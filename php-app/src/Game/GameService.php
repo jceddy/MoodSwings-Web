@@ -3056,7 +3056,7 @@ final class GameService
         }
         $draftMatchId = (int) $game['draft_match_id'];
 
-        $result = $this->withGameLock($gameId, function () use ($gameId, $draftMatchId, $userId, $roundNumber, $stageNumber, $cardIds): array {
+        $result = $this->withGameLock($gameId, function () use ($gameId, $game, $draftMatchId, $userId, $roundNumber, $stageNumber, $cardIds): array {
             $match = $this->fetchDraftMatch($draftMatchId);
             if ($match['status'] !== 'drafting') {
                 throw new GameStateException('This match is not currently drafting');
@@ -3149,8 +3149,14 @@ final class GameService
             // recordGameCompletionStats()'s own $containsBot check, this
             // fires from the pick itself rather than at game/match
             // completion, so it needs its own guard here rather than
-            // sharing that one.
-            if ($this->draftMatchBotUserIds($draftMatchId) === []) {
+            // sharing that one. Also skipped for Chaos Draft (issue #405),
+            // the same exclusion recordGameCompletionStats() applies to
+            // its own per-game/match stats (see that method's own
+            // docblock for why) -- Chaos Draft's own drafting phase reuses
+            // this exact pick-submission mechanic verbatim (see this
+            // method's own opening comment), so without this it would
+            // silently mix into "Quick Draft"'s own pick-position stat.
+            if ($game['deck_type'] !== 'chaos_draft' && $this->draftMatchBotUserIds($draftMatchId) === []) {
                 $this->cardStats->recordQuickDraftPick($cardIds, $roundNumber, $stageNumber, $playerCount);
             }
 
@@ -7718,7 +7724,18 @@ final class GameService
             }
         }
 
-        if (!$containsBot) {
+        // Chaos Draft (issue #405) is excluded from lifetime/card stats
+        // the same as a bot game, confirmed by the maintainer: its
+        // per-round random effect attachments mean a win/loss and a
+        // card's own play pattern no longer reflect that card's actual
+        // printed ability the way every other format's stats are meant
+        // to -- mixing it in would quietly skew both. See
+        // recordMatchCompletionStats()'s own identical exclusion for the
+        // match-level (best-of-three) half of this, and
+        // submitQuickDraftPick()'s own recordQuickDraftPick() guard for
+        // the draft pick-position half (Chaos Draft's own drafting phase
+        // reuses Quick Draft's pick mechanic verbatim).
+        if (!$containsBot && $this->fetchGame($gameId)['deck_type'] !== 'chaos_draft') {
             $this->bumpLifetimeStats($winningUserIds, 'game_wins');
             $this->bumpLifetimeStats($losingUserIds, 'game_losses');
             $this->cardStats->recordGameCompletion($gameId, $winningUserIds, $losingUserIds);
@@ -7752,7 +7769,10 @@ final class GameService
      * applies elsewhere), via the same containsBot pattern -- a bot never
      * has a session to view its own (nonexistent) stats page through
      * regardless, so this is purely about not leaving stray
-     * user_lifetime_stats rows behind for one.
+     * user_lifetime_stats rows behind for one. Also skips entirely for a
+     * Chaos Draft match, the same exclusion recordGameCompletionStats()
+     * applies to its own per-game stats -- see that method's own
+     * docblock for why.
      */
     private function recordMatchCompletionStats(int $draftMatchId, int $winnerUserId): void
     {
@@ -7770,6 +7790,12 @@ final class GameService
             }
         }
         if ($containsBot) {
+            return;
+        }
+
+        $deckTypeStmt = Connection::get()->prepare('SELECT deck_type FROM games WHERE draft_match_id = :match_id LIMIT 1');
+        $deckTypeStmt->execute(['match_id' => $draftMatchId]);
+        if ($deckTypeStmt->fetchColumn() === 'chaos_draft') {
             return;
         }
 

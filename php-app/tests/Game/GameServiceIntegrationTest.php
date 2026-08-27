@@ -14448,6 +14448,75 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame(1, (int) $compulsionStats['times_played_in_won_game']);
     }
 
+    /**
+     * Chaos Draft (issue #405) is excluded from lifetime/card stats the
+     * same as a practice-bot game, confirmed by the maintainer: its
+     * per-round random effect attachments mean a win/loss and a card's
+     * own play pattern no longer reflect that card's actual printed
+     * ability the way every other format's stats are meant to. Mirrors
+     * testGameCompletionByResignationRecordsCardStatsForBothPlayers
+     * above exactly, just with deck_type='chaos_draft' and asserting the
+     * opposite -- nothing recorded at all, for either player.
+     */
+    public function testChaosDraftGameCompletionIsExcludedFromLifetimeAndCardStats(): void
+    {
+        $winner = $this->insertUser('cardstats-chaos-winner');
+        $resigner = $this->insertUser('cardstats-chaos-resigner');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, deck_type, status, created_by_user_id, wins_needed) VALUES ('draft', 'chaos_draft', 'in_progress', :created_by, 1)"
+        );
+        $stmt->execute(['created_by' => $winner]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $winnerPlayerId = $this->insertGamePlayer($gameId, $winner, 0);
+        $resignerPlayerId = $this->insertGamePlayer($gameId, $resigner, 1);
+
+        $this->insertGameCard($gameId, 112, 'hand', $winnerPlayerId); // Determination, never played
+        $this->insertGameCard($gameId, 3, 'hand', $resignerPlayerId); // Charity
+        $this->insertGameRound($gameId, 1, $winnerPlayerId, $winnerPlayerId, 2);
+
+        $this->games->resignGame($gameId, $resignerPlayerId);
+
+        self::assertSame(0, (int) $this->pdo->query('SELECT COUNT(*) FROM card_stats')->fetchColumn(), 'no card stats at all for a Chaos Draft game');
+
+        $winnerStats = $this->games->lifetimeStatsFor($winner);
+        self::assertSame(0, $winnerStats['game_wins'], 'a Chaos Draft win does not count toward lifetime game_wins');
+        $resignerStats = $this->games->lifetimeStatsFor($resigner);
+        self::assertSame(0, $resignerStats['game_losses'], 'a Chaos Draft loss does not count toward lifetime game_losses');
+    }
+
+    /**
+     * Chaos Draft's own drafting phase reuses Quick Draft's pick-
+     * submission mechanic verbatim (submitQuickDraftPick()) -- confirms
+     * that shared code path doesn't leak a Chaos Draft pick into "Quick
+     * Draft"'s own pick-position stat, the same exclusion the game/match
+     * completion paths apply.
+     */
+    public function testChaosDraftPickSubmissionIsExcludedFromQuickDraftPickPositionStats(): void
+    {
+        $u1 = $this->insertUser('chaosdraft-pick-' . uniqid('u1'));
+        $u2 = $this->insertUser('chaosdraft-pick-' . uniqid('u2'));
+        $this->optIntoCustomContent($u1);
+        $this->optIntoCustomContent($u2);
+
+        $gameId = $this->games->createGame(
+            $u1,
+            [$u1, $u2],
+            format: 'draft',
+            deckType: 'chaos_draft',
+            quickDraftPoolSource: 'random_48',
+        );
+
+        $state = $this->games->getState($gameId, $u1);
+        $pack = $state['quick_draft']['drafting']['pack'];
+        $kept = array_slice(array_column($pack, 'catalog_card_id'), 0, 2);
+
+        $this->games->submitQuickDraftPick($gameId, $u1, roundNumber: 1, stageNumber: 1, cardIds: $kept);
+
+        self::assertSame(0, (int) $this->pdo->query('SELECT COUNT(*) FROM card_stats')->fetchColumn(), 'a Chaos Draft pick does not bump any card_stats row, quick_draft_pick_position included');
+    }
+
     public function testCompletedQuickDraftMatchRecordsDeckStatsAndPickPositions(): void
     {
         ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture();

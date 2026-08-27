@@ -1,0 +1,23 @@
+-- No schema change: while investigating the "times played" undercount
+-- (0199), the maintainer asked to confirm Chaos Draft games are excluded
+-- from lifetime/card stats the same way practice-bot games already are.
+-- They weren't: GameService::recordGameCompletionStats()/
+-- recordMatchCompletionStats() only ever checked $containsBot, and
+-- submitQuickDraftPick()'s own recordQuickDraftPick() call (Chaos Draft
+-- reuses Quick Draft's pick-submission mechanic verbatim) only guarded
+-- on the same bot check -- so a real (non-bot) Chaos Draft game between
+-- two human players was recording game_wins/game_losses, deck-membership/
+-- played-card stats, AND quick_draft_pick_position stats exactly like
+-- any other real game, mixing its own randomized-effect-skewed play
+-- patterns into every other format's numbers.
+--
+-- Fixed by adding an explicit games.deck_type === 'chaos_draft' check
+-- alongside each existing bot check, checked independently since a
+-- Chaos Draft game has no bot in it to already trip that guard -- see
+-- GameService.php and php-app/README.md's "Lifetime stats"/"Card
+-- statistics" sections for the full writeup.
+--
+-- This migration exists purely to keep schema_version in sync with the
+-- VERSION bump that shipped alongside this fix, the same way
+-- 0024/.../0199 already did for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.56' WHERE id = 1;

@@ -5099,8 +5099,21 @@ completing, so it contributes to `match_wins`/`match_losses` but not
 #140) -- see "Practice bots" below for why a bot game is deliberately
 excluded from both this and the deck-membership/played-card half of Card
 statistics below (its draft pick-position signal is a separate write path
-with its own bot guard -- see "Card statistics" below). Both private methods
-funnel
+with its own bot guard -- see "Card statistics" below). Neither one runs
+at all for a Chaos Draft game/match either (`games.deck_type ===
+'chaos_draft'`), confirmed by the maintainer: its per-round random
+effect attachments mean a win/loss and a card's own play pattern no
+longer reflect that card's actual printed ability the way every other
+format's stats are meant to -- the same reasoning, applied to a
+different exclusion condition than the bot one right above it, checked
+independently rather than folded into `$containsBot` since a Chaos
+Draft game has no bot in it at all. Chaos Draft's own drafting phase
+reuses Quick Draft's pick-submission mechanic verbatim (see "Chaos
+Draft" below), so `submitQuickDraftPick()`'s own `recordQuickDraftPick()`
+call carries the identical `deck_type !== 'chaos_draft'` guard alongside
+its existing bot guard, for the same reason "Card statistics" below's
+own per-pick guard needs one independent of the game/match-completion
+guard here. Both private methods funnel
 through `bumpLifetimeStats(array $userIds, string $column)`, a single
 `INSERT ... ON DUPLICATE KEY UPDATE ... = ... + 1` per user id -- there's
 no row at all for a user nothing has ever happened to; `GameService::
@@ -5218,7 +5231,14 @@ hook point:
   seated player in that draft match is a practice bot (confirmed by the
   maintainer) -- the same "a bot game doesn't count" policy already
   applied to lifetime stats and the deck-membership/played-card stats
-  above, extended here too. `recordGameCompletionStats()`'s own
+  above, extended here too. Quick Draft's own `submitQuickDraftPick()`
+  additionally skips for `deck_type === 'chaos_draft'` (the same
+  exclusion "Lifetime stats" above applies) -- Chaos Draft reuses this
+  exact pick-submission mechanic verbatim (see "Chaos Draft" below), so
+  without this guard its own picks would silently mix into "Quick
+  Draft"'s own pick-position stat; Winston/Grid/Rotisserie Draft never
+  handle `chaos_draft` at all, so none of their three own guards need
+  the same addition. `recordGameCompletionStats()`'s own
   `$containsBot` check doesn't cover this, though: each of these four
   fires from the pick itself, well before a game (let alone a whole
   match) ever completes, so each carries its own identical guard instead
