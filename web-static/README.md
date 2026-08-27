@@ -1659,20 +1659,36 @@ someone else's listing needs no opt-in of its own.
     `action: 'confirm'`) for the other teammate, mirroring
     `#team-decision-panel`'s own propose/confirm shape immediately above.
 
-    Resolving the round's own offer is mandatory (issue #405 follow-up):
-    `GameService::assertChaosDraftOfferResolved()` now rejects
-    `playMood()`/`pass()` for whoever still has one open. `chaosDraftOfferOpenForViewer`
-    (set from `renderChaosDraftOffer()`'s own poll -- non-null `offer`
-    always means unresolved) feeds both `canAct` (via the shared
-    `passButtonCanAct()`/`refreshPassButtonDisabled()` pair, so `#pass-button`
-    reflects it immediately rather than waiting for the next full board
-    poll) and an early check in `updatePlayButtonEnabled()` (disabling
-    `#play-card-button` with "Choose and attach this round's Chaos Draft
-    effect first" -- checked ahead of `is_playable`, since that's a purely
-    per-card server flag that knows nothing about this DB-level
+    Resolving EVERY player's own offer this round is mandatory before
+    ANYONE may play (issue #405 follow-up, later strengthened by the
+    maintainer into a round-wide rule -- see "Chaos Draft" in
+    `php-app/README.md`): `GameService::assertChaosDraftOfferResolved()`
+    now rejects `playMood()`/`pass()` for EVERY seated player while ANY
+    offer this round -- even someone else's -- is still open.
+    `chaosDraftOfferOpenForViewer` (set from `renderChaosDraftOffer()`'s
+    own poll -- non-null `offer` always means the VIEWER's own is
+    unresolved) and `chaosDraftRoundReady` (the sibling `round_ready`
+    field the same poll response carries, reading whether anyone ELSE
+    this round still has theirs open) both feed `canAct` (via the shared
+    `passButtonCanAct()`/`refreshPassButtonDisabled()` pair, so
+    `#pass-button` reflects either immediately rather than waiting for
+    the next full board poll) and two checks near the top of
+    `updatePlayButtonEnabled()` (disabling `#play-card-button` -- first
+    with "Choose and attach this round's Chaos Draft effect first" if
+    the viewer's own is still open, then with "Waiting for every player
+    to choose and attach this round's Chaos Draft effect" if only
+    someone else's is -- checked ahead of `is_playable`, since that's a
+    purely per-card server flag that knows nothing about this DB-level
     restriction). Hand cards stay clickable regardless, same as any other
     unplayable-right-now card -- only the panel's own Play button is
-    gated.
+    gated. A viewer who's already resolved their own offer but is still
+    waiting on someone else sees `#chaos-draft-offer-panel` stay up with
+    that same "Waiting for every player..." status (rather than hiding,
+    which would otherwise leave the disabled Play/Pass buttons
+    unexplained) -- a live UX gap caught during testing before
+    `round_ready` existed: a player who'd already resolved their own
+    offer would see a normal, enabled Play/Pass button right up until the
+    server's own `409` explained why it didn't work.
 
     `chaosDraftOfferOpenForViewer` ALSO feeds `canAct` itself
     (`passButtonCanAct()`), which the hand-rendering code in

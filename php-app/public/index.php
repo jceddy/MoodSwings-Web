@@ -1764,7 +1764,15 @@ if ($path === '/games/chaos-draft-offer' && $method === 'GET') {
 
     $gamePlayerId = requireGamePlayer($games, $gameId, (int) $currentUser['id']);
 
-    respond(200, ['status' => 'ok', 'offer' => $games->chaosDraftOfferFor($gameId, $gamePlayerId)]);
+    respond(200, [
+        'status' => 'ok',
+        'offer' => $games->chaosDraftOfferFor($gameId, $gamePlayerId),
+        // Whether the round-wide gate (assertChaosDraftOfferResolved())
+        // is currently open -- distinct from 'offer' above, which only
+        // ever reflects THIS viewer's own outstanding choice. See
+        // GameService::chaosDraftRoundReady()'s own docblock.
+        'round_ready' => $games->chaosDraftRoundReady($gameId),
+    ]);
 }
 
 if ($path === '/games/chaos-draft-effect' && $method === 'POST') {
