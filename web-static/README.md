@@ -2265,6 +2265,30 @@ someone else's listing needs no opt-in of its own.
       `tiered_rotisserie_draft_tiers` array sent to `POST /games`, rather
       than through the single shared `saved_decklist_id` param every
       other draft type's own pool source reuses.
+    - **Sealed Deck** (issue #392) has no drafting phase at all, so unlike
+      every draft deck type above it has no own "-panel"/"-drafting"
+      markup -- `renderDraftPanel()` hides every OTHER draft deck type's
+      own panel and shows the shared `#draft-deck-building` view directly,
+      since `state.sealed_deck.status` is always `'deck_building'` while
+      the match is still `'waiting'` (see "Sealed Deck" in
+      `php-app/README.md`). The New Game dialog's own
+      `#new-game-sealed-deck-fields` is the simplest of the six draft
+      deck types' own pool-source pickers: a plain `#new-game-sealed-deck-
+      pool-source` select (Structure/`random_48`/jceddy's 75 Card/One of
+      Each Card/Custom pool/My saved deck, `updateSealedDeckPoolSourceVisibility()`
+      -- the same `updateQuickDraftPoolSourceVisibility()` pattern every
+      other draft type's own pool-source field uses) with no cutoff count
+      or tier configuration to expose, since every player's own pool is
+      independently sized to a fixed 45 cards regardless of player count
+      -- unlike every other draft type's own option labels
+      (`updateDraftPoolSourceOptionLabels()`), Sealed Deck's never need to
+      recompute a size hint on opponent-selection change, since the size
+      is fixed rather than derived from player count. Its description
+      text (`SEALED_DECK_POOL_SOURCE_DESCRIPTIONS`) is phrased around
+      "your own pool" rather than "the shared pool to draft from," the one
+      wording difference from every other draft type's own pool-source
+      descriptions, reflecting that each player is dealt their own
+      independent pool rather than drafting pieces of one shared pool.
 
     Clicking any hand
     card opens `#choices-panel` inline, underneath the hand -- a plain

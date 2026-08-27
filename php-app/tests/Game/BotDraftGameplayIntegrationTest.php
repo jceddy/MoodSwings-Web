@@ -757,4 +757,49 @@ final class BotDraftGameplayIntegrationTest extends TestCase
         $totalPicks = (int) $this->pdo->query('SELECT SUM(rotisserie_draft_pick_position_count) FROM card_stats')->fetchColumn();
         self::assertSame(0, $totalPicks, 'none of the 26 picks -- bot or human -- should have been recorded, since a bot is seated in this match');
     }
+
+    /**
+     * Sealed Deck (issue #392) has no live drafting phase at all, so
+     * there's no equivalent of the other 5 draft deck_types' own
+     * advanceBotXDraftPick() loop -- a bot seated here goes straight to
+     * advanceBotDraftDeck() the very first time advanceAutomatedTurns()
+     * runs, since createGame() itself already dealt its own 45-card pool
+     * and moved the match to 'deck_building' immediately (see
+     * GameService::initializeSealedDeck()). Once the human submits their
+     * own deck too, the same loop starts the game outright, exactly as it
+     * does for every other draft deck_type.
+     */
+    public function testSealedDeckBotSubmitsItsOwnDeckAutomaticallyAndAutoStartsTheGame(): void
+    {
+        $human = $this->insertUser('sealeddeck-human1');
+        $bot = $this->insertBotUser('sealeddeck-bot1');
+
+        $gameId = $this->games->createGame(
+            $human,
+            [$human, $bot],
+            format: 'draft',
+            deckType: 'sealed_deck',
+            sealedDeckPoolSource: 'structure',
+        );
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        $this->games->advanceAutomatedTurns($gameId);
+
+        $botDeckStmt = $this->pdo->prepare('SELECT deck_card_ids FROM draft_match_players WHERE draft_match_id = :id AND user_id = :user_id');
+        $botDeckStmt->execute(['id' => $draftMatchId, 'user_id' => $bot]);
+        $botDeckCardIds = json_decode((string) $botDeckStmt->fetchColumn(), true);
+        self::assertNotNull($botDeckCardIds, "the bot should have submitted its own sealed deck without any human action");
+        self::assertGreaterThanOrEqual(12, count($botDeckCardIds));
+
+        self::assertSame('waiting', $this->fetchGame($gameId)['status'], 'the game should not auto-start until the human submits their own deck too');
+
+        $humanPoolStmt = $this->pdo->prepare('SELECT drafted_card_ids FROM draft_match_players WHERE draft_match_id = :id AND user_id = :user_id');
+        $humanPoolStmt->execute(['id' => $draftMatchId, 'user_id' => $human]);
+        $humanPool = array_map(intval(...), json_decode((string) $humanPoolStmt->fetchColumn(), true));
+        $this->games->submitDraftDeck($gameId, $human, array_slice($humanPool, 0, 12));
+        $this->games->advanceAutomatedTurns($gameId);
+
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status'], 'the game should auto-start once both the human and the bot have a deck in');
+    }
 }

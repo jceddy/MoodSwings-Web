@@ -9450,7 +9450,7 @@ final class GameServiceIntegrationTest extends TestCase
         $bob = $this->insertUser('draft-nonquickdraft-bob');
 
         $this->expectException(GameStateException::class);
-        $this->expectExceptionMessage('only supports the "quick_draft"/"winston_draft"/"grid_draft"/"rotisserie_draft"/"tiered_rotisserie_draft" deck types');
+        $this->expectExceptionMessage('only supports the "quick_draft"/"winston_draft"/"grid_draft"/"rotisserie_draft"/"tiered_rotisserie_draft"/"sealed_deck" deck types');
 
         $this->games->createGame($creator, [$creator, $bob], format: 'draft', deckType: 'structure');
     }
@@ -16758,5 +16758,228 @@ final class GameServiceIntegrationTest extends TestCase
         }
 
         self::assertGreaterThan(1, count(array_unique($firstPickersSeen)), 'Team Play Tiered Rotisserie Draft should not deterministically give the creator (or any other single player) first pick every time');
+    }
+
+    // -- Sealed Deck (issue #392) ---------------------------------------
+
+    public function testCreateGameRejectsSealedDeckForNonDraftFormat(): void
+    {
+        $creator = $this->insertUser('sealeddeck-nondraft-alice');
+        $bob = $this->insertUser('sealeddeck-nondraft-bob');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('only supported for the "draft" format');
+
+        $this->games->createGame($creator, [$creator, $bob], format: 'standard', deckType: 'sealed_deck', sealedDeckPoolSource: 'structure');
+    }
+
+    public function testCreateGameSealedDeckDealsIndependentFortyFiveCardPoolsAndSkipsStraightToDeckBuilding(): void
+    {
+        $alice = $this->insertUser('sealeddeck-immediate-alice');
+        $bob = $this->insertUser('sealeddeck-immediate-bob');
+
+        $gameId = $this->games->createGame(
+            $alice,
+            [$alice, $bob],
+            format: 'draft',
+            deckType: 'sealed_deck',
+            sealedDeckPoolSource: 'structure',
+        );
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $match = $this->fetchDraftMatch($draftMatchId);
+        self::assertSame('deck_building', $match['status'], 'Sealed Deck has no live drafting phase -- the match should already be ready for deck-building the moment the game is created');
+
+        $aliceCardIds = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $alice)['drafted_card_ids'], true);
+        $bobCardIds = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $bob)['drafted_card_ids'], true);
+        self::assertCount(45, $aliceCardIds);
+        self::assertCount(45, $bobCardIds);
+
+        // The match-level pool_card_ids is the flattened union of both --
+        // nothing should be left "undrafted" once the whole pool has
+        // already been handed out whole (see draftMatchPoolView()'s own
+        // undraftedCardIds computation).
+        $poolCardIds = json_decode((string) $match['pool_card_ids'], true);
+        self::assertCount(90, $poolCardIds);
+    }
+
+    public function testCreateGameSealedDeckPoolsAreIndependentAcrossPlayers(): void
+    {
+        $alice = $this->insertUser('sealeddeck-independent-alice');
+        $bob = $this->insertUser('sealeddeck-independent-bob');
+
+        $gameId = $this->games->createGame(
+            $alice,
+            [$alice, $bob],
+            format: 'draft',
+            deckType: 'sealed_deck',
+            sealedDeckPoolSource: 'structure',
+        );
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $aliceCardIds = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $alice)['drafted_card_ids'], true);
+        $bobCardIds = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $bob)['drafted_card_ids'], true);
+
+        self::assertNotSame($aliceCardIds, $bobCardIds, 'Each player\'s own Sealed Deck pool is independently randomized -- two players choosing the same pool source should not end up with the exact same 45 cards');
+    }
+
+    public function testCreateGameSealedDeckCustomPoolBelowMinimumIsRejected(): void
+    {
+        $creator = $this->insertUser('sealeddeck-undersized-alice');
+        $bob = $this->insertUser('sealeddeck-undersized-bob');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('at least 45 are required');
+
+        $this->games->createGame(
+            $creator,
+            [$creator, $bob],
+            format: 'draft',
+            deckType: 'sealed_deck',
+            sealedDeckPoolSource: 'custom',
+            sealedDeckCustomPoolText: "20 Charity\n",
+        );
+    }
+
+    public function testCreateGameSealedDeckSavedDeckPoolUsesItsCardIds(): void
+    {
+        $creator = $this->insertUser('sealeddeck-saveddeck-alice');
+        $bob = $this->insertUser('sealeddeck-saveddeck-bob');
+        // Exactly 45 cards -- Sealed Deck's own pool size, so no
+        // truncation/shuffling happens and every player ends up with this
+        // exact same 45-card list (a saved deck's contents are fixed, not
+        // itself a source of randomness the way 'structure'/'random_48'
+        // are -- see buildSealedDeckPlayerPool()'s own docblock).
+        $decklistId = $this->insertSavedDecklist($creator, 'My Sealed Pool', range(1, 45));
+
+        $gameId = $this->games->createGame(
+            $creator,
+            [$creator, $bob],
+            format: 'draft',
+            deckType: 'sealed_deck',
+            sealedDeckPoolSource: 'saved_deck',
+            savedDecklistId: $decklistId,
+        );
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        self::assertSame('saved_deck', $this->fetchDraftMatch($draftMatchId)['pool_source']);
+        self::assertSame(range(1, 45), array_map(intval(...), json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $creator)['drafted_card_ids'], true)));
+        self::assertSame(range(1, 45), array_map(intval(...), json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $bob)['drafted_card_ids'], true)));
+    }
+
+    public function testSubmitDraftDeckEnforcesSealedDeckMinimumOfTwelve(): void
+    {
+        $alice = $this->insertUser('sealeddeck-mindeck-alice');
+        $bob = $this->insertUser('sealeddeck-mindeck-bob');
+
+        $gameId = $this->games->createGame(
+            $alice,
+            [$alice, $bob],
+            format: 'draft',
+            deckType: 'sealed_deck',
+            sealedDeckPoolSource: 'structure',
+        );
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $aliceCardIds = array_map(intval(...), json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $alice)['drafted_card_ids'], true));
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('between 12 and 45 cards');
+
+        $this->games->submitDraftDeck($gameId, $alice, array_slice($aliceCardIds, 0, 11));
+    }
+
+    public function testSubmitDraftDeckAcceptsATwelveCardSealedDeck(): void
+    {
+        $alice = $this->insertUser('sealeddeck-validdeck-alice');
+        $bob = $this->insertUser('sealeddeck-validdeck-bob');
+
+        $gameId = $this->games->createGame(
+            $alice,
+            [$alice, $bob],
+            format: 'draft',
+            deckType: 'sealed_deck',
+            sealedDeckPoolSource: 'structure',
+        );
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $aliceCardIds = array_map(intval(...), json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $alice)['drafted_card_ids'], true));
+
+        $this->games->submitDraftDeck($gameId, $alice, array_slice($aliceCardIds, 0, 12));
+
+        self::assertSame(
+            array_slice($aliceCardIds, 0, 12),
+            array_map(intval(...), json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $alice)['deck_card_ids'], true))
+        );
+    }
+
+    public function testCreateGameSealedDeckTwoPlayerIsBestOfThree(): void
+    {
+        $alice = $this->insertUser('sealeddeck-bestofthree-alice');
+        $bob = $this->insertUser('sealeddeck-bestofthree-bob');
+
+        $gameId = $this->games->createGame(
+            $alice,
+            [$alice, $bob],
+            format: 'draft',
+            deckType: 'sealed_deck',
+            sealedDeckPoolSource: 'structure',
+        );
+
+        self::assertSame(2, $this->games->getState($gameId, $alice)['sealed_deck']['games_to_win'], 'A 2-player Sealed Deck match should be best-of-three, same as every other draft deck_type (issue #189)');
+    }
+
+    public function testCreateGameSealedDeckThreeOrFourPlayerIsSingleGame(): void
+    {
+        $userIds = $this->insertUsers('sdsingle-' . uniqid(), 3);
+        $gameId = $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'sealed_deck', sealedDeckPoolSource: 'structure');
+
+        self::assertSame(1, $this->games->getState($gameId, $userIds[0])['sealed_deck']['games_to_win'], 'A 3-4 player Sealed Deck game should be single-game, matching Quick/Winston/Grid/Rotisserie Draft\'s own multiplayer support (issue #189)');
+    }
+
+    public function testCreateGameAcceptsSealedDeckWithThreeOrFourPlayers(): void
+    {
+        $threeUserIds = $this->insertUsers('sd3p-' . uniqid(), 3);
+        $threeGameId = $this->games->createGame($threeUserIds[0], $threeUserIds, format: 'draft', deckType: 'sealed_deck', sealedDeckPoolSource: 'structure');
+        self::assertIsInt($threeGameId);
+
+        $fourUserIds = $this->insertUsers('sd4p-' . uniqid(), 4);
+        $fourGameId = $this->games->createGame($fourUserIds[0], $fourUserIds, format: 'draft', deckType: 'sealed_deck', sealedDeckPoolSource: 'structure');
+        self::assertIsInt($fourGameId);
+
+        foreach ([$threeGameId => $threeUserIds, $fourGameId => $fourUserIds] as $gameId => $userIds) {
+            $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+            foreach ($userIds as $userId) {
+                self::assertCount(45, json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userId)['drafted_card_ids'], true));
+            }
+        }
+    }
+
+    public function testCreateGameRejectsSealedDeckWithMoreThanFourPlayers(): void
+    {
+        $userIds = $this->insertUsers('sd5p-' . uniqid(), 5);
+
+        $this->expectException(GameStateException::class);
+
+        $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'sealed_deck', sealedDeckPoolSource: 'structure');
+    }
+
+    public function testCreateGameSealedDeckSupportsTeamPlay(): void
+    {
+        $userIds = $this->insertUsers('sdteam-' . uniqid(), 4);
+
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'team',
+            deckType: 'sealed_deck',
+            partnerUserId: $userIds[1],
+            sealedDeckPoolSource: 'structure',
+        );
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        foreach ($userIds as $userId) {
+            self::assertCount(45, json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userId)['drafted_card_ids'], true));
+        }
     }
 }

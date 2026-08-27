@@ -260,6 +260,8 @@ final class MatchmakingService
                     $params['tiered_rotisserie_draft_mode'] ?? null,
                     $params['tiered_rotisserie_draft_tiers'] ?? null,
                     false,
+                    $params['sealed_deck_pool_source'] ?? null,
+                    $params['sealed_deck_custom_pool_text'] ?? null,
                 );
             } catch (GameStateException $e) {
                 // The creator's own choices turned out not to be valid
