@@ -1,0 +1,11 @@
+-- No schema change: per feedback, the chaos-delta/chaos-override badge
+-- (stacked below the value badge, see 0207) now uses the exact same
+-- ~20px offset .card-thumb__badge--chaos ("Chaos" rarity pill, opposite
+-- top-left corner) already uses, nudged up slightly from an initial
+-- ~22px, so the two land pixel-exactly level with each other instead of
+-- 2px (40px at the doubled desktop card size) off.
+--
+-- This migration exists purely to keep schema_version in sync with the
+-- VERSION bump that shipped alongside this fix, the same way
+-- 0024/.../0208 already did for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.65' WHERE id = 1;

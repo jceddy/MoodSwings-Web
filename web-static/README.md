@@ -266,9 +266,9 @@ OWN printed ability had fixed its value, and silently replaced rather
 than stacked with whatever alt/dice value the card's own printed ability
 already produced -- see `chaos_value_delta` in `php-app/README.md`) gets
 its own small red `.card-thumb__badge--chaos-delta` badge instead,
-reading `+N`/`-N`, positioned immediately left of the value badge --
-never a rotation, since nothing about the card's own printed ability
-locked anything. Shown whenever `card.chaos_value_delta` is nonzero
+reading `+N`/`-N`, positioned directly below the value badge (same
+right-alignment) -- never a rotation, since nothing about the card's
+own printed ability locked anything. Shown whenever `card.chaos_value_delta` is nonzero
 (0 -- the common case, nothing to show -- reads as falsy in JS, so the
 badge is simply omitted). The card-detail dialog's own meta line
 (`openCardDetail()`) surfaces the same net delta as a parenthetical
@@ -288,6 +288,25 @@ there's nothing to stack), reading `=N`, whenever `card.chaos_value_override`
 is non-null (see `chaos_value_override` in `php-app/README.md`). The
 card-detail dialog's meta line surfaces the same fixed value as a
 parenthetical (`(chaos: fixed at N)`).
+
+The value badge sits right at the card's own top-right corner (briefly
+nudged ~20px down in between, to clear the card name printed at the top
+of the art the same way `.card-thumb__badge--copy`/`--recolored`/
+`--chaos` already are on the opposite top-left corner -- reversed on
+the maintainer's own call: overlapping the card's own printed die-value
+icon there is fine, arguably preferable, since a live current value up
+top reads less ambiguously than the two being simultaneously visible).
+Safe to sit this high again since the chaos-delta/chaos-override badge
+no longer shares its row -- that pairing, not the value badge alone,
+was what originally reached far enough left to cover the card name. The
+chaos-delta/chaos-override badge is instead stacked directly below the
+value badge (another bug caught live along the way: originally
+positioned to the value badge's LEFT, on a narrow card that could push
+it far enough to collide with the top-left `--chaos` "Chaos" rarity
+pill) -- offset by the exact same ~20px `.card-thumb__badge--chaos`
+itself uses (nudged up slightly from an initial ~22px, per feedback, so
+the two land EXACTLY level with each other rather than 2px/4px off)
+(see `style.css`'s own comments on all of these).
 
 The card-detail dialog's enlarged
 `#card-detail-art` image replaces what used to be a `<h3>` name heading and

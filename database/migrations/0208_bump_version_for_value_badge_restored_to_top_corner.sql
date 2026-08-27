@@ -1,0 +1,18 @@
+-- No schema change: the maintainer's own follow-up call on 0206/0207's
+-- own fix -- the value badge is moved back to sit right at the card's
+-- own top-right corner (undoing 0206's ~20px down-nudge), since
+-- overlapping the card's own printed die-value icon there is fine,
+-- arguably preferable: a live current value up top reads less
+-- ambiguously than the two being simultaneously visible and potentially
+-- disagreeing. Safe to move back up now that 0207 already stopped the
+-- chaos-delta/chaos-override badge from sharing the value badge's own
+-- row -- that pairing, not the value badge alone, was what originally
+-- reached far enough left to cover the card name. The chaos-delta/
+-- chaos-override badge itself stays stacked directly below the value
+-- badge (0207's own fix), just recomputed relative to the value badge's
+-- restored, higher position.
+--
+-- This migration exists purely to keep schema_version in sync with the
+-- VERSION bump that shipped alongside this fix, the same way
+-- 0024/.../0207 already did for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.64' WHERE id = 1;
