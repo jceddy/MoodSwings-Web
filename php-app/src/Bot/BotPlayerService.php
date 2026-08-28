@@ -1227,6 +1227,12 @@ final class BotPlayerService
             return $targetMoodIds !== [] ? ['target_mood_ids' => $targetMoodIds] : [];
         }
 
+        if ($effectKey === 'hate') {
+            $targetMoodId = $this->hateTargetMoodId($state, $cardId, $botGamePlayerId);
+
+            return $targetMoodId !== null ? ['target_mood_id' => $targetMoodId] : [];
+        }
+
         if ($effectKey === 'nostalgia') {
             $discardCardId = $this->nostalgiaDiscardCardId($state, $botGamePlayerId);
 
@@ -1931,6 +1937,68 @@ final class BotPlayerService
         }
 
         return $bestCardId;
+    }
+
+    /**
+     * Every effect key whose value scales up with the sheer COUNT of
+     * moods in play (own and opponents' alike) -- currently just
+     * Euphoria ("this mood's value increases by 1 for each mood in
+     * play, including itself and other players' moods"). Bottoming ANY
+     * mood via Hate (even Hate itself) shrinks that count by one and so
+     * costs the bot a point of Euphoria's own value regardless of WHICH
+     * mood gets targeted -- see hateTargetMoodId()'s own docblock for
+     * why that makes the whole play not worth it whenever one of these
+     * is in play, rather than just picking a "safer" target.
+     */
+    private const MOOD_COUNT_VALUE_BOOST_EFFECT_KEYS = ['euphoria'];
+
+    /**
+     * Hate's own "what to target" policy (confirmed by the maintainer):
+     * "After playing this mood, you may put any mood on the bottom of
+     * the deck. If you do, draw a card." Hate's own printed base value
+     * is 0, so leaving it untargeted wastes the play entirely -- a
+     * random card draw is strictly better than nothing whenever there's
+     * truly no better target, so this never returns null the way an
+     * ordinary "should we bother" policy would. Prefers the
+     * highest-CURRENT-value mood owned by a non-teammate opponent (the
+     * draw AND denies them that scored value this round -- strictly
+     * better than targeting anything of the acting player's own, which
+     * would only ever cost the same draw for less benefit); falls back
+     * to Hate itself (its own $cardId, always a legal target --
+     * HateEffect's own field has `includes_self`) only once no
+     * qualifying opponent mood exists, since removing a 0-value mood
+     * that was never going to score anyway is the one target that never
+     * costs the acting player anything.
+     *
+     * Returns null instead -- skipping the target field, and so the
+     * card draw, entirely -- whenever the acting player has a mood in
+     * play from MOOD_COUNT_VALUE_BOOST_EFFECT_KEYS (Euphoria): ANY
+     * target (including self) shrinks the in-play mood count by one,
+     * permanently costing that mood a point of its own value for as
+     * long as it stays in play, a real ongoing cost a one-time random
+     * draw isn't worth trading away.
+     */
+    private function hateTargetMoodId(BoardState $state, int $cardId, int $botGamePlayerId): ?int
+    {
+        foreach (self::MOOD_COUNT_VALUE_BOOST_EFFECT_KEYS as $effectKey) {
+            if ($state->playerHasMoodInPlay($botGamePlayerId, $effectKey)) {
+                return null;
+            }
+        }
+
+        $bestOpponentMoodId = null;
+        foreach ($state->activePlayerOrder() as $playerId) {
+            if ($playerId === $botGamePlayerId || $state->isTeammate($botGamePlayerId, $playerId)) {
+                continue;
+            }
+            foreach ($state->moodsOwnedBy($playerId) as $mood) {
+                if ($bestOpponentMoodId === null || $state->valueOf($mood->cardId) > $state->valueOf($bestOpponentMoodId)) {
+                    $bestOpponentMoodId = $mood->cardId;
+                }
+            }
+        }
+
+        return $bestOpponentMoodId ?? $cardId;
     }
 
     /**
