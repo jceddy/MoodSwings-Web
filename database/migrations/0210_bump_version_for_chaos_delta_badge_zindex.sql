@@ -1,0 +1,12 @@
+-- No schema change: per feedback, the chaos-delta/chaos-override badge
+-- now gets an explicit z-index: 1 (over the "Chaos" rarity pill's own
+-- default z-index: auto) as a tie-breaker for if the two ever overlap
+-- despite sitting on opposite corners (an unusually long card name, an
+-- extreme card-size-slider setting, ...) -- the value CHANGE this
+-- badge reports is the more actionable of the two to keep legible, so
+-- it now paints on top rather than being hidden underneath.
+--
+-- This migration exists purely to keep schema_version in sync with the
+-- VERSION bump that shipped alongside this fix, the same way
+-- 0024/.../0209 already did for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.66' WHERE id = 1;

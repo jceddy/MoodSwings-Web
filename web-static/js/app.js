@@ -356,6 +356,69 @@ function saveAllowCustomContentPreference(allowCustomContent) {
     });
 }
 
+// "Discoverable for open games" (issue #116) as a personal preference
+// (Settings dialog's "Game defaults" section) -- write-only, same
+// reasoning as saveAllowCustomContentPreference() above: the current
+// value already rides on getCurrentUser()'s own
+// user.matchmaking_discoverable field. Gates whether this user's own
+// open lobby listings are shown to strangers browsing it at all.
+function saveMatchmakingDiscoverablePreference(matchmakingDiscoverable) {
+    return apiRequest('/user/matchmaking-discoverable-preference', {
+        method: 'POST',
+        body: JSON.stringify({ matchmaking_discoverable: matchmakingDiscoverable }),
+    });
+}
+
+// Issue #116: open lobby matchmaking. postOpenGame() mirrors createGame()'s
+// own params shape (format/deck_type/etc, see "New game" above) minus
+// opponent_user_ids/partner_user_id/random_teams/bot_* -- see
+// MatchmakingService's own docblock for why this first cut is limited to
+// the "duel"/"draft" formats. listOpenGames(mine) lists either every open
+// listing visible to the current user (mine=false, the default) or just
+// their own posted listings (mine=true, so they can see/cancel them).
+function postOpenGame(params) {
+    return apiRequest('/open-games', {
+        method: 'POST',
+        body: JSON.stringify(params),
+    });
+}
+
+// scope: omitted/'' lists every open listing visible to the current user;
+// 'mine' lists their own posted listings; 'joined' lists listings
+// they've joined but that haven't started yet (see leaveOpenGame()).
+function listOpenGames(scope = '') {
+    return apiRequest(`/open-games${scope ? `?${scope}=1` : ''}`);
+}
+
+// Resolves to { ok, body } where body is either
+// { status: 'started', game_id } once this join fills the listing's
+// last seat, or { status: 'waiting', joined_count, target_player_count }
+// if more players are still needed (issue #116 -- standard/team listings
+// can need more than one more joiner).
+function joinOpenGame(listingId) {
+    return apiRequest('/open-games/join', {
+        method: 'POST',
+        body: JSON.stringify({ id: listingId }),
+    });
+}
+
+// Withdraws an earlier joinOpenGame() call on a listing that hasn't
+// started yet -- the only way to back out once committed to a multi-seat
+// listing still waiting on other players.
+function leaveOpenGame(listingId) {
+    return apiRequest('/open-games/leave', {
+        method: 'POST',
+        body: JSON.stringify({ id: listingId }),
+    });
+}
+
+function cancelOpenGame(listingId) {
+    return apiRequest('/open-games/cancel', {
+        method: 'POST',
+        body: JSON.stringify({ id: listingId }),
+    });
+}
+
 // Saved user decklists (issue #92) -- see "Saved decklists" in
 // web-static/README.md. listDecklists() returns { own, friends } where
 // friends is grouped per accepted friend who has 1+ friends-visible decks.

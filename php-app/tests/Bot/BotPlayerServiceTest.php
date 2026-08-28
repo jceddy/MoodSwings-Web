@@ -1360,6 +1360,91 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame([], $action['choices']);
     }
 
+    // -- Hate (confirmed by the maintainer) -----------------------------------
+
+    /**
+     * Player 2's Complacency (id 5, value 4) is the only in-play mood
+     * besides Hate itself -- hateTargetMoodId() targets it (the
+     * highest-value NON-teammate opponent mood) rather than leaving Hate
+     * (id 66, value 0) untargeted, or targeting Hate itself, since a real
+     * opponent target is strictly better: the same card draw, plus
+     * denying player 2 that scored value this round.
+     */
+    public function testChooseActionTargetsAnOpponentsMoodWhenPlayingHate(): void
+    {
+        $state = $this->boardState(hands: [1 => [66], 2 => [5]]);
+        $state->moveHandToInPlay(2, 5);
+
+        $action = $this->bot->chooseAction($state, [66], 1);
+
+        self::assertSame(66, $action['card_id']);
+        self::assertSame(['target_mood_id' => 5], $action['choices']);
+    }
+
+    /**
+     * With no opponent mood in play at all, hateTargetMoodId() falls back
+     * to Hate's own card id (66) -- HateEffect's own field has
+     * `includes_self`, and Hate's printed value is 0, so bottoming it
+     * costs nothing a plain, untargeted play wouldn't already have lost;
+     * the card draw is pure upside. Confirms Hate is never left
+     * deliberately untargeted just because no opponent target exists.
+     */
+    public function testChooseActionTargetsHateItselfWhenNoOpponentMoodExists(): void
+    {
+        $state = $this->boardState(hands: [1 => [66]]);
+
+        $action = $this->bot->chooseAction($state, [66], 1);
+
+        self::assertSame(66, $action['card_id']);
+        self::assertSame(['target_mood_id' => 66], $action['choices']);
+    }
+
+    /**
+     * A teammate's own Complacency doesn't count as a legal target
+     * either (the same "an opponent" exclusion Contempt/Denial already
+     * use above) -- with no true opponent in play, hateTargetMoodId()
+     * falls back to Hate itself exactly as if no one had any mood in
+     * play at all, rather than bottoming the teammate's own mood.
+     */
+    public function testChooseActionDoesNotTargetATeammatesMoodWhenPlayingHate(): void
+    {
+        $state = new BoardState(
+            $this->sampleCatalog(),
+            DefaultEffectRegistry::build(),
+            [1, 2, 3],
+            hands: [1 => [66], 2 => [5]],
+            teamIdByPlayer: [1 => 0, 2 => 0, 3 => 1],
+        );
+        $state->moveHandToInPlay(2, 5);
+
+        $action = $this->bot->chooseAction($state, [66], 1);
+
+        self::assertSame(66, $action['card_id']);
+        self::assertSame(['target_mood_id' => 66], $action['choices']);
+    }
+
+    /**
+     * The bot already has Euphoria (id 117, "value increases by 1 for
+     * each mood in play") in play -- bottoming ANY mood via Hate,
+     * including Hate itself, would shrink the in-play mood count by one
+     * and so cost Euphoria a permanent point of its own value, a real
+     * ongoing loss a one-time random draw isn't worth. hateTargetMoodId()
+     * returns null here even though player 2's Complacency (value 4)
+     * would otherwise be a clearly-worthwhile target, so Hate is played
+     * with no target at all (its own plain 0 value).
+     */
+    public function testChooseActionDoesNotTargetAnythingWithHateWhenEuphoriaIsInPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [66, 117], 2 => [5]]);
+        $state->moveHandToInPlay(1, 117);
+        $state->moveHandToInPlay(2, 5);
+
+        $action = $this->bot->chooseAction($state, [66], 1);
+
+        self::assertSame(66, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
     // -- Anger (confirmed by the maintainer) ---------------------------------
 
     /**
@@ -1979,5 +2064,37 @@ final class BotPlayerServiceTest extends TestCase
         $action = $this->bot->chooseAction($state, [49, 4], 1);
 
         self::assertSame(4, $action['card_id'], 'no trigger applies, so Rationalization should still be saved for last');
+    }
+
+    /**
+     * A bug caught live (issue #196): Compulsion's own required
+     * `target_player_id` field (CardChoiceSchema's `'compulsion'` entry,
+     * scope 'other') has no special-cased choice-building of its own --
+     * it falls straight through to the generic per-field
+     * `resolveSchemaFields()` loop, same as every other required
+     * single-player-target field. In Open Team Play specifically, that
+     * field's own generic 'other' scope permits targeting ANY other
+     * seated player, teammate included (unlike Duplicity's own
+     * `excludes_teammate` flag on an otherwise-identical field shape) --
+     * this is the one test confirming that resolution actually completes
+     * with a real `target_player_id` rather than an incomplete choices
+     * array in a 4-player team game, since no test previously exercised
+     * Compulsion's own bot targeting at all.
+     */
+    public function testChooseActionTargetsAPlayerWhenPlayingCompulsionInTeamPlay(): void
+    {
+        $state = new BoardState(
+            $this->sampleCatalog(),
+            DefaultEffectRegistry::build(),
+            [1, 2, 3, 4],
+            hands: [1 => [], 2 => [], 3 => [86], 4 => []],
+            teamIdByPlayer: [1 => 0, 2 => 0, 3 => 1, 4 => 1],
+        );
+
+        $action = $this->bot->chooseAction($state, [86], 3);
+
+        self::assertNotNull($action);
+        self::assertArrayHasKey('target_player_id', $action['choices']);
+        self::assertNotSame(3, $action['choices']['target_player_id'], 'Compulsion must target another player, never the acting player itself');
     }
 }

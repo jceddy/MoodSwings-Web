@@ -350,6 +350,18 @@
             saveAllowCustomContentPreference(allowCustomContentCheckbox.checked);
         });
 
+        // "Discoverable for open games" (issue #116) -- same wiring
+        // pattern/starts-UNCHECKED opt-in shape as the checkbox above.
+        // Only gates whether THIS user's own open lobby listings are
+        // shown to strangers (MatchmakingService::listOpenGames()) --
+        // joining someone else's listing needs no such opt-in.
+        const matchmakingDiscoverableCheckbox = document.getElementById('settings-matchmaking-discoverable-checkbox');
+        matchmakingDiscoverableCheckbox.checked = user.matchmaking_discoverable;
+        matchmakingDiscoverableCheckbox.addEventListener('change', () => {
+            user.matchmaking_discoverable = matchmakingDiscoverableCheckbox.checked;
+            saveMatchmakingDiscoverablePreference(matchmakingDiscoverableCheckbox.checked);
+        });
+
         // Card/icon size slider (issue #417) -- a client-only preference
         // (see CARD_SCALE_STORAGE_KEY/getCardScale()/applyCardScale()
         // above, already applied once at page load independent of this
@@ -1547,7 +1559,7 @@
     // six are the only deck_types with no single "the deck" for
     // openSharedDeckView() (issue #197) to show.
     function isSharedDeckType(deckType) {
-        return !['custom_duel', 'quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft'].includes(deckType);
+        return !['custom_duel', 'quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck'].includes(deckType);
     }
 
     // Plain-language explanation shown under the New Game dialog's own
@@ -1567,6 +1579,7 @@
         rotisserie_draft: '2-4 players draft one card at a time from a shared, fully face-up pool -- no packs, piles, or grid, just the whole pool laid out at once. A snake-style turn order (choosable cutoff of 13-20 cards per player, default 14) continues until every player has picked that many; a 2-player draft plays a best-of-three match, sideboarding freely between games, while a 3-4 player draft plays a single game.',
         tiered_rotisserie_draft: 'Like Rotisserie Draft, but split into several tiers drafted one after another (turn order carries straight through from one tier into the next). Choose the fixed rarity tiering (Mythic/Rare/Uncommon/Common, each tier\'s own layout twice what it distributes -- a 15-card pool per player) or configure 2-4 custom tiers yourself, each with its own pool and cutoff count. 2-4 players; a 2-player draft plays a best-of-three match, sideboarding freely between games, while a 3-4 player draft plays a single game.',
         chaos_draft: 'Quick Draft\'s own drafting, deck-building, and match structure, unchanged -- but at the start of every round, each player (or team, in Open Team Play) is offered a choice between two randomly-generated effects and attaches the chosen one permanently to a card in their hand, stacking with that card\'s own printed ability.',
+        sealed_deck: '2-4 players, no live drafting at all: each player is independently dealt their own random 45-card Structure deck-style sealed pool (23 common, 14 uncommon, 6 rare, 2 mythic) and builds a deck of at least 12 cards straight from it. A 2-player game plays a best-of-three match, sideboarding freely between games from that same fixed pool; a 3-4 player game is a single game.',
         one_of_each: 'The full 133-card pool — one copy of every printed mood.',
     };
 
@@ -1933,6 +1946,7 @@
         document.getElementById('new-game-grid-draft-saved-deck-fields').hidden = poolSource !== 'saved_deck';
     }
 
+    // Sealed Deck's own analog of updateQuickDraftPoolSourceVisibility().
     // Rotisserie Draft's own analog of updateQuickDraftPoolSourceVisibility().
     function updateRotisserieDraftPoolSourceVisibility() {
         const poolSource = document.getElementById('new-game-rotisserie-draft-pool-source').value;
@@ -1988,6 +2002,13 @@
             return false;
         }
         if (format === 'draft') {
+            // Sealed Deck deliberately excluded here -- it has no live
+            // drafting phase at all, so it's offered as its own top-level
+            // Format option instead (the 'sealed_deck' sentinel handled by
+            // updateDeckTypeAvailability()'s own early-return branch)
+            // rather than duplicating it as one of 'draft' format's own
+            // deck-type choices. Still available under Team Play/Closed
+            // Team Play below, same as every other draft deck_type.
             return deckType === 'quick_draft' || deckType === 'winston_draft' || deckType === 'grid_draft' || deckType === 'rotisserie_draft' || deckType === 'tiered_rotisserie_draft' || deckType === 'chaos_draft';
         }
         switch (deckType) {
@@ -1999,9 +2020,27 @@
             case 'rotisserie_draft': return format === 'closed_team' || format === 'team';
             case 'tiered_rotisserie_draft': return format === 'closed_team' || format === 'team';
             case 'chaos_draft': return format === 'closed_team' || format === 'team';
+            case 'sealed_deck': return format === 'closed_team' || format === 'team';
             case 'power': return format !== 'team' && format !== 'closed_team';
             default: return true;
         }
+    }
+
+    // #new-game-format's own 'sealed_deck' option is a UI-only sentinel --
+    // Sealed Deck has no separate backend format at all, it's still an
+    // ordinary format: 'draft' game (deck_type: 'sealed_deck'), just
+    // offered as its own top-level Format choice instead of one of
+    // 'draft''s own Deck dropdown options (see isDeckTypeAvailableForFormat()'s
+    // own docblock on why it's excluded from that dropdown). Every read of
+    // #new-game-format's value that feeds logic which has to match the
+    // ACTUAL backend format (bot support, the open-lobby player-count
+    // field, what's actually sent to the server) goes through this rather
+    // than reading the select directly; reads that only ever compare
+    // against 'team'/'closed_team'/'duel' don't need it, since the
+    // sentinel already isn't any of those.
+    function effectiveNewGameFormat() {
+        const raw = document.getElementById('new-game-format').value;
+        return raw === 'sealed_deck' ? 'draft' : raw;
     }
 
     // Unavailable deck types are hidden (not merely disabled) so the
@@ -2014,6 +2053,25 @@
     function updateDeckTypeAvailability() {
         const deckTypeSelect = document.getElementById('new-game-deck-type');
         const format = document.getElementById('new-game-format').value;
+
+        // Sealed Deck's own top-level Format option (a UI-only sentinel --
+        // the game itself is still created as an ordinary format: 'draft'
+        // game, deck_type: 'sealed_deck', see the submit handler below) has
+        // only one possible deck: there's no live drafting phase to choose
+        // a pool source for the way every OTHER draft deck_type has, so the
+        // Deck dropdown itself would just be a single-option no-op. Hiding
+        // it entirely (rather than leaving it forced-and-visible) avoids
+        // that dead control -- the deck-type description right below it
+        // stays visible and up to date regardless, via
+        // updateDeckTypeDescription() below.
+        const isSealedDeckFormat = format === 'sealed_deck';
+        document.getElementById('new-game-deck-type-label').hidden = isSealedDeckFormat;
+        if (isSealedDeckFormat) {
+            deckTypeSelect.value = 'sealed_deck';
+            updateDeckTypeDescription();
+            updateOpponentSelectionLimit();
+            return;
+        }
 
         let fallbackValue = null;
         let selectedStillAvailable = false;
@@ -2055,7 +2113,15 @@
 
     function updateTeamFields() {
         const format = document.getElementById('new-game-format').value;
-        const isTeamFormat = format === 'team' || format === 'closed_team';
+        // Issue #116: an open-lobby team listing never offers a partner
+        // choice at all -- there's nobody to choose from yet, and
+        // whoever eventually fills the other 3 seats are strangers with
+        // no way to coordinate a pick ahead of time. Teams are always
+        // assigned randomly once the roster fills instead (see
+        // MatchmakingService::joinOpenGame()), so this stays hidden even
+        // for a team format in that mode.
+        const isOpenLobby = document.getElementById('new-game-mode-open').checked;
+        const isTeamFormat = (format === 'team' || format === 'closed_team') && !isOpenLobby;
         document.getElementById('new-game-team-fields').hidden = !isTeamFormat;
         if (!isTeamFormat) {
             return;
@@ -2533,7 +2599,7 @@
         if (format === 'duel' && deckType === 'custom_duel') {
             return true;
         }
-        if (['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft'].includes(deckType)) {
+        if (['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck'].includes(deckType)) {
             return true;
         }
         return ['structure', 'power', 'jceddys_75', 'one_of_each', 'custom'].includes(deckType);
@@ -2585,7 +2651,7 @@
     // Run on the same format/deck-type change events updateDeckTypeAvailability()
     // already listens to.
     function updateBotCheckboxAvailability() {
-        const format = document.getElementById('new-game-format').value;
+        const format = effectiveNewGameFormat();
         const deckType = document.getElementById('new-game-deck-type').value;
         const supported = botsSupportedFor(format, deckType);
 
@@ -2643,6 +2709,33 @@
     // matters for 'custom_duel' switching away without its own bot
     // decklist filled in -- format alone never disqualifies a bot
     // anymore, Team Play (issue #360) included.
+    // Issue #116: hides the friends picker (every format is supported in
+    // open-lobby mode, unlike the original two-player-only cut) whenever
+    // "Post to the open lobby" is chosen, and shows/hides
+    // #new-game-open-player-count-label -- only 'draft'/'standard' let
+    // the creator actually choose a total (2-4); 'duel' is always 2 and
+    // the team formats are always 4, both forced server-side regardless
+    // of what this field would send, so it stays hidden for those.
+    // updateTeamFields() (called via the format 'change' listener already
+    // wired below) independently keeps #new-game-team-fields hidden in
+    // this mode even for a team format -- there's no partner to choose
+    // from strangers, so teams are always assigned randomly once the
+    // roster fills (see MatchmakingService::joinOpenGame()).
+    function updateNewGameModeFields() {
+        const isOpenLobby = document.getElementById('new-game-mode-open').checked;
+        document.getElementById('new-game-friends-fields').hidden = isOpenLobby;
+
+        const format = effectiveNewGameFormat();
+        document.getElementById('new-game-open-player-count-label').hidden =
+            !isOpenLobby || (format !== 'draft' && format !== 'standard');
+
+        document.getElementById('new-game-submit-button').textContent = isOpenLobby ? 'Post to open lobby' : 'Create game';
+        updateTeamFields();
+    }
+    document.getElementById('new-game-mode-friends').addEventListener('change', updateNewGameModeFields);
+    document.getElementById('new-game-mode-open').addEventListener('change', updateNewGameModeFields);
+    document.getElementById('new-game-format').addEventListener('change', updateNewGameModeFields);
+
     document.getElementById('new-game-format').addEventListener('change', updateOpponentSelectionLimit);
     document.getElementById('new-game-format').addEventListener('change', updateDeckTypeAvailability);
     document.getElementById('new-game-format').addEventListener('change', updateBotCheckboxAvailability);
@@ -2820,7 +2913,11 @@
             prefill ? prefill.defaultSelectionsMode : user.default_selections_mode_preference;
         const submitButton = document.getElementById('new-game-submit-button');
         submitButton.disabled = false;
-        submitButton.textContent = 'Create game';
+        // form.reset() above already put the mode radios back to "Invite
+        // friends" (its checked-by-default option) -- this just brings
+        // the rest of the dialog (friends picker/format options/submit
+        // label) back in line with that.
+        updateNewGameModeFields();
         updateDeckTypeAvailability();
 
         const [{ ok, body }, botsResp] = await Promise.all([listFriends(), listPracticeBots()]);
@@ -2899,7 +2996,12 @@
             // these values would trigger it -- see the format/deck-type
             // 'change' listeners below.
             const formatSelect = document.getElementById('new-game-format');
-            formatSelect.value = prefill.format;
+            // prefill.format/prefill.deckType are the real backend values
+            // off the previous game (always 'draft'/'sealed_deck' for a
+            // Sealed Deck rematch, never the UI-only 'sealed_deck' format
+            // sentinel) -- translate back so the dropdown lands on its own
+            // top-level "Sealed Deck" option rather than "Draft".
+            formatSelect.value = (prefill.format === 'draft' && prefill.deckType === 'sealed_deck') ? 'sealed_deck' : prefill.format;
             formatSelect.dispatchEvent(new Event('change'));
 
             const deckTypeSelect = document.getElementById('new-game-deck-type');
@@ -2960,23 +3062,159 @@
         newGameDialog.close();
     });
 
+    // -- Open games (issue #116) ----------------------------------------
+
+    const openGamesDialog = document.getElementById('open-games-dialog');
+    const NEW_GAME_FORMAT_LABELS = { duel: 'Duel', draft: 'Draft', standard: 'Traditional', team: 'Open Team Play', closed_team: 'Closed Team Play' };
+    const NEW_GAME_DECK_TYPE_LABELS = {
+        structure: 'Structure', power: 'Power', jceddys_75: "jceddy's 75 Card", custom: 'Custom Decklist',
+        custom_duel: 'Custom Decklists (Duel)', quick_draft: 'Quick Draft', winston_draft: 'Winston Draft',
+        grid_draft: 'Grid Draft', rotisserie_draft: 'Rotisserie Draft', tiered_rotisserie_draft: 'Tiered Rotisserie Draft',
+        chaos_draft: 'Chaos Draft', one_of_each: 'One of Each Card',
+    };
+
+    // "2 of 4 joined" -- listing.joined_count itself never includes the
+    // listing's own creator (see MatchmakingService::joinOpenGame()'s own
+    // docblock), but the creator has functionally already filled one
+    // seat, so the number shown here always adds 1 for them -- a brand
+    // new listing reads "1 of 4 joined", not the more confusing
+    // "0 of 4" (a bug caught live: the creator's own seat wasn't being
+    // counted at all).
+    function openGameSummary(listing) {
+        const params = listing.create_game_params;
+        const format = NEW_GAME_FORMAT_LABELS[params.format] || params.format;
+        const deckType = NEW_GAME_DECK_TYPE_LABELS[params.deck_type] || params.deck_type;
+        return `${format} – ${deckType} (${listing.joined_count + 1} of ${listing.target_player_count} joined)`;
+    }
+
+    async function loadOpenGamesDialog() {
+        document.getElementById('open-games-error').hidden = true;
+
+        const [availableResp, joinedResp, mineResp] = await Promise.all([listOpenGames(), listOpenGames('joined'), listOpenGames('mine')]);
+
+        const availableList = document.getElementById('open-games-available-list');
+        availableList.innerHTML = '';
+        const availableListings = availableResp.ok ? availableResp.body.listings : [];
+        document.getElementById('open-games-available-empty').hidden = availableListings.length > 0;
+
+        for (const listing of availableListings) {
+            const item = document.createElement('li');
+            item.append(`${listing.creator_username}: ${openGameSummary(listing)} `);
+            const joinButton = document.createElement('button');
+            joinButton.type = 'button';
+            joinButton.textContent = 'Join';
+            joinButton.addEventListener('click', async () => {
+                joinButton.disabled = true;
+                joinButton.textContent = 'Joining...';
+                const { ok, body } = await joinOpenGame(listing.id);
+                if (!ok) {
+                    joinButton.disabled = false;
+                    joinButton.textContent = 'Join';
+                    document.getElementById('open-games-error').textContent = body.message || 'Could not join this game.';
+                    document.getElementById('open-games-error').hidden = false;
+                    return;
+                }
+                if (body.status === 'started') {
+                    openGamesDialog.close();
+                    showBoard(body.game_id);
+                    return;
+                }
+                // 'waiting' -- this join didn't fill the last seat.
+                // Nothing to jump to yet; refresh so it now shows up
+                // under "Waiting to start" instead (with a Leave button)
+                // and drops out of "Available to join".
+                await loadOpenGamesDialog();
+            });
+            item.appendChild(joinButton);
+            availableList.appendChild(item);
+        }
+
+        const joinedList = document.getElementById('open-games-joined-list');
+        joinedList.innerHTML = '';
+        const joinedListings = joinedResp.ok ? joinedResp.body.listings : [];
+        document.getElementById('open-games-joined-empty').hidden = joinedListings.length > 0;
+
+        for (const listing of joinedListings) {
+            const item = document.createElement('li');
+            item.append(`${listing.creator_username}: ${openGameSummary(listing)} `);
+            const leaveButton = document.createElement('button');
+            leaveButton.type = 'button';
+            leaveButton.textContent = 'Leave';
+            leaveButton.addEventListener('click', async () => {
+                leaveButton.disabled = true;
+                const { ok, body } = await leaveOpenGame(listing.id);
+                if (!ok) {
+                    leaveButton.disabled = false;
+                    document.getElementById('open-games-error').textContent = body.message || 'Could not leave this listing.';
+                    document.getElementById('open-games-error').hidden = false;
+                    return;
+                }
+                await loadOpenGamesDialog();
+            });
+            item.appendChild(leaveButton);
+            joinedList.appendChild(item);
+        }
+
+        const mineList = document.getElementById('open-games-mine-list');
+        mineList.innerHTML = '';
+        const mineListings = mineResp.ok ? mineResp.body.listings : [];
+        document.getElementById('open-games-mine-empty').hidden = mineListings.length > 0;
+
+        for (const listing of mineListings) {
+            const item = document.createElement('li');
+            item.append(`${openGameSummary(listing)} `);
+            const cancelButton = document.createElement('button');
+            cancelButton.type = 'button';
+            cancelButton.textContent = 'Cancel';
+            cancelButton.addEventListener('click', async () => {
+                cancelButton.disabled = true;
+                const { ok, body } = await cancelOpenGame(listing.id);
+                if (!ok) {
+                    cancelButton.disabled = false;
+                    document.getElementById('open-games-error').textContent = body.message || 'Could not cancel this listing.';
+                    document.getElementById('open-games-error').hidden = false;
+                    return;
+                }
+                await loadOpenGamesDialog();
+            });
+            item.appendChild(cancelButton);
+            mineList.appendChild(item);
+        }
+    }
+
+    document.getElementById('open-games-button').addEventListener('click', async () => {
+        await loadOpenGamesDialog();
+        openGamesDialog.showModal();
+    });
+
+    document.getElementById('open-games-close-button').addEventListener('click', () => {
+        openGamesDialog.close();
+    });
+
     newGameForm.addEventListener('submit', async (event) => {
         event.preventDefault();
         newGameError.hidden = true;
 
+        const isOpenLobby = document.getElementById('new-game-mode-open').checked;
+
         const opponentUserIds = Array.from(opponentCheckboxes.querySelectorAll('input:checked'))
             .map((box) => Number(box.value));
 
-        if (opponentUserIds.length === 0) {
+        if (!isOpenLobby && opponentUserIds.length === 0) {
             newGameError.textContent = 'Choose at least one opponent.';
             newGameError.hidden = false;
             return;
         }
 
-        const format = document.getElementById('new-game-format').value;
+        // Translated to the real backend format ('draft') if the Sealed
+        // Deck sentinel is selected -- see effectiveNewGameFormat()'s own
+        // docblock. Everything below (createGame()/postOpenGame() calls
+        // included) reads this one variable, so the actual request always
+        // sends the real format regardless of which option was picked.
+        const format = effectiveNewGameFormat();
         const isTeamFormat = format === 'team' || format === 'closed_team';
 
-        if (isTeamFormat && opponentUserIds.length !== 3) {
+        if (!isOpenLobby && isTeamFormat && opponentUserIds.length !== 3) {
             newGameError.textContent = 'Either team format needs exactly 3 opponents (4 players total).';
             newGameError.hidden = false;
             return;
@@ -2987,7 +3225,7 @@
         // a slow response can't be mistaken for a missed click and prompt a
         // second, duplicate submission -- creating two identical games.
         submitButton.disabled = true;
-        submitButton.textContent = 'Creating...';
+        submitButton.textContent = isOpenLobby ? 'Posting...' : 'Creating...';
 
         const randomTeams = isTeamFormat && document.getElementById('new-game-random-teams').checked;
         const partnerUserId = isTeamFormat && !randomTeams ? Number(document.getElementById('new-game-partner').value) : undefined;
@@ -3047,7 +3285,10 @@
         // of these five is ever active per submission, so whichever
         // select is currently relevant is the one read here. Mirrors how
         // GameService::createGame() itself reuses one $savedDecklistId
-        // param across all five -- see its own docblock.
+        // param across all five -- see its own docblock. Sealed Deck has
+        // no pool-source picker of its own (always the Structure pool for
+        // now, see GameService::buildSealedDeckPlayerPool()'s own
+        // docblock), so it never contributes a branch here.
         const savedDecklistId = deckType === 'custom' ? Number(document.getElementById('new-game-saved-decklist').value) || undefined
             : (deckType === 'quick_draft' || deckType === 'chaos_draft') && quickDraftPoolSource === 'saved_deck' ? Number(document.getElementById('new-game-quick-draft-saved-decklist').value) || undefined
             : deckType === 'winston_draft' && winstonDraftPoolSource === 'saved_deck' ? Number(document.getElementById('new-game-winston-draft-saved-decklist').value) || undefined
@@ -3071,6 +3312,52 @@
         // itself unchecked whenever hidden, so reading .checked
         // unconditionally here already reflects that.
         const botGoesFirst = document.getElementById('new-game-bot-goes-first').checked;
+
+        // Issue #116: post to the open lobby instead of creating the game
+        // directly -- mirrors createGame()'s own params (see above) minus
+        // opponent_user_ids/partner_user_id/random_teams/bot_* (none
+        // meaningful here; strangers, not chosen friends or a bot, fill
+        // the other seats once they join -- teams in particular are
+        // always assigned randomly once the roster fills, see
+        // MatchmakingService::joinOpenGame()). target_player_count only
+        // matters for 'draft'/'standard' (#new-game-open-player-count) --
+        // 'duel' is always 2 and the team formats are always 4, both
+        // forced server-side regardless of what's sent here.
+        if (isOpenLobby) {
+            const { ok, body } = await postOpenGame({
+                format,
+                deck_type: deckType,
+                target_player_count: Number(document.getElementById('new-game-open-player-count').value),
+                decklist_text: decklistText,
+                duel_deck_rules: duelDeckRules,
+                quick_draft_pool_source: quickDraftPoolSource,
+                quick_draft_custom_pool_text: quickDraftCustomPoolText,
+                winston_draft_pool_source: winstonDraftPoolSource,
+                winston_draft_custom_pool_text: winstonDraftCustomPoolText,
+                grid_draft_pool_source: gridDraftPoolSource,
+                grid_draft_custom_pool_text: gridDraftCustomPoolText,
+                saved_decklist_id: savedDecklistId,
+                default_selections_mode: defaultSelectionsMode,
+                rotisserie_draft_pool_source: rotisserieDraftPoolSource,
+                rotisserie_draft_custom_pool_text: rotisserieDraftCustomPoolText,
+                rotisserie_draft_cutoff_count: rotisserieDraftCutoffCount,
+                tiered_rotisserie_draft_mode: tieredRotisserieDraftMode,
+                tiered_rotisserie_draft_tiers: tieredRotisserieDraftTiers,
+            });
+
+            if (!ok) {
+                submitButton.disabled = false;
+                submitButton.textContent = 'Post to open lobby';
+                newGameError.textContent = body.message || 'Could not post this game to the open lobby.';
+                newGameError.hidden = false;
+                return;
+            }
+
+            newGameDialog.close();
+            await showAlertDialog('Posted! Your open game will stay listed under "Open games" until someone joins it.');
+            return;
+        }
+
         const { ok, body } = await createGame(
             opponentUserIds,
             format,
@@ -4510,7 +4797,7 @@
         // a pending decision is known (nothing can freeze a still-waiting
         // draft the same way, so there's nothing to gate here yet).
         const canResignWhileWaiting = state.game.status === 'waiting'
-            && ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft'].includes(state.game.deck_type);
+            && ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck'].includes(state.game.deck_type);
         const resignButton = document.getElementById('resign-button');
         resignButton.hidden = isReadOnlyView()
             || !(state.game.status === 'in_progress' || canResignWhileWaiting)
@@ -4765,13 +5052,14 @@
                 document.getElementById('draft-deck-building').hidden = true;
                 renderDuelDeckSubmission(state);
                 autoStartGameIfReady(state.players.every((p) => p.deck_submitted));
-            } else if (state.game.deck_type === 'quick_draft' || state.game.deck_type === 'winston_draft' || state.game.deck_type === 'grid_draft' || state.game.deck_type === 'rotisserie_draft' || state.game.deck_type === 'tiered_rotisserie_draft' || state.game.deck_type === 'chaos_draft') {
+            } else if (state.game.deck_type === 'quick_draft' || state.game.deck_type === 'winston_draft' || state.game.deck_type === 'grid_draft' || state.game.deck_type === 'rotisserie_draft' || state.game.deck_type === 'tiered_rotisserie_draft' || state.game.deck_type === 'chaos_draft' || state.game.deck_type === 'sealed_deck') {
                 document.getElementById('duel-deck-submission').hidden = true;
                 const draftState = state.game.deck_type === 'quick_draft' || state.game.deck_type === 'chaos_draft' ? state.quick_draft
                     : state.game.deck_type === 'winston_draft' ? state.winston_draft
                         : state.game.deck_type === 'grid_draft' ? state.grid_draft
                             : state.game.deck_type === 'rotisserie_draft' ? state.rotisserie_draft
-                                : state.tiered_rotisserie_draft;
+                                : state.game.deck_type === 'sealed_deck' ? state.sealed_deck
+                                    : state.tiered_rotisserie_draft;
                 document.getElementById('board-round-status').textContent =
                     draftState.status === 'drafting' ? 'Drafting your deck.' : 'Building your deck.';
                 renderDraftPanel(state);
@@ -5223,6 +5511,19 @@
     // that function's own docblock) -- so this can be a poll cycle stale,
     // same tradeoff every other chaos-draft-offer UI state already makes.
     let chaosDraftOfferOpenForViewer = false;
+    // Whether the ROUND OVERALL still has anyone's offer (not just the
+    // viewer's own) left unresolved -- GameService::
+    // assertChaosDraftOfferResolved() now blocks EVERY play/pass in the
+    // round until EVERY seated player/team has resolved theirs, a
+    // maintainer-requested strengthening of the original "only the
+    // acting player is blocked" rule (a round-start "draft phase" gating
+    // ordinary play, not merely a rule about your own turn). Distinct
+    // from chaosDraftOfferOpenForViewer above -- a viewer can have
+    // resolved their OWN offer (that flag false) while this one is still
+    // true, waiting on someone else. Defaults true (not blocking) for
+    // the same "can be a poll cycle stale" reasoning
+    // chaosDraftOfferOpenForViewer's own declaration already gives.
+    let chaosDraftRoundReady = true;
 
     // Whether #pass-button should currently be clickable -- shared by
     // renderBoard()'s own regular poll and refreshPassButtonDisabled()
@@ -5232,7 +5533,7 @@
             return false;
         }
         const pendingDecision = Boolean(currentState.round && currentState.round.pending_decision);
-        return !isReadOnlyView() && currentState.game.status === 'in_progress' && currentState.you.is_your_turn && !pendingDecision && !chaosDraftOfferOpenForViewer;
+        return !isReadOnlyView() && currentState.game.status === 'in_progress' && currentState.you.is_your_turn && !pendingDecision && !chaosDraftOfferOpenForViewer && chaosDraftRoundReady;
     }
 
     // Applies passButtonCanAct() to the DOM immediately -- called both
@@ -5256,7 +5557,7 @@
             && state.you && state.you.game_player_id != null;
         if (!eligible) {
             chaosDraftSelectedEffectId = null;
-            renderChaosDraftOffer(null);
+            renderChaosDraftOffer(null, true);
             return;
         }
         if (chaosDraftOfferRequestInFlight) {
@@ -5268,19 +5569,24 @@
         if (!ok) {
             return; // transient failure -- the next poll retries
         }
-        renderChaosDraftOffer(body.offer);
+        renderChaosDraftOffer(body.offer, body.round_ready);
     }
 
     function chaosDraftEffectSummary(effect) {
         return capitalize(effect.rarity) + ' — ' + effect.rules_text;
     }
 
-    function renderChaosDraftOffer(offer) {
+    function renderChaosDraftOffer(offer, roundReady) {
         // See chaosDraftOfferOpenForViewer's own declaration -- offer is
         // only ever non-null while genuinely unresolved (chaosDraftOfferFor()
         // returns null once resolved_at is set), so this is exactly
         // "must I choose/attach before I can play or pass this round."
         chaosDraftOfferOpenForViewer = offer !== null;
+        // See chaosDraftRoundReady's own declaration -- distinct from the
+        // flag above: whether anyone ELSE this round still needs to
+        // resolve theirs, which blocks Play/Pass just as much as the
+        // viewer's own still-open offer would.
+        chaosDraftRoundReady = roundReady;
         refreshPassButtonDisabled();
 
         const panel = document.getElementById('chaos-draft-offer-panel');
@@ -5292,13 +5598,24 @@
         const rejectButton = document.getElementById('chaos-draft-offer-reject-button');
 
         if (!offer) {
-            panel.hidden = true;
             choicesEl.innerHTML = '';
             attachCardsEl.innerHTML = '';
             attachEl.hidden = true;
             confirmButton.hidden = true;
             rejectButton.hidden = true;
             chaosDraftSelectedEffectId = null;
+
+            // The viewer is done, but the round overall is still waiting
+            // on someone else's own offer -- keep the panel up with an
+            // explanatory status instead of hiding it, so Play/Pass
+            // staying disabled doesn't look broken or unexplained.
+            if (!roundReady) {
+                panel.hidden = false;
+                statusEl.textContent = "Waiting for every player to choose and attach this round's Chaos Draft effect before play can continue.";
+                return;
+            }
+
+            panel.hidden = true;
             return;
         }
 
@@ -5339,7 +5656,7 @@
                     chaosDraftEffectSummary(effect),
                     () => {
                         chaosDraftSelectedEffectId = effect.id;
-                        renderChaosDraftOffer(offer);
+                        renderChaosDraftOffer(offer, chaosDraftRoundReady);
                     }
                 ));
             });
@@ -5554,7 +5871,7 @@
             return false;
         }
 
-        const draftState = state.quick_draft || state.winston_draft || state.grid_draft || state.rotisserie_draft || state.tiered_rotisserie_draft;
+        const draftState = state.quick_draft || state.winston_draft || state.grid_draft || state.rotisserie_draft || state.tiered_rotisserie_draft || state.sealed_deck;
 
         return !draftState || draftState.status === 'completed';
     }
@@ -5619,7 +5936,7 @@
     function renderDraftMatchScoreline(state) {
         const el = document.getElementById('draft-match-scoreline');
         const nextGameButton = document.getElementById('draft-match-next-game-button');
-        const draftState = state.quick_draft || state.winston_draft || state.grid_draft || state.rotisserie_draft || state.tiered_rotisserie_draft;
+        const draftState = state.quick_draft || state.winston_draft || state.grid_draft || state.rotisserie_draft || state.tiered_rotisserie_draft || state.sealed_deck;
         if (!draftState) {
             el.hidden = true;
             nextGameButton.hidden = true;
@@ -6425,6 +6742,15 @@
     let currentOpponentUsername = 'your opponent';
 
     function renderDraftDeckBuilding(deckBuilding) {
+        // Sorted by color/rarity/name (compareDraftPoolCards, shared with
+        // openDraftPoolView()'s own "View draft pool" sections) rather than
+        // left in draft/deal order -- makes a 45+ card pool actually
+        // scannable while trimming a deck. Reassigns (rather than sorting
+        // deckBuilding.drafted_cards in place) so this stays idempotent
+        // across the repeated re-renders every selection toggle triggers
+        // with the exact same deckBuilding object: already-sorted input
+        // sorts back to the same order every time.
+        deckBuilding.drafted_cards = deckBuilding.drafted_cards.slice().sort(compareDraftPoolCards);
         currentDeckBuilding = deckBuilding;
         // Open Team Play (deckBuilding.team_drafted_cards non-null): max_deck_size
         // is the whole TEAM's combined pool, not a real ceiling on what
@@ -6709,7 +7035,7 @@
             } else if (rd.status === 'deck_building') {
                 renderDraftDeckBuilding(rd.deck_building);
             }
-        } else {
+        } else if (state.game.deck_type === 'tiered_rotisserie_draft') {
             const trd = state.tiered_rotisserie_draft;
             document.getElementById('tiered-rotisserie-draft-panel').hidden = false;
             document.getElementById('quick-draft-panel').hidden = true;
@@ -6723,6 +7049,24 @@
                 renderTieredRotisserieDraftDrafting(trd.drafting);
             } else if (trd.status === 'deck_building') {
                 renderDraftDeckBuilding(trd.deck_building);
+            }
+        } else {
+            // Sealed Deck (issue #392): no live drafting phase at all, so
+            // unlike every other draft deck_type above, there's no own
+            // "-panel"/"-drafting" markup to show -- sd.status is always
+            // 'deck_building' while the match is still 'waiting' (see
+            // GameService::sealedDeckStateFor()'s own docblock), so this
+            // always goes straight to the shared #draft-deck-building view.
+            const sd = state.sealed_deck;
+            document.getElementById('quick-draft-panel').hidden = true;
+            document.getElementById('winston-draft-panel').hidden = true;
+            document.getElementById('grid-draft-panel').hidden = true;
+            document.getElementById('rotisserie-draft-panel').hidden = true;
+            document.getElementById('tiered-rotisserie-draft-panel').hidden = true;
+            document.getElementById('draft-deck-building').hidden = sd.status !== 'deck_building';
+
+            if (sd.status === 'deck_building') {
+                renderDraftDeckBuilding(sd.deck_building);
             }
         }
     }
@@ -7461,6 +7805,13 @@
         // (a DB-level, not BoardState-level, restriction).
         if (chaosDraftOfferOpenForViewer) {
             validationMessage.textContent = "Choose and attach this round's Chaos Draft effect first (see above).";
+            validationMessage.hidden = false;
+            playButton.disabled = true;
+            return;
+        }
+
+        if (!chaosDraftRoundReady) {
+            validationMessage.textContent = "Waiting for every player to choose and attach this round's Chaos Draft effect (see above).";
             validationMessage.hidden = false;
             playButton.disabled = true;
             return;

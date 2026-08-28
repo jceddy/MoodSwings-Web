@@ -157,6 +157,24 @@ final class UserRepository
         $stmt->execute(['allow_custom_content' => $allowCustomContent ? 1 : 0, 'id' => $id]);
     }
 
+    /**
+     * "Discoverable for open games" (issue #116) as a personal preference
+     * (Settings dialog's "Game defaults" section) -- opt-in gate for
+     * whether this user's own open game listings (MatchmakingService)
+     * are shown to strangers via the open lobby at all. Defaults to
+     * false (off), the same "must opt in" shape allow_custom_content/
+     * default_selections_mode_preference already use, since posting an
+     * open listing exposes this user's username to anyone browsing the
+     * lobby. Joining someone else's listing needs no such opt-in of its
+     * own -- that's an explicit action the joiner already takes by
+     * clicking join, not something done to them. See migration 0198.
+     */
+    public function setMatchmakingDiscoverable(int $id, bool $matchmakingDiscoverable): void
+    {
+        $stmt = Connection::get()->prepare('UPDATE users SET matchmaking_discoverable = :matchmaking_discoverable WHERE id = :id');
+        $stmt->execute(['matchmaking_discoverable' => $matchmakingDiscoverable ? 1 : 0, 'id' => $id]);
+    }
+
     public function delete(int $id): void
     {
         $stmt = Connection::get()->prepare('DELETE FROM users WHERE id = :id');

@@ -1,0 +1,17 @@
+-- No schema change: a follow-up to 0206's own fix, reported live from
+-- that fix's own verification screenshot -- nudging the value/chaos-
+-- delta/chaos-override badge row down (0206) fixed the card-name
+-- overlap, but positioning the chaos-delta/chaos-override badge to the
+-- value badge's LEFT (unchanged from before) now put it at the same
+-- height as the top-left .card-thumb__badge--chaos "Chaos" rarity pill,
+-- and on a narrow card the two could still collide with EACH OTHER.
+-- Fixed by stacking the chaos-delta/chaos-override badge directly BELOW
+-- the value badge instead (same right-alignment, same ~22px/44px
+-- increment .card-thumb__badge--copy + .card-thumb__badge--recolored
+-- already uses for its own vertical stack), so it never shares a row
+-- with anything in the opposite corner again.
+--
+-- This migration exists purely to keep schema_version in sync with the
+-- VERSION bump that shipped alongside this fix, the same way
+-- 0024/.../0206 already did for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.63' WHERE id = 1;

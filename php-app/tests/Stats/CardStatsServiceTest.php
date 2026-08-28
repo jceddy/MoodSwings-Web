@@ -113,6 +113,20 @@ final class CardStatsServiceTest extends TestCase
         $stmt->execute(['game_id' => $gameId, 'actor' => $actingGamePlayerId, 'card_id' => $gameCardId]);
     }
 
+    private function insertPendingDecisionCreatedEvent(int $gameId, int $actingGamePlayerId, int $gameCardId, ?array $details = null): void
+    {
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO game_events (game_id, acting_game_player_id, event_type, card_id, details)
+             VALUES (:game_id, :actor, 'pending_decision_created', :card_id, :details)"
+        );
+        $stmt->execute([
+            'game_id' => $gameId,
+            'actor' => $actingGamePlayerId,
+            'card_id' => $gameCardId,
+            'details' => $details === null ? null : json_encode($details),
+        ]);
+    }
+
     private function fetchCardStats(int $catalogCardId): ?array
     {
         $stmt = $this->pdo->prepare('SELECT * FROM card_stats WHERE catalog_card_id = :id');
@@ -207,6 +221,91 @@ final class CardStatsServiceTest extends TestCase
 
         $card = $this->fetchCardStats(6);
         self::assertSame(1, (int) $card['times_played'], 'a repeat play still only counts once toward "was this card played in this game"');
+    }
+
+    /**
+     * A bug caught live: a card whose effect implements
+     * RequiresOpponentDecision (Compulsion, Fury, Instability, etc.) logs
+     * 'pending_decision_created' instead of 'mood_played' whenever its
+     * play actually pauses for an opponent's response -- see
+     * GameService::playMood()'s own "isPending" branch. For a card like
+     * Fury, whose decision fires on nearly every real play, that meant
+     * "times played" stayed at 0 forever despite being played constantly.
+     */
+    public function testRecordGameCompletionCountsAPlayThatPausedForAnOpponentDecision(): void
+    {
+        $winner = $this->insertUser('cardstats-pending-winner');
+        $loser = $this->insertUser('cardstats-pending-loser');
+        $gameId = $this->insertGame($winner);
+        $winnerPlayerId = $this->insertGamePlayer($gameId, $winner, 0);
+        $this->insertGamePlayer($gameId, $loser, 1);
+
+        // Fury-style play: paused for an opponent decision, so only
+        // 'pending_decision_created' was ever logged -- no 'mood_played'.
+        $furyCardId = $this->insertGameCard($gameId, 20, $winnerPlayerId);
+        $this->insertPendingDecisionCreatedEvent($gameId, $winnerPlayerId, $furyCardId);
+
+        $this->stats->recordGameCompletion($gameId, [$winner], [$loser]);
+
+        $card = $this->fetchCardStats(20);
+        self::assertSame(1, (int) $card['times_played']);
+        self::assertSame(1, (int) $card['times_played_in_won_game']);
+    }
+
+    /**
+     * The same event_type is also logged for a scoring-time decision
+     * re-triggering on a card played earlier in the round (Enthusiasm's/
+     * Passion's own bonus decision, tagged 'scoring_trigger' -- see
+     * scoreRoundAndAdvance()) and an after-scoring order choice between
+     * two already-resolved afterScoring cards (tagged
+     * 'after_scoring_order_trigger' -- see finishScoringAndAdvance()).
+     * Neither is a card actually being played right then, so neither
+     * should bump times_played on its own.
+     */
+    public function testRecordGameCompletionExcludesScoringAndOrderTriggerPendingDecisions(): void
+    {
+        $winner = $this->insertUser('cardstats-trigger-winner');
+        $loser = $this->insertUser('cardstats-trigger-loser');
+        $gameId = $this->insertGame($winner);
+        $winnerPlayerId = $this->insertGamePlayer($gameId, $winner, 0);
+        $this->insertGamePlayer($gameId, $loser, 1);
+
+        $scoringCardId = $this->insertGameCard($gameId, 21, $winnerPlayerId);
+        $this->insertPendingDecisionCreatedEvent($gameId, $winnerPlayerId, $scoringCardId, ['scoring_trigger' => true]);
+
+        $orderCardId = $this->insertGameCard($gameId, 22, $winnerPlayerId);
+        $this->insertPendingDecisionCreatedEvent($gameId, $winnerPlayerId, $orderCardId, ['after_scoring_order_trigger' => true]);
+
+        $this->stats->recordGameCompletion($gameId, [$winner], [$loser]);
+
+        // Both cards still get a card_stats row (they're in the deck --
+        // times_in_deck), just no times_played bump from either trigger.
+        self::assertSame(0, (int) $this->fetchCardStats(21)['times_played'], 'a scoring-trigger decision is not the card being played');
+        self::assertSame(0, (int) $this->fetchCardStats(22)['times_played'], 'an after-scoring-order decision is not the card being played');
+    }
+
+    /**
+     * A multi-step pending-decision chain (e.g. a Duplicity repeat still
+     * needing its own opponent decision) logs 'pending_decision_created'
+     * more than once for the very same play -- still only one "played"
+     * toward this game, same DISTINCT dedup 'mood_played' repeats already get.
+     */
+    public function testRecordGameCompletionDedupsMultiplePendingDecisionCreatedEventsForOnePlay(): void
+    {
+        $winner = $this->insertUser('cardstats-pending-chain-winner');
+        $loser = $this->insertUser('cardstats-pending-chain-loser');
+        $gameId = $this->insertGame($winner);
+        $winnerPlayerId = $this->insertGamePlayer($gameId, $winner, 0);
+        $this->insertGamePlayer($gameId, $loser, 1);
+
+        $cardId = $this->insertGameCard($gameId, 23, $winnerPlayerId);
+        $this->insertPendingDecisionCreatedEvent($gameId, $winnerPlayerId, $cardId);
+        $this->insertPendingDecisionCreatedEvent($gameId, $winnerPlayerId, $cardId);
+
+        $this->stats->recordGameCompletion($gameId, [$winner], [$loser]);
+
+        $card = $this->fetchCardStats(23);
+        self::assertSame(1, (int) $card['times_played']);
     }
 
     public function testRecordGameCompletionIgnoresUndrawnSharedPoolCardsWithNoOwner(): void

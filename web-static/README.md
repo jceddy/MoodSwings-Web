@@ -266,9 +266,9 @@ OWN printed ability had fixed its value, and silently replaced rather
 than stacked with whatever alt/dice value the card's own printed ability
 already produced -- see `chaos_value_delta` in `php-app/README.md`) gets
 its own small red `.card-thumb__badge--chaos-delta` badge instead,
-reading `+N`/`-N`, positioned immediately left of the value badge --
-never a rotation, since nothing about the card's own printed ability
-locked anything. Shown whenever `card.chaos_value_delta` is nonzero
+reading `+N`/`-N`, positioned directly below the value badge (same
+right-alignment) -- never a rotation, since nothing about the card's
+own printed ability locked anything. Shown whenever `card.chaos_value_delta` is nonzero
 (0 -- the common case, nothing to show -- reads as falsy in JS, so the
 badge is simply omitted). The card-detail dialog's own meta line
 (`openCardDetail()`) surfaces the same net delta as a parenthetical
@@ -288,6 +288,32 @@ there's nothing to stack), reading `=N`, whenever `card.chaos_value_override`
 is non-null (see `chaos_value_override` in `php-app/README.md`). The
 card-detail dialog's meta line surfaces the same fixed value as a
 parenthetical (`(chaos: fixed at N)`).
+
+The value badge sits right at the card's own top-right corner (briefly
+nudged ~20px down in between, to clear the card name printed at the top
+of the art the same way `.card-thumb__badge--copy`/`--recolored`/
+`--chaos` already are on the opposite top-left corner -- reversed on
+the maintainer's own call: overlapping the card's own printed die-value
+icon there is fine, arguably preferable, since a live current value up
+top reads less ambiguously than the two being simultaneously visible).
+Safe to sit this high again since the chaos-delta/chaos-override badge
+no longer shares its row -- that pairing, not the value badge alone,
+was what originally reached far enough left to cover the card name. The
+chaos-delta/chaos-override badge is instead stacked directly below the
+value badge (another bug caught live along the way: originally
+positioned to the value badge's LEFT, on a narrow card that could push
+it far enough to collide with the top-left `--chaos` "Chaos" rarity
+pill) -- offset by the exact same ~20px `.card-thumb__badge--chaos`
+itself uses (nudged up slightly from an initial ~22px, per feedback, so
+the two land EXACTLY level with each other rather than 2px/4px off). An
+explicit `z-index: 1` on the chaos-delta/chaos-override badge (the
+"Chaos" pill keeps its own default `z-index: auto`) settles which one
+wins if the two ever DO overlap anyway despite being on opposite
+corners (an unusually long card name, an extreme card-size-slider
+setting, ...) -- the value CHANGE this badge reports is the more
+actionable of the two to keep legible, so it paints on top rather than
+being hidden underneath (see `style.css`'s own comments on all of
+these).
 
 The card-detail dialog's enlarged
 `#card-detail-art` image replaces what used to be a `<h3>` name heading and
@@ -693,6 +719,64 @@ formats preference" in `php-app/README.md`. A `createGame()` rejection
 from a non-opted-in invitee surfaces through the New Game dialog's own
 ordinary `#new-game-error` element, the same as any other creation
 failure.
+
+### Open lobby matchmaking (issue #116)
+
+An alternative to naming specific friend opponents: the New Game
+dialog's `#new-game-mode-fields` radio pair -- "Invite friends"
+(unchanged default) vs. "Post to the open lobby" --
+switches `#new-game-form` into posting an open listing instead
+(`MatchmakingService`, see "Open lobby matchmaking" in
+`php-app/README.md` for the full backend/scope writeup). Every format is
+supported; choosing "open" (`updateNewGameModeFields()`) hides
+`#new-game-friends-fields`, and for `draft`/`standard` shows
+`#new-game-open-player-count-label` -- a `2`-`4` select for exactly how
+many total players (including the creator) the listing needs before it
+starts, forced to `2` for `duel` and `4` for the team formats regardless
+(both hide the field, since there's nothing to choose). A team format's
+own partner-choice fields (`#new-game-team-fields`) stay hidden in this
+mode too, even though the format itself is otherwise shown normally --
+`updateTeamFields()`'s own open-lobby check keeps it that way, since
+teams are always assigned randomly once a listing's roster fills (no
+way to coordinate a partner pick with strangers). Submitting in this
+mode calls `postOpenGame()` (app.js) instead of `createGame()`, reusing
+every already-collected field (deck_type, decklist/pool choices, default
+selections mode, etc.) unchanged plus the player-count select's own
+value; on success the dialog closes with a confirmation via
+`showAlertDialog()` rather than jumping straight to a board, since
+there's no game yet -- just a listing waiting for however many more
+players it needs.
+
+A new "Open games" button (next to "New game"/"Past games") opens
+`#open-games-dialog`, with three sections: `GET /open-games` (available
+to join, each showing "X of Y joined" via `openGameSummary()` with a
+Join button calling `joinOpenGame()` -- jumps straight to the resulting
+board once that join's own response reports `{"status": "started"}`,
+or just refreshes the dialog if it instead reports `{"status":
+"waiting"}`, since the listing isn't a real game yet); `GET
+/open-games?joined=1` ("Waiting to start" -- listings the current user
+has joined themselves but that haven't filled yet, each with a Leave
+button calling `leaveOpenGame()`, the only way to back out of a
+multi-seat listing that's taking a while to fill); and `GET
+/open-games?mine=1` (the current user's own open listings, each with a
+Cancel button calling `cancelOpenGame()`).
+
+No frontend filtering of its own -- a `chaos_draft` listing simply never
+appears in `GET /open-games`'s own response for a viewer who hasn't
+opted into "Allow custom card/effect formats" (`MatchmakingService::
+listOpenGames()`, see "Open lobby matchmaking" in `php-app/README.md`),
+the same server-side-only enforcement `createGame()` already uses for
+friends-created Chaos Draft games.
+
+`#settings-matchmaking-discoverable-checkbox`, in the Settings dialog's
+"Game defaults" section right below the custom-content checkbox -- same
+starts-**unchecked**/opt-in shape (`users.matchmaking_discoverable`,
+migration `0198`, defaults `false`): posting an open listing exposes
+your username to anyone browsing the lobby, so it's off until you
+explicitly turn it on. Same "sync on open, save on change" wiring as
+every other Settings checkbox (`POST /user/matchmaking-discoverable-preference`).
+Only gates whether YOUR OWN listings are shown to strangers -- joining
+someone else's listing needs no opt-in of its own.
 
 ## Pages
 
@@ -1246,7 +1330,37 @@ failure.
     the selected partner as `partner_user_id` or, if the random checkbox is
     checked, `random_teams: true` with no `partner_user_id` at all. See
     "Open Team Play"/"Closed Team Play" in `php-app/README.md` for the
-    formats themselves. The
+    formats themselves.
+
+    `#new-game-format`'s own "Sealed Deck" option (issue #392, right after
+    "Draft") is a UI-only sentinel with no backend format of its own --
+    Sealed Deck has no live drafting phase to distinguish it from an
+    ordinary deck-building step, so unlike Quick/Winston/Grid/(Tiered)
+    Rotisserie/Chaos Draft it never actually needed the real `'draft'`
+    format's own separate-per-player-decks plumbing exposed as a THIRD
+    dropdown option here -- see "Sealed Deck" in `php-app/README.md` for why
+    it's not simply another `format: 'draft'` deck-type choice either.
+    Selecting it hides the now-redundant Deck dropdown entirely
+    (`updateDeckTypeAvailability()`'s own early-return branch,
+    `#new-game-deck-type-label`) and forces `#new-game-deck-type`'s value to
+    `'sealed_deck'` under the hood, so its description still renders exactly
+    as it would if `'sealed_deck'` had been picked from that dropdown
+    directly (there's no pool-source picker of its own to render -- Sealed
+    Deck is always a Structure-deck-style pool for now, see "Sealed Deck" in
+    `php-app/README.md`). Every other read of `#new-game-format`'s value that has to match the
+    ACTUAL backend format -- bot support (`botsSupportedFor()`), the
+    open-lobby "total players needed" field, and what's actually sent to
+    `POST /games`/`POST /open-games` -- goes through `effectiveNewGameFormat()`
+    instead of reading the `<select>` directly, translating the sentinel
+    back to `'draft'` (reads that only ever compare against `'team'`/
+    `'closed_team'`/`'duel'` don't need this, since the sentinel already
+    isn't any of those). A rematch prefill undoes the same translation in
+    reverse (`format: 'draft'` + `deck_type: 'sealed_deck'` on the previous
+    game selects "Sealed Deck" here, not "Draft") so reopening the dialog
+    from a finished Sealed Deck game lands back on the same option a human
+    would have picked.
+
+    The
     dialog's Deck dropdown (`#new-game-deck-type` -- Structure, Power,
     jceddy's 75 Card, Custom Decklist, Custom Decklists (Duel), Quick
     Draft, Winston Draft, Grid Draft, One of Each Card, in that order,
@@ -1601,20 +1715,36 @@ failure.
     `action: 'confirm'`) for the other teammate, mirroring
     `#team-decision-panel`'s own propose/confirm shape immediately above.
 
-    Resolving the round's own offer is mandatory (issue #405 follow-up):
-    `GameService::assertChaosDraftOfferResolved()` now rejects
-    `playMood()`/`pass()` for whoever still has one open. `chaosDraftOfferOpenForViewer`
-    (set from `renderChaosDraftOffer()`'s own poll -- non-null `offer`
-    always means unresolved) feeds both `canAct` (via the shared
-    `passButtonCanAct()`/`refreshPassButtonDisabled()` pair, so `#pass-button`
-    reflects it immediately rather than waiting for the next full board
-    poll) and an early check in `updatePlayButtonEnabled()` (disabling
-    `#play-card-button` with "Choose and attach this round's Chaos Draft
-    effect first" -- checked ahead of `is_playable`, since that's a purely
-    per-card server flag that knows nothing about this DB-level
+    Resolving EVERY player's own offer this round is mandatory before
+    ANYONE may play (issue #405 follow-up, later strengthened by the
+    maintainer into a round-wide rule -- see "Chaos Draft" in
+    `php-app/README.md`): `GameService::assertChaosDraftOfferResolved()`
+    now rejects `playMood()`/`pass()` for EVERY seated player while ANY
+    offer this round -- even someone else's -- is still open.
+    `chaosDraftOfferOpenForViewer` (set from `renderChaosDraftOffer()`'s
+    own poll -- non-null `offer` always means the VIEWER's own is
+    unresolved) and `chaosDraftRoundReady` (the sibling `round_ready`
+    field the same poll response carries, reading whether anyone ELSE
+    this round still has theirs open) both feed `canAct` (via the shared
+    `passButtonCanAct()`/`refreshPassButtonDisabled()` pair, so
+    `#pass-button` reflects either immediately rather than waiting for
+    the next full board poll) and two checks near the top of
+    `updatePlayButtonEnabled()` (disabling `#play-card-button` -- first
+    with "Choose and attach this round's Chaos Draft effect first" if
+    the viewer's own is still open, then with "Waiting for every player
+    to choose and attach this round's Chaos Draft effect" if only
+    someone else's is -- checked ahead of `is_playable`, since that's a
+    purely per-card server flag that knows nothing about this DB-level
     restriction). Hand cards stay clickable regardless, same as any other
     unplayable-right-now card -- only the panel's own Play button is
-    gated.
+    gated. A viewer who's already resolved their own offer but is still
+    waiting on someone else sees `#chaos-draft-offer-panel` stay up with
+    that same "Waiting for every player..." status (rather than hiding,
+    which would otherwise leave the disabled Play/Pass buttons
+    unexplained) -- a live UX gap caught during testing before
+    `round_ready` existed: a player who'd already resolved their own
+    offer would see a normal, enabled Play/Pass button right up until the
+    server's own `409` explained why it didn't work.
 
     `chaosDraftOfferOpenForViewer` ALSO feeds `canAct` itself
     (`passButtonCanAct()`), which the hand-rendering code in
@@ -1794,7 +1924,14 @@ failure.
       (`submitDraftDeck()`, `POST /games/draft/deck`) serves both the
       very first trim and every later sideboard between the
       match's games; there's no "first trim" vs. "sideboard" distinction in
-      the UI either. For Open Team Play, the picker (`#draft-deck-picker`,
+      the UI either. `renderDraftDeckBuilding()` sorts `deckBuilding.drafted_cards`
+      by color/rarity/name (`compareDraftPoolCards`, the same order
+      `openDraftPoolView()`'s own "View draft pool" sections already use)
+      before rendering `#draft-deck-picker` -- reassigned rather than
+      sorted in place so re-sorting the same already-sorted array on every
+      selection-toggle re-render is a no-op, since `draftDeckSelection`
+      tracks plain indices into this array and a reorder would otherwise
+      silently point selections at the wrong cards. For Open Team Play, the picker (`#draft-deck-picker`,
       built from `deckBuilding.drafted_cards`) IS the team's whole
       combined pool minus whatever the teammate's own current deck has
       already claimed (see `GameService::draftDeckBuildingStateFor()`'s
@@ -2165,6 +2302,20 @@ failure.
       `tiered_rotisserie_draft_tiers` array sent to `POST /games`, rather
       than through the single shared `saved_decklist_id` param every
       other draft type's own pool source reuses.
+    - **Sealed Deck** (issue #392) has no drafting phase at all, so unlike
+      every draft deck type above it has no own "-panel"/"-drafting"
+      markup -- `renderDraftPanel()` hides every OTHER draft deck type's
+      own panel and shows the shared `#draft-deck-building` view directly,
+      since `state.sealed_deck.status` is always `'deck_building'` while
+      the match is still `'waiting'` (see "Sealed Deck" in
+      `php-app/README.md`). Unlike every other draft type, it has no
+      pool-source picker of its own in the New Game dialog at all -- it's
+      always a Structure-deck-style pool for now (a future request may
+      reintroduce a choice here), so selecting it just shows its
+      description text with nothing further to configure. Sealed Deck is
+      offered as its own top-level `#new-game-format` option ("Sealed
+      Deck," next to "Draft") rather than one of "Draft"'s own Deck
+      dropdown choices -- see "New Game dialog"'s own note on this below.
 
     Clicking any hand
     card opens `#choices-panel` inline, underneath the hand -- a plain

@@ -75,17 +75,22 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/games/draft/first-player-choice` | `{"game_id", "play_first": bool}`              | Requires auth; `403` if you're not seated in that game. Only callable once a best-of-three draft match's game 2/3 has actually started -- the loser of the previous game doesn't have to decide who goes first until they can see their own opening hand, and round 1 stays frozen (nobody can play/pass) until they do. Lets them go first themselves (`play_first: true`) or leave the previous winner going first again (`play_first: false`); either answer permanently unfreezes the round. `409` if the game isn't `quick_draft`/`winston_draft`/`grid_draft`, hasn't started yet, is game 1 of its match (nothing to base the choice on), the calling user wasn't the previous game's loser, or the decision was already made. See "Quick Draft"/"Winston Draft"/"Grid Draft" below. |
 | POST   | `/games/team-decision` | `{"game_id", "action", ...}`                              | Requires auth; `403` if you're not seated in that game; `409` if the game isn't `team`/`closed_team` format or has no open team decision. `action: 'propose'` takes `{"proposed_game_player_id"}` (any candidate teammate may propose); `action: 'confirm'` takes `{"approve": bool}` (the OTHER teammate approves or rejects the pending proposal). See "Open Team Play"/"Closed Team Play" below. Same return shape as `/games/play` once a proposal is confirmed; otherwise `{"round_scored": false, "game_completed": false}` (propose, or a rejected confirm sent back to 'propose'). |
 | POST   | `/games/initial-pass` | `{"game_id", "card_ids": [int, int]}`                        | Requires auth; `403` if you're not seated in that game; `409` if the game isn't `closed_team`, `card_ids` isn't exactly 2 distinct cards currently in your hand, or you've already submitted your pass this game. `closed_team`'s own pregame mechanic -- see "Closed Team Play" below. Returns `{"round_scored": false, "game_completed": false, "pending_decision": bool}` (`pending_decision` is `true` until all 4 players have submitted). |
-| GET    | `/games/chaos-draft-offer` | query param `game_id`                                | Requires auth; `403` if you're not seated in that game. `chaos_draft`'s own round-start choice -- returns `null` if you (or, for Open Team Play, your team) have no offer this round (e.g. empty hand), otherwise `{"effect_1", "effect_2", "is_team_offer", "phase", "proposer_game_player_id"}` (`effect_1`/`effect_2` each `{"id", "rarity", "shape", "rules_text"}`; `phase`/`proposer_game_player_id` are only meaningful once `is_team_offer` is `true` -- Open Team Play's own `'propose'`/`'confirm'` two-step, see below -- and stay at their unused defaults otherwise). Deliberately kept OUT of `GET /games/state`'s own read path since the first call each round is a lazy WRITE (rolling that round's two offered effects) -- see "Chaos Draft" below. |
+| GET    | `/games/chaos-draft-offer` | query param `game_id`                                | Requires auth; `403` if you're not seated in that game. `chaos_draft`'s own round-start choice. `offer` is `null` if you (or, for Open Team Play, your team) have no offer this round (e.g. empty hand), otherwise `{"effect_1", "effect_2", "is_team_offer", "phase", "proposer_game_player_id"}` (`effect_1`/`effect_2` each `{"id", "rarity", "shape", "rules_text"}`; `phase`/`proposer_game_player_id` are only meaningful once `is_team_offer` is `true` -- Open Team Play's own `'propose'`/`'confirm'` two-step, see below -- and stay at their unused defaults otherwise). `round_ready` (`GameService::chaosDraftRoundReady()`) is a sibling boolean, independent of `offer` -- whether every OTHER seated player/team's own offer this round is ALSO resolved, since `/games/play`/`/games/pass` now reject everyone, not just whoever still has `offer` open, until it is (see "Chaos Draft" below). Deliberately kept OUT of `GET /games/state`'s own read path since the first call each round is a lazy WRITE (rolling that round's two offered effects) -- see "Chaos Draft" below. |
 | POST   | `/games/chaos-draft-effect` | `{"game_id", "action", "chosen_effect_id"?, "attach_game_card_id"?, "approve"?}` | Requires auth; `403` if you're not seated in that game; `409` if the game isn't `chaos_draft` or there's no open offer. `action: 'choose'` (individual `draft`/`closed_team`) takes `{"chosen_effect_id", "attach_game_card_id"}` -- immediately attaches. `action: 'propose'`/`action: 'confirm'` are Open Team Play's own two-step counterpart to `/games/team-decision`: `'propose'` takes the same `chosen_effect_id`/`attach_game_card_id` (the card may be either teammate's own hand card) from either teammate, `'confirm'` takes `{"approve": bool}` from the other teammate (never the proposer). `409` if `action` doesn't match the game's own format (`'choose'` for anything but Open Team Play, or `'propose'`/`'confirm'` for Open Team Play), the offer's own `phase` doesn't match the action (e.g. `'confirm'` with nothing proposed yet, or the proposer trying to also confirm), `chosen_effect_id` wasn't one of the two actually offered, or `attach_game_card_id` isn't a card in the right hand. See "Chaos Draft" below. Same `{"round_scored": false, "game_completed": false}` shape `/games/team-decision` uses, plus `pending_decision: true` for `'propose'` and a rejected `'confirm'` (mirroring that route's own convention). |
 | GET    | `/games`        | —                                                                 | Requires auth. Lists games you're seated in that still belong in the main lobby -- every `waiting`/`in_progress` game, plus a `completed`/`abandoned` one ONLY if it's still part of a best-of-three draft match (`quick_draft`/`winston_draft`/`grid_draft`) that isn't itself fully decided yet (see "Past games" below); every other `completed`/`abandoned` game has moved to `GET /games/past` instead. `waiting`/`in_progress` games always sort above still-current-`completed`/`abandoned` ones regardless of recency, most-recently-active first within each of those two tiers -- each with `players` (`user_id`/`username`/`seat_order`/`is_bot` -- issue #140, see "Practice bots" below), `is_your_turn`, `is_awaiting_your_response` (a delayed choice is on you specifically -- a Compulsion-style pending decision targeting you, your team's own turn_order/draw_recipient decision needing your propose/confirm, `closed_team`'s still-unsubmitted pregame card pass, or -- for a best-of-three draft match's game 2/3 -- being the previous game's loser while round 1 is still frozen awaiting your own `setPlayFirstNextMatchGame()` call; see `isAwaitingResponseFrom()`/`isAwaitingFirstPlayerChoiceFrom()` -- unlike `is_your_turn`, none of these require it to actually be your own turn), `current_turn_username` (whichever seated player `current_turn_game_player_id` actually belongs to, by username -- null whenever the game isn't `in_progress` or the round is between turns, e.g. an Open Team Play `turn_order` decision still open), `awaiting_response_usernames` (the generalized, all-players version of `is_awaiting_your_response` -- every seated player `isAwaitingResponseFrom()` currently returns `true` for, which can be more than one at once, e.g. `closed_team`'s pregame card pass before every player has submitted; for a still-`waiting` `quick_draft`/`winston_draft`/`grid_draft` game, both `current_turn_username`/`is_your_turn`/`is_awaiting_your_response` stay at their game-less-in-progress defaults but `awaiting_response_usernames` is instead populated by `draftAwaitingResponseUsernames()` -- both players at once for quick_draft's own simultaneous-blind draw/received pick stages until each has submitted, or exactly whoever's turn it currently is for winston_draft's/grid_draft's single active turn player, or whoever hasn't yet submitted a deck once the match reaches `deck_building`), `winner_usernames` (empty until the game actually completes; both teammates' for a team-format win, same "credit the whole winning team" logic `GET /games/state`'s own field of the same name uses), `default_selections_mode` (bool, issue #274 -- see "Default selections mode" below), and all four of `created_at`/`started_at`/`last_move_at`/`completed_at` (see "Game timestamps" below). `quick_draft`/`winston_draft`/`grid_draft` games additionally carry `draft_match_id`, `match_game_number`, and `draft_match` (`{"status", "your_wins", "opponent_wins", "games_to_win", "winner_username", "players"}`, `winner_username` only set once the match's own status is `completed`, `players` -- issue #189 -- every seated player's own `user_id`/`username`/`wins`/`is_you`, the field a 3-4 player Quick Draft match's own scoreline should actually be read from since `your_wins`/`opponent_wins` only ever reflect the first non-viewer seat) -- all three `null` for every other `deck_type`. The lobby UI uses these to group a match's up-to-3 games together and show the match's own result once it's decided; see "Quick Draft"/"Winston Draft"/"Grid Draft" below. |
+| POST   | `/open-games`   | same shape as `POST /games` above minus `opponent_user_ids`/`partner_user_id`/`random_teams`/`bot_decklist_text`/`bot_saved_decklist_id`/`bot_goes_first`, plus `target_player_count`? (int) | Requires auth. Posts an open game listing (issue #116) instead of creating a game directly -- see "Open lobby matchmaking" below. `target_player_count` is only meaningful for `format` `draft`/`standard` (`2`-`4`, defaults `2`) -- forced to `2` for `duel` and `4` for `team`/`closed_team` regardless of what's sent. `400` if you haven't opted into `matchmaking_discoverable` (see below), `format` isn't one `createGame()` itself supports, or `target_player_count` is outside `2`-`4`. Returns `{"listing_id"}`. |
+| GET    | `/open-games`   | query params `mine`?/`joined`? (each `"1"` or omitted)             | Requires auth. `mine=1` lists your own still-`open` listings (so you can see/cancel them); `joined=1` lists listings you've joined but that haven't started yet (so you can see/leave them, see `POST /open-games/leave` below); omitted (or neither) lists every other open listing visible to you (`MatchmakingService::listOpenGames()` -- only from discoverable creators, never from/to a user you've blocked or who's blocked you either direction, and never one you've already joined yourself). Each listing is `{"id", "created_by_user_id", "creator_username", "create_game_params", "target_player_count", "joined_count", "created_at"}` -- `joined_count` never includes the listing's own creator. See "Open lobby matchmaking" below. |
+| POST   | `/open-games/join` | `{"id"}`                                                       | Requires auth. Joins an open listing. `404` if the listing doesn't exist, isn't `open` anymore, is your own, you've already joined it, or either of you has blocked the other (deliberately indistinguishable from "doesn't exist" -- same reasoning `POST /friends/invite` already uses for a blocked target). If this join still leaves the roster short of `target_player_count`, returns `{"status": "waiting", "joined_count", "target_player_count"}` and nothing else happens yet. Once it's the join that fills the roster, creates the actual game exactly as if every joiner had been named in the creator's own `opponent_user_ids` all along (same `GameService::createGame()` call underneath, teams assigned randomly for `team`/`closed_team` -- see "Open lobby matchmaking" below) and returns `{"status": "started", "game_id"}`. `400` if the creator's own choices turn out invalid once the roster fills (e.g. a saved decklist since deleted) -- the listing is retired in that case rather than staying joinable and failing the same way for the next person too. |
+| POST   | `/open-games/leave` | `{"id"}`                                                    | Requires auth. Withdraws your own earlier join from a listing that hasn't started yet. `404` if the listing doesn't exist, isn't open anymore, or you haven't joined it. |
+| POST   | `/open-games/cancel` | `{"id"}`                                                    | Requires auth. Withdraws one of your own still-`open` listings, at any point (even mid-roster). `404` if it doesn't exist or isn't open anymore, `403` if it's not yours. |
 | GET    | `/games/past`   | —                                                                 | Requires auth. The complement of `GET /games` above: every `completed`/`abandoned` game NOT still tied to an undecided draft match -- i.e. exactly the games `GET /games` excludes. Same row shape as `GET /games` (`GameService::gameSummaryFor()` hydrates both), sorted most-recently-completed first rather than by actionability, since nothing here is actionable. See "Past games" below. |
 | GET    | `/games/state`  | query param `game_id`                                            | Requires auth; `403` if you're not seated in that game. Full board view: `game`, `players` (with `hand_count`/`total_wins`/`team_id`/`is_bot`/`presence` -- `'online'`/`'offline'`/`'hidden'`, see "Online/presence indicator" below -- per seat; `is_bot` is issue #140's own practice-bot flag, see "Practice bots" below), `you` (your `game_player_id`, and — once started — your full `hand`), `round` (turn/plays-remaining/banned-colors/`pending_decision`/etc., `null` before the game starts), `in_play`, `discard_pile`, and `deck_count` (never the deck's order). Every serialized card also carries `choice_fields` — see below. `game.default_selections_mode` (bool, issue #274) is fixed for the game's whole lifetime; when `true`, `choice_fields` (and `round.pending_decision.field`, once one is open) come back with a `default` key pre-filled on some fields -- see "Default selections mode" below. `team`/`closed_team` format games additionally get `teams` and `team_decision` (both `null` otherwise) and `you.teammate_game_player_id` -- see "Open Team Play"/"Closed Team Play" below. `you.teammate_hand` is only ever populated for `team` (Open Team Play's own "open information" premise); `closed_team` games additionally get `initial_card_pass` (`null` once every player has submitted their pregame card pass). `chat_messages` (issue #109) is the game's full in-game chat history so far, oldest first -- omitted entirely for a still-`waiting` game, the same early return that keeps `round`/`in_play`/etc. absent then too (chat only ever gets appended to via `POST /games/chat` once `in_progress`, see "In-game chat" below). `quick_draft` games additionally get `game.match_game_number` and a `quick_draft` field (both `null` for every other deck_type, and populated regardless of `game.status` -- see "Quick Draft" below); `winston_draft`/`grid_draft` games likewise get `game.match_game_number` and a `winston_draft`/`grid_draft` field -- see "Winston Draft"/"Grid Draft" below. Also includes `game.created_by_user_id` and, only for a bot's own seat in a `custom_duel` game and only in the game's own creator's view, `players[].bot_decklist_cards` (issue #398's own Rematch prompt) -- see "Rematch" below. |
 | GET    | `/games/log`    | query params `game_id`, `code`?                                   | Requires auth; `403` unless you're seated in that game OR authorized to spectate it (issue #128 -- same `canSpectateGame()` check `GET /games/spectate/state`/`GET /games/deck` use). The entire `game_events` log for this game, oldest first, unbounded (issue #98) -- unlike `/games/state`'s own `recent_events`, which is newest-first and capped at 15. Each entry is `{"id", "created_at", "round_number", "event_type", "acting_game_player_id", "acting_username", "card_id", "card_name", "details", "description"}` -- `description` is the same `describeEvent()`-rendered text `recent_events` itself uses; the rest is raw enough for a genuine offline export (see "Game log" below). No per-viewer filtering -- every event is already visible to every seated player (and now every spectator) regardless of who triggered it. See `GameService::fullEventLog()`. |
 | GET    | `/games/deck`   | query params `game_id`, `code`?                                   | Requires auth; `403` unless you're seated in that game OR authorized to spectate it (issue #128 -- friends with a seated player, or `code` matches the game's own spectate code; same `canSpectateGame()` check `GET /games/spectate/state` uses). A shared-deck game's entire deck (issue #197) -- every `deck_type` except `custom_duel`/`quick_draft`/`winston_draft`/`grid_draft`, where each player has their own deck rather than one shared pool (see `GameService::isSharedDeckType()`). Returns `{"cards": [...]}`, hydrated the same way `/decklists/view` hydrates a saved decklist's cards, sorted white/blue/black/red/green then alphabetically by name within a color. `409` if the game's `deck_type` has no single shared deck, or the game is still `waiting` (nothing dealt yet). See "Shared deck view" below. |
 | GET    | `/games/export` | query param `game_id`                                             | Requires auth; `403` if you're not seated in that game -- deliberately narrower than `/games/log` above (no spectator path), since this is a personal offline archive rather than a shareable view. A raw, complete dump of every row related to this game (issue #99), across every table with any FK relationship to `games.id` -- not the curated, human-readable view `/games/log` already provides. Returns `{"export": {...}}`; see `GameService::exportGameData()` and "Download complete game data" below for the full shape. |
 | POST   | `/games/start`  | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. Deals hands and begins round 1. `409` if the game isn't `waiting` or has fewer than 2 seated players. |
-| POST   | `/games/play`   | `{"game_id", "card_id", "choices"?}`                              | Requires auth; `403` if you're not seated in that game. `choices` is an opaque object passed straight through to the rules engine — its shape (a target player id, a discard, a mode string, etc.) is entirely card-specific; see `src/Rules/PlayerChoices.php` and `CardChoiceSchema` below. `400` on an invalid/missing choice for that card, `409` if it's not your turn, a decision is already pending, this round's own Chaos Draft offer is still unresolved for you (see "Chaos Draft" below), or the play is otherwise illegal. Returns `{"round_scored", "game_completed", "winner_game_player_id"?}`, or `{"pending_decision": true}` if the play now needs another player's own answer before it can finish — see `RequiresOpponentDecision` below. |
-| POST   | `/games/pass`   | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. `409` if it's not your turn, a decision is pending, or this round's own Chaos Draft offer is still unresolved for you (see "Chaos Draft" below). Same return shape as `/games/play`. |
+| POST   | `/games/play`   | `{"game_id", "card_id", "choices"?}`                              | Requires auth; `403` if you're not seated in that game. `choices` is an opaque object passed straight through to the rules engine — its shape (a target player id, a discard, a mode string, etc.) is entirely card-specific; see `src/Rules/PlayerChoices.php` and `CardChoiceSchema` below. `400` on an invalid/missing choice for that card, `409` if it's not your turn, a decision is already pending, this round's own Chaos Draft offer is still unresolved for ANY seated player (see "Chaos Draft" below), or the play is otherwise illegal. Returns `{"round_scored", "game_completed", "winner_game_player_id"?}`, or `{"pending_decision": true}` if the play now needs another player's own answer before it can finish — see `RequiresOpponentDecision` below. |
+| POST   | `/games/pass`   | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. `409` if it's not your turn, a decision is pending, or this round's own Chaos Draft offer is still unresolved for ANY seated player (see "Chaos Draft" below). Same return shape as `/games/play`. |
 | POST   | `/games/respond` | `{"game_id", "choices"}`                                        | Requires auth; `403` if you're not seated in that game. Answers the one outstanding pending decision targeting you (see `round.pending_decision` in `/games/state`). `409` if you have no decision pending in that game. `400` on an invalid answer. Returns `{"pending_decision": true}` if the batch has other targets still waiting (or a Duplicity repeat of the same card also needs an answer), otherwise the same `{"round_scored", "game_completed", ...}` shape as `/games/play`. |
 | POST   | `/games/resign` | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. `409` if the game isn't `in_progress` (unless it's a `quick_draft`/`winston_draft`/`grid_draft` match still `'waiting'` through drafting/deck-building -- see "Resigning from a draft match" below), you've already resigned, or a decision is pending. Gives up instead of playing the game/draft out -- see "Resigning" below. Returns `{"round_scored": false, "game_completed", "winner_game_player_id"?}`. |
 | GET    | `/games/notes`  | query param `game_id`                                             | Requires auth; `403` if you're not seated in that game. Returns `{"note_text"}` -- your own private note for that seat (issue #258), `""` if you've never saved one. Always readable, regardless of the game's status. See "In-game notepad" below. |
@@ -105,6 +110,7 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/user/auto-apply-scoring-bonuses-preference` | `{"auto_apply_scoring_bonuses": bool}`               | Requires auth. Opts you in/out of automatically applying Enthusiasm's/Passion's own obviously-correct per-round scoring bonus (Settings dialog's "Game defaults" section, defaults `true`) -- write-only, since the current value already rides on `GET /me`'s own user object. `400` if `auto_apply_scoring_bonuses` is missing. See "Auto-apply scoring bonuses" below. |
 | POST   | `/user/board-layout-preference` | `{"board_layout_preference": "above_play_area"\|"below_hand"}` | Requires auth. Chooses where the board's Round/Score/Players section renders (Settings dialog's own "Display" section, defaults `"above_play_area"`) -- write-only, since the current value already rides on `GET /me`'s own user object. `400` if `board_layout_preference` is missing or isn't one of those two exact strings. See "Board layout preference" below. |
 | POST   | `/user/allow-custom-content-preference` | `{"allow_custom_content": bool}`                | Requires auth. Opts you in/out of seeing/joining `chaos_draft` games (Settings dialog's "Game defaults" section, defaults `false` -- an explicit opt-IN, unlike the two auto-* preferences above) -- write-only, since the current value already rides on `GET /me`'s own user object. `400` if `allow_custom_content` is missing. See "Custom card/effect formats preference" below. |
+| POST   | `/user/matchmaking-discoverable-preference` | `{"matchmaking_discoverable": bool}`        | Requires auth. Opts you in/out of having your own open game listings (issue #116) shown to strangers browsing the open lobby (Settings dialog's "Game defaults" section, defaults `false` -- an explicit opt-IN) -- write-only, same reasoning as `allow-custom-content-preference` above. `400` if `matchmaking_discoverable` is missing. See "Open lobby matchmaking" below. |
 | GET    | `/notifications/vapid-public-key` | —                                                | No auth required -- the VAPID public key isn't secret (that's the point of asymmetric VAPID auth), same reasoning as `/cards/catalog` being public. Returns `{"public_key"}` (empty string if the server has none configured). See "Browser push notifications" below. |
 | POST   | `/notifications/subscribe` | `{"endpoint", "keys": {"p256dh", "auth"}}`                | Requires auth. Stores (or updates, if the endpoint's already known) a `PushSubscription` for the current user. `400` if `endpoint`/`keys.p256dh`/`keys.auth` are missing. See "Browser push notifications" below. |
 | POST   | `/notifications/unsubscribe` | `{"endpoint"}`                                          | Requires auth. Removes the current user's subscription for that endpoint, if any (silently a no-op otherwise). |
@@ -2759,22 +2765,30 @@ don't contain any `chaos_NNN` key, so its generic per-field-type policy
 (see that class's own docblock) already covered every shape these nine
 fields use.
 
-**Resolving the round's own offer is mandatory (issue #405 follow-up --
-maintainer request).** `GameService::assertChaosDraftOfferResolved()` is
-called from both `playMood()` and `pass()`, right after
-`assertNoPendingDecision()`: if the acting player (or, in Open Team Play,
-their TEAM) still has this round's own offer sitting unresolved, both
-throw a `409` rather than let the play/pass go through -- "the player
-needs to choose and apply a chaos effect before they can take their
-turn." It rolls the round's offer itself
-(`ensureChaosDraftOffersForRound()`) rather than trusting the frontend's
-own `GET /games/chaos-draft-offer` poll to have already done so, so a
-request racing ahead of that poll can't slip through with no offer row to
-check yet. Only the ACTING player/team is blocked -- someone else's own
-still-open offer this round never stops you, matching
-`chaosDraftOfferFor()`'s own "resolved independently, not turn-gated"
-design. A player with an empty hand at the start of the round gets no
-offer at all (unchanged), so nothing to block them on.
+**Resolving EVERY player's own offer is mandatory before ANYONE may play
+or pass (issue #405 follow-up -- maintainer request).**
+`GameService::assertChaosDraftOfferResolved()` is called from both
+`playMood()` and `pass()`, right after `assertNoPendingDecision()`: if
+ANY seated player (or, in Open Team Play, team) still has this round's
+own offer sitting unresolved, EVERY play/pass this round throws a `409`
+until it's cleared -- "each player must choose and apply their chaos
+effect for the round before anyone can play," a round-start "draft
+phase" gating ordinary play, not merely a rule about your own turn. (An
+earlier, narrower version of this rule -- issue #405's own first
+follow-up -- only blocked the ACTING player/team; the maintainer later
+asked for it to block everyone instead.) It rolls the round's offer
+itself (`ensureChaosDraftOffersForRound()`) rather than trusting the
+frontend's own `GET /games/chaos-draft-offer` poll to have already done
+so, so a request racing ahead of that poll can't slip through with no
+offer row to check yet. `GameService::chaosDraftRoundOffersBlockPlay()`
+is the shared, non-throwing predicate that actually walks every seated
+player/team (`activeGamePlayerIds()`, or team ids `0`/`1` for team
+formats) checking for one still-unresolved offer with something left to
+attach it to. `chaosDraftOfferFor()` (the per-player DISPLAY of what a
+given player is still facing) is unaffected by this -- it still only
+ever shows a player their own outstanding offer, never anyone else's. A
+player with an empty hand at the start of the round gets no offer at all
+(unchanged), so they never hold the gate closed.
 
 Practice bots (issue #140) never had any policy for choosing a chaos
 effect -- previously harmless (the offer was always optional), but a bot
@@ -2782,32 +2796,35 @@ seated in a chaos_draft game would now get stuck forever the instant this
 gate applied to it. `GameService::advanceBotChaosDraftOffer()` (dispatched
 from `advanceAutomatedTurns()`, positioned the same way
 `advanceBotTeamDecision()` already is -- resolved before that iteration's
-own turn/decision dispatch, so the gate above is always already
-satisfied by the time a bot's own `playMood()`/`pass()` is tried) gives
-every bot `BotPlayerService::chooseChaosDraftEffectAttachment()`'s own
-simple, deterministic policy: always take `effect_1` (the first offered),
-attached to the lowest-value candidate hand card (the same "buff your
-weakest card" bias `chooseInitialCardPass()` already applies to a
-mandatory discard). Open Team Play's own propose/confirm two-step is
-handled the same way `advanceBotTeamDecision()` handles
-`turn_order`/`draw_recipient`: either bot teammate may propose (attaching
-to whichever of the two teammates' own hands has the lowest-value
-candidate, since the offer accepts either), and only the NON-proposing
-teammate may confirm (always approves, never rejects). A bot paired with
-a real human teammate proposes on its own initiative but correctly stops
-there -- confirmation is that human's own call, so the offer stays open
-until they act.
+own turn/decision dispatch) gives every bot `BotPlayerService::
+chooseChaosDraftEffectAttachment()`'s own simple, deterministic policy:
+always take `effect_1` (the first offered), attached to the lowest-value
+candidate hand card (the same "buff your weakest card" bias
+`chooseInitialCardPass()` already applies to a mandatory discard). Open
+Team Play's own propose/confirm two-step is handled the same way
+`advanceBotTeamDecision()` handles `turn_order`/`draw_recipient`: either
+bot teammate may propose (attaching to whichever of the two teammates'
+own hands has the lowest-value candidate, since the offer accepts
+either), and only the NON-proposing teammate may confirm (always
+approves, never rejects). A bot paired with a real human teammate
+proposes on its own initiative but correctly stops there -- confirmation
+is that human's own call, so the offer stays open until they act. Note
+that resolving every bot's own offer this way does NOT by itself reopen
+the gate for anyone -- with the round-wide rule above, a real human
+player (or a mixed team still awaiting that human's own confirm)
+elsewhere in the SAME round holds the gate closed for bots and humans
+alike, exactly as if that human were the one currently trying to act.
 
-One more wrinkle `advanceAutomatedTurns()` itself has to guard against: a
-bot whose own turn comes up while its TEAM's offer is proposed but still
-awaiting a human teammate's own confirm is legitimately still blocked by
-the gate above even though it's a bot's turn nominally -- dispatching to
-its own `playMood()`/`pass()` unconditionally would let that exception
-escape uncaught mid-loop. `GameService::chaosDraftOfferBlocksPlayer()`
-(the shared, non-throwing predicate half of
-`assertChaosDraftOfferResolved()`) is checked immediately before that
-dispatch, falling through to the loop's own "waiting on a real player"
-`break` instead.
+`advanceAutomatedTurns()` itself has to guard against dispatching a
+bot's own turn action while the gate above is still closed for any
+reason -- whether it's the bot's OWN offer (already handled by
+`advanceBotChaosDraftOffer()` just before this check, so it's never
+still open by this point) or someone else's -- dispatching to either
+branch below unconditionally would let `assertChaosDraftOfferResolved()`'s
+own exception escape uncaught mid-loop.
+`GameService::chaosDraftRoundOffersBlockPlay()` is checked immediately
+before that dispatch, falling through to the loop's own "waiting on a
+real player" `break` instead.
 
 **`ChaosActOnChosenPlayersMoodEffect` lets the acting player choose the
 target moods directly (issue #405 follow-up -- a maintainer ruling
@@ -3580,6 +3597,77 @@ pool). `drafted_so_far`/`opponent_drafted_so_far`/
 `other_players_drafted_so_far`/`teams_drafted_so_far` stay whole-match
 totals, unchanged in shape from base Rotisserie Draft -- a single running
 `drafted_card_ids` list already spans every tier.
+
+### Sealed Deck (issue #392)
+
+`deck_type: 'sealed_deck'` is the sixth `format: 'draft'` deck type, reusing
+the same `draft_matches`/`draft_match_players` tables and best-of-three/
+deck-building infrastructure as every other draft-family deck type
+(`games.deck_type = 'sealed_deck'` is the only thing distinguishing it). What's
+genuinely different is that there's no live drafting mechanic at all: each
+seated player is independently dealt their own randomized 45-card pool
+(structure-deck-sized, matching `STRUCTURE_DECK_RARITY_COUNTS`'s own 23+14+6+2
+total) the moment the game is created, and goes straight to building a deck
+from it -- no packs, piles, grid, or shared face-up pool to pick from, unlike
+Quick/Winston/Grid/(Tiered) Rotisserie Draft.
+
+**Independent per-player pools** -- `buildSealedDeckPlayerPool()` always calls
+`buildStructureDeckCardIds()` directly (no pool-source choice, unlike every
+other draft deck type's own `buildDraftPool()`-backed picker), and
+`createGame()` calls it once PER SEATED PLAYER, rather than the single
+shared-pool call every other draft deck type makes. Each call independently
+randomizes its own structure-deck-style 45-card pool
+(`SEALED_DECK_POOL_SIZE`), so two players always end up with two different
+pools even though every pool is built the same way. `draft_matches.pool_source`
+is still recorded as the literal `'structure'` for every Sealed Deck match,
+for consistency with every other draft deck type's own row shape, even though
+there's no longer a user-facing choice behind it -- a future request may
+reintroduce other pool sources here. `draft_matches.pool_card_ids`
+stores the flattened union of every player's own pool (informational only,
+matching every other draft deck type's own "whole pool" convention) --
+`draftMatchPoolView()`'s own `undraftedCardIds` computation (`pool_card_ids`
+minus every player's own `drafted_card_ids`) correctly lands on an empty list,
+since nothing here is ever left over the way Quick Draft's discards or Grid
+Draft's round-end remainder are.
+
+**No drafting phase at all** -- `initializeSealedDeck()` runs in place of every
+other deck type's own `initializeXDraft()`: each player's `drafted_card_ids`
+is already written by `createGame()` itself (straight from their own
+`buildSealedDeckPlayerPool()` result), so this simply moves
+`draft_matches.status` directly to `'deck_building'`, skipping `'drafting'`
+altogether. `getState()`'s own `sealed_deck` field
+(`sealedDeckStateFor()`) mirrors `quickDraftStateFor()`'s exact shape (with
+`SEALED_DECK_MIN_DECK_SIZE`, 12, in place of `QUICK_DRAFT_MIN_DECK_SIZE`) for
+consistency, but its own `drafting` sub-field always stays `null` in practice.
+The frontend's own `renderDraftPanel()` reflects this: unlike every other
+draft deck type, Sealed Deck has no own "-panel"/"-drafting" markup at all --
+it goes straight to the shared `#draft-deck-building` view every draft deck
+type's own deck-building step already renders from.
+
+**Its own top-level Format option** -- since there's no live drafting phase
+to speak of, the New Game dialog surfaces Sealed Deck as its own choice in
+the Format dropdown (`#new-game-format`, next to "Draft"), not as one of
+"Draft"'s own Deck dropdown options the way it briefly was at first --
+picking it there would have meant a Deck dropdown with exactly one
+non-degenerate choice, and a name ("Sealed Deck") already redundant with the
+deck_type it names. This is a UI-only distinction: choosing it still sends
+`format: 'draft'`/`deck_type: 'sealed_deck'` to `POST /games`/`POST /open-games`
+same as always -- `format` itself never gained a new value, and every
+backend rule in this section is otherwise unaffected. See "New Game dialog"
+in `web-static/README.md` for the frontend mechanics (`#new-game-format`'s
+own `'sealed_deck'` sentinel value, `effectiveNewGameFormat()`).
+
+**Deck-building/match progression/bots** are otherwise identical to every
+other draft deck type: `submitDraftDeck()`, `draftGamesToWin()`'s best-of-three
+(2 players)/single-game (3-4 players) split, `advanceDraftMatch()`'s
+between-game sideboarding (from that same fixed 45-card pool, never
+re-dealt), and `advanceBotDraftDeck()`'s automatic bot deck submission all
+already work generically off `draft_matches`/`draft_match_players` -- adding
+`'sealed_deck'` to `DRAFT_DECK_TYPES` was the only change any of them needed.
+Since `advanceBotDraftTurn()` only ever reaches its per-deck-type pick dispatch
+while `draft_matches.status === 'drafting'` (never true for Sealed Deck), a
+bot seated here goes straight to submitting its own deck the very first time
+`advanceAutomatedTurns()` runs, with no pick-turn logic needed at all.
 
 ### Open Team Play
 
@@ -5094,8 +5182,21 @@ completing, so it contributes to `match_wins`/`match_losses` but not
 #140) -- see "Practice bots" below for why a bot game is deliberately
 excluded from both this and the deck-membership/played-card half of Card
 statistics below (its draft pick-position signal is a separate write path
-with its own bot guard -- see "Card statistics" below). Both private methods
-funnel
+with its own bot guard -- see "Card statistics" below). Neither one runs
+at all for a Chaos Draft game/match either (`games.deck_type ===
+'chaos_draft'`), confirmed by the maintainer: its per-round random
+effect attachments mean a win/loss and a card's own play pattern no
+longer reflect that card's actual printed ability the way every other
+format's stats are meant to -- the same reasoning, applied to a
+different exclusion condition than the bot one right above it, checked
+independently rather than folded into `$containsBot` since a Chaos
+Draft game has no bot in it at all. Chaos Draft's own drafting phase
+reuses Quick Draft's pick-submission mechanic verbatim (see "Chaos
+Draft" below), so `submitQuickDraftPick()`'s own `recordQuickDraftPick()`
+call carries the identical `deck_type !== 'chaos_draft'` guard alongside
+its existing bot guard, for the same reason "Card statistics" below's
+own per-pick guard needs one independent of the game/match-completion
+guard here. Both private methods funnel
 through `bumpLifetimeStats(array $userIds, string $column)`, a single
 `INSERT ... ON DUPLICATE KEY UPDATE ... = ... + 1` per user id -- there's
 no row at all for a user nothing has ever happened to; `GameService::
@@ -5162,10 +5263,24 @@ hook point:
   `DISTINCT` because a deck can legally contain duplicate copies of a
   catalog card (issue #109) -- a duplicate still only counts once toward
   "how many decks this card ended up in", not once per copy. "Played" is
-  `game_events.event_type = 'mood_played'`, joined through
-  `game_events.card_id -> game_cards.id -> game_cards.card_id` for the
-  catalog id, `DISTINCT`-deduped the same way (a card played twice in one
-  game via Duplicity's repeat mechanic still only counts once).
+  `game_events.event_type = 'mood_played'` OR a `'pending_decision_created'`
+  event with neither a `scoring_trigger` nor `after_scoring_order_trigger`
+  key in its own `details` (a bug caught live: a
+  `RequiresOpponentDecision` card -- Compulsion, Fury, Instability, etc.
+  -- only ever logs `'pending_decision_created'` for its own play, never
+  `'mood_played'`, see `GameService::playMood()`'s own `isPending` branch
+  and `respondToDecision()`'s own "No closing 'mood_played' event here"
+  comment -- so for a card whose decision fires on nearly every real play
+  this stayed at "times played: 0" forever until fixed; the two excluded
+  `details` keys are the same event type reused for a scoring-time
+  decision re-triggering on an already-played card and an after-scoring
+  order choice, neither of which is a card being played right then --
+  see `scoreRoundAndAdvance()`/`finishScoringAndAdvance()`), joined
+  through `game_events.card_id -> game_cards.id -> game_cards.card_id`
+  for the catalog id, `DISTINCT`-deduped the same way (a card played
+  twice in one game via Duplicity's repeat mechanic, or one whose pause
+  logs more than one `'pending_decision_created'` for the same play,
+  still only counts once).
 - **Draft pick-position signal**
   (`recordQuickDraftPick()`/`recordWinstonDraftPick()`/
   `recordGridDraftPick()`/`recordRotisserieDraftPick()`) is knowable the
@@ -5199,7 +5314,14 @@ hook point:
   seated player in that draft match is a practice bot (confirmed by the
   maintainer) -- the same "a bot game doesn't count" policy already
   applied to lifetime stats and the deck-membership/played-card stats
-  above, extended here too. `recordGameCompletionStats()`'s own
+  above, extended here too. Quick Draft's own `submitQuickDraftPick()`
+  additionally skips for `deck_type === 'chaos_draft'` (the same
+  exclusion "Lifetime stats" above applies) -- Chaos Draft reuses this
+  exact pick-submission mechanic verbatim (see "Chaos Draft" below), so
+  without this guard its own picks would silently mix into "Quick
+  Draft"'s own pick-position stat; Winston/Grid/Rotisserie Draft never
+  handle `chaos_draft` at all, so none of their three own guards need
+  the same addition. `recordGameCompletionStats()`'s own
   `$containsBot` check doesn't cover this, though: each of these four
   fires from the pick itself, well before a game (let alone a whole
   match) ever completes, so each carries its own identical guard instead
@@ -6658,6 +6780,28 @@ since it already holds that dependency):
   green and white moods" option has no owner filter of its own and
   would just as happily sweep up the bot's own qualifying moods
   alongside any opponent's.
+- **Hate's own "never leave it untargeted" policy** (confirmed by the
+  maintainer), via `hateTargetMoodId()`: unlike every OTHER optional
+  `CardChoiceSchema` field (left blank by default per `BotChoiceResolver`'s
+  own docblock), Hate's `target_mood_id` is always filled in -- its own
+  printed value is 0, so a plain untargeted play wastes the card outright,
+  while "put any mood on the bottom of the deck, then draw a card" has
+  no real cost when the target is Hate itself. Prefers the highest-CURRENT-value
+  mood owned by a non-teammate opponent (the same card draw, plus denying
+  them that scored value this round -- strictly better than targeting the
+  bot's own or a teammate's mood, which HateEffect's own field permits
+  but this never does, the same "an opponent" exclusion Contempt/Denial
+  already use); falls back to Hate's own `$cardId` (always legal --
+  `includes_self`) only once no such opponent mood exists. The one
+  exception: `MOOD_COUNT_VALUE_BOOST_EFFECT_KEYS` (currently just Euphoria,
+  "this mood's value increases by 1 for each mood in play, including
+  itself and other players' moods") -- bottoming ANY mood, even Hate
+  itself, shrinks the in-play mood count by one and so costs a mood like
+  that a permanent point of its own value for as long as it stays in
+  play, a real ongoing loss a one-time random draw isn't worth trading
+  away. `hateTargetMoodId()` returns `null` whenever the bot itself has
+  one of these in play, skipping the target field (and the draw)
+  entirely regardless of how good an opponent target might otherwise be.
 - `chooseDecisionAnswer(BoardState $state, array $field, int
   $botGamePlayerId, string $decisionType = ''): array` -- `[]` (submits
   as a plain empty answer, i.e. "declined") for an optional pending-
@@ -6829,6 +6973,47 @@ is driven purely by `activeTeamDecision()`'s "any unresolved row for this
 game" query, with no game-status check of its own).
 `testResignDuringAnOpenDrawRecipientDecisionStillCompletesTheGame`
 (`GameServiceIntegrationTest`) covers it.
+
+**A bot's own broken play attempt could ALSO permanently break the
+game -- caught live, again, in production (issue #196).** The two fixes
+above only ever guarded against `GameStateException` -- `GET /games/state`'s
+own `catch (GameStateException)` around `advanceAutomatedTurns()`, and
+every OTHER route's identical `catch` after its own human mutation
+succeeds (`POST /games/team-decision` included). Neither one catches a
+bug in `BotPlayerService::chooseAction()`/`buildChoicesForCard()` itself
+letting a bot choose a card it can't actually finish playing -- seen live
+as Compulsion's own required `target_player_id` (`CardChoiceSchema`'s
+`'compulsion'` entry) coming back missing from the bot's own chosen
+`$action['choices']`, so `MoodPlayService`'s `resolveAfterPlayingChain()`
+threw `InvalidChoiceException` deep inside `playMood()` -- a completely
+different exception class from `GameStateException` (both are separate
+`RuntimeException` subclasses; neither extends the other), so it fell
+straight through every one of those `catch (GameStateException)` blocks
+to `public/index.php`'s top-level handler. A human rejecting a
+`draw_recipient` proposal (`POST /games/team-decision`, `action:
+'confirm'`) triggered it directly -- the reject itself resolved and
+persisted fine, but the SAME request's own follow-up
+`advanceAutomatedTurns()` call then tried to drive the next bot's turn,
+hit this bug, and 500'd -- and since the exact same broken board state
+reproduces this identically on every retry, `GET /games/state`'s own
+poll afterward failed the same way forever, with no path back to a
+working game through ordinary use (the same "permanently unloadable"
+shape as the first bug above, just from a different exception class
+escaping a different call site). Fixed at the source instead of patching
+every call site again: `advanceAutomatedTurns()`'s own bot-turn branch
+now wraps `playMood()`/`pass()` in `catch (Throwable)` (deliberately not
+a curated exception list -- ANY bug here should never escape this loop,
+current or future), logs it (`error_log()`, the same pattern
+`public/index.php`'s own top-level handler already uses), and falls back
+to an automated `pass()` for that one seat instead of letting the
+exception propagate -- keeping the round, and the whole game, moving for
+every other seated player at the cost of skipping whatever that one
+bot's turn would have done. The underlying "why did Compulsion's own
+choices come back incomplete" question is still open (no fixture yet
+reproduces it in isolation -- every other seat's own targeting works
+correctly in tests, see `testChooseActionTargetsAPlayerWhenPlayingCompulsionInTeamPlay`)
+but can no longer break a game either way: a recurrence now logs instead
+of costing a human their ability to load their own game.
 
 **Hand visibility.** Needs no new rule at all -- a bot's hand is exactly
 as hidden from every other seated player as any other player's is
@@ -7160,6 +7345,145 @@ direct API request:
 Same write-only, no-separate-GET pattern every preference above already
 established (`POST /user/allow-custom-content-preference`, see the API
 table above; current value already rides on `GET /me`'s own user object).
+
+### Open lobby matchmaking (issue #116)
+
+An alternative to `POST /games`' own friends-only `opponent_user_ids`:
+`MatchmakingService` (`src/Matchmaking/`) lets a player post a game as
+"open" instead of naming specific opponents, and any other discoverable,
+non-blocked player can browse and join it. First of the three candidate
+mechanisms issue #116 itself lists -- quick match/random-opponent queues
+and skill-based matchmaking are explicitly deferred future steps, not
+attempted here.
+
+**Every format is supported**, including `standard` (2-4 player
+free-for-all) and the team formats (always exactly 4, 2 teams of 2) --
+migration `0198`'s original first cut was scoped to exactly-two-player
+`duel`/`draft` listings only, extended to the rest by migration `0201`
+once the maintainer settled how a multi-seat listing decides it's ready
+(see "Roster accumulation" below) and how team formats get their
+partners (see "Team formats" below). Every format/deck_type choice is
+fully available (issue discussion explicitly preferred this over a
+fixed simple ruleset) -- an open Duel listing can use any deck_type a
+friends-created one could, an open Draft listing can be any of
+Quick/Winston/Grid/Rotisserie/Tiered Rotisserie/Chaos Draft, and an open
+Standard listing needs no deck_type restriction at all.
+
+**Data model** (migrations `0198`/`0201`): `open_game_listings` (id,
+`created_by_user_id`, `create_game_params` -- a JSON blob holding the
+exact same named-argument shape `GameService::createGame()` itself
+takes, minus `createdByUserId`/`userIds`/`partnerUserId`/
+`randomTeams`/`bot_*`, none of which are known or meaningful until real
+players join -- the same "one JSON blob instead of a column per
+possible param" shape `draft_matches.pool_card_ids` already uses,
+`target_player_count` (below), `status` (`open`/`claimed`/`cancelled`),
+and `claimed_by_user_id`/`claimed_game_id`/`claimed_at`/`cancelled_at`.
+Rows are kept permanently once claimed/cancelled rather than deleted,
+the same "keep the audit trail" preference the rest of this schema
+follows. `open_game_listing_joins` (listing_id, user_id, joined_at, one
+row per player who's joined so far, not counting the creator) is its own
+table rather than a JSON array on the listing itself, so its own
+`UNIQUE(listing_id, user_id)` constraint is a storage-level guarantee
+against double-joining on top of the advisory lock below.
+
+**Roster accumulation**: the original design let a single joiner
+instantly complete and claim a listing, since exactly one more player
+was ever needed for `duel`/2-player `draft`. That no longer holds once a
+listing can need up to 3 more -- `target_player_count` records how many
+total seats (including the creator) a listing needs; the maintainer's
+own choice was an exact target the creator picks at posting time (e.g.
+"3 players"), not a min/max range with a manual "start now". Forced to
+the only legal value for `duel` (`2`) and the team formats (`4`)
+regardless of what's posted; only `draft`/`standard` actually let the
+creator choose (`2`-`4`). `MatchmakingService::joinOpenGame()` runs
+under a per-listing advisory lock (`GET_LOCK()`, mirroring
+`GameService::withGameLock()`'s own pattern) so two people joining the
+same last-open seat at once can't both push the roster over
+`target_player_count` -- each join is recorded in
+`open_game_listing_joins`, and only once the count (creator + every
+recorded join) reaches the target does `GameService::createGame()`
+actually fire, seating everyone at once; before that the listing just
+sits `open` with a partial roster. `MatchmakingService::leaveOpenGame()`
+lets a joiner withdraw their own earlier join while still waiting --
+without it, joining a multi-seat listing would be a one-way commitment
+with no way to back out if it's taking a while to fill.
+
+**Team formats**: always exactly 4 (2 teams of 2), and there's no way to
+know a partner ahead of time when every joiner is a stranger. The
+maintainer's own choice was a random shuffle once the roster fills, over
+either letting the creator hand-pick a partner from the joiners or pure
+join-order pairing -- reuses `GameService::createGame()`'s own existing
+`randomTeams` argument verbatim (the same one a friends-created team
+game can already opt into instead of naming a partner), so
+`joinOpenGame()` never reads a `partner_user_id` from
+`create_game_params` at all for these two formats -- there never is one,
+since `openGameCreateParamsFromRequestBody()` (`index.php`) doesn't even
+accept one for an open listing.
+
+**Moderation**: joining a stranger's game is exactly the scenario the
+existing friends-only model sidesteps entirely. A new personal
+preference, `users.matchmaking_discoverable` (`TINYINT(1)`, defaults
+`0`/off, migration `0198`) -- an explicit opt-IN, the same shape
+`allow_custom_content` above uses -- gates whether a listing is shown to
+anyone besides its own creator at all (`OpenGameListingRepository::
+listOpenFor()`). Separately, a listing is never shown to (or joinable
+by) a user who's blocked the creator or vice versa -- `friendships`'
+`blocked` status is symmetric once set regardless of who performed the
+block, and `MatchmakingService::joinOpenGame()`/`listOpenFor()` both
+check it. A blocked join attempt is reported the same generic "not
+found" a nonexistent listing gets, the same "the requester isn't told
+they've been blocked specifically" reasoning `FriendshipService` already
+uses. Joining someone else's listing needs no opt-in of its own --
+that's an explicit action the joiner already takes by clicking Join, not
+something done to them.
+
+A `chaos_draft` listing gets the same "custom card/effect formats"
+opt-in (`users.allow_custom_content`, see "Custom card/effect formats
+preference" above) enforced at all three points a friends-created
+Chaos Draft game already enforces it at just one: **posting**
+(`MatchmakingService::postOpenGame()` rejects a `chaos_draft` listing
+from a non-opted-in creator -- otherwise it'd exist only to be hidden
+from every non-opted-in browser and still blow up in `createGame()` the
+moment someone finally joined it), **browsing**
+(`MatchmakingService::listOpenGames()` filters `chaos_draft` listings
+out of a non-opted-in viewer's results entirely -- a bug caught live: a
+player who'd never opted in could otherwise see, and be tempted to
+join, a format whose fan-made effects they'd explicitly not agreed to),
+and **joining** (`MatchmakingService::joinOpenGame()` re-checks the
+joining user directly, since a listing can in principle still be joined
+by id, bypassing the browse filter -- a rejection here is far cleaner
+than letting the join through only to have `createGame()`'s own
+existing all-seated-players check blow up and cancel the whole listing
+out from under everyone else once the roster happens to fill).
+
+**Flow**: `POST /open-games` (creator, requires the opt-in above) →
+`GET /open-games` (any other discoverable, non-blocked user browses,
+excluding listings they've already joined -- see `GET
+/open-games?joined=1` below) → `POST /open-games/join` (joiner) --
+either records the join and reports `{"status": "waiting", ...}` if the
+roster still isn't full, or (once it is) actually calls
+`GameService::createGame()` with every player's id now known and
+reports `{"status": "started", "game_id"}`, marking the listing
+`claimed` -- from that point on the resulting game is completely
+indistinguishable from one friends created directly. If the creator's
+own choices turn out invalid once the roster fills (e.g. a saved
+decklist deleted after the listing was posted), the listing is retired
+(`cancelled`) rather than staying joinable and failing the same way for
+the next person too. `POST /open-games/leave` lets a joiner withdraw
+from a listing still waiting on more players; `POST /open-games/cancel`
+lets the creator withdraw their own listing entirely, at any point.
+
+**Frontend**: `game/index.html`'s New Game dialog gains an "Opponent"
+choice between "Invite friends" (unchanged) and "Post to the open
+lobby" -- the latter hides the friends picker and, for `draft`/
+`standard`, shows a player-count select (`updateNewGameModeFields()` in
+`game.js`); a team format's own partner-choice fields stay hidden in
+this mode regardless (`updateTeamFields()`'s own open-lobby check), since
+teams are always random here. A new "Open games" button/dialog has three
+sections: listings available to join (each showing "X of Y joined"),
+listings the current user has joined but that are still waiting on more
+players (with a Leave button), and the current user's own open listings
+(with a Cancel button).
 
 ### Rematch (issue #398)
 
