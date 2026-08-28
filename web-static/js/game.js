@@ -3070,7 +3070,7 @@
         structure: 'Structure', power: 'Power', jceddys_75: "jceddy's 75 Card", custom: 'Custom Decklist',
         custom_duel: 'Custom Decklists (Duel)', quick_draft: 'Quick Draft', winston_draft: 'Winston Draft',
         grid_draft: 'Grid Draft', rotisserie_draft: 'Rotisserie Draft', tiered_rotisserie_draft: 'Tiered Rotisserie Draft',
-        chaos_draft: 'Chaos Draft', one_of_each: 'One of Each Card',
+        chaos_draft: 'Chaos Draft', one_of_each: 'One of Each Card', sealed_deck: 'Sealed Deck',
     };
 
     // "2 of 4 joined" -- listing.joined_count itself never includes the
@@ -3082,9 +3082,15 @@
     // counted at all).
     function openGameSummary(listing) {
         const params = listing.create_game_params;
-        const format = NEW_GAME_FORMAT_LABELS[params.format] || params.format;
         const deckType = NEW_GAME_DECK_TYPE_LABELS[params.deck_type] || params.deck_type;
-        return `${format} – ${deckType} (${listing.joined_count + 1} of ${listing.target_player_count} joined)`;
+        // Sealed Deck (issue #392) is a 'draft' format deck_type with no
+        // actual drafting phase, so leading with "Draft" would be
+        // misleading here -- the deck_type name alone already says
+        // everything a player needs to know.
+        const format = params.deck_type === 'sealed_deck'
+            ? deckType
+            : `${NEW_GAME_FORMAT_LABELS[params.format] || params.format} – ${deckType}`;
+        return `${format} (${listing.joined_count + 1} of ${listing.target_player_count} joined)`;
     }
 
     async function loadOpenGamesDialog() {

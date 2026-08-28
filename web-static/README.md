@@ -768,6 +768,16 @@ listOpenGames()`, see "Open lobby matchmaking" in `php-app/README.md`),
 the same server-side-only enforcement `createGame()` already uses for
 friends-created Chaos Draft games.
 
+`openGameSummary()`'s own `format`/`deck_type` labels (a bug caught
+live: these used to fall back to the raw snake_case value -- e.g.
+"Draft – sealed_deck" -- whenever `NEW_GAME_DECK_TYPE_LABELS` was
+missing an entry, which it was for `sealed_deck`) now always resolve to
+the same human-friendly strings as the New Game dialog's own `<option>`
+labels. Sealed Deck also gets a special case dropping the leading
+"Draft – " -- it's a `format: 'draft'` value under the hood (issue
+#392), but with no actual drafting phase, leading with "Draft" would
+misname what the listing actually is.
+
 `#settings-matchmaking-discoverable-checkbox`, in the Settings dialog's
 "Game defaults" section right below the custom-content checkbox -- same
 starts-**unchecked**/opt-in shape (`users.matchmaking_discoverable`,
