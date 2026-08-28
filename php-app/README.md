@@ -6974,6 +6974,47 @@ game" query, with no game-status check of its own).
 `testResignDuringAnOpenDrawRecipientDecisionStillCompletesTheGame`
 (`GameServiceIntegrationTest`) covers it.
 
+**A bot's own broken play attempt could ALSO permanently break the
+game -- caught live, again, in production (issue #196).** The two fixes
+above only ever guarded against `GameStateException` -- `GET /games/state`'s
+own `catch (GameStateException)` around `advanceAutomatedTurns()`, and
+every OTHER route's identical `catch` after its own human mutation
+succeeds (`POST /games/team-decision` included). Neither one catches a
+bug in `BotPlayerService::chooseAction()`/`buildChoicesForCard()` itself
+letting a bot choose a card it can't actually finish playing -- seen live
+as Compulsion's own required `target_player_id` (`CardChoiceSchema`'s
+`'compulsion'` entry) coming back missing from the bot's own chosen
+`$action['choices']`, so `MoodPlayService`'s `resolveAfterPlayingChain()`
+threw `InvalidChoiceException` deep inside `playMood()` -- a completely
+different exception class from `GameStateException` (both are separate
+`RuntimeException` subclasses; neither extends the other), so it fell
+straight through every one of those `catch (GameStateException)` blocks
+to `public/index.php`'s top-level handler. A human rejecting a
+`draw_recipient` proposal (`POST /games/team-decision`, `action:
+'confirm'`) triggered it directly -- the reject itself resolved and
+persisted fine, but the SAME request's own follow-up
+`advanceAutomatedTurns()` call then tried to drive the next bot's turn,
+hit this bug, and 500'd -- and since the exact same broken board state
+reproduces this identically on every retry, `GET /games/state`'s own
+poll afterward failed the same way forever, with no path back to a
+working game through ordinary use (the same "permanently unloadable"
+shape as the first bug above, just from a different exception class
+escaping a different call site). Fixed at the source instead of patching
+every call site again: `advanceAutomatedTurns()`'s own bot-turn branch
+now wraps `playMood()`/`pass()` in `catch (Throwable)` (deliberately not
+a curated exception list -- ANY bug here should never escape this loop,
+current or future), logs it (`error_log()`, the same pattern
+`public/index.php`'s own top-level handler already uses), and falls back
+to an automated `pass()` for that one seat instead of letting the
+exception propagate -- keeping the round, and the whole game, moving for
+every other seated player at the cost of skipping whatever that one
+bot's turn would have done. The underlying "why did Compulsion's own
+choices come back incomplete" question is still open (no fixture yet
+reproduces it in isolation -- every other seat's own targeting works
+correctly in tests, see `testChooseActionTargetsAPlayerWhenPlayingCompulsionInTeamPlay`)
+but can no longer break a game either way: a recurrence now logs instead
+of costing a human their ability to load their own game.
+
 **Hand visibility.** Needs no new rule at all -- a bot's hand is exactly
 as hidden from every other seated player as any other player's is
 already, since it's an ordinary `game_players` row with no special
