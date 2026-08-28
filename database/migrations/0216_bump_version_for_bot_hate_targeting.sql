@@ -1,0 +1,12 @@
+-- Bumps schema_version for BotPlayerService::hateTargetMoodId() -- bots
+-- no longer play Hate with its optional target_mood_id left blank. They
+-- now target the highest-value non-teammate opponent mood when one
+-- exists, falling back to Hate itself (printed value 0, so bottoming it
+-- costs nothing) so the card draw is never left on the table, unless the
+-- bot has a mood in play whose value scales with the total mood count
+-- (Euphoria), where removing any mood -- even Hate itself -- would cost
+-- that mood a permanent point of value. Code-only change (no schema
+-- change), so no migration content beyond this version stamp is needed.
+-- A bot-behavior tweak like this one bumps the PATCH version only, per
+-- CLAUDE.md's own versioning convention -- it's not a new full feature.
+UPDATE schema_version SET version = '1.29.4' WHERE id = 1;

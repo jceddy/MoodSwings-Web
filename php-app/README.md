@@ -6780,6 +6780,28 @@ since it already holds that dependency):
   green and white moods" option has no owner filter of its own and
   would just as happily sweep up the bot's own qualifying moods
   alongside any opponent's.
+- **Hate's own "never leave it untargeted" policy** (confirmed by the
+  maintainer), via `hateTargetMoodId()`: unlike every OTHER optional
+  `CardChoiceSchema` field (left blank by default per `BotChoiceResolver`'s
+  own docblock), Hate's `target_mood_id` is always filled in -- its own
+  printed value is 0, so a plain untargeted play wastes the card outright,
+  while "put any mood on the bottom of the deck, then draw a card" has
+  no real cost when the target is Hate itself. Prefers the highest-CURRENT-value
+  mood owned by a non-teammate opponent (the same card draw, plus denying
+  them that scored value this round -- strictly better than targeting the
+  bot's own or a teammate's mood, which HateEffect's own field permits
+  but this never does, the same "an opponent" exclusion Contempt/Denial
+  already use); falls back to Hate's own `$cardId` (always legal --
+  `includes_self`) only once no such opponent mood exists. The one
+  exception: `MOOD_COUNT_VALUE_BOOST_EFFECT_KEYS` (currently just Euphoria,
+  "this mood's value increases by 1 for each mood in play, including
+  itself and other players' moods") -- bottoming ANY mood, even Hate
+  itself, shrinks the in-play mood count by one and so costs a mood like
+  that a permanent point of its own value for as long as it stays in
+  play, a real ongoing loss a one-time random draw isn't worth trading
+  away. `hateTargetMoodId()` returns `null` whenever the bot itself has
+  one of these in play, skipping the target field (and the draw)
+  entirely regardless of how good an opponent target might otherwise be.
 - `chooseDecisionAnswer(BoardState $state, array $field, int
   $botGamePlayerId, string $decisionType = ''): array` -- `[]` (submits
   as a plain empty answer, i.e. "declined") for an optional pending-
