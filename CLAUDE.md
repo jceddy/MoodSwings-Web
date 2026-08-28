@@ -6,6 +6,17 @@ When a `development` → `main` release PR merges (or otherwise announcing
 one), summarize what's included in **10 bullet points or fewer** — not a
 long prose recap of every constituent PR.
 
+This applies to the automated Discord deploy announcement too, not just
+a chat-message summary. `deploy.yml`'s "Announce deploy on Discord" step
+posts `.github/release-notes/<VERSION>.md` verbatim if it exists, and
+otherwise falls back to `auto_changelog.sh`'s flat one-bullet-per-commit
+list, which does not respect the 10-bullet limit. So the
+`development` → `main` promotion PR itself must include a curated
+`.github/release-notes/<VERSION>.md` file (named after the exact
+`VERSION` being promoted, ≤10 bullets — see
+`.github/release-notes/README.md`) whenever the promotion PR is opened,
+not added after the fact.
+
 ## Versioning (VERSION file / schema_version)
 
 `VERSION` follows `major.minor.patch`. A new full feature (a new
