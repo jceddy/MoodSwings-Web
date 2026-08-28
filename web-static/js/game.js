@@ -6742,6 +6742,15 @@
     let currentOpponentUsername = 'your opponent';
 
     function renderDraftDeckBuilding(deckBuilding) {
+        // Sorted by color/rarity/name (compareDraftPoolCards, shared with
+        // openDraftPoolView()'s own "View draft pool" sections) rather than
+        // left in draft/deal order -- makes a 45+ card pool actually
+        // scannable while trimming a deck. Reassigns (rather than sorting
+        // deckBuilding.drafted_cards in place) so this stays idempotent
+        // across the repeated re-renders every selection toggle triggers
+        // with the exact same deckBuilding object: already-sorted input
+        // sorts back to the same order every time.
+        deckBuilding.drafted_cards = deckBuilding.drafted_cards.slice().sort(compareDraftPoolCards);
         currentDeckBuilding = deckBuilding;
         // Open Team Play (deckBuilding.team_drafted_cards non-null): max_deck_size
         // is the whole TEAM's combined pool, not a real ceiling on what

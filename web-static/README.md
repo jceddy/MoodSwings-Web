@@ -1924,7 +1924,14 @@ someone else's listing needs no opt-in of its own.
       (`submitDraftDeck()`, `POST /games/draft/deck`) serves both the
       very first trim and every later sideboard between the
       match's games; there's no "first trim" vs. "sideboard" distinction in
-      the UI either. For Open Team Play, the picker (`#draft-deck-picker`,
+      the UI either. `renderDraftDeckBuilding()` sorts `deckBuilding.drafted_cards`
+      by color/rarity/name (`compareDraftPoolCards`, the same order
+      `openDraftPoolView()`'s own "View draft pool" sections already use)
+      before rendering `#draft-deck-picker` -- reassigned rather than
+      sorted in place so re-sorting the same already-sorted array on every
+      selection-toggle re-render is a no-op, since `draftDeckSelection`
+      tracks plain indices into this array and a reorder would otherwise
+      silently point selections at the wrong cards. For Open Team Play, the picker (`#draft-deck-picker`,
       built from `deckBuilding.drafted_cards`) IS the team's whole
       combined pool minus whatever the teammate's own current deck has
       already claimed (see `GameService::draftDeckBuildingStateFor()`'s
