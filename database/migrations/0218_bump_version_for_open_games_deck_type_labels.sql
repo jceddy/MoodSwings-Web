@@ -1,0 +1,11 @@
+-- Bumps schema_version for the Open Games dialog now showing
+-- human-friendly format/deck_type labels (openGameSummary() in game.js)
+-- instead of falling back to the raw snake_case deck_type value --
+-- e.g. "Draft – sealed_deck" -- whenever NEW_GAME_DECK_TYPE_LABELS was
+-- missing an entry, which it was for sealed_deck. Sealed Deck also
+-- drops the leading "Draft – " since it has no actual drafting phase.
+-- Code-only change (no schema change), so no migration content beyond
+-- this version stamp is needed. A UI label fix like this one bumps the
+-- PATCH version only, per CLAUDE.md's own versioning convention -- it's
+-- not a new full feature.
+UPDATE schema_version SET version = '1.29.6' WHERE id = 1;
