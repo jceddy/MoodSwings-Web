@@ -1,0 +1,13 @@
+-- Bumps schema_version for advanceAutomatedTurns() now catching ANY
+-- exception (not just GameStateException) from a bot's own play/pass
+-- attempt, logging it and falling back to an automated pass instead of
+-- letting it escape -- a bug in BotPlayerService's own choice-building
+-- (seen live: Compulsion's required target_player_id coming back
+-- missing) used to propagate straight through every route's own
+-- catch (GameStateException) block, making the game permanently
+-- unloadable via GET /games/state's own unconditional poll (issue #196).
+-- Code-only change (no schema change), so no migration content beyond
+-- this version stamp is needed. A resilience/bug fix like this one bumps
+-- the PATCH version only, per CLAUDE.md's own versioning convention --
+-- it's not a new full feature.
+UPDATE schema_version SET version = '1.29.5' WHERE id = 1;

@@ -2065,4 +2065,36 @@ final class BotPlayerServiceTest extends TestCase
 
         self::assertSame(4, $action['card_id'], 'no trigger applies, so Rationalization should still be saved for last');
     }
+
+    /**
+     * A bug caught live (issue #196): Compulsion's own required
+     * `target_player_id` field (CardChoiceSchema's `'compulsion'` entry,
+     * scope 'other') has no special-cased choice-building of its own --
+     * it falls straight through to the generic per-field
+     * `resolveSchemaFields()` loop, same as every other required
+     * single-player-target field. In Open Team Play specifically, that
+     * field's own generic 'other' scope permits targeting ANY other
+     * seated player, teammate included (unlike Duplicity's own
+     * `excludes_teammate` flag on an otherwise-identical field shape) --
+     * this is the one test confirming that resolution actually completes
+     * with a real `target_player_id` rather than an incomplete choices
+     * array in a 4-player team game, since no test previously exercised
+     * Compulsion's own bot targeting at all.
+     */
+    public function testChooseActionTargetsAPlayerWhenPlayingCompulsionInTeamPlay(): void
+    {
+        $state = new BoardState(
+            $this->sampleCatalog(),
+            DefaultEffectRegistry::build(),
+            [1, 2, 3, 4],
+            hands: [1 => [], 2 => [], 3 => [86], 4 => []],
+            teamIdByPlayer: [1 => 0, 2 => 0, 3 => 1, 4 => 1],
+        );
+
+        $action = $this->bot->chooseAction($state, [86], 3);
+
+        self::assertNotNull($action);
+        self::assertArrayHasKey('target_player_id', $action['choices']);
+        self::assertNotSame(3, $action['choices']['target_player_id'], 'Compulsion must target another player, never the acting player itself');
+    }
 }

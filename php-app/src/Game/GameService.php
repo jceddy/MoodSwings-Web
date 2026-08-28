@@ -4781,9 +4781,33 @@ final class GameService
                     fn (int $cardId) => $this->plays->isPlayable($state, $currentTurnGamePlayerId, $cardId),
                 ));
                 $action = $this->bots->chooseAction($state, $playableCardIds, $currentTurnGamePlayerId);
-                $lastResult = $action !== null
-                    ? $this->playMood($gameId, $currentTurnGamePlayerId, $action['card_id'], $action['choices'])
-                    : $this->pass($gameId, $currentTurnGamePlayerId, automated: true);
+                try {
+                    $lastResult = $action !== null
+                        ? $this->playMood($gameId, $currentTurnGamePlayerId, $action['card_id'], $action['choices'])
+                        : $this->pass($gameId, $currentTurnGamePlayerId, automated: true);
+                } catch (Throwable $e) {
+                    // A bug in the bot's own choice-building (BotPlayerService::
+                    // buildChoicesForCard()) let it choose a card it couldn't
+                    // actually finish playing -- caught live: Compulsion's own
+                    // required target_player_id came back missing, so
+                    // MoodPlayService threw InvalidChoiceException deep inside
+                    // playMood() here. Never let a bug like that (of ANY
+                    // exception type -- this is deliberately \Throwable, not a
+                    // curated list) escape this loop: EVERY caller (GET
+                    // /games/state's own unconditional poll included, see that
+                    // route's own docblock) would otherwise 500 forever
+                    // afterward, since the same broken board state reproduces
+                    // this identically on every single retry -- there's no
+                    // transient condition here for "try again" to ever clear
+                    // on its own. Falling back to a plain automated pass keeps
+                    // the round (and the whole game) moving for every other
+                    // seated player, at the cost of skipping whatever this
+                    // one turn would have done -- strictly better than a
+                    // permanently unloadable game with no recovery path a
+                    // human could ever trigger themselves.
+                    error_log("advanceAutomatedTurns({$gameId}): bot {$currentTurnGamePlayerId}'s own play attempt failed, passing instead -- " . $e);
+                    $lastResult = $this->pass($gameId, $currentTurnGamePlayerId, automated: true);
+                }
                 continue;
             }
 
