@@ -179,15 +179,53 @@ photo underneath makes one worth having -- one property set once, rather
 than repeating a theme-scoped override at each of the dozen individual
 dialog rules.
 
-Noir's card art, separately, still stays a pure CSS filter
-(`:root[data-theme="noir"] .card-thumb__art, ... { filter: grayscale(1)
-contrast(1.15); }`, `css/style.css`) over the normal MSW print -- no
-alternate card-front images of its own, unlike Steampunk/Futuristic/Neon.
-The filter's own selector also reaches `#card-detail-art`/
-`#choices-card-art` too (the card-detail dialog's and the choices panel's
-own single-card previews), not just the many `.card-thumb__art` thumbnails
-across hand/in-play/discard/draft screens -- all card art funnels through
-`cardArtUrl()`, so this one CSS rule covers everywhere it appears.
+Noir's card art, separately, still needs no alternate card-front images
+of its own, unlike Steampunk/Futuristic/Neon -- it's a filter over the
+normal MSW print. That filter is no longer a flat `grayscale(1)
+contrast(1.15)`, though: an early version fully desaturated the whole
+card uniformly, which erased the color-coded header band a player
+normally reads a card's mood from at a glance -- a real usability
+regression this repo's own playtesting caught. `#noir-card-fade` (an SVG
+`<filter>`, defined once in `game/index.html` since card art only appears
+there, referenced from `css/style.css` via `filter:
+url(#noir-card-fade)`) fakes a top-to-bottom gradient a plain CSS
+`filter` can't express on its own: the header band (the top ~20% of the
+card) stays completely untouched, full color; from there it fades to
+fully desaturated-plus-contrast by three-quarters of the way down,
+staying that way through the footer. Mechanically, it's a desaturated,
+contrast-boosted copy of the card (`feColorMatrix`/`feComponentTransfer`)
+punched through a gradient alpha mask (`feImage`, an inline base64
+SVG rect whose own linear gradient carries that same 0%/20%/75%/100%
+shape) via `feComposite`'s `"in"` operator, then `feMerge` stacks that
+masked copy OVER the plain original -- transparent (top) lets the
+original color show through untouched, opaque (bottom) fully replaces it.
+Needs `primitiveUnits="objectBoundingBox"` (every x/y/width/height given
+as a 0-1 fraction, not a raw pixel value) so the gradient sizes itself
+against the filtered `<img>`'s own box instead of some unrelated
+coordinate space -- the default resolves percentages incorrectly and
+silently produces a blank or mispositioned result rather than an error,
+so this was verified against real card art (a `feImage`/`feComposite`
+debug harness rendering just the raw alpha mask, then the masked
+grayscale layer alone, before trusting the full composite) before
+shipping it. Since the filter is defined once as an SVG `<defs>` block
+rather than computed from `--color-*` custom properties, it isn't
+theme-aware in the way the rest of this file's CSS is -- it's simply
+never referenced by anything but Noir's own filter rule, so that doesn't
+matter in practice.
+
+The filter's own selector reaches `#card-detail-art`/`#choices-card-art`
+too (the card-detail dialog's and the choices panel's own single-card
+previews), not just the many `.card-thumb__art` thumbnails across
+hand/in-play/discard/draft screens -- all card art funnels through
+`cardArtUrl()`, so this one CSS rule (referencing the one SVG filter)
+covers everywhere it appears. It also survives the 90deg/180deg/270deg
+`transform: rotate()` this file's own rules apply to suppressed/
+value-overridden in-play cards (tabletop "tapped card" conventions) --
+CSS applies `filter` to an element's own unrotated content before
+`transform` repositions the result, so the gradient (computed in the
+image's own un-rotated coordinate space) rotates rigidly along with
+everything else already printed on the card, keeping the same relative
+"header stays colorful, footer stays gray" relationship it has upright.
 
 Getting `data-theme` set before first paint (so an explicit preference
 never flashes the wrong theme first) needs to happen before `js/app.js`
