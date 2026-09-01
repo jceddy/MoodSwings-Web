@@ -7900,10 +7900,23 @@
         return null;
     }
 
-    function constraintMessage(constraint, candidates) {
+    function constraintMessage(constraint, candidates, candidateValues) {
         if (!constraint) return null;
         if (constraint.type === 'max_total_value') {
-            const total = candidates.reduce((sum, c) => sum + c.value, 0);
+            // candidateValues (field.candidate_values -- see
+            // GameService::withSimulatedConstraintValues()'s own docblock)
+            // is a server-computed card_id -> value map using each mood's
+            // value as if the card currently being played (e.g. Anger)
+            // were already in play, needed because a dynamic mood's value
+            // (Superiority's "7 if you have more moods than each other
+            // player") can change once the played card itself enters play
+            // and shifts a mood-count comparison. Falling back to c.value
+            // (the stale pre-play value) keeps this a no-op for fields
+            // without that map.
+            const total = candidates.reduce((sum, c) => {
+                const value = candidateValues && candidateValues[c.card_id] !== undefined ? candidateValues[c.card_id] : c.value;
+                return sum + value;
+            }, 0);
             return total > constraint.max ? `The combined value of the chosen moods cannot exceed ${constraint.max}` : null;
         }
         if (candidates.length < 2) return null; // the rest only make sense once 2+ are chosen
@@ -7926,7 +7939,7 @@
     function fieldValidationMessage(field, widget) {
         if (!field.multi) return null;
         const candidates = selectedCandidates(field, widget);
-        return countMessage(field.count, candidates.length) || constraintMessage(field.constraint, candidates);
+        return countMessage(field.count, candidates.length) || constraintMessage(field.constraint, candidates, field.candidate_values);
     }
 
     function updatePlayButtonEnabled() {

@@ -2563,7 +2563,7 @@ final class BotPlayerService
      */
     private function angerTargetMoodIds(BoardState $state, int $cardId, int $botGamePlayerId): array
     {
-        $targets = $this->angerSwingMaximizingTargets($state, $botGamePlayerId);
+        $targets = $this->angerSwingMaximizingTargets($state, $cardId, $botGamePlayerId);
 
         if ($this->angerShouldAlsoTargetItself($state, $botGamePlayerId)) {
             $targets[] = $cardId;
@@ -2582,9 +2582,21 @@ final class BotPlayerService
      * maxValueSubsetWithinBudget() to find the highest-total-value subset
      * that still fits Anger's own 5-point combined-value ceiling.
      *
+     * Each candidate's value is computed via
+     * BoardState::valueOfAsIfAlsoInPlay() rather than plain valueOf() --
+     * $state here is the board as of *before* Anger ($cardId) is actually
+     * played, but a dynamic opponent mood's value (e.g. SuperiorityEffect's
+     * "7 if you have more moods than each other player") can depend on
+     * $botGamePlayerId's own mood count, which Anger itself is about to
+     * change. Without this, the bot could wrongly treat a target as
+     * over-budget (or under-budget) using a value that's already stale by
+     * the time AngerEffect::afterPlaying() actually validates it -- the
+     * same client-side staleness bug this fixes in game.js's own
+     * constraintMessage() (see GameService::withSimulatedConstraintValues()).
+     *
      * @return int[]
      */
-    private function angerSwingMaximizingTargets(BoardState $state, int $botGamePlayerId): array
+    private function angerSwingMaximizingTargets(BoardState $state, int $cardId, int $botGamePlayerId): array
     {
         $opponentMoodValues = [];
         foreach ($state->moodsInPlay() as $mood) {
@@ -2592,7 +2604,7 @@ final class BotPlayerService
                 continue;
             }
 
-            $opponentMoodValues[$mood->cardId] = $state->valueOf($mood->cardId);
+            $opponentMoodValues[$mood->cardId] = $state->valueOfAsIfAlsoInPlay($mood->cardId, $cardId, $botGamePlayerId);
         }
 
         return $this->maxValueSubsetWithinBudget($opponentMoodValues, self::ANGER_DISCARD_BUDGET);

@@ -3322,6 +3322,69 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * Regression test: SuperiorityEffect's own "7 if you have more moods
+     * than each other player" value depends on a mood-count comparison
+     * that playing Anger itself can tip -- here player 1 has 2 other
+     * moods in play (fewer than player 2's 3, Superiority included), so
+     * Superiority sits at 7 (over Anger's 5-point combined-value budget)
+     * right up until Anger is actually played and player 1's own count
+     * rises to 3, tying player 2's and dropping Superiority back to its
+     * base value of 3 (within budget). Before this fix, Anger's own
+     * 'max_total_value' constraint was checked client-side (game.js's
+     * constraintMessage()) using each candidate's stale pre-play value,
+     * so choosing Superiority alongside Anger would show as exceeding
+     * the budget and disable the Play button even though the server (see
+     * AngerEffect::afterPlaying(), which validates the same constraint
+     * only after Anger is already in play) would have accepted it.
+     */
+    public function testAngersCombinedValueFieldReflectsASuperiorityThatOnlyFitsTheBudgetOnceAngerItselfIsInPlay(): void
+    {
+        $u1 = $this->insertUser('angersuperiority1');
+        $u2 = $this->insertUser('angersuperiority2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        // Player 1: 2 simple filler moods in play, Anger still in hand.
+        $this->insertGameCard($gameId, 2, 'in_play', $p1); // Benevolence, value 2
+        $this->insertGameCard($gameId, 3, 'in_play', $p1); // Charity, value 1
+        $angerId = $this->insertGameCard($gameId, 80, 'hand', $p1); // Anger
+
+        // Player 2: Superiority plus 2 more simple filler moods, so their
+        // own count (3) currently exceeds player 1's (2).
+        $superiorityId = $this->insertGameCard($gameId, 77, 'in_play', $p2); // Superiority, base 3 / alt 7
+        $this->insertGameCard($gameId, 13, 'in_play', $p2); // Friendliness, value 2
+        $this->insertGameCard($gameId, 14, 'in_play', $p2); // Guilt, value 2
+
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $stateBeforePlaying = $this->games->getState($gameId, $u1);
+        self::assertSame(7, self::findByCardId($stateBeforePlaying['in_play'], $superiorityId)['value']);
+
+        $angerCard = self::findByCardId($stateBeforePlaying['you']['hand'], $angerId);
+        $targetField = self::findFieldByKey($angerCard['choice_fields'], 'target_mood_ids');
+        self::assertSame(3, $targetField['candidate_values'][$superiorityId]);
+
+        $this->games->playMood($gameId, $p1, $angerId, ['target_mood_ids' => [$superiorityId]]);
+
+        $stateAfterPlaying = $this->games->getState($gameId, $u1);
+        self::assertNotContains(
+            $superiorityId,
+            array_column($stateAfterPlaying['in_play'], 'card_id'),
+        );
+        self::assertContains(
+            $superiorityId,
+            array_column($stateAfterPlaying['discard_pile'], 'card_id'),
+        );
+    }
+
+    /**
      * Regression test: Euphoria's own "+1 per mood in play, including
      * itself" value can genuinely exceed Repentance's usual 0-12 picker
      * range (CardChoiceSchema's own practical default, not a real rule --

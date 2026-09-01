@@ -1631,6 +1631,35 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame(['target_mood_ids' => []], $action['choices']);
     }
 
+    /**
+     * Regression test (confirmed by the maintainer): SuperiorityEffect's
+     * own "7 if you have more moods than each other player" value depends
+     * on a mood-count comparison that playing Anger itself can tip. Here
+     * player 1 (the bot) has 2 other moods in play (fewer than player 2's
+     * 3, Superiority included), so Superiority sits at 7 -- over Anger's
+     * own 5-point combined-value budget -- right up until Anger is
+     * actually played and player 1's own count rises to 3, tying player
+     * 2's and dropping Superiority back to its base value of 3 (within
+     * budget). Before this fix, angerSwingMaximizingTargets() scored
+     * Superiority using its stale pre-play value (7), so the bot would
+     * never target it even though it's actually in budget the moment
+     * Anger is played.
+     */
+    public function testChooseActionTargetsASuperiorityThatOnlyFitsAngersBudgetOnceAngerItselfIsInPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [80, 2, 3], 2 => [77, 13, 14]]);
+        $state->moveHandToInPlay(1, 2); // Benevolence, value 2
+        $state->moveHandToInPlay(1, 3); // Charity, value 1
+        $state->moveHandToInPlay(2, 77); // Superiority, base 3 / alt 7
+        $state->moveHandToInPlay(2, 13); // Friendliness, value 2
+        $state->moveHandToInPlay(2, 14); // Guilt, value 2
+
+        $action = $this->bot->chooseAction($state, [80], 1);
+
+        self::assertSame(80, $action['card_id']);
+        self::assertContains(77, $action['choices']['target_mood_ids']);
+    }
+
     public function testChooseDecisionAnswerReturnsEmptyForAnOptionalField(): void
     {
         $state = $this->boardState();
