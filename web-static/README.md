@@ -155,7 +155,7 @@ gets its own `--color-text`/`--color-border`/etc. tuned to the photo's own
 warm neon signage, the same as any other named palette. Its
 `--color-surface`, though, is the one deliberate exception to every other
 palette's "solid, opaque hex" convention: a translucent near-black
-(`rgba(12, 10, 8, 0.72)`), so dialogs/rows/panels read as frosted glass
+(`rgba(12, 10, 8, 0.82)`), so dialogs/rows/panels read as frosted glass
 over the photo rather than flat opaque cards -- a look that suits Noir
 specifically and wouldn't necessarily suit a palette with a plain color
 background instead of a busy photo. A `linear-gradient()` darkening scrim
@@ -164,6 +164,20 @@ is layered between `--color-surface`'s own backdrop and the photo (same
 the photo itself (neon signs, wet-pavement reflections) can't fail
 contrast with light text wherever page content happens to land on top of
 them -- a robustness measure a single flat color/pattern never needed.
+
+"Frosted glass" is a literal `backdrop-filter: blur()`, not just
+translucency -- a new `--surface-blur` custom property (`css/style.css`)
+drives it, added alongside `background-color: var(--color-surface)` on
+every dialog (plus the grid-draft arrow button) that paints that
+property. `--surface-blur` is undefined everywhere except Noir, so the
+`var(--surface-blur, none)` fallback makes it a no-op for every other
+palette -- a solid opaque background has nothing behind it worth
+blurring, so there's no reason to pay for the blur pass on pages using
+them. Only Noir's own `:root` block sets `--surface-blur: blur(10px)`,
+turning the same shared declaration into a real blur exactly where the
+photo underneath makes one worth having -- one property set once, rather
+than repeating a theme-scoped override at each of the dozen individual
+dialog rules.
 
 Noir's card art, separately, still stays a pure CSS filter
 (`:root[data-theme="noir"] .card-thumb__art, ... { filter: grayscale(1)

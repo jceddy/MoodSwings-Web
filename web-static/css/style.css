@@ -333,11 +333,25 @@ body {
    text wherever page content happens to land on top of them; the scrim
    guarantees --color-text stays legible everywhere regardless of layout
    height. Like the three ambitious themes below, this doesn't touch the
-   four status colors. */
+   four status colors.
+
+   --surface-blur drives an ACTUAL `backdrop-filter: blur()` on every
+   element that paints --color-surface as its own background (every
+   dialog, plus the grid-draft arrow button -- see each of their own
+   rules further down, each now paired with a
+   `backdrop-filter: var(--surface-blur, none)` right next to its
+   `background-color`) -- undefined everywhere else, so the `none`
+   fallback keeps every other palette exactly as before (a solid color
+   has nothing behind it worth blurring anyway); Noir is the one palette
+   with enough behind its panels -- the photo -- for a blur to read as
+   genuine frosted glass rather than a wasted GPU pass. Deliberately a
+   custom property set once here rather than 12 one-off theme-scoped
+   overrides at each individual dialog rule. */
 :root[data-theme="noir"] {
     color-scheme: dark;
     --color-bg: #0a0a0c;
-    --color-surface: rgba(12, 10, 8, 0.72);
+    --color-surface: rgba(12, 10, 8, 0.82);
+    --surface-blur: blur(10px);
     --color-text: #f2ead8;
     --color-text-secondary: #cfc4ae;
     --color-muted: #9a9184;
@@ -398,6 +412,8 @@ dialog#resources-dialog {
     width: 90%;
     padding: 1.5rem;
     background-color: var(--color-surface);
+    backdrop-filter: var(--surface-blur, none);
+    -webkit-backdrop-filter: var(--surface-blur, none);
     color: var(--color-text);
     border: 1px solid var(--color-border);
     border-radius: 0.5rem;
@@ -594,6 +610,8 @@ dialog#settings-dialog {
     width: 90%;
     padding: 1.5rem;
     background-color: var(--color-surface);
+    backdrop-filter: var(--surface-blur, none);
+    -webkit-backdrop-filter: var(--surface-blur, none);
     color: var(--color-text);
     border: 1px solid var(--color-border);
     border-radius: 0.5rem;
@@ -1010,6 +1028,8 @@ body.game-page {
     border: 1px solid var(--color-border);
     border-radius: 0.4rem;
     background: var(--color-surface);
+    backdrop-filter: var(--surface-blur, none);
+    -webkit-backdrop-filter: var(--surface-blur, none);
     color: var(--color-text);
     cursor: pointer;
     padding: 0.25rem;
@@ -1751,6 +1771,8 @@ dialog#card-detail-dialog {
     width: 90%;
     padding: 1.5rem;
     background-color: var(--color-surface);
+    backdrop-filter: var(--surface-blur, none);
+    -webkit-backdrop-filter: var(--surface-blur, none);
     color: var(--color-text);
     border: 1px solid var(--color-border);
     border-radius: 0.5rem;
@@ -1765,6 +1787,8 @@ dialog#confirm-dialog {
     width: 85%;
     padding: 1.5rem;
     background-color: var(--color-surface);
+    backdrop-filter: var(--surface-blur, none);
+    -webkit-backdrop-filter: var(--surface-blur, none);
     color: var(--color-text);
     border: 1px solid var(--color-border);
     border-radius: 0.5rem;
@@ -1857,6 +1881,8 @@ dialog#art-preview-dialog {
     width: 90%;
     padding: 1.5rem;
     background-color: var(--color-surface);
+    backdrop-filter: var(--surface-blur, none);
+    -webkit-backdrop-filter: var(--surface-blur, none);
     color: var(--color-text);
     border: 1px solid var(--color-border);
     border-radius: 0.5rem;
@@ -1880,6 +1906,8 @@ dialog#game-log-dialog[open] {
     max-height: 80vh;
     padding: 1.5rem;
     background-color: var(--color-surface);
+    backdrop-filter: var(--surface-blur, none);
+    -webkit-backdrop-filter: var(--surface-blur, none);
     color: var(--color-text);
     border: 1px solid var(--color-border);
     border-radius: 0.5rem;
@@ -1901,6 +1929,8 @@ dialog#shared-deck-dialog[open] {
     max-height: 80vh;
     padding: 1.5rem;
     background-color: var(--color-surface);
+    backdrop-filter: var(--surface-blur, none);
+    -webkit-backdrop-filter: var(--surface-blur, none);
     color: var(--color-text);
     border: 1px solid var(--color-border);
     border-radius: 0.5rem;
@@ -1918,6 +1948,8 @@ dialog#draft-pool-dialog[open] {
     max-height: 80vh;
     padding: 1.5rem;
     background-color: var(--color-surface);
+    backdrop-filter: var(--surface-blur, none);
+    -webkit-backdrop-filter: var(--surface-blur, none);
     color: var(--color-text);
     border: 1px solid var(--color-border);
     border-radius: 0.5rem;
@@ -1933,6 +1965,8 @@ dialog#game-notes-dialog[open] {
     width: 90%;
     padding: 1.5rem;
     background-color: var(--color-surface);
+    backdrop-filter: var(--surface-blur, none);
+    -webkit-backdrop-filter: var(--surface-blur, none);
     color: var(--color-text);
     border: 1px solid var(--color-border);
     border-radius: 0.5rem;
@@ -1963,6 +1997,8 @@ dialog#game-chat-dialog[open] {
     max-height: 80vh;
     padding: 1.5rem;
     background-color: var(--color-surface);
+    backdrop-filter: var(--surface-blur, none);
+    -webkit-backdrop-filter: var(--surface-blur, none);
     color: var(--color-text);
     border: 1px solid var(--color-border);
     border-radius: 0.5rem;
@@ -2049,6 +2085,8 @@ dialog#deck-builder-dialog[open] {
     max-height: 90vh;
     padding: 1.5rem;
     background-color: var(--color-surface);
+    backdrop-filter: var(--surface-blur, none);
+    -webkit-backdrop-filter: var(--surface-blur, none);
     color: var(--color-text);
     border: 1px solid var(--color-border);
     border-radius: 0.5rem;
