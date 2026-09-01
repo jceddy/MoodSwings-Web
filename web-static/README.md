@@ -108,21 +108,29 @@ convention as Jade/Red Marble/White Marble) PLUS a decorative `body`
 background-image, since "ambitious theme" -- not just an alternate card
 print -- was the whole design brief for these four.
 
-Steampunk/Futuristic/Neon's background is a small, tileable inline SVG
-baked directly into `css/style.css` as a `data:image/svg+xml;base64,...`
-URI (no separate image file to manage): a pair of brass gear silhouettes
-for Steampunk, circuit-board traces and via pads for Futuristic, and a
-two-tone magenta/cyan crosshatch grid under a fixed radial-gradient glow
-(anchored to the bottom of the viewport, for the classic synthwave "grid
-fading into a glowing horizon" look) for Neon. Every color baked into
-those SVGs/gradients is already low-alpha, so they read as a subtle
-texture behind the page rather than competing with `--color-text` for
-contrast -- no separate `opacity` property needed on top. **These three
-are placeholder art**, generated procedurally (simple alternating-radius
-polygons for gears, hand-plotted right-angle paths for circuit traces,
-plain crosshatch lines for the grid) because no image-generation tool was
-available to produce anything more detailed; the maintainer may replace
-any of the three with real artwork.
+Futuristic/Neon's background is a small, tileable inline SVG baked
+directly into `css/style.css` as a `data:image/svg+xml;base64,...` URI
+(no separate image file to manage): circuit-board traces and via pads for
+Futuristic, and a two-tone magenta/cyan crosshatch grid under a fixed
+radial-gradient glow (anchored to the bottom of the viewport, for the
+classic synthwave "grid fading into a glowing horizon" look) for Neon.
+Every color baked into those SVGs/gradients is already low-alpha, so they
+read as a subtle texture behind the page rather than competing with
+`--color-text` for contrast -- no separate `opacity` property needed on
+top. **These two are still placeholder art**, generated procedurally
+(hand-plotted right-angle paths for circuit traces, plain crosshatch
+lines for the grid) because no image-generation tool was available to
+produce anything more detailed; the maintainer may replace either with
+real artwork -- the same way Steampunk's own placeholder (originally a
+procedural pair of brass gear silhouettes, same technique) already got
+replaced with a real maintainer-supplied photo/illustration of an aged
+brass-and-gears mechanism (`img/themes/steampunk-bg.webp`), using the
+same `cover`/`fixed`/darkening-scrim technique as Noir's own photo (see
+Noir's own section below for the full mechanical explanation) -- except
+with a stronger scrim (0.55 alpha vs Noir's 0.4), since this image has
+large bright parchment-colored passages across most of its area rather
+than a few small highlights, and `--color-text`'s light parchment tone
+would otherwise fail contrast against them.
 
 Steampunk/Futuristic/Neon are ALSO alternate PRINTED card-front art,
 added gradually one card at a time rather than needing full coverage
