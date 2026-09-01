@@ -313,6 +313,46 @@ body {
     color: var(--color-text);
 }
 
+/* Buttons (reported live: "can we make the buttons match the themes?") --
+   left completely unstyled otherwise, every <button> on every page rendered
+   as the browser's own default chrome (light gray, native OS look) no
+   matter which --color-* below was active, clashing hard against a dark
+   palette or one of the four photo-backed skins (Noir/Steampunk/
+   Futuristic/Neon). Reuses the exact same surface/border/blur idiom every
+   dialog and .grid-draft-arrow-button already apply per-theme (see
+   --surface-blur's own docblock further down) so a plain button just
+   inherits whatever "surface panel" already means for the active theme,
+   with no separate per-theme override needed here. This is only the
+   shared baseline every button starts from -- a more specific selector
+   elsewhere (#resign-button, .icon-action-button, .grid-draft-arrow-button,
+   etc.) still wins by specificity for its own one-off sizing/color/layout
+   needs. */
+button {
+    font: inherit;
+    color: var(--color-text);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 0.4rem;
+    padding: 0.4rem 0.8rem;
+    backdrop-filter: var(--surface-blur, none);
+    -webkit-backdrop-filter: var(--surface-blur, none);
+    cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+    border-color: var(--color-text-secondary);
+}
+
+button:focus-visible {
+    outline: 2px solid var(--color-info);
+    outline-offset: 1px;
+}
+
+button:disabled {
+    cursor: default;
+    opacity: 0.5;
+}
+
 /* Noir (issue #363) -- the maintainer's own photo replaces the earlier
    procedurally-generated placeholder (a diagonal stripe pattern, before
    that a CSS filter alone) once real art became available: a moody,
