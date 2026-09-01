@@ -39,11 +39,12 @@
    override the same seven structural/decorative properties, PLUS set a
    decorative `body` background-image, since "ambitious theme" was the
    whole design brief for these four, not just an alternate card print.
-   Steampunk/Futuristic/Neon use a tileable inline-SVG texture (brass
-   gears, circuit traces, a neon grid); Noir uses a real photo
-   (img/themes/noir-bg.webp) -- see its own :root block further down for
-   why that means its --color-surface breaks from every other palette's
-   own convention of a solid, opaque value. */
+   Futuristic/Neon still use a tileable inline-SVG texture (circuit
+   traces, a neon grid); Noir and Steampunk use a real photo/illustration
+   instead (img/themes/noir-bg.webp, img/themes/steampunk-bg.webp) -- see
+   Noir's own :root block further down for why that means its
+   --color-surface breaks from every other palette's own convention of a
+   solid, opaque value. */
 :root {
     color-scheme: light;
     /* Card/icon size slider (issue #417) -- a plain multiplier every
@@ -236,13 +237,14 @@
 }
 
 /* Steampunk (issue #363, card-skin theme) -- a dark brass/espresso
-   palette evoking riveted copper machinery, plus a tileable inline-SVG
-   background of two brass gear silhouettes (drawn as simple alternating-
-   radius polygons, not photographic art -- see this repo's own README
-   for why: no image-generation tool was available, so this is a
-   deliberately low-fidelity placeholder the maintainer can replace).
-   Doesn't touch the four status colors, same reasoning as Jade/Red
-   Marble/White Marble above. */
+   palette evoking riveted copper machinery, plus a real maintainer-
+   supplied photo/illustration background (see its own comment further
+   down, right by the [data-theme="steampunk"] body rule, for exactly how
+   that's composited) -- this replaced an earlier procedurally-generated
+   placeholder (a tileable inline-SVG pair of brass gear silhouettes),
+   from back when no image-generation tool was available. Doesn't touch
+   the four status colors, same reasoning as Jade/Red Marble/White Marble
+   above. */
 :root[data-theme="steampunk"] {
     color-scheme: dark;
     --color-bg: #1c130a;
@@ -369,16 +371,34 @@ body {
     background-attachment: fixed;
 }
 
-/* The three "ambitious" card-skin themes (see their own :root blocks
-   above) each additionally paint a decorative, tileable background
-   behind the page -- kept at low alpha (baked into each SVG/gradient's
-   own rgba() stops, not a separate opacity property, so it never dims
-   actual page content sitting on top of it) so body text set in
-   --color-text above stays at full, unaffected contrast. */
+/* Steampunk's own decorative background (the second of the four
+   card-skin themes to move from procedural placeholder art to a real
+   maintainer-supplied image, after Noir -- see its own extensive comment
+   further up for the reasoning this mirrors) is a photo/illustration of
+   an aged brass-and-gears mechanism (img/themes/steampunk-bg.webp),
+   fixed behind the page the same way Noir's own photo is. Unlike Noir's
+   background, though, this one has large BRIGHT parchment-colored
+   patches across most of its area (not just a few small highlights), so
+   the same "layer a darkening scrim under the image" technique gets a
+   noticeably stronger scrim here (0.55 alpha vs Noir's 0.4) -- without
+   it, --color-text's own light parchment tone (#f0e0c0, chosen to
+   complement this exact image) would fail contrast against the image's
+   own lightest passages wherever page content happens to land there. */
 :root[data-theme="steampunk"] body {
-    background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNjAiIGhlaWdodD0iMTYwIiB2aWV3Qm94PSIwIDAgMTYwIDE2MCI+PHBvbHlnb24gcG9pbnRzPSI3MC4wLDM4LjAgNjEuOCw0NS43IDYzLjksNTYuOCA1Mi43LDU4LjIgNDcuOSw2OC40IDM4LjAsNjMuMCAyOC4xLDY4LjQgMjMuMyw1OC4yIDEyLjEsNTYuOCAxNC4yLDQ1LjcgNi4wLDM4LjAgMTQuMiwzMC4zIDEyLjEsMTkuMiAyMy4zLDE3LjggMjguMSw3LjYgMzguMCwxMy4wIDQ3LjksNy42IDUyLjcsMTcuOCA2My45LDE5LjIgNjEuOCwzMC4zIiBmaWxsPSJub25lIiBzdHJva2U9InJnYmEoMTk2LDE0OCw4NCwwLjIwKSIgc3Ryb2tlLXdpZHRoPSIyIi8+PGNpcmNsZSBjeD0iMzgiIGN5PSIzOCIgcj0iOSIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJyZ2JhKDE5NiwxNDgsODQsMC4yMCkiIHN0cm9rZS13aWR0aD0iMiIvPjxwb2x5Z29uIHBvaW50cz0iMTQ0LjAsMTIyLjAgMTM3LjksMTI3LjcgMTM4LjEsMTM2LjEgMTI5LjcsMTM1LjkgMTI0LjAsMTQyLjAgMTE4LjMsMTM1LjkgMTA5LjksMTM2LjEgMTEwLjEsMTI3LjcgMTA0LjAsMTIyLjAgMTEwLjEsMTE2LjMgMTA5LjksMTA3LjkgMTE4LjMsMTA4LjEgMTI0LjAsMTAyLjAgMTI5LjcsMTA4LjEgMTM4LjEsMTA3LjkgMTM3LjksMTE2LjMiIGZpbGw9Im5vbmUiIHN0cm9rZT0icmdiYSgxOTYsMTQ4LDg0LDAuMjApIiBzdHJva2Utd2lkdGg9IjIiLz48Y2lyY2xlIGN4PSIxMjQiIGN5PSIxMjIiIHI9IjUiIGZpbGw9Im5vbmUiIHN0cm9rZT0icmdiYSgxOTYsMTQ4LDg0LDAuMjApIiBzdHJva2Utd2lkdGg9IjIiLz48L3N2Zz4=");
-    background-repeat: repeat;
+    background-image:
+        linear-gradient(rgba(15, 9, 3, 0.55), rgba(15, 9, 3, 0.55)),
+        url("../img/themes/steampunk-bg.webp");
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    background-attachment: fixed;
 }
+
+/* The remaining two "ambitious" card-skin themes still use a decorative,
+   tileable SVG background -- kept at low alpha (baked into each SVG/
+   gradient's own rgba() stops, not a separate opacity property, so it
+   never dims actual page content sitting on top of it) so body text set
+   in --color-text above stays at full, unaffected contrast. */
 
 :root[data-theme="futuristic"] body {
     background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMDAiIGhlaWdodD0iMTAwIiB2aWV3Qm94PSIwIDAgMTAwIDEwMCI+PHBhdGggZD0iTTAsMjAgSDMwIFY1MCBINzAgVjIwIEgxMDAiIGZpbGw9Im5vbmUiIHN0cm9rZT0icmdiYSg0MSwxODIsMjQ2LDAuMjIpIiBzdHJva2Utd2lkdGg9IjEuNSIvPjxwYXRoIGQ9Ik0yMCwxMDAgVjcwIEg1MCBWNDAiIGZpbGw9Im5vbmUiIHN0cm9rZT0icmdiYSg0MSwxODIsMjQ2LDAuMjIpIiBzdHJva2Utd2lkdGg9IjEuNSIvPjxwYXRoIGQ9Ik0xMDAsNjAgSDgwIFY5MCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJyZ2JhKDQxLDE4MiwyNDYsMC4yMikiIHN0cm9rZS13aWR0aD0iMS41Ii8+PHBhdGggZD0iTTAsODUgSDE1IiBmaWxsPSJub25lIiBzdHJva2U9InJnYmEoNDEsMTgyLDI0NiwwLjIyKSIgc3Ryb2tlLXdpZHRoPSIxLjUiLz48Y2lyY2xlIGN4PSIzMCIgY3k9IjIwIiByPSIyLjIiIGZpbGw9InJnYmEoNDEsMTgyLDI0NiwwLjI4KSIvPjxjaXJjbGUgY3g9IjcwIiBjeT0iNTAiIHI9IjIuMiIgZmlsbD0icmdiYSg0MSwxODIsMjQ2LDAuMjgpIi8+PGNpcmNsZSBjeD0iNzAiIGN5PSIyMCIgcj0iMi4yIiBmaWxsPSJyZ2JhKDQxLDE4MiwyNDYsMC4yOCkiLz48Y2lyY2xlIGN4PSIyMCIgY3k9IjcwIiByPSIyLjIiIGZpbGw9InJnYmEoNDEsMTgyLDI0NiwwLjI4KSIvPjxjaXJjbGUgY3g9IjUwIiBjeT0iNzAiIHI9IjIuMiIgZmlsbD0icmdiYSg0MSwxODIsMjQ2LDAuMjgpIi8+PGNpcmNsZSBjeD0iNTAiIGN5PSI0MCIgcj0iMi4yIiBmaWxsPSJyZ2JhKDQxLDE4MiwyNDYsMC4yOCkiLz48Y2lyY2xlIGN4PSI4MCIgY3k9IjYwIiByPSIyLjIiIGZpbGw9InJnYmEoNDEsMTgyLDI0NiwwLjI4KSIvPjxjaXJjbGUgY3g9IjgwIiBjeT0iOTAiIHI9IjIuMiIgZmlsbD0icmdiYSg0MSwxODIsMjQ2LDAuMjgpIi8+PGNpcmNsZSBjeD0iMTUiIGN5PSI4NSIgcj0iMi4yIiBmaWxsPSJyZ2JhKDQxLDE4MiwyNDYsMC4yOCkiLz48L3N2Zz4=");
