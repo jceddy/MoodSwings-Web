@@ -3430,9 +3430,95 @@
         return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
     }
 
-    function cardArtUrl(card) {
+    // Card skins (issue #363) -- a second, independent customization axis
+    // from the color palette (<select id="theme-select">/data-theme, see
+    // "Palettes" in web-static/README.md): alternate printed card-front
+    // art per theme, selected via <select id="card-skin-select">/
+    // data-skin and persisted the same localStorage-only way. 'noir' is
+    // deliberately excluded from this list -- it's a pure CSS filter over
+    // the normal MSW art (see style.css's own [data-skin="noir"] rule),
+    // never a distinct image, so it needs no entry in the URL-building
+    // logic below at all.
+    const CARD_SKIN_STORAGE_KEY = 'cardSkinPreference';
+    const CARD_ART_SKINS = ['steampunk', 'futuristic', 'neon'];
+
+    function cardSkinPreference() {
+        try {
+            return localStorage.getItem(CARD_SKIN_STORAGE_KEY) || 'none';
+        } catch (e) {
+            // localStorage unavailable (e.g. private browsing) -- falls
+            // back to the normal MSW art, same as an explicit "None".
+            return 'none';
+        }
+    }
+
+    function defaultCardArtUrl(card) {
         return '../img/cards/MSW/' + card.catalog_card_id + '-' + slugify(card.name) + '.webp';
     }
+
+    // Themed art is added gradually, one card at a time, per issue #363's
+    // own scope -- there's no manifest of which catalog_card_ids a skin
+    // actually covers yet, so this always POINTS at where a themed file
+    // WOULD live; setCardArt() below is what actually falls back to the
+    // normal print when that file doesn't exist (yet).
+    function cardArtUrl(card) {
+        const skin = cardSkinPreference();
+        if (!CARD_ART_SKINS.includes(skin)) {
+            return defaultCardArtUrl(card);
+        }
+        return '../img/cards/MSW/' + skin + '/' + card.catalog_card_id + '-' + slugify(card.name) + '.webp';
+    }
+
+    // Every <img> that shows card art funnels through this (rather than
+    // setting .src directly) so a skin with only partial coverage degrades
+    // cleanly: a themed file that doesn't exist yet 404s, and the onerror
+    // handler swaps back to the normal MSW print exactly once (cleared
+    // immediately after, so a THEN-failing default request -- shouldn't
+    // happen, but belt-and-suspenders -- can't loop).
+    function setCardArt(imgEl, card) {
+        imgEl.src = cardArtUrl(card);
+        imgEl.onerror = () => {
+            imgEl.onerror = null;
+            imgEl.src = defaultCardArtUrl(card);
+        };
+    }
+
+    // <select id="card-skin-select"> only exists in game/index.html's own
+    // footer (issue #363) -- card art has nothing to skin on every other
+    // page, unlike the color palette above, which is genuinely sitewide.
+    // Mirrors app.js's own initThemeSelect() structure/localStorage
+    // pattern, but re-renders the current board immediately on change
+    // (from the already-fetched currentState, no extra fetch needed) so
+    // every already-built .card-thumb picks up the new skin right away --
+    // simply changing data-skin doesn't touch DOM nodes built earlier.
+    (function initCardSkinSelect() {
+        const select = document.getElementById('card-skin-select');
+        if (!select) {
+            return;
+        }
+
+        select.value = cardSkinPreference();
+        if (select.value !== 'none') {
+            document.documentElement.dataset.skin = select.value;
+        }
+
+        select.addEventListener('change', () => {
+            const preference = select.value;
+            if (preference === 'none') {
+                delete document.documentElement.dataset.skin;
+            } else {
+                document.documentElement.dataset.skin = preference;
+            }
+            try {
+                localStorage.setItem(CARD_SKIN_STORAGE_KEY, preference);
+            } catch (e) {
+                // ignore -- the selection just won't persist across reloads
+            }
+            if (currentState) {
+                renderBoard(currentState);
+            }
+        });
+    })();
 
     // Builds a card-art thumbnail in place of the old text-only button --
     // the printed art already conveys name/color/base value/rules text (all
@@ -3451,7 +3537,7 @@
 
         const img = document.createElement('img');
         img.className = 'card-thumb__art';
-        img.src = cardArtUrl(card);
+        setCardArt(img, card);
         img.alt = card.name + '. ' + (card.rules_text || 'No ability.');
         button.appendChild(img);
 
@@ -3594,7 +3680,7 @@
     // "Draft" button (see renderRotisserieDraftDrafting()).
     function openCardDetail(card, ownerLabel, selection, actionButton) {
         const artEl = document.getElementById('card-detail-art');
-        artEl.src = cardArtUrl(card);
+        setCardArt(artEl, card);
         artEl.alt = card.name + '. ' + (card.rules_text || 'No ability.');
 
         let meta = card.color + ', base value ' + card.base_value;
@@ -7886,7 +7972,7 @@
 
         boardError.hidden = true;
         const artEl = document.getElementById('choices-card-art');
-        artEl.src = cardArtUrl(card);
+        setCardArt(artEl, card);
         artEl.alt = card.name + '. ' + (card.rules_text || 'No ability.');
 
         // Chaos Draft (issue #405): same additive info as openCardDetail()'s

@@ -43,15 +43,21 @@ codebase doesn't control the shape of, so a CSS margin targeting it
 that entirely, since it opens the door for the BMC button to render
 however it wants without ever crowding another control.
 
-## Dark mode
+## Palettes
 
-Three modes, chosen via a `<select id="theme-select">` in every page's own
-`<footer>` (`system`/`light`/`dark`, defaulting to `system`): honor the
+Originally three modes (`system`/`light`/`dark`, issue #112) plus, as of
+issue #363, a small curated set of additional named palettes -- Jade, Red
+Marble, White Marble, and High Contrast -- all chosen via the same
+`<select id="theme-select">` in every page's own `<footer>` (defaulting to
+`system`). The first three still mean what they always did: honor the
 OS/browser's `prefers-color-scheme` preference, force light, or force dark
-regardless of what the OS says. Full theming (more than light/dark, a
-"themes" concept) was scoped out of this pass -- see the "Implement dark
-mode and/or themes" issue's own notes -- this only covers the two-mode
-case plus the system default.
+regardless of what the OS says. Every named palette after that is a single
+FIXED look with no `prefers-color-scheme` counterpart of its own -- picking
+"Jade" overrides the system preference entirely, the same way an explicit
+"Dark" selection already did. `<optgroup>`s ("Basic"/"Palettes") separate
+the two kinds in the dropdown now that there are seven options instead of
+three; the label above it reads "Palette" rather than "Theme" for the same
+reason (see "Card skins" below for the OTHER thing "theme" could now mean).
 
 The color switch itself is CSS-only, in `css/style.css`: a `:root` block
 defines light-mode custom properties (`--color-bg`, `--color-text`,
@@ -66,23 +72,89 @@ light mode against a dark OS. A separate `:root[data-theme="dark"]` rule
 applies the same dark overrides unconditionally, forcing dark mode against
 a light OS. This means the "System" default needs no JavaScript to react
 live to an OS-level theme change -- the media query alone re-evaluates
-automatically -- only the two explicit overrides need `data-theme` set at
-all.
+automatically -- only the explicit overrides need `data-theme` set at all.
 
-Getting that attribute set before first paint (so an explicit preference
-never flashes the wrong theme first) needs to happen before `js/app.js`
+Each named palette (issue #363) is just one more `:root[data-theme="..."]`
+block alongside `dark`'s own, overriding the same seven structural/
+decorative custom properties -- Jade/Red Marble/White Marble were built
+from three maintainer-supplied hex colors apiece (see `css/style.css`'s
+own comment above each block for exactly how each of the three maps to
+bg/surface/text/border/etc., including where a color needed computing
+rather than using a given one directly, e.g. a hue too saturated to read
+whole paragraphs of running text in); High Contrast is this repo's own
+suggested addition, a genuine accessibility palette (near-black-on-white,
+thicker borders, darker/more-saturated status colors) rather than a
+decorative one. None of the four touch the semantic status colors
+(`--color-error`/`--color-success`/`--color-pending`/`--color-info`) or
+the decorative icon accents (`--color-brown`/`--color-gold`) except High
+Contrast, which deliberately does override the four status colors --
+reading those clearly is that palette's entire point.
+
+Getting `data-theme` set before first paint (so an explicit preference
+never flashes the wrong palette first) needs to happen before `js/app.js`
 even loads, since that script tag sits at the bottom of `<body>`. Each
 page duplicates a tiny inline `<script>` at the top of its own `<head>`
 that reads `themePreference` from `localStorage` and sets
 `document.documentElement.dataset.theme` synchronously -- inlined and
 repeated per page rather than factored into a shared external file, since
 an external script would itself add back the network-round-trip delay
-this exists to avoid. `js/app.js`'s own `initThemeSelect()` IIFE only
-needs to keep the footer `<select>` in sync with that same stored
-preference and write a new one back to `localStorage` (plus update
+this exists to avoid. That inline script (and `js/app.js`'s own
+`initThemeSelect()` `change` handler) checks `theme !== 'system'` now,
+not `theme === 'light' || theme === 'dark'` -- issue #363 needed every
+NEW palette name to also set `data-theme`, and listing every valid name
+in seven duplicated inline scripts every time a palette gets added would
+be its own maintenance burden; "system" is the one value that's ever
+actually meant to clear the attribute. `js/app.js`'s own `initThemeSelect()`
+IIFE only needs to keep the footer `<select>` in sync with that same
+stored preference and write a new one back to `localStorage` (plus update
 `data-theme` immediately) on `change` -- it doesn't need to set the
 attribute on load, since the inline per-page script already did that job
 by the time this file runs.
+
+## Card skins (issue #363)
+
+A second, independent customization axis from the palette above -- picking
+a color palette and a card skin are two separate decisions, so a player
+could be on "Dark" + "Neon" or "Jade" + "Steampunk", any combination.
+Chosen via a SEPARATE `<select id="card-skin-select">`, only present in
+`game/index.html`'s own footer (unlike the palette selector, card art has
+nothing to skin on every other page) -- `None`/`Noir`/`Steampunk`/
+`Futuristic`/`Neon`, persisted the same `localStorage`-only way as the
+palette (`cardSkinPreference`, no server-side sync -- issue #363 scoped
+that out explicitly). `initCardSkinSelect()` in `game.js` mirrors
+`initThemeSelect()`'s own structure, but additionally calls
+`renderBoard(currentState)` immediately on `change` -- unlike a CSS custom
+property, which every already-rendered element picks up automatically the
+instant it changes, swapping `data-skin` alone does nothing for a
+`.card-thumb`'s `<img src>` that was already set; every visible card needs
+its art actually rebuilt.
+
+Three of the four skins (Steampunk/Futuristic/Neon) are alternate PRINTED
+card-front art, added gradually one card at a time rather than needing
+full coverage before shipping -- `cardArtUrl(card)` (`game.js`) points at
+`img/cards/MSW/<skin>/<catalog_card_id>-<slug>.webp` whenever one of these
+three is selected (see the READMEs already sitting in each of those three
+now-created-but-still-empty folders for the exact naming convention), and
+every `<img>` that shows card art is set through `setCardArt(imgEl, card)`
+rather than a raw `.src =` assignment -- if that themed file doesn't exist
+yet, the request 404s and `setCardArt()`'s own `onerror` handler swaps the
+`src` back to the normal MSW print exactly once, so a skin with only
+partial coverage degrades cleanly to "some cards look normal" rather than
+a page full of broken-image icons. There's no manifest of which
+`catalog_card_id`s a skin actually covers anywhere -- the 404-and-fall-back
+approach means one never needs maintaining as coverage grows.
+
+The fourth, Noir, is different: a pure CSS filter
+(`:root[data-skin="noir"] .card-thumb__art, ... { filter: grayscale(1)
+contrast(1.15); }`, `css/style.css`) over the normal MSW art, needing no
+alternate images of its own at all -- this repo's own suggested fourth
+skin, chosen specifically because it's "free" to ship a fully-working
+example alongside the three asset-backed ones while those three grow their
+own coverage over time. The same selector reaches `#card-detail-art`/
+`#choices-card-art` too (the card-detail dialog's and the choices panel's
+own single-card previews), not just the many `.card-thumb__art` thumbnails
+across hand/in-play/discard/draft screens -- all card art funnels through
+`cardArtUrl()`, so this one CSS rule covers everywhere it appears.
 
 ## Maintenance mode
 
@@ -1058,7 +1130,7 @@ someone else's listing needs no opt-in of its own.
     `.lobby-status--<status>` class per row -- `waiting` reads in
     `--color-pending`, `in_progress` in a new `--color-info` (blue, added
     alongside the existing error/success/pending theme variables --
-    see "Dark mode" below), `completed` in `--color-muted`, and the rarer
+    see "Palettes" below), `completed` in `--color-muted`, and the rarer
     `abandoned` in `--color-error` -- distinguishing what needs attention
     at a glance rather than requiring every row's text to be read in full.
     `is_your_turn` gets its own whole-row background
