@@ -1807,7 +1807,18 @@ someone else's listing needs no opt-in of its own.
     rule always wins over the browser's own default
     `[hidden] { display: none }` UA-stylesheet rule regardless of
     selector specificity -- the exact same fix `.in-play-zone[hidden]`
-    already needed, see that rule's own comment).
+    already needed, see that rule's own comment). Also needs an explicit
+    `z-index: 1` (a bug caught live: without it, other content showed
+    through -- a "Waiting for..." status line's own `.waiting-icon`
+    hourglass, which animates `opacity` and so creates a stacking context
+    of its own, or a Noir-skinned card's `filter: url(#noir-card-fade)`,
+    same reason). `#game-main` itself establishes no stacking context, so
+    any such descendant hoists all the way up to the ROOT one -- the same
+    level `#loading-overlay`'s own `position: fixed` puts it at -- and
+    since `#game-main` comes AFTER `#loading-overlay` in `game/index.html`,
+    it would otherwise paint on top rather than staying hidden beneath
+    it. See `#loading-overlay`'s own comment in `style.css` for the full
+    mechanism.
   - **Board**: players, whose turn it is, in-play moods, the discard pile,
     deck count, and your hand (via `GET /games/state`). For a
     `custom_duel` game still `waiting` to start, `renderDuelDeckSubmission()`
