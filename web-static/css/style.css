@@ -34,20 +34,16 @@
    The SAME <select id="theme-select">/data-theme attribute ALSO carries
    four card-skin themes -- Noir/Steampunk/Futuristic/Neon (see
    cardArtUrl()/setCardArt() in game.js for the printed-card-art half of
-   these). Three of the four -- Steampunk/Futuristic/Neon -- are full
-   themes in their own right, same as any named palette above: their own
-   :root[data-theme="..."] blocks further down override the same seven
-   structural/decorative properties, PLUS set a decorative `body`
-   background-image (a tileable inline-SVG texture evoking each theme --
-   brass gears, circuit traces, a neon grid) since "ambitious theme" was
-   the whole design brief for these three, not just an alternate card
-   print. The fourth, Noir, stays a pure CSS filter with no COLOR block of
-   its own at all -- see this file's own [data-theme="noir"] rule further
-   down for why that one deliberately falls through to the system/light/
-   dark default instead -- but it DOES get its own decorative `body`
-   background, a neutral diagonal-stripe pattern (evoking classic
-   venetian-blind film-noir lighting) chosen specifically because it reads
-   the same regardless of which color scheme it's falling through to. */
+   these). All four are full themes in their own right, same as any named
+   palette above: their own :root[data-theme="..."] blocks further down
+   override the same seven structural/decorative properties, PLUS set a
+   decorative `body` background-image, since "ambitious theme" was the
+   whole design brief for these four, not just an alternate card print.
+   Steampunk/Futuristic/Neon use a tileable inline-SVG texture (brass
+   gears, circuit traces, a neon grid); Noir uses a real photo
+   (img/themes/noir-bg.webp) -- see its own :root block further down for
+   why that means its --color-surface breaks from every other palette's
+   own convention of a solid, opaque value. */
 :root {
     color-scheme: light;
     /* Card/icon size slider (issue #417) -- a plain multiplier every
@@ -315,24 +311,48 @@ body {
     color: var(--color-text);
 }
 
-/* Noir (see its own filter rule further down) has no color block of its
-   own, so unlike the three below it can't bake theme-specific hues into
-   its background -- it needs to sit on top of whatever system/light/dark
-   background is already active. A neutral mid-gray at low alpha reads the
-   same either way (a faint shadow on a light background, a faint lift on
-   a dark one), so one rule covers both without branching on the current
-   color scheme. Diagonal repeating bands, rather than a texture, evoke
-   classic film-noir cinematography -- light through venetian blinds
-   cutting hard shadow stripes across a wall -- which needs no image asset
-   at all, plain `repeating-linear-gradient()`. */
+/* Noir (issue #363) -- the maintainer's own photo replaces the earlier
+   procedurally-generated placeholder (a diagonal stripe pattern, before
+   that a CSS filter alone) once real art became available: a moody,
+   rain-streaked night street (img/themes/noir-bg.webp), fixed behind the
+   page content the way Neon's own glow gradient is. Since the photo is
+   mostly dark, Noir now needs its OWN color block -- unlike the earlier
+   placeholder, which deliberately fell through to system/light/dark so a
+   plain CSS pattern would read reasonably against either, a real photo
+   this dark would make default light-mode text (near-black on near-white
+   assumptions) illegible over it. --color-text/--border below are warm
+   parchment/amber tones pulled from the photo's own neon signage, and
+   --color-surface is a translucent near-black (not the solid hex every
+   other palette uses) so panels/dialogs/rows read as frosted glass over
+   the photo rather than flat opaque cards -- a deliberate exception to
+   the "solid --color-surface" convention every other palette follows,
+   justified by how busy the photo is behind it. The linear-gradient
+   layered UNDER the photo (in the same background-image list) is a
+   uniform darkening scrim -- the photo alone has bright patches (neon
+   signs, wet-pavement reflections) that would fail contrast with light
+   text wherever page content happens to land on top of them; the scrim
+   guarantees --color-text stays legible everywhere regardless of layout
+   height. Like the three ambitious themes below, this doesn't touch the
+   four status colors. */
+:root[data-theme="noir"] {
+    color-scheme: dark;
+    --color-bg: #0a0a0c;
+    --color-surface: rgba(12, 10, 8, 0.72);
+    --color-text: #f2ead8;
+    --color-text-secondary: #cfc4ae;
+    --color-muted: #9a9184;
+    --color-border: #c9a55c;
+    --color-border-subtle: #6b5a3a;
+}
+
 :root[data-theme="noir"] body {
-    background-image: repeating-linear-gradient(
-        115deg,
-        rgba(128, 128, 128, 0.16) 0px,
-        rgba(128, 128, 128, 0.16) 34px,
-        transparent 34px,
-        transparent 90px
-    );
+    background-image:
+        linear-gradient(rgba(4, 3, 2, 0.4), rgba(4, 3, 2, 0.4)),
+        url("../img/themes/noir-bg.webp");
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    background-attachment: fixed;
 }
 
 /* The three "ambitious" card-skin themes (see their own :root blocks
@@ -1262,23 +1282,19 @@ body.game-page {
     transition: transform 0.15s ease;
 }
 
-/* Noir card skin (issue #363) -- unlike Steampunk/Futuristic/Neon (full
-   themes of their own now, see their :root blocks further up, plus
-   alternate printed art per card added gradually -- see cardArtUrl()/
-   setCardArt() in game.js), Noir needs no ART or COLOR block of its own
-   for card art: a single grayscale-plus-contrast filter over the normal
-   MSW print reads as its own distinct look everywhere card art appears --
-   the hand/in-play/discard thumbnails (.card-thumb__art) here, plus the
-   card detail dialog and the choices panel's own preview
+/* Noir card skin (issue #363) -- unlike Steampunk/Futuristic/Neon (real
+   alternate printed art added per card, gradually -- see cardArtUrl()/
+   setCardArt() in game.js), Noir needs no ALTERNATE ART of its own for
+   card fronts specifically: a single grayscale-plus-contrast filter over
+   the normal MSW print reads as its own distinct look everywhere card art
+   appears -- the hand/in-play/discard thumbnails (.card-thumb__art) here,
+   plus the card detail dialog and the choices panel's own preview
    (#card-detail-art/#choices-card-art, styled separately elsewhere in
-   this file, but still plain <img> elements this same rule reaches). It
-   DOES get its own decorative `body` background (see the venetian-blind-
-   stripe rule further up, right before Steampunk's) -- unlike that
-   background, though, "noir" still doesn't match any
-   :root[data-theme="..."] COLOR block, so picking it leaves the color
-   scheme at its system/light/dark default while still setting the
-   attribute both that background rule and this one (and cardArtUrl() in
-   game.js) read. */
+   this file, but still plain <img> elements this same rule reaches).
+   Noir's own :root[data-theme="noir"] block further up covers the
+   sitewide color/background half of the theme (the photo background,
+   plus text/border colors tuned for it) -- this rule only covers the
+   card-art-specific filter half, which the photo alone doesn't touch. */
 :root[data-theme="noir"] .card-thumb__art,
 :root[data-theme="noir"] #card-detail-art,
 :root[data-theme="noir"] #choices-card-art {
