@@ -108,29 +108,33 @@ convention as Jade/Red Marble/White Marble) PLUS a decorative `body`
 background-image, since "ambitious theme" -- not just an alternate card
 print -- was the whole design brief for these four.
 
-Futuristic/Neon's background is a small, tileable inline SVG baked
-directly into `css/style.css` as a `data:image/svg+xml;base64,...` URI
-(no separate image file to manage): circuit-board traces and via pads for
-Futuristic, and a two-tone magenta/cyan crosshatch grid under a fixed
-radial-gradient glow (anchored to the bottom of the viewport, for the
-classic synthwave "grid fading into a glowing horizon" look) for Neon.
-Every color baked into those SVGs/gradients is already low-alpha, so they
-read as a subtle texture behind the page rather than competing with
-`--color-text` for contrast -- no separate `opacity` property needed on
-top. **These two are still placeholder art**, generated procedurally
-(hand-plotted right-angle paths for circuit traces, plain crosshatch
-lines for the grid) because no image-generation tool was available to
-produce anything more detailed; the maintainer may replace either with
-real artwork -- the same way Steampunk's own placeholder (originally a
-procedural pair of brass gear silhouettes, same technique) already got
-replaced with a real maintainer-supplied photo/illustration of an aged
-brass-and-gears mechanism (`img/themes/steampunk-bg.webp`), using the
-same `cover`/`fixed`/darkening-scrim technique as Noir's own photo (see
-Noir's own section below for the full mechanical explanation) -- except
-with a stronger scrim (0.55 alpha vs Noir's 0.4), since this image has
-large bright parchment-colored passages across most of its area rather
-than a few small highlights, and `--color-text`'s light parchment tone
-would otherwise fail contrast against them.
+Neon's background is a small, tileable inline SVG baked directly into
+`css/style.css` as a `data:image/svg+xml;base64,...` URI (no separate
+image file to manage): a two-tone magenta/cyan crosshatch grid under a
+fixed radial-gradient glow (anchored to the bottom of the viewport, for
+the classic synthwave "grid fading into a glowing horizon" look). Every
+color baked into that SVG/gradient is already low-alpha, so it reads as a
+subtle texture behind the page rather than competing with `--color-text`
+for contrast -- no separate `opacity` property needed on top. **This is
+still placeholder art**, generated procedurally (plain crosshatch lines)
+because no image-generation tool was available to produce anything more
+detailed; the maintainer may replace it with real artwork -- the same way
+Steampunk's and Futuristic's own placeholders (originally a procedural
+pair of brass gear silhouettes, and hand-plotted right-angle circuit
+traces, respectively, same technique) already got replaced with real
+maintainer-supplied photos/illustrations: an aged brass-and-gears
+mechanism (`img/themes/steampunk-bg.webp`) and a dark circuit-board/
+data-network scene (`img/themes/futuristic-bg.webp`). Both use the same
+`cover`/`fixed`/darkening-scrim technique as Noir's own photo (see Noir's
+own section below for the full mechanical explanation), just tuned per
+image: Steampunk's scrim is stronger (0.55 alpha vs Noir's 0.4) since that
+image has large bright parchment-colored passages across most of its
+area rather than a few small highlights, and `--color-text`'s light
+parchment tone would otherwise fail contrast against them; Futuristic's
+scrim is lighter still (0.35 alpha) since that image is already very dark
+overall, with no bright passages to fight for contrast against -- just
+enough to guard against its own brightest glowing traces rather than to
+meaningfully dim the image itself.
 
 Steampunk/Futuristic/Neon are ALSO alternate PRINTED card-front art,
 added gradually one card at a time rather than needing full coverage
@@ -162,14 +166,20 @@ own fallback mechanism to join them: it isn't a `cards` row at all (see
 `<catalog_card_id>-<slug>` naming or `img/cards/MSW/<skin>/` nesting.
 `hurtFeelingsArtUrl()`/`setHurtFeelingsArt()` (`game.js`) mirror their
 shape instead, using `img/hurt-feelings.webp`/`img/hurt-feelings-<skin>.webp`
-naming alongside the existing base file: `img/hurt-feelings-steampunk.webp`
-is the first themed file to exist, so every other skin still 404s and
-falls back to the plain print, same graceful partial-coverage story as the
-three cards above. The Hurt Feelings thumbnail's click-to-preview dialog
-(`openArtPreview()`) needed the same fallback wired in separately -- it
-takes an optional third `fallbackSrc` argument (unused by its only other
-caller) so a themed preview that 404s swaps back to the default print
-instead of showing a broken-image icon.
+naming alongside the existing base file. The Hurt Feelings thumbnail's
+click-to-preview dialog (`openArtPreview()`) needed the same fallback
+wired in separately -- it takes an optional third `fallbackSrc` argument
+(unused by its only other caller) so a themed preview that 404s swaps
+back to the default print instead of showing a broken-image icon.
+
+Futuristic's first three pieces of real card-skin art followed the same
+pattern, plus its own Hurt Feelings art:
+`img/cards/MSW/futuristic/32-creativity.webp`,
+`img/cards/MSW/futuristic/67-intimidation.webp`,
+`img/cards/MSW/futuristic/134-smugness.webp`, and
+`img/hurt-feelings-futuristic.webp`. Neon still has no themed art for any
+of these four, so it (and any future skin without its own file yet) still
+404s and falls back to the plain print through the exact same mechanism.
 
 The fourth skin, Noir, uses a real maintainer-supplied photo instead of a
 procedural pattern: a moody, rain-streaked night street

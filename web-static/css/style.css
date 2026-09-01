@@ -257,9 +257,10 @@
 }
 
 /* Futuristic (issue #363, card-skin theme) -- a near-black deep-blue
-   palette with a cyan accent border, plus a tileable inline-SVG
-   background of circuit-board traces and via pads (see Steampunk's own
-   comment above re: placeholder art). */
+   palette with a cyan accent border. Its body background is a real
+   maintainer-supplied photo/illustration (img/themes/futuristic-bg.webp,
+   see its own comment further down) rather than the tileable inline-SVG
+   circuit-trace placeholder this theme originally shipped with. */
 :root[data-theme="futuristic"] {
     color-scheme: dark;
     --color-bg: #060b14;
@@ -394,16 +395,31 @@ body {
     background-attachment: fixed;
 }
 
-/* The remaining two "ambitious" card-skin themes still use a decorative,
-   tileable SVG background -- kept at low alpha (baked into each SVG/
-   gradient's own rgba() stops, not a separate opacity property, so it
-   never dims actual page content sitting on top of it) so body text set
-   in --color-text above stays at full, unaffected contrast. */
-
+/* Futuristic, like Steampunk and Noir before it, now uses a real
+   maintainer-supplied photo/illustration (img/themes/futuristic-bg.webp
+   -- a dark circuit-board/data-network scene) in place of its original
+   tileable inline-SVG placeholder pattern, with the same cover/fixed
+   treatment. Unlike Steampunk's own photo, this one is already very dark
+   overall (no large bright passages to fight for contrast against), so
+   its darkening scrim can stay light -- just enough to guarantee the
+   image's own brightest glowing traces never approach --color-text's
+   contrast floor, not to meaningfully dim the image itself. */
 :root[data-theme="futuristic"] body {
-    background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMDAiIGhlaWdodD0iMTAwIiB2aWV3Qm94PSIwIDAgMTAwIDEwMCI+PHBhdGggZD0iTTAsMjAgSDMwIFY1MCBINzAgVjIwIEgxMDAiIGZpbGw9Im5vbmUiIHN0cm9rZT0icmdiYSg0MSwxODIsMjQ2LDAuMjIpIiBzdHJva2Utd2lkdGg9IjEuNSIvPjxwYXRoIGQ9Ik0yMCwxMDAgVjcwIEg1MCBWNDAiIGZpbGw9Im5vbmUiIHN0cm9rZT0icmdiYSg0MSwxODIsMjQ2LDAuMjIpIiBzdHJva2Utd2lkdGg9IjEuNSIvPjxwYXRoIGQ9Ik0xMDAsNjAgSDgwIFY5MCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJyZ2JhKDQxLDE4MiwyNDYsMC4yMikiIHN0cm9rZS13aWR0aD0iMS41Ii8+PHBhdGggZD0iTTAsODUgSDE1IiBmaWxsPSJub25lIiBzdHJva2U9InJnYmEoNDEsMTgyLDI0NiwwLjIyKSIgc3Ryb2tlLXdpZHRoPSIxLjUiLz48Y2lyY2xlIGN4PSIzMCIgY3k9IjIwIiByPSIyLjIiIGZpbGw9InJnYmEoNDEsMTgyLDI0NiwwLjI4KSIvPjxjaXJjbGUgY3g9IjcwIiBjeT0iNTAiIHI9IjIuMiIgZmlsbD0icmdiYSg0MSwxODIsMjQ2LDAuMjgpIi8+PGNpcmNsZSBjeD0iNzAiIGN5PSIyMCIgcj0iMi4yIiBmaWxsPSJyZ2JhKDQxLDE4MiwyNDYsMC4yOCkiLz48Y2lyY2xlIGN4PSIyMCIgY3k9IjcwIiByPSIyLjIiIGZpbGw9InJnYmEoNDEsMTgyLDI0NiwwLjI4KSIvPjxjaXJjbGUgY3g9IjUwIiBjeT0iNzAiIHI9IjIuMiIgZmlsbD0icmdiYSg0MSwxODIsMjQ2LDAuMjgpIi8+PGNpcmNsZSBjeD0iNTAiIGN5PSI0MCIgcj0iMi4yIiBmaWxsPSJyZ2JhKDQxLDE4MiwyNDYsMC4yOCkiLz48Y2lyY2xlIGN4PSI4MCIgY3k9IjYwIiByPSIyLjIiIGZpbGw9InJnYmEoNDEsMTgyLDI0NiwwLjI4KSIvPjxjaXJjbGUgY3g9IjgwIiBjeT0iOTAiIHI9IjIuMiIgZmlsbD0icmdiYSg0MSwxODIsMjQ2LDAuMjgpIi8+PGNpcmNsZSBjeD0iMTUiIGN5PSI4NSIgcj0iMi4yIiBmaWxsPSJyZ2JhKDQxLDE4MiwyNDYsMC4yOCkiLz48L3N2Zz4=");
-    background-repeat: repeat;
+    background-image:
+        linear-gradient(rgba(2, 4, 8, 0.35), rgba(2, 4, 8, 0.35)),
+        url("../img/themes/futuristic-bg.webp");
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    background-attachment: fixed;
 }
+
+/* Neon, below, is the one remaining "ambitious" card-skin theme still
+   using a decorative, tileable SVG background -- kept at low alpha
+   (baked into each SVG/gradient's own rgba() stops, not a separate
+   opacity property, so it never dims actual page content sitting on top
+   of it) so body text set in --color-text above stays at full,
+   unaffected contrast. */
 
 :root[data-theme="neon"] body {
     background-image:
