@@ -304,8 +304,56 @@ html {
     text-size-adjust: 100%;
 }
 
+/* Anonymous Pro (requested live: "could we use Anonymous Pro for the
+   default font") -- the site's own default typeface, in place of the
+   plain system-ui/sans-serif stack every page used before, regardless of
+   theme. Self-hosted (fonts/anonymous-pro-*.woff2; fonts/anonymous-pro-
+   OFL.txt is its own SIL Open Font License text), same reasoning as
+   Steampunk's own IM Fell English SC further down: matches every other
+   themed asset in this app already being a local file rather than a
+   third-party request. Ships all four static weight/style combos (regular/
+   bold/italic/bold-italic) since this app's own CSS already sets
+   font-weight: bold and font-style: italic in a few places -- without a
+   real bold/italic cut, the browser would synthesize a fake (faux-bold/
+   oblique) one from the regular face, which looks noticeably worse on a
+   monospace font than on a normal text face. Steampunk's own heading
+   override (see further down) still layers on top of this for h1/h2/h3
+   only -- this is just the shared body-text default every theme starts
+   from. */
+@font-face {
+    font-family: 'Anonymous Pro';
+    src: url("../fonts/anonymous-pro-regular.woff2") format('woff2');
+    font-weight: normal;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: 'Anonymous Pro';
+    src: url("../fonts/anonymous-pro-bold.woff2") format('woff2');
+    font-weight: bold;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: 'Anonymous Pro';
+    src: url("../fonts/anonymous-pro-italic.woff2") format('woff2');
+    font-weight: normal;
+    font-style: italic;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: 'Anonymous Pro';
+    src: url("../fonts/anonymous-pro-bold-italic.woff2") format('woff2');
+    font-weight: bold;
+    font-style: italic;
+    font-display: swap;
+}
+
 body {
-    font-family: system-ui, sans-serif;
+    font-family: 'Anonymous Pro', monospace;
     max-width: 40rem;
     margin: 4rem auto;
     padding: 0 1rem;
