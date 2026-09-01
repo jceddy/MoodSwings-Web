@@ -846,6 +846,7 @@ const DECK_TYPE_LABELS = {
     tiered_rotisserie_draft: 'Tiered Rotisserie Draft',
     chaos_draft: 'Chaos Draft',
     one_of_each: 'One of Each Card',
+    sealed_deck: 'Sealed Deck',
 };
 
 function deckTypeLabel(deckType) {

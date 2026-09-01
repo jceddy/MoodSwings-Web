@@ -2242,6 +2242,13 @@
             const deckDescription = game.deck_type === 'custom'
                 ? (game.custom_deck_name || 'Uploaded Deck')
                 : deckTypeLabel(game.deck_type) + ' deck';
+            // Sealed Deck is a UI-only sentinel over format 'draft' -- see
+            // renderBoard()'s own identical exception for why this
+            // replaces the whole format/deck combination rather than
+            // showing "Draft, Sealed Deck deck".
+            const formatAndDeckDescription = game.deck_type === 'sealed_deck'
+                ? 'Sealed Deck'
+                : formatLabel(game.format) + ', ' + deckDescription;
             const formatEl = document.createElement('div');
             formatEl.className = 'lobby-format';
             // "Default selections" mode (issue #274) -- a per-game
@@ -2250,7 +2257,7 @@
             // seated player can tell it's on without opening the game --
             // per the issue's own "visible to the players playing it (at
             // least in the lobby)" requirement.
-            formatEl.textContent = formatLabel(game.format) + ', ' + deckDescription +
+            formatEl.textContent = formatAndDeckDescription +
                 (game.default_selections_mode ? ', default selections' : '');
             infoEl.appendChild(formatEl);
         }
@@ -2367,9 +2374,17 @@
         const deckDescription = firstGame.deck_type === 'custom'
             ? (firstGame.custom_deck_name || 'Uploaded Deck')
             : deckTypeLabel(firstGame.deck_type) + ' deck';
+        // Sealed Deck's own 2-player best-of-three match is grouped here
+        // too (it has a draft_match_id just like Quick/Winston Draft) --
+        // see renderBoard()'s own identical exception for why this
+        // replaces the whole format/deck combination rather than showing
+        // "Draft, Sealed Deck deck".
+        const formatAndDeckDescription = firstGame.deck_type === 'sealed_deck'
+            ? 'Sealed Deck'
+            : formatLabel(firstGame.format) + ', ' + deckDescription;
         const formatEl = document.createElement('div');
         formatEl.className = 'lobby-format';
-        formatEl.textContent = formatLabel(firstGame.format) + ', ' + deckDescription;
+        formatEl.textContent = formatAndDeckDescription;
         headerEl.appendChild(formatEl);
 
         const scoreEl = document.createElement('div');
@@ -4869,12 +4884,22 @@
             : state.game.deck_type === 'custom_duel'
                 ? (you && you.custom_deck_name || 'Uploaded Deck')
                 : deckTypeLabel(state.game.deck_type) + ' deck';
+        // Sealed Deck is a UI-only sentinel over format 'draft' (see
+        // isSealedDeckFormat() and the New Game dialog wiring further up)
+        // -- showing it as "Draft, Sealed Deck deck" would surface that
+        // internal plumbing to players instead of the one name they
+        // actually picked, so it replaces the whole format/deck
+        // combination the same way custom/custom_duel's own deck name
+        // already does above.
+        const formatAndDeckDescription = state.game.deck_type === 'sealed_deck'
+            ? 'Sealed Deck'
+            : formatLabel(state.game.format) + ', ' + deckDescription;
         // "Default selections" mode (issue #274) -- mirrors the lobby
         // row's own indicator (buildGameRow()) so it's visible once a
         // player has actually opened the board too, not just from the
         // lobby list.
         document.getElementById('board-title').textContent =
-            'Game #' + state.game.id + ' (' + formatLabel(state.game.format) + ', ' + deckDescription +
+            'Game #' + state.game.id + ' (' + formatAndDeckDescription +
             (state.game.default_selections_mode ? ', default selections' : '') + ')';
 
         // Spectator mode (issue #128)/Watch game replay (issue #240) --

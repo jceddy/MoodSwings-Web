@@ -57,7 +57,13 @@
         const deckDescription = game.deck_type === 'custom'
             ? (game.custom_deck_name || 'Uploaded Deck')
             : deckTypeLabel(game.deck_type) + ' deck';
-        formatEl.textContent = formatLabel(game.format) + ', ' + deckDescription;
+        // Sealed Deck is a UI-only sentinel over format 'draft' -- see
+        // game.js's renderBoard() for its own identical exception, why
+        // this replaces the whole format/deck combination rather than
+        // showing "Draft, Sealed Deck deck".
+        formatEl.textContent = game.deck_type === 'sealed_deck'
+            ? 'Sealed Deck'
+            : formatLabel(game.format) + ', ' + deckDescription;
         infoEl.appendChild(formatEl);
 
         const playersEl = document.createElement('div');
