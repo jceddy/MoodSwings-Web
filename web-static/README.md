@@ -51,11 +51,13 @@ Marble, White Marble, High Contrast, and High Contrast Dark -- AND a set
 of card-skin themes -- Noir, Steampunk, Futuristic, Neon -- all chosen via
 the SAME single `<select id="theme-select">` in every page's own
 `<footer>` (defaulting to `system`). There is deliberately no second
-selector: a palette and a skin are visually independent (a palette
-recolors chrome/UI, a skin re-skins card art), but the product decision
-was that a player picks ONE option from ONE dropdown at a time rather than
-crossing two axes -- simpler to explain and to build. `<optgroup>`s
-("Basic"/"Palettes"/"Skins") group the eleven options for readability.
+selector: the product decision was that a player picks ONE option from ONE
+dropdown at a time rather than crossing two axes -- simpler to explain and
+to build. `<optgroup>`s ("Basic"/"Palettes"/"Skins") group the eleven
+options for readability. Three of the four skins (Steampunk/Futuristic/
+Neon, see further down) recolor chrome/UI the same way a palette does, on
+top of re-skinning card art -- only Noir is a pure card-art effect with no
+color change of its own.
 
 The first three ("Basic") mean what they always did: honor the
 OS/browser's `prefers-color-scheme` preference, force light, or force dark
@@ -98,12 +100,30 @@ accents (`--color-brown`/`--color-gold`) except the two High Contrast
 palettes, which deliberately do override the four status colors -- reading
 those clearly is their entire point.
 
-The four skins are a different, independent customization axis from the
-five palettes above -- picking any one of them from the dropdown leaves
-colors at whatever system/light/dark default was already selected before,
-since no skin name matches a `:root[data-theme="..."]` color block in
-`css/style.css` at all; only the palettes above define one. Three of the
-four (Steampunk/Futuristic/Neon) are alternate PRINTED card-front art,
+The four skins are a different customization axis from the five palettes
+above, but three of the four -- Steampunk, Futuristic, and Neon -- are
+now full themes in their own right: each has its own
+`:root[data-theme="..."]` color block (same seven structural/decorative
+properties every palette overrides, none of the four status colors, same
+convention as Jade/Red Marble/White Marble) PLUS a decorative `body`
+background-image, since "ambitious theme" -- not just an alternate card
+print -- was the whole design brief for these three. That background is a
+small, tileable inline SVG baked directly into `css/style.css` as a
+`data:image/svg+xml;base64,...` URI (no separate image file to manage): a
+pair of brass gear silhouettes for Steampunk, circuit-board traces and via
+pads for Futuristic, and a two-tone magenta/cyan crosshatch grid under a
+fixed radial-gradient glow (anchored to the bottom of the viewport, for
+the classic synthwave "grid fading into a glowing horizon" look) for
+Neon. Every color baked into those SVGs/gradients is already low-alpha, so
+they read as a subtle texture behind the page rather than competing with
+`--color-text` for contrast -- no separate `opacity` property needed on
+top. **These three are placeholder art**, generated procedurally (simple
+alternating-radius polygons for gears, hand-plotted right-angle paths for
+circuit traces, plain crosshatch lines for the grid) because no
+image-generation tool was available to produce anything more detailed;
+the maintainer may replace any of the three with real artwork.
+
+Steampunk/Futuristic/Neon are ALSO alternate PRINTED card-front art,
 added gradually one card at a time rather than needing full coverage
 before shipping -- `cardArtUrl(card)` (`game.js`) points at
 `img/cards/MSW/<skin>/<catalog_card_id>-<slug>.webp` whenever one of these
@@ -117,17 +137,19 @@ partial coverage degrades cleanly to "some cards look normal" rather than
 a page full of broken-image icons. There's no manifest of which
 `catalog_card_id`s a skin actually covers anywhere -- the 404-and-fall-back
 approach means one never needs maintaining as coverage grows. Card art
-only appears in `game/index.html`, so selecting a skin has no visible
-effect on any other page -- the preference still applies sitewide (same
-`localStorage` key as the palettes), it just has nothing to act on there.
+only appears in `game/index.html`, so on every other page selecting one of
+these three shows only its color/background treatment, with nothing to
+skin.
 
-The fourth skin, Noir, is different: a pure CSS filter
-(`:root[data-theme="noir"] .card-thumb__art, ... { filter: grayscale(1)
-contrast(1.15); }`, `css/style.css`) over the normal MSW art, needing no
-alternate images of its own at all -- this repo's own suggested fourth
-skin, chosen specifically because it's "free" to ship a fully-working
-example alongside the three asset-backed ones while those three grow their
-own coverage over time. The same selector reaches `#card-detail-art`/
+The fourth skin, Noir, is different: unlike the other three it stays a
+pure CSS filter (`:root[data-theme="noir"] .card-thumb__art, ... {
+filter: grayscale(1) contrast(1.15); }`, `css/style.css`) over the normal
+MSW art, with no color block or background-image of its own at all --
+this repo's own suggested fourth skin, chosen specifically because it's
+"free" to ship a fully-working example needing no art or palette design
+at all. Since "noir" matches no `:root[data-theme="..."]` color block,
+selecting it leaves colors at whatever system/light/dark default was
+already active. The filter's own selector also reaches `#card-detail-art`/
 `#choices-card-art` too (the card-detail dialog's and the choices panel's
 own single-card previews), not just the many `.card-thumb__art` thumbnails
 across hand/in-play/discard/draft screens -- all card art funnels through
