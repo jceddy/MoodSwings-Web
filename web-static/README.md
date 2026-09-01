@@ -156,20 +156,31 @@ across hand/in-play/discard/draft screens -- all card art funnels through
 `cardArtUrl()`, so this one CSS rule covers everywhere it appears.
 
 Noir DOES get its own decorative `body` background, though (same as the
-three ambitious themes above): a neutral mid-gray horizontal stripe
-pattern (`repeating-linear-gradient()`, no image asset needed) evoking
-classic film-noir cinematography -- light cutting through venetian blinds
-into hard shadow bands across a wall. Since it has no palette to draw a
-color from, the stripes use a fixed neutral gray at low alpha that reads
+three ambitious themes above): a neutral mid-gray diagonal stripe pattern
+(`repeating-linear-gradient()`, no image asset needed) evoking classic
+film-noir cinematography -- light cutting through venetian blinds into
+hard shadow bands across a wall. Since it has no palette to draw a color
+from, the stripes use a fixed neutral gray at low alpha that reads
 reasonably either way: a faint shadow over a light background, a faint
 lift over a dark one -- so one rule works regardless of whatever system/
-light/dark default it's layered on top of, with no branching needed. The
-bands are horizontal rather than diagonal deliberately -- an earlier,
-diagonal version of this rule hit a real Chromium rendering bug where a
-`repeating-linear-gradient()` at a non-cardinal angle visibly desyncs at
-internal rasterization-tile boundaries once the painted area is tall
-enough; a horizontal (or vertical) band has no diagonal phase for a tile
-boundary to fall out of step with, so it tiles perfectly at any height.
+light/dark default it's layered on top of, with no branching needed.
+
+The angle is `135deg` specifically, not an arbitrary diagonal. An earlier
+version of this rule used `115deg` and hit a real, reproducible Chromium
+bug: on a tall page, `repeating-linear-gradient()` visibly desyncs partway
+down, as if the pattern's phase had jumped by roughly half a period.
+Verified live against the running app (freshly loaded and after other
+angles had already painted, up to a 2600px-tall viewport), this
+reproduces deterministically at `115deg` and NOT at `30deg`/`45deg`/
+`60deg`/`135deg` -- angles in the 45-degree family stay seam-free while an
+off-family angle like `115deg` doesn't, suggesting Chromium's rasterizer
+has a precise fast path for those angles that a generic one falls out of.
+`135deg` was picked over `45deg` only to lean the same direction
+(down-right) the original `115deg` did. If a future browser update
+reintroduces seaming even at `135deg`, the fallback is a horizontal or
+vertical band (`to bottom`/`to right`) -- those have no diagonal phase for
+a rasterizer tile boundary to fall out of step with at all, at the cost of
+a less dynamic-looking stripe.
 
 Getting `data-theme` set before first paint (so an explicit preference
 never flashes the wrong theme first) needs to happen before `js/app.js`

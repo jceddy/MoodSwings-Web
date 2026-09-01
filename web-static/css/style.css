@@ -321,19 +321,31 @@ body {
    background is already active. A neutral mid-gray at low alpha reads the
    same either way (a faint shadow on a light background, a faint lift on
    a dark one), so one rule covers both without branching on the current
-   color scheme. Horizontal repeating bands, rather than a texture, evoke
-   classic film-noir cinematography -- light through venetian blinds
-   cutting hard shadow stripes across a wall -- which needs no image asset
-   at all, plain `repeating-linear-gradient()`. Deliberately horizontal
-   (not diagonal, an earlier version of this rule) -- a diagonal angle hit
-   a real rendering seam in Chromium on a tall page: repeating-linear-
-   gradient() at a non-cardinal angle can visibly misalign at internal
-   rasterization-tile boundaries once the painted area is large enough,
-   which a horizontal (or vertical) band avoids entirely since there's no
-   diagonal phase for a tile boundary to fall out of step with. */
+   color scheme. Diagonal repeating bands evoke classic film-noir
+   cinematography -- light through venetian blinds cutting hard shadow
+   stripes across a wall -- which needs no image asset at all, plain
+   `repeating-linear-gradient()`.
+
+   The angle is 135deg specifically, not an arbitrary diagonal -- an
+   earlier version of this rule used 115deg and hit a real, reproducible
+   Chromium rendering bug: on a tall page, repeating-linear-gradient()
+   visibly desyncs partway down, as if the pattern's phase had jumped by
+   roughly half a period. Empirically (verified live against this exact
+   page, both freshly loaded and after other angles had already painted,
+   up to a 2600px-tall viewport) this reproduces deterministically at
+   115deg and NOT at 30deg/45deg/60deg/135deg -- i.e. multiples of 15deg
+   near a 45deg-family angle stay seam-free while an off-family angle like
+   115deg doesn't, suggesting Chromium's rasterizer has a precise fast
+   path for these angles that a generic angle falls out of. 135deg was
+   picked over 45deg only because it leans the same direction (down-right)
+   the original 115deg did. If a future browser update reintroduces
+   seaming at 135deg, fall back to a horizontal/vertical band (`to
+   bottom`/`to right`) -- those have no diagonal phase for a rasterizer
+   tile boundary to fall out of step with at all, at the cost of a less
+   dynamic-looking stripe. */
 :root[data-theme="noir"] body {
     background-image: repeating-linear-gradient(
-        to bottom,
+        135deg,
         rgba(128, 128, 128, 0.16) 0px,
         rgba(128, 128, 128, 0.16) 34px,
         transparent 34px,
