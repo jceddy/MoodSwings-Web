@@ -1628,7 +1628,7 @@ if ($path === '/games/notes' && $method === 'GET') {
 
     $gamePlayerId = requireGamePlayer($games, $gameId, (int) $currentUser['id']);
 
-    respond(200, ['status' => 'ok', 'note_text' => $games->getNote($gamePlayerId)]);
+    respond(200, ['status' => 'ok', 'note_text' => $games->getNote($gameId, $gamePlayerId)]);
 }
 
 if ($path === '/games/notes' && $method === 'POST') {

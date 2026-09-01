@@ -13178,7 +13178,7 @@ final class GameServiceIntegrationTest extends TestCase
     {
         ['gameId' => $gameId, 'p1' => $p1] = $this->buildThreePlayerFixture();
 
-        self::assertSame('', $this->games->getNote($p1));
+        self::assertSame('', $this->games->getNote($gameId, $p1));
     }
 
     public function testSaveNoteThenGetNoteRoundTrips(): void
@@ -13187,11 +13187,11 @@ final class GameServiceIntegrationTest extends TestCase
 
         $this->games->saveNote($gameId, $p1, 'Watch out for Apathy.');
 
-        self::assertSame('Watch out for Apathy.', $this->games->getNote($p1));
+        self::assertSame('Watch out for Apathy.', $this->games->getNote($gameId, $p1));
 
         $this->games->saveNote($gameId, $p1, 'Actually, watch out for Boredom instead.');
 
-        self::assertSame('Actually, watch out for Boredom instead.', $this->games->getNote($p1));
+        self::assertSame('Actually, watch out for Boredom instead.', $this->games->getNote($gameId, $p1));
     }
 
     public function testNotesAreIsolatedPerSeatEvenInTheSameGame(): void
@@ -13201,8 +13201,8 @@ final class GameServiceIntegrationTest extends TestCase
         $this->games->saveNote($gameId, $p1, "p1's note");
         $this->games->saveNote($gameId, $p2, "p2's note");
 
-        self::assertSame("p1's note", $this->games->getNote($p1));
-        self::assertSame("p2's note", $this->games->getNote($p2));
+        self::assertSame("p1's note", $this->games->getNote($gameId, $p1));
+        self::assertSame("p2's note", $this->games->getNote($gameId, $p2));
     }
 
     public function testSaveNoteRejectsTextOverTheLengthLimit(): void
@@ -13220,7 +13220,7 @@ final class GameServiceIntegrationTest extends TestCase
         $text = str_repeat('a', 20000);
         $this->games->saveNote($gameId, $p1, $text);
 
-        self::assertSame($text, $this->games->getNote($p1));
+        self::assertSame($text, $this->games->getNote($gameId, $p1));
     }
 
     public function testSaveNoteFailsOnceTheGameHasCompleted(): void
@@ -13242,7 +13242,7 @@ final class GameServiceIntegrationTest extends TestCase
 
         $this->pdo->prepare("UPDATE games SET status = 'completed' WHERE id = :id")->execute(['id' => $gameId]);
 
-        self::assertSame('Saved while still in progress.', $this->games->getNote($p1));
+        self::assertSame('Saved while still in progress.', $this->games->getNote($gameId, $p1));
     }
 
     public function testSaveNoteFailsOnceTheGameHasBeenAbandoned(): void
@@ -13273,7 +13273,7 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertCount(1, $state['chat_messages']);
         self::assertSame('Nice hand!', $state['chat_messages'][0]['message_text']);
         self::assertSame('table', $state['chat_messages'][0]['channel']);
-        self::assertSame($p1, $state['chat_messages'][0]['sender_game_player_id']);
+        self::assertSame($u1, $state['chat_messages'][0]['sender_user_id']);
         self::assertSame('p1', $state['chat_messages'][0]['sender_username']);
 
         // Visible to the sender's own state too, not just other seats.
@@ -16298,13 +16298,13 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
-     * postChatMessage()'s own deck-building exception
-     * (isOpenTeamDeckBuildingChat()): once Open Team Play's draft match
-     * reaches 'deck_building', teammates can coordinate over the 'team'
-     * channel even though games.status is still 'waiting' (real gameplay
-     * hasn't started -- see driveMultiplayerQuickDraftToDeckBuilding()'s
-     * own final assertion). Visible to both teammates, same as any other
-     * 'team'-channel message.
+     * postChatMessage()'s own draft-match waiting-window exception
+     * (isDraftMatchWaitingWindow(), issue #463): a draft match's own
+     * 'table'/'team' chat is usable throughout drafting/deck-building too,
+     * even though games.status is still 'waiting' (real gameplay hasn't
+     * started -- see driveMultiplayerQuickDraftToDeckBuilding()'s own
+     * final assertion). 'team'-channel visibility here is unchanged from
+     * before: visible to both teammates, never the opposing team.
      */
     public function testOpenTeamQuickDraftDeckBuildingAllowsTeamChannelChat(): void
     {
@@ -16333,13 +16333,12 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
-     * The deck-building exception is deliberately narrower than the
-     * general "in_progress" rule it replaces -- only the 'team' channel,
-     * never 'table' (see isOpenTeamDeckBuildingChat()'s own docblock for
-     * why: the opposing team may still be mid-draft/deck-building
-     * themselves).
+     * Issue #463 widened the waiting-window exception to cover 'table' too
+     * (not just 'team') -- players now want to talk during the
+     * pack-opening/pick screens themselves, the same as the deck-building
+     * window this test used to find blocked.
      */
-    public function testOpenTeamQuickDraftDeckBuildingStillBlocksTableChannelChat(): void
+    public function testOpenTeamQuickDraftDeckBuildingAllowsTableChannelChatToo(): void
     {
         $userIds = $this->insertUsers('otqdchattbl-' . uniqid() . '-', 4);
         $gameId = $this->games->createGame(
@@ -16353,18 +16352,22 @@ final class GameServiceIntegrationTest extends TestCase
         $this->driveMultiplayerQuickDraftToDeckBuilding($gameId, $userIds);
 
         $p0 = $this->gamePlayerIdForUser($gameId, $userIds[0]);
-        $this->expectException(GameStateException::class);
-        $this->expectExceptionMessage('while the game is in progress');
         $this->games->postChatMessage($gameId, $p0, 'table', 'Good luck to the other team too!');
+
+        $messages = $this->games->getState($gameId, $userIds[2])['chat_messages'];
+        self::assertCount(1, $messages);
+        self::assertSame('Good luck to the other team too!', $messages[0]['message_text']);
+        self::assertSame('table', $messages[0]['channel']);
     }
 
     /**
-     * The exception only kicks in once the match has actually reached
-     * 'deck_building' -- mid-'drafting', a stray message would arrive to
-     * a teammate who's still mid-pack and not yet looking at chat (see
-     * isOpenTeamDeckBuildingChat()'s own docblock).
+     * Issue #463's own core ask: chat during the drafting screens
+     * themselves, not just once deck-building has started -- unlike the
+     * old, narrower isOpenTeamDeckBuildingChat() this replaced,
+     * isDraftMatchWaitingWindow() doesn't distinguish the match's own
+     * 'drafting' vs. 'deck_building' sub-status at all.
      */
-    public function testOpenTeamQuickDraftStillBlocksChatDuringTheDraftingPhaseItself(): void
+    public function testOpenTeamQuickDraftAllowsChatDuringTheDraftingPhaseItself(): void
     {
         $userIds = $this->insertUsers('otqdchatdrafting-' . uniqid() . '-', 4);
         $gameId = $this->games->createGame(
@@ -16378,23 +16381,25 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame('drafting', $this->games->getState($gameId, $userIds[0])['quick_draft']['status']);
 
         $p0 = $this->gamePlayerIdForUser($gameId, $userIds[0]);
-        $this->expectException(GameStateException::class);
-        $this->expectExceptionMessage('while the game is in progress');
-        $this->games->postChatMessage($gameId, $p0, 'team', 'Too early to chat about deck building.');
+        $this->games->postChatMessage($gameId, $p0, 'team', 'Already chatting during the draft itself.');
+
+        $messages = $this->games->getState($gameId, $userIds[1])['chat_messages'];
+        self::assertCount(1, $messages);
+        self::assertSame('Already chatting during the draft itself.', $messages[0]['message_text']);
     }
 
     /**
-     * Closed Team Play must NOT get this exception either -- "information
-     * stays closed between teammates" applies to chat the same as it does
-     * to the deck-building pool itself (see
-     * testClosedTeamQuickDraftDeckBuildingStaysPersonalPoolOnly() above).
-     * postChatMessage()'s own $game['format'] === 'team' check inside
-     * isOpenTeamDeckBuildingChat() already excludes 'closed_team', so this
-     * falls all the way back to the original "in progress" message rather
-     * than "no team channel" -- the 'team' channel itself is still valid
-     * for this format in principle, just not reachable yet.
+     * Closed Team Play must never get a 'team' channel, in the waiting
+     * window or otherwise -- "information stays closed between teammates"
+     * applies to chat the same as it does to the deck-building pool itself
+     * (see testClosedTeamQuickDraftDeckBuildingStaysPersonalPoolOnly()
+     * above). isDraftMatchWaitingWindow() itself no longer checks format
+     * at all (see its own docblock), so this now reaches
+     * postChatMessage()'s own unconditional `$game['format'] === 'team'`
+     * channel check instead -- still blocked, just via a different
+     * exception message than before.
      */
-    public function testClosedTeamQuickDraftDeckBuildingStillBlocksChat(): void
+    public function testClosedTeamQuickDraftDeckBuildingStillBlocksTeamChannelChat(): void
     {
         $userIds = $this->insertUsers('ctqdchat-' . uniqid() . '-', 4);
         $gameId = $this->games->createGame(
@@ -16409,16 +16414,43 @@ final class GameServiceIntegrationTest extends TestCase
 
         $p0 = $this->gamePlayerIdForUser($gameId, $userIds[0]);
         $this->expectException(GameStateException::class);
-        $this->expectExceptionMessage('while the game is in progress');
+        $this->expectExceptionMessage('no team channel');
         $this->games->postChatMessage($gameId, $p0, 'team', 'Closed Team Play should never reach this.');
     }
 
     /**
-     * A non-team draft (format 'draft') has no teammate to coordinate
-     * with at all -- the deck-building exception must never kick in for
-     * it, on either channel.
+     * Closed Team Play's own 'table' channel, by contrast, IS reachable
+     * during the waiting window -- same as any other draft match's own
+     * table chat, since there's nothing closed about talking to the whole
+     * table.
      */
-    public function testSoloQuickDraftDeckBuildingStillBlocksChat(): void
+    public function testClosedTeamQuickDraftDeckBuildingAllowsTableChannelChat(): void
+    {
+        $userIds = $this->insertUsers('ctqdchattbl-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'closed_team',
+            deckType: 'quick_draft',
+            partnerUserId: $userIds[1],
+            quickDraftPoolSource: 'random_48',
+        );
+        $this->driveMultiplayerQuickDraftToDeckBuilding($gameId, $userIds);
+
+        $p0 = $this->gamePlayerIdForUser($gameId, $userIds[0]);
+        $this->games->postChatMessage($gameId, $p0, 'table', 'Talking to the whole table is fine.');
+
+        $messages = $this->games->getState($gameId, $userIds[1])['chat_messages'];
+        self::assertCount(1, $messages);
+    }
+
+    /**
+     * A non-team draft (format 'draft') has no teammate to coordinate
+     * with, but the waiting-window exception is no longer team-specific
+     * at all (issue #463) -- solo 2-player Quick Draft gets 'table' chat
+     * during deck-building same as every other draft match.
+     */
+    public function testSoloQuickDraftDeckBuildingAllowsTableChannelChat(): void
     {
         $userIds = $this->insertUsers('soloqdchat-' . uniqid() . '-', 2);
         $gameId = $this->games->createGame(
@@ -16431,9 +16463,11 @@ final class GameServiceIntegrationTest extends TestCase
         $this->driveQuickDraftToDeckBuilding($gameId, $userIds[0], $userIds[1]);
 
         $p0 = $this->gamePlayerIdForUser($gameId, $userIds[0]);
-        $this->expectException(GameStateException::class);
-        $this->expectExceptionMessage('while the game is in progress');
-        $this->games->postChatMessage($gameId, $p0, 'table', 'No teammate here to chat with.');
+        $this->games->postChatMessage($gameId, $p0, 'table', 'Good game, good luck.');
+
+        $messages = $this->games->getState($gameId, $userIds[1])['chat_messages'];
+        self::assertCount(1, $messages);
+        self::assertSame('Good game, good luck.', $messages[0]['message_text']);
     }
 
     /**
@@ -16475,6 +16509,92 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertCount(2, $messages);
         self::assertSame('Deck-building chat.', $messages[0]['message_text']);
         self::assertSame('In-progress chat.', $messages[1]['message_text']);
+    }
+
+    /**
+     * Issue #463's own core case: a message sent during game 1 of a
+     * 2-player best-of-three Quick Draft match is still there once game 2
+     * starts, keyed off the shared draft_match_id rather than game 1's own
+     * (now-completed) game_id -- and a NEW message sent from game 2 is
+     * visible in the same conversation, sent under a brand new
+     * game_player_id (see advanceDraftMatch()) that has nothing to do with
+     * game 1's own.
+     */
+    public function testChatMessagesPersistFromGameOneIntoGameTwoOfABestOfThreeMatch(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture(winsNeeded: 1);
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+        $this->submitFullQuickDraftDeck($gameId, $u1);
+        $this->submitFullQuickDraftDeck($gameId, $u2);
+        $this->games->startGame($gameId);
+
+        $gameOneP1 = $this->gamePlayerIdForUser($gameId, $u1);
+        $this->games->postChatMessage($gameId, $gameOneP1, 'table', 'Good luck in game 1!');
+
+        $this->completeQuickDraftGameByPassing($gameId);
+        self::assertSame('completed', $this->fetchGame($gameId)['status']);
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE draft_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $draftMatchId]);
+        $nextGameId = (int) $nextGameStmt->fetchColumn();
+        self::assertGreaterThan(0, $nextGameId, 'a losing game 1 must always start game 2');
+
+        $gameTwoP1 = $this->gamePlayerIdForUser($nextGameId, $u1);
+        self::assertNotSame($gameOneP1, $gameTwoP1, 'fixture sanity check -- game 2 must mint a fresh game_player_id');
+
+        // Game 1's message is still there, viewed from game 2.
+        $messagesBeforeGameTwoMessage = $this->games->getState($nextGameId, $u2)['chat_messages'];
+        self::assertCount(1, $messagesBeforeGameTwoMessage);
+        self::assertSame('Good luck in game 1!', $messagesBeforeGameTwoMessage[0]['message_text']);
+
+        // A new message sent under game 2's own game_player_id joins the same conversation.
+        $this->games->postChatMessage($nextGameId, $gameTwoP1, 'table', 'On to game 2.');
+        $messages = $this->games->getState($nextGameId, $u2)['chat_messages'];
+        self::assertCount(2, $messages);
+        self::assertSame('Good luck in game 1!', $messages[0]['message_text']);
+        self::assertSame('On to game 2.', $messages[1]['message_text']);
+        // Both messages resolve to the same sender username despite coming
+        // from two different game_player_id rows.
+        self::assertSame($messages[0]['sender_username'], $messages[1]['sender_username']);
+    }
+
+    /**
+     * The private notepad (issue #258) gets the same match-spanning
+     * treatment as chat (issue #463) -- a note saved during game 1 is
+     * still there, under the SAME user, once game 2 starts.
+     */
+    public function testNoteSavedDuringGameOnePersistsIntoGameTwoOfABestOfThreeMatch(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture(winsNeeded: 1);
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+        $this->submitFullQuickDraftDeck($gameId, $u1);
+        $this->submitFullQuickDraftDeck($gameId, $u2);
+        $this->games->startGame($gameId);
+
+        $gameOneP1 = $this->gamePlayerIdForUser($gameId, $u1);
+        $this->games->saveNote($gameId, $gameOneP1, 'Watch out for Apathy in game 1.');
+
+        $this->completeQuickDraftGameByPassing($gameId);
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE draft_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $draftMatchId]);
+        $nextGameId = (int) $nextGameStmt->fetchColumn();
+
+        $gameTwoP1 = $this->gamePlayerIdForUser($nextGameId, $u1);
+        self::assertSame('Watch out for Apathy in game 1.', $this->games->getNote($nextGameId, $gameTwoP1));
+
+        // Overwriting from game 2 updates the SAME shared note, not a new one.
+        $this->games->saveNote($nextGameId, $gameTwoP1, 'Actually, watch out for Boredom in game 2.');
+        self::assertSame('Actually, watch out for Boredom in game 2.', $this->games->getNote($nextGameId, $gameTwoP1));
+
+        // The other player's own note is unaffected and still isolated.
+        self::assertSame('', $this->games->getNote($nextGameId, $this->gamePlayerIdForUser($nextGameId, $u2)));
     }
 
     // -- Tiered Rotisserie Draft (issue #361) --------------------------------
