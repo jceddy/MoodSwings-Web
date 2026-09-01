@@ -2929,22 +2929,35 @@ someone else's listing needs no opt-in of its own.
     line of log text).
 
     **In-game notepad (issue #258).** A "Notes" button (`#view-notes-
-    button`, next to "View log"/"View decklist") opens `#game-notes-
-    dialog` -- a private, per-seat scratchpad, never shared with anyone
-    else at the table, so unlike "View log"/"View decklist" it has no
-    lobby-row counterpart and is hidden entirely while spectating/
-    replaying (`isReadOnlyView()`; a spectator/replay viewer has no seat
-    of their own to have a note for). Opening it fetches the note's
-    current text via `GET /games/notes` (`getGameNote()` in `app.js`);
-    typing into the textarea autosaves on a 1-second debounce
-    (`saveGameNote()` -> `POST /games/notes`) rather than needing an
-    explicit Save button, and closing the dialog with an edit still
-    pending flushes it immediately first. Once the game's own status
-    isn't `in_progress`, the textarea is disabled and a "This game has
-    ended, so your notes are read-only" message replaces the save-status
-    line -- the previously-saved text is still loaded and shown, just not
-    editable (see `GameService::saveNote()`'s own gate in
-    `php-app/README.md`).
+    button`, next to "Chat"/"View log") opens `#game-notes-dialog` -- a
+    private, per-seat scratchpad, never shared with anyone else at the
+    table, so unlike "View log"/"View decklist" it has no lobby-row
+    counterpart and is hidden entirely while spectating/replaying
+    (`isReadOnlyView()`; a spectator/replay viewer has no seat of their
+    own to have a note for). Issue #463 moved `#view-notes-button` in the
+    HTML to sit alongside `#view-chat-button`/`#resign-button`, OUTSIDE
+    `#in-progress-area` -- a bug caught live during that issue's own
+    verification: the button used to live INSIDE `#in-progress-area`,
+    which `renderBoard()` sets `hidden = true` for the entire `'waiting'`
+    status (see "Open Team Play's deck-building chat" below, now widened
+    to "Chat and notes during a draft match's waiting window"), so the
+    button's own `.hidden` computation had no visible effect at all during
+    that window until the markup itself moved -- an ancestor's `hidden`
+    wins over a child's, regardless of what the child's own script sets.
+    Opening it fetches the note's current text via `GET /games/notes`
+    (`getGameNote()` in `app.js`); typing into the textarea autosaves on a
+    1-second debounce (`saveGameNote()` -> `POST /games/notes`) rather
+    than needing an explicit Save button, and closing the dialog with an
+    edit still pending flushes it immediately first. `isNotesReadOnly()`
+    mirrors the backend's own gate (`GameService::saveNote()`, see
+    `php-app/README.md`): once the game is neither `in_progress` nor in
+    the waiting window below, the textarea is disabled and a "This game
+    has ended, so your notes are read-only" message replaces the
+    save-status line -- the previously-saved text is still loaded and
+    shown, just not editable. Issue #463 also made the note itself
+    survive a rematch's fresh `game_player_id` once a game belongs to a
+    draft match (shared across every game in the match) -- see "In-game
+    notepad" in `php-app/README.md` for the full match-scoping story.
 
     **In-game chat (issue #109).** A "Chat" button (`#view-chat-button`,
     next to "Notes") opens `#game-chat-dialog`, hidden the same way "Notes"
@@ -2964,30 +2977,41 @@ someone else's listing needs no opt-in of its own.
     closed, a small notification dot on `#view-chat-button` itself
     (`.has-unread-chat`, the same visual treatment as `#friends-button`'s
     own `.has-friend-request` dot) lights up once the currently-viewed
-    game has a message, past what was last seen (`chatLastSeenMessageId`,
-    the highest `chat_messages[].id` seen so far), whose
-    `sender_game_player_id` ISN'T the viewer's own -- a plain message-count
+    conversation has a message, past what was last seen
+    (`chatLastSeenMessageId`, the highest `chat_messages[].id` seen so
+    far), whose `sender_user_id` ISN'T the viewer's own (`state.you.user_id`,
+    issue #463 -- comparing against `sender_game_player_id` instead would
+    incorrectly flag the viewer's OWN earlier-game messages as unread,
+    since that id changes per game within a match) -- a plain message-count
     comparison would also light this up for the viewer's own just-sent
     message or on a fresh page load where they're the only one who's said
     anything so far, neither of which is actually "unread." Clears the
-    moment the dialog is opened -- tracked per-game (`chatSeenGameId`/
-    `chatLastSeenMessageId`), and `chatLastSeenMessageId` is additionally
-    persisted to `localStorage` (`chatLastSeenMessageId:{game_id}`,
+    moment the dialog is opened -- tracked per CONVERSATION
+    (`chatSeenConversationKey`/`chatLastSeenMessageId`, issue #463; a
+    conversation is a whole draft match once one exists, not just the
+    currently-open `game_id`), and `chatLastSeenMessageId` is additionally
+    persisted to `localStorage`
+    (`chatLastSeenMessageId:match:{draft_match_id}` or
+    `chatLastSeenMessageId:game:{game_id}`, `chatConversationKeyFor(state)`,
     read/written through the same try/catch-guarded-for-private-browsing
     pattern `initThemeSelect()`'s own `THEME_STORAGE_KEY` uses in `app.js`)
     so a browser refresh after reading a message doesn't forget that and
-    re-flag it unread; switching to a different game re-reads that game's
-    own stored value rather than carrying over whatever the previous
-    game's was. `#chat-channel-select` (a `<select>` for `Table`/
-    `Team`) is only shown for `format: 'team'` games -- deliberately NOT
-    `closed_team` too (see "In-game chat" in `../php-app/README.md` for
-    why: Closed Team Play's whole premise is that information stays
-    closed between teammates, so it gets no private channel) -- and also
-    hidden during the deck-building chat window described below, where
-    only `'team'` is ever valid. `sendChatText()` resolves which implicit
-    channel to send whenever the selector is hidden for either reason:
-    `isTeamDeckBuildingChatOpen(currentState)` picks `'team'`, everything
-    else (every non-`'team'`-format game) picks `'table'`. Sending
+    re-flag it unread; switching from game 1 to game 2 of the same match
+    reads the SAME stored value (keyed by `draft_match_id`) rather than
+    finding nothing for game 2's own id and momentarily re-flagging every
+    already-read message as unread again. `#chat-channel-select` (a
+    `<select>` for `Table`/`Team`) is only shown for `format: 'team'`
+    games -- deliberately NOT `closed_team` too (see "In-game chat" in
+    `../php-app/README.md` for why: Closed Team Play's whole premise is
+    that information stays closed between teammates, so it gets no
+    private channel). Issue #463 widened the waiting-window exception
+    (below) to accept BOTH channels, so unlike before, the picker no
+    longer needs its own special case to hide during drafting/
+    deck-building -- it stays available there too, same as once the game
+    is `in_progress`; `sendChatText()` now treats a hidden picker as
+    always meaning `'table'` (the only channel a non-`'team'`-format game
+    ever has), with no need to ask `isTeamDeckBuildingChatOpen()` (now
+    removed) which of two reasons it was hidden for. Sending
     (`sendChatMessage()` -> `POST /games/chat`) clears the input (on a
     confirmed send only -- see below) and calls `refreshBoard()`
     immediately on success, the same "an action triggers its own
@@ -3030,28 +3054,35 @@ someone else's listing needs no opt-in of its own.
     used to silently discard the player's own typed text right along with
     the error message.
 
-    **Open Team Play's deck-building chat.** Once deck-building started
-    drawing from the whole team's shared drafted pool (see "Deck
-    building" above), teammates needed a way to actually coordinate --
-    but `#view-chat-button`/`renderChat()` used to be computed only in the
-    `in_progress` branch of `renderBoard()`, past the `'waiting'` branch's
-    own early `return`, so the button never even appeared during
-    drafting/deck-building. Both are now computed unconditionally, right
-    alongside `#resign-button`'s own identical fix for issue #144 (same
-    rationale: `#view-chat-button` lives outside `#in-progress-area`
-    precisely so it stays reachable there), gated by
-    `isTeamDeckBuildingChatOpen(state)` -- `true` only for `format:
-    'team'`, `game.status === 'waiting'`, and the relevant draft
-    sub-state's own `status === 'deck_building'` (checked against
-    `state.quick_draft`/`state.winston_draft`/`state.grid_draft`,
-    whichever `state.game.deck_type` selects) -- which mirrors
-    `GameService::isOpenTeamDeckBuildingChat()` exactly, so the frontend
-    never offers something the backend would then reject. `isChatReadOnly()`
-    checks the same condition, so opening the dialog during this window
-    shows an editable form rather than the read-only message a genuinely
-    `'waiting'`-for-other-reasons game would still get. Still hidden
-    entirely for `closed_team`/non-team drafts and during the drafting
-    sub-phase itself, matching the backend's own narrower exception.
+    **Chat and notes during a draft match's waiting window (issue #463).**
+    Once deck-building started drawing from the whole team's shared
+    drafted pool (see "Deck building" above), teammates needed a way to
+    actually coordinate -- but `#view-chat-button`/`renderChat()` used to
+    be computed only in the `in_progress` branch of `renderBoard()`, past
+    the `'waiting'` branch's own early `return`, so the button never even
+    appeared during drafting/deck-building. Both are now computed
+    unconditionally, right alongside `#resign-button`'s own identical fix
+    for issue #144 (same rationale: `#view-chat-button` lives outside
+    `#in-progress-area` precisely so it stays reachable there), gated by
+    `isDraftMatchWaitingWindow(state)` -- `state.game.status === 'waiting'
+    && state.game.draft_match_id !== null`, with no further narrowing by
+    format, channel, or the match's own drafting-vs-deck_building
+    sub-status. This replaces an earlier, much narrower version of this
+    same idea (`isTeamDeckBuildingChatOpen()`, Open-Team-Play-only,
+    `'team'`-channel-only, `deck_building`-only, mirroring the backend's
+    now-removed `isOpenTeamDeckBuildingChat()`) that predated issue #463 --
+    players now want to talk (and take notes) during the pack-opening/pick
+    screens themselves too, not just once deck-building has started, and
+    for every draft-family format, not just Open Team Play. `#view-notes-
+    button` gets the identical treatment (see "In-game notepad" above for
+    the HTML-nesting bug this surfaced). `isChatReadOnly()`/
+    `isNotesReadOnly()` check the same condition, so opening either dialog
+    during this window shows an editable form rather than the read-only
+    message a genuinely `'waiting'`-for-other-reasons game would still
+    get. Closed Team Play still correctly gets no `'team'` channel even
+    here -- that's enforced unconditionally by `postChatMessage()`'s own
+    `$game['format'] === 'team'` check on the backend, not by this
+    window's own gate, which no longer distinguishes team formats at all.
 
     `#pending-decision-banner` and `#scoring-preview` are two more elements
     with this exact same failure shape, caught later: both live outside

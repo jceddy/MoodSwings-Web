@@ -4265,6 +4265,12 @@ misinterpreted.
 it's a deliberately private per-seat scratchpad (see
 `GameNoteRepository`), and triggering an export has no business
 revealing what a different seated player privately wrote to themselves.
+For a game that belongs to a draft match, this (and the `game_chat_messages`
+section below) is looked up by `(draft_match_id, user_id)`/`draft_match_id`
+rather than the exported game's own `game_player_id`/`game_id` alone
+(issue #463's own match-scoping -- see "In-game notepad"/"In-game chat"
+below), so an export triggered from game 2 still surfaces a note/message
+that was actually written during game 1.
 
 For a Quick/Winston/Grid Draft game (`games.draft_match_id` set), the
 export additionally includes `draft_match`/`draft_match_players`/
@@ -5427,48 +5433,70 @@ so a colorblind viewer -- or anyone glancing quickly -- can tell
 A small freeform scratchpad for jotting down private reads/reminders
 during a game -- who's bluffing, what's already been played, a plan for
 next round -- never shared with anyone else at the table, including
-teammates. Per-game rather than persistent across every game a player's
-ever in (the issue's own scope), and keyed directly on `game_players.id`
-(migration `0054`'s `game_notes` table, `UNIQUE KEY` on
-`game_player_id`) rather than a separate `(user_id, game_id)` compound --
-a seat already uniquely identifies "this player, in this game," the same
+teammates. Originally keyed directly on `game_players.id` (migration
+`0054`'s `game_notes` table, `UNIQUE KEY` on `game_player_id`), the same
 way `resigned_at`/`custom_deck_name`/the initial card pass all hang off
-`game_player_id` rather than inventing their own key. `GameNoteRepository`
-(`src/Repository/GameNoteRepository.php`) is a two-method repository:
-`findByGamePlayerId(int): ?string` and `upsert(int, string): void` (an
-`INSERT ... ON DUPLICATE KEY UPDATE`, so the row is lazily created on
-first save rather than provisioned up front for every seat).
+`game_player_id` rather than inventing their own key -- but issue #463
+widened this: once a game belongs to a draft match
+(`games.draft_match_id` non-null), the note is instead shared across the
+WHOLE match (drafting/deck-building and every game within a 2-player
+best-of-three), not reset per individual `games.id`. Migration `0219`
+added `draft_match_id`/`user_id` columns plus a `uq_game_notes_match_user
+(draft_match_id, user_id)` unique key for this -- MySQL treats every
+`draft_match_id IS NULL` row as distinct under a unique index, so a
+non-match game's note stays governed purely by the original
+`uq_game_notes_game_player_id` key, unaffected.
 
-`GameService::getNote(int $gamePlayerId): string` (empty string, not
-`null`, if nothing's ever been saved -- one less null-check for both the
-HTTP layer and the frontend) and `GameService::saveNote(int $gameId, int
-$gamePlayerId, string $noteText): void` are the only two entry points.
-`saveNote()` enforces a `MAX_NOTE_LENGTH` of 20,000 characters (checked
-in PHP via `mb_strlen()` -- the column itself is `MEDIUMTEXT`,
-effectively unbounded at the DB layer, so this is purely an
-application-level sanity limit) and throws `GameStateException` unless
-the game is still `in_progress`. That gate is deliberate: once a game
-reaches a terminal status (`completed` or `abandoned`) the note becomes
-**read-only**, matching how a resigned/finished game locks out every
-other board action -- but `getNote()` has no such gate, so the note
-itself stays fully readable forever; only further edits are refused.
-`GET /games/notes`/`POST /games/notes` (see the API table above) are
-thin wrappers around these two methods, both behind the same
-`requireGamePlayer()` seat check every other per-player game route uses.
+`GameNoteRepository` (`src/Repository/GameNoteRepository.php`):
+`findFor(int $gamePlayerId, ?int $draftMatchId, int $userId): ?string`
+and `upsert(int $gamePlayerId, ?int $draftMatchId, int $userId, string
+$noteText): void` -- both branch on whether `$draftMatchId` is non-null,
+looking up/upserting by `(draft_match_id, user_id)` for a match game or
+by `game_player_id` alone otherwise (an `INSERT ... ON DUPLICATE KEY
+UPDATE` either way, so the row is lazily created on first save). For a
+match game, `game_player_id` is still recorded on the row -- overwritten
+on every save -- purely as "which specific game in the match this was
+last edited from"; it plays no part in the lookup once `draft_match_id`
+is set.
+
+`GameService::getNote(int $gameId, int $gamePlayerId): string` (empty
+string, not `null`, if nothing's ever been saved) and
+`GameService::saveNote(int $gameId, int $gamePlayerId, string
+$noteText): void` are the only two entry points; both resolve
+`$draftMatchId`/`$userId` from `$gameId`/`$gamePlayerId` before calling
+into the repository. `saveNote()` enforces a `MAX_NOTE_LENGTH` of 20,000
+characters (checked in PHP via `mb_strlen()` -- the column itself is
+`MEDIUMTEXT`, effectively unbounded at the DB layer) and throws
+`GameStateException` unless the game is `in_progress` OR (issue #463)
+`isDraftMatchWaitingWindow($game)` -- see "Chat and notes during a draft
+match's waiting window" below, shared verbatim with chat's own gate. That
+gate is deliberate: once a non-match game reaches a terminal status
+(`completed` or `abandoned`) the note becomes **read-only**, matching how
+a resigned/finished game locks out every other board action -- but
+`getNote()` has no such gate, so the note itself stays fully readable
+forever; only further edits are refused. `GET /games/notes`/`POST
+/games/notes` (see the API table above) are thin wrappers around these
+two methods, both behind the same `requireGamePlayer()` seat check every
+other per-player game route uses.
 
 Frontend (`web-static/game/index.html`/`web-static/js/game.js`): a
-"Notes" button next to the existing "View log"/"View decklist" buttons
-opens `#game-notes-dialog`, matching that same established dialog
-pattern rather than a persistent inline panel (only reachable from that
-game's own board, never a separate cross-game notes page, per the
-issue's own "per-game, not persistent" scope). Typing into the textarea
-autosaves on a 1-second debounce (`saveGameNote()` in `app.js`) rather
-than needing an explicit Save button; closing the dialog with an edit
-still pending flushes it immediately rather than discarding it. Once the
-game's own status isn't `in_progress`, the textarea is disabled and a
-"This game has ended, so your notes are read-only" message is shown
-instead -- the previously-saved text is still loaded and displayed, just
-not editable, mirroring the backend's own read-but-not-write rule.
+"Notes" button next to "Chat"/"View log" opens `#game-notes-dialog`,
+matching that same established dialog pattern. Issue #463 moved
+`#view-notes-button` out from inside `#in-progress-area` to sit alongside
+`#view-chat-button`/`#resign-button` (a bug caught live during this
+issue's own verification: `#in-progress-area` itself is `hidden` for the
+entire `'waiting'` status, so the button's own `.hidden` computation was
+silently irrelevant -- an ancestor's `hidden` wins regardless of a
+child's own value -- meaning the newly-widened visibility rule below had
+no visible effect until the markup actually moved). Typing into the
+textarea autosaves on a 1-second debounce (`saveGameNote()` in `app.js`)
+rather than needing an explicit Save button; closing the dialog with an
+edit still pending flushes it immediately rather than discarding it.
+`isNotesReadOnly()` mirrors the backend's gate exactly (`in_progress` OR
+`isDraftMatchWaitingWindow(currentState)`) -- once neither holds, the
+textarea is disabled and a "This game has ended, so your notes are
+read-only" message is shown instead, with the previously-saved text still
+loaded and displayed.
 
 ### In-game chat (issue #109)
 
@@ -5481,29 +5509,45 @@ chat is genuinely many-rows-per-seat and shared -- migration `0079`'s
 FK straight to `games.id` (`ON DELETE CASCADE`, so it automatically
 participates in the 7-day stale-game deletion cascade -- see "Cleanup
 cron" below -- with no extra cron-script code needed), no `UNIQUE`
-constraint. Reset per individual `games.id` rather than persisting across
-a best-of-three Quick/Winston/Grid Draft match's up-to-3 games, matching
-`game_notes`/`game_events` rather than `draft_matches`/
-`draft_match_players` (the only tables that actually span a whole match).
+constraint.
+
+**Match-scoped chat (issue #463)**: originally reset per individual
+`games.id`, so a best-of-three Quick/Winston/Grid/Rotisserie/Tiered
+Rotisserie/Chaos Draft match's own conversation vanished between game 1
+and game 2, and there was no chat at all during the drafting/
+deck-building phase itself. Migration `0219` added `draft_match_id`/
+`sender_user_id` columns: a message row still physically belongs to
+whichever specific `game_id`/`sender_game_player_id` it was written from
+(unchanged FK/cascade, so it's still cleaned up whenever THAT specific
+stale game is deleted), but `GameChatRepository::messagesFor()` now reads
+by `draft_match_id` instead whenever the game belongs to one -- spanning
+every game in the match, not just the current one -- and resolves each
+message's sender via the match-stable `sender_user_id` rather than
+`sender_game_player_id`, since a message from an earlier game in the
+match has no way to resolve back to a still-valid seat once that earlier
+game's own `game_players` rows are gone (a new `game_player_id` is minted
+per game -- see `advanceDraftMatch()`). `draft_match_id` is only ever set
+for draft-family deck types (any format, any player count -- `wins_needed`
+best-of-three only ever spans multiple `games` rows for a 2-player match,
+since `draftGamesToWin()` returns 1 for 3+ players; for those, this
+mainly widens WHEN chat is usable, not how many games it spans -- see
+below). Ends when the match itself does -- no carryover into a brand-new
+rematch against the same opponent, matching how chat already ends when a
+single non-match game does.
 
 Delivery deliberately piggybacks on the existing `GET /games/state` poll
 (the frontend's `pollTimer`, every 4 seconds) rather than a dedicated
 polling endpoint or a load-once-per-dialog-open fetch -- this codebase has
 no precedent anywhere for a delta/since-id fetch, so `chat_messages`
-always carries the whole conversation so far, the same "just re-fetch
-everything" pattern every other poll/dialog-open in the app already uses.
-A typical game's message count stays small enough (short-lived, deleted
-with the game after 7 days) that this is simpler than adding a delta
-mechanism. Gated the same way `game_notes` is -- `requireGamePlayer()`
-only, no `canSpectateGame()` fallback -- so a spectator (watching via
-share code) can never read or send chat, unlike `game_events`/`GET
-/games/log`'s own more permissive spectator-visible gating. `getState()`
-always returns `chat_messages` for a real seated viewer regardless of
-`games.status` (`[]` if nothing's eligible to have been sent yet -- see
-"Open Team Play's deck-building chat" below for the one `'waiting'`-status
-case anything actually CAN have been sent); `getSpectatorState()` always
-returns `[]` regardless, since `buildGameState()`'s single shared builder
-only ever populates it when there's a real seated viewer.
+always carries the whole conversation so far. Gated the same way
+`game_notes` is -- `requireGamePlayer()` only, no `canSpectateGame()`
+fallback -- so a spectator (watching via share code) can never read or
+send chat, unlike `game_events`/`GET /games/log`'s own more permissive
+spectator-visible gating. `getState()` always returns `chat_messages` for
+a real seated viewer regardless of `games.status` (`[]` if nothing's
+eligible to have been sent yet -- see "Chat and notes during a draft
+match's waiting window" below for the `'waiting'`-status case); a
+spectator/replay's `getSpectatorState()` always returns `[]` regardless.
 
 Open Team Play (`format: 'team'` only -- deliberately NOT Closed Team
 Play, see below) additionally gets a private teammate-only channel
@@ -5524,7 +5568,10 @@ above, point 4) -- a private out-of-band channel there would undercut the
 one thing that format is actually testing. Open Team Play has no such
 restriction (partners already see each other's hands via
 `you.teammate_hand`), so a private channel there is just a convenience,
-not a rules violation.
+not a rules violation. This channel check is unconditional -- it runs
+regardless of the match's own status, so it's the reason Closed Team Play
+correctly still gets refused a `'team'` channel even during the widened
+waiting window below.
 `team_id` is stored directly on the message row rather than only
 resolvable via a join back through `sender_game_player_id`, keeping the
 read-side filter (`WHERE channel = 'table' OR (channel = 'team' AND
@@ -5532,16 +5579,20 @@ team_id = :viewer_team_id)`, `GameChatRepository::messagesFor()`) a single
 indexed lookup rather than a join on every 4-second poll. A `NULL`
 `$viewerTeamId` (every non-team format) naturally excludes every `'team'`
 row via SQL's own `NULL`-comparison semantics, so no special-casing is
-needed for the (overwhelmingly common) non-team case.
+needed for the (overwhelmingly common) non-team case. (Team assignments
+never actually need to survive a rematch within the same
+`draft_match_id`: `advanceDraftMatch()`'s own next-game insert only ever
+runs for a 2-player match, where `team_id` is always `NULL` to begin
+with -- team-format drafts are always best-of-one, per `draftGamesToWin()`
+above -- so this is a non-issue in practice, not something requiring its
+own carry-forward logic.)
 
 `GameService::postChatMessage(int $gameId, int $senderGamePlayerId,
 string $channel, string $messageText): void` is the only write path:
-`GameStateException` unless the game is `in_progress` (matching
-`saveNote()`'s own "while playing" gate -- a completed/abandoned game has
-no one left mid-conversation to send to) -- with one exception, see
-"Open Team Play's deck-building chat" below -- `InvalidArgumentException`
-if `$messageText` is empty after trimming or over
-`MAX_CHAT_MESSAGE_LENGTH` (500 characters -- much shorter than the
+`GameStateException` unless the game is `in_progress` OR (issue #463)
+`isDraftMatchWaitingWindow($game)` is true -- see below --
+`InvalidArgumentException` if `$messageText` is empty after trimming or
+over `MAX_CHAT_MESSAGE_LENGTH` (500 characters -- much shorter than the
 notepad's 20,000, since a chat message is meant to be read live by
 another player rather than held as a private scratchpad). No additional
 send-rate-limiter beyond that length cap -- friends-only, seated-players-
@@ -5566,39 +5617,44 @@ cooldown scope, the same way those two already share one bucket per game
 instead of one each. `notify_chat_message` (migration `0079`, default on)
 is its own notification preference, independent of the other three.
 
-**Open Team Play's deck-building chat**: once deck-building itself started
-drawing from the whole team's shared drafted pool rather than each
-player's own personal one (issue #362 stage 2), teammates needed a way to
-actually coordinate who's building around what -- but `games.status` sits
-at `'waiting'` for a draft match's entire drafting/deck-building phase,
-so the general "only while `in_progress`" rule above would otherwise block
-chat at exactly that moment. `GameService::isOpenTeamDeckBuildingChat()`
-is `postChatMessage()`'s one exception: it lets the `'team'` channel
-through (never `'table'` -- the opposing team may still be mid-draft/
-deck-building themselves, with no real "table" to speak to yet) for
-format `'team'` (never `'closed_team'`, matching the existing
-`$game['format'] === 'team'` check above) once the draft match has
-actually reached `'deck_building'` (not mid-`'drafting'`, where a stray
-message would arrive to a teammate who's still mid-pack). The read side
-needed a matching change: `buildGameState()`'s own `chat_messages`
-computation used to sit after its `'waiting'`-status early return, so it
-never ran at all for a still-drafting/deck-building game -- it's now
-computed just before that early return instead, so a `'waiting'` game's
-`chat_messages` is populated (`[]` if nothing's eligible to have been
-sent) the same as an `in_progress`/`completed` one. `web-static/js/
-game.js`'s own `isTeamDeckBuildingChatOpen(state)` mirrors this exactly
-on the frontend, both for `#view-chat-button`'s visibility (moved outside
-`#in-progress-area`, same reachability trick `#resign-button` already
-uses for issue #144) and for hiding `#chat-channel-select` during this
-window specifically -- only `'team'` is ever valid here, so offering a
-choice would just let `'table'` fail server-side.
+**Chat and notes during a draft match's waiting window (issue #463)**:
+`games.status` sits at `'waiting'` for a draft match's entire drafting/
+deck-building phase and every inter-game sideboard (real gameplay hasn't
+started -- see `advanceDraftMatch()`), so the general "only while
+`in_progress`" rule above would otherwise block both chat and notes at
+exactly the moments players most want them -- during the pack-opening/
+pick screens themselves, and while deciding what to build around.
+`GameService::isDraftMatchWaitingWindow(array $game): bool` is
+`postChatMessage()`'s and `saveNote()`'s shared exception: `$game['status']
+=== 'waiting' && $game['draft_match_id'] !== null`, with no further
+narrowing by format, channel, or the match's own drafting-vs-
+deck_building sub-status -- this replaces an earlier, much narrower
+version of this idea (`isOpenTeamDeckBuildingChat()`, Open-Team-Play-
+only, `'team'`-channel-only, `deck_building`-only) that predated this
+issue. The read side needed a matching change: `buildGameState()`'s own
+`chat_messages`/note-adjacent computations used to sit after the
+`'waiting'`-status early return, so they never ran at all for a
+still-drafting/deck-building game; they're now computed just before that
+early return instead. `web-static/js/game.js`'s own
+`isDraftMatchWaitingWindow(state)` mirrors the backend check exactly
+(`state.game.draft_match_id` is now surfaced on `state.game` for exactly
+this purpose), driving both `#view-chat-button`/`#view-notes-button`'s
+visibility (both live outside `#in-progress-area`, same reachability
+trick `#resign-button` already uses for issue #144) and
+`#chat-channel-select`'s own visibility, which no longer needs a
+deck-building-specific special case now that both channels are valid
+throughout the whole waiting window for format `'team'`.
 
-`GameService::exportGameData()`'s own `game_chat_messages` section applies
-the identical `'table'`-or-own-`team_id` filter `messagesFor()` uses
-rather than a raw unfiltered dump -- an export triggered by one player has
-no business revealing what the OTHER team privately said to each other,
-the same reasoning `game_notes`' own per-requester scoping there already
-follows.
+`GameService::exportGameData()`'s own `game_chat_messages`/`game_notes`
+sections apply the same match-vs-single-game scoping `chatMessagesFor()`/
+`getNote()` use live (by `draft_match_id` when the exported game belongs
+to one, else by `game_id`/`game_player_id`) -- without this, an export
+triggered from game 2 of a match would find nothing for a note/message
+that was actually written during game 1 and is still visible live. The
+chat section also still applies the identical `'table'`-or-own-`team_id`
+filter `messagesFor()` uses rather than a raw unfiltered dump -- an
+export triggered by one player has no business revealing what the OTHER
+team privately said to each other.
 
 `POST /games/chat` (see the API table above) is the only new route -- no
 `GET /games/chat`, since messages are delivered via `GET /games/state`'s
@@ -5612,32 +5668,35 @@ open, `renderChat()` re-renders the dialog's message list from
 open, so an open chat dialog updates live without the player needing to
 close and reopen it. A small notification dot on the "Chat" button itself
 (`.has-unread-chat`, mirroring `#friends-button`'s own `.has-friend-request`
-dot) lights up when the currently-viewed game has a `chat_messages[].id`
-past `chatLastSeenMessageId` whose `sender_game_player_id` ISN'T the
-viewer's own -- checked against sender rather than a plain message count,
-so being the only one who's said anything so far (including right after
-sending your own message, or on a fresh page load) never lights it up --
-and clears the moment the dialog is opened. `chatLastSeenMessageId` is
-persisted to `localStorage` per `game_id` (`chatLastSeenMessageId:
-{game_id}`, same try/catch-guarded-for-private-browsing pattern
-`initThemeSelect()` already uses for its own theme preference), not just
-kept in memory, so refreshing the browser after having read a message
-doesn't forget that and light the badge back up for it. The channel
-`<select>` only
-appears for `format: 'team'` games -- NOT `closed_team` too, unlike every
-other team-format UI check in this frontend; every other format only
-ever has `'table'`. Every message is rendered via `Element.append(string)`/
-`textContent`, never `innerHTML` -- free-text chat rendered back to other
-users is this issue's own flagged XSS surface, and this is the same
-text-node-only convention the rest of the frontend already follows for
-every other piece of user-supplied text on the board. A row of "quick
-chat" buttons (`#game-chat-quick-buttons`, between the send form and the
-Close button) sends a canned message -- GL;HF, GG, and a handful of
-emoji -- on whichever channel is currently selected with one click, no
-typing required; each just calls the same `sendChatText()` helper the
-free-text form's own submit handler uses, differing only in where the
-message text comes from (a button's own `data-quick-chat-text` rather
-than `#game-chat-input`'s value).
+dot) lights up when the currently-viewed conversation has a
+`chat_messages[].id` past `chatLastSeenMessageId` whose `sender_user_id`
+ISN'T the viewer's own (`state.you.user_id`, issue #463 -- comparing by
+`sender_game_player_id` instead would incorrectly flag the viewer's OWN
+earlier-game messages as someone else's, since that id changes per game
+within a match) -- checked against sender rather than a plain message
+count, so being the only one who's said anything so far never lights it
+up -- and clears the moment the dialog is opened. `chatLastSeenMessageId`
+is persisted to `localStorage` per CONVERSATION, not per `game_id`
+(`chatLastSeenMessageId:match:{draft_match_id}` or
+`chatLastSeenMessageId:game:{game_id}`, `chatConversationKeyFor(state)`)
+-- same try/catch-guarded-for-private-browsing pattern `initThemeSelect()`
+already uses for its own theme preference -- so switching from game 1 to
+game 2 of the same match doesn't lose the read position and momentarily
+re-flag game 1's already-read messages as unread. The channel `<select>`
+only appears for `format: 'team'` games -- NOT `closed_team` too, unlike
+every other team-format UI check in this frontend; every other format
+only ever has `'table'`. Every message is rendered via
+`Element.append(string)`/`textContent`, never `innerHTML` -- free-text
+chat rendered back to other users is this issue's own flagged XSS
+surface, and this is the same text-node-only convention the rest of the
+frontend already follows for every other piece of user-supplied text on
+the board. A row of "quick chat" buttons (`#game-chat-quick-buttons`,
+between the send form and the Close button) sends a canned message --
+GL;HF, GG, and a handful of emoji -- on whichever channel is currently
+selected with one click, no typing required; each just calls the same
+`sendChatText()` helper the free-text form's own submit handler uses,
+differing only in where the message text comes from (a button's own
+`data-quick-chat-text` rather than `#game-chat-input`'s value).
 
 ### Default selections mode (issue #274)
 

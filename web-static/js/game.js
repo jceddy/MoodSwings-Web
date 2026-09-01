@@ -4279,7 +4279,7 @@
     let saveNoteTimer = null;
 
     function isNotesReadOnly() {
-        return !currentState || currentState.game.status !== 'in_progress';
+        return !currentState || !(currentState.game.status === 'in_progress' || isDraftMatchWaitingWindow(currentState));
     }
 
     async function flushNoteSave(gameId) {
@@ -4344,58 +4344,63 @@
     const chatButton = document.getElementById('view-chat-button');
     const chatSendButton = document.getElementById('game-chat-send-button');
     // The highest chat_messages[].id the player has already seen for the
-    // current game (dialog open, or last closed while caught up) --
-    // renderChat() below diffs against this to decide whether the unread
-    // badge should show. Persisted to localStorage (keyed per game_id,
-    // CHAT_LAST_SEEN_STORAGE_PREFIX below) rather than kept only in
-    // memory, so refreshing the browser doesn't forget what's already
-    // been read and re-flag it as unread -- a plain in-memory counter
-    // would reset to 0 on every page load. Reset (well, re-loaded from
-    // storage) whenever the viewed game itself changes.
-    let chatSeenGameId = null;
+    // current conversation (dialog open, or last closed while caught up)
+    // -- renderChat() below diffs against this to decide whether the
+    // unread badge should show. Persisted to localStorage (keyed per
+    // conversation, CHAT_LAST_SEEN_STORAGE_PREFIX below) rather than kept
+    // only in memory, so refreshing the browser doesn't forget what's
+    // already been read and re-flag it as unread -- a plain in-memory
+    // counter would reset to 0 on every page load. Reset (well, re-loaded
+    // from storage) whenever the viewed conversation itself changes.
+    let chatSeenConversationKey = null;
     let chatLastSeenMessageId = 0;
 
     const CHAT_LAST_SEEN_STORAGE_PREFIX = 'chatLastSeenMessageId:';
 
-    function getStoredChatLastSeenMessageId(gameId) {
+    // Issue #463: chat spans the whole match once one exists (see
+    // GameService::chatMessagesFor()), so the "last seen" position needs
+    // to key off draft_match_id too, not game_id alone -- otherwise
+    // switching from game 1 to game 2 of the same match would find no
+    // stored position for game 2's own id and momentarily re-flag every
+    // already-read message from game 1 as unread.
+    function chatConversationKeyFor(state) {
+        return state.game.draft_match_id !== null ? 'match:' + state.game.draft_match_id : 'game:' + state.game.id;
+    }
+
+    function getStoredChatLastSeenMessageId(conversationKey) {
         try {
-            return Number(localStorage.getItem(CHAT_LAST_SEEN_STORAGE_PREFIX + gameId)) || 0;
+            return Number(localStorage.getItem(CHAT_LAST_SEEN_STORAGE_PREFIX + conversationKey)) || 0;
         } catch (e) {
             // localStorage unavailable (e.g. private browsing) -- falls
-            // back to treating this game as never-seen, same as before
-            // this persistence existed.
+            // back to treating this conversation as never-seen, same as
+            // before this persistence existed.
             return 0;
         }
     }
 
-    function setStoredChatLastSeenMessageId(gameId, messageId) {
+    function setStoredChatLastSeenMessageId(conversationKey, messageId) {
         try {
-            localStorage.setItem(CHAT_LAST_SEEN_STORAGE_PREFIX + gameId, String(messageId));
+            localStorage.setItem(CHAT_LAST_SEEN_STORAGE_PREFIX + conversationKey, String(messageId));
         } catch (e) {
             // ignore -- the read position just won't persist across reloads
         }
     }
 
-    // Open Team Play's deck-building exception to "chat only while
-    // in_progress" -- mirrors GameService::isOpenTeamDeckBuildingChat()
-    // exactly (format 'team', still 'waiting', and the draft match has
-    // reached 'deck_building', not just 'drafting') so the button/dialog
-    // never offer something the server would then reject.
-    function isTeamDeckBuildingChatOpen(state) {
-        if (!state || state.game.status !== 'waiting' || state.game.format !== 'team') {
-            return false;
-        }
-        const draftState = state.game.deck_type === 'quick_draft' || state.game.deck_type === 'chaos_draft' ? state.quick_draft
-            : state.game.deck_type === 'winston_draft' ? state.winston_draft
-                : state.game.deck_type === 'grid_draft' ? state.grid_draft
-                    : state.game.deck_type === 'rotisserie_draft' ? state.rotisserie_draft
-                        : state.game.deck_type === 'tiered_rotisserie_draft' ? state.tiered_rotisserie_draft
-                            : null;
-        return Boolean(draftState) && draftState.status === 'deck_building';
+    // A draft match's own "chat/notes are usable during drafting/
+    // deck-building too, not just in_progress" exception (issue #463) --
+    // mirrors GameService::isDraftMatchWaitingWindow() exactly (still
+    // 'waiting', and this game belongs to a draft match at all) so the
+    // button/dialog never offer something the server would then reject.
+    // Deliberately doesn't narrow by format/channel/drafting-vs-
+    // deck_building sub-status the way the old, narrower
+    // isTeamDeckBuildingChatOpen() this replaces used to -- every draft
+    // match's own waiting window is covered uniformly now.
+    function isDraftMatchWaitingWindow(state) {
+        return Boolean(state) && state.game.status === 'waiting' && state.game.draft_match_id !== null;
     }
 
     function isChatReadOnly() {
-        return !currentState || !(currentState.game.status === 'in_progress' || isTeamDeckBuildingChatOpen(currentState));
+        return !currentState || !(currentState.game.status === 'in_progress' || isDraftMatchWaitingWindow(currentState));
     }
 
     function chatMessageListItem(message) {
@@ -4417,10 +4422,11 @@
     function renderChat(state) {
         const gameId = state.game.id;
         const messages = state.chat_messages || [];
+        const conversationKey = chatConversationKeyFor(state);
 
-        if (chatSeenGameId !== gameId) {
-            chatSeenGameId = gameId;
-            chatLastSeenMessageId = getStoredChatLastSeenMessageId(gameId);
+        if (chatSeenConversationKey !== conversationKey) {
+            chatSeenConversationKey = conversationKey;
+            chatLastSeenMessageId = getStoredChatLastSeenMessageId(conversationKey);
         }
 
         // Open Team Play only -- NOT 'closed_team' too, unlike every other
@@ -4428,21 +4434,19 @@
         // Play's whole premise is that information stays closed between
         // teammates (see postChatMessage()'s own docblock in
         // GameService.php), so it gets no private channel to undercut
-        // that with. Also hidden during the deck-building chat window
-        // itself -- isOpenTeamDeckBuildingChat() only ever accepts 'team'
-        // there (the opposing team may still be mid-draft/deck-building,
-        // with no "table" to speak to yet), so offering a choice would
-        // just let the 'table' option fail server-side; sendChatText()
-        // below sends 'team' directly whenever this is hidden for that
-        // reason.
-        chatChannelSelect.hidden = state.game.format !== 'team' || isTeamDeckBuildingChatOpen(state);
+        // that with. Issue #463 widened the waiting-window exception to
+        // accept BOTH channels (not just 'team'), so unlike before, this
+        // no longer needs its own special case for the drafting/
+        // deck-building window -- the picker stays available there too,
+        // same as once the game is in_progress.
+        chatChannelSelect.hidden = state.game.format !== 'team';
 
         if (gameChatDialog.open && gameChatDialog.dataset.gameId === String(gameId)) {
             renderList(chatMessagesList, chatEmptyEl, messages, chatMessageListItem);
             chatMessagesList.scrollTop = chatMessagesList.scrollHeight;
             if (messages.length > 0) {
                 chatLastSeenMessageId = messages[messages.length - 1].id;
-                setStoredChatLastSeenMessageId(gameId, chatLastSeenMessageId);
+                setStoredChatLastSeenMessageId(conversationKey, chatLastSeenMessageId);
             }
             chatButton.classList.remove('has-unread-chat');
         } else {
@@ -4451,10 +4455,14 @@
             // past chatLastSeenMessageId above) or reloading the page
             // after being the only one who's said anything so far must
             // never light this up, since there's nothing of anyone else's
-            // the player hasn't seen.
-            const viewerGamePlayerId = state.you && state.you.game_player_id;
+            // the player hasn't seen. Compared by user_id (issue #463),
+            // not game_player_id -- a message sent from an earlier game in
+            // the same match carries THAT game's own game_player_id, which
+            // would never match the viewer's CURRENT one even for their
+            // own message.
+            const viewerUserId = state.you && state.you.user_id;
             const hasUnreadFromSomeoneElse = messages.some(
-                (message) => message.id > chatLastSeenMessageId && message.sender_game_player_id !== viewerGamePlayerId
+                (message) => message.id > chatLastSeenMessageId && message.sender_user_id !== viewerUserId
             );
             chatButton.classList.toggle('has-unread-chat', hasUnreadFromSomeoneElse);
         }
@@ -4508,15 +4516,11 @@
         chatQuickButtons.forEach((button) => { button.disabled = true; });
 
         try {
-            // chatChannelSelect.hidden collapses two different situations to
-            // the same "no choice to make" state: an ordinary non-team format
-            // (only 'table' exists) and the deck-building window (only 'team'
-            // exists, see renderChat()'s own chatChannelSelect.hidden
-            // computation above) -- isTeamDeckBuildingChatOpen() tells them
-            // apart so the right implicit channel is sent either way.
-            const channel = chatChannelSelect.hidden
-                ? (isTeamDeckBuildingChatOpen(currentState) ? 'team' : 'table')
-                : chatChannelSelect.value;
+            // chatChannelSelect.hidden now means exactly one thing --
+            // format !== 'team' (see renderChat()'s own computation above)
+            // -- so a hidden picker always implies 'table', the only
+            // channel that format ever has.
+            const channel = chatChannelSelect.hidden ? 'table' : chatChannelSelect.value;
             const { ok, body } = await sendChatMessage(currentGameId, messageText, channel);
             if (!ok) {
                 chatErrorEl.textContent = (body && body.message) || 'Could not send that message.';
@@ -4810,20 +4814,29 @@
             || Boolean(you && you.resigned);
         resignButton.disabled = false;
 
-        // In-game chat (issue #109) -- same seated-players-only gating as
-        // Notes (see the isReadOnlyView() check further down for that
-        // one), computed here rather than down with it since #view-chat-
-        // button, like #resign-button just above, lives outside
-        // #in-progress-area precisely so it stays reachable during the
-        // 'waiting' branch's own early return below -- Open Team Play's
-        // deck-building window (isTeamDeckBuildingChatOpen()) is the one
-        // case chat is actually usable while still 'waiting'. renderChat()
-        // itself is likewise called unconditionally here rather than only
-        // in the in_progress branch, so an open chat dialog keeps
-        // receiving new messages through a 'waiting' poll too.
+        // In-game chat (issue #109) and Notes (issue #258) -- both
+        // seated-players-only, computed here rather than down with
+        // #in-progress-area's own content since #view-chat-button/
+        // #view-notes-button, like #resign-button just above, live outside
+        // it precisely so they stay reachable during the 'waiting' branch's
+        // own early return below -- a draft match's own waiting window
+        // (isDraftMatchWaitingWindow(), issue #463) is the one case either
+        // is actually usable while still 'waiting'. renderChat() itself is
+        // likewise called unconditionally here rather than only in the
+        // in_progress branch, so an open chat dialog keeps receiving new
+        // messages through a 'waiting' poll too.
+        //
+        // Chat and Notes differ once the game is OVER, though (completed/
+        // abandoned): chat has "no one left mid-conversation to send to"
+        // (see postChatMessage()'s own docblock) and hides entirely, while
+        // Notes stays visible read-only (getNote() never blocks on status
+        // at all) -- a personal scratchpad someone would still want to
+        // read back, unlike a live conversation.
         document.getElementById('view-chat-button').hidden = isReadOnlyView()
-            || !(state.game.status === 'in_progress' || isTeamDeckBuildingChatOpen(state));
+            || !(state.game.status === 'in_progress' || isDraftMatchWaitingWindow(state));
         renderChat(state);
+        document.getElementById('view-notes-button').hidden = isReadOnlyView()
+            || (state.game.status === 'waiting' && !isDraftMatchWaitingWindow(state));
 
         renderDraftMatchScoreline(state);
         renderRematchButton(state);
@@ -5234,12 +5247,6 @@
         // the game has actually started and its deck has been dealt (see
         // the 'waiting' branch above, which hides this whole area).
         document.getElementById('view-shared-deck-button').hidden = !isSharedDeckType(state.game.deck_type);
-
-        // "Notes" (issue #258) -- a private per-seat scratchpad, so it only
-        // ever makes sense for an actual seated player, never a
-        // spectator/replay viewer (state.you is just a synthesized stub
-        // with no game_player_id there -- see isReadOnlyView()'s docblock).
-        document.getElementById('view-notes-button').hidden = isReadOnlyView();
 
         // round.play_grants describes whoever's turn it currently is, not
         // the viewer specifically -- showing it while it's someone else's

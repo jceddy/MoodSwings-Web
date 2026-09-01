@@ -401,7 +401,6 @@
 
                 <h3>Recent plays</h3>
                 <button id="view-log-button" type="button">View log</button>
-                <button id="view-notes-button" type="button" hidden>Notes</button>
                 <button id="view-shared-deck-button" type="button" hidden>View decklist</button>
                 <ul id="recent-events-list"></ul>
                 <p id="recent-events-empty" hidden>Nothing has happened yet.</p>
@@ -417,12 +416,18 @@
             <button id="resign-button" type="button" hidden>Resign game</button>
 
             <!-- Also outside #in-progress-area, same rationale as
-                 #resign-button above: Open Team Play's deck-building phase
-                 (still 'waiting', not yet in_progress) gets its own team
-                 chat exception -- see GameService::postChatMessage()'s
-                 own isOpenTeamDeckBuildingChat() and renderBoard()'s
-                 chatButton.hidden computation in game.js. -->
+                 #resign-button above: a draft match's own waiting window
+                 (drafting/deck-building/inter-game sideboard) gets its own
+                 chat/notes exception -- see
+                 GameService::isDraftMatchWaitingWindow() and renderBoard()'s
+                 own chatButton.hidden/notesButton.hidden computation in
+                 game.js (issue #463 moved #view-notes-button out here too,
+                 alongside #view-chat-button, for exactly this reason --
+                 it used to live inside #in-progress-area above, where
+                 inProgressArea.hidden = true during 'waiting' hid it
+                 regardless of its own .hidden). -->
             <button id="view-chat-button" type="button" hidden>Chat</button>
+            <button id="view-notes-button" type="button" hidden>Notes</button>
         </section>
     </main>
 
