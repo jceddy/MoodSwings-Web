@@ -2242,6 +2242,13 @@
             const deckDescription = game.deck_type === 'custom'
                 ? (game.custom_deck_name || 'Uploaded Deck')
                 : deckTypeLabel(game.deck_type) + ' deck';
+            // Sealed Deck is a UI-only sentinel over format 'draft' -- see
+            // renderBoard()'s own identical exception for why this
+            // replaces the whole format/deck combination rather than
+            // showing "Draft, Sealed Deck deck".
+            const formatAndDeckDescription = game.deck_type === 'sealed_deck'
+                ? 'Sealed Deck'
+                : formatLabel(game.format) + ', ' + deckDescription;
             const formatEl = document.createElement('div');
             formatEl.className = 'lobby-format';
             // "Default selections" mode (issue #274) -- a per-game
@@ -2250,7 +2257,7 @@
             // seated player can tell it's on without opening the game --
             // per the issue's own "visible to the players playing it (at
             // least in the lobby)" requirement.
-            formatEl.textContent = formatLabel(game.format) + ', ' + deckDescription +
+            formatEl.textContent = formatAndDeckDescription +
                 (game.default_selections_mode ? ', default selections' : '');
             infoEl.appendChild(formatEl);
         }
@@ -2367,9 +2374,17 @@
         const deckDescription = firstGame.deck_type === 'custom'
             ? (firstGame.custom_deck_name || 'Uploaded Deck')
             : deckTypeLabel(firstGame.deck_type) + ' deck';
+        // Sealed Deck's own 2-player best-of-three match is grouped here
+        // too (it has a draft_match_id just like Quick/Winston Draft) --
+        // see renderBoard()'s own identical exception for why this
+        // replaces the whole format/deck combination rather than showing
+        // "Draft, Sealed Deck deck".
+        const formatAndDeckDescription = firstGame.deck_type === 'sealed_deck'
+            ? 'Sealed Deck'
+            : formatLabel(firstGame.format) + ', ' + deckDescription;
         const formatEl = document.createElement('div');
         formatEl.className = 'lobby-format';
-        formatEl.textContent = formatLabel(firstGame.format) + ', ' + deckDescription;
+        formatEl.textContent = formatAndDeckDescription;
         headerEl.appendChild(formatEl);
 
         const scoreEl = document.createElement('div');
@@ -4869,12 +4884,22 @@
             : state.game.deck_type === 'custom_duel'
                 ? (you && you.custom_deck_name || 'Uploaded Deck')
                 : deckTypeLabel(state.game.deck_type) + ' deck';
+        // Sealed Deck is a UI-only sentinel over format 'draft' (see
+        // isSealedDeckFormat() and the New Game dialog wiring further up)
+        // -- showing it as "Draft, Sealed Deck deck" would surface that
+        // internal plumbing to players instead of the one name they
+        // actually picked, so it replaces the whole format/deck
+        // combination the same way custom/custom_duel's own deck name
+        // already does above.
+        const formatAndDeckDescription = state.game.deck_type === 'sealed_deck'
+            ? 'Sealed Deck'
+            : formatLabel(state.game.format) + ', ' + deckDescription;
         // "Default selections" mode (issue #274) -- mirrors the lobby
         // row's own indicator (buildGameRow()) so it's visible once a
         // player has actually opened the board too, not just from the
         // lobby list.
         document.getElementById('board-title').textContent =
-            'Game #' + state.game.id + ' (' + formatLabel(state.game.format) + ', ' + deckDescription +
+            'Game #' + state.game.id + ' (' + formatAndDeckDescription +
             (state.game.default_selections_mode ? ', default selections' : '') + ')';
 
         // Spectator mode (issue #128)/Watch game replay (issue #240) --
@@ -7875,10 +7900,23 @@
         return null;
     }
 
-    function constraintMessage(constraint, candidates) {
+    function constraintMessage(constraint, candidates, candidateValues) {
         if (!constraint) return null;
         if (constraint.type === 'max_total_value') {
-            const total = candidates.reduce((sum, c) => sum + c.value, 0);
+            // candidateValues (field.candidate_values -- see
+            // GameService::withSimulatedConstraintValues()'s own docblock)
+            // is a server-computed card_id -> value map using each mood's
+            // value as if the card currently being played (e.g. Anger)
+            // were already in play, needed because a dynamic mood's value
+            // (Superiority's "7 if you have more moods than each other
+            // player") can change once the played card itself enters play
+            // and shifts a mood-count comparison. Falling back to c.value
+            // (the stale pre-play value) keeps this a no-op for fields
+            // without that map.
+            const total = candidates.reduce((sum, c) => {
+                const value = candidateValues && candidateValues[c.card_id] !== undefined ? candidateValues[c.card_id] : c.value;
+                return sum + value;
+            }, 0);
             return total > constraint.max ? `The combined value of the chosen moods cannot exceed ${constraint.max}` : null;
         }
         if (candidates.length < 2) return null; // the rest only make sense once 2+ are chosen
@@ -7901,7 +7939,7 @@
     function fieldValidationMessage(field, widget) {
         if (!field.multi) return null;
         const candidates = selectedCandidates(field, widget);
-        return countMessage(field.count, candidates.length) || constraintMessage(field.constraint, candidates);
+        return countMessage(field.count, candidates.length) || constraintMessage(field.constraint, candidates, field.candidate_values);
     }
 
     function updatePlayButtonEnabled() {

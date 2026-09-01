@@ -13910,6 +13910,15 @@ final class GameService
                 $choiceFields
             );
 
+            // Anger's own 'max_total_value' constraint needs the same
+            // as-if-already-in-play treatment for the *values it sums*,
+            // not just which candidates are offered -- see
+            // withSimulatedConstraintValues()'s own docblock.
+            $choiceFields = array_map(
+                fn (array $field) => $this->withSimulatedConstraintValues($state, $field, $cardId, $reactingViewerId),
+                $choiceFields
+            );
+
             // 'grant_source_card_id' -- present only when 2+ distinct
             // outstanding grants would each independently allow playing
             // this card (BoardState::usableGrants()), letting the player
@@ -14213,6 +14222,44 @@ final class GameService
         }
         sort($extraValues);
         $field['extra_values'] = $extraValues;
+
+        return $field;
+    }
+
+    /**
+     * Adds a server-computed candidate_values map (in-play mood card id =>
+     * its value as if $cardId were already in play) to a 'mood'-type
+     * field with a 'max_total_value' constraint (currently just Anger) --
+     * a no-op for every other field. Needed for the same reason as
+     * withSimulatedMoodCandidates() above, but for the constraint's *sum*
+     * rather than which candidates are offered: a target mood whose value
+     * is dynamic (e.g. SuperiorityEffect's "7 if you have more moods than
+     * each other player," which $cardId itself -- Anger -- is about to
+     * change by entering play and increasing $ownerId's own mood count)
+     * must be summed using its value as of *after* $cardId is in play,
+     * not its stale pre-play value. AngerEffect::afterPlaying() itself
+     * validates the constraint server-side using a live valueOf() call
+     * made after Anger has already been moved into play, so without this
+     * the client's own combined-value check (game.js's constraintMessage())
+     * could disable the Play button for a selection the server would
+     * actually accept. game.js reads this map by card id instead of each
+     * candidate's plain 'value' when present.
+     */
+    private function withSimulatedConstraintValues(BoardState $state, array $field, int $cardId, int $ownerId): array
+    {
+        $constraint = $field['constraint'] ?? null;
+        if ($field['type'] !== 'mood' || $constraint === null || $constraint['type'] !== 'max_total_value') {
+            return $field;
+        }
+
+        $values = [];
+        foreach ($state->moodsInPlay() as $inPlayCardId => $mood) {
+            if ($inPlayCardId === $cardId) {
+                continue;
+            }
+            $values[$inPlayCardId] = $state->valueOfAsIfAlsoInPlay($inPlayCardId, $cardId, $ownerId);
+        }
+        $field['candidate_values'] = $values;
 
         return $field;
     }

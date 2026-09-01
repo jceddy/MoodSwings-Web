@@ -594,16 +594,26 @@ dialog#resources-dialog #resources-close-button {
 
 /* Loading overlay (see #loading-overlay's own comment in game/index.html)
    -- fixed/inset:0 so it sits above whichever view (lobby or board) is
-   currently underneath it regardless of scroll position, with no
-   z-index needed since every other overlay-like element in this app
-   (dialog#*) is a native <dialog>, which already promotes itself to the
-   browser's own top layer -- a plain fixed div with no dialog siblings
-   open at the same time (the loading overlay only ever shows during an
-   initial view load, never alongside one of those) naturally paints
-   above the normal document flow already. */
+   currently underneath it regardless of scroll position. Every other
+   overlay-like element in this app (dialog#*) is a native <dialog>,
+   which already promotes itself to the browser's own top layer, so
+   those never need a z-index here to lose to. This one does, though (a
+   bug caught live: waiting-icon-pulse's own opacity animation below --
+   "waiting for other players" hourglass icons in the players list --
+   and the Noir card-art filter (filter: url(#noir-card-fade), applied
+   to #game-main's own descendants) each create a stacking context of
+   their own; #game-main itself establishes none, so those hoist all the
+   way up to the ROOT stacking context, painting in DOM order right
+   alongside #loading-overlay's own fixed one -- and since #game-main
+   comes AFTER #loading-overlay in game/index.html, they'd paint OVER
+   it, showing through the "loading" screen instead of being hidden
+   beneath it). z-index: 1 settles that regardless of which descendant
+   happens to be creating a stacking context on a given load, without
+   needing to track down and fix every individual cause. */
 #loading-overlay {
     position: fixed;
     inset: 0;
+    z-index: 1;
     display: flex;
     flex-direction: column;
     align-items: center;
