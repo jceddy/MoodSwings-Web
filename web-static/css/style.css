@@ -353,6 +353,42 @@ button:disabled {
     opacity: 0.5;
 }
 
+/* Select widgets (requested live: "can we color the select widgets to
+   match the theme colors?"). color-scheme (see :root's own docblock)
+   already lets a <select> follow the browser's own native light/dark
+   form-control rendering, but that's a flat, generic gray with no idea
+   about a theme's own accent border color (Noir's amber, Neon's
+   magenta, ...) or its exact --color-surface -- a select still read as
+   visibly "off-brand" against one of the four photo-backed skins, the
+   same way an unstyled button used to before the fix right above this
+   one. Reuses that identical surface/border/blur idiom so a select now
+   reads as the same kind of themed surface every button/dialog/panel
+   already is. Deliberately doesn't touch the native dropdown arrow or
+   the OS-drawn <option> list -- appearance: none plus a hand-drawn arrow
+   would let the arrow match too, but at the cost of reimplementing
+   platform-specific sizing/RTL/accessibility behavior the native control
+   already gets right for free; color/border/background alone was the
+   ask. */
+select {
+    font: inherit;
+    color: var(--color-text);
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 0.4rem;
+    padding: 0.3rem 0.5rem;
+    backdrop-filter: var(--surface-blur, none);
+    -webkit-backdrop-filter: var(--surface-blur, none);
+}
+
+select:focus-visible {
+    outline: 2px solid var(--color-info);
+    outline-offset: 1px;
+}
+
+select:disabled {
+    opacity: 0.5;
+}
+
 /* Noir (issue #363) -- the maintainer's own photo replaces the earlier
    procedurally-generated placeholder (a diagonal stripe pattern, before
    that a CSS filter alone) once real art became available: a moody,
