@@ -3471,14 +3471,30 @@
         return '../img/cards/MSW/' + card.catalog_card_id + '-' + slugify(card.name) + '.webp';
     }
 
+    // Session-lived record of skin/catalog_card_id combos already known to
+    // 404 (issue #363 follow-up, reported live as a visible flicker on
+    // every ~4s poll refresh): renderBoard() rebuilds every card thumb --
+    // and its <img> -- from scratch each poll, so before this cache
+    // existed, a card a skin doesn't cover yet re-issued its doomed themed
+    // request and re-ran the onerror fallback below EVERY single poll,
+    // not just once. With only a handful of cards covered so far, that
+    // was effectively every card on the board, every four seconds. Once a
+    // combo 404s here, cardArtUrl() skips straight to the normal print for
+    // it from then on, without ever touching the per-skin README's own
+    // "no manifest to update" design (this is populated automatically
+    // from real failures, not maintained by hand, and starts empty again
+    // on every fresh page load).
+    const missingThemedArt = new Set();
+
     // Themed art is added gradually, one card at a time, per issue #363's
     // own scope -- there's no manifest of which catalog_card_ids a skin
     // actually covers yet, so this always POINTS at where a themed file
-    // WOULD live; setCardArt() below is what actually falls back to the
-    // normal print when that file doesn't exist (yet).
+    // WOULD live (unless missingThemedArt above already knows it 404s);
+    // setCardArt() below is what actually falls back to the normal print
+    // when that file doesn't exist (yet).
     function cardArtUrl(card) {
         const skin = cardSkinPreference();
-        if (!CARD_ART_SKINS.includes(skin)) {
+        if (!CARD_ART_SKINS.includes(skin) || missingThemedArt.has(skin + ':' + card.catalog_card_id)) {
             return defaultCardArtUrl(card);
         }
         return '../img/cards/MSW/' + skin + '/' + card.catalog_card_id + '-' + slugify(card.name) + '.webp';
@@ -3489,11 +3505,14 @@
     // cleanly: a themed file that doesn't exist yet 404s, and the onerror
     // handler swaps back to the normal MSW print exactly once (cleared
     // immediately after, so a THEN-failing default request -- shouldn't
-    // happen, but belt-and-suspenders -- can't loop).
+    // happen, but belt-and-suspenders -- can't loop) -- and records the
+    // miss in missingThemedArt so later polls don't repeat the request.
     function setCardArt(imgEl, card) {
+        const skin = cardSkinPreference();
         imgEl.src = cardArtUrl(card);
         imgEl.onerror = () => {
             imgEl.onerror = null;
+            missingThemedArt.add(skin + ':' + card.catalog_card_id);
             imgEl.src = defaultCardArtUrl(card);
         };
     }
