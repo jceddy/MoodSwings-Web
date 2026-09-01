@@ -66,8 +66,11 @@ namespace MoodSwings\Rules;
  *                           // itself), but wrong for the handful whose printed text has no reason to rule out
  *                           // targeting itself -- Anger ("put any number of moods with total value 5 or less
  *                           // into the discard pile," value 0, so discarding itself is not just legal but
- *                           // often efficient) and Hate ("put any mood on the bottom of the deck," no owner/
- *                           // other-player restriction) are the first two such cards. Set true to have fieldOptions()
+ *                           // often efficient), Hate ("put any mood on the bottom of the deck," no owner/
+ *                           // other-player restriction), and Hostility's own second stage ("put up to two
+ *                           // moods, each with a value of 3 or less, into the discard pile" has no "other than
+ *                           // this one" clause the way Worry's near-identical wording does, and Hostility's
+ *                           // own flat value of 3 happens to qualify) are the first such cards. Set true to have fieldOptions()
  *                           // synthesize a self entry directly from the card being played (labeled " [self]"
  *                           // so it isn't mistaken for some other in-play copy of the same card -- a duel
  *                           // deck, or two of the same custom card, can each be played independently in the
@@ -283,7 +286,7 @@ final class CardChoiceSchema
         ],
         'hostility' => [
             ['key' => 'discard_mood_id', 'type' => 'mood', 'scope' => 'own', 'required' => false, 'label' => 'Your black or green mood to put into the discard pile', 'filter' => ['colors' => ['black', 'green']]],
-            ['key' => 'target_mood_ids', 'type' => 'mood', 'scope' => 'any', 'multi' => true, 'required' => false, 'label' => 'Moods to put into the discard pile (value 3 or less, up to 2; only if you put a mood into the discard pile above)', 'filter' => ['max_value' => 3], 'count' => ['max' => 2]],
+            ['key' => 'target_mood_ids', 'type' => 'mood', 'scope' => 'any', 'multi' => true, 'required' => false, 'label' => 'Moods to put into the discard pile (value 3 or less, up to 2; only if you put a mood into the discard pile above)', 'filter' => ['max_value' => 3], 'count' => ['max' => 2], 'includes_self' => true],
         ],
         'malice' => [
             ['key' => 'target_player_id', 'type' => 'player', 'scope' => 'any', 'required' => false, 'label' => 'Player to target (must have 2+ moods)', 'filter' => ['min_mood_count' => 2]],
