@@ -896,6 +896,13 @@ function fetchDeployedVersion() {
 // inline <script> in each page's own <head> (before this file even loads),
 // so an explicit preference never flashes the wrong theme first -- this
 // IIFE only needs to reflect that same preference in the dropdown's value.
+//
+// Issue #363 added a curated set of named palettes (Jade, Red Marble,
+// White Marble, High Contrast) alongside plain light/dark -- every value
+// other than 'system' sets data-theme now, not just those original two
+// (a fixed palette overrides the OS preference exactly the same way an
+// explicit "Dark" selection already did), so this only special-cases
+// 'system' itself rather than listing every valid theme name here too.
 const THEME_STORAGE_KEY = 'themePreference';
 
 (function initThemeSelect() {
@@ -915,10 +922,10 @@ const THEME_STORAGE_KEY = 'themePreference';
 
     select.addEventListener('change', () => {
         const preference = select.value;
-        if (preference === 'light' || preference === 'dark') {
-            document.documentElement.dataset.theme = preference;
-        } else {
+        if (preference === 'system') {
             delete document.documentElement.dataset.theme;
+        } else {
+            document.documentElement.dataset.theme = preference;
         }
         try {
             localStorage.setItem(THEME_STORAGE_KEY, preference);

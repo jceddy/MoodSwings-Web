@@ -1,0 +1,11 @@
+-- Themes/skins (issue #363), first pass: four new named color palettes
+-- (Jade, Red Marble, White Marble, High Contrast) alongside the existing
+-- system/light/dark modes, plus an independent card-skin selector
+-- (None/Noir/Steampunk/Futuristic/Neon) for alternate printed card-front
+-- art -- see "Palettes"/"Card skins" in web-static/README.md. Pure
+-- frontend feature (CSS custom properties + two localStorage-persisted
+-- <select> preferences, no server-side sync) -- no schema change, so no
+-- migration content beyond this version stamp is needed. A brand new,
+-- named feature like this one bumps the MINOR version and resets patch
+-- to 0, per CLAUDE.md's own versioning convention.
+UPDATE schema_version SET version = '1.30.0' WHERE id = 1;

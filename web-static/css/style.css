@@ -1,10 +1,33 @@
 /* -- Theming ---------------------------------------------------------
-   Three modes (see "Dark mode" in web-static/README.md): system default
-   (honors prefers-color-scheme, the ":not([data-theme=\"light\"])" guard
-   below), and explicit light/dark overrides via documentElement's
+   Three base modes (see "Palettes" in web-static/README.md): system
+   default (honors prefers-color-scheme, the ":not([data-theme=\"light\"])"
+   guard below), and explicit light/dark overrides via documentElement's
    data-theme attribute. color-scheme lets the browser's own UI (native
    form controls, scrollbars, default link colors) follow along without
-   needing to restyle each one by hand. */
+   needing to restyle each one by hand.
+
+   Issue #363 adds a curated set of NAMED palettes on top of those three --
+   Jade, Red Marble, White Marble, and High Contrast below -- selected from
+   the same data-theme attribute/<select id="theme-select">, but each is a
+   single FIXED look (no @media (prefers-color-scheme) counterpart the way
+   light/dark/system have): picking one overrides the system preference
+   entirely, the same way an explicit "dark" selection already does today.
+   Every one of them only overrides the seven structural/decorative
+   properties (--color-bg through --color-border-subtle) -- the four
+   semantic status colors (--color-error/--color-success/--color-pending/
+   --color-info) and the two decorative icon accents (--color-brown/
+   --color-gold, see .player-stat--hand/--points/--wins further down) stay
+   at their shared light-theme values across every one of these, since
+   they're functional/recognizable indicators (or icons meant to evoke a
+   universal concept -- a trophy is gold regardless of the page's own
+   palette) rather than part of a palette's own decorative identity;
+   re-deriving all four/two per palette would multiply the design surface
+   for little benefit and real risk of a palette accidentally making
+   error/success harder to tell apart (Jade's own dominant hue IS green,
+   for instance). High Contrast is the one exception -- seeing status
+   colors clearly is the entire point of that palette, so it deliberately
+   does override them (with no --color-brown/--color-gold override either,
+   since the base light values already contrast fine against white). */
 :root {
     color-scheme: light;
     /* Card/icon size slider (issue #417) -- a plain multiplier every
@@ -91,6 +114,85 @@
     --color-awaiting-response-bg: #3d2f10;
     --color-brown: #c58b52;
     --color-gold: #e0b93a;
+}
+
+/* Jade (issue #363) -- a dark palette built from the three greens the
+   maintainer supplied (#1A9C1A/#004D00/#003400): the darkest anchors the
+   page background, the mid tone lifts --color-surface just enough for
+   panels to read as "above" it (mirroring color-scheme dark's own
+   bg-vs-surface relationship above), and the brightest becomes a vivid
+   accent border color rather than running text -- a fully saturated
+   #1A9C1A is a lot to read paragraphs in. --color-text/--text-secondary/
+   --muted are computed light, green-tinted neutrals for comfortable
+   contrast against that dark background; --border-subtle is the accent
+   green darkened back down toward --color-surface, for a divider that
+   reads as "quietly the same family" rather than "another highlight." */
+:root[data-theme="jade"] {
+    color-scheme: dark;
+    --color-bg: #003400;
+    --color-surface: #004d00;
+    --color-text: #e4f5e4;
+    --color-text-secondary: #b9d9b9;
+    --color-muted: #7fa98a;
+    --color-border: #1a9c1a;
+    --color-border-subtle: #0f5c0f;
+}
+
+/* Red Marble (issue #363) -- a light palette from the maintainer's own
+   #CDCD9A/#CD6767/#CD3434: the warm khaki anchors bg/surface (a marble
+   ground tone, not a pure white), the deepest red becomes the accent
+   border, and the middle rose is the subtler border. --color-text is a
+   darkened version of that same deep red (full #CD3434 is too loud to
+   read whole paragraphs in) rather than a fourth unrelated color, so
+   running text still reads as part of the same red family. */
+:root[data-theme="red-marble"] {
+    color-scheme: light;
+    --color-bg: #cdcd9a;
+    --color-surface: #cdcd9a;
+    --color-text: #5c1a1a;
+    --color-text-secondary: #7a3030;
+    --color-muted: #a67373;
+    --color-border: #cd3434;
+    --color-border-subtle: #cd6767;
+}
+
+/* White Marble (issue #363) -- a light palette from the maintainer's own
+   #E7E7E7/#808080/#343434: already a clean light/mid/dark grayscale ramp,
+   so unlike Jade/Red Marble above this needs no computed "darken for
+   readability" step -- #343434 is already comfortably dark against
+   #E7E7E7. --text-secondary/--border-subtle are the only two genuinely
+   new values, lightened steps between the three given tones. */
+:root[data-theme="white-marble"] {
+    color-scheme: light;
+    --color-bg: #e7e7e7;
+    --color-surface: #e7e7e7;
+    --color-text: #343434;
+    --color-text-secondary: #5c5c5c;
+    --color-muted: #808080;
+    --color-border: #808080;
+    --color-border-subtle: #c4c4c4;
+}
+
+/* High Contrast (issue #363, suggested) -- pure black-on-white with
+   thicker/darker borders, an accessibility palette rather than a
+   decorative one. The one named palette that DOES override the four
+   status colors (see this section's own opening comment for why every
+   other one doesn't) -- reading them correctly is this palette's whole
+   point, so each is pushed darker/more saturated for stronger contrast
+   against a pure white background than the shared light-theme values. */
+:root[data-theme="high-contrast"] {
+    color-scheme: light;
+    --color-bg: #fff;
+    --color-surface: #fff;
+    --color-text: #000;
+    --color-text-secondary: #1a1a1a;
+    --color-muted: #444;
+    --color-border: #000;
+    --color-border-subtle: #555;
+    --color-error: #cc0000;
+    --color-success: #006400;
+    --color-pending: #7a5b00;
+    --color-info: #003c82;
 }
 
 /* Opts out of mobile Chrome's "font boosting" text autosizer, which
@@ -1017,6 +1119,24 @@ body.game-page {
     border: 1px solid var(--color-border);
     border-radius: 0.4rem;
     transition: transform 0.15s ease;
+}
+
+/* Noir card skin (issue #363) -- unlike the Steampunk/Futuristic/Neon
+   skins (alternate printed art per card, added gradually -- see
+   cardArtUrl()/setCardArt() in game.js), Noir needs no art of its own at
+   all: a single grayscale-plus-contrast filter over the normal MSW print
+   reads as its own distinct look everywhere card art appears -- the hand/
+   in-play/discard thumbnails (.card-thumb__art) here, plus the card
+   detail dialog and the choices panel's own preview (#card-detail-art/
+   #choices-card-art, styled separately elsewhere in this file, but still
+   plain <img> elements this same rule reaches). Selected independently of
+   the color palette above via its own [data-skin] attribute/
+   <select id="card-skin-select"> (game/index.html only -- card art has
+   nothing to skin on every other page), never data-theme. */
+:root[data-skin="noir"] .card-thumb__art,
+:root[data-skin="noir"] #card-detail-art,
+:root[data-skin="noir"] #choices-card-art {
+    filter: grayscale(1) contrast(1.15);
 }
 
 .card-thumb.not-playable {
