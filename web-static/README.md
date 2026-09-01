@@ -298,29 +298,14 @@ visible card needs its art actually rebuilt.
 Steampunk is also the first skin with its own display font: headings
 (`h1`/`h2`/`h3`) switch to IM Fell English SC, a small-caps Victorian
 book face, via a `@font-face` in `css/style.css` pointing at
-`fonts/im-fell-english-sc.woff2` (its `fonts/im-fell-english-sc-OFL.txt`
-is the font's own SIL Open Font License text, required alongside any
-redistributed copy of it). Self-hosted rather than pulled from Google
-Fonts at request time, matching every other themed asset in this app
-already being a local file instead of a third-party dependency.
-Deliberately scoped to headings only, not the whole page -- small caps
-reads well for a short title but makes a full paragraph (or a card's own
-rules text) much harder to read, so body copy stays on the normal font
-stack regardless of theme.
-
-The site's own default typeface (every theme, not just Steampunk) is
-Anonymous Pro, a monospace face, replacing the plain `system-ui,
-sans-serif` stack every page used before -- same self-hosting reasoning
-as IM Fell English SC above (`fonts/anonymous-pro-*.woff2`,
-`fonts/anonymous-pro-OFL.txt`), just applied to `body` itself rather than
-scoped to one theme's headings. Ships all four static weight/style
-combos (regular/bold/italic/bold-italic), since this app's own CSS
-already sets `font-weight: bold`/`font-style: italic` in a handful of
-places and a real cut of each looks meaningfully better than a browser-
-synthesized faux-bold/oblique on a monospace face. Steampunk's own
-heading override above still layers on top of this for `h1`/`h2`/`h3`
-only -- Anonymous Pro is just the shared body-text default every theme
-(Steampunk included) starts from.
+`fonts/im-fell-english-sc.woff2` (its `fonts/OFL.txt` is the font's own
+SIL Open Font License text, required alongside any redistributed copy of
+it). Self-hosted rather than pulled from Google Fonts at request time,
+matching every other themed asset in this app already being a local file
+instead of a third-party dependency. Deliberately scoped to headings
+only, not the whole page -- small caps reads well for a short title but
+makes a full paragraph (or a card's own rules text) much harder to read,
+so body copy stays on the normal font stack regardless of theme.
 
 All theme/palette/skin preferences are `localStorage`-only, with no
 server-side sync -- issue #363 scoped that out explicitly.
