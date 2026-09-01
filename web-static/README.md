@@ -295,6 +295,18 @@ automatically the instant it changes, swapping `data-theme` alone does
 nothing for a `.card-thumb`'s `<img src>` that was already set; every
 visible card needs its art actually rebuilt.
 
+Steampunk is also the first skin with its own display font: headings
+(`h1`/`h2`/`h3`) switch to IM Fell English SC, a small-caps Victorian
+book face, via a `@font-face` in `css/style.css` pointing at
+`fonts/im-fell-english-sc.woff2` (its `fonts/OFL.txt` is the font's own
+SIL Open Font License text, required alongside any redistributed copy of
+it). Self-hosted rather than pulled from Google Fonts at request time,
+matching every other themed asset in this app already being a local file
+instead of a third-party dependency. Deliberately scoped to headings
+only, not the whole page -- small caps reads well for a short title but
+makes a full paragraph (or a card's own rules text) much harder to read,
+so body copy stays on the normal font stack regardless of theme.
+
 All theme/palette/skin preferences are `localStorage`-only, with no
 server-side sync -- issue #363 scoped that out explicitly.
 

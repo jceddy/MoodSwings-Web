@@ -434,6 +434,29 @@ button:disabled {
     background-attachment: fixed;
 }
 
+/* Steampunk's own display face -- IM Fell English SC, a small-caps
+   Victorian book type -- self-hosted (fonts/im-fell-english-sc.woff2)
+   rather than pulled from Google Fonts at request time, matching every
+   other themed asset in this app (background photos, card art) already
+   being a local file rather than a third-party dependency. Scoped to
+   headings only, not the whole page: small caps reads great for a short
+   H1/H2 but turns a full paragraph -- or a card's own rules text -- into
+   a slog, so body copy stays on the normal font stack regardless of
+   theme. */
+@font-face {
+    font-family: 'IM Fell English SC';
+    src: url("../fonts/im-fell-english-sc.woff2") format('woff2');
+    font-weight: normal;
+    font-style: normal;
+    font-display: swap;
+}
+
+:root[data-theme="steampunk"] h1,
+:root[data-theme="steampunk"] h2,
+:root[data-theme="steampunk"] h3 {
+    font-family: 'IM Fell English SC', serif;
+}
+
 /* Futuristic, like Steampunk and Noir before it, now uses a real
    maintainer-supplied photo/illustration (img/themes/futuristic-bg.webp
    -- a dark circuit-board/data-network scene) in place of its original
