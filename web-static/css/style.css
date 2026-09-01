@@ -401,14 +401,40 @@ button:disabled {
     --color-border-subtle: #6b5a3a;
 }
 
-:root[data-theme="noir"] body {
+/* Fixed backdrop pseudo-element (reported live: "when I scroll, the
+   background image moves a little, and then it snaps back into place
+   when I am done scrolling"). Every skin below used to paint its photo
+   straight onto body with background-attachment: fixed to get this same
+   "stays put while content scrolls over it" look -- but attachment:
+   fixed forces the browser to repaint that background on every scroll
+   frame instead of just compositing it (it isn't a real, independently-
+   composited layer the way position: fixed is), which is exactly what
+   shows up as visible lag during a scroll/trackpad-momentum gesture,
+   settling back into its correct position only once scrolling actually
+   stops. A position: fixed pseudo-element sized to the full viewport
+   gets its own compositor layer, so it tracks perfectly with zero
+   per-frame repaint cost -- same visual result, none of the jank.
+   Declared once here, generic (no background-image of its own); each
+   skin below sets its own background-image/-size/-position/-repeat on
+   this same body::before selector instead of on body directly. z-index:
+   -1 keeps it behind every normal (non-positioned) page element without
+   needing a z-index anywhere else -- see #loading-overlay's own similar
+   stacking-context fix further up for the same underlying mechanism. */
+body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+}
+
+:root[data-theme="noir"] body::before {
     background-image:
         linear-gradient(rgba(4, 3, 2, 0.4), rgba(4, 3, 2, 0.4)),
         url("../img/themes/noir-bg.webp");
     background-size: cover;
     background-position: center;
     background-repeat: no-repeat;
-    background-attachment: fixed;
 }
 
 /* Steampunk's own decorative background (the second of the four
@@ -424,14 +450,13 @@ button:disabled {
    it, --color-text's own light parchment tone (#f0e0c0, chosen to
    complement this exact image) would fail contrast against the image's
    own lightest passages wherever page content happens to land there. */
-:root[data-theme="steampunk"] body {
+:root[data-theme="steampunk"] body::before {
     background-image:
         linear-gradient(rgba(15, 9, 3, 0.55), rgba(15, 9, 3, 0.55)),
         url("../img/themes/steampunk-bg.webp");
     background-size: cover;
     background-position: center;
     background-repeat: no-repeat;
-    background-attachment: fixed;
 }
 
 /* Steampunk's own display face -- IM Fell English SC, a small-caps
@@ -466,14 +491,13 @@ button:disabled {
    its darkening scrim can stay light -- just enough to guarantee the
    image's own brightest glowing traces never approach --color-text's
    contrast floor, not to meaningfully dim the image itself. */
-:root[data-theme="futuristic"] body {
+:root[data-theme="futuristic"] body::before {
     background-image:
         linear-gradient(rgba(2, 4, 8, 0.35), rgba(2, 4, 8, 0.35)),
         url("../img/themes/futuristic-bg.webp");
     background-size: cover;
     background-position: center;
     background-repeat: no-repeat;
-    background-attachment: fixed;
 }
 
 /* Neon, like Steampunk and Futuristic before it, now uses a real
@@ -487,14 +511,13 @@ button:disabled {
    this, all four card-skin themes now use a real photo/illustration for
    their body background -- see Noir's own section further down for its
    photo plus the separate SVG filter its card art alone needs. */
-:root[data-theme="neon"] body {
+:root[data-theme="neon"] body::before {
     background-image:
         linear-gradient(rgba(4, 1, 8, 0.3), rgba(4, 1, 8, 0.3)),
         url("../img/themes/neon-bg.webp");
     background-size: cover;
     background-position: center;
     background-repeat: no-repeat;
-    background-attachment: fixed;
 }
 
 footer {
