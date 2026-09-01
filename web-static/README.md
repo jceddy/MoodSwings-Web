@@ -108,40 +108,35 @@ convention as Jade/Red Marble/White Marble) PLUS a decorative `body`
 background-image, since "ambitious theme" -- not just an alternate card
 print -- was the whole design brief for these four.
 
-Neon's background is a small, tileable inline SVG baked directly into
-`css/style.css` as a `data:image/svg+xml;base64,...` URI (no separate
-image file to manage): a two-tone magenta/cyan crosshatch grid under a
-fixed radial-gradient glow (anchored to the bottom of the viewport, for
-the classic synthwave "grid fading into a glowing horizon" look). Every
-color baked into that SVG/gradient is already low-alpha, so it reads as a
-subtle texture behind the page rather than competing with `--color-text`
-for contrast -- no separate `opacity` property needed on top. **This is
-still placeholder art**, generated procedurally (plain crosshatch lines)
-because no image-generation tool was available to produce anything more
-detailed; the maintainer may replace it with real artwork -- the same way
-Steampunk's and Futuristic's own placeholders (originally a procedural
-pair of brass gear silhouettes, and hand-plotted right-angle circuit
-traces, respectively, same technique) already got replaced with real
-maintainer-supplied photos/illustrations: an aged brass-and-gears
-mechanism (`img/themes/steampunk-bg.webp`) and a dark circuit-board/
-data-network scene (`img/themes/futuristic-bg.webp`). Both use the same
+All three of Steampunk, Futuristic, and Neon originally shipped with a
+placeholder background baked directly into `css/style.css` as a small,
+tileable `data:image/svg+xml;base64,...` inline SVG, generated
+procedurally (brass gear silhouettes, hand-plotted right-angle circuit
+traces, and a magenta/cyan crosshatch grid under a radial-gradient glow,
+respectively) because no image-generation tool was available at the
+time to produce anything more detailed. All three have since been
+replaced, one at a time, with a real maintainer-supplied photo/
+illustration: an aged brass-and-gears mechanism
+(`img/themes/steampunk-bg.webp`), a dark circuit-board/data-network scene
+(`img/themes/futuristic-bg.webp`), and a cyberpunk alley lit by
+magenta/cyan signage (`img/themes/neon-bg.webp`). All three use the same
 `cover`/`fixed`/darkening-scrim technique as Noir's own photo (see Noir's
 own section below for the full mechanical explanation), just tuned per
-image: Steampunk's scrim is stronger (0.55 alpha vs Noir's 0.4) since that
-image has large bright parchment-colored passages across most of its
-area rather than a few small highlights, and `--color-text`'s light
+image: Steampunk's scrim is strongest (0.55 alpha vs Noir's 0.4) since
+that image has large bright parchment-colored passages across most of
+its area rather than a few small highlights, and `--color-text`'s light
 parchment tone would otherwise fail contrast against them; Futuristic's
-scrim is lighter still (0.35 alpha) since that image is already very dark
-overall, with no bright passages to fight for contrast against -- just
-enough to guard against its own brightest glowing traces rather than to
-meaningfully dim the image itself.
+and Neon's scrims are lighter still (0.35 and 0.3 alpha) since both
+images are already very dark overall, with no bright passages to fight
+for contrast against -- just enough to guard against each image's own
+brightest glowing details rather than to meaningfully dim it.
 
 Steampunk/Futuristic/Neon are ALSO alternate PRINTED card-front art,
 added gradually one card at a time rather than needing full coverage
 before shipping -- `cardArtUrl(card)` (`game.js`) points at
 `img/cards/MSW/<skin>/<catalog_card_id>-<slug>.webp` whenever one of these
 three is selected (see the READMEs already sitting in each of those three
-now-created-but-still-empty folders for the exact naming convention), and
+folders for the exact naming convention), and
 every `<img>` that shows card art is set through `setCardArt(imgEl, card)`
 rather than a raw `.src =` assignment -- if that themed file doesn't exist
 yet, the request 404s and `setCardArt()`'s own `onerror` handler swaps the
@@ -177,15 +172,20 @@ pattern, plus its own Hurt Feelings art:
 `img/cards/MSW/futuristic/32-creativity.webp`,
 `img/cards/MSW/futuristic/67-intimidation.webp`,
 `img/cards/MSW/futuristic/134-smugness.webp`, and
-`img/hurt-feelings-futuristic.webp`. Neon still has no themed art for any
-of these four, so it (and any future skin without its own file yet) still
+`img/hurt-feelings-futuristic.webp`. Neon's own matching set followed
+the same pattern: `img/cards/MSW/neon/32-creativity.webp`,
+`img/cards/MSW/neon/67-intimidation.webp`,
+`img/cards/MSW/neon/134-smugness.webp`, and
+`img/hurt-feelings-neon.webp`. Any future skin (or these three, for any
+card not yet covered) without its own themed file for a given card still
 404s and falls back to the plain print through the exact same mechanism.
 
 The fourth skin, Noir, uses a real maintainer-supplied photo instead of a
 procedural pattern: a moody, rain-streaked night street
 (`img/themes/noir-bg.webp`), sized to `cover` and pinned with
 `background-attachment: fixed` so it stays put as a backdrop while content
-scrolls over it (the same technique Neon's own glow gradient uses).
+scrolls over it (the same technique Steampunk/Futuristic/Neon's own
+photos use).
 Because a real photo this dark can't "fall through" to whatever
 system/light/dark default happened to be active the way the earlier
 placeholder pattern could -- default light-mode text assumes a light
