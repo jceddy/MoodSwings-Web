@@ -1305,20 +1305,32 @@ body.game-page {
 /* Noir card skin (issue #363) -- unlike Steampunk/Futuristic/Neon (real
    alternate printed art added per card, gradually -- see cardArtUrl()/
    setCardArt() in game.js), Noir needs no ALTERNATE ART of its own for
-   card fronts specifically: a single grayscale-plus-contrast filter over
-   the normal MSW print reads as its own distinct look everywhere card art
-   appears -- the hand/in-play/discard thumbnails (.card-thumb__art) here,
-   plus the card detail dialog and the choices panel's own preview
-   (#card-detail-art/#choices-card-art, styled separately elsewhere in
-   this file, but still plain <img> elements this same rule reaches).
-   Noir's own :root[data-theme="noir"] block further up covers the
-   sitewide color/background half of the theme (the photo background,
-   plus text/border colors tuned for it) -- this rule only covers the
-   card-art-specific filter half, which the photo alone doesn't touch. */
+   card fronts specifically: a filter over the normal MSW print reads as
+   its own distinct look everywhere card art appears -- the hand/in-play/
+   discard thumbnails (.card-thumb__art) here, plus the card detail dialog
+   and the choices panel's own preview (#card-detail-art/#choices-card-art,
+   styled separately elsewhere in this file, but still plain <img>
+   elements this same rule reaches). Noir's own :root[data-theme="noir"]
+   block further up covers the sitewide color/background half of the
+   theme (the photo background, plus text/border colors tuned for it) --
+   this rule only covers the card-art-specific filter half, which the
+   photo alone doesn't touch.
+
+   #noir-card-fade (game/index.html, the only page card art appears on --
+   see its own extensive comment there for exactly how it works) is a
+   gradient fade rather than a flat `grayscale(1) contrast(1.15)` (an
+   earlier version of this rule): a plain CSS filter applies at one
+   uniform strength across the whole element, so a fully-grayscaled card
+   loses the color-coded header band a player normally reads a card's
+   mood from at a glance -- a real usability regression this repo's own
+   playtesting caught. The SVG filter keeps that header band's original
+   color intact and only fades to full grayscale by three-quarters of the
+   way down the card, so the mood color is still readable, but the print
+   below it still reads as noir. */
 :root[data-theme="noir"] .card-thumb__art,
 :root[data-theme="noir"] #card-detail-art,
 :root[data-theme="noir"] #choices-card-art {
-    filter: grayscale(1) contrast(1.15);
+    filter: url(#noir-card-fade);
 }
 
 .card-thumb.not-playable {
