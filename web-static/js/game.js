@@ -3430,25 +3430,25 @@
         return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
     }
 
-    // Card skins (issue #363) -- a second, independent customization axis
-    // from the color palette (<select id="theme-select">/data-theme, see
-    // "Palettes" in web-static/README.md): alternate printed card-front
-    // art per theme, selected via <select id="card-skin-select">/
-    // data-skin and persisted the same localStorage-only way. 'noir' is
-    // deliberately excluded from this list -- it's a pure CSS filter over
-    // the normal MSW art (see style.css's own [data-skin="noir"] rule),
-    // never a distinct image, so it needs no entry in the URL-building
-    // logic below at all.
-    const CARD_SKIN_STORAGE_KEY = 'cardSkinPreference';
+    // Card skins (issue #363) -- alternate printed card-front art for a
+    // handful of the options in the SAME <select id="theme-select">/
+    // data-theme picker used for color palettes (see "Themes" in
+    // web-static/README.md and app.js's initThemeSelect()). A theme name
+    // that isn't one of CARD_ART_SKINS below (a base mode, a palette, or
+    // 'noir') simply has no themed art folder, so cardArtUrl() falls
+    // through to the normal MSW print -- 'noir' in particular is a pure
+    // CSS filter over that normal art (see style.css's own
+    // [data-theme="noir"] rule), never a distinct image, so it needs no
+    // entry in the URL-building logic below at all.
     const CARD_ART_SKINS = ['steampunk', 'futuristic', 'neon'];
 
     function cardSkinPreference() {
         try {
-            return localStorage.getItem(CARD_SKIN_STORAGE_KEY) || 'none';
+            return localStorage.getItem(THEME_STORAGE_KEY) || 'system';
         } catch (e) {
             // localStorage unavailable (e.g. private browsing) -- falls
-            // back to the normal MSW art, same as an explicit "None".
-            return 'none';
+            // back to the normal MSW art, same as no theme selected.
+            return 'system';
         }
     }
 
@@ -3483,42 +3483,17 @@
         };
     }
 
-    // <select id="card-skin-select"> only exists in game/index.html's own
-    // footer (issue #363) -- card art has nothing to skin on every other
-    // page, unlike the color palette above, which is genuinely sitewide.
-    // Mirrors app.js's own initThemeSelect() structure/localStorage
-    // pattern, but re-renders the current board immediately on change
-    // (from the already-fetched currentState, no extra fetch needed) so
-    // every already-built .card-thumb picks up the new skin right away --
-    // simply changing data-skin doesn't touch DOM nodes built earlier.
-    (function initCardSkinSelect() {
-        const select = document.getElementById('card-skin-select');
-        if (!select) {
-            return;
+    // app.js's initThemeSelect() already owns <select id="theme-select">
+    // sitewide (persistence, data-theme). This just re-renders the
+    // current board immediately on change (from the already-fetched
+    // currentState, no extra fetch needed) so every already-built
+    // .card-thumb picks up a newly-selected skin right away -- simply
+    // changing data-theme doesn't touch DOM nodes built earlier.
+    document.getElementById('theme-select')?.addEventListener('change', () => {
+        if (currentState) {
+            renderBoard(currentState);
         }
-
-        select.value = cardSkinPreference();
-        if (select.value !== 'none') {
-            document.documentElement.dataset.skin = select.value;
-        }
-
-        select.addEventListener('change', () => {
-            const preference = select.value;
-            if (preference === 'none') {
-                delete document.documentElement.dataset.skin;
-            } else {
-                document.documentElement.dataset.skin = preference;
-            }
-            try {
-                localStorage.setItem(CARD_SKIN_STORAGE_KEY, preference);
-            } catch (e) {
-                // ignore -- the selection just won't persist across reloads
-            }
-            if (currentState) {
-                renderBoard(currentState);
-            }
-        });
-    })();
+    });
 
     // Builds a card-art thumbnail in place of the old text-only button --
     // the printed art already conveys name/color/base value/rules text (all
