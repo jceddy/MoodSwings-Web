@@ -321,13 +321,19 @@ body {
    background is already active. A neutral mid-gray at low alpha reads the
    same either way (a faint shadow on a light background, a faint lift on
    a dark one), so one rule covers both without branching on the current
-   color scheme. Diagonal repeating bands, rather than a texture, evoke
+   color scheme. Horizontal repeating bands, rather than a texture, evoke
    classic film-noir cinematography -- light through venetian blinds
    cutting hard shadow stripes across a wall -- which needs no image asset
-   at all, plain `repeating-linear-gradient()`. */
+   at all, plain `repeating-linear-gradient()`. Deliberately horizontal
+   (not diagonal, an earlier version of this rule) -- a diagonal angle hit
+   a real rendering seam in Chromium on a tall page: repeating-linear-
+   gradient() at a non-cardinal angle can visibly misalign at internal
+   rasterization-tile boundaries once the painted area is large enough,
+   which a horizontal (or vertical) band avoids entirely since there's no
+   diagonal phase for a tile boundary to fall out of step with. */
 :root[data-theme="noir"] body {
     background-image: repeating-linear-gradient(
-        115deg,
+        to bottom,
         rgba(128, 128, 128, 0.16) 0px,
         rgba(128, 128, 128, 0.16) 34px,
         transparent 34px,
