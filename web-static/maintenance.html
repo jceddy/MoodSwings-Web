@@ -3,16 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <script>
-    // Sets the theme before first paint so an explicit light/dark preference
-    // (see "Dark mode" in web-static/README.md) never flashes the wrong
-    // theme first -- inlined and duplicated per-page rather than an external
-    // script, since an external file would itself add a delay this exists to
-    // avoid. The "system" default needs no JS at all: style.css's own
-    // prefers-color-scheme media query handles it.
+    // Sets the palette before first paint so an explicit preference (see
+    // "Palettes" in web-static/README.md) never flashes the wrong one first
+    // -- inlined and duplicated per-page rather than an external script,
+    // since an external file would itself add a delay this exists to avoid.
+    // The "system" default needs no JS at all: style.css's own
+    // prefers-color-scheme media query handles it; every OTHER value
+    // (light/dark, or a named palette like jade/red-marble/white-marble/
+    // high-contrast -- issue #363) is a fixed look applied unconditionally.
     (function () {
         try {
             var theme = localStorage.getItem('themePreference');
-            if (theme === 'light' || theme === 'dark') {
+            if (theme && theme !== 'system') {
                 document.documentElement.dataset.theme = theme;
             }
         } catch (e) {
@@ -51,9 +53,24 @@
 
     <footer><span id="app-version"></span><a id="resources-link" href="#">Resources</a><label id="theme-select-label">Theme
         <select id="theme-select">
-            <option value="system">System</option>
-            <option value="light">Light</option>
-            <option value="dark">Dark</option>
+            <optgroup label="Basic">
+                <option value="system">System</option>
+                <option value="light">Light</option>
+                <option value="dark">Dark</option>
+            </optgroup>
+            <optgroup label="Palettes">
+                <option value="jade">Jade</option>
+                <option value="red-marble">Red Marble</option>
+                <option value="white-marble">White Marble</option>
+                <option value="high-contrast">High Contrast</option>
+                <option value="high-contrast-dark">High Contrast Dark</option>
+            </optgroup>
+            <optgroup label="Skins">
+                <option value="noir">Noir</option>
+                <option value="steampunk">Steampunk</option>
+                <option value="futuristic">Futuristic</option>
+                <option value="neon">Neon</option>
+            </optgroup>
         </select>
     </label></footer>
     <script src="js/app.js"></script>

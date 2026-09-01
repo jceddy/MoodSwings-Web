@@ -1,10 +1,50 @@
 /* -- Theming ---------------------------------------------------------
-   Three modes (see "Dark mode" in web-static/README.md): system default
-   (honors prefers-color-scheme, the ":not([data-theme=\"light\"])" guard
-   below), and explicit light/dark overrides via documentElement's
+   Three base modes (see "Themes" in web-static/README.md): system
+   default (honors prefers-color-scheme, the ":not([data-theme=\"light\"])"
+   guard below), and explicit light/dark overrides via documentElement's
    data-theme attribute. color-scheme lets the browser's own UI (native
    form controls, scrollbars, default link colors) follow along without
-   needing to restyle each one by hand. */
+   needing to restyle each one by hand.
+
+   Issue #363 adds a curated set of NAMED palettes on top of those three --
+   Jade, Red Marble, White Marble, High Contrast, and High Contrast Dark
+   below -- selected from the same data-theme attribute/
+   <select id="theme-select">, but each is a single FIXED look (no
+   @media (prefers-color-scheme) counterpart the way light/dark/system
+   have): picking one overrides the system preference entirely, the same
+   way an explicit "dark" selection already does today. Every one of them
+   only overrides the seven structural/decorative properties (--color-bg
+   through --color-border-subtle) -- the four semantic status colors
+   (--color-error/--color-success/--color-pending/--color-info) and the
+   two decorative icon accents (--color-brown/--color-gold, see
+   .player-stat--hand/--points/--wins further down) stay at their shared
+   light-theme values across every one of these, since they're
+   functional/recognizable indicators (or icons meant to evoke a universal
+   concept -- a trophy is gold regardless of the page's own palette)
+   rather than part of a palette's own decorative identity; re-deriving
+   all four/two per palette would multiply the design surface for little
+   benefit and real risk of a palette accidentally making error/success
+   harder to tell apart (Jade's own dominant hue IS green, for instance).
+   The two High Contrast variants are the exception -- seeing status
+   colors clearly is the entire point of those, so they deliberately do
+   override them (with no --color-brown/--color-gold override either,
+   since the base light/dark values already contrast fine against
+   white/black respectively).
+
+   The SAME <select id="theme-select">/data-theme attribute ALSO carries
+   four card-skin themes -- Noir/Steampunk/Futuristic/Neon (see
+   cardArtUrl()/setCardArt() in game.js for the printed-card-art half of
+   these). All four are full themes in their own right, same as any named
+   palette above: their own :root[data-theme="..."] blocks further down
+   override the same seven structural/decorative properties, PLUS set a
+   decorative `body` background-image, since "ambitious theme" was the
+   whole design brief for these four, not just an alternate card print.
+   Neon still uses a tileable inline-SVG texture (a magenta/cyan grid);
+   Noir, Steampunk, and Futuristic use a real photo/illustration instead
+   (img/themes/noir-bg.webp, img/themes/steampunk-bg.webp,
+   img/themes/futuristic-bg.webp) -- see Noir's own :root block further
+   down for why that means its --color-surface breaks from every other
+   palette's own convention of a solid, opaque value. */
 :root {
     color-scheme: light;
     /* Card/icon size slider (issue #417) -- a plain multiplier every
@@ -93,6 +133,162 @@
     --color-gold: #e0b93a;
 }
 
+/* Jade (issue #363) -- a dark palette built from the three greens the
+   maintainer supplied (#1A9C1A/#004D00/#003400): the darkest anchors the
+   page background, the mid tone lifts --color-surface just enough for
+   panels to read as "above" it (mirroring color-scheme dark's own
+   bg-vs-surface relationship above), and the brightest becomes a vivid
+   accent border color rather than running text -- a fully saturated
+   #1A9C1A is a lot to read paragraphs in. --color-text/--text-secondary/
+   --muted are computed light, green-tinted neutrals for comfortable
+   contrast against that dark background; --border-subtle is the accent
+   green darkened back down toward --color-surface, for a divider that
+   reads as "quietly the same family" rather than "another highlight." */
+:root[data-theme="jade"] {
+    color-scheme: dark;
+    --color-bg: #003400;
+    --color-surface: #004d00;
+    --color-text: #e4f5e4;
+    --color-text-secondary: #b9d9b9;
+    --color-muted: #7fa98a;
+    --color-border: #1a9c1a;
+    --color-border-subtle: #0f5c0f;
+}
+
+/* Red Marble (issue #363) -- a light palette from the maintainer's own
+   #CDCD9A/#CD6767/#CD3434: the warm khaki anchors bg/surface (a marble
+   ground tone, not a pure white), the deepest red becomes the accent
+   border, and the middle rose is the subtler border. --color-text is a
+   darkened version of that same deep red (full #CD3434 is too loud to
+   read whole paragraphs in) rather than a fourth unrelated color, so
+   running text still reads as part of the same red family. */
+:root[data-theme="red-marble"] {
+    color-scheme: light;
+    --color-bg: #cdcd9a;
+    --color-surface: #cdcd9a;
+    --color-text: #5c1a1a;
+    --color-text-secondary: #7a3030;
+    --color-muted: #a67373;
+    --color-border: #cd3434;
+    --color-border-subtle: #cd6767;
+}
+
+/* White Marble (issue #363) -- a light palette from the maintainer's own
+   #E7E7E7/#808080/#343434: already a clean light/mid/dark grayscale ramp,
+   so unlike Jade/Red Marble above this needs no computed "darken for
+   readability" step -- #343434 is already comfortably dark against
+   #E7E7E7. --text-secondary/--border-subtle are the only two genuinely
+   new values, lightened steps between the three given tones. */
+:root[data-theme="white-marble"] {
+    color-scheme: light;
+    --color-bg: #e7e7e7;
+    --color-surface: #e7e7e7;
+    --color-text: #343434;
+    --color-text-secondary: #5c5c5c;
+    --color-muted: #808080;
+    --color-border: #808080;
+    --color-border-subtle: #c4c4c4;
+}
+
+/* High Contrast (issue #363, suggested) -- pure black-on-white with
+   thicker/darker borders, an accessibility palette rather than a
+   decorative one. The one named palette that DOES override the four
+   status colors (see this section's own opening comment for why every
+   other one doesn't) -- reading them correctly is this palette's whole
+   point, so each is pushed darker/more saturated for stronger contrast
+   against a pure white background than the shared light-theme values. */
+:root[data-theme="high-contrast"] {
+    color-scheme: light;
+    --color-bg: #fff;
+    --color-surface: #fff;
+    --color-text: #000;
+    --color-text-secondary: #1a1a1a;
+    --color-muted: #444;
+    --color-border: #000;
+    --color-border-subtle: #555;
+    --color-error: #cc0000;
+    --color-success: #006400;
+    --color-pending: #7a5b00;
+    --color-info: #003c82;
+}
+
+/* High Contrast Dark -- the dark-mode counterpart High Contrast above
+   never had, the same way plain Light/Dark come as a pair. Pure
+   white-on-black rather than a softened dark gray (#181818/#e8e8e8, the
+   plain dark theme's own values) for the same reason High Contrast
+   itself pushes past the plain light theme's #fff/#222 -- and the four
+   status colors are pushed toward fully saturated rather than the plain
+   dark theme's already-brightened versions, for the same "reading these
+   correctly is the whole point" reason High Contrast's own light variant
+   overrides them. */
+:root[data-theme="high-contrast-dark"] {
+    color-scheme: dark;
+    --color-bg: #000;
+    --color-surface: #000;
+    --color-text: #fff;
+    --color-text-secondary: #e6e6e6;
+    --color-muted: #bbb;
+    --color-border: #fff;
+    --color-border-subtle: #aaa;
+    --color-error: #ff5252;
+    --color-success: #00e676;
+    --color-pending: #ffd54f;
+    --color-info: #40c4ff;
+}
+
+/* Steampunk (issue #363, card-skin theme) -- a dark brass/espresso
+   palette evoking riveted copper machinery, plus a real maintainer-
+   supplied photo/illustration background (see its own comment further
+   down, right by the [data-theme="steampunk"] body rule, for exactly how
+   that's composited) -- this replaced an earlier procedurally-generated
+   placeholder (a tileable inline-SVG pair of brass gear silhouettes),
+   from back when no image-generation tool was available. Doesn't touch
+   the four status colors, same reasoning as Jade/Red Marble/White Marble
+   above. */
+:root[data-theme="steampunk"] {
+    color-scheme: dark;
+    --color-bg: #1c130a;
+    --color-surface: #241a0e;
+    --color-text: #f0e0c0;
+    --color-text-secondary: #d8c39c;
+    --color-muted: #a88b62;
+    --color-border: #8b5e2f;
+    --color-border-subtle: #5c3f20;
+}
+
+/* Futuristic (issue #363, card-skin theme) -- a near-black deep-blue
+   palette with a cyan accent border. Its body background is a real
+   maintainer-supplied photo/illustration (img/themes/futuristic-bg.webp,
+   see its own comment further down) rather than the tileable inline-SVG
+   circuit-trace placeholder this theme originally shipped with. */
+:root[data-theme="futuristic"] {
+    color-scheme: dark;
+    --color-bg: #060b14;
+    --color-surface: #0d1626;
+    --color-text: #d8ecff;
+    --color-text-secondary: #a9c7e6;
+    --color-muted: #6f8bab;
+    --color-border: #29b6f6;
+    --color-border-subtle: #1a4a66;
+}
+
+/* Neon (issue #363, card-skin theme) -- a near-black deep-purple palette
+   with a hot-magenta accent border. Its body background is a real
+   maintainer-supplied photo (img/themes/neon-bg.webp, see its own
+   comment further down) -- a cyberpunk-alley scene lit by magenta/cyan
+   signage -- rather than the tileable inline-SVG crosshatch-grid
+   placeholder this theme originally shipped with. */
+:root[data-theme="neon"] {
+    color-scheme: dark;
+    --color-bg: #0a0014;
+    --color-surface: #150626;
+    --color-text: #f5e6ff;
+    --color-text-secondary: #d9b3ff;
+    --color-muted: #9a6fc2;
+    --color-border: #ff2fd6;
+    --color-border-subtle: #6a1a5c;
+}
+
 /* Opts out of mobile Chrome's "font boosting" text autosizer, which
    independently scales each block of text (list items, in particular)
    to stay legible based on how its content happens to wrap -- harmless
@@ -117,6 +313,270 @@ body {
     color: var(--color-text);
 }
 
+/* Buttons (reported live: "can we make the buttons match the themes?") --
+   left completely unstyled otherwise, every <button> on every page rendered
+   as the browser's own default chrome (light gray, native OS look) no
+   matter which --color-* below was active, clashing hard against a dark
+   palette or one of the four photo-backed skins (Noir/Steampunk/
+   Futuristic/Neon). Reuses the exact same surface/border/blur idiom every
+   dialog and .grid-draft-arrow-button already apply per-theme (see
+   --surface-blur's own docblock further down) so a plain button just
+   inherits whatever "surface panel" already means for the active theme,
+   with no separate per-theme override needed here. This is only the
+   shared baseline every button starts from -- a more specific selector
+   elsewhere (#resign-button, .icon-action-button, .grid-draft-arrow-button,
+   etc.) still wins by specificity for its own one-off sizing/color/layout
+   needs. */
+button {
+    font: inherit;
+    color: var(--color-text);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 0.4rem;
+    padding: 0.4rem 0.8rem;
+    backdrop-filter: var(--surface-blur, none);
+    -webkit-backdrop-filter: var(--surface-blur, none);
+    cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+    border-color: var(--color-text-secondary);
+}
+
+button:focus-visible {
+    outline: 2px solid var(--color-info);
+    outline-offset: 1px;
+}
+
+button:disabled {
+    cursor: default;
+    opacity: 0.5;
+}
+
+/* Select widgets (requested live: "can we color the select widgets to
+   match the theme colors?"). color-scheme (see :root's own docblock)
+   already lets a <select> follow the browser's own native light/dark
+   form-control rendering, but that's a flat, generic gray with no idea
+   about a theme's own accent border color (Noir's amber, Neon's
+   magenta, ...) or its exact --color-surface -- a select still read as
+   visibly "off-brand" against one of the four photo-backed skins, the
+   same way an unstyled button used to before the fix right above this
+   one. Reuses that identical surface/border/blur idiom so a select now
+   reads as the same kind of themed surface every button/dialog/panel
+   already is. Deliberately doesn't touch the native dropdown arrow or
+   the OS-drawn <option> list -- appearance: none plus a hand-drawn arrow
+   would let the arrow match too, but at the cost of reimplementing
+   platform-specific sizing/RTL/accessibility behavior the native control
+   already gets right for free; color/border/background alone was the
+   ask. */
+select {
+    font: inherit;
+    color: var(--color-text);
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 0.4rem;
+    padding: 0.3rem 0.5rem;
+    backdrop-filter: var(--surface-blur, none);
+    -webkit-backdrop-filter: var(--surface-blur, none);
+}
+
+select:focus-visible {
+    outline: 2px solid var(--color-info);
+    outline-offset: 1px;
+}
+
+select:disabled {
+    opacity: 0.5;
+}
+
+/* Noir (issue #363) -- the maintainer's own photo replaces the earlier
+   procedurally-generated placeholder (a diagonal stripe pattern, before
+   that a CSS filter alone) once real art became available: a moody,
+   rain-streaked night street (img/themes/noir-bg.webp), fixed behind the
+   page content the way Neon's own glow gradient is. Since the photo is
+   mostly dark, Noir now needs its OWN color block -- unlike the earlier
+   placeholder, which deliberately fell through to system/light/dark so a
+   plain CSS pattern would read reasonably against either, a real photo
+   this dark would make default light-mode text (near-black on near-white
+   assumptions) illegible over it. --color-text/--border below are warm
+   parchment/amber tones pulled from the photo's own neon signage, and
+   --color-surface is a translucent near-black (not the solid hex every
+   other palette uses) so panels/dialogs/rows read as frosted glass over
+   the photo rather than flat opaque cards -- a deliberate exception to
+   the "solid --color-surface" convention every other palette follows,
+   justified by how busy the photo is behind it. The linear-gradient
+   layered UNDER the photo (in the same background-image list) is a
+   uniform darkening scrim -- the photo alone has bright patches (neon
+   signs, wet-pavement reflections) that would fail contrast with light
+   text wherever page content happens to land on top of them; the scrim
+   guarantees --color-text stays legible everywhere regardless of layout
+   height. Like the three ambitious themes below, this doesn't touch the
+   four status colors.
+
+   --surface-blur drives an ACTUAL `backdrop-filter: blur()` on every
+   element that paints --color-surface as its own background (every
+   dialog, plus the grid-draft arrow button -- see each of their own
+   rules further down, each now paired with a
+   `backdrop-filter: var(--surface-blur, none)` right next to its
+   `background-color`) -- undefined everywhere else, so the `none`
+   fallback keeps every other palette exactly as before (a solid color
+   has nothing behind it worth blurring anyway); Noir is the one palette
+   with enough behind its panels -- the photo -- for a blur to read as
+   genuine frosted glass rather than a wasted GPU pass. Deliberately a
+   custom property set once here rather than 12 one-off theme-scoped
+   overrides at each individual dialog rule. */
+:root[data-theme="noir"] {
+    color-scheme: dark;
+    --color-bg: #0a0a0c;
+    --color-surface: rgba(12, 10, 8, 0.82);
+    --surface-blur: blur(10px);
+    --color-text: #f2ead8;
+    --color-text-secondary: #cfc4ae;
+    --color-muted: #9a9184;
+    --color-border: #c9a55c;
+    --color-border-subtle: #6b5a3a;
+}
+
+/* Fixed backdrop pseudo-element (reported live: "when I scroll, the
+   background image moves a little, and then it snaps back into place
+   when I am done scrolling"). Every skin below used to paint its photo
+   straight onto body with background-attachment: fixed to get this same
+   "stays put while content scrolls over it" look -- but attachment:
+   fixed forces the browser to repaint that background on every scroll
+   frame instead of just compositing it (it isn't a real, independently-
+   composited layer the way position: fixed is), which is exactly what
+   shows up as visible lag during a scroll/trackpad-momentum gesture,
+   settling back into its correct position only once scrolling actually
+   stops. A position: fixed pseudo-element sized to the full viewport
+   gets its own compositor layer, so it tracks perfectly with zero
+   per-frame repaint cost -- same visual result, none of the jank.
+   Declared once here, generic (no background-image of its own); each
+   skin below sets its own background-image/-size/-position/-repeat on
+   this same body::before selector instead of on body directly. z-index:
+   -1 keeps it behind every normal (non-positioned) page element without
+   needing a z-index anywhere else -- see #loading-overlay's own similar
+   stacking-context fix further up for the same underlying mechanism.
+
+   height: 100dvh (reported live as a SEPARATE remaining wobble, once the
+   attachment: fixed jank above was already gone: "the background is
+   still moving ... due to the browser header/address bar moving off the
+   top and back down when scrolling") -- a mobile browser's own address
+   bar hiding/showing on scroll resizes the actual visible viewport, but
+   the plain 100% height a bare `inset: 0` would compute (against the
+   LAYOUT viewport, which several mobile browsers only resize once the
+   address-bar animation finishes, not continuously during it) lags a
+   frame or two behind that resize, reading as the same kind of
+   snap-into-place jump. 100dvh ("dynamic viewport height") is the
+   viewport unit built for exactly this: it tracks the address bar's
+   real, currently-visible height live, frame by frame, so the backdrop
+   resizes in lockstep with it instead of jumping after the fact. The
+   plain 100vh line right above it is a fallback for browsers old enough
+   not to support dvh at all -- harmless (never applied) everywhere else,
+   since the second, more specific declaration simply wins whenever a
+   browser understands it. left/right/top still come from inset: 0;
+   height replaces inset's own bottom: 0 for the vertical dimension. */
+body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    height: 100vh;
+    height: 100dvh;
+    z-index: -1;
+    pointer-events: none;
+}
+
+:root[data-theme="noir"] body::before {
+    background-image:
+        linear-gradient(rgba(4, 3, 2, 0.4), rgba(4, 3, 2, 0.4)),
+        url("../img/themes/noir-bg.webp");
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+}
+
+/* Steampunk's own decorative background (the second of the four
+   card-skin themes to move from procedural placeholder art to a real
+   maintainer-supplied image, after Noir -- see its own extensive comment
+   further up for the reasoning this mirrors) is a photo/illustration of
+   an aged brass-and-gears mechanism (img/themes/steampunk-bg.webp),
+   fixed behind the page the same way Noir's own photo is. Unlike Noir's
+   background, though, this one has large BRIGHT parchment-colored
+   patches across most of its area (not just a few small highlights), so
+   the same "layer a darkening scrim under the image" technique gets a
+   noticeably stronger scrim here (0.55 alpha vs Noir's 0.4) -- without
+   it, --color-text's own light parchment tone (#f0e0c0, chosen to
+   complement this exact image) would fail contrast against the image's
+   own lightest passages wherever page content happens to land there. */
+:root[data-theme="steampunk"] body::before {
+    background-image:
+        linear-gradient(rgba(15, 9, 3, 0.55), rgba(15, 9, 3, 0.55)),
+        url("../img/themes/steampunk-bg.webp");
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+}
+
+/* Steampunk's own display face -- IM Fell English SC, a small-caps
+   Victorian book type -- self-hosted (fonts/im-fell-english-sc.woff2)
+   rather than pulled from Google Fonts at request time, matching every
+   other themed asset in this app (background photos, card art) already
+   being a local file rather than a third-party dependency. Scoped to
+   headings only, not the whole page: small caps reads great for a short
+   H1/H2 but turns a full paragraph -- or a card's own rules text -- into
+   a slog, so body copy stays on the normal font stack regardless of
+   theme. */
+@font-face {
+    font-family: 'IM Fell English SC';
+    src: url("../fonts/im-fell-english-sc.woff2") format('woff2');
+    font-weight: normal;
+    font-style: normal;
+    font-display: swap;
+}
+
+:root[data-theme="steampunk"] h1,
+:root[data-theme="steampunk"] h2,
+:root[data-theme="steampunk"] h3 {
+    font-family: 'IM Fell English SC', serif;
+}
+
+/* Futuristic, like Steampunk and Noir before it, now uses a real
+   maintainer-supplied photo/illustration (img/themes/futuristic-bg.webp
+   -- a dark circuit-board/data-network scene) in place of its original
+   tileable inline-SVG placeholder pattern, with the same cover/fixed
+   treatment. Unlike Steampunk's own photo, this one is already very dark
+   overall (no large bright passages to fight for contrast against), so
+   its darkening scrim can stay light -- just enough to guarantee the
+   image's own brightest glowing traces never approach --color-text's
+   contrast floor, not to meaningfully dim the image itself. */
+:root[data-theme="futuristic"] body::before {
+    background-image:
+        linear-gradient(rgba(2, 4, 8, 0.35), rgba(2, 4, 8, 0.35)),
+        url("../img/themes/futuristic-bg.webp");
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+}
+
+/* Neon, like Steampunk and Futuristic before it, now uses a real
+   maintainer-supplied photo (img/themes/neon-bg.webp -- a cyberpunk
+   alley lit by magenta/cyan signage) in place of its original tileable
+   inline-SVG crosshatch-grid-plus-glow placeholder, with the same
+   cover/fixed treatment. Like Futuristic's own photo, this one is
+   already very dark overall (no large bright passages), so its
+   darkening scrim stays light -- just enough to guard against the
+   photo's own brightest neon signs, not to meaningfully dim it. With
+   this, all four card-skin themes now use a real photo/illustration for
+   their body background -- see Noir's own section further down for its
+   photo plus the separate SVG filter its card art alone needs. */
+:root[data-theme="neon"] body::before {
+    background-image:
+        linear-gradient(rgba(4, 1, 8, 0.3), rgba(4, 1, 8, 0.3)),
+        url("../img/themes/neon-bg.webp");
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+}
+
 footer {
     margin-top: 2rem;
     font-size: 0.8rem;
@@ -135,6 +595,8 @@ dialog#resources-dialog {
     width: 90%;
     padding: 1.5rem;
     background-color: var(--color-surface);
+    backdrop-filter: var(--surface-blur, none);
+    -webkit-backdrop-filter: var(--surface-blur, none);
     color: var(--color-text);
     border: 1px solid var(--color-border);
     border-radius: 0.5rem;
@@ -275,16 +737,26 @@ dialog#resources-dialog #resources-close-button {
 
 /* Loading overlay (see #loading-overlay's own comment in game/index.html)
    -- fixed/inset:0 so it sits above whichever view (lobby or board) is
-   currently underneath it regardless of scroll position, with no
-   z-index needed since every other overlay-like element in this app
-   (dialog#*) is a native <dialog>, which already promotes itself to the
-   browser's own top layer -- a plain fixed div with no dialog siblings
-   open at the same time (the loading overlay only ever shows during an
-   initial view load, never alongside one of those) naturally paints
-   above the normal document flow already. */
+   currently underneath it regardless of scroll position. Every other
+   overlay-like element in this app (dialog#*) is a native <dialog>,
+   which already promotes itself to the browser's own top layer, so
+   those never need a z-index here to lose to. This one does, though (a
+   bug caught live: waiting-icon-pulse's own opacity animation below --
+   "waiting for other players" hourglass icons in the players list --
+   and the Noir card-art filter (filter: url(#noir-card-fade), applied
+   to #game-main's own descendants) each create a stacking context of
+   their own; #game-main itself establishes none, so those hoist all the
+   way up to the ROOT stacking context, painting in DOM order right
+   alongside #loading-overlay's own fixed one -- and since #game-main
+   comes AFTER #loading-overlay in game/index.html, they'd paint OVER
+   it, showing through the "loading" screen instead of being hidden
+   beneath it). z-index: 1 settles that regardless of which descendant
+   happens to be creating a stacking context on a given load, without
+   needing to track down and fix every individual cause. */
 #loading-overlay {
     position: fixed;
     inset: 0;
+    z-index: 1;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -331,6 +803,8 @@ dialog#settings-dialog {
     width: 90%;
     padding: 1.5rem;
     background-color: var(--color-surface);
+    backdrop-filter: var(--surface-blur, none);
+    -webkit-backdrop-filter: var(--surface-blur, none);
     color: var(--color-text);
     border: 1px solid var(--color-border);
     border-radius: 0.5rem;
@@ -747,6 +1221,8 @@ body.game-page {
     border: 1px solid var(--color-border);
     border-radius: 0.4rem;
     background: var(--color-surface);
+    backdrop-filter: var(--surface-blur, none);
+    -webkit-backdrop-filter: var(--surface-blur, none);
     color: var(--color-text);
     cursor: pointer;
     padding: 0.25rem;
@@ -1017,6 +1493,37 @@ body.game-page {
     border: 1px solid var(--color-border);
     border-radius: 0.4rem;
     transition: transform 0.15s ease;
+}
+
+/* Noir card skin (issue #363) -- unlike Steampunk/Futuristic/Neon (real
+   alternate printed art added per card, gradually -- see cardArtUrl()/
+   setCardArt() in game.js), Noir needs no ALTERNATE ART of its own for
+   card fronts specifically: a filter over the normal MSW print reads as
+   its own distinct look everywhere card art appears -- the hand/in-play/
+   discard thumbnails (.card-thumb__art) here, plus the card detail dialog
+   and the choices panel's own preview (#card-detail-art/#choices-card-art,
+   styled separately elsewhere in this file, but still plain <img>
+   elements this same rule reaches). Noir's own :root[data-theme="noir"]
+   block further up covers the sitewide color/background half of the
+   theme (the photo background, plus text/border colors tuned for it) --
+   this rule only covers the card-art-specific filter half, which the
+   photo alone doesn't touch.
+
+   #noir-card-fade (game/index.html, the only page card art appears on --
+   see its own extensive comment there for exactly how it works) is a
+   gradient fade rather than a flat `grayscale(1) contrast(1.15)` (an
+   earlier version of this rule): a plain CSS filter applies at one
+   uniform strength across the whole element, so a fully-grayscaled card
+   loses the color-coded header band a player normally reads a card's
+   mood from at a glance -- a real usability regression this repo's own
+   playtesting caught. The SVG filter keeps that header band's original
+   color intact and only fades to full grayscale by three-quarters of the
+   way down the card, so the mood color is still readable, but the print
+   below it still reads as noir. */
+:root[data-theme="noir"] .card-thumb__art,
+:root[data-theme="noir"] #card-detail-art,
+:root[data-theme="noir"] #choices-card-art {
+    filter: url(#noir-card-fade);
 }
 
 .card-thumb.not-playable {
@@ -1469,6 +1976,8 @@ dialog#card-detail-dialog {
     width: 90%;
     padding: 1.5rem;
     background-color: var(--color-surface);
+    backdrop-filter: var(--surface-blur, none);
+    -webkit-backdrop-filter: var(--surface-blur, none);
     color: var(--color-text);
     border: 1px solid var(--color-border);
     border-radius: 0.5rem;
@@ -1483,6 +1992,8 @@ dialog#confirm-dialog {
     width: 85%;
     padding: 1.5rem;
     background-color: var(--color-surface);
+    backdrop-filter: var(--surface-blur, none);
+    -webkit-backdrop-filter: var(--surface-blur, none);
     color: var(--color-text);
     border: 1px solid var(--color-border);
     border-radius: 0.5rem;
@@ -1575,6 +2086,8 @@ dialog#art-preview-dialog {
     width: 90%;
     padding: 1.5rem;
     background-color: var(--color-surface);
+    backdrop-filter: var(--surface-blur, none);
+    -webkit-backdrop-filter: var(--surface-blur, none);
     color: var(--color-text);
     border: 1px solid var(--color-border);
     border-radius: 0.5rem;
@@ -1598,6 +2111,8 @@ dialog#game-log-dialog[open] {
     max-height: 80vh;
     padding: 1.5rem;
     background-color: var(--color-surface);
+    backdrop-filter: var(--surface-blur, none);
+    -webkit-backdrop-filter: var(--surface-blur, none);
     color: var(--color-text);
     border: 1px solid var(--color-border);
     border-radius: 0.5rem;
@@ -1619,6 +2134,8 @@ dialog#shared-deck-dialog[open] {
     max-height: 80vh;
     padding: 1.5rem;
     background-color: var(--color-surface);
+    backdrop-filter: var(--surface-blur, none);
+    -webkit-backdrop-filter: var(--surface-blur, none);
     color: var(--color-text);
     border: 1px solid var(--color-border);
     border-radius: 0.5rem;
@@ -1636,6 +2153,8 @@ dialog#draft-pool-dialog[open] {
     max-height: 80vh;
     padding: 1.5rem;
     background-color: var(--color-surface);
+    backdrop-filter: var(--surface-blur, none);
+    -webkit-backdrop-filter: var(--surface-blur, none);
     color: var(--color-text);
     border: 1px solid var(--color-border);
     border-radius: 0.5rem;
@@ -1651,6 +2170,8 @@ dialog#game-notes-dialog[open] {
     width: 90%;
     padding: 1.5rem;
     background-color: var(--color-surface);
+    backdrop-filter: var(--surface-blur, none);
+    -webkit-backdrop-filter: var(--surface-blur, none);
     color: var(--color-text);
     border: 1px solid var(--color-border);
     border-radius: 0.5rem;
@@ -1681,6 +2202,8 @@ dialog#game-chat-dialog[open] {
     max-height: 80vh;
     padding: 1.5rem;
     background-color: var(--color-surface);
+    backdrop-filter: var(--surface-blur, none);
+    -webkit-backdrop-filter: var(--surface-blur, none);
     color: var(--color-text);
     border: 1px solid var(--color-border);
     border-radius: 0.5rem;
@@ -1767,6 +2290,8 @@ dialog#deck-builder-dialog[open] {
     max-height: 90vh;
     padding: 1.5rem;
     background-color: var(--color-surface);
+    backdrop-filter: var(--surface-blur, none);
+    -webkit-backdrop-filter: var(--surface-blur, none);
     color: var(--color-text);
     border: 1px solid var(--color-border);
     border-radius: 0.5rem;

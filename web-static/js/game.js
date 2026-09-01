@@ -2242,6 +2242,13 @@
             const deckDescription = game.deck_type === 'custom'
                 ? (game.custom_deck_name || 'Uploaded Deck')
                 : deckTypeLabel(game.deck_type) + ' deck';
+            // Sealed Deck is a UI-only sentinel over format 'draft' -- see
+            // renderBoard()'s own identical exception for why this
+            // replaces the whole format/deck combination rather than
+            // showing "Draft, Sealed Deck deck".
+            const formatAndDeckDescription = game.deck_type === 'sealed_deck'
+                ? 'Sealed Deck'
+                : formatLabel(game.format) + ', ' + deckDescription;
             const formatEl = document.createElement('div');
             formatEl.className = 'lobby-format';
             // "Default selections" mode (issue #274) -- a per-game
@@ -2250,7 +2257,7 @@
             // seated player can tell it's on without opening the game --
             // per the issue's own "visible to the players playing it (at
             // least in the lobby)" requirement.
-            formatEl.textContent = formatLabel(game.format) + ', ' + deckDescription +
+            formatEl.textContent = formatAndDeckDescription +
                 (game.default_selections_mode ? ', default selections' : '');
             infoEl.appendChild(formatEl);
         }
@@ -2367,9 +2374,17 @@
         const deckDescription = firstGame.deck_type === 'custom'
             ? (firstGame.custom_deck_name || 'Uploaded Deck')
             : deckTypeLabel(firstGame.deck_type) + ' deck';
+        // Sealed Deck's own 2-player best-of-three match is grouped here
+        // too (it has a draft_match_id just like Quick/Winston Draft) --
+        // see renderBoard()'s own identical exception for why this
+        // replaces the whole format/deck combination rather than showing
+        // "Draft, Sealed Deck deck".
+        const formatAndDeckDescription = firstGame.deck_type === 'sealed_deck'
+            ? 'Sealed Deck'
+            : formatLabel(firstGame.format) + ', ' + deckDescription;
         const formatEl = document.createElement('div');
         formatEl.className = 'lobby-format';
-        formatEl.textContent = formatLabel(firstGame.format) + ', ' + deckDescription;
+        formatEl.textContent = formatAndDeckDescription;
         headerEl.appendChild(formatEl);
 
         const scoreEl = document.createElement('div');
@@ -3430,9 +3445,113 @@
         return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
     }
 
-    function cardArtUrl(card) {
+    // Card skins (issue #363) -- alternate printed card-front art for a
+    // handful of the options in the SAME <select id="theme-select">/
+    // data-theme picker used for color palettes (see "Themes" in
+    // web-static/README.md and app.js's initThemeSelect()). A theme name
+    // that isn't one of CARD_ART_SKINS below (a base mode, a palette, or
+    // 'noir') simply has no themed art folder, so cardArtUrl() falls
+    // through to the normal MSW print -- 'noir' in particular is a pure
+    // CSS filter over that normal art (see style.css's own
+    // [data-theme="noir"] rule), never a distinct image, so it needs no
+    // entry in the URL-building logic below at all.
+    const CARD_ART_SKINS = ['steampunk', 'futuristic', 'neon'];
+
+    function cardSkinPreference() {
+        try {
+            return localStorage.getItem(THEME_STORAGE_KEY) || 'system';
+        } catch (e) {
+            // localStorage unavailable (e.g. private browsing) -- falls
+            // back to the normal MSW art, same as no theme selected.
+            return 'system';
+        }
+    }
+
+    function defaultCardArtUrl(card) {
         return '../img/cards/MSW/' + card.catalog_card_id + '-' + slugify(card.name) + '.webp';
     }
+
+    // Session-lived record of skin/catalog_card_id combos already known to
+    // 404 (issue #363 follow-up, reported live as a visible flicker on
+    // every ~4s poll refresh): renderBoard() rebuilds every card thumb --
+    // and its <img> -- from scratch each poll, so before this cache
+    // existed, a card a skin doesn't cover yet re-issued its doomed themed
+    // request and re-ran the onerror fallback below EVERY single poll,
+    // not just once. With only a handful of cards covered so far, that
+    // was effectively every card on the board, every four seconds. Once a
+    // combo 404s here, cardArtUrl() skips straight to the normal print for
+    // it from then on, without ever touching the per-skin README's own
+    // "no manifest to update" design (this is populated automatically
+    // from real failures, not maintained by hand, and starts empty again
+    // on every fresh page load).
+    const missingThemedArt = new Set();
+
+    // Themed art is added gradually, one card at a time, per issue #363's
+    // own scope -- there's no manifest of which catalog_card_ids a skin
+    // actually covers yet, so this always POINTS at where a themed file
+    // WOULD live (unless missingThemedArt above already knows it 404s);
+    // setCardArt() below is what actually falls back to the normal print
+    // when that file doesn't exist (yet).
+    function cardArtUrl(card) {
+        const skin = cardSkinPreference();
+        if (!CARD_ART_SKINS.includes(skin) || missingThemedArt.has(skin + ':' + card.catalog_card_id)) {
+            return defaultCardArtUrl(card);
+        }
+        return '../img/cards/MSW/' + skin + '/' + card.catalog_card_id + '-' + slugify(card.name) + '.webp';
+    }
+
+    // Every <img> that shows card art funnels through this (rather than
+    // setting .src directly) so a skin with only partial coverage degrades
+    // cleanly: a themed file that doesn't exist yet 404s, and the onerror
+    // handler swaps back to the normal MSW print exactly once (cleared
+    // immediately after, so a THEN-failing default request -- shouldn't
+    // happen, but belt-and-suspenders -- can't loop) -- and records the
+    // miss in missingThemedArt so later polls don't repeat the request.
+    function setCardArt(imgEl, card) {
+        const skin = cardSkinPreference();
+        imgEl.src = cardArtUrl(card);
+        imgEl.onerror = () => {
+            imgEl.onerror = null;
+            missingThemedArt.add(skin + ':' + card.catalog_card_id);
+            imgEl.src = defaultCardArtUrl(card);
+        };
+    }
+
+    // Hurt Feelings (issue #363 skin fallback) is a round-level marker,
+    // not a cards row -- see its own render call site's comment for why
+    // it has no catalog_card_id -- so it can't reuse cardArtUrl()'s
+    // <id>-<slug> naming or img/cards/MSW/<skin>/ nesting. Its base art
+    // lives at img/hurt-feelings.webp; a themed version (when one exists)
+    // lives alongside it as img/hurt-feelings-<skin>.webp instead. Same
+    // graceful-fallback shape as setCardArt() otherwise: a skin with no
+    // themed file yet 404s, and onerror swaps back to the default print.
+    function hurtFeelingsArtUrl() {
+        const skin = cardSkinPreference();
+        if (!CARD_ART_SKINS.includes(skin)) {
+            return '../img/hurt-feelings.webp';
+        }
+        return '../img/hurt-feelings-' + skin + '.webp';
+    }
+
+    function setHurtFeelingsArt(imgEl) {
+        imgEl.src = hurtFeelingsArtUrl();
+        imgEl.onerror = () => {
+            imgEl.onerror = null;
+            imgEl.src = '../img/hurt-feelings.webp';
+        };
+    }
+
+    // app.js's initThemeSelect() already owns <select id="theme-select">
+    // sitewide (persistence, data-theme). This just re-renders the
+    // current board immediately on change (from the already-fetched
+    // currentState, no extra fetch needed) so every already-built
+    // .card-thumb picks up a newly-selected skin right away -- simply
+    // changing data-theme doesn't touch DOM nodes built earlier.
+    document.getElementById('theme-select')?.addEventListener('change', () => {
+        if (currentState) {
+            renderBoard(currentState);
+        }
+    });
 
     // Builds a card-art thumbnail in place of the old text-only button --
     // the printed art already conveys name/color/base value/rules text (all
@@ -3451,7 +3570,7 @@
 
         const img = document.createElement('img');
         img.className = 'card-thumb__art';
-        img.src = cardArtUrl(card);
+        setCardArt(img, card);
         img.alt = card.name + '. ' + (card.rules_text || 'No ability.');
         button.appendChild(img);
 
@@ -3594,7 +3713,7 @@
     // "Draft" button (see renderRotisserieDraftDrafting()).
     function openCardDetail(card, ownerLabel, selection, actionButton) {
         const artEl = document.getElementById('card-detail-art');
-        artEl.src = cardArtUrl(card);
+        setCardArt(artEl, card);
         artEl.alt = card.name + '. ' + (card.rules_text || 'No ability.');
 
         let meta = card.color + ', base value ' + card.base_value;
@@ -3977,8 +4096,18 @@
     // img/cards/ and so has no catalog_card_id/rules_text to build a
     // card-detail-dialog-style view from.
     const artPreviewDialog = document.getElementById('art-preview-dialog');
-    function openArtPreview(src, alt) {
+    // fallbackSrc is optional -- only Hurt Feelings' own themed art (which
+    // can 404 for a skin with no themed file yet, same as any other card
+    // skin) currently needs it; a caller that doesn't pass one gets no
+    // onerror handler at all, same as before this parameter existed.
+    function openArtPreview(src, alt, fallbackSrc) {
         const imageEl = document.getElementById('art-preview-image');
+        imageEl.onerror = fallbackSrc
+            ? () => {
+                imageEl.onerror = null;
+                imageEl.src = fallbackSrc;
+            }
+            : null;
         imageEl.src = src;
         imageEl.alt = alt;
         artPreviewDialog.showModal();
@@ -4279,7 +4408,7 @@
     let saveNoteTimer = null;
 
     function isNotesReadOnly() {
-        return !currentState || currentState.game.status !== 'in_progress';
+        return !currentState || !(currentState.game.status === 'in_progress' || isDraftMatchWaitingWindow(currentState));
     }
 
     async function flushNoteSave(gameId) {
@@ -4344,58 +4473,63 @@
     const chatButton = document.getElementById('view-chat-button');
     const chatSendButton = document.getElementById('game-chat-send-button');
     // The highest chat_messages[].id the player has already seen for the
-    // current game (dialog open, or last closed while caught up) --
-    // renderChat() below diffs against this to decide whether the unread
-    // badge should show. Persisted to localStorage (keyed per game_id,
-    // CHAT_LAST_SEEN_STORAGE_PREFIX below) rather than kept only in
-    // memory, so refreshing the browser doesn't forget what's already
-    // been read and re-flag it as unread -- a plain in-memory counter
-    // would reset to 0 on every page load. Reset (well, re-loaded from
-    // storage) whenever the viewed game itself changes.
-    let chatSeenGameId = null;
+    // current conversation (dialog open, or last closed while caught up)
+    // -- renderChat() below diffs against this to decide whether the
+    // unread badge should show. Persisted to localStorage (keyed per
+    // conversation, CHAT_LAST_SEEN_STORAGE_PREFIX below) rather than kept
+    // only in memory, so refreshing the browser doesn't forget what's
+    // already been read and re-flag it as unread -- a plain in-memory
+    // counter would reset to 0 on every page load. Reset (well, re-loaded
+    // from storage) whenever the viewed conversation itself changes.
+    let chatSeenConversationKey = null;
     let chatLastSeenMessageId = 0;
 
     const CHAT_LAST_SEEN_STORAGE_PREFIX = 'chatLastSeenMessageId:';
 
-    function getStoredChatLastSeenMessageId(gameId) {
+    // Issue #463: chat spans the whole match once one exists (see
+    // GameService::chatMessagesFor()), so the "last seen" position needs
+    // to key off draft_match_id too, not game_id alone -- otherwise
+    // switching from game 1 to game 2 of the same match would find no
+    // stored position for game 2's own id and momentarily re-flag every
+    // already-read message from game 1 as unread.
+    function chatConversationKeyFor(state) {
+        return state.game.draft_match_id !== null ? 'match:' + state.game.draft_match_id : 'game:' + state.game.id;
+    }
+
+    function getStoredChatLastSeenMessageId(conversationKey) {
         try {
-            return Number(localStorage.getItem(CHAT_LAST_SEEN_STORAGE_PREFIX + gameId)) || 0;
+            return Number(localStorage.getItem(CHAT_LAST_SEEN_STORAGE_PREFIX + conversationKey)) || 0;
         } catch (e) {
             // localStorage unavailable (e.g. private browsing) -- falls
-            // back to treating this game as never-seen, same as before
-            // this persistence existed.
+            // back to treating this conversation as never-seen, same as
+            // before this persistence existed.
             return 0;
         }
     }
 
-    function setStoredChatLastSeenMessageId(gameId, messageId) {
+    function setStoredChatLastSeenMessageId(conversationKey, messageId) {
         try {
-            localStorage.setItem(CHAT_LAST_SEEN_STORAGE_PREFIX + gameId, String(messageId));
+            localStorage.setItem(CHAT_LAST_SEEN_STORAGE_PREFIX + conversationKey, String(messageId));
         } catch (e) {
             // ignore -- the read position just won't persist across reloads
         }
     }
 
-    // Open Team Play's deck-building exception to "chat only while
-    // in_progress" -- mirrors GameService::isOpenTeamDeckBuildingChat()
-    // exactly (format 'team', still 'waiting', and the draft match has
-    // reached 'deck_building', not just 'drafting') so the button/dialog
-    // never offer something the server would then reject.
-    function isTeamDeckBuildingChatOpen(state) {
-        if (!state || state.game.status !== 'waiting' || state.game.format !== 'team') {
-            return false;
-        }
-        const draftState = state.game.deck_type === 'quick_draft' || state.game.deck_type === 'chaos_draft' ? state.quick_draft
-            : state.game.deck_type === 'winston_draft' ? state.winston_draft
-                : state.game.deck_type === 'grid_draft' ? state.grid_draft
-                    : state.game.deck_type === 'rotisserie_draft' ? state.rotisserie_draft
-                        : state.game.deck_type === 'tiered_rotisserie_draft' ? state.tiered_rotisserie_draft
-                            : null;
-        return Boolean(draftState) && draftState.status === 'deck_building';
+    // A draft match's own "chat/notes are usable during drafting/
+    // deck-building too, not just in_progress" exception (issue #463) --
+    // mirrors GameService::isDraftMatchWaitingWindow() exactly (still
+    // 'waiting', and this game belongs to a draft match at all) so the
+    // button/dialog never offer something the server would then reject.
+    // Deliberately doesn't narrow by format/channel/drafting-vs-
+    // deck_building sub-status the way the old, narrower
+    // isTeamDeckBuildingChatOpen() this replaces used to -- every draft
+    // match's own waiting window is covered uniformly now.
+    function isDraftMatchWaitingWindow(state) {
+        return Boolean(state) && state.game.status === 'waiting' && state.game.draft_match_id !== null;
     }
 
     function isChatReadOnly() {
-        return !currentState || !(currentState.game.status === 'in_progress' || isTeamDeckBuildingChatOpen(currentState));
+        return !currentState || !(currentState.game.status === 'in_progress' || isDraftMatchWaitingWindow(currentState));
     }
 
     function chatMessageListItem(message) {
@@ -4417,10 +4551,11 @@
     function renderChat(state) {
         const gameId = state.game.id;
         const messages = state.chat_messages || [];
+        const conversationKey = chatConversationKeyFor(state);
 
-        if (chatSeenGameId !== gameId) {
-            chatSeenGameId = gameId;
-            chatLastSeenMessageId = getStoredChatLastSeenMessageId(gameId);
+        if (chatSeenConversationKey !== conversationKey) {
+            chatSeenConversationKey = conversationKey;
+            chatLastSeenMessageId = getStoredChatLastSeenMessageId(conversationKey);
         }
 
         // Open Team Play only -- NOT 'closed_team' too, unlike every other
@@ -4428,21 +4563,19 @@
         // Play's whole premise is that information stays closed between
         // teammates (see postChatMessage()'s own docblock in
         // GameService.php), so it gets no private channel to undercut
-        // that with. Also hidden during the deck-building chat window
-        // itself -- isOpenTeamDeckBuildingChat() only ever accepts 'team'
-        // there (the opposing team may still be mid-draft/deck-building,
-        // with no "table" to speak to yet), so offering a choice would
-        // just let the 'table' option fail server-side; sendChatText()
-        // below sends 'team' directly whenever this is hidden for that
-        // reason.
-        chatChannelSelect.hidden = state.game.format !== 'team' || isTeamDeckBuildingChatOpen(state);
+        // that with. Issue #463 widened the waiting-window exception to
+        // accept BOTH channels (not just 'team'), so unlike before, this
+        // no longer needs its own special case for the drafting/
+        // deck-building window -- the picker stays available there too,
+        // same as once the game is in_progress.
+        chatChannelSelect.hidden = state.game.format !== 'team';
 
         if (gameChatDialog.open && gameChatDialog.dataset.gameId === String(gameId)) {
             renderList(chatMessagesList, chatEmptyEl, messages, chatMessageListItem);
             chatMessagesList.scrollTop = chatMessagesList.scrollHeight;
             if (messages.length > 0) {
                 chatLastSeenMessageId = messages[messages.length - 1].id;
-                setStoredChatLastSeenMessageId(gameId, chatLastSeenMessageId);
+                setStoredChatLastSeenMessageId(conversationKey, chatLastSeenMessageId);
             }
             chatButton.classList.remove('has-unread-chat');
         } else {
@@ -4451,10 +4584,14 @@
             // past chatLastSeenMessageId above) or reloading the page
             // after being the only one who's said anything so far must
             // never light this up, since there's nothing of anyone else's
-            // the player hasn't seen.
-            const viewerGamePlayerId = state.you && state.you.game_player_id;
+            // the player hasn't seen. Compared by user_id (issue #463),
+            // not game_player_id -- a message sent from an earlier game in
+            // the same match carries THAT game's own game_player_id, which
+            // would never match the viewer's CURRENT one even for their
+            // own message.
+            const viewerUserId = state.you && state.you.user_id;
             const hasUnreadFromSomeoneElse = messages.some(
-                (message) => message.id > chatLastSeenMessageId && message.sender_game_player_id !== viewerGamePlayerId
+                (message) => message.id > chatLastSeenMessageId && message.sender_user_id !== viewerUserId
             );
             chatButton.classList.toggle('has-unread-chat', hasUnreadFromSomeoneElse);
         }
@@ -4508,15 +4645,11 @@
         chatQuickButtons.forEach((button) => { button.disabled = true; });
 
         try {
-            // chatChannelSelect.hidden collapses two different situations to
-            // the same "no choice to make" state: an ordinary non-team format
-            // (only 'table' exists) and the deck-building window (only 'team'
-            // exists, see renderChat()'s own chatChannelSelect.hidden
-            // computation above) -- isTeamDeckBuildingChatOpen() tells them
-            // apart so the right implicit channel is sent either way.
-            const channel = chatChannelSelect.hidden
-                ? (isTeamDeckBuildingChatOpen(currentState) ? 'team' : 'table')
-                : chatChannelSelect.value;
+            // chatChannelSelect.hidden now means exactly one thing --
+            // format !== 'team' (see renderChat()'s own computation above)
+            // -- so a hidden picker always implies 'table', the only
+            // channel that format ever has.
+            const channel = chatChannelSelect.hidden ? 'table' : chatChannelSelect.value;
             const { ok, body } = await sendChatMessage(currentGameId, messageText, channel);
             if (!ok) {
                 chatErrorEl.textContent = (body && body.message) || 'Could not send that message.';
@@ -4770,12 +4903,22 @@
             : state.game.deck_type === 'custom_duel'
                 ? (you && you.custom_deck_name || 'Uploaded Deck')
                 : deckTypeLabel(state.game.deck_type) + ' deck';
+        // Sealed Deck is a UI-only sentinel over format 'draft' (see
+        // isSealedDeckFormat() and the New Game dialog wiring further up)
+        // -- showing it as "Draft, Sealed Deck deck" would surface that
+        // internal plumbing to players instead of the one name they
+        // actually picked, so it replaces the whole format/deck
+        // combination the same way custom/custom_duel's own deck name
+        // already does above.
+        const formatAndDeckDescription = state.game.deck_type === 'sealed_deck'
+            ? 'Sealed Deck'
+            : formatLabel(state.game.format) + ', ' + deckDescription;
         // "Default selections" mode (issue #274) -- mirrors the lobby
         // row's own indicator (buildGameRow()) so it's visible once a
         // player has actually opened the board too, not just from the
         // lobby list.
         document.getElementById('board-title').textContent =
-            'Game #' + state.game.id + ' (' + formatLabel(state.game.format) + ', ' + deckDescription +
+            'Game #' + state.game.id + ' (' + formatAndDeckDescription +
             (state.game.default_selections_mode ? ', default selections' : '') + ')';
 
         // Spectator mode (issue #128)/Watch game replay (issue #240) --
@@ -4810,20 +4953,29 @@
             || Boolean(you && you.resigned);
         resignButton.disabled = false;
 
-        // In-game chat (issue #109) -- same seated-players-only gating as
-        // Notes (see the isReadOnlyView() check further down for that
-        // one), computed here rather than down with it since #view-chat-
-        // button, like #resign-button just above, lives outside
-        // #in-progress-area precisely so it stays reachable during the
-        // 'waiting' branch's own early return below -- Open Team Play's
-        // deck-building window (isTeamDeckBuildingChatOpen()) is the one
-        // case chat is actually usable while still 'waiting'. renderChat()
-        // itself is likewise called unconditionally here rather than only
-        // in the in_progress branch, so an open chat dialog keeps
-        // receiving new messages through a 'waiting' poll too.
+        // In-game chat (issue #109) and Notes (issue #258) -- both
+        // seated-players-only, computed here rather than down with
+        // #in-progress-area's own content since #view-chat-button/
+        // #view-notes-button, like #resign-button just above, live outside
+        // it precisely so they stay reachable during the 'waiting' branch's
+        // own early return below -- a draft match's own waiting window
+        // (isDraftMatchWaitingWindow(), issue #463) is the one case either
+        // is actually usable while still 'waiting'. renderChat() itself is
+        // likewise called unconditionally here rather than only in the
+        // in_progress branch, so an open chat dialog keeps receiving new
+        // messages through a 'waiting' poll too.
+        //
+        // Chat and Notes differ once the game is OVER, though (completed/
+        // abandoned): chat has "no one left mid-conversation to send to"
+        // (see postChatMessage()'s own docblock) and hides entirely, while
+        // Notes stays visible read-only (getNote() never blocks on status
+        // at all) -- a personal scratchpad someone would still want to
+        // read back, unlike a live conversation.
         document.getElementById('view-chat-button').hidden = isReadOnlyView()
-            || !(state.game.status === 'in_progress' || isTeamDeckBuildingChatOpen(state));
+            || !(state.game.status === 'in_progress' || isDraftMatchWaitingWindow(state));
         renderChat(state);
+        document.getElementById('view-notes-button').hidden = isReadOnlyView()
+            || (state.game.status === 'waiting' && !isDraftMatchWaitingWindow(state));
 
         renderDraftMatchScoreline(state);
         renderRematchButton(state);
@@ -5002,15 +5154,18 @@
                 // img/cards/ and has no catalog_card_id to build a
                 // card-detail-dialog-style view from; clicking it opens the
                 // same generic art-preview dialog used for that reason.
+                // Themed via hurtFeelingsArtUrl()/setHurtFeelingsArt() (see
+                // their own comment further up) rather than cardArtUrl()/
+                // setCardArt(), for that same "no catalog_card_id" reason.
                 if (hasHurtFeelings) {
                     const alt = player.username + ' has Hurt Feelings this round (2 plays).';
                     const thumb = document.createElement('button');
                     thumb.type = 'button';
                     thumb.className = 'hurt-feelings-thumb';
                     thumb.title = alt;
-                    thumb.addEventListener('click', () => openArtPreview('../img/hurt-feelings.webp', alt));
+                    thumb.addEventListener('click', () => openArtPreview(hurtFeelingsArtUrl(), alt, '../img/hurt-feelings.webp'));
                     const img = document.createElement('img');
-                    img.src = '../img/hurt-feelings.webp';
+                    setHurtFeelingsArt(img);
                     img.alt = 'Hurt Feelings';
                     thumb.appendChild(img);
                     iconsEl.appendChild(thumb);
@@ -5234,12 +5389,6 @@
         // the game has actually started and its deck has been dealt (see
         // the 'waiting' branch above, which hides this whole area).
         document.getElementById('view-shared-deck-button').hidden = !isSharedDeckType(state.game.deck_type);
-
-        // "Notes" (issue #258) -- a private per-seat scratchpad, so it only
-        // ever makes sense for an actual seated player, never a
-        // spectator/replay viewer (state.you is just a synthesized stub
-        // with no game_player_id there -- see isReadOnlyView()'s docblock).
-        document.getElementById('view-notes-button').hidden = isReadOnlyView();
 
         // round.play_grants describes whoever's turn it currently is, not
         // the viewer specifically -- showing it while it's someone else's
@@ -7770,10 +7919,23 @@
         return null;
     }
 
-    function constraintMessage(constraint, candidates) {
+    function constraintMessage(constraint, candidates, candidateValues) {
         if (!constraint) return null;
         if (constraint.type === 'max_total_value') {
-            const total = candidates.reduce((sum, c) => sum + c.value, 0);
+            // candidateValues (field.candidate_values -- see
+            // GameService::withSimulatedConstraintValues()'s own docblock)
+            // is a server-computed card_id -> value map using each mood's
+            // value as if the card currently being played (e.g. Anger)
+            // were already in play, needed because a dynamic mood's value
+            // (Superiority's "7 if you have more moods than each other
+            // player") can change once the played card itself enters play
+            // and shifts a mood-count comparison. Falling back to c.value
+            // (the stale pre-play value) keeps this a no-op for fields
+            // without that map.
+            const total = candidates.reduce((sum, c) => {
+                const value = candidateValues && candidateValues[c.card_id] !== undefined ? candidateValues[c.card_id] : c.value;
+                return sum + value;
+            }, 0);
             return total > constraint.max ? `The combined value of the chosen moods cannot exceed ${constraint.max}` : null;
         }
         if (candidates.length < 2) return null; // the rest only make sense once 2+ are chosen
@@ -7796,7 +7958,7 @@
     function fieldValidationMessage(field, widget) {
         if (!field.multi) return null;
         const candidates = selectedCandidates(field, widget);
-        return countMessage(field.count, candidates.length) || constraintMessage(field.constraint, candidates);
+        return countMessage(field.count, candidates.length) || constraintMessage(field.constraint, candidates, field.candidate_values);
     }
 
     function updatePlayButtonEnabled() {
@@ -7879,7 +8041,7 @@
 
         boardError.hidden = true;
         const artEl = document.getElementById('choices-card-art');
-        artEl.src = cardArtUrl(card);
+        setCardArt(artEl, card);
         artEl.alt = card.name + '. ' + (card.rules_text || 'No ability.');
 
         // Chaos Draft (issue #405): same additive info as openCardDetail()'s

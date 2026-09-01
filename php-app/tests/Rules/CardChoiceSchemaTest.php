@@ -387,6 +387,23 @@ final class CardChoiceSchemaTest extends TestCase
         self::assertTrue($fields[0]['includes_self']);
     }
 
+    /**
+     * Hostility's own second-stage text ("put up to two moods, each with a
+     * value of 3 or less, into the discard pile") has no "other than this
+     * one" exclusion the way Worry's near-identical wording does, and
+     * Hostility's own flat value (3) happens to qualify -- a bug caught
+     * live: HostilityEffect itself already accepted the card's own id as a
+     * target (see MoodPlayServiceTest::testHostilityCanTargetItselfInTheSecondStage()),
+     * but this schema entry was missing includes_self, so neither the
+     * game.js UI nor the bot ever actually offered it as a candidate.
+     */
+    public function testHostilityIncludesSelfAsATargetInItsSecondStage(): void
+    {
+        $fields = CardChoiceSchema::forEffectKey('hostility');
+
+        self::assertTrue($fields[1]['includes_self']);
+    }
+
     public function testCrueltyIndecisivenessAndSuspicionHaveNoCountOrConstraintSinceTheyAllowAnyNumber(): void
     {
         foreach (['cruelty', 'indecisiveness', 'suspicion', 'doubt', 'thrill'] as $effectKey) {

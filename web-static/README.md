@@ -43,15 +43,28 @@ codebase doesn't control the shape of, so a CSS margin targeting it
 that entirely, since it opens the door for the BMC button to render
 however it wants without ever crowding another control.
 
-## Dark mode
+## Themes
 
-Three modes, chosen via a `<select id="theme-select">` in every page's own
-`<footer>` (`system`/`light`/`dark`, defaulting to `system`): honor the
+Originally three modes (`system`/`light`/`dark`, issue #112) plus, as of
+issue #363, a curated set of additional named color palettes -- Jade, Red
+Marble, White Marble, High Contrast, and High Contrast Dark -- AND a set
+of card-skin themes -- Noir, Steampunk, Futuristic, Neon -- all chosen via
+the SAME single `<select id="theme-select">` in every page's own
+`<footer>` (defaulting to `system`). There is deliberately no second
+selector: the product decision was that a player picks ONE option from ONE
+dropdown at a time rather than crossing two axes -- simpler to explain and
+to build. `<optgroup>`s ("Basic"/"Palettes"/"Skins") group the eleven
+options for readability. All four skins (see further down) recolor
+chrome/UI the same way a palette does, on top of card art: Steampunk/
+Futuristic/Neon re-skin the printed card front itself, while Noir applies
+a CSS filter to the existing print instead of swapping the image.
+
+The first three ("Basic") mean what they always did: honor the
 OS/browser's `prefers-color-scheme` preference, force light, or force dark
-regardless of what the OS says. Full theming (more than light/dark, a
-"themes" concept) was scoped out of this pass -- see the "Implement dark
-mode and/or themes" issue's own notes -- this only covers the two-mode
-case plus the system default.
+regardless of what the OS says. Every other option is a single FIXED
+appearance with no `prefers-color-scheme` counterpart -- picking "Jade"
+overrides the system preference entirely, the same way an explicit "Dark"
+selection already did.
 
 The color switch itself is CSS-only, in `css/style.css`: a `:root` block
 defines light-mode custom properties (`--color-bg`, `--color-text`,
@@ -66,10 +79,194 @@ light mode against a dark OS. A separate `:root[data-theme="dark"]` rule
 applies the same dark overrides unconditionally, forcing dark mode against
 a light OS. This means the "System" default needs no JavaScript to react
 live to an OS-level theme change -- the media query alone re-evaluates
-automatically -- only the two explicit overrides need `data-theme` set at
-all.
+automatically -- only the explicit overrides need `data-theme` set at all.
 
-Getting that attribute set before first paint (so an explicit preference
+Each named palette (issue #363) is just one more `:root[data-theme="..."]`
+block alongside `dark`'s own, overriding the same seven structural/
+decorative custom properties -- Jade/Red Marble/White Marble were built
+from three maintainer-supplied hex colors apiece (see `css/style.css`'s
+own comment above each block for exactly how each of the three maps to
+bg/surface/text/border/etc., including where a color needed computing
+rather than using a given one directly, e.g. a hue too saturated to read
+whole paragraphs of running text in); High Contrast and High Contrast Dark
+are this repo's own suggested additions, genuine accessibility palettes
+(near-black-on-white and near-white-on-black respectively, thicker
+borders, darker/more-saturated status colors) rather than decorative
+ones -- the latter added specifically so a player who needs the contrast
+isn't forced into a light background to get it. None of the other
+palettes touch the semantic status colors (`--color-error`/
+`--color-success`/`--color-pending`/`--color-info`) or the decorative icon
+accents (`--color-brown`/`--color-gold`) except the two High Contrast
+palettes, which deliberately do override the four status colors -- reading
+those clearly is their entire point.
+
+The four skins are a different customization axis from the five palettes
+above, but all four are full themes in their own right: each has its own
+`:root[data-theme="..."]` color block (same seven structural/decorative
+properties every palette overrides, none of the four status colors, same
+convention as Jade/Red Marble/White Marble) PLUS a decorative `body`
+background-image, since "ambitious theme" -- not just an alternate card
+print -- was the whole design brief for these four.
+
+All three of Steampunk, Futuristic, and Neon originally shipped with a
+placeholder background baked directly into `css/style.css` as a small,
+tileable `data:image/svg+xml;base64,...` inline SVG, generated
+procedurally (brass gear silhouettes, hand-plotted right-angle circuit
+traces, and a magenta/cyan crosshatch grid under a radial-gradient glow,
+respectively) because no image-generation tool was available at the
+time to produce anything more detailed. All three have since been
+replaced, one at a time, with a real maintainer-supplied photo/
+illustration: an aged brass-and-gears mechanism
+(`img/themes/steampunk-bg.webp`), a dark circuit-board/data-network scene
+(`img/themes/futuristic-bg.webp`), and a cyberpunk alley lit by
+magenta/cyan signage (`img/themes/neon-bg.webp`). All three use the same
+`cover`/`fixed`/darkening-scrim technique as Noir's own photo (see Noir's
+own section below for the full mechanical explanation), just tuned per
+image: Steampunk's scrim is strongest (0.55 alpha vs Noir's 0.4) since
+that image has large bright parchment-colored passages across most of
+its area rather than a few small highlights, and `--color-text`'s light
+parchment tone would otherwise fail contrast against them; Futuristic's
+and Neon's scrims are lighter still (0.35 and 0.3 alpha) since both
+images are already very dark overall, with no bright passages to fight
+for contrast against -- just enough to guard against each image's own
+brightest glowing details rather than to meaningfully dim it.
+
+Steampunk/Futuristic/Neon are ALSO alternate PRINTED card-front art,
+added gradually one card at a time rather than needing full coverage
+before shipping -- `cardArtUrl(card)` (`game.js`) points at
+`img/cards/MSW/<skin>/<catalog_card_id>-<slug>.webp` whenever one of these
+three is selected (see the READMEs already sitting in each of those three
+folders for the exact naming convention), and
+every `<img>` that shows card art is set through `setCardArt(imgEl, card)`
+rather than a raw `.src =` assignment -- if that themed file doesn't exist
+yet, the request 404s and `setCardArt()`'s own `onerror` handler swaps the
+`src` back to the normal MSW print exactly once, so a skin with only
+partial coverage degrades cleanly to "some cards look normal" rather than
+a page full of broken-image icons. There's no manifest of which
+`catalog_card_id`s a skin actually covers anywhere -- the 404-and-fall-back
+approach means one never needs maintaining as coverage grows. Card art
+only appears in `game/index.html`, so on every other page selecting one of
+these three shows only its color/background treatment, with nothing to
+skin.
+
+Steampunk's first four pieces of real card-skin art (a maintainer-supplied
+sketch-style illustration per card) landed this way: Creativity
+(`img/cards/MSW/steampunk/32-creativity.webp`), Intimidation
+(`img/cards/MSW/steampunk/67-intimidation.webp`), and the Smugness token
+(`img/cards/MSW/steampunk/134-smugness.webp`, `cards.is_token = 1` --
+tokens get themed art through the exact same `cardArtUrl()` path as any
+other card, since both key off `catalog_card_id`). Hurt Feelings needed its
+own fallback mechanism to join them: it isn't a `cards` row at all (see
+"Assets" below), so it can't reuse `cardArtUrl()`/`setCardArt()`'s
+`<catalog_card_id>-<slug>` naming or `img/cards/MSW/<skin>/` nesting.
+`hurtFeelingsArtUrl()`/`setHurtFeelingsArt()` (`game.js`) mirror their
+shape instead, using `img/hurt-feelings.webp`/`img/hurt-feelings-<skin>.webp`
+naming alongside the existing base file. The Hurt Feelings thumbnail's
+click-to-preview dialog (`openArtPreview()`) needed the same fallback
+wired in separately -- it takes an optional third `fallbackSrc` argument
+(unused by its only other caller) so a themed preview that 404s swaps
+back to the default print instead of showing a broken-image icon.
+
+Futuristic's first three pieces of real card-skin art followed the same
+pattern, plus its own Hurt Feelings art:
+`img/cards/MSW/futuristic/32-creativity.webp`,
+`img/cards/MSW/futuristic/67-intimidation.webp`,
+`img/cards/MSW/futuristic/134-smugness.webp`, and
+`img/hurt-feelings-futuristic.webp`. Neon's own matching set followed
+the same pattern: `img/cards/MSW/neon/32-creativity.webp`,
+`img/cards/MSW/neon/67-intimidation.webp`,
+`img/cards/MSW/neon/134-smugness.webp`, and
+`img/hurt-feelings-neon.webp`. Any future skin (or these three, for any
+card not yet covered) without its own themed file for a given card still
+404s and falls back to the plain print through the exact same mechanism.
+
+The fourth skin, Noir, uses a real maintainer-supplied photo instead of a
+procedural pattern: a moody, rain-streaked night street
+(`img/themes/noir-bg.webp`), sized to `cover` and pinned with
+`background-attachment: fixed` so it stays put as a backdrop while content
+scrolls over it (the same technique Steampunk/Futuristic/Neon's own
+photos use).
+Because a real photo this dark can't "fall through" to whatever
+system/light/dark default happened to be active the way the earlier
+placeholder pattern could -- default light-mode text assumes a light
+background, and would be close to illegible over a night photo -- Noir
+gets its own `--color-text`/`--color-border`/etc. tuned to the photo's own
+warm neon signage, the same as any other named palette. Its
+`--color-surface`, though, is the one deliberate exception to every other
+palette's "solid, opaque hex" convention: a translucent near-black
+(`rgba(12, 10, 8, 0.82)`), so dialogs/rows/panels read as frosted glass
+over the photo rather than flat opaque cards -- a look that suits Noir
+specifically and wouldn't necessarily suit a palette with a plain color
+background instead of a busy photo. A `linear-gradient()` darkening scrim
+is layered between `--color-surface`'s own backdrop and the photo (same
+`background-image` list, drawn first) so the handful of bright spots in
+the photo itself (neon signs, wet-pavement reflections) can't fail
+contrast with light text wherever page content happens to land on top of
+them -- a robustness measure a single flat color/pattern never needed.
+
+"Frosted glass" is a literal `backdrop-filter: blur()`, not just
+translucency -- a new `--surface-blur` custom property (`css/style.css`)
+drives it, added alongside `background-color: var(--color-surface)` on
+every dialog (plus the grid-draft arrow button) that paints that
+property. `--surface-blur` is undefined everywhere except Noir, so the
+`var(--surface-blur, none)` fallback makes it a no-op for every other
+palette -- a solid opaque background has nothing behind it worth
+blurring, so there's no reason to pay for the blur pass on pages using
+them. Only Noir's own `:root` block sets `--surface-blur: blur(10px)`,
+turning the same shared declaration into a real blur exactly where the
+photo underneath makes one worth having -- one property set once, rather
+than repeating a theme-scoped override at each of the dozen individual
+dialog rules.
+
+Noir's card art, separately, still needs no alternate card-front images
+of its own, unlike Steampunk/Futuristic/Neon -- it's a filter over the
+normal MSW print. That filter is no longer a flat `grayscale(1)
+contrast(1.15)`, though: an early version fully desaturated the whole
+card uniformly, which erased the color-coded header band a player
+normally reads a card's mood from at a glance -- a real usability
+regression this repo's own playtesting caught. `#noir-card-fade` (an SVG
+`<filter>`, defined once in `game/index.html` since card art only appears
+there, referenced from `css/style.css` via `filter:
+url(#noir-card-fade)`) fakes a top-to-bottom gradient a plain CSS
+`filter` can't express on its own: the header band (the top ~20% of the
+card) stays completely untouched, full color; from there it fades to
+fully desaturated-plus-contrast by three-quarters of the way down,
+staying that way through the footer. Mechanically, it's a desaturated,
+contrast-boosted copy of the card (`feColorMatrix`/`feComponentTransfer`)
+punched through a gradient alpha mask (`feImage`, an inline base64
+SVG rect whose own linear gradient carries that same 0%/20%/75%/100%
+shape) via `feComposite`'s `"in"` operator, then `feMerge` stacks that
+masked copy OVER the plain original -- transparent (top) lets the
+original color show through untouched, opaque (bottom) fully replaces it.
+Needs `primitiveUnits="objectBoundingBox"` (every x/y/width/height given
+as a 0-1 fraction, not a raw pixel value) so the gradient sizes itself
+against the filtered `<img>`'s own box instead of some unrelated
+coordinate space -- the default resolves percentages incorrectly and
+silently produces a blank or mispositioned result rather than an error,
+so this was verified against real card art (a `feImage`/`feComposite`
+debug harness rendering just the raw alpha mask, then the masked
+grayscale layer alone, before trusting the full composite) before
+shipping it. Since the filter is defined once as an SVG `<defs>` block
+rather than computed from `--color-*` custom properties, it isn't
+theme-aware in the way the rest of this file's CSS is -- it's simply
+never referenced by anything but Noir's own filter rule, so that doesn't
+matter in practice.
+
+The filter's own selector reaches `#card-detail-art`/`#choices-card-art`
+too (the card-detail dialog's and the choices panel's own single-card
+previews), not just the many `.card-thumb__art` thumbnails across
+hand/in-play/discard/draft screens -- all card art funnels through
+`cardArtUrl()`, so this one CSS rule (referencing the one SVG filter)
+covers everywhere it appears. It also survives the 90deg/180deg/270deg
+`transform: rotate()` this file's own rules apply to suppressed/
+value-overridden in-play cards (tabletop "tapped card" conventions) --
+CSS applies `filter` to an element's own unrotated content before
+`transform` repositions the result, so the gradient (computed in the
+image's own un-rotated coordinate space) rotates rigidly along with
+everything else already printed on the card, keeping the same relative
+"header stays colorful, footer stays gray" relationship it has upright.
+
+Getting `data-theme` set before first paint (so an explicit preference
 never flashes the wrong theme first) needs to happen before `js/app.js`
 even loads, since that script tag sits at the bottom of `<body>`. Each
 page duplicates a tiny inline `<script>` at the top of its own `<head>`
@@ -77,12 +274,41 @@ that reads `themePreference` from `localStorage` and sets
 `document.documentElement.dataset.theme` synchronously -- inlined and
 repeated per page rather than factored into a shared external file, since
 an external script would itself add back the network-round-trip delay
-this exists to avoid. `js/app.js`'s own `initThemeSelect()` IIFE only
+this exists to avoid. That inline script (and `js/app.js`'s own
+`initThemeSelect()` `change` handler) checks `theme !== 'system'`, not
+`theme === 'light' || theme === 'dark'` -- issue #363 needed every NEW
+palette or skin name to also set `data-theme`, and listing every valid
+name in seven duplicated inline scripts every time an option gets added
+would be its own maintenance burden; "system" is the one value that's
+ever actually meant to clear the attribute. This same genericity is what
+lets skin names live in the identical `data-theme` attribute as palette
+names with no special-casing anywhere -- a skin name just happens not to
+match any color block. `js/app.js`'s own `initThemeSelect()` IIFE only
 needs to keep the footer `<select>` in sync with that same stored
 preference and write a new one back to `localStorage` (plus update
 `data-theme` immediately) on `change` -- it doesn't need to set the
 attribute on load, since the inline per-page script already did that job
-by the time this file runs.
+by the time this file runs. `game.js` additionally listens for `change` on
+`#theme-select` to call `renderBoard(currentState)` immediately -- unlike
+a CSS custom property, which every already-rendered element picks up
+automatically the instant it changes, swapping `data-theme` alone does
+nothing for a `.card-thumb`'s `<img src>` that was already set; every
+visible card needs its art actually rebuilt.
+
+Steampunk is also the first skin with its own display font: headings
+(`h1`/`h2`/`h3`) switch to IM Fell English SC, a small-caps Victorian
+book face, via a `@font-face` in `css/style.css` pointing at
+`fonts/im-fell-english-sc.woff2` (its `fonts/OFL.txt` is the font's own
+SIL Open Font License text, required alongside any redistributed copy of
+it). Self-hosted rather than pulled from Google Fonts at request time,
+matching every other themed asset in this app already being a local file
+instead of a third-party dependency. Deliberately scoped to headings
+only, not the whole page -- small caps reads well for a short title but
+makes a full paragraph (or a card's own rules text) much harder to read,
+so body copy stays on the normal font stack regardless of theme.
+
+All theme/palette/skin preferences are `localStorage`-only, with no
+server-side sync -- issue #363 scoped that out explicitly.
 
 ## Maintenance mode
 
@@ -1035,8 +1261,20 @@ someone else's listing needs no opt-in of its own.
     Structure deck" -- built from the same `format`/`deck_type` labels
     (`formatLabel()`/`deckTypeLabel()`) the board's own title uses,
     substituting the game's `custom_deck_name` for a `custom` deck_type
-    just like the board title does, with a trailing ", default
-    selections" appended whenever `game.default_selections_mode` is true
+    just like the board title does. Sealed Deck gets the same "drop the
+    leading format label" special case `openGameSummary()`'s own listing
+    already applies (see "Open lobby matchmaking" above) -- it's a
+    `format: 'draft'` value under the hood (issue #392) with no actual
+    drafting phase, so this line reads plain "Sealed Deck" rather than
+    "Draft, Sealed Deck deck" (a bug caught live: this and the board
+    title, spectate's own friends-games list, and the Quick/Winston/
+    Sealed Deck match-group header all built this line independently of
+    `openGameSummary()`'s fix and so never inherited it -- now all four
+    apply the same exception, plus `DECK_TYPE_LABELS` itself finally
+    gained a `sealed_deck` entry rather than silently falling back to the
+    raw value wherever some future caller reads it unadorned), with a
+    trailing ", default selections" appended whenever
+    `game.default_selections_mode` is true
     (issue #274 -- the same suffix the board title itself gets, see
     "Default selections mode" in `php-app/README.md`). `custom_duel` falls back to
     `deckTypeLabel()`'s generic label here since each player's own
@@ -1058,7 +1296,7 @@ someone else's listing needs no opt-in of its own.
     `.lobby-status--<status>` class per row -- `waiting` reads in
     `--color-pending`, `in_progress` in a new `--color-info` (blue, added
     alongside the existing error/success/pending theme variables --
-    see "Dark mode" below), `completed` in `--color-muted`, and the rarer
+    see "Themes" below), `completed` in `--color-muted`, and the rarer
     `abandoned` in `--color-error` -- distinguishing what needs attention
     at a glance rather than requiring every row's text to be read in full.
     `is_your_turn` gets its own whole-row background
@@ -1581,7 +1819,18 @@ someone else's listing needs no opt-in of its own.
     rule always wins over the browser's own default
     `[hidden] { display: none }` UA-stylesheet rule regardless of
     selector specificity -- the exact same fix `.in-play-zone[hidden]`
-    already needed, see that rule's own comment).
+    already needed, see that rule's own comment). Also needs an explicit
+    `z-index: 1` (a bug caught live: without it, other content showed
+    through -- a "Waiting for..." status line's own `.waiting-icon`
+    hourglass, which animates `opacity` and so creates a stacking context
+    of its own, or a Noir-skinned card's `filter: url(#noir-card-fade)`,
+    same reason). `#game-main` itself establishes no stacking context, so
+    any such descendant hoists all the way up to the ROOT one -- the same
+    level `#loading-overlay`'s own `position: fixed` puts it at -- and
+    since `#game-main` comes AFTER `#loading-overlay` in `game/index.html`,
+    it would otherwise paint on top rather than staying hidden beneath
+    it. See `#loading-overlay`'s own comment in `style.css` for the full
+    mechanism.
   - **Board**: players, whose turn it is, in-play moods, the discard pile,
     deck count, and your hand (via `GET /games/state`). For a
     `custom_duel` game still `waiting` to start, `renderDuelDeckSubmission()`
@@ -2929,22 +3178,35 @@ someone else's listing needs no opt-in of its own.
     line of log text).
 
     **In-game notepad (issue #258).** A "Notes" button (`#view-notes-
-    button`, next to "View log"/"View decklist") opens `#game-notes-
-    dialog` -- a private, per-seat scratchpad, never shared with anyone
-    else at the table, so unlike "View log"/"View decklist" it has no
-    lobby-row counterpart and is hidden entirely while spectating/
-    replaying (`isReadOnlyView()`; a spectator/replay viewer has no seat
-    of their own to have a note for). Opening it fetches the note's
-    current text via `GET /games/notes` (`getGameNote()` in `app.js`);
-    typing into the textarea autosaves on a 1-second debounce
-    (`saveGameNote()` -> `POST /games/notes`) rather than needing an
-    explicit Save button, and closing the dialog with an edit still
-    pending flushes it immediately first. Once the game's own status
-    isn't `in_progress`, the textarea is disabled and a "This game has
-    ended, so your notes are read-only" message replaces the save-status
-    line -- the previously-saved text is still loaded and shown, just not
-    editable (see `GameService::saveNote()`'s own gate in
-    `php-app/README.md`).
+    button`, next to "Chat"/"View log") opens `#game-notes-dialog` -- a
+    private, per-seat scratchpad, never shared with anyone else at the
+    table, so unlike "View log"/"View decklist" it has no lobby-row
+    counterpart and is hidden entirely while spectating/replaying
+    (`isReadOnlyView()`; a spectator/replay viewer has no seat of their
+    own to have a note for). Issue #463 moved `#view-notes-button` in the
+    HTML to sit alongside `#view-chat-button`/`#resign-button`, OUTSIDE
+    `#in-progress-area` -- a bug caught live during that issue's own
+    verification: the button used to live INSIDE `#in-progress-area`,
+    which `renderBoard()` sets `hidden = true` for the entire `'waiting'`
+    status (see "Open Team Play's deck-building chat" below, now widened
+    to "Chat and notes during a draft match's waiting window"), so the
+    button's own `.hidden` computation had no visible effect at all during
+    that window until the markup itself moved -- an ancestor's `hidden`
+    wins over a child's, regardless of what the child's own script sets.
+    Opening it fetches the note's current text via `GET /games/notes`
+    (`getGameNote()` in `app.js`); typing into the textarea autosaves on a
+    1-second debounce (`saveGameNote()` -> `POST /games/notes`) rather
+    than needing an explicit Save button, and closing the dialog with an
+    edit still pending flushes it immediately first. `isNotesReadOnly()`
+    mirrors the backend's own gate (`GameService::saveNote()`, see
+    `php-app/README.md`): once the game is neither `in_progress` nor in
+    the waiting window below, the textarea is disabled and a "This game
+    has ended, so your notes are read-only" message replaces the
+    save-status line -- the previously-saved text is still loaded and
+    shown, just not editable. Issue #463 also made the note itself
+    survive a rematch's fresh `game_player_id` once a game belongs to a
+    draft match (shared across every game in the match) -- see "In-game
+    notepad" in `php-app/README.md` for the full match-scoping story.
 
     **In-game chat (issue #109).** A "Chat" button (`#view-chat-button`,
     next to "Notes") opens `#game-chat-dialog`, hidden the same way "Notes"
@@ -2964,30 +3226,41 @@ someone else's listing needs no opt-in of its own.
     closed, a small notification dot on `#view-chat-button` itself
     (`.has-unread-chat`, the same visual treatment as `#friends-button`'s
     own `.has-friend-request` dot) lights up once the currently-viewed
-    game has a message, past what was last seen (`chatLastSeenMessageId`,
-    the highest `chat_messages[].id` seen so far), whose
-    `sender_game_player_id` ISN'T the viewer's own -- a plain message-count
+    conversation has a message, past what was last seen
+    (`chatLastSeenMessageId`, the highest `chat_messages[].id` seen so
+    far), whose `sender_user_id` ISN'T the viewer's own (`state.you.user_id`,
+    issue #463 -- comparing against `sender_game_player_id` instead would
+    incorrectly flag the viewer's OWN earlier-game messages as unread,
+    since that id changes per game within a match) -- a plain message-count
     comparison would also light this up for the viewer's own just-sent
     message or on a fresh page load where they're the only one who's said
     anything so far, neither of which is actually "unread." Clears the
-    moment the dialog is opened -- tracked per-game (`chatSeenGameId`/
-    `chatLastSeenMessageId`), and `chatLastSeenMessageId` is additionally
-    persisted to `localStorage` (`chatLastSeenMessageId:{game_id}`,
+    moment the dialog is opened -- tracked per CONVERSATION
+    (`chatSeenConversationKey`/`chatLastSeenMessageId`, issue #463; a
+    conversation is a whole draft match once one exists, not just the
+    currently-open `game_id`), and `chatLastSeenMessageId` is additionally
+    persisted to `localStorage`
+    (`chatLastSeenMessageId:match:{draft_match_id}` or
+    `chatLastSeenMessageId:game:{game_id}`, `chatConversationKeyFor(state)`,
     read/written through the same try/catch-guarded-for-private-browsing
     pattern `initThemeSelect()`'s own `THEME_STORAGE_KEY` uses in `app.js`)
     so a browser refresh after reading a message doesn't forget that and
-    re-flag it unread; switching to a different game re-reads that game's
-    own stored value rather than carrying over whatever the previous
-    game's was. `#chat-channel-select` (a `<select>` for `Table`/
-    `Team`) is only shown for `format: 'team'` games -- deliberately NOT
-    `closed_team` too (see "In-game chat" in `../php-app/README.md` for
-    why: Closed Team Play's whole premise is that information stays
-    closed between teammates, so it gets no private channel) -- and also
-    hidden during the deck-building chat window described below, where
-    only `'team'` is ever valid. `sendChatText()` resolves which implicit
-    channel to send whenever the selector is hidden for either reason:
-    `isTeamDeckBuildingChatOpen(currentState)` picks `'team'`, everything
-    else (every non-`'team'`-format game) picks `'table'`. Sending
+    re-flag it unread; switching from game 1 to game 2 of the same match
+    reads the SAME stored value (keyed by `draft_match_id`) rather than
+    finding nothing for game 2's own id and momentarily re-flagging every
+    already-read message as unread again. `#chat-channel-select` (a
+    `<select>` for `Table`/`Team`) is only shown for `format: 'team'`
+    games -- deliberately NOT `closed_team` too (see "In-game chat" in
+    `../php-app/README.md` for why: Closed Team Play's whole premise is
+    that information stays closed between teammates, so it gets no
+    private channel). Issue #463 widened the waiting-window exception
+    (below) to accept BOTH channels, so unlike before, the picker no
+    longer needs its own special case to hide during drafting/
+    deck-building -- it stays available there too, same as once the game
+    is `in_progress`; `sendChatText()` now treats a hidden picker as
+    always meaning `'table'` (the only channel a non-`'team'`-format game
+    ever has), with no need to ask `isTeamDeckBuildingChatOpen()` (now
+    removed) which of two reasons it was hidden for. Sending
     (`sendChatMessage()` -> `POST /games/chat`) clears the input (on a
     confirmed send only -- see below) and calls `refreshBoard()`
     immediately on success, the same "an action triggers its own
@@ -3030,28 +3303,35 @@ someone else's listing needs no opt-in of its own.
     used to silently discard the player's own typed text right along with
     the error message.
 
-    **Open Team Play's deck-building chat.** Once deck-building started
-    drawing from the whole team's shared drafted pool (see "Deck
-    building" above), teammates needed a way to actually coordinate --
-    but `#view-chat-button`/`renderChat()` used to be computed only in the
-    `in_progress` branch of `renderBoard()`, past the `'waiting'` branch's
-    own early `return`, so the button never even appeared during
-    drafting/deck-building. Both are now computed unconditionally, right
-    alongside `#resign-button`'s own identical fix for issue #144 (same
-    rationale: `#view-chat-button` lives outside `#in-progress-area`
-    precisely so it stays reachable there), gated by
-    `isTeamDeckBuildingChatOpen(state)` -- `true` only for `format:
-    'team'`, `game.status === 'waiting'`, and the relevant draft
-    sub-state's own `status === 'deck_building'` (checked against
-    `state.quick_draft`/`state.winston_draft`/`state.grid_draft`,
-    whichever `state.game.deck_type` selects) -- which mirrors
-    `GameService::isOpenTeamDeckBuildingChat()` exactly, so the frontend
-    never offers something the backend would then reject. `isChatReadOnly()`
-    checks the same condition, so opening the dialog during this window
-    shows an editable form rather than the read-only message a genuinely
-    `'waiting'`-for-other-reasons game would still get. Still hidden
-    entirely for `closed_team`/non-team drafts and during the drafting
-    sub-phase itself, matching the backend's own narrower exception.
+    **Chat and notes during a draft match's waiting window (issue #463).**
+    Once deck-building started drawing from the whole team's shared
+    drafted pool (see "Deck building" above), teammates needed a way to
+    actually coordinate -- but `#view-chat-button`/`renderChat()` used to
+    be computed only in the `in_progress` branch of `renderBoard()`, past
+    the `'waiting'` branch's own early `return`, so the button never even
+    appeared during drafting/deck-building. Both are now computed
+    unconditionally, right alongside `#resign-button`'s own identical fix
+    for issue #144 (same rationale: `#view-chat-button` lives outside
+    `#in-progress-area` precisely so it stays reachable there), gated by
+    `isDraftMatchWaitingWindow(state)` -- `state.game.status === 'waiting'
+    && state.game.draft_match_id !== null`, with no further narrowing by
+    format, channel, or the match's own drafting-vs-deck_building
+    sub-status. This replaces an earlier, much narrower version of this
+    same idea (`isTeamDeckBuildingChatOpen()`, Open-Team-Play-only,
+    `'team'`-channel-only, `deck_building`-only, mirroring the backend's
+    now-removed `isOpenTeamDeckBuildingChat()`) that predated issue #463 --
+    players now want to talk (and take notes) during the pack-opening/pick
+    screens themselves too, not just once deck-building has started, and
+    for every draft-family format, not just Open Team Play. `#view-notes-
+    button` gets the identical treatment (see "In-game notepad" above for
+    the HTML-nesting bug this surfaced). `isChatReadOnly()`/
+    `isNotesReadOnly()` check the same condition, so opening either dialog
+    during this window shows an editable form rather than the read-only
+    message a genuinely `'waiting'`-for-other-reasons game would still
+    get. Closed Team Play still correctly gets no `'team'` channel even
+    here -- that's enforced unconditionally by `postChatMessage()`'s own
+    `$game['format'] === 'team'` check on the backend, not by this
+    window's own gate, which no longer distinguishes team formats at all.
 
     `#pending-decision-banner` and `#scoring-preview` are two more elements
     with this exact same failure shape, caught later: both live outside

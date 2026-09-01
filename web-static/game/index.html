@@ -3,16 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <script>
-    // Sets the theme before first paint so an explicit light/dark preference
-    // (see "Dark mode" in web-static/README.md) never flashes the wrong
-    // theme first -- inlined and duplicated per-page rather than an external
-    // script, since an external file would itself add a delay this exists to
-    // avoid. The "system" default needs no JS at all: style.css's own
-    // prefers-color-scheme media query handles it.
+    // Sets the palette before first paint so an explicit preference (see
+    // "Palettes" in web-static/README.md) never flashes the wrong one first
+    // -- inlined and duplicated per-page rather than an external script,
+    // since an external file would itself add a delay this exists to avoid.
+    // The "system" default needs no JS at all: style.css's own
+    // prefers-color-scheme media query handles it; every OTHER value
+    // (light/dark, or a named palette like jade/red-marble/white-marble/
+    // high-contrast -- issue #363) is a fixed look applied unconditionally.
     (function () {
         try {
             var theme = localStorage.getItem('themePreference');
-            if (theme === 'light' || theme === 'dark') {
+            if (theme && theme !== 'system') {
                 document.documentElement.dataset.theme = theme;
             }
         } catch (e) {
@@ -26,6 +28,48 @@
     <link rel="stylesheet" href="../css/style.css">
 </head>
 <body class="game-page">
+    <!-- Noir card-art filter (issue #363) -- referenced from style.css via
+         `filter: url(#noir-card-fade)`, only defined here since card art
+         only appears on this page. A CSS `filter: grayscale()` can't vary
+         its own strength across an element, so this SVG filter fakes a
+         top-to-bottom gradient instead: the desaturated+contrast-boosted
+         copy of the art (feColorMatrix/feComponentTransfer) is punched
+         through a gradient alpha mask (feImage, an embedded SVG rect whose
+         own gradient goes transparent-white for the top 20% -- matching
+         where a card's own colored header band lives, the primary "what
+         mood is this" cue at a glance -- to opaque-white by 75% down) via
+         feComposite's "in" operator, then feMerge stacks that masked,
+         grayscale layer OVER the untouched original: fully transparent at
+         the top lets the original color show through unmodified, fully
+         opaque by 75% down completely replaces it with grayscale. Needs
+         primitiveUnits="objectBoundingBox" (with every x/y/width/height
+         given as a 0-1 fraction rather than a raw pixel value) so the
+         gradient positions itself against the filtered <img>'s OWN box
+         regardless of its rendered size -- the default userSpaceUnits
+         resolves percentages against the wrong coordinate system entirely
+         and silently produces a blank/mispositioned result instead of an
+         error (verified by testing both against real card art before
+         shipping this). Hidden via width/height 0 -- this SVG's only job
+         is to hold a <filter> definition for CSS to reference by id, nothing
+         in it is meant to render on its own. -->
+    <svg width="0" height="0" style="position: absolute">
+        <defs>
+            <filter id="noir-card-fade" primitiveUnits="objectBoundingBox" x="0" y="0" width="1" height="1">
+                <feImage href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMCIgaGVpZ2h0PSIxMCI+PGRlZnM+PGxpbmVhckdyYWRpZW50IGlkPSJnIiB4MT0iMCIgeTE9IjAiIHgyPSIwIiB5Mj0iMSI+PHN0b3Agb2Zmc2V0PSIwJSIgc3RvcC1jb2xvcj0id2hpdGUiIHN0b3Atb3BhY2l0eT0iMCIvPjxzdG9wIG9mZnNldD0iMjAlIiBzdG9wLWNvbG9yPSJ3aGl0ZSIgc3RvcC1vcGFjaXR5PSIwIi8+PHN0b3Agb2Zmc2V0PSI3NSUiIHN0b3AtY29sb3I9IndoaXRlIiBzdG9wLW9wYWNpdHk9IjEiLz48c3RvcCBvZmZzZXQ9IjEwMCUiIHN0b3AtY29sb3I9IndoaXRlIiBzdG9wLW9wYWNpdHk9IjEiLz48L2xpbmVhckdyYWRpZW50PjwvZGVmcz48cmVjdCB3aWR0aD0iMTAiIGhlaWdodD0iMTAiIGZpbGw9InVybCgjZykiLz48L3N2Zz4=" x="0" y="0" width="1" height="1" preserveAspectRatio="none" result="mask"/>
+                <feColorMatrix in="SourceGraphic" type="saturate" values="0" result="gray"/>
+                <feComponentTransfer in="gray" result="grayContrast">
+                    <feFuncR type="linear" slope="1.15" intercept="-0.075"/>
+                    <feFuncG type="linear" slope="1.15" intercept="-0.075"/>
+                    <feFuncB type="linear" slope="1.15" intercept="-0.075"/>
+                </feComponentTransfer>
+                <feComposite in="grayContrast" in2="mask" operator="in" result="grayMasked"/>
+                <feMerge>
+                    <feMergeNode in="SourceGraphic"/>
+                    <feMergeNode in="grayMasked"/>
+                </feMerge>
+            </filter>
+        </defs>
+    </svg>
     <!-- Loading overlay: shown while the initial lobby/board load (a
          fresh view -- switching into the lobby, opening a game, spectating,
          or watching a replay) is in flight, so that moment doesn't look
@@ -401,7 +445,6 @@
 
                 <h3>Recent plays</h3>
                 <button id="view-log-button" type="button">View log</button>
-                <button id="view-notes-button" type="button" hidden>Notes</button>
                 <button id="view-shared-deck-button" type="button" hidden>View decklist</button>
                 <ul id="recent-events-list"></ul>
                 <p id="recent-events-empty" hidden>Nothing has happened yet.</p>
@@ -417,12 +460,18 @@
             <button id="resign-button" type="button" hidden>Resign game</button>
 
             <!-- Also outside #in-progress-area, same rationale as
-                 #resign-button above: Open Team Play's deck-building phase
-                 (still 'waiting', not yet in_progress) gets its own team
-                 chat exception -- see GameService::postChatMessage()'s
-                 own isOpenTeamDeckBuildingChat() and renderBoard()'s
-                 chatButton.hidden computation in game.js. -->
+                 #resign-button above: a draft match's own waiting window
+                 (drafting/deck-building/inter-game sideboard) gets its own
+                 chat/notes exception -- see
+                 GameService::isDraftMatchWaitingWindow() and renderBoard()'s
+                 own chatButton.hidden/notesButton.hidden computation in
+                 game.js (issue #463 moved #view-notes-button out here too,
+                 alongside #view-chat-button, for exactly this reason --
+                 it used to live inside #in-progress-area above, where
+                 inProgressArea.hidden = true during 'waiting' hid it
+                 regardless of its own .hidden). -->
             <button id="view-chat-button" type="button" hidden>Chat</button>
+            <button id="view-notes-button" type="button" hidden>Notes</button>
         </section>
     </main>
 
@@ -1400,9 +1449,24 @@
 
     <footer><span id="app-version"></span><a id="resources-link" href="#">Resources</a><label id="theme-select-label">Theme
         <select id="theme-select">
-            <option value="system">System</option>
-            <option value="light">Light</option>
-            <option value="dark">Dark</option>
+            <optgroup label="Basic">
+                <option value="system">System</option>
+                <option value="light">Light</option>
+                <option value="dark">Dark</option>
+            </optgroup>
+            <optgroup label="Palettes">
+                <option value="jade">Jade</option>
+                <option value="red-marble">Red Marble</option>
+                <option value="white-marble">White Marble</option>
+                <option value="high-contrast">High Contrast</option>
+                <option value="high-contrast-dark">High Contrast Dark</option>
+            </optgroup>
+            <optgroup label="Skins">
+                <option value="noir">Noir</option>
+                <option value="steampunk">Steampunk</option>
+                <option value="futuristic">Futuristic</option>
+                <option value="neon">Neon</option>
+            </optgroup>
         </select>
     </label></footer>
     <script src="../js/app.js"></script>

@@ -687,6 +687,9 @@ final class GameService
     /** @var array<int, array<int, string>> gameId => (game_player_id => username), memoized per instance by playerUsernamesFor() */
     private array $playerUsernamesByGame = [];
 
+    /** @var array<int, string> user_id => username, memoized per instance by usernamesForUserIds() -- issue #463's own match-stable chat sender lookup */
+    private array $usernamesByUserId = [];
+
     /** @var array<int, string> chaos_effects.id => rarity, memoized per instance by chaosEffectRarity() -- global catalog data, not scoped per game */
     private array $chaosEffectRarityCache = [];
 
@@ -8048,29 +8051,38 @@ final class GameService
 
     /**
      * In-game notepad (issue #258): private per-seat scratch notes, never
-     * shared with anyone else at the table -- keyed on $gamePlayerId
-     * directly (the caller already resolved and authorized it, the same
-     * `requireGamePlayer()` pattern every other per-seat action uses), not
-     * $userId, since a seat already uniquely identifies "this player, in
-     * this game." Empty string (not null) for a seat that's never saved
-     * one yet, so the frontend's textarea always has a plain string to
-     * bind to.
+     * shared with anyone else at the table. Issue #463: once $gameId
+     * belongs to a draft match, this resolves to the one note shared
+     * across the whole match (drafting/deck-building and every game
+     * within a 2-player best-of-three) via (draft_match_id, user_id)
+     * rather than $gamePlayerId alone -- see GameNoteRepository::findFor()
+     * -- so a note taken during game 1's sideboard is still there once
+     * game 2 starts. Empty string (not null) for a seat/match that's
+     * never saved one yet, so the frontend's textarea always has a plain
+     * string to bind to.
      */
-    public function getNote(int $gamePlayerId): string
+    public function getNote(int $gameId, int $gamePlayerId): string
     {
-        return $this->notes->findByGamePlayerId($gamePlayerId) ?? '';
+        $game = $this->fetchGame($gameId);
+        $draftMatchId = $game['draft_match_id'] !== null ? (int) $game['draft_match_id'] : null;
+        $userId = $this->userIdForGamePlayer($gamePlayerId);
+
+        return $this->notes->findFor($gamePlayerId, $draftMatchId, $userId) ?? '';
     }
 
     /**
-     * Only editable while the game is still 'in_progress' -- once it
-     * reaches a terminal status ('completed'/'abandoned') the note stays
-     * fully visible (see getNote() above) but read-only, the same as
-     * every other in-progress-only board action.
+     * Editable while the game is still 'in_progress', OR (issue #463)
+     * anywhere in a draft match's own 'waiting' window -- see
+     * isDraftMatchWaitingWindow()'s own docblock, shared with
+     * postChatMessage() below. Once a non-match game reaches a terminal
+     * status ('completed'/'abandoned') the note stays fully visible (see
+     * getNote() above) but read-only, the same as every other
+     * in-progress-only board action.
      */
     public function saveNote(int $gameId, int $gamePlayerId, string $noteText): void
     {
         $game = $this->fetchGame($gameId);
-        if ($game['status'] !== 'in_progress') {
+        if ($game['status'] !== 'in_progress' && !$this->isDraftMatchWaitingWindow($game)) {
             throw new GameStateException('Notes can only be edited while the game is in progress.');
         }
 
@@ -8078,23 +8090,55 @@ final class GameService
             throw new \InvalidArgumentException('A note cannot be longer than ' . self::MAX_NOTE_LENGTH . ' characters.');
         }
 
-        $this->notes->upsert($gamePlayerId, $noteText);
+        $draftMatchId = $game['draft_match_id'] !== null ? (int) $game['draft_match_id'] : null;
+        $userId = $this->userIdForGamePlayer($gamePlayerId);
+
+        $this->notes->upsert($gamePlayerId, $draftMatchId, $userId, $noteText);
+    }
+
+    private function userIdForGamePlayer(int $gamePlayerId): int
+    {
+        $stmt = Connection::get()->prepare('SELECT user_id FROM game_players WHERE id = :id');
+        $stmt->execute(['id' => $gamePlayerId]);
+
+        return (int) $stmt->fetchColumn();
     }
 
     /**
-     * In-game chat (issue #109): appends one message to $gameId's chat,
-     * visible either to the whole seated table ('table') or, for Open
-     * Team Play only ('team' -- NOT isTeamFormat(), see below), to
-     * $senderGamePlayerId's own teammate too ('team' channel) -- see
-     * chatMessagesFor()'s own read-side filter for the other half of
-     * this. Only while the game is 'in_progress', the same "editable
-     * only in_progress, stays visible read-only after" rule saveNote()
-     * enforces for notes -- "while playing" is this issue's own framing,
-     * and a completed/abandoned game has no one left mid-conversation to
-     * send to. Fires a best-effort notification (never blocking, see
-     * NotificationService's own docblock) to every OTHER seat this
-     * message is actually visible to -- never the sender, and never the
-     * other team once $channel is 'team'.
+     * Issue #463: the shared "chat/notes are usable during a draft
+     * match's own drafting/deck-building phase too, not just once actual
+     * gameplay is 'in_progress'" rule -- games.status sits at 'waiting'
+     * for that entire phase (initial drafting, initial deck-building, AND
+     * every inter-game sideboard in a 2-player best-of-three -- see
+     * advanceDraftMatch()), so this is deliberately just "any draft-match
+     * game, still waiting", with no further narrowing by the match's own
+     * drafting-vs-deck_building sub-status: unlike the old, narrower
+     * isOpenTeamDeckBuildingChat() this replaces, players now WANT to
+     * talk during the pack-opening/pick screens themselves too (that's
+     * this issue's whole point), not just once building has started.
+     * Replaces the old Open-Team-Play-only, 'team'-channel-only,
+     * deck_building-only carve-out entirely -- every format/channel a
+     * draft match supports is covered by this same single check now.
+     */
+    private function isDraftMatchWaitingWindow(array $game): bool
+    {
+        return $game['status'] === 'waiting' && $game['draft_match_id'] !== null;
+    }
+
+    /**
+     * In-game chat (issue #109): appends one message, visible either to
+     * the whole seated table ('table') or, for Open Team Play only
+     * ('team' -- NOT isTeamFormat(), see below), to $senderGamePlayerId's
+     * own teammate too ('team' channel) -- see chatMessagesFor()'s own
+     * read-side filter for the other half of this. Usable while the game
+     * is 'in_progress', OR (issue #463) anywhere in a draft match's own
+     * 'waiting' window -- see isDraftMatchWaitingWindow()'s own docblock,
+     * shared with saveNote() above; "while playing" is this issue's own
+     * framing, and a completed/abandoned non-match game has no one left
+     * mid-conversation to send to. Fires a best-effort notification
+     * (never blocking, see NotificationService's own docblock) to every
+     * OTHER seat this message is actually visible to -- never the sender,
+     * and never the other team once $channel is 'team'.
      *
      * Deliberately checks `$game['format'] === 'team'` rather than the
      * shared isTeamFormat() predicate every OTHER team-format branch in
@@ -8111,7 +8155,7 @@ final class GameService
     public function postChatMessage(int $gameId, int $senderGamePlayerId, string $channel, string $messageText): void
     {
         $game = $this->fetchGame($gameId);
-        if ($game['status'] !== 'in_progress' && !$this->isOpenTeamDeckBuildingChat($game, $channel)) {
+        if ($game['status'] !== 'in_progress' && !$this->isDraftMatchWaitingWindow($game)) {
             throw new GameStateException('Chat messages can only be sent while the game is in progress.');
         }
 
@@ -8139,39 +8183,11 @@ final class GameService
             throw new GameStateException('channel must be "table" or "team"');
         }
 
-        $this->chat->insert($gameId, $senderGamePlayerId, $channel, $senderTeamId, $messageText);
+        $draftMatchId = $game['draft_match_id'] !== null ? (int) $game['draft_match_id'] : null;
+        $senderUserId = $this->userIdForGamePlayer($senderGamePlayerId);
+
+        $this->chat->insert($gameId, $draftMatchId, $senderGamePlayerId, $senderUserId, $channel, $senderTeamId, $messageText);
         $this->notifyChatMessageRecipients($gameId, $senderGamePlayerId, $channel, $senderTeamId, $messageText);
-    }
-
-    /**
-     * postChatMessage()'s one exception to "only while in_progress" above:
-     * Open Team Play's own deck-building window. A draft match's games row
-     * sits at status 'waiting' for its entire drafting/deck-building phase
-     * (real gameplay hasn't started -- see draftDeckBuildingStateFor()'s
-     * own docblock), so the general rule would otherwise block chat at
-     * exactly the moment two teammates most need to coordinate which cards
-     * to build around, now that deck-building draws from their whole
-     * shared pool rather than each player's own personal one (issue #362
-     * stage 2). Deliberately narrower than the general rule:
-     * only the 'team' channel, never 'table' -- the opposing team may
-     * still be mid-draft/deck-building themselves, with nothing useful to
-     * say to a table that doesn't exist as a "table" yet; only format
-     * 'team', never 'closed_team', matching postChatMessage()'s own
-     * $game['format'] === 'team' check above (Closed Team Play's whole
-     * premise is that information -- including out-of-band chat -- stays
-     * closed between teammates); and only once the match has actually
-     * reached 'deck_building', not mid-'drafting', where a stray message
-     * would arrive to a teammate who's still mid-pack and not yet looking
-     * at chat.
-     */
-    private function isOpenTeamDeckBuildingChat(array $game, string $channel): bool
-    {
-        if ($channel !== 'team' || $game['format'] !== 'team' || $game['status'] !== 'waiting' || $game['draft_match_id'] === null) {
-            return false;
-        }
-
-        $match = $this->fetchDraftMatch((int) $game['draft_match_id']);
-        return $match['status'] === 'deck_building';
     }
 
     private function notifyChatMessageRecipients(int $gameId, int $senderGamePlayerId, string $channel, ?int $senderTeamId, string $messageText): void
@@ -8202,31 +8218,58 @@ final class GameService
      * Issue #109's own read side: every 'table'-channel message plus
      * every 'team'-channel one belonging to $viewerTeamId (see
      * GameChatRepository::messagesFor()'s own NULL-safety for the
-     * non-team-format case), each with its sender's username resolved
-     * via playerUsernamesFor() rather than a join. Called from
+     * non-team-format case). Issue #463: once $gameId belongs to a draft
+     * match, this spans every game in it (not just $gameId's own) --
+     * GameChatRepository::messagesFor() does the actual scoping, this
+     * just resolves each message's match-stable sender_user_id to a
+     * username via usernamesForUserIds() rather than a join. Called from
      * buildGameState() for every seated viewer on every poll -- chat
      * deliberately piggybacks on the existing GET /games/state poll
      * rather than its own polling endpoint (see this issue's own scope
      * notes), so this has no caching/pagination of its own: a typical
-     * game's message count is small enough (short-lived, deleted with
-     * the game after 7 days -- see bin/expire_and_delete_stale_games.php)
+     * match's message count is small enough (short-lived, deleted with
+     * its games after 7 days -- see bin/expire_and_delete_stale_games.php)
      * that returning the whole conversation every 4 seconds is simpler
      * than adding a delta-fetch mechanism this codebase has no precedent
      * for anywhere else.
      *
-     * @return array<int, array{id:int, sender_game_player_id:int, sender_username:?string, channel:string, message_text:string, created_at:string}>
+     * @return array<int, array{id:int, sender_user_id:int, sender_username:?string, channel:string, message_text:string, created_at:string}>
      */
-    private function chatMessagesFor(int $gameId, ?int $viewerTeamId): array
+    private function chatMessagesFor(int $gameId, ?int $draftMatchId, ?int $viewerTeamId): array
     {
-        $names = $this->playerUsernamesFor($gameId);
+        $messages = $this->chat->messagesFor($gameId, $draftMatchId, $viewerTeamId);
+        $names = $this->usernamesForUserIds(array_map(static fn (array $row): int => $row['sender_user_id'], $messages));
 
         return array_map(
             static fn (array $row): array => [
                 ...$row,
-                'sender_username' => $names[$row['sender_game_player_id']] ?? null,
+                'sender_username' => $names[$row['sender_user_id']] ?? null,
             ],
-            $this->chat->messagesFor($gameId, $viewerTeamId)
+            $messages
         );
+    }
+
+    /**
+     * @param int[] $userIds
+     * @return array<int, string> user_id => username
+     */
+    private function usernamesForUserIds(array $userIds): array
+    {
+        $missing = array_values(array_unique(array_filter(
+            $userIds,
+            fn (int $userId): bool => !isset($this->usernamesByUserId[$userId])
+        )));
+
+        if ($missing !== []) {
+            $placeholders = implode(',', array_fill(0, count($missing), '?'));
+            $stmt = Connection::get()->prepare("SELECT id, username FROM users WHERE id IN ({$placeholders})");
+            $stmt->execute($missing);
+            foreach ($stmt->fetchAll() as $row) {
+                $this->usernamesByUserId[(int) $row['id']] = $row['username'];
+            }
+        }
+
+        return array_intersect_key($this->usernamesByUserId, array_flip($userIds));
     }
 
     /**
@@ -12233,6 +12276,14 @@ final class GameService
                 // every other deck_type. See the 'quick_draft' field below
                 // for the match-level scoreline this drives on the frontend.
                 'match_game_number' => $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null,
+                // Non-null for every draft-family deck_type (any format,
+                // any player count), null otherwise -- see
+                // isDraftMatchWaitingWindow()'s own docblock. Surfaced
+                // (issue #463) so the frontend can mirror that exact same
+                // check for showing the chat/notes buttons during a draft
+                // match's own 'waiting' window, without re-deriving it from
+                // deck_type/format itself.
+                'draft_match_id' => $game['draft_match_id'] !== null ? (int) $game['draft_match_id'] : null,
             ],
             'players' => $players,
             'round' => null,
@@ -12288,7 +12339,12 @@ final class GameService
             // Omitted entirely for a spectator (no viewer seat to speak
             // from) -- mirrors 'closed_team' never populating
             // 'you.teammate_hand' (see this method's own docblock above).
-            $response['you'] = ['game_player_id' => $viewerGamePlayerId];
+            // user_id (issue #463) is match-stable, unlike game_player_id
+            // itself -- the frontend needs it to tell its own chat
+            // messages/note apart from a teammate's/opponent's once a
+            // message's sender_game_player_id may belong to an earlier
+            // game in the same match.
+            $response['you'] = ['game_player_id' => $viewerGamePlayerId, 'user_id' => $viewerUserId];
         }
 
         if ($viewerUserId !== null) {
@@ -12316,12 +12372,12 @@ final class GameService
         // missing one) is read straight off $players, already built above
         // -- no extra query needed. Computed here, before the 'waiting'
         // early return just below, rather than down with deck_count/
-        // recent_events -- Open Team Play's deck-building chat exception
-        // (isOpenTeamDeckBuildingChat()) is only actually usable while
-        // still 'waiting', so this needs to run in that branch too, not
-        // just for in_progress/completed. Harmless for every other
-        // 'waiting' game (nothing could have been inserted yet -- that's
-        // the only branch of postChatMessage() that can write chat before
+        // recent_events -- a draft match's own 'waiting'-window chat
+        // exception (isDraftMatchWaitingWindow()) is usable while still
+        // 'waiting', so this needs to run in that branch too, not just
+        // for in_progress/completed. Harmless for every other 'waiting'
+        // game (nothing could have been inserted yet -- that's the only
+        // branch of postChatMessage() that can write chat before
         // in_progress at all).
         if ($viewerGamePlayerId !== null) {
             $viewerTeamId = null;
@@ -12331,7 +12387,8 @@ final class GameService
                     break;
                 }
             }
-            $response['chat_messages'] = $this->chatMessagesFor($gameId, $viewerTeamId);
+            $draftMatchId = $game['draft_match_id'] !== null ? (int) $game['draft_match_id'] : null;
+            $response['chat_messages'] = $this->chatMessagesFor($gameId, $draftMatchId, $viewerTeamId);
         } else {
             $response['chat_messages'] = [];
         }
@@ -12773,7 +12830,11 @@ final class GameService
      * migration 0027's own docblock), so this section reflects the WHOLE
      * match's draft history, not just $gameId's own slice of it -- the
      * sibling games' own `games`/`game_players`/etc rows are never
-     * included here, only $gameId's.
+     * included here, only $gameId's. `game_notes`/`game_chat_messages`
+     * (issue #463) are the one exception: both are match-scoped concepts
+     * now, so they're fetched by (draft_match_id, user_id)/draft_match_id
+     * instead, spanning every game in the match same as chatMessagesFor()/
+     * getNote() already do live.
      *
      * @return array<string, mixed>
      */
@@ -12782,8 +12843,19 @@ final class GameService
         $pdo = Connection::get();
         $game = $this->decodeJsonColumns($this->fetchGame($gameId), 'games');
 
-        $notesStmt = $pdo->prepare('SELECT * FROM game_notes WHERE game_player_id = :game_player_id ORDER BY id ASC');
-        $notesStmt->execute(['game_player_id' => $requestingGamePlayerId]);
+        // Issue #463: a note is now shared across the whole match (see
+        // GameNoteRepository), so its stored game_player_id may reflect an
+        // EARLIER game in the match than $gameId's own -- looking this up
+        // by (draft_match_id, user_id) whenever one applies, rather than
+        // $requestingGamePlayerId's own row directly, avoids silently
+        // exporting nothing for a note that's actually visible live.
+        $draftMatchId = $game['draft_match_id'] !== null ? (int) $game['draft_match_id'] : null;
+        $notesStmt = $draftMatchId !== null
+            ? $pdo->prepare('SELECT * FROM game_notes WHERE draft_match_id = :match_id AND user_id = :user_id ORDER BY id ASC')
+            : $pdo->prepare('SELECT * FROM game_notes WHERE game_player_id = :game_player_id ORDER BY id ASC');
+        $notesStmt->execute($draftMatchId !== null
+            ? ['match_id' => $draftMatchId, 'user_id' => $this->userIdForGamePlayer($requestingGamePlayerId)]
+            : ['game_player_id' => $requestingGamePlayerId]);
         $notes = array_map(fn (array $row) => $this->decodeJsonColumns($row, 'game_notes'), $notesStmt->fetchAll());
 
         // In-game chat (issue #109) needs the same care game_notes above
@@ -12792,18 +12864,29 @@ final class GameService
         // fetchAllForGame() below would return every row unfiltered, so
         // this uses the same WHERE clause chatMessagesFor()/
         // GameChatRepository::messagesFor() already apply on every poll,
-        // rather than that helper.
+        // rather than that helper. Issue #463: scoped to draft_match_id
+        // (spanning every game in the match), not just $gameId's own, for
+        // the same "matches what the player actually sees live" reason
+        // as the game_notes fetch above.
         $requesterTeamIdStmt = $pdo->prepare('SELECT team_id FROM game_players WHERE id = :id');
         $requesterTeamIdStmt->execute(['id' => $requestingGamePlayerId]);
         $rawRequesterTeamId = $requesterTeamIdStmt->fetchColumn();
         $requesterTeamId = $rawRequesterTeamId !== null ? (int) $rawRequesterTeamId : null;
 
-        $chatStmt = $pdo->prepare(
-            "SELECT * FROM game_chat_messages
-             WHERE game_id = :game_id AND (channel = 'table' OR (channel = 'team' AND team_id = :viewer_team_id))
-             ORDER BY id ASC"
-        );
-        $chatStmt->execute(['game_id' => $gameId, 'viewer_team_id' => $requesterTeamId]);
+        $chatStmt = $draftMatchId !== null
+            ? $pdo->prepare(
+                "SELECT * FROM game_chat_messages
+                 WHERE draft_match_id = :match_id AND (channel = 'table' OR (channel = 'team' AND team_id = :viewer_team_id))
+                 ORDER BY id ASC"
+            )
+            : $pdo->prepare(
+                "SELECT * FROM game_chat_messages
+                 WHERE game_id = :game_id AND (channel = 'table' OR (channel = 'team' AND team_id = :viewer_team_id))
+                 ORDER BY id ASC"
+            );
+        $chatStmt->execute($draftMatchId !== null
+            ? ['match_id' => $draftMatchId, 'viewer_team_id' => $requesterTeamId]
+            : ['game_id' => $gameId, 'viewer_team_id' => $requesterTeamId]);
         $chatMessages = array_map(fn (array $row) => $this->decodeJsonColumns($row, 'game_chat_messages'), $chatStmt->fetchAll());
 
         $roundScoresStmt = $pdo->prepare(
@@ -13827,6 +13910,15 @@ final class GameService
                 $choiceFields
             );
 
+            // Anger's own 'max_total_value' constraint needs the same
+            // as-if-already-in-play treatment for the *values it sums*,
+            // not just which candidates are offered -- see
+            // withSimulatedConstraintValues()'s own docblock.
+            $choiceFields = array_map(
+                fn (array $field) => $this->withSimulatedConstraintValues($state, $field, $cardId, $reactingViewerId),
+                $choiceFields
+            );
+
             // 'grant_source_card_id' -- present only when 2+ distinct
             // outstanding grants would each independently allow playing
             // this card (BoardState::usableGrants()), letting the player
@@ -14130,6 +14222,44 @@ final class GameService
         }
         sort($extraValues);
         $field['extra_values'] = $extraValues;
+
+        return $field;
+    }
+
+    /**
+     * Adds a server-computed candidate_values map (in-play mood card id =>
+     * its value as if $cardId were already in play) to a 'mood'-type
+     * field with a 'max_total_value' constraint (currently just Anger) --
+     * a no-op for every other field. Needed for the same reason as
+     * withSimulatedMoodCandidates() above, but for the constraint's *sum*
+     * rather than which candidates are offered: a target mood whose value
+     * is dynamic (e.g. SuperiorityEffect's "7 if you have more moods than
+     * each other player," which $cardId itself -- Anger -- is about to
+     * change by entering play and increasing $ownerId's own mood count)
+     * must be summed using its value as of *after* $cardId is in play,
+     * not its stale pre-play value. AngerEffect::afterPlaying() itself
+     * validates the constraint server-side using a live valueOf() call
+     * made after Anger has already been moved into play, so without this
+     * the client's own combined-value check (game.js's constraintMessage())
+     * could disable the Play button for a selection the server would
+     * actually accept. game.js reads this map by card id instead of each
+     * candidate's plain 'value' when present.
+     */
+    private function withSimulatedConstraintValues(BoardState $state, array $field, int $cardId, int $ownerId): array
+    {
+        $constraint = $field['constraint'] ?? null;
+        if ($field['type'] !== 'mood' || $constraint === null || $constraint['type'] !== 'max_total_value') {
+            return $field;
+        }
+
+        $values = [];
+        foreach ($state->moodsInPlay() as $inPlayCardId => $mood) {
+            if ($inPlayCardId === $cardId) {
+                continue;
+            }
+            $values[$inPlayCardId] = $state->valueOfAsIfAlsoInPlay($inPlayCardId, $cardId, $ownerId);
+        }
+        $field['candidate_values'] = $values;
 
         return $field;
     }

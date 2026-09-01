@@ -1360,6 +1360,143 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame([], $action['choices']);
     }
 
+    // -- Conviction (confirmed by the maintainer) -----------------------------
+
+    /**
+     * Player 2 has Doubt (id 36, value 2) in play and player 3 has
+     * Complacency (id 5, value 4) -- convictionBestOpponentMoodId() picks
+     * the HIGHEST across every non-teammate opponent (Complacency), not
+     * just the first opponent's own mood it finds.
+     */
+    public function testChooseActionTargetsTheHighestValueOpponentsMoodWhenPlayingConviction(): void
+    {
+        $state = $this->boardState(hands: [1 => [6, 105], 2 => [36], 3 => [5]]);
+        $state->moveHandToInPlay(2, 36);
+        $state->moveHandToInPlay(3, 5);
+
+        $action = $this->bot->chooseAction($state, [6, 105], 1);
+
+        self::assertSame(6, $action['card_id']);
+        self::assertSame(['target_mood_id' => 5], $action['choices']);
+    }
+
+    /**
+     * The bot's own Complacency (id 5, value 4) is in play alongside
+     * player 2's Doubt (id 36, value 2) -- ConvictionEffect's own field
+     * has no owner restriction, so BotChoiceResolver's generic "any
+     * scope, highest value" default would happily send the bot's OWN
+     * higher-value mood to the bottom of the deck instead. Per the
+     * maintainer, Conviction should always prefer AN OPPONENT's mood
+     * over the acting player's own, even a lower-value one -- removing a
+     * mood only denies its OWNER those round points, so targeting the
+     * bot's own mood would cost the acting side points for nothing.
+     */
+    public function testChooseActionPrefersAnOpponentsLowerValueMoodOverTheBotsOwnHigherValueMoodWhenPlayingConviction(): void
+    {
+        $state = $this->boardState(hands: [1 => [6, 105, 5], 2 => [36]]);
+        $state->moveHandToInPlay(1, 5);
+        $state->moveHandToInPlay(2, 36);
+
+        $action = $this->bot->chooseAction($state, [6, 105], 1);
+
+        self::assertSame(6, $action['card_id']);
+        self::assertSame(['target_mood_id' => 36], $action['choices']);
+    }
+
+    /**
+     * A teammate's own Complacency doesn't count as "an opponent" either
+     * (the same exclusion Contempt/Pacifism already apply) -- and since
+     * it already contributes to the bot's own GROUP total (Open Team
+     * Play), that group is already ahead of player 3's empty board
+     * before Conviction is even played, so the round-winning exception
+     * doesn't apply. Conviction is deprioritized behind Wrath exactly as
+     * if no one had any mood in play at all.
+     */
+    public function testChooseActionDoesNotTargetATeammatesMoodWhenPlayingConviction(): void
+    {
+        $state = new BoardState(
+            $this->sampleCatalog(),
+            DefaultEffectRegistry::build(),
+            [1, 2, 3],
+            hands: [1 => [6, 105], 2 => [5]],
+            teamIdByPlayer: [1 => 0, 2 => 0, 3 => 1],
+        );
+        $state->moveHandToInPlay(2, 5);
+
+        $action = $this->bot->chooseAction($state, [6, 105], 1);
+
+        self::assertSame(105, $action['card_id']);
+    }
+
+    /**
+     * No opponent has any mood in play -- only the bot's own Charity (id
+     * 3, value 1) is, giving Conviction a legal (but undesirable) target
+     * -- and playing Conviction for its own plain value (2) wouldn't
+     * decide the round (every score is at or above 0 already: the bot's
+     * own is 1, both rivals' are 0). Deprioritized behind Wrath (id 105,
+     * value 0, no ability), proving the veto actively suppresses
+     * Conviction below even a LOWER-value alternative, not just
+     * something that would already outrank it by plain baseValue().
+     */
+    public function testChooseActionDeprioritizesConvictionWithNoOpponentTargetAndNoRoundToWin(): void
+    {
+        $state = $this->boardState(hands: [1 => [6, 105, 3]]);
+        $state->moveHandToInPlay(1, 3);
+
+        $action = $this->bot->chooseAction($state, [6, 105], 1);
+
+        self::assertSame(105, $action['card_id']);
+    }
+
+    /**
+     * With nothing else playable, Conviction is still played --
+     * deprioritized WHEN, never skipped outright, the same policy every
+     * other sortPriorityValue() veto in this class already follows.
+     * ConvictionEffect's own field is REQUIRED (unlike Hate/Contempt's
+     * own optional "you may" fields), so convictionTargetMoodId() must
+     * still supply a legal target even with no opponent to target --
+     * here, the bot's own only other in-play mood (Charity, id 3).
+     */
+    public function testChooseActionStillPlaysConvictionWhenNothingElseIsPlayable(): void
+    {
+        $state = $this->boardState(hands: [1 => [6, 3]]);
+        $state->moveHandToInPlay(1, 3);
+
+        $action = $this->bot->chooseAction($state, [6], 1);
+
+        self::assertSame(6, $action['card_id']);
+        self::assertSame(['target_mood_id' => 3], $action['choices']);
+    }
+
+    /**
+     * No opponent has any mood in play, so convictionBestOpponentMoodId()
+     * finds nothing -- but the bot's own Charity (id 3, base value 1) has
+     * been pushed to -2 by an attached chaos effect (adjustChaosValueDelta(),
+     * standing in for chaos_064 here without needing a full Chaos Draft
+     * game state), putting the bot's own current round total at -2 while
+     * both rivals sit at 0. Playing Conviction for its own plain value
+     * (2) brings the bot's total to 0 -- tying/clearing both rivals, the
+     * deciding difference between losing and winning the round -- so
+     * Conviction is played anyway (outranking Wrath, id 105, value 0,
+     * once the veto lifts), purely for its own value. With no opponent
+     * target, convictionTargetMoodId() falls back to the LOWEST-value
+     * other mood in play: the bot's OWN Hate (id 66, value 0) is also in
+     * play, but Charity's own -2 is lower still, so Charity (id 3) is the
+     * one sent to the bottom of the deck, not Hate.
+     */
+    public function testChooseActionPlaysConvictionForItsOwnValueWhenItWouldWinTheRound(): void
+    {
+        $state = $this->boardState(hands: [1 => [6, 105, 3, 66]]);
+        $state->moveHandToInPlay(1, 3);
+        $state->adjustChaosValueDelta(3, -3);
+        $state->moveHandToInPlay(1, 66);
+
+        $action = $this->bot->chooseAction($state, [6, 105], 1);
+
+        self::assertSame(6, $action['card_id']);
+        self::assertSame(['target_mood_id' => 3], $action['choices']);
+    }
+
     // -- Hate (confirmed by the maintainer) -----------------------------------
 
     /**
@@ -1492,6 +1629,35 @@ final class BotPlayerServiceTest extends TestCase
 
         self::assertSame(80, $action['card_id']);
         self::assertSame(['target_mood_ids' => []], $action['choices']);
+    }
+
+    /**
+     * Regression test (confirmed by the maintainer): SuperiorityEffect's
+     * own "7 if you have more moods than each other player" value depends
+     * on a mood-count comparison that playing Anger itself can tip. Here
+     * player 1 (the bot) has 2 other moods in play (fewer than player 2's
+     * 3, Superiority included), so Superiority sits at 7 -- over Anger's
+     * own 5-point combined-value budget -- right up until Anger is
+     * actually played and player 1's own count rises to 3, tying player
+     * 2's and dropping Superiority back to its base value of 3 (within
+     * budget). Before this fix, angerSwingMaximizingTargets() scored
+     * Superiority using its stale pre-play value (7), so the bot would
+     * never target it even though it's actually in budget the moment
+     * Anger is played.
+     */
+    public function testChooseActionTargetsASuperiorityThatOnlyFitsAngersBudgetOnceAngerItselfIsInPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [80, 2, 3], 2 => [77, 13, 14]]);
+        $state->moveHandToInPlay(1, 2); // Benevolence, value 2
+        $state->moveHandToInPlay(1, 3); // Charity, value 1
+        $state->moveHandToInPlay(2, 77); // Superiority, base 3 / alt 7
+        $state->moveHandToInPlay(2, 13); // Friendliness, value 2
+        $state->moveHandToInPlay(2, 14); // Guilt, value 2
+
+        $action = $this->bot->chooseAction($state, [80], 1);
+
+        self::assertSame(80, $action['card_id']);
+        self::assertContains(77, $action['choices']['target_mood_ids']);
     }
 
     public function testChooseDecisionAnswerReturnsEmptyForAnOptionalField(): void
