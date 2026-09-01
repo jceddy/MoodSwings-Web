@@ -39,12 +39,12 @@
    override the same seven structural/decorative properties, PLUS set a
    decorative `body` background-image, since "ambitious theme" was the
    whole design brief for these four, not just an alternate card print.
-   Futuristic/Neon still use a tileable inline-SVG texture (circuit
-   traces, a neon grid); Noir and Steampunk use a real photo/illustration
-   instead (img/themes/noir-bg.webp, img/themes/steampunk-bg.webp) -- see
-   Noir's own :root block further down for why that means its
-   --color-surface breaks from every other palette's own convention of a
-   solid, opaque value. */
+   Neon still uses a tileable inline-SVG texture (a magenta/cyan grid);
+   Noir, Steampunk, and Futuristic use a real photo/illustration instead
+   (img/themes/noir-bg.webp, img/themes/steampunk-bg.webp,
+   img/themes/futuristic-bg.webp) -- see Noir's own :root block further
+   down for why that means its --color-surface breaks from every other
+   palette's own convention of a solid, opaque value. */
 :root {
     color-scheme: light;
     /* Card/icon size slider (issue #417) -- a plain multiplier every
@@ -257,9 +257,10 @@
 }
 
 /* Futuristic (issue #363, card-skin theme) -- a near-black deep-blue
-   palette with a cyan accent border, plus a tileable inline-SVG
-   background of circuit-board traces and via pads (see Steampunk's own
-   comment above re: placeholder art). */
+   palette with a cyan accent border. Its body background is a real
+   maintainer-supplied photo/illustration (img/themes/futuristic-bg.webp,
+   see its own comment further down) rather than the tileable inline-SVG
+   circuit-trace placeholder this theme originally shipped with. */
 :root[data-theme="futuristic"] {
     color-scheme: dark;
     --color-bg: #060b14;
@@ -272,12 +273,11 @@
 }
 
 /* Neon (issue #363, card-skin theme) -- a near-black deep-purple palette
-   with a hot-magenta accent border, plus a tileable inline-SVG
-   crosshatch grid (magenta major lines, cyan minor lines) layered under
-   a fixed radial-gradient glow anchored to the bottom of the viewport --
-   the classic synthwave "grid fading into a glowing horizon" look,
-   without needing a full perspective-projected image (see Steampunk's
-   own comment above re: placeholder art). */
+   with a hot-magenta accent border. Its body background is a real
+   maintainer-supplied photo (img/themes/neon-bg.webp, see its own
+   comment further down) -- a cyberpunk-alley scene lit by magenta/cyan
+   signage -- rather than the tileable inline-SVG crosshatch-grid
+   placeholder this theme originally shipped with. */
 :root[data-theme="neon"] {
     color-scheme: dark;
     --color-bg: #0a0014;
@@ -394,24 +394,44 @@ body {
     background-attachment: fixed;
 }
 
-/* The remaining two "ambitious" card-skin themes still use a decorative,
-   tileable SVG background -- kept at low alpha (baked into each SVG/
-   gradient's own rgba() stops, not a separate opacity property, so it
-   never dims actual page content sitting on top of it) so body text set
-   in --color-text above stays at full, unaffected contrast. */
-
+/* Futuristic, like Steampunk and Noir before it, now uses a real
+   maintainer-supplied photo/illustration (img/themes/futuristic-bg.webp
+   -- a dark circuit-board/data-network scene) in place of its original
+   tileable inline-SVG placeholder pattern, with the same cover/fixed
+   treatment. Unlike Steampunk's own photo, this one is already very dark
+   overall (no large bright passages to fight for contrast against), so
+   its darkening scrim can stay light -- just enough to guarantee the
+   image's own brightest glowing traces never approach --color-text's
+   contrast floor, not to meaningfully dim the image itself. */
 :root[data-theme="futuristic"] body {
-    background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMDAiIGhlaWdodD0iMTAwIiB2aWV3Qm94PSIwIDAgMTAwIDEwMCI+PHBhdGggZD0iTTAsMjAgSDMwIFY1MCBINzAgVjIwIEgxMDAiIGZpbGw9Im5vbmUiIHN0cm9rZT0icmdiYSg0MSwxODIsMjQ2LDAuMjIpIiBzdHJva2Utd2lkdGg9IjEuNSIvPjxwYXRoIGQ9Ik0yMCwxMDAgVjcwIEg1MCBWNDAiIGZpbGw9Im5vbmUiIHN0cm9rZT0icmdiYSg0MSwxODIsMjQ2LDAuMjIpIiBzdHJva2Utd2lkdGg9IjEuNSIvPjxwYXRoIGQ9Ik0xMDAsNjAgSDgwIFY5MCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJyZ2JhKDQxLDE4MiwyNDYsMC4yMikiIHN0cm9rZS13aWR0aD0iMS41Ii8+PHBhdGggZD0iTTAsODUgSDE1IiBmaWxsPSJub25lIiBzdHJva2U9InJnYmEoNDEsMTgyLDI0NiwwLjIyKSIgc3Ryb2tlLXdpZHRoPSIxLjUiLz48Y2lyY2xlIGN4PSIzMCIgY3k9IjIwIiByPSIyLjIiIGZpbGw9InJnYmEoNDEsMTgyLDI0NiwwLjI4KSIvPjxjaXJjbGUgY3g9IjcwIiBjeT0iNTAiIHI9IjIuMiIgZmlsbD0icmdiYSg0MSwxODIsMjQ2LDAuMjgpIi8+PGNpcmNsZSBjeD0iNzAiIGN5PSIyMCIgcj0iMi4yIiBmaWxsPSJyZ2JhKDQxLDE4MiwyNDYsMC4yOCkiLz48Y2lyY2xlIGN4PSIyMCIgY3k9IjcwIiByPSIyLjIiIGZpbGw9InJnYmEoNDEsMTgyLDI0NiwwLjI4KSIvPjxjaXJjbGUgY3g9IjUwIiBjeT0iNzAiIHI9IjIuMiIgZmlsbD0icmdiYSg0MSwxODIsMjQ2LDAuMjgpIi8+PGNpcmNsZSBjeD0iNTAiIGN5PSI0MCIgcj0iMi4yIiBmaWxsPSJyZ2JhKDQxLDE4MiwyNDYsMC4yOCkiLz48Y2lyY2xlIGN4PSI4MCIgY3k9IjYwIiByPSIyLjIiIGZpbGw9InJnYmEoNDEsMTgyLDI0NiwwLjI4KSIvPjxjaXJjbGUgY3g9IjgwIiBjeT0iOTAiIHI9IjIuMiIgZmlsbD0icmdiYSg0MSwxODIsMjQ2LDAuMjgpIi8+PGNpcmNsZSBjeD0iMTUiIGN5PSI4NSIgcj0iMi4yIiBmaWxsPSJyZ2JhKDQxLDE4MiwyNDYsMC4yOCkiLz48L3N2Zz4=");
-    background-repeat: repeat;
+    background-image:
+        linear-gradient(rgba(2, 4, 8, 0.35), rgba(2, 4, 8, 0.35)),
+        url("../img/themes/futuristic-bg.webp");
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    background-attachment: fixed;
 }
 
+/* Neon, like Steampunk and Futuristic before it, now uses a real
+   maintainer-supplied photo (img/themes/neon-bg.webp -- a cyberpunk
+   alley lit by magenta/cyan signage) in place of its original tileable
+   inline-SVG crosshatch-grid-plus-glow placeholder, with the same
+   cover/fixed treatment. Like Futuristic's own photo, this one is
+   already very dark overall (no large bright passages), so its
+   darkening scrim stays light -- just enough to guard against the
+   photo's own brightest neon signs, not to meaningfully dim it. With
+   this, all four card-skin themes now use a real photo/illustration for
+   their body background -- see Noir's own section further down for its
+   photo plus the separate SVG filter its card art alone needs. */
 :root[data-theme="neon"] body {
     background-image:
-        radial-gradient(ellipse at 50% 100%, rgba(255, 47, 214, 0.28), transparent 60%),
-        url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCIgdmlld0JveD0iMCAwIDgwIDgwIj48bGluZSB4MT0iMCIgeTE9IjAiIHgyPSI4MCIgeTI9IjAiIHN0cm9rZT0icmdiYSgyNTUsNDcsMjE0LDAuMjQpIiBzdHJva2Utd2lkdGg9IjEuNSIvPjxsaW5lIHgxPSIwIiB5MT0iMCIgeDI9IjAiIHkyPSI4MCIgc3Ryb2tlPSJyZ2JhKDI1NSw0NywyMTQsMC4yNCkiIHN0cm9rZS13aWR0aD0iMS41Ii8+PGxpbmUgeDE9IjAiIHkxPSI0MC4wIiB4Mj0iODAiIHkyPSI0MC4wIiBzdHJva2U9InJnYmEoNDEsMjMwLDI0NiwwLjE1KSIgc3Ryb2tlLXdpZHRoPSIxIi8+PGxpbmUgeDE9IjQwLjAiIHkxPSIwIiB4Mj0iNDAuMCIgeTI9IjgwIiBzdHJva2U9InJnYmEoNDEsMjMwLDI0NiwwLjE1KSIgc3Ryb2tlLXdpZHRoPSIxIi8+PC9zdmc+");
-    background-repeat: no-repeat, repeat;
-    background-position: center bottom, top left;
-    background-attachment: fixed, scroll;
+        linear-gradient(rgba(4, 1, 8, 0.3), rgba(4, 1, 8, 0.3)),
+        url("../img/themes/neon-bg.webp");
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    background-attachment: fixed;
 }
 
 footer {
