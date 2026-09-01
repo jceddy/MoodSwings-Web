@@ -6839,6 +6839,27 @@ since it already holds that dependency):
   green and white moods" option has no owner filter of its own and
   would just as happily sweep up the bot's own qualifying moods
   alongside any opponent's.
+- **Conviction's own "don't play it blind" policy** (confirmed by the
+  maintainer), via `convictionHasAGoodReasonToPlayNow()`/
+  `convictionBestOpponentMoodId()`/`sortPriorityValue()` once more: the
+  same `PHP_INT_MIN` deprioritization as Contempt above, unless either a
+  non-teammate opponent currently has ANY mood in play for Conviction to
+  remove (`convictionBestOpponentMoodId()` -- the highest-value mood
+  among non-teammate opponents only; `ConvictionEffect`'s own field has
+  no owner or color restriction at all, so the bot's own or a teammate's
+  mood is deliberately excluded the same way Contempt's own targeting
+  already excludes them), OR playing it for its own plain printed value
+  (2, no ability at all) would be the deciding difference between the
+  bot's own group NOT currently having the highest score this round and
+  having it (`wouldBecomeHighestScore()`, reused with an
+  `$unboostedValue` of 0, the identical reuse Contempt's own policy
+  already makes of it). Unlike Contempt's own optional "you may" field,
+  though, `ConvictionEffect`'s `target_mood_id` is REQUIRED -- once the
+  bot commits to playing it at all, `convictionTargetMoodId()` must
+  still supply SOME legal target even with no qualifying opponent mood,
+  so it falls back to the LOWEST-value other mood currently in play (the
+  bot's own, or a teammate's in Open/Closed Team Play) rather than
+  leaving the field empty.
 - **Hate's own "never leave it untargeted" policy** (confirmed by the
   maintainer), via `hateTargetMoodId()`: unlike every OTHER optional
   `CardChoiceSchema` field (left blank by default per `BotChoiceResolver`'s

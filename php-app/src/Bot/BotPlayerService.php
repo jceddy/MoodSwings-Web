@@ -171,7 +171,19 @@ use MoodSwings\Rules\RoundScorer;
  * the bot's own group NOT currently having the highest score this round
  * and having it (wouldBecomeHighestScore(), reused with an
  * $unboostedValue of 0); see that method's own docblock for the full
- * policy.
+ * policy; and convictionHasAGoodReasonToPlayNow()/sortPriorityValue()
+ * once more (confirmed by the maintainer, the same treatment as
+ * Contempt above), which deprioritizes Conviction unless either a
+ * non-teammate opponent currently has a mood in play to remove
+ * (convictionBestOpponentMoodId()), or playing it for its own plain
+ * printed value (2, no ability at all) would be the deciding difference
+ * between the bot's own group NOT currently having the highest score
+ * this round and having it (wouldBecomeHighestScore() again, reused the
+ * same way); see that method's own docblock for the full policy,
+ * including why -- unlike Hate/Contempt's own OPTIONAL "you may" target
+ * field -- convictionTargetMoodId() must still supply SOME legal target
+ * even with no qualifying opponent mood, since ConvictionEffect's own
+ * field is required.
  * GameService is the only caller
  * (see its own "Practice bots" section in php-app/README.md for how this
  * fits into the request lifecycle) -- legality itself
@@ -734,6 +746,9 @@ final class BotPlayerService
         if ($effectKey === 'contempt' && !$this->contemptHasAGoodReasonToPlayNow($state, $cardId, $botGamePlayerId)) {
             return PHP_INT_MIN;
         }
+        if ($effectKey === 'conviction' && !$this->convictionHasAGoodReasonToPlayNow($state, $cardId, $botGamePlayerId)) {
+            return PHP_INT_MIN;
+        }
         if ($effectKey === 'intimidation' && $this->intimidationTargetPlayerId($state, $botGamePlayerId) === null) {
             return PHP_INT_MIN;
         }
@@ -1231,6 +1246,12 @@ final class BotPlayerService
             $targetMoodId = $this->hateTargetMoodId($state, $cardId, $botGamePlayerId);
 
             return $targetMoodId !== null ? ['target_mood_id' => $targetMoodId] : [];
+        }
+
+        if ($effectKey === 'conviction') {
+            $targetMoodId = $this->convictionTargetMoodId($state, $cardId, $botGamePlayerId);
+
+            return $targetMoodId !== null ? ['target_mood_id' => $targetMoodId] : null;
         }
 
         if ($effectKey === 'nostalgia') {
@@ -2059,6 +2080,99 @@ final class BotPlayerService
     private function contemptHasAGoodReasonToPlayNow(BoardState $state, int $cardId, int $botGamePlayerId): bool
     {
         if ($this->contemptTargetMoodId($state, $botGamePlayerId) !== null) {
+            return true;
+        }
+
+        return $this->wouldBecomeHighestScore($state, $botGamePlayerId, 0, $this->baseValue($state, $cardId));
+    }
+
+    /**
+     * Conviction's own "who to target" policy (confirmed by the
+     * maintainer): the highest-CURRENT-value mood owned by a
+     * non-teammate opponent, or null if no opponent currently has one in
+     * play. Deliberately excludes both the acting player itself and any
+     * teammate -- ConvictionEffect's own field is scope 'any' with no
+     * restriction against the acting player or a teammate (its own
+     * docblock even calls out "the acting player's own moods" as a legal
+     * target), so BotChoiceResolver's own generic default would happily
+     * let the bot send its OWN highest-value mood to the bottom of the
+     * deck -- exactly backwards from what removing an opponent's points
+     * should accomplish for the acting side. "An opponent" per the
+     * maintainer means neither the acting player nor a teammate.
+     */
+    private function convictionBestOpponentMoodId(BoardState $state, int $botGamePlayerId): ?int
+    {
+        $bestMoodId = null;
+        foreach ($state->activePlayerOrder() as $playerId) {
+            if ($playerId === $botGamePlayerId || $state->isTeammate($botGamePlayerId, $playerId)) {
+                continue;
+            }
+            foreach ($state->moodsOwnedBy($playerId) as $mood) {
+                if ($bestMoodId === null || $state->valueOf($mood->cardId) > $state->valueOf($bestMoodId)) {
+                    $bestMoodId = $mood->cardId;
+                }
+            }
+        }
+
+        return $bestMoodId;
+    }
+
+    /**
+     * Conviction's own choice_field is REQUIRED (unlike Hate/Contempt's
+     * own optional "you may" fields above) -- ConvictionEffect always
+     * sends the chosen mood to the bottom of its owner's deck and has
+     * them draw a card, so once the bot commits to playing Conviction at
+     * all (see convictionHasAGoodReasonToPlayNow()), SOME legal target
+     * must be supplied or the play can't resolve. Always prefers
+     * convictionBestOpponentMoodId() when one exists. With no opponent
+     * target -- reached only when convictionHasAGoodReasonToPlayNow()
+     * decided Conviction's own printed value was worth playing for
+     * anyway -- falls back to the LOWEST-value other mood currently in
+     * play (the acting player's own, or a teammate's in Open/Closed Team
+     * Play, whichever happens to be cheapest), so the forced target
+     * costs the acting side as little as possible, rather than the
+     * generic "highest-value 'any' scope" default BotChoiceResolver
+     * would otherwise apply.
+     */
+    private function convictionTargetMoodId(BoardState $state, int $cardId, int $botGamePlayerId): ?int
+    {
+        $bestOpponentMoodId = $this->convictionBestOpponentMoodId($state, $botGamePlayerId);
+        if ($bestOpponentMoodId !== null) {
+            return $bestOpponentMoodId;
+        }
+
+        $lowestMoodId = null;
+        foreach ($state->moodsInPlay() as $mood) {
+            if ($mood->cardId === $cardId) {
+                continue;
+            }
+            if ($lowestMoodId === null || $state->valueOf($mood->cardId) < $state->valueOf($lowestMoodId)) {
+                $lowestMoodId = $mood->cardId;
+            }
+        }
+
+        return $lowestMoodId;
+    }
+
+    /**
+     * Conviction's own "should this be played at all right now" policy
+     * (confirmed by the maintainer): worth playing whenever either
+     * convictionBestOpponentMoodId() finds a legal opponent target to
+     * remove, OR -- with no such target -- playing $cardId for its own
+     * plain printed value (2, no ability at all) would be the deciding
+     * difference between the bot's own group NOT currently having the
+     * highest score this round and having it (wouldBecomeHighestScore(),
+     * reused here with an $unboostedValue of 0, the same "didn't play
+     * this" vs "played this for its own value" comparison Contempt above
+     * already reuses it for). Otherwise PHP_INT_MIN via
+     * sortPriorityValue() -- deprioritized behind everything else (never
+     * skipped outright, so it's still played once nothing better is
+     * available), the same "save it for when it actually pays off"
+     * treatment Contempt/Cynicism/Rationalization already get.
+     */
+    private function convictionHasAGoodReasonToPlayNow(BoardState $state, int $cardId, int $botGamePlayerId): bool
+    {
+        if ($this->convictionBestOpponentMoodId($state, $botGamePlayerId) !== null) {
             return true;
         }
 
