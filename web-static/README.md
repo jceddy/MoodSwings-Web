@@ -54,10 +54,10 @@ the SAME single `<select id="theme-select">` in every page's own
 selector: the product decision was that a player picks ONE option from ONE
 dropdown at a time rather than crossing two axes -- simpler to explain and
 to build. `<optgroup>`s ("Basic"/"Palettes"/"Skins") group the eleven
-options for readability. Three of the four skins (Steampunk/Futuristic/
-Neon, see further down) recolor chrome/UI the same way a palette does, on
-top of re-skinning card art -- only Noir is a pure card-art effect with no
-color change of its own.
+options for readability. All four skins (see further down) recolor
+chrome/UI the same way a palette does, on top of card art: Steampunk/
+Futuristic/Neon re-skin the printed card front itself, while Noir applies
+a CSS filter to the existing print instead of swapping the image.
 
 The first three ("Basic") mean what they always did: honor the
 OS/browser's `prefers-color-scheme` preference, force light, or force dark
@@ -101,27 +101,28 @@ palettes, which deliberately do override the four status colors -- reading
 those clearly is their entire point.
 
 The four skins are a different customization axis from the five palettes
-above, but three of the four -- Steampunk, Futuristic, and Neon -- are
-now full themes in their own right: each has its own
+above, but all four are full themes in their own right: each has its own
 `:root[data-theme="..."]` color block (same seven structural/decorative
 properties every palette overrides, none of the four status colors, same
 convention as Jade/Red Marble/White Marble) PLUS a decorative `body`
 background-image, since "ambitious theme" -- not just an alternate card
-print -- was the whole design brief for these three. That background is a
-small, tileable inline SVG baked directly into `css/style.css` as a
-`data:image/svg+xml;base64,...` URI (no separate image file to manage): a
-pair of brass gear silhouettes for Steampunk, circuit-board traces and via
-pads for Futuristic, and a two-tone magenta/cyan crosshatch grid under a
-fixed radial-gradient glow (anchored to the bottom of the viewport, for
-the classic synthwave "grid fading into a glowing horizon" look) for
-Neon. Every color baked into those SVGs/gradients is already low-alpha, so
-they read as a subtle texture behind the page rather than competing with
-`--color-text` for contrast -- no separate `opacity` property needed on
-top. **These three are placeholder art**, generated procedurally (simple
-alternating-radius polygons for gears, hand-plotted right-angle paths for
-circuit traces, plain crosshatch lines for the grid) because no
-image-generation tool was available to produce anything more detailed;
-the maintainer may replace any of the three with real artwork.
+print -- was the whole design brief for these four.
+
+Steampunk/Futuristic/Neon's background is a small, tileable inline SVG
+baked directly into `css/style.css` as a `data:image/svg+xml;base64,...`
+URI (no separate image file to manage): a pair of brass gear silhouettes
+for Steampunk, circuit-board traces and via pads for Futuristic, and a
+two-tone magenta/cyan crosshatch grid under a fixed radial-gradient glow
+(anchored to the bottom of the viewport, for the classic synthwave "grid
+fading into a glowing horizon" look) for Neon. Every color baked into
+those SVGs/gradients is already low-alpha, so they read as a subtle
+texture behind the page rather than competing with `--color-text` for
+contrast -- no separate `opacity` property needed on top. **These three
+are placeholder art**, generated procedurally (simple alternating-radius
+polygons for gears, hand-plotted right-angle paths for circuit traces,
+plain crosshatch lines for the grid) because no image-generation tool was
+available to produce anything more detailed; the maintainer may replace
+any of the three with real artwork.
 
 Steampunk/Futuristic/Neon are ALSO alternate PRINTED card-front art,
 added gradually one card at a time rather than needing full coverage
@@ -141,46 +142,38 @@ only appears in `game/index.html`, so on every other page selecting one of
 these three shows only its color/background treatment, with nothing to
 skin.
 
-The fourth skin, Noir, is different: unlike the other three it stays a
-pure CSS filter for card art (`:root[data-theme="noir"] .card-thumb__art,
-... { filter: grayscale(1) contrast(1.15); }`, `css/style.css`) over the
-normal MSW art, with no color block of its own at all -- this repo's own
-suggested fourth skin, chosen specifically because it's "free" to ship a
-fully-working example needing no art or palette design at all. Since
-"noir" matches no `:root[data-theme="..."]` color block, selecting it
-leaves colors at whatever system/light/dark default was already active.
+The fourth skin, Noir, uses a real maintainer-supplied photo instead of a
+procedural pattern: a moody, rain-streaked night street
+(`img/themes/noir-bg.webp`), sized to `cover` and pinned with
+`background-attachment: fixed` so it stays put as a backdrop while content
+scrolls over it (the same technique Neon's own glow gradient uses).
+Because a real photo this dark can't "fall through" to whatever
+system/light/dark default happened to be active the way the earlier
+placeholder pattern could -- default light-mode text assumes a light
+background, and would be close to illegible over a night photo -- Noir
+gets its own `--color-text`/`--color-border`/etc. tuned to the photo's own
+warm neon signage, the same as any other named palette. Its
+`--color-surface`, though, is the one deliberate exception to every other
+palette's "solid, opaque hex" convention: a translucent near-black
+(`rgba(12, 10, 8, 0.72)`), so dialogs/rows/panels read as frosted glass
+over the photo rather than flat opaque cards -- a look that suits Noir
+specifically and wouldn't necessarily suit a palette with a plain color
+background instead of a busy photo. A `linear-gradient()` darkening scrim
+is layered between `--color-surface`'s own backdrop and the photo (same
+`background-image` list, drawn first) so the handful of bright spots in
+the photo itself (neon signs, wet-pavement reflections) can't fail
+contrast with light text wherever page content happens to land on top of
+them -- a robustness measure a single flat color/pattern never needed.
+
+Noir's card art, separately, still stays a pure CSS filter
+(`:root[data-theme="noir"] .card-thumb__art, ... { filter: grayscale(1)
+contrast(1.15); }`, `css/style.css`) over the normal MSW print -- no
+alternate card-front images of its own, unlike Steampunk/Futuristic/Neon.
 The filter's own selector also reaches `#card-detail-art`/
 `#choices-card-art` too (the card-detail dialog's and the choices panel's
 own single-card previews), not just the many `.card-thumb__art` thumbnails
 across hand/in-play/discard/draft screens -- all card art funnels through
 `cardArtUrl()`, so this one CSS rule covers everywhere it appears.
-
-Noir DOES get its own decorative `body` background, though (same as the
-three ambitious themes above): a neutral mid-gray diagonal stripe pattern
-(`repeating-linear-gradient()`, no image asset needed) evoking classic
-film-noir cinematography -- light cutting through venetian blinds into
-hard shadow bands across a wall. Since it has no palette to draw a color
-from, the stripes use a fixed neutral gray at low alpha that reads
-reasonably either way: a faint shadow over a light background, a faint
-lift over a dark one -- so one rule works regardless of whatever system/
-light/dark default it's layered on top of, with no branching needed.
-
-The angle is `135deg` specifically, not an arbitrary diagonal. An earlier
-version of this rule used `115deg` and hit a real, reproducible Chromium
-bug: on a tall page, `repeating-linear-gradient()` visibly desyncs partway
-down, as if the pattern's phase had jumped by roughly half a period.
-Verified live against the running app (freshly loaded and after other
-angles had already painted, up to a 2600px-tall viewport), this
-reproduces deterministically at `115deg` and NOT at `30deg`/`45deg`/
-`60deg`/`135deg` -- angles in the 45-degree family stay seam-free while an
-off-family angle like `115deg` doesn't, suggesting Chromium's rasterizer
-has a precise fast path for those angles that a generic one falls out of.
-`135deg` was picked over `45deg` only to lean the same direction
-(down-right) the original `115deg` did. If a future browser update
-reintroduces seaming even at `135deg`, the fallback is a horizontal or
-vertical band (`to bottom`/`to right`) -- those have no diagonal phase for
-a rasterizer tile boundary to fall out of step with at all, at the cost of
-a less dynamic-looking stripe.
 
 Getting `data-theme` set before first paint (so an explicit preference
 never flashes the wrong theme first) needs to happen before `js/app.js`
