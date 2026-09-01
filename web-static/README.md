@@ -150,6 +150,27 @@ only appears in `game/index.html`, so on every other page selecting one of
 these three shows only its color/background treatment, with nothing to
 skin.
 
+Steampunk's first four pieces of real card-skin art (a maintainer-supplied
+sketch-style illustration per card) landed this way: Creativity
+(`img/cards/MSW/steampunk/32-creativity.webp`), Intimidation
+(`img/cards/MSW/steampunk/67-intimidation.webp`), and the Smugness token
+(`img/cards/MSW/steampunk/134-smugness.webp`, `cards.is_token = 1` --
+tokens get themed art through the exact same `cardArtUrl()` path as any
+other card, since both key off `catalog_card_id`). Hurt Feelings needed its
+own fallback mechanism to join them: it isn't a `cards` row at all (see
+"Assets" below), so it can't reuse `cardArtUrl()`/`setCardArt()`'s
+`<catalog_card_id>-<slug>` naming or `img/cards/MSW/<skin>/` nesting.
+`hurtFeelingsArtUrl()`/`setHurtFeelingsArt()` (`game.js`) mirror their
+shape instead, using `img/hurt-feelings.webp`/`img/hurt-feelings-<skin>.webp`
+naming alongside the existing base file: `img/hurt-feelings-steampunk.webp`
+is the first themed file to exist, so every other skin still 404s and
+falls back to the plain print, same graceful partial-coverage story as the
+three cards above. The Hurt Feelings thumbnail's click-to-preview dialog
+(`openArtPreview()`) needed the same fallback wired in separately -- it
+takes an optional third `fallbackSrc` argument (unused by its only other
+caller) so a themed preview that 404s swaps back to the default print
+instead of showing a broken-image icon.
+
 The fourth skin, Noir, uses a real maintainer-supplied photo instead of a
 procedural pattern: a moody, rain-streaked night street
 (`img/themes/noir-bg.webp`), sized to `cover` and pinned with

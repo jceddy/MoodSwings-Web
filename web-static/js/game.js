@@ -3483,6 +3483,30 @@
         };
     }
 
+    // Hurt Feelings (issue #363 skin fallback) is a round-level marker,
+    // not a cards row -- see its own render call site's comment for why
+    // it has no catalog_card_id -- so it can't reuse cardArtUrl()'s
+    // <id>-<slug> naming or img/cards/MSW/<skin>/ nesting. Its base art
+    // lives at img/hurt-feelings.webp; a themed version (when one exists)
+    // lives alongside it as img/hurt-feelings-<skin>.webp instead. Same
+    // graceful-fallback shape as setCardArt() otherwise: a skin with no
+    // themed file yet 404s, and onerror swaps back to the default print.
+    function hurtFeelingsArtUrl() {
+        const skin = cardSkinPreference();
+        if (!CARD_ART_SKINS.includes(skin)) {
+            return '../img/hurt-feelings.webp';
+        }
+        return '../img/hurt-feelings-' + skin + '.webp';
+    }
+
+    function setHurtFeelingsArt(imgEl) {
+        imgEl.src = hurtFeelingsArtUrl();
+        imgEl.onerror = () => {
+            imgEl.onerror = null;
+            imgEl.src = '../img/hurt-feelings.webp';
+        };
+    }
+
     // app.js's initThemeSelect() already owns <select id="theme-select">
     // sitewide (persistence, data-theme). This just re-renders the
     // current board immediately on change (from the already-fetched
@@ -4038,8 +4062,18 @@
     // img/cards/ and so has no catalog_card_id/rules_text to build a
     // card-detail-dialog-style view from.
     const artPreviewDialog = document.getElementById('art-preview-dialog');
-    function openArtPreview(src, alt) {
+    // fallbackSrc is optional -- only Hurt Feelings' own themed art (which
+    // can 404 for a skin with no themed file yet, same as any other card
+    // skin) currently needs it; a caller that doesn't pass one gets no
+    // onerror handler at all, same as before this parameter existed.
+    function openArtPreview(src, alt, fallbackSrc) {
         const imageEl = document.getElementById('art-preview-image');
+        imageEl.onerror = fallbackSrc
+            ? () => {
+                imageEl.onerror = null;
+                imageEl.src = fallbackSrc;
+            }
+            : null;
         imageEl.src = src;
         imageEl.alt = alt;
         artPreviewDialog.showModal();
@@ -5076,15 +5110,18 @@
                 // img/cards/ and has no catalog_card_id to build a
                 // card-detail-dialog-style view from; clicking it opens the
                 // same generic art-preview dialog used for that reason.
+                // Themed via hurtFeelingsArtUrl()/setHurtFeelingsArt() (see
+                // their own comment further up) rather than cardArtUrl()/
+                // setCardArt(), for that same "no catalog_card_id" reason.
                 if (hasHurtFeelings) {
                     const alt = player.username + ' has Hurt Feelings this round (2 plays).';
                     const thumb = document.createElement('button');
                     thumb.type = 'button';
                     thumb.className = 'hurt-feelings-thumb';
                     thumb.title = alt;
-                    thumb.addEventListener('click', () => openArtPreview('../img/hurt-feelings.webp', alt));
+                    thumb.addEventListener('click', () => openArtPreview(hurtFeelingsArtUrl(), alt, '../img/hurt-feelings.webp'));
                     const img = document.createElement('img');
-                    img.src = '../img/hurt-feelings.webp';
+                    setHurtFeelingsArt(img);
                     img.alt = 'Hurt Feelings';
                     thumb.appendChild(img);
                     iconsEl.appendChild(thumb);
