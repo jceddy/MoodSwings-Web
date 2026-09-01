@@ -41,10 +41,13 @@
    background-image (a tileable inline-SVG texture evoking each theme --
    brass gears, circuit traces, a neon grid) since "ambitious theme" was
    the whole design brief for these three, not just an alternate card
-   print. The fourth, Noir, stays a pure CSS filter with no color block of
+   print. The fourth, Noir, stays a pure CSS filter with no COLOR block of
    its own at all -- see this file's own [data-theme="noir"] rule further
    down for why that one deliberately falls through to the system/light/
-   dark default instead. */
+   dark default instead -- but it DOES get its own decorative `body`
+   background, a neutral diagonal-stripe pattern (evoking classic
+   venetian-blind film-noir lighting) chosen specifically because it reads
+   the same regardless of which color scheme it's falling through to. */
 :root {
     color-scheme: light;
     /* Card/icon size slider (issue #417) -- a plain multiplier every
@@ -310,6 +313,26 @@ body {
     padding: 0 1rem;
     background-color: var(--color-bg);
     color: var(--color-text);
+}
+
+/* Noir (see its own filter rule further down) has no color block of its
+   own, so unlike the three below it can't bake theme-specific hues into
+   its background -- it needs to sit on top of whatever system/light/dark
+   background is already active. A neutral mid-gray at low alpha reads the
+   same either way (a faint shadow on a light background, a faint lift on
+   a dark one), so one rule covers both without branching on the current
+   color scheme. Diagonal repeating bands, rather than a texture, evoke
+   classic film-noir cinematography -- light through venetian blinds
+   cutting hard shadow stripes across a wall -- which needs no image asset
+   at all, plain `repeating-linear-gradient()`. */
+:root[data-theme="noir"] body {
+    background-image: repeating-linear-gradient(
+        115deg,
+        rgba(128, 128, 128, 0.16) 0px,
+        rgba(128, 128, 128, 0.16) 34px,
+        transparent 34px,
+        transparent 90px
+    );
 }
 
 /* The three "ambitious" card-skin themes (see their own :root blocks
@@ -1242,16 +1265,20 @@ body.game-page {
 /* Noir card skin (issue #363) -- unlike Steampunk/Futuristic/Neon (full
    themes of their own now, see their :root blocks further up, plus
    alternate printed art per card added gradually -- see cardArtUrl()/
-   setCardArt() in game.js), Noir needs no art or color block of its own
-   at all: a single grayscale-plus-contrast filter over the normal MSW
-   print reads as its own distinct look everywhere card art appears -- the
-   hand/in-play/discard thumbnails (.card-thumb__art) here, plus the card
-   detail dialog and the choices panel's own preview (#card-detail-art/
-   #choices-card-art, styled separately elsewhere in this file, but still
-   plain <img> elements this same rule reaches). "noir" just doesn't
-   happen to match any :root[data-theme="..."] color block, so picking it
-   leaves the color scheme at its system/light/dark default while still
-   setting the attribute this rule (and cardArtUrl() in game.js) reads. */
+   setCardArt() in game.js), Noir needs no ART or COLOR block of its own
+   for card art: a single grayscale-plus-contrast filter over the normal
+   MSW print reads as its own distinct look everywhere card art appears --
+   the hand/in-play/discard thumbnails (.card-thumb__art) here, plus the
+   card detail dialog and the choices panel's own preview
+   (#card-detail-art/#choices-card-art, styled separately elsewhere in
+   this file, but still plain <img> elements this same rule reaches). It
+   DOES get its own decorative `body` background (see the venetian-blind-
+   stripe rule further up, right before Steampunk's) -- unlike that
+   background, though, "noir" still doesn't match any
+   :root[data-theme="..."] COLOR block, so picking it leaves the color
+   scheme at its system/light/dark default while still setting the
+   attribute both that background rule and this one (and cardArtUrl() in
+   game.js) read. */
 :root[data-theme="noir"] .card-thumb__art,
 :root[data-theme="noir"] #card-detail-art,
 :root[data-theme="noir"] #choices-card-art {

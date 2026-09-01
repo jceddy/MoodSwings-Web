@@ -142,18 +142,28 @@ these three shows only its color/background treatment, with nothing to
 skin.
 
 The fourth skin, Noir, is different: unlike the other three it stays a
-pure CSS filter (`:root[data-theme="noir"] .card-thumb__art, ... {
-filter: grayscale(1) contrast(1.15); }`, `css/style.css`) over the normal
-MSW art, with no color block or background-image of its own at all --
-this repo's own suggested fourth skin, chosen specifically because it's
-"free" to ship a fully-working example needing no art or palette design
-at all. Since "noir" matches no `:root[data-theme="..."]` color block,
-selecting it leaves colors at whatever system/light/dark default was
-already active. The filter's own selector also reaches `#card-detail-art`/
+pure CSS filter for card art (`:root[data-theme="noir"] .card-thumb__art,
+... { filter: grayscale(1) contrast(1.15); }`, `css/style.css`) over the
+normal MSW art, with no color block of its own at all -- this repo's own
+suggested fourth skin, chosen specifically because it's "free" to ship a
+fully-working example needing no art or palette design at all. Since
+"noir" matches no `:root[data-theme="..."]` color block, selecting it
+leaves colors at whatever system/light/dark default was already active.
+The filter's own selector also reaches `#card-detail-art`/
 `#choices-card-art` too (the card-detail dialog's and the choices panel's
 own single-card previews), not just the many `.card-thumb__art` thumbnails
 across hand/in-play/discard/draft screens -- all card art funnels through
 `cardArtUrl()`, so this one CSS rule covers everywhere it appears.
+
+Noir DOES get its own decorative `body` background, though (same as the
+three ambitious themes above): a neutral mid-gray diagonal stripe pattern
+(`repeating-linear-gradient()`, no image asset needed) evoking classic
+film-noir cinematography -- light cutting through venetian blinds into
+hard shadow bands across a wall. Since it has no palette to draw a color
+from, the stripes use a fixed neutral gray at low alpha that reads
+reasonably either way: a faint shadow over a light background, a faint
+lift over a dark one -- so one rule works regardless of whatever system/
+light/dark default it's layered on top of, with no branching needed.
 
 Getting `data-theme` set before first paint (so an explicit preference
 never flashes the wrong theme first) needs to happen before `js/app.js`
