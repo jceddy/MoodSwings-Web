@@ -1,5 +1,5 @@
 /* -- Theming ---------------------------------------------------------
-   Three base modes (see "Palettes" in web-static/README.md): system
+   Three base modes (see "Themes" in web-static/README.md): system
    default (honors prefers-color-scheme, the ":not([data-theme=\"light\"])"
    guard below), and explicit light/dark overrides via documentElement's
    data-theme attribute. color-scheme lets the browser's own UI (native
@@ -32,16 +32,22 @@
    white/black respectively).
 
    The SAME <select id="theme-select">/data-theme attribute ALSO carries
-   the four card skins (Noir/Steampunk/Futuristic/Neon, see this file's
-   own [data-theme="noir"] rule further down and cardArtUrl()/
-   setCardArt() in game.js) -- there's deliberately no separate control
-   for those, so every option in that one dropdown is simply "a theme,"
-   whether it changes colors, card art, both, or (for the three skins with
-   no art uploaded yet) neither visibly yet. A skin name matches no
-   :root[data-theme="..."] color block here, so selecting one leaves the
-   color scheme at its system/light/dark default -- see this file's own
-   [data-theme="noir"] rule's docblock for exactly why that faithfully
-   falls through instead of needing its own special-casing anywhere. */
+   four card-skin themes -- Noir/Steampunk/Futuristic/Neon (see
+   cardArtUrl()/setCardArt() in game.js for the printed-card-art half of
+   these). Three of the four -- Steampunk/Futuristic/Neon -- are full
+   themes in their own right, same as any named palette above: their own
+   :root[data-theme="..."] blocks further down override the same seven
+   structural/decorative properties, PLUS set a decorative `body`
+   background-image (a tileable inline-SVG texture evoking each theme --
+   brass gears, circuit traces, a neon grid) since "ambitious theme" was
+   the whole design brief for these three, not just an alternate card
+   print. The fourth, Noir, stays a pure CSS filter with no COLOR block of
+   its own at all -- see this file's own [data-theme="noir"] rule further
+   down for why that one deliberately falls through to the system/light/
+   dark default instead -- but it DOES get its own decorative `body`
+   background, a neutral diagonal-stripe pattern (evoking classic
+   venetian-blind film-noir lighting) chosen specifically because it reads
+   the same regardless of which color scheme it's falling through to. */
 :root {
     color-scheme: light;
     /* Card/icon size slider (issue #417) -- a plain multiplier every
@@ -233,6 +239,58 @@
     --color-info: #40c4ff;
 }
 
+/* Steampunk (issue #363, card-skin theme) -- a dark brass/espresso
+   palette evoking riveted copper machinery, plus a tileable inline-SVG
+   background of two brass gear silhouettes (drawn as simple alternating-
+   radius polygons, not photographic art -- see this repo's own README
+   for why: no image-generation tool was available, so this is a
+   deliberately low-fidelity placeholder the maintainer can replace).
+   Doesn't touch the four status colors, same reasoning as Jade/Red
+   Marble/White Marble above. */
+:root[data-theme="steampunk"] {
+    color-scheme: dark;
+    --color-bg: #1c130a;
+    --color-surface: #241a0e;
+    --color-text: #f0e0c0;
+    --color-text-secondary: #d8c39c;
+    --color-muted: #a88b62;
+    --color-border: #8b5e2f;
+    --color-border-subtle: #5c3f20;
+}
+
+/* Futuristic (issue #363, card-skin theme) -- a near-black deep-blue
+   palette with a cyan accent border, plus a tileable inline-SVG
+   background of circuit-board traces and via pads (see Steampunk's own
+   comment above re: placeholder art). */
+:root[data-theme="futuristic"] {
+    color-scheme: dark;
+    --color-bg: #060b14;
+    --color-surface: #0d1626;
+    --color-text: #d8ecff;
+    --color-text-secondary: #a9c7e6;
+    --color-muted: #6f8bab;
+    --color-border: #29b6f6;
+    --color-border-subtle: #1a4a66;
+}
+
+/* Neon (issue #363, card-skin theme) -- a near-black deep-purple palette
+   with a hot-magenta accent border, plus a tileable inline-SVG
+   crosshatch grid (magenta major lines, cyan minor lines) layered under
+   a fixed radial-gradient glow anchored to the bottom of the viewport --
+   the classic synthwave "grid fading into a glowing horizon" look,
+   without needing a full perspective-projected image (see Steampunk's
+   own comment above re: placeholder art). */
+:root[data-theme="neon"] {
+    color-scheme: dark;
+    --color-bg: #0a0014;
+    --color-surface: #150626;
+    --color-text: #f5e6ff;
+    --color-text-secondary: #d9b3ff;
+    --color-muted: #9a6fc2;
+    --color-border: #ff2fd6;
+    --color-border-subtle: #6a1a5c;
+}
+
 /* Opts out of mobile Chrome's "font boosting" text autosizer, which
    independently scales each block of text (list items, in particular)
    to stay legible based on how its content happens to wrap -- harmless
@@ -255,6 +313,51 @@ body {
     padding: 0 1rem;
     background-color: var(--color-bg);
     color: var(--color-text);
+}
+
+/* Noir (see its own filter rule further down) has no color block of its
+   own, so unlike the three below it can't bake theme-specific hues into
+   its background -- it needs to sit on top of whatever system/light/dark
+   background is already active. A neutral mid-gray at low alpha reads the
+   same either way (a faint shadow on a light background, a faint lift on
+   a dark one), so one rule covers both without branching on the current
+   color scheme. Diagonal repeating bands, rather than a texture, evoke
+   classic film-noir cinematography -- light through venetian blinds
+   cutting hard shadow stripes across a wall -- which needs no image asset
+   at all, plain `repeating-linear-gradient()`. */
+:root[data-theme="noir"] body {
+    background-image: repeating-linear-gradient(
+        115deg,
+        rgba(128, 128, 128, 0.16) 0px,
+        rgba(128, 128, 128, 0.16) 34px,
+        transparent 34px,
+        transparent 90px
+    );
+}
+
+/* The three "ambitious" card-skin themes (see their own :root blocks
+   above) each additionally paint a decorative, tileable background
+   behind the page -- kept at low alpha (baked into each SVG/gradient's
+   own rgba() stops, not a separate opacity property, so it never dims
+   actual page content sitting on top of it) so body text set in
+   --color-text above stays at full, unaffected contrast. */
+:root[data-theme="steampunk"] body {
+    background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNjAiIGhlaWdodD0iMTYwIiB2aWV3Qm94PSIwIDAgMTYwIDE2MCI+PHBvbHlnb24gcG9pbnRzPSI3MC4wLDM4LjAgNjEuOCw0NS43IDYzLjksNTYuOCA1Mi43LDU4LjIgNDcuOSw2OC40IDM4LjAsNjMuMCAyOC4xLDY4LjQgMjMuMyw1OC4yIDEyLjEsNTYuOCAxNC4yLDQ1LjcgNi4wLDM4LjAgMTQuMiwzMC4zIDEyLjEsMTkuMiAyMy4zLDE3LjggMjguMSw3LjYgMzguMCwxMy4wIDQ3LjksNy42IDUyLjcsMTcuOCA2My45LDE5LjIgNjEuOCwzMC4zIiBmaWxsPSJub25lIiBzdHJva2U9InJnYmEoMTk2LDE0OCw4NCwwLjIwKSIgc3Ryb2tlLXdpZHRoPSIyIi8+PGNpcmNsZSBjeD0iMzgiIGN5PSIzOCIgcj0iOSIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJyZ2JhKDE5NiwxNDgsODQsMC4yMCkiIHN0cm9rZS13aWR0aD0iMiIvPjxwb2x5Z29uIHBvaW50cz0iMTQ0LjAsMTIyLjAgMTM3LjksMTI3LjcgMTM4LjEsMTM2LjEgMTI5LjcsMTM1LjkgMTI0LjAsMTQyLjAgMTE4LjMsMTM1LjkgMTA5LjksMTM2LjEgMTEwLjEsMTI3LjcgMTA0LjAsMTIyLjAgMTEwLjEsMTE2LjMgMTA5LjksMTA3LjkgMTE4LjMsMTA4LjEgMTI0LjAsMTAyLjAgMTI5LjcsMTA4LjEgMTM4LjEsMTA3LjkgMTM3LjksMTE2LjMiIGZpbGw9Im5vbmUiIHN0cm9rZT0icmdiYSgxOTYsMTQ4LDg0LDAuMjApIiBzdHJva2Utd2lkdGg9IjIiLz48Y2lyY2xlIGN4PSIxMjQiIGN5PSIxMjIiIHI9IjUiIGZpbGw9Im5vbmUiIHN0cm9rZT0icmdiYSgxOTYsMTQ4LDg0LDAuMjApIiBzdHJva2Utd2lkdGg9IjIiLz48L3N2Zz4=");
+    background-repeat: repeat;
+}
+
+:root[data-theme="futuristic"] body {
+    background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMDAiIGhlaWdodD0iMTAwIiB2aWV3Qm94PSIwIDAgMTAwIDEwMCI+PHBhdGggZD0iTTAsMjAgSDMwIFY1MCBINzAgVjIwIEgxMDAiIGZpbGw9Im5vbmUiIHN0cm9rZT0icmdiYSg0MSwxODIsMjQ2LDAuMjIpIiBzdHJva2Utd2lkdGg9IjEuNSIvPjxwYXRoIGQ9Ik0yMCwxMDAgVjcwIEg1MCBWNDAiIGZpbGw9Im5vbmUiIHN0cm9rZT0icmdiYSg0MSwxODIsMjQ2LDAuMjIpIiBzdHJva2Utd2lkdGg9IjEuNSIvPjxwYXRoIGQ9Ik0xMDAsNjAgSDgwIFY5MCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJyZ2JhKDQxLDE4MiwyNDYsMC4yMikiIHN0cm9rZS13aWR0aD0iMS41Ii8+PHBhdGggZD0iTTAsODUgSDE1IiBmaWxsPSJub25lIiBzdHJva2U9InJnYmEoNDEsMTgyLDI0NiwwLjIyKSIgc3Ryb2tlLXdpZHRoPSIxLjUiLz48Y2lyY2xlIGN4PSIzMCIgY3k9IjIwIiByPSIyLjIiIGZpbGw9InJnYmEoNDEsMTgyLDI0NiwwLjI4KSIvPjxjaXJjbGUgY3g9IjcwIiBjeT0iNTAiIHI9IjIuMiIgZmlsbD0icmdiYSg0MSwxODIsMjQ2LDAuMjgpIi8+PGNpcmNsZSBjeD0iNzAiIGN5PSIyMCIgcj0iMi4yIiBmaWxsPSJyZ2JhKDQxLDE4MiwyNDYsMC4yOCkiLz48Y2lyY2xlIGN4PSIyMCIgY3k9IjcwIiByPSIyLjIiIGZpbGw9InJnYmEoNDEsMTgyLDI0NiwwLjI4KSIvPjxjaXJjbGUgY3g9IjUwIiBjeT0iNzAiIHI9IjIuMiIgZmlsbD0icmdiYSg0MSwxODIsMjQ2LDAuMjgpIi8+PGNpcmNsZSBjeD0iNTAiIGN5PSI0MCIgcj0iMi4yIiBmaWxsPSJyZ2JhKDQxLDE4MiwyNDYsMC4yOCkiLz48Y2lyY2xlIGN4PSI4MCIgY3k9IjYwIiByPSIyLjIiIGZpbGw9InJnYmEoNDEsMTgyLDI0NiwwLjI4KSIvPjxjaXJjbGUgY3g9IjgwIiBjeT0iOTAiIHI9IjIuMiIgZmlsbD0icmdiYSg0MSwxODIsMjQ2LDAuMjgpIi8+PGNpcmNsZSBjeD0iMTUiIGN5PSI4NSIgcj0iMi4yIiBmaWxsPSJyZ2JhKDQxLDE4MiwyNDYsMC4yOCkiLz48L3N2Zz4=");
+    background-repeat: repeat;
+}
+
+:root[data-theme="neon"] body {
+    background-image:
+        radial-gradient(ellipse at 50% 100%, rgba(255, 47, 214, 0.28), transparent 60%),
+        url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCIgdmlld0JveD0iMCAwIDgwIDgwIj48bGluZSB4MT0iMCIgeTE9IjAiIHgyPSI4MCIgeTI9IjAiIHN0cm9rZT0icmdiYSgyNTUsNDcsMjE0LDAuMjQpIiBzdHJva2Utd2lkdGg9IjEuNSIvPjxsaW5lIHgxPSIwIiB5MT0iMCIgeDI9IjAiIHkyPSI4MCIgc3Ryb2tlPSJyZ2JhKDI1NSw0NywyMTQsMC4yNCkiIHN0cm9rZS13aWR0aD0iMS41Ii8+PGxpbmUgeDE9IjAiIHkxPSI0MC4wIiB4Mj0iODAiIHkyPSI0MC4wIiBzdHJva2U9InJnYmEoNDEsMjMwLDI0NiwwLjE1KSIgc3Ryb2tlLXdpZHRoPSIxIi8+PGxpbmUgeDE9IjQwLjAiIHkxPSIwIiB4Mj0iNDAuMCIgeTI9IjgwIiBzdHJva2U9InJnYmEoNDEsMjMwLDI0NiwwLjE1KSIgc3Ryb2tlLXdpZHRoPSIxIi8+PC9zdmc+");
+    background-repeat: no-repeat, repeat;
+    background-position: center bottom, top left;
+    background-attachment: fixed, scroll;
 }
 
 footer {
@@ -1159,20 +1262,23 @@ body.game-page {
     transition: transform 0.15s ease;
 }
 
-/* Noir card skin (issue #363) -- unlike the Steampunk/Futuristic/Neon
-   skins (alternate printed art per card, added gradually -- see
-   cardArtUrl()/setCardArt() in game.js), Noir needs no art of its own at
-   all: a single grayscale-plus-contrast filter over the normal MSW print
-   reads as its own distinct look everywhere card art appears -- the hand/
-   in-play/discard thumbnails (.card-thumb__art) here, plus the card
-   detail dialog and the choices panel's own preview (#card-detail-art/
-   #choices-card-art, styled separately elsewhere in this file, but still
-   plain <img> elements this same rule reaches). Selected from the SAME
-   <select id="theme-select">/data-theme as every color palette above --
-   "noir"/"steampunk"/"futuristic"/"neon" just don't happen to match any
-   :root[data-theme="..."] color block, so picking one of them leaves the
-   color scheme at its system/light/dark default while still setting the
-   attribute this rule (and cardArtUrl() in game.js) reads. */
+/* Noir card skin (issue #363) -- unlike Steampunk/Futuristic/Neon (full
+   themes of their own now, see their :root blocks further up, plus
+   alternate printed art per card added gradually -- see cardArtUrl()/
+   setCardArt() in game.js), Noir needs no ART or COLOR block of its own
+   for card art: a single grayscale-plus-contrast filter over the normal
+   MSW print reads as its own distinct look everywhere card art appears --
+   the hand/in-play/discard thumbnails (.card-thumb__art) here, plus the
+   card detail dialog and the choices panel's own preview
+   (#card-detail-art/#choices-card-art, styled separately elsewhere in
+   this file, but still plain <img> elements this same rule reaches). It
+   DOES get its own decorative `body` background (see the venetian-blind-
+   stripe rule further up, right before Steampunk's) -- unlike that
+   background, though, "noir" still doesn't match any
+   :root[data-theme="..."] COLOR block, so picking it leaves the color
+   scheme at its system/light/dark default while still setting the
+   attribute both that background rule and this one (and cardArtUrl() in
+   game.js) read. */
 :root[data-theme="noir"] .card-thumb__art,
 :root[data-theme="noir"] #card-detail-art,
 :root[data-theme="noir"] #choices-card-art {
