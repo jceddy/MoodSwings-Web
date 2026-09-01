@@ -1405,7 +1405,7 @@
         <script type="text/javascript" src="https://cdnjs.buymeacoffee.com/1.0.0/button.prod.min.js" data-name="bmc-button" data-slug="jceddy" data-color="#FFDD00" data-emoji="" data-font="Cookie" data-text="Buy me a coffee" data-outline-color="#000000" data-font-color="#000000" data-coffee-color="#ffffff"></script>
     </dialog>
 
-    <footer><span id="app-version"></span><a id="resources-link" href="#">Resources</a><label id="theme-select-label">Palette
+    <footer><span id="app-version"></span><a id="resources-link" href="#">Resources</a><label id="theme-select-label">Theme
         <select id="theme-select">
             <optgroup label="Basic">
                 <option value="system">System</option>
@@ -1417,17 +1417,14 @@
                 <option value="red-marble">Red Marble</option>
                 <option value="white-marble">White Marble</option>
                 <option value="high-contrast">High Contrast</option>
+                <option value="high-contrast-dark">High Contrast Dark</option>
             </optgroup>
-        </select>
-    </label><!-- Card skin (issue #363) -- game/index.html only, since card
-         art has nothing to skin on every other page. See cardArtUrl()/
-         initCardSkinSelect() in game.js. --><label id="card-skin-select-label">Card skin
-        <select id="card-skin-select">
-            <option value="none">None</option>
-            <option value="noir">Noir</option>
-            <option value="steampunk">Steampunk</option>
-            <option value="futuristic">Futuristic</option>
-            <option value="neon">Neon</option>
+            <optgroup label="Skins">
+                <option value="noir">Noir</option>
+                <option value="steampunk">Steampunk</option>
+                <option value="futuristic">Futuristic</option>
+                <option value="neon">Neon</option>
+            </optgroup>
         </select>
     </label></footer>
     <script src="../js/app.js"></script>

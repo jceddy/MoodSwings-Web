@@ -7,27 +7,41 @@
    needing to restyle each one by hand.
 
    Issue #363 adds a curated set of NAMED palettes on top of those three --
-   Jade, Red Marble, White Marble, and High Contrast below -- selected from
-   the same data-theme attribute/<select id="theme-select">, but each is a
-   single FIXED look (no @media (prefers-color-scheme) counterpart the way
-   light/dark/system have): picking one overrides the system preference
-   entirely, the same way an explicit "dark" selection already does today.
-   Every one of them only overrides the seven structural/decorative
-   properties (--color-bg through --color-border-subtle) -- the four
-   semantic status colors (--color-error/--color-success/--color-pending/
-   --color-info) and the two decorative icon accents (--color-brown/
-   --color-gold, see .player-stat--hand/--points/--wins further down) stay
-   at their shared light-theme values across every one of these, since
-   they're functional/recognizable indicators (or icons meant to evoke a
-   universal concept -- a trophy is gold regardless of the page's own
-   palette) rather than part of a palette's own decorative identity;
-   re-deriving all four/two per palette would multiply the design surface
-   for little benefit and real risk of a palette accidentally making
-   error/success harder to tell apart (Jade's own dominant hue IS green,
-   for instance). High Contrast is the one exception -- seeing status
-   colors clearly is the entire point of that palette, so it deliberately
-   does override them (with no --color-brown/--color-gold override either,
-   since the base light values already contrast fine against white). */
+   Jade, Red Marble, White Marble, High Contrast, and High Contrast Dark
+   below -- selected from the same data-theme attribute/
+   <select id="theme-select">, but each is a single FIXED look (no
+   @media (prefers-color-scheme) counterpart the way light/dark/system
+   have): picking one overrides the system preference entirely, the same
+   way an explicit "dark" selection already does today. Every one of them
+   only overrides the seven structural/decorative properties (--color-bg
+   through --color-border-subtle) -- the four semantic status colors
+   (--color-error/--color-success/--color-pending/--color-info) and the
+   two decorative icon accents (--color-brown/--color-gold, see
+   .player-stat--hand/--points/--wins further down) stay at their shared
+   light-theme values across every one of these, since they're
+   functional/recognizable indicators (or icons meant to evoke a universal
+   concept -- a trophy is gold regardless of the page's own palette)
+   rather than part of a palette's own decorative identity; re-deriving
+   all four/two per palette would multiply the design surface for little
+   benefit and real risk of a palette accidentally making error/success
+   harder to tell apart (Jade's own dominant hue IS green, for instance).
+   The two High Contrast variants are the exception -- seeing status
+   colors clearly is the entire point of those, so they deliberately do
+   override them (with no --color-brown/--color-gold override either,
+   since the base light/dark values already contrast fine against
+   white/black respectively).
+
+   The SAME <select id="theme-select">/data-theme attribute ALSO carries
+   the four card skins (Noir/Steampunk/Futuristic/Neon, see this file's
+   own [data-theme="noir"] rule further down and cardArtUrl()/
+   setCardArt() in game.js) -- there's deliberately no separate control
+   for those, so every option in that one dropdown is simply "a theme,"
+   whether it changes colors, card art, both, or (for the three skins with
+   no art uploaded yet) neither visibly yet. A skin name matches no
+   :root[data-theme="..."] color block here, so selecting one leaves the
+   color scheme at its system/light/dark default -- see this file's own
+   [data-theme="noir"] rule's docblock for exactly why that faithfully
+   falls through instead of needing its own special-casing anywhere. */
 :root {
     color-scheme: light;
     /* Card/icon size slider (issue #417) -- a plain multiplier every
@@ -193,6 +207,30 @@
     --color-success: #006400;
     --color-pending: #7a5b00;
     --color-info: #003c82;
+}
+
+/* High Contrast Dark -- the dark-mode counterpart High Contrast above
+   never had, the same way plain Light/Dark come as a pair. Pure
+   white-on-black rather than a softened dark gray (#181818/#e8e8e8, the
+   plain dark theme's own values) for the same reason High Contrast
+   itself pushes past the plain light theme's #fff/#222 -- and the four
+   status colors are pushed toward fully saturated rather than the plain
+   dark theme's already-brightened versions, for the same "reading these
+   correctly is the whole point" reason High Contrast's own light variant
+   overrides them. */
+:root[data-theme="high-contrast-dark"] {
+    color-scheme: dark;
+    --color-bg: #000;
+    --color-surface: #000;
+    --color-text: #fff;
+    --color-text-secondary: #e6e6e6;
+    --color-muted: #bbb;
+    --color-border: #fff;
+    --color-border-subtle: #aaa;
+    --color-error: #ff5252;
+    --color-success: #00e676;
+    --color-pending: #ffd54f;
+    --color-info: #40c4ff;
 }
 
 /* Opts out of mobile Chrome's "font boosting" text autosizer, which
@@ -1129,13 +1167,15 @@ body.game-page {
    in-play/discard thumbnails (.card-thumb__art) here, plus the card
    detail dialog and the choices panel's own preview (#card-detail-art/
    #choices-card-art, styled separately elsewhere in this file, but still
-   plain <img> elements this same rule reaches). Selected independently of
-   the color palette above via its own [data-skin] attribute/
-   <select id="card-skin-select"> (game/index.html only -- card art has
-   nothing to skin on every other page), never data-theme. */
-:root[data-skin="noir"] .card-thumb__art,
-:root[data-skin="noir"] #card-detail-art,
-:root[data-skin="noir"] #choices-card-art {
+   plain <img> elements this same rule reaches). Selected from the SAME
+   <select id="theme-select">/data-theme as every color palette above --
+   "noir"/"steampunk"/"futuristic"/"neon" just don't happen to match any
+   :root[data-theme="..."] color block, so picking one of them leaves the
+   color scheme at its system/light/dark default while still setting the
+   attribute this rule (and cardArtUrl() in game.js) reads. */
+:root[data-theme="noir"] .card-thumb__art,
+:root[data-theme="noir"] #card-detail-art,
+:root[data-theme="noir"] #choices-card-art {
     filter: grayscale(1) contrast(1.15);
 }
 
