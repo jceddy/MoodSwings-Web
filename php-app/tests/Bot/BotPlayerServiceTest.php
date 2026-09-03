@@ -888,6 +888,58 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame([], $action['choices']);
     }
 
+    // -- Grief (confirmed by the maintainer) --------------------------------
+
+    /**
+     * Grief's own extra plays are restricted to cards FROM the discard
+     * pile, same as Harmony -- with the pile completely empty, that
+     * grant accomplishes nothing, so Grief (id 65, value 0) is
+     * deprioritized behind Apathy (id 55, value 4, plain filler).
+     */
+    public function testChooseActionDeprioritizesGriefWhenTheDiscardPileIsEmpty(): void
+    {
+        $state = $this->boardState(hands: [1 => [65, 55]]);
+
+        $action = $this->bot->chooseAction($state, [65, 55], 1);
+
+        self::assertSame(55, $action['card_id']);
+    }
+
+    /**
+     * The instant the discard pile has even one card in it, Grief
+     * reverts to its ordinary EARLY_PRIORITY_EFFECT_KEYS boosted
+     * treatment -- its own value (0) plus EARLY_PRIORITY_BONUS (10)
+     * comfortably outranks Apathy's plain value (4).
+     */
+    public function testChooseActionPrioritizesGriefWhenTheDiscardPileHasACard(): void
+    {
+        $state = new BoardState(
+            $this->sampleCatalog(),
+            DefaultEffectRegistry::build(),
+            [1, 2],
+            hands: [1 => [65, 55]],
+            discard: [8],
+        );
+
+        $action = $this->bot->chooseAction($state, [65, 55], 1);
+
+        self::assertSame(65, $action['card_id']);
+    }
+
+    /**
+     * With nothing else playable, Grief is still played -- deprioritized
+     * WHEN, never skipped outright.
+     */
+    public function testChooseActionStillPlaysGriefWhenNothingElseIsPlayable(): void
+    {
+        $state = $this->boardState(hands: [1 => [65]]);
+
+        $action = $this->bot->chooseAction($state, [65], 1);
+
+        self::assertSame(65, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
     // -- Nostalgia (confirmed by the maintainer) ---------------------------
 
     /**

@@ -2427,6 +2427,26 @@ dialog#deck-builder-dialog[open] {
     color: var(--color-error);
 }
 
+/* Deck Builder catalog "+ Deck"/"+ Sideboard" actions, moved into the
+   shared card-detail popup instead of sitting under each catalog
+   thumbnail (issue #93 follow-up) -- one row per action, each pairing a
+   copy-count indicator with its own button, see
+   deckBuilderCardDetailActions() in game.js. */
+#card-detail-deck-builder-actions {
+    margin-bottom: 1rem;
+}
+
+.card-detail-deck-builder-action {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.card-detail-deck-builder-action + .card-detail-deck-builder-action {
+    margin-top: 0.5rem;
+}
+
 #opponent-checkboxes label {
     display: block;
     margin-bottom: 0.25rem;

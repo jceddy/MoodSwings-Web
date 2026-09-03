@@ -713,6 +713,16 @@ final class BotPlayerService
      * even one card in it, Harmony reverts to its ordinary
      * EARLY_PRIORITY_EFFECT_KEYS boosted treatment above.
      *
+     * Grief gets the identical PHP_INT_MIN treatment as Harmony above,
+     * whenever the discard pile is completely empty -- GriefEffect's
+     * own extra plays are restricted to the discard pile too
+     * (grantExtraPlay(['source' => 'discard'])), the same "nothing
+     * there to take advantage of" situation as Harmony, just granting
+     * two plays instead of one. The instant the discard pile has even
+     * one card in it, Grief reverts to its ordinary
+     * EARLY_PRIORITY_EFFECT_KEYS boosted treatment above (it's already
+     * listed there).
+     *
      * Nostalgia (confirmed by the maintainer) gets the identical
      * PHP_INT_MIN treatment as Harmony above, whenever the discard pile
      * is completely empty -- NostalgiaEffect's own "you may put a card
@@ -762,6 +772,9 @@ final class BotPlayerService
             return PHP_INT_MIN;
         }
         if ($effectKey === 'harmony' && $state->discardPile() === []) {
+            return PHP_INT_MIN;
+        }
+        if ($effectKey === 'grief' && $state->discardPile() === []) {
             return PHP_INT_MIN;
         }
         if ($effectKey === 'nostalgia' && $state->discardPile() === []) {
