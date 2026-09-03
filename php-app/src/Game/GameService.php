@@ -10186,13 +10186,25 @@ final class GameService
         // advanceTurn()'s active-player filtering) or win it, so from
         // their own perspective it's just as much history as a completed
         // game -- listPastGamesForUser() picks it up via the same column.
+        //
+        // The game_matches LEFT JOIN/OR-clause is issue #90's own
+        // non-draft best-of-three match wrapper's exact analog of the
+        // draft_matches one just above -- a finished game 1 of a still
+        // in_progress Duel/Team/Closed Team Play/2-player Traditional
+        // match is just as much "currently being played" as a draft
+        // match's own finished game 1 is, not history yet.
         $gameIdsStmt = $pdo->prepare(
             "SELECT g.id FROM games g
              JOIN game_players gp ON gp.game_id = g.id
              LEFT JOIN draft_matches dm ON dm.id = g.draft_match_id
+             LEFT JOIN game_matches gm ON gm.id = g.game_match_id
              WHERE gp.user_id = :user_id
                AND gp.resigned_at IS NULL
-               AND (g.status NOT IN ('completed', 'abandoned') OR (g.draft_match_id IS NOT NULL AND dm.status != 'completed'))
+               AND (
+                 g.status NOT IN ('completed', 'abandoned')
+                 OR (g.draft_match_id IS NOT NULL AND dm.status != 'completed')
+                 OR (g.game_match_id IS NOT NULL AND gm.status != 'completed')
+               )
              ORDER BY
                  (g.status IN ('waiting', 'in_progress')) DESC,
                  COALESCE(g.last_move_at, g.started_at, g.created_at) DESC,
@@ -10235,12 +10247,14 @@ final class GameService
             "SELECT g.id FROM games g
              JOIN game_players gp ON gp.game_id = g.id
              LEFT JOIN draft_matches dm ON dm.id = g.draft_match_id
+             LEFT JOIN game_matches gm ON gm.id = g.game_match_id
              WHERE gp.user_id = :user_id
                AND (
                  gp.resigned_at IS NOT NULL
                  OR (
                    g.status IN ('completed', 'abandoned')
                    AND (g.draft_match_id IS NULL OR dm.status = 'completed')
+                   AND (g.game_match_id IS NULL OR gm.status = 'completed')
                  )
                )
              ORDER BY COALESCE(g.completed_at, g.last_move_at, g.started_at, g.created_at) DESC, g.id DESC"
@@ -11044,6 +11058,45 @@ final class GameService
             'winner_username' => $winnerUsername,
             'players' => $players,
         ];
+    }
+
+    /**
+     * getState()'s own top-level 'game_match' field -- the non-draft
+     * best-of-three match's counterpart of quickDraftStateFor()'s own
+     * 'quick_draft' field (and its Winston/Grid/Rotisserie/Sealed Deck
+     * siblings), giving the board a "go to next game" button the moment
+     * this game finishes and advanceGameMatch() has already created the
+     * next one. Deliberately a separate function from gameMatchSummaryFor()
+     * (the lobby's own grouped-match-row summary) rather than folding
+     * next_game_id into that one: the lobby's summary is generic (any
+     * viewer, no specific "current game" in mind -- it doesn't need
+     * next_game_id at all, since every game in the match, including a
+     * freshly created next one, is already listed there as its own row),
+     * while this needs the specific game just finished to know whether
+     * IT is the match's most recent game or an older one to route past --
+     * same distinction quickDraftStateFor()'s own next_game_id has always
+     * drawn against the shared draftMatchSummaryFor() shape.
+     *
+     * @return array<string, mixed>
+     */
+    private function gameMatchStateFor(array $game, int $viewerUserId): array
+    {
+        $gameMatchId = (int) $game['game_match_id'];
+        $summary = $this->gameMatchSummaryFor($gameMatchId, $viewerUserId);
+
+        $nextGameId = null;
+        if ($game['status'] === 'completed' && $summary['status'] !== 'completed') {
+            $nextGameStmt = Connection::get()->prepare(
+                'SELECT id FROM games WHERE game_match_id = :match_id ORDER BY match_game_number DESC LIMIT 1'
+            );
+            $nextGameStmt->execute(['match_id' => $gameMatchId]);
+            $latestGameId = (int) $nextGameStmt->fetchColumn();
+            if ($latestGameId !== (int) $game['id']) {
+                $nextGameId = $latestGameId;
+            }
+        }
+
+        return $summary + ['next_game_id' => $nextGameId];
     }
 
     private function fetchGameMatch(int $gameMatchId): array
@@ -12648,6 +12701,15 @@ final class GameService
             // 'drafting' sub-field always stays null in practice (no live
             // drafting phase exists for this deck_type at all).
             'sealed_deck' => null,
+            // Issue #90's own best-of-three match wrapper for Duel/Open
+            // Team Play/Closed Team Play/2-player Traditional -- the
+            // non-draft counterpart of 'quick_draft' etc. immediately
+            // above, populated the same "only while this game's own
+            // deck_type/match actually applies" way. See
+            // gameMatchStateFor()'s own docblock for why it needs its own
+            // dispatch branch rather than just reusing gameMatchSummaryFor()
+            // (the lobby's own 'game_match' summary) as-is.
+            'game_match' => null,
         ];
 
         if ($viewerGamePlayerId !== null) {
@@ -12675,6 +12737,8 @@ final class GameService
                 $response['tiered_rotisserie_draft'] = $this->tieredRotisserieDraftStateFor($game, $viewerUserId);
             } elseif ($game['deck_type'] === 'sealed_deck' && $game['draft_match_id'] !== null) {
                 $response['sealed_deck'] = $this->sealedDeckStateFor($game, $viewerUserId);
+            } elseif ($game['game_match_id'] !== null) {
+                $response['game_match'] = $this->gameMatchStateFor($game, $viewerUserId);
             }
         }
 

@@ -3770,6 +3770,30 @@ dialog's own checkbox while posting to the open lobby silently did
 nothing, since `joinOpenGame()`'s hardcoded `createGame()` call never
 passed a value for this parameter at all.
 
+**Lobby grouping and the board's own "next game" button** -- both
+`listGamesForUser()`/`listPastGamesForUser()` and `getState()` were
+missing their own `game_match` awareness at first (a second issue #90
+follow-up): the two lobby queries only carved out an in-progress
+`draft_matches` row from moving a finished game to Past games, with no
+`game_matches` equivalent, so a completed game 1 of a still-undecided
+Duel/Team Play/Closed Team Play/Traditional match jumped straight to
+Past games instead of staying grouped with its still-active sibling the
+way a draft match's own game 1 already does. Fixed by adding the same
+`LEFT JOIN game_matches`/`gm.status != 'completed'` carve-out those two
+queries already had for `draft_matches`. Separately, `getState()` never
+exposed a `game_match` field at all (only the draft-family deck types get
+a `quick_draft`/`winston_draft`/etc. field, each carrying its own
+`next_game_id` once that particular game finishes and
+`advanceDraftMatch()` has created the next one) -- so the board's own "Go
+to next game" button, wired to whichever of those fields is present,
+never appeared for a finished game 1 of a non-draft best-of-three match
+either. `gameMatchStateFor()` fills that gap: it wraps
+`gameMatchSummaryFor()`'s own status/your_wins/opponent_wins/
+games_to_win/winner_username/players shape (the lobby's own grouped-match
+summary) with the same next_game_id computation the draft-family's own
+`*StateFor()` methods already use, exposed as `getState()`'s own
+top-level `game_match` field.
+
 **Frontend** -- see "Best of three" in `web-static/README.md`.
 
 ### Open Team Play
