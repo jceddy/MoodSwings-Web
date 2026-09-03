@@ -11166,23 +11166,29 @@ final class GameService
     /**
      * gameSummaryFor()'s own game_match/'game_match' shape (issue #90's
      * best-of-three match wrapper for Duel/Open Team Play/Closed Team
-     * Play) -- deliberately the same field names as draftMatchSummaryFor()
-     * (status/your_wins/opponent_wins/games_to_win/winner_username/players)
-     * so the lobby's own draft-match-grouping rendering can treat either
-     * shape identically, keyed off whichever of draft_match/game_match a
-     * row actually carries (see web-static/js/game.js's own match summary
-     * rendering).
+     * Play) -- deliberately close to draftMatchSummaryFor()'s own field
+     * names (status/your_wins/opponent_wins/games_to_win/players, plus
+     * its own 'winner_usernames' -- see below) so the lobby's own
+     * draft-match-grouping rendering can treat either shape identically,
+     * keyed off whichever of draft_match/game_match a row actually
+     * carries (see web-static/js/game.js's own match summary rendering).
      *
      * Unlike draftMatchSummaryFor(), there's no draft_match_players-style
      * table to read wins/usernames back from -- see game_matches' own
      * migration 0223 docblock for why a completed game's own
-     * winner_game_player_id (resolved to its user_id) is sufficient,
-     * including for Team Play/Closed Team Play. Seating (and so each
-     * team's own membership) is read from the match's own MOST RECENT
-     * games row rather than $gameId's specifically -- both are identical
-     * in practice (advanceGameMatch() always carries seats forward
-     * unchanged), but the most recent game is unambiguously still part
-     * of the match even after it's the one that just completed it.
+     * winner_game_player_id (resolved to its user_id) is sufficient for
+     * win-counting purposes, including for Team Play/Closed Team Play
+     * (see totalWinsForTeam()/advanceGameMatch()'s own docblocks for why
+     * that representative isn't necessarily the same teammate game to
+     * game, which is why 'winner_usernames' below resolves the WHOLE
+     * winning team from that representative's own seat's team_id, rather
+     * than assuming it's always the same one or two teammates).
+     * Seating (and so each team's own membership) is read from the
+     * match's own MOST RECENT games row rather than $gameId's
+     * specifically -- both are identical in practice (advanceGameMatch()
+     * always carries seats forward unchanged), but the most recent game
+     * is unambiguously still part of the match even after it's the one
+     * that just completed it.
      *
      * @return array<string, mixed>
      */
@@ -11237,12 +11243,25 @@ final class GameService
             }
         }
 
-        $winnerUsername = null;
+        // Same "credit the whole winning team" convention as getState()'s
+        // own per-game 'winner_usernames' -- both teammates on the winning
+        // team for a team-format win, just the one player's otherwise.
+        // $match['winner_user_id'] is only ever a stand-in representative
+        // for a team format (see advanceGameMatch()'s own docblock), so
+        // its own seat's team_id -- not just that one user_id -- decides
+        // who else gets credited.
+        $winnerUsernames = [];
         if ($match['winner_user_id'] !== null) {
+            $winnerTeamId = null;
             foreach ($seats as $seat) {
                 if ((int) $seat['user_id'] === (int) $match['winner_user_id']) {
-                    $winnerUsername = $seat['username'];
+                    $winnerTeamId = $isTeamFormat ? (int) $seat['team_id'] : null;
                     break;
+                }
+            }
+            foreach ($seats as $seat) {
+                if ($isTeamFormat ? (int) $seat['team_id'] === $winnerTeamId : (int) $seat['user_id'] === (int) $match['winner_user_id']) {
+                    $winnerUsernames[] = $seat['username'];
                 }
             }
         }
@@ -11263,7 +11282,7 @@ final class GameService
             'your_wins' => $yourWins,
             'opponent_wins' => $opponentWins,
             'games_to_win' => self::GAME_MATCH_GAMES_TO_WIN,
-            'winner_username' => $winnerUsername,
+            'winner_usernames' => $winnerUsernames,
             'players' => $players,
             // Power Duel sideboarding (migration 0228) -- only ever true
             // for a 'duel'/'custom_duel' match built under the 'power'

@@ -2610,12 +2610,18 @@
     function buildMatchGroupRow(matchGames) {
         const games = matchGames.slice().sort((a, b) => b.match_game_number - a.match_game_number);
         const firstGame = games[0];
-        // Issue #90's own game_match carries the identical shape as
-        // draft_match (status/your_wins/opponent_wins/games_to_win/
-        // winner_username/players -- see GameService::gameMatchSummaryFor()'s
-        // own docblock), so everything below renders either one exactly
-        // the same way without needing to know which kind of match it is.
+        // Issue #90's own game_match carries almost the identical shape as
+        // draft_match (status/your_wins/opponent_wins/games_to_win/players
+        // -- see GameService::gameMatchSummaryFor()'s own docblock), so
+        // everything below renders either one exactly the same way
+        // without needing to know which kind of match it is. The one
+        // difference is the winner field -- draft_match's own singular
+        // winner_username (a draft-based match is never team-format
+        // best-of-three, see draftMatchSummaryFor()'s own docblock) vs.
+        // game_match's own winner_usernames array (both teammates for a
+        // team-format win) -- normalized to an array below either way.
         const match = firstGame.draft_match || firstGame.game_match;
+        const matchWinnerUsernames = match.winner_usernames || (match.winner_username ? [match.winner_username] : []);
 
         const li = document.createElement('li');
         li.className = 'lobby-match-group';
@@ -2645,15 +2651,15 @@
             + ' (first to ' + match.games_to_win + ' wins)';
         headerEl.appendChild(scoreEl);
 
-        // winner_username is only ever set once draft_match.status is
-        // 'completed' (see GameService::draftMatchSummaryFor()) --
-        // this is the match's own overall result, distinct from (and shown
-        // alongside, not instead of) each individual game's own
-        // winner_usernames, which buildGameRow() still renders per sub-row.
-        if (match.winner_username) {
+        // matchWinnerUsernames is only ever non-empty once the match
+        // itself is 'completed' -- this is the match's own overall
+        // result, distinct from (and shown alongside, not instead of)
+        // each individual game's own winner_usernames, which
+        // buildGameRow() still renders per sub-row.
+        if (matchWinnerUsernames.length > 0) {
             const resultEl = document.createElement('div');
             resultEl.className = 'lobby-winner';
-            resultEl.textContent = match.winner_username + ' won the match';
+            resultEl.textContent = matchWinnerUsernames.join(' & ') + ' won the match';
             headerEl.appendChild(resultEl);
         }
 
@@ -2673,7 +2679,7 @@
         // headerEl itself. Match-level, not per-game (the pool is shared
         // across the whole match, see GameService::draftMatchPoolView()),
         // so this lives in the group's own header rather than on any one
-        // sub-row. Same "status is 'completed'" gate as winner_username
+        // sub-row. Same "status is 'completed'" gate as matchWinnerUsernames
         // above -- the pool view itself also enforces this server-side,
         // but gating the button too avoids offering it for a
         // still-undecided match's own dead end.

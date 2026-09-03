@@ -1042,22 +1042,40 @@ silently did nothing -- `best_of_three` in the payload to `POST
 `MatchmakingService::joinOpenGame()`'s own eventual `createGame()` call
 once the roster fills.
 
-**Lobby grouping** -- `GameService::gameMatchSummaryFor()` returns the
-exact same shape `draftMatchSummaryFor()` already does (`status`/
-`your_wins`/`opponent_wins`/`games_to_win`/`winner_username`/`players`),
-exposed as `game.game_match`/`game.game_match_id` right alongside the
-existing `game.draft_match`/`game.draft_match_id`. `groupGameEntries()`'s
-own `matchGroupKey()` picks whichever of the two a game actually carries
+**Lobby grouping** -- `GameService::gameMatchSummaryFor()` returns almost
+the exact same shape `draftMatchSummaryFor()` already does (`status`/
+`your_wins`/`opponent_wins`/`games_to_win`/`players`), exposed as
+`game.game_match`/`game.game_match_id` right alongside the existing
+`game.draft_match`/`game.draft_match_id`. `groupGameEntries()`'s own
+`matchGroupKey()` picks whichever of the two a game actually carries
 (never both) to group its up-to-3 games into one `buildMatchGroupRow()`
 entry, and that function itself reads `firstGame.draft_match ||
-firstGame.game_match` -- since the two shapes are identical, every bit of
-match-group rendering (the "Match score: you X, opponent Y (first to Z
-wins)" line, the "... won the match" result line, each game's own compact
-sub-row) already works for either kind of match with no branching. The
-one genuine difference: "View draft pool" (issue #314) stays gated
-specifically on `firstGame.draft_match_id !== null` -- issue #90's own
-match has no shared pool to view at all (no draft ever happened), unlike
-every draft-family deck type.
+firstGame.game_match` -- since the two shapes are otherwise identical,
+every bit of match-group rendering (the "Match score: you X, opponent Y
+(first to Z wins)" line, the "... won the match" result line, each game's
+own compact sub-row) already works for either kind of match with no
+branching. The one genuine difference: "View draft pool" (issue #314)
+stays gated specifically on `firstGame.draft_match_id !== null` -- issue
+#90's own match has no shared pool to view at all (no draft ever
+happened), unlike every draft-family deck type.
+
+**Both teammates as the match winner (bugfix, follow-up to issue #90)** --
+`gameMatchSummaryFor()`'s own winner field is `winner_usernames` (an
+array), not `draftMatchSummaryFor()`'s singular `winner_username` (a
+draft-based match is never team-format best-of-three, so this never came
+up there -- see `draftMatchSummaryFor()`'s own docblock). For a
+team-format best-of-three match, it holds BOTH teammates on the winning
+team (resolved from the winning representative's own seat's `team_id`,
+not just that one representative's `user_id` -- see
+`GameService::advanceGameMatch()`'s own docblock for why that
+representative isn't necessarily the same teammate game to game), rather
+than crediting just whichever teammate happened to complete the deciding
+game. Non-team matches fall back to the single winner's username, same as
+before. `buildMatchGroupRow()`'s own `matchWinnerUsernames` normalizes
+either shape (`match.winner_usernames` or the older single
+`match.winner_username`) into one array and joins it with `' & '`, the
+same convention `game.winner_usernames` already uses for a single game's
+own "Game over" result line.
 
 This grouping only ever has both games to group in the first place if
 the backend's own lobby queries actually return both -- `listGamesForUser()`/
