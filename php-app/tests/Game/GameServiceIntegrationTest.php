@@ -17551,6 +17551,122 @@ final class GameServiceIntegrationTest extends TestCase
         return $byName;
     }
 
+    /**
+     * GameService::getState()'s own visual-sideboard-picker fields
+     * (migration 0233, issue #90 follow-up): 'power_duel_sideboard_pool'
+     * (main deck + sideboard combined, only ever non-null from game 2 of
+     * a sideboarding match onward) and 'power_duel_previous_deck_card_ids'
+     * (the viewer's own main deck from the immediately preceding game --
+     * here, since Alice never resubmits for game 2, that's still exactly
+     * her game-1 main deck).
+     */
+    public function testGetStateExposesThePowerDuelSideboardPoolAndPreviousDeckForGame2(): void
+    {
+        $alice = $this->insertUser('sb-prev-alice');
+        $bob = $this->insertUser('sb-prev-bob');
+        $aliceMain = $this->fetchNonMythicCardNames(15);
+        $aliceSideboard = $this->fetchNonMythicCardNames(5, 15);
+        $bobMain = $this->fetchNonMythicCardNames(15, 20);
+        $bobSideboard = $this->fetchNonMythicCardNames(5, 35);
+
+        $gameId = $this->games->createGame(
+            $alice,
+            [$alice, $bob],
+            format: 'duel',
+            deckType: 'custom_duel',
+            duelDeckRules: ['preset' => 'power'],
+            bestOfThree: true,
+            allowSideboarding: true,
+        );
+        $this->games->submitCustomDuelDeck($gameId, $this->games->gamePlayerIdFor($gameId, $alice), $this->buildPowerDuelDecklistText($aliceMain, $aliceSideboard));
+        $this->games->submitCustomDuelDeck($gameId, $this->games->gamePlayerIdFor($gameId, $bob), $this->buildPowerDuelDecklistText($bobMain, $bobSideboard));
+        $this->games->startGame($gameId);
+
+        $game1State = $this->games->getState($gameId, $alice);
+        self::assertNull($game1State['power_duel_sideboard_pool'], 'nothing to show yet for game 1 itself');
+        self::assertNull($game1State['power_duel_previous_deck_card_ids']);
+
+        $gameMatchId = (int) $this->fetchGame($gameId)['game_match_id'];
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $alice));
+
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE game_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $gameMatchId]);
+        $game2Id = (int) $nextGameStmt->fetchColumn();
+
+        $catalogIds = $this->loadCardCatalogIdsByName();
+        $aliceMainIds = array_map(static fn (string $name): int => $catalogIds[mb_strtolower($name)], $aliceMain);
+        $aliceSideboardIds = array_map(static fn (string $name): int => $catalogIds[mb_strtolower($name)], $aliceSideboard);
+
+        $game2State = $this->games->getState($game2Id, $alice);
+        $poolIds = array_map(static fn (array $card): int => $card['card_id'], $game2State['power_duel_sideboard_pool']);
+        sort($poolIds);
+        $expectedPoolIds = [...$aliceMainIds, ...$aliceSideboardIds];
+        sort($expectedPoolIds);
+        self::assertSame($expectedPoolIds, $poolIds, 'the pool is main deck + sideboard combined from game 1');
+
+        $previousDeckIds = $game2State['power_duel_previous_deck_card_ids'];
+        sort($previousDeckIds);
+        sort($aliceMainIds);
+        self::assertSame($aliceMainIds, $previousDeckIds, 'Alice never resubmitted, so the previous deck is still exactly her game-1 main deck');
+    }
+
+    /**
+     * The "previous deck" is always the immediately PRECEDING game, not
+     * always game 1 -- game 3's own previous game is game 2, which here
+     * is already a sideboard swap away from Bob's original game-1 main
+     * deck.
+     */
+    public function testGetStatePreviousDeckIsTheImmediatelyPrecedingGameNotAlwaysGameOne(): void
+    {
+        $alice = $this->insertUser('sb-prev2-alice');
+        $bob = $this->insertUser('sb-prev2-bob');
+        $aliceMain = $this->fetchNonMythicCardNames(15);
+        $aliceSideboard = $this->fetchNonMythicCardNames(5, 15);
+        $bobMain = $this->fetchNonMythicCardNames(15, 20);
+        $bobSideboard = $this->fetchNonMythicCardNames(5, 35);
+
+        $gameId = $this->games->createGame(
+            $alice,
+            [$alice, $bob],
+            format: 'duel',
+            deckType: 'custom_duel',
+            duelDeckRules: ['preset' => 'power'],
+            bestOfThree: true,
+            allowSideboarding: true,
+        );
+        $this->games->submitCustomDuelDeck($gameId, $this->games->gamePlayerIdFor($gameId, $alice), $this->buildPowerDuelDecklistText($aliceMain, $aliceSideboard));
+        $this->games->submitCustomDuelDeck($gameId, $this->games->gamePlayerIdFor($gameId, $bob), $this->buildPowerDuelDecklistText($bobMain, $bobSideboard));
+        $this->games->startGame($gameId);
+        $gameMatchId = (int) $this->fetchGame($gameId)['game_match_id'];
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $alice)); // Bob wins game 1
+
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE game_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $gameMatchId]);
+        $game2Id = (int) $nextGameStmt->fetchColumn();
+
+        // Bob swaps for game 2: bench bobMain[0], bring in bobSideboard[0].
+        $bobGame2Deck = [...array_slice($bobMain, 1), $bobSideboard[0]];
+        $this->games->submitCustomDuelDeck($game2Id, $this->games->gamePlayerIdFor($game2Id, $bob), $this->buildPowerDuelDecklistText($bobGame2Deck));
+        $this->games->submitCustomDuelDeck($game2Id, $this->games->gamePlayerIdFor($game2Id, $alice), $this->buildPowerDuelDecklistText($aliceMain));
+        $this->games->startGame($game2Id);
+        $this->games->resignGame($game2Id, $this->games->gamePlayerIdFor($game2Id, $bob)); // Alice wins game 2 -- 1-1, game 3 needed
+
+        $nextGameStmt->execute(['match_id' => $gameMatchId]);
+        $game3Id = (int) $nextGameStmt->fetchColumn();
+
+        $catalogIds = $this->loadCardCatalogIdsByName();
+        $bobGame2DeckIds = array_map(static fn (string $name): int => $catalogIds[mb_strtolower($name)], $bobGame2Deck);
+        sort($bobGame2DeckIds);
+
+        $previousDeckIds = $this->games->getState($game3Id, $bob)['power_duel_previous_deck_card_ids'];
+        sort($previousDeckIds);
+        self::assertSame($bobGame2DeckIds, $previousDeckIds, "game 3's previous deck must be Bob's game-2 swap, not his original game-1 main deck");
+    }
+
     public function testPowerDuelWithoutSideboardingLocksTheDeckAcrossGames(): void
     {
         $alice = $this->insertUser('sb-locked-alice');

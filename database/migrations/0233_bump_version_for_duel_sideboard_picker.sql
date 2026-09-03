@@ -1,0 +1,11 @@
+-- Power Duel sideboarding (issue #90 follow-up): game 2/3's own
+-- resubmission form now shows a visual card-toggle picker
+-- (#duel-deck-sideboard-picker) over the fixed game-1 pool instead of a
+-- plain-text "Load your pool" button + textarea -- mirrors the draft
+-- formats' own #draft-deck-building sideboard screen, pre-selecting
+-- whichever pool cards the player actually played in the immediately
+-- preceding game (GameService::getState()'s new
+-- power_duel_previous_deck_card_ids field). A UI adjustment to an
+-- already-shipped feature, not a new feature of its own, so this only
+-- bumps the patch version per CLAUDE.md's own versioning convention.
+UPDATE schema_version SET version = '1.32.4' WHERE id = 1;

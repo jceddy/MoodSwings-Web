@@ -201,19 +201,24 @@
                 <h3>Deck submissions</h3>
                 <ul id="duel-deck-submission-status"></ul>
 
+                <!-- Power Duel sideboarding (migration 0228/0233, issue #90
+                     follow-up) -- shown INSTEAD of
+                     #duel-deck-submit-form-container for game 2/3 of a
+                     match that opted into it (GameService::getState()'s
+                     own 'power_duel_sideboard_pool'/
+                     'power_duel_previous_deck_card_ids'). A visual toggle
+                     picker over your original deck + sideboard combined,
+                     mirroring the draft formats' own #draft-deck-building
+                     sideboard screen -- pre-selects whichever of those
+                     cards you actually played last game. -->
+                <div id="duel-deck-sideboard-picker" hidden>
+                    <p id="duel-deck-sideboard-picker-status"></p>
+                    <div id="duel-deck-sideboard-picker-cards"></div>
+                    <button id="duel-deck-sideboard-picker-submit-button" type="button">Submit deck</button>
+                    <p id="duel-deck-sideboard-picker-error" class="error" hidden></p>
+                </div>
+
                 <div id="duel-deck-submit-form-container">
-                    <!-- Power Duel sideboarding (migration 0228, issue #90
-                         follow-up) -- shown only for game 2/3 of a match
-                         that opted into it (GameService::getState()'s own
-                         'power_duel_sideboard_pool'). Your new deck can
-                         only be assembled from these cards (your original
-                         deck + sideboard combined); "Load your pool" fills
-                         the paste field with all of them so you can trim
-                         it back down instead of retyping the whole thing. -->
-                    <div id="duel-deck-sideboard-hint" hidden>
-                        <p>Sideboarding is on for this match -- your new deck can only use cards from your original deck and sideboard.</p>
-                        <button id="duel-deck-load-sideboard-pool-button" type="button">Load your pool</button>
-                    </div>
                     <label>Use a saved deck
                         <select id="duel-deck-submit-saved-decklist">
                             <option value="">Paste/upload a decklist instead</option>

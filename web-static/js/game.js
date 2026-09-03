@@ -1487,6 +1487,19 @@
     // poll's re-render of the SAME game -- see renderDuelDeckSubmission().
     let duelSavedDecklistSelectPopulated = false;
 
+    // Power Duel sideboarding (migration 0228/0233, issue #90 follow-up)
+    // -- the visual sideboard picker's own toggle selection, tracked as a
+    // plain Set<card_id> rather than draftDeckSelection's own indices
+    // below, since Power Duel's own pool is always singleton (no
+    // duplicate cards, unlike a drafted pool -- see DuelDeckRules' own
+    // 'power' preset), so a card_id alone always identifies exactly one
+    // pool entry. Reset in showBoard() (same reasoning as
+    // duelSavedDecklistSelectPopulated above) so switching games always
+    // re-seeds rather than carrying a stale selection into a different
+    // game's picker.
+    let duelSideboardPickerSelection = new Set();
+    let duelSideboardPickerInitialized = false;
+
     // refreshBoard() can overlap with itself -- the 4-second poll timer
     // doesn't wait for a prior call to finish, and a user action (Start
     // game, Play, Pass, ...) triggers its own refreshBoard() independent
@@ -1561,6 +1574,8 @@
         pushDisplayHistoryEntry();
         currentGameId = gameId;
         duelSavedDecklistSelectPopulated = false;
+        duelSideboardPickerSelection = new Set();
+        duelSideboardPickerInitialized = false;
         lobbyView.hidden = true;
         boardView.hidden = false;
         // boardMessage ("Game complete!"/"Round scored...") is otherwise
@@ -7667,22 +7682,99 @@
         );
 
         const you = state.players.find((p) => p.game_player_id === state.you.game_player_id);
-        document.getElementById('duel-deck-submit-form-container').hidden = you.deck_submitted;
         document.getElementById('duel-deck-submitted-message').hidden = !you.deck_submitted;
         if (you.deck_submitted) {
             document.getElementById('duel-deck-submitted-message').textContent =
                 'You submitted: ' + (you.custom_deck_name || 'Uploaded Deck');
-        } else if (!duelSavedDecklistSelectPopulated) {
+            document.getElementById('duel-deck-sideboard-picker').hidden = true;
+            document.getElementById('duel-deck-submit-form-container').hidden = true;
+            return;
+        }
+
+        // Power Duel sideboarding (migration 0228/0233, issue #90
+        // follow-up) -- power_duel_sideboard_pool is only ever non-null
+        // for game 2/3 of a match that opted into it; when present, the
+        // visual picker below REPLACES the plain paste/upload/saved-deck
+        // form entirely, since your new deck can only be assembled from
+        // this fixed pool anyway (see renderDuelSideboardPicker()'s own
+        // docblock).
+        if (state.power_duel_sideboard_pool) {
+            document.getElementById('duel-deck-submit-form-container').hidden = true;
+            renderDuelSideboardPicker(state);
+            return;
+        }
+
+        document.getElementById('duel-deck-sideboard-picker').hidden = true;
+        document.getElementById('duel-deck-submit-form-container').hidden = false;
+        if (!duelSavedDecklistSelectPopulated) {
             duelSavedDecklistSelectPopulated = true;
             populateSavedDecklistSelect(document.getElementById('duel-deck-submit-saved-decklist'));
         }
+    }
 
-        // Power Duel sideboarding (migration 0228, issue #90 follow-up) --
-        // power_duel_sideboard_pool is only ever non-null for game 2/3 of
-        // a match that opted into it, and only while you haven't
-        // resubmitted yet (deck_submitted above), so the hint/button
-        // don't linger once you have.
-        document.getElementById('duel-deck-sideboard-hint').hidden = you.deck_submitted || !state.power_duel_sideboard_pool;
+    // Power Duel sideboarding's own visual card-toggle picker (migration
+    // 0233, issue #90 follow-up) -- mirrors the draft formats' own
+    // #draft-deck-building screen (renderDraftDeckBuilding()): every card
+    // from your original game-1 deck + sideboard combined
+    // (state.power_duel_sideboard_pool) shown as a toggleable thumbnail
+    // (via openCardDetail()'s own `selection` form, the same Select/
+    // De-select popup pattern renderDraftDeckBuilding() uses), pre-
+    // selected from whichever of those you actually played in the
+    // immediately preceding game (state.power_duel_previous_deck_card_ids)
+    // rather than forcing a full retrim from scratch every game. A plain
+    // Set<card_id> is enough to track the selection (unlike
+    // draftDeckSelection's own indices) since Power Duel's own pool is
+    // always singleton -- no duplicate cards to disambiguate. Submitting
+    // converts the current selection back into decklist text
+    // (formatDecklistCardLines(), the same helper the old "Load your
+    // pool" button used to pre-fill the paste field with) and posts it
+    // through the exact same submitCustomDuelDeck() endpoint the
+    // paste-based form already uses -- GameService::submitCustomDuelDeck()'s
+    // own pool-membership/format validation runs exactly the same way
+    // either way, so no new backend route was needed for this, only the
+    // extra power_duel_previous_deck_card_ids field for pre-selection.
+    function renderDuelSideboardPicker(state) {
+        document.getElementById('duel-deck-sideboard-picker').hidden = false;
+
+        const pool = state.power_duel_sideboard_pool;
+        if (!duelSideboardPickerInitialized) {
+            duelSideboardPickerSelection = new Set(
+                state.power_duel_previous_deck_card_ids && state.power_duel_previous_deck_card_ids.length > 0
+                    ? state.power_duel_previous_deck_card_ids
+                    : pool.map((card) => card.card_id)
+            );
+            duelSideboardPickerInitialized = true;
+        }
+
+        document.getElementById('duel-deck-sideboard-picker-status').textContent =
+            'Sideboarding is on for this match -- select the cards for your new deck from your original deck and sideboard below (' +
+            duelSideboardPickerSelection.size + ' selected). Tap a card to select/de-select it.';
+
+        const cardsEl = document.getElementById('duel-deck-sideboard-picker-cards');
+        cardsEl.innerHTML = '';
+        for (const card of pool) {
+            const selected = duelSideboardPickerSelection.has(card.card_id);
+            const thumb = buildCardThumb(card, {
+                onClick: () => openCardDetail(card, null, {
+                    selected,
+                    disabled: false,
+                    onToggle: () => {
+                        if (duelSideboardPickerSelection.has(card.card_id)) {
+                            duelSideboardPickerSelection.delete(card.card_id);
+                        } else {
+                            duelSideboardPickerSelection.add(card.card_id);
+                        }
+                        renderDuelSideboardPicker(state);
+                    },
+                }),
+                // Same dimmed/dashed-border ".not-playable" treatment
+                // renderDraftDeckBuilding() reuses for "not currently in
+                // the deck" -- see its own docblock.
+                notPlayable: !selected,
+            });
+            thumb.classList.toggle('selected', selected);
+            cardsEl.appendChild(thumb);
+        }
     }
 
     document.getElementById('duel-deck-submit-file').addEventListener('change', async (event) => {
@@ -7698,22 +7790,33 @@
         document.getElementById('duel-deck-submit-paste-fields').hidden = event.target.value !== '';
     });
 
-    // Power Duel sideboarding (migration 0228, issue #90 follow-up) --
-    // fills the paste field with every card from your original deck +
-    // sideboard (currentState.power_duel_sideboard_pool, read fresh
-    // rather than stashed at render time, so this still works after any
-    // number of intervening polls) as one flat list -- there's no
-    // Sideboard section here, since which of these end up in your new
-    // deck vs. benched again is entirely up to what you leave in vs. trim
-    // out, not something to declare separately.
-    document.getElementById('duel-deck-load-sideboard-pool-button').addEventListener('click', () => {
+    // Power Duel sideboarding's own visual picker submit (migration 0233,
+    // issue #90 follow-up) -- converts the current toggle selection back
+    // into decklist text (formatDecklistCardLines(), the same helper the
+    // old "Load your pool" button used) and posts it through the exact
+    // same endpoint the paste-based form's own submit button uses below;
+    // reads currentState fresh rather than a stashed reference so this
+    // still works after any number of intervening polls.
+    document.getElementById('duel-deck-sideboard-picker-submit-button').addEventListener('click', async () => {
+        const errorEl = document.getElementById('duel-deck-sideboard-picker-error');
+        errorEl.hidden = true;
+
         const pool = currentState && currentState.power_duel_sideboard_pool;
         if (!pool) {
             return;
         }
-        document.getElementById('duel-deck-submit-saved-decklist').value = '';
-        document.getElementById('duel-deck-submit-paste-fields').hidden = false;
-        document.getElementById('duel-deck-submit-text').value = formatDecklistCardLines(pool).join('\n');
+        const selectedCards = pool.filter((card) => duelSideboardPickerSelection.has(card.card_id));
+        const decklistText = formatDecklistCardLines(selectedCards).join('\n');
+        const { ok, body } = await submitCustomDuelDeck(currentGameId, decklistText, undefined);
+
+        if (!ok) {
+            errorEl.textContent = body.message || 'Could not submit that deck.';
+            errorEl.hidden = false;
+            return;
+        }
+
+        duelSideboardPickerInitialized = false;
+        await refreshBoard();
     });
 
     document.getElementById('duel-deck-submit-button').addEventListener('click', async () => {

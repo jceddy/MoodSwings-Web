@@ -12714,6 +12714,7 @@ final class GameService
         // Null for game 1 itself (nothing declared yet to show) and for
         // every non-sideboarding match.
         $powerDuelSideboardPool = null;
+        $powerDuelPreviousDeckCardIds = null;
         if (
             $viewerUserId !== null
             && $game['deck_type'] === 'custom_duel'
@@ -12737,6 +12738,32 @@ final class GameService
                 );
                 $powerDuelSideboardPool = CardCatalog::serialize($poolCardIds);
             }
+
+            // The viewer's own main deck from the immediately PRECEDING
+            // game (match_game_number - 1, not always game 1 -- game 3's
+            // own "previous game" is game 2, which may itself already be a
+            // sideboard swap away from game 1's original main deck) --
+            // exposed as bare card ids (not CardCatalog::serialize()'d,
+            // unlike $powerDuelSideboardPool above) purely so the
+            // frontend's own visual picker can pre-select "whatever I
+            // actually played last game" the same way the draft
+            // deck-building screen's own previous_deck_card_ids already
+            // does, without needing a second full card shape for the same
+            // ids already present in the pool above.
+            $previousGameStmt = $pdo->prepare(
+                'SELECT gp.custom_deck_card_ids
+                 FROM game_players gp JOIN games g ON g.id = gp.game_id
+                 WHERE g.game_match_id = :match_id AND g.match_game_number = :prev_game_number AND gp.user_id = :user_id'
+            );
+            $previousGameStmt->execute([
+                'match_id' => (int) $game['game_match_id'],
+                'prev_game_number' => (int) $game['match_game_number'] - 1,
+                'user_id' => $viewerUserId,
+            ]);
+            $previousGameRow = $previousGameStmt->fetch();
+            $powerDuelPreviousDeckCardIds = $previousGameRow !== false && $previousGameRow['custom_deck_card_ids'] !== null
+                ? array_map(intval(...), (array) json_decode((string) $previousGameRow['custom_deck_card_ids'], true))
+                : null;
         }
 
         $players = [];
@@ -12942,6 +12969,10 @@ final class GameService
             // $powerDuelSideboardPool's own docblock just above for what
             // this is and when it's non-null.
             'power_duel_sideboard_pool' => $powerDuelSideboardPool,
+            // $powerDuelPreviousDeckCardIds's own docblock just above --
+            // bare ids for the visual picker's own pre-selection, null
+            // under the exact same conditions $powerDuelSideboardPool is.
+            'power_duel_previous_deck_card_ids' => $powerDuelPreviousDeckCardIds,
         ];
 
         if ($viewerGamePlayerId !== null) {

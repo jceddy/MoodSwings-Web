@@ -3859,6 +3859,26 @@ whatever's left over (`pool` minus the new main deck), computed
 automatically rather than asked for a second time -- there's no way to
 introduce a card from outside the fixed game-1 pool this way.
 
+**Visual sideboard picker (game 2/3)** -- `GameService::getState()`
+exposes two viewer-only fields for game 2/3 of a sideboarding match, both
+`null` for game 1 itself and every non-sideboarding match:
+`power_duel_sideboard_pool` (the game-1-declared pool -- main deck +
+sideboard combined -- `CardCatalog::serialize()`'d for rendering) and
+`power_duel_previous_deck_card_ids` (bare card ids, not a serialized
+shape, since these are always a subset of the pool above): the viewer's
+own main deck from the immediately PRECEDING game (`match_game_number -
+1`, not always game 1 -- game 3's own "previous game" is game 2, itself
+possibly already a sideboard swap away from game 1's original main deck).
+The frontend's own visual picker (see "Best of three"'s own "Power Duel
+sideboarding" subsection in `web-static/README.md`) uses the pool for its
+toggleable card grid and the previous deck to pre-select whichever of
+those cards the player actually played last game, mirroring the draft
+formats' own sideboard screen (`deckBuilding.drafted_cards`/
+`previous_deck_card_ids`). Submitting still goes through the exact same
+`submitCustomDuelDeck()`/`validateAndStorePowerDuelSideboardSwap()` path
+described above -- the picker only changes how the player assembles the
+decklist text client-side, not how it's validated server-side.
+
 **Saved decklists** -- `UserDecklistService::cardIdsForUse()` now also
 returns `sideboardCardIds` (previously always omitted, since neither of
 its two callers had any sideboard concept before this) so a saved Power
