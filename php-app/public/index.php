@@ -1146,6 +1146,13 @@ function openGameCreateParamsFromRequestBody(array $body): array
                 ];
             }, $body['tiered_rotisserie_draft_tiers'])
             : null,
+        // Issue #90 follow-up: was missing entirely here, so checking
+        // "Best of three" while posting to the open lobby silently did
+        // nothing -- MatchmakingService::joinOpenGame()'s own createGame()
+        // call always passed its hardcoded default (false) for this
+        // parameter, since it isn't threaded through create_game_params at
+        // all without this key.
+        'best_of_three' => (bool) ($body['best_of_three'] ?? false),
     ];
 }
 

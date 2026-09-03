@@ -1017,20 +1017,30 @@ someone else's listing needs no opt-in of its own.
 ### Best of three (issue #90)
 
 `#new-game-best-of-three-label` (a checkbox, right above the Deck
-dropdown) opts a Duel/Open Team Play/Closed Team Play game into a
-best-of-three match -- see "Best of three" in `php-app/README.md` for the
-full backend writeup (`game_matches`, migration 0223). Shown/hidden by
-`updateBestOfThreeFieldVisibility()` (`isBestOfThreeAvailable()`, wired to
-the same format/deck-type `change` events `updateDeckTypeAvailability()`
-already listens to, plus run once when the dialog opens): visible only
-for `duel`/`team`/`closed_team` with a non-draft deck type -- every
-draft-based deck type already gets its own best-of-three match regardless
-(`draft_match_id`), so the checkbox stays hidden there rather than
-offering a second, meaningless toggle. Checking it sends `best_of_three:
-true` (`createGame()`'s new last parameter, both here and in app.js's own
-wrapper) to `POST /games`; unavailable in "Post to the open lobby" mode,
-same as several other New Game dialog options `postOpenGame()` doesn't
-thread through.
+dropdown) opts a Duel/Open Team Play/Closed Team Play/Traditional game
+into a best-of-three match -- see "Best of three" in `php-app/README.md`
+for the full backend writeup (`game_matches`, migration 0223). Shown/
+hidden by `updateBestOfThreeFieldVisibility()` (`isBestOfThreeAvailable()`,
+wired to the same format/deck-type `change` events
+`updateDeckTypeAvailability()` already listens to, plus the opponent
+checkboxes/open-lobby player-count select/mode radios, and run once when
+the dialog opens): visible for `duel`/`team`/`closed_team` with a
+non-draft deck type unconditionally, or for `standard` only once the
+dialog's current selections add up to exactly 2 total players
+(`currentNewGamePlayerCount()`) -- with 3+ players there's no single
+"the opponent" for a best-of-three race to be between, the same reason
+`isDeckTypeAvailableForFormat()`'s own draft deck types already fall back
+to a single game past 2 players. Every draft-based deck type already gets
+its own best-of-three match regardless (`draft_match_id`), so the
+checkbox stays hidden there too rather than offering a second,
+meaningless toggle. Checking it sends `best_of_three: true`
+(`createGame()`'s new last parameter, both here and in app.js's own
+wrapper) to `POST /games`, or -- issue #90 follow-up, this was missing
+entirely at first, so checking the box while posting to the open lobby
+silently did nothing -- `best_of_three` in the payload to `POST
+/open-games` (`postOpenGame()`), threaded through `create_game_params` to
+`MatchmakingService::joinOpenGame()`'s own eventual `createGame()` call
+once the roster fills.
 
 **Lobby grouping** -- `GameService::gameMatchSummaryFor()` returns the
 exact same shape `draftMatchSummaryFor()` already does (`status`/

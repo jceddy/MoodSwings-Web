@@ -17122,6 +17122,60 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertNull($game['game_match_id']);
     }
 
+    // Issue #90 follow-up: Traditional (format: 'standard') qualifies for
+    // a best-of-three match too, but only at exactly 2 players -- with
+    // 3-4, "first to 2 game wins" no longer names a single opponent.
+    public function testCreateGameBestOfThreeForStandardWithTwoPlayersCreatesAGameMatch(): void
+    {
+        $alice = $this->insertUser('bo3-standard-2p-alice');
+        $bob = $this->insertUser('bo3-standard-2p-bob');
+
+        $gameId = $this->games->createGame($alice, [$alice, $bob], format: 'standard', deckType: 'structure', bestOfThree: true);
+
+        $game = $this->fetchGame($gameId);
+        self::assertNotNull($game['game_match_id']);
+        self::assertSame(1, (int) $game['match_game_number']);
+    }
+
+    public function testCreateGameBestOfThreeForStandardWithThreePlayersIsIgnored(): void
+    {
+        $userIds = $this->insertUsers('bo3-standard-3p-' . uniqid(), 3);
+
+        $gameId = $this->games->createGame($userIds[0], $userIds, format: 'standard', deckType: 'structure', bestOfThree: true);
+
+        $game = $this->fetchGame($gameId);
+        self::assertNull($game['game_match_id']);
+        self::assertNull($game['match_game_number']);
+    }
+
+    public function testBestOfThreeStandardMatchProgressesAndCompletesAtTwoWins(): void
+    {
+        $alice = $this->insertUser('bo3-standard-progress-alice');
+        $bob = $this->insertUser('bo3-standard-progress-bob');
+
+        $gameId = $this->games->createGame($alice, [$alice, $bob], format: 'standard', deckType: 'structure', bestOfThree: true);
+        $this->games->startGame($gameId);
+
+        $gameMatchId = (int) $this->fetchGame($gameId)['game_match_id'];
+
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $alice));
+        self::assertSame('in_progress', $this->fetchGameMatch($gameMatchId)['status']);
+
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE game_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $gameMatchId]);
+        $game2Id = (int) $nextGameStmt->fetchColumn();
+        self::assertSame(2, (int) $this->fetchGame($game2Id)['match_game_number']);
+
+        $this->games->startGame($game2Id);
+        $this->games->resignGame($game2Id, $this->games->gamePlayerIdFor($game2Id, $alice));
+
+        $completedMatch = $this->fetchGameMatch($gameMatchId);
+        self::assertSame('completed', $completedMatch['status']);
+        self::assertSame($bob, (int) $completedMatch['winner_user_id']);
+    }
+
     public function testBestOfThreeDuelMatchProgressesAndCompletesAtTwoWins(): void
     {
         $alice = $this->insertUser('bo3-duel-progress-alice');

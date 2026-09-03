@@ -3674,12 +3674,28 @@ bot seated here goes straight to submitting its own deck the very first time
 Every draft-family deck type has had its own best-of-three match wrapper
 since Quick Draft (issue #88, `draft_matches`/`draft_match_players`,
 migration 0027). Issue #90 extends the same "first to 2 game wins, with a
-fresh game auto-created after each one" idea to the three NON-draft
-formats -- Duel, Open Team Play, and Closed Team Play -- via a separate,
-purpose-built `game_matches` table (migration 0223), opted into per game
-with `createGame()`'s own `$bestOfThree` parameter (`best_of_three` in the
+fresh game auto-created after each one" idea to the non-draft formats --
+Duel, Open Team Play, Closed Team Play, and (issue #90 follow-up,
+migration 0225) Traditional -- via a separate, purpose-built
+`game_matches` table (migration 0223), opted into per game with
+`createGame()`'s own `$bestOfThree` parameter (`best_of_three` in the
 API/New Game dialog). It's ignored (not an error) for any draft-based
 `deck_type`, which already gets its own match regardless.
+
+**Traditional (`format: 'standard'`) only qualifies at exactly 2
+players** -- unlike Duel (always 2) and the team formats (always 4, and
+so always exactly 2 SIDES of 2), Traditional supports 2-4 individual
+players with no inherent pairing between them. "First to 2 game wins"
+only names a single, unambiguous opponent when there are exactly 2
+players to begin with; with 3-4, whoever wins game 1 might lose game 2 to
+a DIFFERENT player, so the whole "best of three" premise stops making
+sense. This mirrors `draftGamesToWin()`'s own identical rule for a draft
+match (best-of-three at 2 players, single-game at 3-4) -- `createGame()`
+checks `count($userIds) === 2` before creating a `game_matches` row for
+`'standard'`, silently skipping it (not an error) otherwise, same as the
+New Game dialog's own checkbox staying hidden whenever more than 1
+opponent is checked (or, in open-lobby mode, whenever the target player
+count isn't 2).
 
 **Why a separate table, not `draft_matches` reused** -- `draft_matches`'
 own `pool_source`/`pool_card_ids`/`current_round` columns, and
@@ -3744,6 +3760,15 @@ later addition.
 that mechanic is gated specifically on `draft_match_id !== null`, so it
 never applies here. A future issue could extend it if this format ever
 wants the same "loser decides" fairness rule.
+
+**Open lobby matchmaking** -- `best_of_three` is threaded through
+`create_game_params` (`openGameCreateParamsFromRequestBody()`,
+`MatchmakingService::joinOpenGame()`'s own `createGame()` call) the same
+as every other `createGame()` option a posted listing carries. This was
+missing entirely at first (issue #90 follow-up): checking the New Game
+dialog's own checkbox while posting to the open lobby silently did
+nothing, since `joinOpenGame()`'s hardcoded `createGame()` call never
+passed a value for this parameter at all.
 
 **Frontend** -- see "Best of three" in `web-static/README.md`.
 
