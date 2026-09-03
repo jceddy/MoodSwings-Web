@@ -2026,6 +2026,20 @@
         }
     }
 
+    // Issue #90: Duel/Open Team Play/Closed Team Play's own best-of-three
+    // match wrapper (see GameService::createGame()'s own $bestOfThree
+    // docblock) -- every draft-based deck_type already gets a best-of-
+    // three match of its own regardless of this checkbox (games.draft_match_id,
+    // migration 0027), so this only ever applies to a non-draft deck_type
+    // under one of the three non-draft formats.
+    function isBestOfThreeAvailable(deckType, format) {
+        if (format !== 'duel' && format !== 'team' && format !== 'closed_team') {
+            return false;
+        }
+
+        return !['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck'].includes(deckType);
+    }
+
     // #new-game-format's own 'sealed_deck' option is a UI-only sentinel --
     // Sealed Deck has no separate backend format at all, it's still an
     // ordinary format: 'draft' game (deck_type: 'sealed_deck'), just
@@ -2363,7 +2377,12 @@
     function buildMatchGroupRow(matchGames) {
         const games = matchGames.slice().sort((a, b) => b.match_game_number - a.match_game_number);
         const firstGame = games[0];
-        const match = firstGame.draft_match;
+        // Issue #90's own game_match carries the identical shape as
+        // draft_match (status/your_wins/opponent_wins/games_to_win/
+        // winner_username/players -- see GameService::gameMatchSummaryFor()'s
+        // own docblock), so everything below renders either one exactly
+        // the same way without needing to know which kind of match it is.
+        const match = firstGame.draft_match || firstGame.game_match;
 
         const li = document.createElement('li');
         li.className = 'lobby-match-group';
@@ -2428,7 +2447,11 @@
         const headerRowEl = document.createElement('div');
         headerRowEl.className = 'lobby-row';
         headerRowEl.appendChild(headerEl);
-        if (match.status === 'completed') {
+        // Only a draft-based match actually has a shared pool to show --
+        // issue #90's own game_match wrapper has no equivalent (there's no
+        // pool at all for structure/power/custom_duel/etc.), so this stays
+        // gated on draft_match_id specifically, not just "any match".
+        if (match.status === 'completed' && firstGame.draft_match_id !== null) {
             const poolActionsEl = document.createElement('div');
             poolActionsEl.className = 'lobby-match-actions';
             poolActionsEl.appendChild(actionButton('View draft pool', () => openDraftPoolView(firstGame.id)));
@@ -2456,30 +2479,48 @@
     // refreshPastGames() below -- draft_match_id grouping works
     // identically for either list, the backend query is what decides
     // which games (and which whole matches) belong in which one.
+    // Issue #90's own best-of-three match wrapper for Duel/Open Team
+    // Play/Closed Team Play (games.game_match_id) groups the exact same
+    // way a draft-based match's own games.draft_match_id already does --
+    // a game belongs to at most one of the two, never both, so this key
+    // just picks whichever one is actually set. Namespaced ('draft:'/
+    // 'game:') purely so the two id spaces can never collide.
+    function matchGroupKey(game) {
+        if (game.draft_match_id !== null) {
+            return 'draft:' + game.draft_match_id;
+        }
+        if (game.game_match_id !== null) {
+            return 'game:' + game.game_match_id;
+        }
+        return null;
+    }
+
     function groupGameEntries(games) {
-        const matchGamesById = new Map();
+        const matchGamesByKey = new Map();
         for (const game of games) {
-            if (game.draft_match_id === null) {
+            const key = matchGroupKey(game);
+            if (key === null) {
                 continue;
             }
-            if (!matchGamesById.has(game.draft_match_id)) {
-                matchGamesById.set(game.draft_match_id, []);
+            if (!matchGamesByKey.has(key)) {
+                matchGamesByKey.set(key, []);
             }
-            matchGamesById.get(game.draft_match_id).push(game);
+            matchGamesByKey.get(key).push(game);
         }
 
         const entries = [];
-        const renderedMatchIds = new Set();
+        const renderedMatchKeys = new Set();
         for (const game of games) {
-            if (game.draft_match_id === null) {
+            const key = matchGroupKey(game);
+            if (key === null) {
                 entries.push(() => buildGameRow(game));
                 continue;
             }
-            if (renderedMatchIds.has(game.draft_match_id)) {
+            if (renderedMatchKeys.has(key)) {
                 continue;
             }
-            renderedMatchIds.add(game.draft_match_id);
-            const matchGames = matchGamesById.get(game.draft_match_id);
+            renderedMatchKeys.add(key);
+            const matchGames = matchGamesByKey.get(key);
             entries.push(() => buildMatchGroupRow(matchGames));
         }
 
@@ -2660,6 +2701,19 @@
         }
     }
 
+    // Issue #90's own "Best of three" checkbox -- shown/hidden by the
+    // same format/deck-type change events updateDeckTypeAvailability()
+    // already listens to (see this function's own registration below).
+    function updateBestOfThreeFieldVisibility() {
+        const format = effectiveNewGameFormat();
+        const deckType = document.getElementById('new-game-deck-type').value;
+        const show = isBestOfThreeAvailable(deckType, format);
+        document.getElementById('new-game-best-of-three-label').hidden = !show;
+        if (!show) {
+            document.getElementById('new-game-best-of-three').checked = false;
+        }
+    }
+
     // Hides (and, if checked, unchecks) every bot checkbox -- and their
     // own "Practice bots" heading -- whenever the current format/deck_type
     // combination doesn't support seating one (see botsSupportedFor()).
@@ -2755,10 +2809,12 @@
     document.getElementById('new-game-format').addEventListener('change', updateDeckTypeAvailability);
     document.getElementById('new-game-format').addEventListener('change', updateBotCheckboxAvailability);
     document.getElementById('new-game-format').addEventListener('change', updateTeamFields);
+    document.getElementById('new-game-format').addEventListener('change', updateBestOfThreeFieldVisibility);
     document.getElementById('new-game-random-teams').addEventListener('change', updateTeamFields);
     document.getElementById('new-game-deck-type').addEventListener('change', updateDeckTypeDescription);
     document.getElementById('new-game-deck-type').addEventListener('change', updateOpponentSelectionLimit);
     document.getElementById('new-game-deck-type').addEventListener('change', updateBotCheckboxAvailability);
+    document.getElementById('new-game-deck-type').addEventListener('change', updateBestOfThreeFieldVisibility);
     document.getElementById('new-game-saved-decklist').addEventListener('change', updateDeckTypeDescription);
     document.getElementById('new-game-bot-saved-decklist').addEventListener('change', updateBotDecklistFieldsVisibility);
     document.getElementById('new-game-duel-rules-preset').addEventListener('change', updateDuelRulesPresetVisibility);
@@ -2987,6 +3043,7 @@
 
         updateBotCheckboxAvailability();
         updateTeamFields();
+        updateBestOfThreeFieldVisibility();
         await populateSavedDecklistSelect(document.getElementById('new-game-saved-decklist'));
         await populateSavedDecklistSelect(document.getElementById('new-game-bot-saved-decklist'));
         // Issue #290's own three draft-type pickers, sharing the exact
@@ -3333,6 +3390,11 @@
         // itself unchecked whenever hidden, so reading .checked
         // unconditionally here already reflects that.
         const botGoesFirst = document.getElementById('new-game-bot-goes-first').checked;
+        // Issue #90 -- see isBestOfThreeAvailable() for when this field is
+        // actually shown; #new-game-best-of-three is itself unchecked
+        // whenever hidden (updateBestOfThreeFieldVisibility()), so reading
+        // .checked unconditionally here already reflects that.
+        const bestOfThree = document.getElementById('new-game-best-of-three').checked;
 
         // Issue #116: post to the open lobby instead of creating the game
         // directly -- mirrors createGame()'s own params (see above) minus
@@ -3404,6 +3466,7 @@
             tieredRotisserieDraftMode,
             tieredRotisserieDraftTiers,
             botGoesFirst,
+            bestOfThree,
         );
 
         if (!ok) {
