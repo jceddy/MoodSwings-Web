@@ -6825,6 +6825,26 @@ since it already holds that dependency):
   boosted treatment (it's already listed there, alongside Charity/
   Duplicity/Harmony/Grief and the rest of the extra-play family).
 
+  **Fear** (confirmed by the maintainer) gets a `sortPriorityValue()`
+  `PHP_INT_MIN` treatment via `fearHasAGoodReasonToPlayNow()` -- unlike
+  Harmony/Grief/Nostalgia above, this isn't conditioned on the discard
+  pile; `FearEffect`'s own printed value is always 0 (no alt value
+  either), so on its own it's purely a worthless opening/filler play with
+  nothing to show for it -- "not as an opening move, and not for zero
+  points at all" per the maintainer, which for Fear is the same veto
+  either way since it never scores anything on its own. The one
+  exception: the bot's own hand holds a card that would actually benefit
+  from the extra mood Fear puts into play, which Fear's own unconditional
+  extra-play grant then lets be played the very same turn -- one whose
+  value scales with mood count (`MOOD_COUNTING_EFFECT_KEYS`: Euphoria,
+  Serenity, Tranquility, Vanity, Superiority) or specifically with blue
+  moods in play (`BLUE_CARING_EFFECT_KEYS`: the `PairedColorThresholdEffect`
+  registrations pairing blue with another color -- Loyalty, Frustration,
+  Disregard, Pity -- plus Love, which needs one mood of every color; Fear
+  itself is blue, so playing it directly feeds whichever of these the bot
+  is holding). The instant either kind of synergy card sits in hand, Fear
+  reverts to its ordinary `EARLY_PRIORITY_EFFECT_KEYS` boosted treatment.
+
   **Anger** (confirmed by the maintainer) gets its own targeting
   exception too, via `angerTargetMoodIds()` -- `buildChoicesForCard()`
   special-cases `effectKey === 'anger'` the same way it does
@@ -6924,10 +6944,10 @@ since it already holds that dependency):
   above, since `target_mood_ids` is optional and not in
   `ALWAYS_FILLED_OPTIONAL_FIELDS`, so the generic resolver would
   otherwise always leave it unfilled. "Put two chosen moods that share a
-  color or value into their players' hands" is used for one of two
-  purposes, tried in order, both constrained to a legal
+  color or value into their players' hands" is used for one of three
+  purposes, tried in order, all constrained to a legal
   same-color-or-value pair the same way `DenialEffect` itself validates
-  (`sameColorOrValuePairs()`, shared by both):
+  (`sameColorOrValuePairs()`, shared by all three):
   - `denialWinningTargetMoodIds()` -- targeting opponent card(s) to
     remove them from play and win the round outright. Every pair of
     non-teammate opponents' own in-play moods that satisfies the
@@ -6947,7 +6967,14 @@ since it already holds that dependency):
     !== null` (Awe or similar) short-circuits straight to "no winning
     pair," the same "nothing to win this round regardless of who's
     targeted" guard `sneakinessTargetPlayerId()` already applies.
-  - Failing that, `denialReplayTargetMoodIds()` -- picking up one of the
+  - Failing that, `denialSignificantSwingTargetMoodIds()` (confirmed by
+    the maintainer, new) -- the same non-teammate-opponent-pair search as
+    above, but asking only that the pair's combined live value clear
+    `DENIAL_SIGNIFICANT_SWING_THRESHOLD` (4), not that removing it win
+    the round outright. Genuinely costing an opponent a meaningful amount
+    is worth doing on its own even short of a decisive win; the
+    highest-combined-value qualifying pair is preferred.
+  - Failing that too, `denialReplayTargetMoodIds()` -- picking up one of the
     bot's OWN low-point (`DENIAL_REPLAY_MAX_VALUE`, 0-2) moods with its
     own "after playing this mood" ability to re-play: `DenialEffect`
     returns a targeted mood to its own OWNER's hand (`BoardState::
@@ -6970,13 +6997,20 @@ since it already holds that dependency):
 
   Returns `[]` (Denial still legally playable as a plain 1-point blue
   mood, per `DenialEffect`'s own `if ($targets === []) { return; }`)
-  when NEITHER priority finds a qualifying pair -- unlike Harmony/
-  Nostalgia/Pacifism above, this doesn't deprioritize Denial itself via
-  `sortPriorityValue()` in that case; a same-color-or-value pair
-  genuinely doesn't always exist among whatever's in play, and Denial's
-  own printed value (1) is ordinary enough that leading with it purely
-  by `baseValue()` the way most cards do is still a reasonable default
-  then.
+  when NONE of the three priorities finds a qualifying pair.
+  `denialHasAGoodReasonToPlayNow()` (confirmed by the maintainer, new)
+  then deprioritizes Denial itself via `sortPriorityValue()` (the same
+  `PHP_INT_MIN` treatment Harmony/Nostalgia/Pacifism above get) in that
+  case -- "avoid playing Denial unless there's a good target to bounce"
+  -- UNLESS playing it for its own plain printed value alone (no target
+  at all) would be the deciding difference between the bot's own group
+  NOT currently having the highest score this round and having it
+  (`wouldBecomeHighestScore()`, reused with an `$unboostedValue` of 0,
+  the same pattern Cynicism/Contempt/Conviction use elsewhere in this
+  section) -- "the point from it will win the round" exception, worth
+  playing even with nothing to bounce. Denial's own printed value (1) is
+  otherwise too marginal to lead with blind, unlike most cards' plain
+  `baseValue()` default.
 - **Nostalgia's own discard-pickup targeting** (confirmed by the
   maintainer), via `nostalgiaDiscardCardId()`: always takes the
   highest-`baseValue()` card currently in the discard pile when playing
