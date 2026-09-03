@@ -1762,6 +1762,50 @@ final class GameServiceIntegrationTest extends TestCase
         }
     }
 
+    // Issue #90's own non-draft best-of-three match wrapper (game_matches/
+    // games.game_match_id) needs the exact same listGamesForUser()/
+    // listPastGamesForUser() carve-out testListGamesForUserKeepsACompletedDraftMatchGameVisibleWhileASiblingGameIsStillInProgress()
+    // above already covers for draft_match_id -- a finished game 1 of a
+    // still-undecided Duel/Team/Closed Team Play/Traditional best-of-three
+    // match must stay in the main lobby, not jump to Past games, until the
+    // whole match is decided. Checked from Bob's perspective only -- Alice
+    // resigns from every game below (the simplest way to end one without
+    // playing it out), which routes each game straight to HER OWN Past
+    // games immediately via gp.resigned_at, a separate and already-tested
+    // mechanism unrelated to the game_match carve-out this test targets.
+    public function testListGamesForUserKeepsAnInProgressGameMatchsFinishedGameVisibleWhileMatchContinues(): void
+    {
+        $alice = $this->insertUser('bo3-lobby-alice');
+        $bob = $this->insertUser('bo3-lobby-bob');
+
+        $gameId = $this->games->createGame($alice, [$alice, $bob], format: 'duel', deckType: 'structure', bestOfThree: true);
+        $this->games->startGame($gameId);
+
+        $gameMatchId = (int) $this->fetchGame($gameId)['game_match_id'];
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $alice));
+
+        self::assertSame('completed', $this->fetchGame($gameId)['status']);
+        self::assertSame('in_progress', $this->fetchGameMatch($gameMatchId)['status'], 'one game win is not enough to decide a best-of-three match');
+
+        self::assertContains($gameId, array_column($this->games->listGamesForUser($bob), 'id'), 'completed game 1 of an in-progress best-of-three match must stay in the main lobby');
+        self::assertNotContains($gameId, array_column($this->games->listPastGamesForUser($bob), 'id'), 'and must NOT yet appear in Past games');
+
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE game_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $gameMatchId]);
+        $game2Id = (int) $nextGameStmt->fetchColumn();
+        $this->games->startGame($game2Id);
+        $this->games->resignGame($game2Id, $this->games->gamePlayerIdFor($game2Id, $alice));
+
+        self::assertSame('completed', $this->fetchGameMatch($gameMatchId)['status'], 'the match is now decided 2-0');
+
+        self::assertNotContains($gameId, array_column($this->games->listGamesForUser($bob), 'id'), 'game 1 moves out of the main lobby once the whole match is decided');
+        self::assertNotContains($game2Id, array_column($this->games->listGamesForUser($bob), 'id'), 'game 2 moves out of the main lobby too');
+        self::assertContains($gameId, array_column($this->games->listPastGamesForUser($bob), 'id'), 'game 1 now appears in Past games');
+        self::assertContains($game2Id, array_column($this->games->listPastGamesForUser($bob), 'id'), 'as does game 2');
+    }
+
     // -- Cleanup cron (issue #84) --------------------------------------------
 
     private function markGameStale(int $gameId, int $daysAgo): void
@@ -17226,6 +17270,48 @@ final class GameServiceIntegrationTest extends TestCase
 
         $nextGameStmt->execute(['match_id' => $gameMatchId]);
         self::assertFalse($nextGameStmt->fetchColumn(), 'a best-of-three match can never need a 4th game');
+    }
+
+    // getState()'s own top-level 'game_match' field (GameService::
+    // gameMatchStateFor()) is what drives the board's "Go to next game"
+    // button once a non-draft best-of-three game finishes but the match
+    // continues -- the exact same next_game_id mechanism draft-based
+    // matches already have via quick_draft/winston_draft/etc. (see
+    // renderDraftMatchScoreline() in web-static/js/game.js).
+    public function testGameMatchStateExposesNextGameIdOnceAGameFinishesButTheMatchContinues(): void
+    {
+        $alice = $this->insertUser('bo3-nextgame-alice');
+        $bob = $this->insertUser('bo3-nextgame-bob');
+
+        $gameId = $this->games->createGame($alice, [$alice, $bob], format: 'duel', deckType: 'structure', bestOfThree: true);
+        $this->games->startGame($gameId);
+
+        self::assertNull($this->games->getState($gameId, $bob)['game_match']['next_game_id'], 'game 1 is still being played -- there is no next game yet');
+
+        $gameMatchId = (int) $this->fetchGame($gameId)['game_match_id'];
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $alice));
+
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE game_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $gameMatchId]);
+        $game2Id = (int) $nextGameStmt->fetchColumn();
+
+        $state = $this->games->getState($gameId, $bob);
+        self::assertSame('in_progress', $state['game_match']['status']);
+        self::assertSame(1, $state['game_match']['your_wins']);
+        self::assertSame(0, $state['game_match']['opponent_wins']);
+        self::assertSame($game2Id, $state['game_match']['next_game_id'], 'game 1 finished but the match continues -- the board must offer a way to jump straight to game 2');
+
+        // Game 2's own state has no next_game_id yet -- it's the current,
+        // still-unfinished game.
+        $this->games->startGame($game2Id);
+        self::assertNull($this->games->getState($game2Id, $bob)['game_match']['next_game_id']);
+
+        $this->games->resignGame($game2Id, $this->games->gamePlayerIdFor($game2Id, $alice));
+        $completedState = $this->games->getState($gameId, $bob);
+        self::assertSame('completed', $completedState['game_match']['status'], 'the match is now decided 2-0');
+        self::assertNull($completedState['game_match']['next_game_id'], 'a completed match has no next game to route to');
     }
 
     public function testBestOfThreeCustomDuelResetsTheDecklistForTheNextGame(): void

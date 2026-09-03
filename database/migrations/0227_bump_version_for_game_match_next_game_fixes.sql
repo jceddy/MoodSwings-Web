@@ -1,0 +1,12 @@
+-- Issue #90 follow-up: fixes two bugs in the non-draft best-of-three
+-- match wrapper (game_matches) -- getState() never exposed a top-level
+-- 'game_match' field, so the board's own "Go to next game" button never
+-- appeared once a Duel/Team Play/Closed Team Play/Traditional match's
+-- game 1 finished but the match continued; and listGamesForUser()/
+-- listPastGamesForUser() had no game_matches carve-out of their own, so
+-- that same finished game 1 jumped straight to Past games instead of
+-- staying grouped with its still-active game 2 in the main lobby. Both
+-- are tweaks to an already-shipped feature, not a new one of its own, so
+-- per CLAUDE.md's own versioning convention this only bumps the patch
+-- component -- no schema change is needed either.
+UPDATE schema_version SET version = '1.31.2' WHERE id = 1;

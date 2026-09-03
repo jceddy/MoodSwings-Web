@@ -1059,6 +1059,15 @@ specifically on `firstGame.draft_match_id !== null` -- issue #90's own
 match has no shared pool to view at all (no draft ever happened), unlike
 every draft-family deck type.
 
+This grouping only ever has both games to group in the first place if
+the backend's own lobby queries actually return both -- `listGamesForUser()`/
+`listPastGamesForUser()` were missing their own `game_matches` carve-out
+at first (a second issue #90 follow-up), so a completed game 1 of a
+still in_progress match jumped straight to Past games instead of staying
+listed alongside its still-active game 2 the way a draft match's own
+game 1 already does; see `php-app/README.md`'s own "Lobby grouping and
+the board's own 'next game' button" writeup for the fix.
+
 **Sideboarding** -- a custom_duel match's game 2/3 is a completely
 ordinary fresh `games` row with no submitted decklist yet, so the
 EXISTING "submit your decklist" flow (already built for a brand new
@@ -2091,34 +2100,49 @@ notification, tag `'custom-duel-deck'`) is all a player needs to do.
     ability, additive rather than replacing it.
 
     A `#draft-match-scoreline` line (`renderDraftMatchScoreline()`, reading
-    whichever of `state.quick_draft`/`state.winston_draft`/`state.grid_draft`
-    is non-null --
-    all three share an identical outer shape, `your_wins`/`opponent_wins`/
-    `games_to_win`/`next_game_id`/`players`, even though their own `drafting`
-    sub-shapes differ -- hidden for every other deck_type) sits just below
-    the round-status line and is always shown once a `quick_draft`/
-    `winston_draft`/`grid_draft` game
+    whichever of `state.quick_draft`/`state.winston_draft`/`state.grid_draft`/
+    `state.rotisserie_draft`/`state.tiered_rotisserie_draft`/`state.sealed_deck`
+    (`draftState`) is non-null, falling back to `state.game_match`
+    (`matchState`) for a non-draft best-of-three match (issue #90, `format`
+    `duel`/`team`/`closed_team`/2-player `standard`) -- every one of those
+    shares an identical outer shape, `your_wins`/`opponent_wins`/
+    `games_to_win`/`next_game_id`/`players` (see `GameService::
+    gameMatchStateFor()`'s own docblock in `../php-app/README.md` for why
+    it needs its own function rather than reusing the lobby's
+    `gameMatchSummaryFor()` as-is), even though the draft-family's own
+    `drafting` sub-shapes differ -- hidden only when NEITHER is present)
+    sits just below the round-status line and is shown once any of them
     exists, regardless of whether the game itself is `waiting`/
     `in_progress`/`completed` -- "Best of 3 match, game N, you lead X-Y"
     (or "tied X-X"/"<opponent> leads Y-X", whichever side is actually
-    ahead) for a 2-player Quick Draft/Winston Draft/Grid Draft match.
-    A 3-4 player match of any of the three (issue #189, always
-    single-game -- `games_to_win` is 1) has more than one rival to show a
-    score for, so it branches on `players.length > 2` instead and builds
-    its text from `players` (every seated player's own username/wins/is_you,
-    populated identically by `quickDraftStateFor()`/`winstonDraftStateFor()`/
-    `gridDraftStateFor()` for any player count) -- "Single-game match -- you 0, Alice 0, Bob 1"
-    rather than the "Best of N"/leader-vs-opponent phrasing. No
-    deck_type-specific label here (Quick Draft/Winston
-    Draft/Grid Draft) -- that's already shown elsewhere on the board (the
-    title), so this line stays purely about the match's own progress. The same function also
-    owns `#draft-match-next-game-button`, right next to the scoreline:
-    hidden unless `next_game_id` is set (only true once
-    this specific game has completed but the match itself hasn't --
-    `advanceDraftMatch()` already created the next game), and its
-    `onclick` is just `showBoard(next_game_id)` -- a direct, prominent
-    link to the next game from a just-finished one, instead of making the
-    player go back to the lobby and pick the new `waiting` row out by hand.
+    ahead). A 3-4 player Quick Draft/Winston Draft/Grid Draft/Rotisserie
+    Draft match (issue #189, always single-game -- `games_to_win` is 1)
+    has more than one rival to show a score for, so it branches on
+    `draftState.players.length > 2` instead and builds its text from
+    `players` (every seated player's own username/wins/is_you, populated
+    identically by `quickDraftStateFor()`/`winstonDraftStateFor()`/etc. for
+    any player count) -- "Single-game match -- you 0, Alice 0, Bob 1"
+    rather than the "Best of N"/leader-vs-opponent phrasing. This branch is
+    deliberately keyed off `draftState` specifically, not the shared
+    `matchState` fallback -- a `game_match`'s own `players[]` can just as
+    easily be 4 entries for Open/Closed Team Play, but that's always a
+    genuine two-SIDED best-of-three (`your_wins`/`opponent_wins` already
+    aggregate each side/team), never a free-for-all single game the way
+    this branch assumes. No deck_type-specific label here (Quick Draft/
+    Winston Draft/Grid Draft) -- that's already shown elsewhere on the
+    board (the title), so this line stays purely about the match's own
+    progress. The same function also owns `#draft-match-next-game-button`,
+    right next to the scoreline: hidden unless `matchState.next_game_id` is
+    set (only true once this specific game has completed but the match
+    itself hasn't -- `advanceDraftMatch()`/`advanceGameMatch()` already
+    created the next game), and its `onclick` is just
+    `showBoard(matchState.next_game_id)` -- a direct, prominent link to the
+    next game from a just-finished one, instead of making the player go
+    back to the lobby and pick the new `waiting` row out by hand. This was
+    missing entirely for `game_match` at first (issue #90 follow-up):
+    `getState()` never exposed a `game_match` field at all, so a finished
+    game 1 of a non-draft best-of-three match had no way to reach game 2
+    except going back to the lobby by hand.
     **Rematch (issue #398).** Right below `#draft-match-next-game-button`,
     `#rematch-button` -- `renderRematchButton(state)`, called from
     `renderBoard()` alongside `renderDraftMatchScoreline(state)`, hides it
@@ -2127,13 +2151,13 @@ notification, tag `'custom-duel-deck'`) is all a player needs to do.
     buildGameState()`'s own new field -- see "Rematch" in
     `../php-app/README.md`), the game is genuinely `'completed'` (nobody
     resigned, `winner_usernames` non-empty -- an expired game has
-    neither), and, for a draft-based deck_type, only once the whole match
+    neither), and, for a match of any kind, only once the whole match
     itself has completed too (the same `draftState.status === 'completed'`
     check `renderDraftMatchScoreline()` reads, via the identical
-    `state.quick_draft || state.winston_draft || ...` OR-chain) --
-    `#draft-match-next-game-button` already owns the "this game finished
-    but the match continues" case, so Rematch would just be redundant (or
-    confusing) sitting next to it there. Its own `onclick` is
+    `state.quick_draft || state.winston_draft || ... || state.game_match`
+    OR-chain) -- `#draft-match-next-game-button` already owns the "this
+    game finished but the match continues" case, so Rematch would just be
+    redundant (or confusing) sitting next to it there. Its own `onclick` is
     `openNewGameDialog(buildRematchPrefill(state))` -- opens the *same*
     `#new-game-dialog` the plain "New game" button does (deliberately, not
     a second parallel creation flow -- that dialog already has ~20

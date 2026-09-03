@@ -6139,7 +6139,13 @@
             return false;
         }
 
-        const draftState = state.quick_draft || state.winston_draft || state.grid_draft || state.rotisserie_draft || state.tiered_rotisserie_draft || state.sealed_deck;
+        // state.game_match (issue #90's non-draft best-of-three match
+        // wrapper) belongs in this same OR-chain -- without it, Rematch
+        // was wrongly offered the moment game 1 of a Duel/Team/Closed
+        // Team Play/Traditional best-of-three match finished, alongside
+        // (rather than in place of) draft-match-next-game-button's own
+        // "there's already a next game" case.
+        const draftState = state.quick_draft || state.winston_draft || state.grid_draft || state.rotisserie_draft || state.tiered_rotisserie_draft || state.sealed_deck || state.game_match;
 
         return !draftState || draftState.status === 'completed';
     }
@@ -6201,11 +6207,26 @@
     // (Quick Draft/Winston Draft/Grid Draft/Rotisserie Draft) here --
     // that's already shown elsewhere on the board (the title), so this
     // line stays purely about the match's own progress.
+    //
+    // state.game_match (issue #90's own non-draft best-of-three match
+    // wrapper for Duel/Open Team Play/Closed Team Play/2-player
+    // Traditional -- see GameService::gameMatchStateFor()) shares that
+    // exact same your_wins/opponent_wins/games_to_win/next_game_id shape,
+    // so it joins the same OR-chain below via its own matchState
+    // fallback -- kept separate from draftState itself, though, since the
+    // "more than 2 players" branch just below only ever applies to a real
+    // 3-4 player single-game Quick Draft (draftState.players there is
+    // per-competitor); a game_match's own players[] can just as easily be
+    // 4 entries for Open/Closed Team Play, but those are always a genuine
+    // two-SIDED best-of-three (your_wins/opponent_wins already aggregate
+    // each side's team), never a free-for-all single game the way that
+    // branch assumes.
     function renderDraftMatchScoreline(state) {
         const el = document.getElementById('draft-match-scoreline');
         const nextGameButton = document.getElementById('draft-match-next-game-button');
         const draftState = state.quick_draft || state.winston_draft || state.grid_draft || state.rotisserie_draft || state.tiered_rotisserie_draft || state.sealed_deck;
-        if (!draftState) {
+        const matchState = draftState || state.game_match;
+        if (!matchState) {
             el.hidden = true;
             nextGameButton.hidden = true;
             return;
@@ -6220,7 +6241,7 @@
         // single game (games_to_win === 1) rather than a real best-of-three,
         // so they get their own phrasing built from draftState.players
         // (every seated player's own username/wins/is_you) instead.
-        if (draftState.players && draftState.players.length > 2) {
+        if (draftState && draftState.players && draftState.players.length > 2) {
             const scores = draftState.players
                 .map((p) => (p.is_you ? 'you' : p.username) + ' ' + p.wins)
                 .join(', ');
@@ -6233,24 +6254,25 @@
             // to name); otherwise whichever side is ahead is named first --
             // "you" or the opponent's own username -- with their own win
             // count first, e.g. "you 2-1"/"Dr Potato 2-1", never "1-2".
-            const scoreText = draftState.your_wins === draftState.opponent_wins
-                ? 'tied ' + draftState.your_wins + '-' + draftState.opponent_wins
-                : draftState.your_wins > draftState.opponent_wins
-                    ? 'you ' + draftState.your_wins + '-' + draftState.opponent_wins
-                    : opponentUsername + ' ' + draftState.opponent_wins + '-' + draftState.your_wins;
+            const scoreText = matchState.your_wins === matchState.opponent_wins
+                ? 'tied ' + matchState.your_wins + '-' + matchState.opponent_wins
+                : matchState.your_wins > matchState.opponent_wins
+                    ? 'you ' + matchState.your_wins + '-' + matchState.opponent_wins
+                    : opponentUsername + ' ' + matchState.opponent_wins + '-' + matchState.your_wins;
 
-            el.textContent = 'Best of ' + (draftState.games_to_win * 2 - 1) + ' match, game ' +
+            el.textContent = 'Best of ' + (matchState.games_to_win * 2 - 1) + ' match, game ' +
                 (state.game.match_game_number || 1) + ', ' + scoreText;
         }
 
         // next_game_id is only ever set once this game has completed and
-        // advanceDraftMatch() has already created the next one -- see
-        // GameService::quickDraftStateFor()/winstonDraftStateFor(). A
-        // prominent button right next to the scoreline (rather than
-        // making the player go back to the lobby and find it themselves)
-        // takes them straight to it.
-        nextGameButton.hidden = !draftState.next_game_id;
-        nextGameButton.onclick = draftState.next_game_id ? () => showBoard(draftState.next_game_id) : null;
+        // advanceDraftMatch()/advanceGameMatch() has already created the
+        // next one -- see GameService::quickDraftStateFor()/
+        // winstonDraftStateFor()/gameMatchStateFor(). A prominent button
+        // right next to the scoreline (rather than making the player go
+        // back to the lobby and find it themselves) takes them straight
+        // to it.
+        nextGameButton.hidden = !matchState.next_game_id;
+        nextGameButton.onclick = matchState.next_game_id ? () => showBoard(matchState.next_game_id) : null;
     }
 
     // Tracks *indices* into drafting.pack rather than card_ids -- a
