@@ -3737,6 +3737,25 @@ both completion paths and stays consistent across a match's games since
 counts a team format's match wins by `winner_team_id` matching the
 just-completed game's own, rather than by the representative's `user_id`.
 
+**Lobby match-winner display credits the whole team too** (bugfix,
+follow-up to the above) -- `gameMatchSummaryFor()`'s own `winner_usernames`
+(an array, renamed from the old singular `winner_username`) resolves the
+WHOLE winning team from `game_matches.winner_user_id`'s own seat's
+`team_id`, rather than assuming that one representative is the only
+teammate worth naming. Before this, the lobby's "... won the match" line
+for a completed team-format best-of-three match named only whichever
+teammate happened to complete the deciding game, even though the match
+was actually won by both of them together -- the same "credit the whole
+team" gap `getState()`'s own per-game `winner_usernames` field was fixed
+for earlier (see "Winner display" below), just at the match-summary level
+instead of the single-game one. Non-team matches fall back to the single
+winner's username, same as before. `web-static/js/game.js`'s
+`buildMatchGroupRow()` normalizes either the new `winner_usernames` array
+or the older singular `winner_username` (still what `draftMatchSummaryFor()`
+returns, since a draft-based match is never team-format best-of-three) into
+one array before rendering, so both match kinds keep sharing the same
+render path.
+
 **Sideboarding** -- explicitly limited in this pass to custom_duel's own
 existing per-game decklist submission, which already needs no new
 mechanism at all: a fresh `games`/`game_players` row for game 2/3 starts
@@ -3798,7 +3817,7 @@ to next game" button, wired to whichever of those fields is present,
 never appeared for a finished game 1 of a non-draft best-of-three match
 either. `gameMatchStateFor()` fills that gap: it wraps
 `gameMatchSummaryFor()`'s own status/your_wins/opponent_wins/
-games_to_win/winner_username/players shape (the lobby's own grouped-match
+games_to_win/winner_usernames/players shape (the lobby's own grouped-match
 summary) with the same next_game_id computation the draft-family's own
 `*StateFor()` methods already use, exposed as `getState()`'s own
 top-level `game_match` field.

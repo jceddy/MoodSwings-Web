@@ -1,0 +1,12 @@
+-- Lobby follow-up to the previous best-of-three team match completion fix:
+-- a completed team-format best-of-three match's own game_matches.winner_user_id
+-- is only ever a stand-in representative (see advanceGameMatch()'s own
+-- docblock), so GameService::gameMatchSummaryFor() used to have the lobby's
+-- "... won the match" line name only that one teammate. Fixed to resolve
+-- the whole winning team from that representative's own seat's team_id
+-- (new 'winner_usernames' array field, replacing the old singular
+-- 'winner_username'), crediting both teammates -- the same "credit the
+-- whole team" convention getState()'s own per-game winner_usernames field
+-- already uses. A bug fix, not a new feature, so this only bumps the
+-- patch version per CLAUDE.md's own versioning convention.
+UPDATE schema_version SET version = '1.32.6' WHERE id = 1;

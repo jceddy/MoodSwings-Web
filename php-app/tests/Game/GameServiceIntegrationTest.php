@@ -17829,6 +17829,65 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame($u2, (int) $completedMatch['winner_user_id']);
     }
 
+    /**
+     * The lobby-facing counterpart to the fix above: even a completed
+     * team-format best-of-three match's own single `winner_user_id` (a
+     * stand-in representative -- see advanceGameMatch()'s own docblock)
+     * used to be all `gameMatchSummaryFor()` named as "the match winner"
+     * in the lobby, crediting only whichever teammate happened to
+     * complete the deciding game rather than both members of the winning
+     * team.
+     */
+    public function testGameMatchSummaryCreditsBothTeammatesAsTheMatchWinner(): void
+    {
+        [$u1, $u2, $u3, $u4] = $this->insertUsers('bo3-team-winners-' . uniqid(), 4);
+        $decklistText = $this->buildCustomDecklistText(self::TEAM_MIN_CUSTOM_DECK_SIZE);
+
+        $gameId = $this->games->createGame(
+            $u1,
+            [$u1, $u2, $u3, $u4],
+            format: 'team',
+            deckType: 'custom',
+            decklistText: $decklistText,
+            partnerUserId: $u2,
+            bestOfThree: true,
+        );
+        $this->games->startGame($gameId);
+
+        // Team 1 (u3/u4) resigns both games, so team 0 (u1/u2) wins the
+        // match 2-0 -- completeGameByResignation() always credits the
+        // lowest-seat_order teammate (u1) as game_matches.winner_user_id's
+        // own stand-in representative, so this exercises the exact case
+        // where naming only that one user would previously have left u2
+        // out of the match's own "who won" display despite being just as
+        // much a winner.
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $u3));
+
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE game_match_id = (SELECT game_match_id FROM games WHERE id = :game_id) AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['game_id' => $gameId]);
+        $game2Id = (int) $nextGameStmt->fetchColumn();
+        $this->games->startGame($game2Id);
+        $this->games->resignGame($game2Id, $this->games->gamePlayerIdFor($game2Id, $u4));
+
+        $state = $this->games->getState($game2Id, $u1);
+        self::assertSame('completed', $state['game_match']['status']);
+        self::assertEqualsCanonicalizing(
+            [$this->usernameFor($u1), $this->usernameFor($u2)],
+            $state['game_match']['winner_usernames'],
+            'both members of the winning team should be named as the match winner, not just whichever one happened to complete the deciding game',
+        );
+    }
+
+    private function usernameFor(int $userId): string
+    {
+        $stmt = $this->pdo->prepare('SELECT username FROM users WHERE id = :id');
+        $stmt->execute(['id' => $userId]);
+
+        return (string) $stmt->fetchColumn();
+    }
+
     private const TEAM_MIN_CUSTOM_DECK_SIZE = 45;
 
     private function buildCustomDecklistText(int $cardCount): string
