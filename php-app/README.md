@@ -3714,19 +3714,28 @@ so one shared numbering column is unambiguous.
 which needs a row per player regardless (to hold the drafted pool/current
 deck), this feature has nothing per-player to persist, so a match's own
 win count is simply recomputed on demand from its (at most 3) `games`
-rows: `advanceGameMatch()` resolves the just-completed game's
-`winner_game_player_id` back to a `user_id`, then counts how many of the
-match's own completed games that same `user_id` has already won. This
-also correctly covers Team Play/Closed Team Play without a separate
-`winner_team_id` column: a team game's own `winner_game_player_id` is
-always that game's winning team's lowest-seat_order member (the same
-representative convention `completeGameByResignation()`/
-`finishTeamScoringAndAdvance()` already use to pick one game_player id
-for a team win), and since a match's seats -- and so each team's own
-representative -- carry forward unchanged from game to game (same
-`seat_order`/`team_id`, just re-inserted for the new `games` row), tallying
-by that representative's `user_id` across the match is equivalent to
-tallying by team.
+rows. For a non-team match, `advanceGameMatch()` resolves the just-completed
+game's `winner_game_player_id` back to a `user_id`, then counts how many of
+the match's own completed games that same `user_id` has already won.
+
+**Team Play/Closed Team Play count by `games.winner_team_id` instead**
+(bugfix, follow-up to issue #90) -- a team game's own
+`winner_game_player_id` is only ever a stand-in representative for that
+row's own FK/display purposes, and the two completion paths don't pick the
+same one consistently: `completeGameByResignation()` always credits the
+winning team's lowest-seat_order member, but `finishTeamScoringAndAdvance()`
+(via `determineRoundWinner()`) instead credits whichever teammate scored
+the higher individual point total in the game's own final round, which can
+be a *different* teammate game to game even when the same team keeps
+winning. Counting match wins off that representative's `user_id` (as
+originally implemented) could therefore split one team's 2 match wins
+across two different teammates' `user_id`s and never end the match.
+`games.winner_team_id` doesn't have this problem -- it's set directly by
+both completion paths and stays consistent across a match's games since
+`team_id` is one of the seats carried forward unchanged (same `seat_order`/
+`team_id`, just re-inserted for the new `games` row) -- so `advanceGameMatch()`
+counts a team format's match wins by `winner_team_id` matching the
+just-completed game's own, rather than by the representative's `user_id`.
 
 **Sideboarding** -- explicitly limited in this pass to custom_duel's own
 existing per-game decklist submission, which already needs no new

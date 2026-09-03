@@ -17758,6 +17758,77 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame('in_progress', $this->fetchGame($game2Id)['status']);
     }
 
+    /**
+     * The bug report behind this test: a best-of-three team match wasn't
+     * ending once a team reached 2 game wins. Root cause -- games.
+     * winner_game_player_id for a team-format game is only ever a stand-in
+     * representative, and finishTeamScoringAndAdvance() (via
+     * determineRoundWinner()) picks that representative by whichever
+     * teammate scored the higher individual point total in the game's own
+     * final round, NOT always the same lowest-seat_order teammate game to
+     * game (unlike completeGameByResignation(), which always does pick the
+     * lowest-seat_order one). advanceGameMatch() used to count a team's
+     * match wins by that representative's own user_id, so the same team
+     * winning games 1 and 2 via two DIFFERENT representatives never
+     * reached GAME_MATCH_GAMES_TO_WIN for either individual user, and the
+     * match stayed 'in_progress' forever. Fixed by counting off games.
+     * winner_team_id instead, which is stable across a match's games since
+     * team_id is one of the seats carried forward unchanged.
+     */
+    public function testBestOfThreeTeamMatchCompletesWhenTheWinningRepresentativeDiffersBetweenGames(): void
+    {
+        [$u1, $u2, $u3, $u4] = $this->insertUsers('bo3-team-rep-' . uniqid(), 4);
+        $decklistText = $this->buildCustomDecklistText(self::TEAM_MIN_CUSTOM_DECK_SIZE);
+
+        $gameId = $this->games->createGame(
+            $u1,
+            [$u1, $u2, $u3, $u4],
+            format: 'team',
+            deckType: 'custom',
+            decklistText: $decklistText,
+            partnerUserId: $u2,
+            bestOfThree: true,
+        );
+        $this->games->startGame($gameId);
+        $gameMatchId = (int) $this->fetchGame($gameId)['game_match_id'];
+
+        // Game 1: team 1 (u3/u4) resigns, so team 0 wins it --
+        // completeGameByResignation() always credits the LOWEST-seat_order
+        // teammate (u1) as the representative.
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $u3));
+
+        self::assertSame('in_progress', $this->fetchGameMatch($gameMatchId)['status'], 'one game win is not enough to end a best-of-three match');
+
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE game_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $gameMatchId]);
+        $game2Id = (int) $nextGameStmt->fetchColumn();
+        $this->games->startGame($game2Id);
+
+        // Game 2: team 0 wins AGAIN, but this time u2 (not u1) is credited
+        // as the representative -- exactly what determineRoundWinner()
+        // does when u2 scores the higher individual total in the game's
+        // own final round. Driving real gameplay to a specific individual
+        // score split isn't practical here, so the game-scoring completion
+        // finishTeamScoringAndAdvance() would itself perform is applied
+        // directly, then advanceGameMatch() (the method this bug is in) is
+        // invoked exactly as that method would have.
+        $u2PlayerId2 = $this->games->gamePlayerIdFor($game2Id, $u2);
+        $this->pdo->prepare(
+            "UPDATE games SET status = 'completed', winner_game_player_id = :winner, winner_team_id = 0, completed_at = NOW() WHERE id = :game_id"
+        )->execute(['winner' => $u2PlayerId2, 'game_id' => $game2Id]);
+        (new \ReflectionMethod($this->games, 'advanceGameMatch'))->invoke($this->games, $game2Id, $u2PlayerId2);
+
+        $completedMatch = $this->fetchGameMatch($gameMatchId);
+        self::assertSame(
+            'completed',
+            $completedMatch['status'],
+            'team 0 has now won both games of the match even though a different teammate was credited as the representative each time',
+        );
+        self::assertSame($u2, (int) $completedMatch['winner_user_id']);
+    }
+
     private const TEAM_MIN_CUSTOM_DECK_SIZE = 45;
 
     private function buildCustomDecklistText(int $cardCount): string
