@@ -202,6 +202,18 @@
                 <ul id="duel-deck-submission-status"></ul>
 
                 <div id="duel-deck-submit-form-container">
+                    <!-- Power Duel sideboarding (migration 0228, issue #90
+                         follow-up) -- shown only for game 2/3 of a match
+                         that opted into it (GameService::getState()'s own
+                         'power_duel_sideboard_pool'). Your new deck can
+                         only be assembled from these cards (your original
+                         deck + sideboard combined); "Load your pool" fills
+                         the paste field with all of them so you can trim
+                         it back down instead of retyping the whole thing. -->
+                    <div id="duel-deck-sideboard-hint" hidden>
+                        <p>Sideboarding is on for this match -- your new deck can only use cards from your original deck and sideboard.</p>
+                        <button id="duel-deck-load-sideboard-pool-button" type="button">Load your pool</button>
+                    </div>
                     <label>Use a saved deck
                         <select id="duel-deck-submit-saved-decklist">
                             <option value="">Paste/upload a decklist instead</option>
@@ -539,6 +551,8 @@
             </div>
 
             <label class="new-game-field" id="new-game-best-of-three-label" hidden><input type="checkbox" id="new-game-best-of-three"> Best of three (create the next game automatically if this one doesn't decide it)</label>
+
+            <label class="new-game-field" id="new-game-allow-sideboarding-label" hidden><input type="checkbox" id="new-game-allow-sideboarding"> Allow sideboarding (up to 5 cards, swapped freely between games)</label>
 
             <label class="new-game-field" id="new-game-deck-type-label">Deck
                 <select id="new-game-deck-type">
@@ -1425,6 +1439,46 @@
                 <p id="deck-builder-deck-summary"></p>
                 <p id="deck-builder-deck-empty" hidden>No cards in this deck yet -- add some from the catalog.</p>
                 <div id="deck-builder-deck-cards" class="deck-builder-card-grid"></div>
+            </section>
+
+            <!-- Sideboarding (migration 0228, issue #90 follow-up) --
+                 shown only for Free-form/Power Duel (see
+                 deckBuilderFormatSupportsSideboard() in game.js); Power
+                 Duel best-of-three sideboarding (see "Best of three" in
+                 web-static/README.md) caps this at
+                 POWER_DUEL_SIDEBOARD_MAX_CARDS cards, Free-form has no
+                 cap of its own, same as its main deck. -->
+            <section class="deck-builder-sideboard" id="deck-builder-sideboard-section" hidden>
+                <h3>Your sideboard</h3>
+                <div class="deck-builder-sort">
+                    <label>Sort by
+                        <select id="deck-builder-sideboard-sort-1" class="deck-builder-sort-select">
+                            <option value="">(unsorted)</option>
+                            <option value="color">Color</option>
+                            <option value="rarity">Rarity</option>
+                            <option value="name">Name</option>
+                        </select>
+                    </label>
+                    <label>then
+                        <select id="deck-builder-sideboard-sort-2" class="deck-builder-sort-select">
+                            <option value="">(nothing)</option>
+                            <option value="color">Color</option>
+                            <option value="rarity">Rarity</option>
+                            <option value="name">Name</option>
+                        </select>
+                    </label>
+                    <label>then
+                        <select id="deck-builder-sideboard-sort-3" class="deck-builder-sort-select">
+                            <option value="">(nothing)</option>
+                            <option value="color">Color</option>
+                            <option value="rarity">Rarity</option>
+                            <option value="name">Name</option>
+                        </select>
+                    </label>
+                </div>
+                <p id="deck-builder-sideboard-summary"></p>
+                <p id="deck-builder-sideboard-empty" hidden>No cards in your sideboard yet -- add some from the catalog.</p>
+                <div id="deck-builder-sideboard-cards" class="deck-builder-card-grid"></div>
             </section>
         </div>
 

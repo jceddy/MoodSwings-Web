@@ -1037,6 +1037,10 @@ if ($path === '/games' && $method === 'POST') {
     // Only meaningful for format 'duel'/'team'/'closed_team' with a
     // non-draft deck_type (issue #90) -- see createGame()'s own docblock.
     $bestOfThree = (bool) ($body['best_of_three'] ?? false);
+    // Only meaningful for a best-of-three Duel game using deck_type
+    // 'custom_duel' built under the "Power Duel" preset (issue #90
+    // follow-up, migration 0228) -- see createGame()'s own docblock.
+    $allowSideboarding = (bool) ($body['allow_sideboarding'] ?? false);
     // Only meaningful for deck_type 'rotisserie_draft' -- see createGame()'s own docblock.
     $rotisserieDraftPoolSource = isset($body['rotisserie_draft_pool_source']) ? (string) $body['rotisserie_draft_pool_source'] : null;
     $rotisserieDraftCustomPoolText = isset($body['rotisserie_draft_custom_pool_text']) ? (string) $body['rotisserie_draft_custom_pool_text'] : null;
@@ -1094,6 +1098,7 @@ if ($path === '/games' && $method === 'POST') {
             $tieredRotisserieDraftTiers,
             $botGoesFirst,
             $bestOfThree,
+            $allowSideboarding,
         );
         respond(201, ['status' => 'ok', 'game_id' => $gameId]);
     } catch (GameStateException $e) {
@@ -1153,6 +1158,10 @@ function openGameCreateParamsFromRequestBody(array $body): array
         // parameter, since it isn't threaded through create_game_params at
         // all without this key.
         'best_of_three' => (bool) ($body['best_of_three'] ?? false),
+        // Only meaningful alongside 'best_of_three' for a Duel game using
+        // deck_type 'custom_duel' built under the "Power Duel" preset --
+        // see createGame()'s own $allowSideboarding docblock.
+        'allow_sideboarding' => (bool) ($body['allow_sideboarding'] ?? false),
     ];
 }
 

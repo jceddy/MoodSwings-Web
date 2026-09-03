@@ -1262,6 +1262,14 @@ body.game-page {
     margin-top: 0.5rem;
 }
 
+/* Power Duel sideboarding's own resubmission hint (migration 0228, issue
+   #90 follow-up) -- separates it from the "Use a saved deck" field right
+   below, which would otherwise sit flush against its own "Load your
+   pool" button. */
+#duel-deck-sideboard-hint {
+    margin-bottom: 0.5rem;
+}
+
 /* Select all/Clear selection/Reset to previous deck don't all fit on one
    row on narrow (mobile) widths -- flex-wrap plus its own row-gap keeps
    whichever button wraps to a second line from sitting flush against the
@@ -2343,7 +2351,8 @@ dialog#deck-builder-dialog[open] {
 }
 
 .deck-builder-catalog,
-.deck-builder-deck {
+.deck-builder-deck,
+.deck-builder-sideboard {
     flex: 1 1 24rem;
     min-width: 0;
     max-width: 100%;

@@ -17353,6 +17353,247 @@ final class GameServiceIntegrationTest extends TestCase
         $this->games->startGame($game2Id);
     }
 
+    // Power Duel sideboarding (migration 0228, issue #90 follow-up) --
+    // $allowSideboarding only ever actually takes effect for a
+    // best-of-three 'duel' game using deck_type 'custom_duel' built under
+    // the "Power Duel" duel_deck_rules preset; silently ignored (not an
+    // error) for anything else, the same "harmless no-op outside its own
+    // narrow scope" convention $bestOfThree's own Traditional-at-2-players
+    // restriction already established.
+    public function testAllowSideboardingOnlyAppliesToPowerDuelBestOfThree(): void
+    {
+        $alice = $this->insertUser('sb-scope-alice');
+        $bob = $this->insertUser('sb-scope-bob');
+
+        $powerBo3Id = $this->games->createGame(
+            $alice,
+            [$alice, $bob],
+            format: 'duel',
+            deckType: 'custom_duel',
+            duelDeckRules: ['preset' => 'power'],
+            bestOfThree: true,
+            allowSideboarding: true,
+        );
+        $powerBo3MatchId = (int) $this->fetchGame($powerBo3Id)['game_match_id'];
+        self::assertTrue((bool) $this->fetchGameMatch($powerBo3MatchId)['allow_sideboarding']);
+
+        // Same preset, but no best-of-three at all -- there's no match to
+        // carry the flag on in the first place.
+        $noMatchId = $this->games->createGame(
+            $alice,
+            [$alice, $bob],
+            format: 'duel',
+            deckType: 'custom_duel',
+            duelDeckRules: ['preset' => 'power'],
+            bestOfThree: false,
+            allowSideboarding: true,
+        );
+        self::assertNull($this->fetchGame($noMatchId)['game_match_id']);
+
+        // Best-of-three, but a different preset -- ignored, not an error.
+        $userDefinedBo3Id = $this->games->createGame(
+            $alice,
+            [$alice, $bob],
+            format: 'duel',
+            deckType: 'custom_duel',
+            duelDeckRules: ['preset' => 'user_defined', 'min_cards' => 7],
+            bestOfThree: true,
+            allowSideboarding: true,
+        );
+        $userDefinedMatchId = (int) $this->fetchGame($userDefinedBo3Id)['game_match_id'];
+        self::assertFalse((bool) $this->fetchGameMatch($userDefinedMatchId)['allow_sideboarding'], 'allow_sideboarding only ever applies to the "power" preset');
+    }
+
+    /** @return string[] */
+    private function fetchNonMythicCardNames(int $count, int $offset = 0): array
+    {
+        $stmt = $this->pdo->prepare("SELECT name FROM cards WHERE rarity != 'mythic' ORDER BY id LIMIT :count OFFSET :offset");
+        $stmt->bindValue('count', $count, \PDO::PARAM_INT);
+        $stmt->bindValue('offset', $offset, \PDO::PARAM_INT);
+        $stmt->execute();
+
+        return $stmt->fetchAll(\PDO::FETCH_COLUMN);
+    }
+
+    /**
+     * @param string[] $mainCardNames
+     * @param string[] $sideboardCardNames
+     */
+    private function buildPowerDuelDecklistText(array $mainCardNames, array $sideboardCardNames = []): string
+    {
+        $lines = array_map(static fn (string $name): string => "1 {$name}", $mainCardNames);
+        if ($sideboardCardNames !== []) {
+            $lines[] = '';
+            $lines[] = 'Sideboard';
+            foreach ($sideboardCardNames as $name) {
+                $lines[] = "1 {$name}";
+            }
+        }
+
+        return implode("\n", $lines);
+    }
+
+    public function testPowerDuelSideboardDeclarationEnforcesCapAndNoOverlapWithTheMainDeck(): void
+    {
+        $alice = $this->insertUser('sb-declare-alice');
+        $bob = $this->insertUser('sb-declare-bob');
+        $mainNames = $this->fetchNonMythicCardNames(15);
+        $sixCardSideboard = $this->fetchNonMythicCardNames(6, 15);
+
+        $gameId = $this->games->createGame(
+            $alice,
+            [$alice, $bob],
+            format: 'duel',
+            deckType: 'custom_duel',
+            duelDeckRules: ['preset' => 'power'],
+            bestOfThree: true,
+            allowSideboarding: true,
+        );
+        $alicePlayerId = $this->games->gamePlayerIdFor($gameId, $alice);
+
+        try {
+            $this->games->submitCustomDuelDeck($gameId, $alicePlayerId, $this->buildPowerDuelDecklistText($mainNames, $sixCardSideboard));
+            self::fail('A 6-card sideboard should be rejected -- Power Duel caps it at 5.');
+        } catch (GameStateException $e) {
+            self::assertStringContainsString('sideboard', $e->getMessage());
+        }
+
+        try {
+            $overlapSideboard = [$mainNames[0], ...$this->fetchNonMythicCardNames(2, 15)];
+            $this->games->submitCustomDuelDeck($gameId, $alicePlayerId, $this->buildPowerDuelDecklistText($mainNames, $overlapSideboard));
+            self::fail('A card cannot be declared in both the deck and the sideboard at once.');
+        } catch (GameStateException $e) {
+            self::assertStringContainsString('both your deck and your sideboard', $e->getMessage());
+        }
+
+        // A legal declaration (5-card sideboard, no overlap) succeeds.
+        $sideboardNames = $this->fetchNonMythicCardNames(5, 15);
+        $this->games->submitCustomDuelDeck($gameId, $alicePlayerId, $this->buildPowerDuelDecklistText($mainNames, $sideboardNames));
+        $stored = $this->fetchGamePlayer($alicePlayerId);
+        self::assertCount(15, json_decode((string) $stored['custom_deck_card_ids'], true));
+        self::assertCount(5, json_decode((string) $stored['custom_deck_sideboard_card_ids'], true));
+    }
+
+    public function testPowerDuelSideboardingSwapsWithinTheDeclaredPoolAcrossGames(): void
+    {
+        $alice = $this->insertUser('sb-swap-alice');
+        $bob = $this->insertUser('sb-swap-bob');
+        $aliceMain = $this->fetchNonMythicCardNames(15);
+        $aliceSideboard = $this->fetchNonMythicCardNames(5, 15);
+        $bobMain = $this->fetchNonMythicCardNames(15, 20);
+        $bobSideboard = $this->fetchNonMythicCardNames(5, 35);
+        $outsideCardName = $this->fetchNonMythicCardNames(1, 40)[0];
+
+        $gameId = $this->games->createGame(
+            $alice,
+            [$alice, $bob],
+            format: 'duel',
+            deckType: 'custom_duel',
+            duelDeckRules: ['preset' => 'power'],
+            bestOfThree: true,
+            allowSideboarding: true,
+        );
+        $this->games->submitCustomDuelDeck($gameId, $this->games->gamePlayerIdFor($gameId, $alice), $this->buildPowerDuelDecklistText($aliceMain, $aliceSideboard));
+        $this->games->submitCustomDuelDeck($gameId, $this->games->gamePlayerIdFor($gameId, $bob), $this->buildPowerDuelDecklistText($bobMain, $bobSideboard));
+        $this->games->startGame($gameId);
+
+        $gameMatchId = (int) $this->fetchGame($gameId)['game_match_id'];
+        // Alice resigns, so Bob wins game 1.
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $alice));
+
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE game_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $gameMatchId]);
+        $game2Id = (int) $nextGameStmt->fetchColumn();
+
+        foreach ([$alice, $bob] as $userId) {
+            $playerId = $this->games->gamePlayerIdFor($game2Id, $userId);
+            $row = $this->fetchGamePlayer($playerId);
+            self::assertNull($row['custom_deck_card_ids'], "user {$userId} must resubmit for game 2 -- sideboarding is on for this match");
+            self::assertNull($row['custom_deck_sideboard_card_ids']);
+        }
+
+        $bobPlayerId2 = $this->games->gamePlayerIdFor($game2Id, $bob);
+
+        // Bob tries to sneak in a card from outside his own declared pool.
+        $illegalSwap = [...array_slice($bobMain, 1), $outsideCardName];
+        try {
+            $this->games->submitCustomDuelDeck($game2Id, $bobPlayerId2, $this->buildPowerDuelDecklistText($illegalSwap));
+            self::fail('A card outside the declared deck/sideboard pool must be rejected.');
+        } catch (GameStateException $e) {
+            self::assertStringContainsString('original deck or sideboard', $e->getMessage());
+        }
+
+        // A legal swap: bench bobMain[0], bring in bobSideboard[0] instead.
+        $legalSwap = [...array_slice($bobMain, 1), $bobSideboard[0]];
+        $this->games->submitCustomDuelDeck($game2Id, $bobPlayerId2, $this->buildPowerDuelDecklistText($legalSwap));
+
+        $updated = $this->fetchGamePlayer($bobPlayerId2);
+        $newMain = array_map(intval(...), json_decode((string) $updated['custom_deck_card_ids'], true));
+        $newSideboard = array_map(intval(...), json_decode((string) $updated['custom_deck_sideboard_card_ids'], true));
+        $catalogIds = $this->loadCardCatalogIdsByName();
+        self::assertContains($catalogIds[mb_strtolower($bobSideboard[0])], $newMain, 'the swapped-in sideboard card must now be in the active deck');
+        self::assertContains($catalogIds[mb_strtolower($bobMain[0])], $newSideboard, 'the swapped-out deck card must now be benched');
+        self::assertCount(15, $newMain);
+        self::assertCount(5, $newSideboard);
+    }
+
+    /** @return array<string, int> lowercased card name => catalog id */
+    private function loadCardCatalogIdsByName(): array
+    {
+        $rows = $this->pdo->query('SELECT id, name FROM cards')->fetchAll();
+        $byName = [];
+        foreach ($rows as $row) {
+            $byName[mb_strtolower($row['name'])] = (int) $row['id'];
+        }
+
+        return $byName;
+    }
+
+    public function testPowerDuelWithoutSideboardingLocksTheDeckAcrossGames(): void
+    {
+        $alice = $this->insertUser('sb-locked-alice');
+        $bob = $this->insertUser('sb-locked-bob');
+        $mainNames = $this->fetchNonMythicCardNames(15);
+
+        $gameId = $this->games->createGame(
+            $alice,
+            [$alice, $bob],
+            format: 'duel',
+            deckType: 'custom_duel',
+            duelDeckRules: ['preset' => 'power'],
+            bestOfThree: true,
+            // allowSideboarding defaults to false.
+        );
+        $decklistText = $this->buildPowerDuelDecklistText($mainNames);
+        $this->games->submitCustomDuelDeck($gameId, $this->games->gamePlayerIdFor($gameId, $alice), $decklistText);
+        $this->games->submitCustomDuelDeck($gameId, $this->games->gamePlayerIdFor($gameId, $bob), $decklistText);
+        $this->games->startGame($gameId);
+
+        $game1Alice = $this->fetchGamePlayer($this->games->gamePlayerIdFor($gameId, $alice));
+        $gameMatchId = (int) $this->fetchGame($gameId)['game_match_id'];
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $alice));
+
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE game_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $gameMatchId]);
+        $game2Id = (int) $nextGameStmt->fetchColumn();
+
+        $game2Alice = $this->fetchGamePlayer($this->games->gamePlayerIdFor($game2Id, $alice));
+        self::assertSame(
+            $game1Alice['custom_deck_card_ids'],
+            $game2Alice['custom_deck_card_ids'],
+            'without sideboarding, a Power Duel deck is locked for the whole match -- it must carry forward automatically, not reset to NULL',
+        );
+        self::assertNull($game2Alice['custom_deck_sideboard_card_ids']);
+
+        // Since the decklist is already there, game 2 can start immediately.
+        $this->games->startGame($game2Id);
+        self::assertSame('in_progress', $this->fetchGame($game2Id)['status']);
+    }
+
     public function testBestOfThreeCustomDeckTypeCarriesTheSameDecklistForwardAutomatically(): void
     {
         [$u1, $u2, $u3, $u4] = $this->insertUsers('bo3-custom-' . uniqid(), 4);

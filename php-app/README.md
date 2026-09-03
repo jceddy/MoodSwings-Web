@@ -3796,6 +3796,78 @@ top-level `game_match` field.
 
 **Frontend** -- see "Best of three" in `web-static/README.md`.
 
+### Power Duel sideboarding
+
+A second, narrower opt-in on top of best-of-three (migration 0228):
+`createGame()`'s own `$allowSideboarding` parameter (`allow_sideboarding`
+in the API/New Game dialog) lets a best-of-three Duel match built under
+`custom_duel`'s existing "Power Duel" `duel_deck_rules` preset
+(`custom_duel_rules_preset === 'power'`) swap cards between a 15-card
+main deck and a declared bench, the traditional TCG sideboarding rule --
+silently ignored (not an error) for any other preset/format/deck_type
+combination, or without `best_of_three` itself, the same "harmless
+no-op outside its own narrow scope" convention `best_of_three`'s own
+Traditional-at-2-players restriction already established.
+`game_matches.allow_sideboarding` (`BOOLEAN`) carries the choice for the
+whole match; `game_players.custom_deck_sideboard_card_ids` (`JSON`,
+nullable) holds a seated player's own currently-benched cards, alongside
+the existing `custom_deck_card_ids`.
+
+**Why this needed its own opt-in, not just reusing custom_duel's
+existing free resubmission** -- every other `custom_duel` best-of-three
+match already lets a player submit a COMPLETELY different decklist for
+every game, no restriction at all (see "Best of three" above). Power
+Duel's own default instead LOCKS the deck for the whole match once
+`allow_sideboarding` is off: `advanceGameMatch()` carries
+`custom_deck_name`/`custom_deck_card_ids`/`custom_deck_sideboard_card_ids`
+forward onto the new game unchanged, the same explicit carry-forward
+`custom`/a seated bot's own `custom_duel` seat already get, rather than
+resetting to `NULL` and forcing a fresh (and, for every other preset,
+totally unconstrained) resubmission. This is a deliberate design choice,
+not an oversight: Power Duel is meant to approximate the algorithmic
+`power` deck_type's own single, fixed-for-the-match deck, so "anything
+goes every game" would defeat that resemblance entirely. Checking
+`allow_sideboarding` is what unlocks a constrained, traditional sideboard
+swap instead of full lock-in.
+
+**Declaring the pool (game 1)** -- `submitCustomDuelDeck()` dispatches to
+`validateAndStorePowerDuelSideboardPool()` for a sideboarding match's own
+game 1: the main deck is validated exactly as any other `custom_duel`
+submission (`DuelDeckRules::validate()`, so still capped at 1 mythic/
+singleton/≥15 cards), and the sideboard (parsed the same optional
+`Sideboard` section `DecklistParser`/a saved decklist's own
+`sideboard_card_ids` already support -- see "Saved decklists" below) is
+capped at `POWER_DUEL_SIDEBOARD_MAX_CARDS` (5) cards, singleton within
+itself, and may never share a card with the main deck -- a card is
+either in your deck or benched, never both. Deliberately does NOT apply
+the mythic cap to the sideboard itself: a second Mythic sitting benched
+is fine, since swapping it in always means swapping the active one out,
+which the game-2/3 validation below re-enforces on the ACTIVE deck every
+time regardless.
+
+**Swapping within the pool (game 2/3)** -- `advanceGameMatch()` resets
+both columns to `NULL` for a sideboarding match (same as every other
+`custom_duel` match's own default), so a resubmission is still required.
+`validateAndStorePowerDuelSideboardSwap()` handles it: rather than
+declaring a whole new pool, the player submits only their new main deck
+(no `Sideboard` section needed -- any submitted one is ignored), which
+must be assembled entirely from their OWN game-1-declared pool (fetched
+fresh from that game's own `game_players` row, keyed by `user_id` --
+never trusted from the client) and still passes the ordinary
+`DuelDeckRules::validate()` check. The new sideboard is then just
+whatever's left over (`pool` minus the new main deck), computed
+automatically rather than asked for a second time -- there's no way to
+introduce a card from outside the fixed game-1 pool this way.
+
+**Saved decklists** -- `UserDecklistService::cardIdsForUse()` now also
+returns `sideboardCardIds` (previously always omitted, since neither of
+its two callers had any sideboard concept before this) so a saved Power
+Duel deck's own declared sideboard flows straight into game 1's
+declaration the same way its main deck already did.
+
+**Frontend** -- see "Best of three"'s own "Power Duel sideboarding"
+subsection in `web-static/README.md`.
+
 ### Open Team Play
 
 `format: 'team'` seats exactly 4 players as two teams of two, sitting next

@@ -866,6 +866,22 @@ final class GameService
         ?array $tieredRotisserieDraftTiers = null,
         bool $botGoesFirst = false,
         bool $bestOfThree = false,
+        // Power Duel sideboarding: only ever actually takes effect for a
+        // best-of-three 'duel' game using deck_type 'custom_duel' built
+        // under the "Power Duel" duel_deck_rules preset ($duelRulesPreset
+        // === 'power', resolved just below) -- silently ignored (not an
+        // error) for every other format/deck_type/preset combination, the
+        // same "harmless no-op outside its own narrow scope" convention
+        // $bestOfThree's own Traditional-at-2-players restriction already
+        // established. See submitCustomDuelDeck()/advanceGameMatch() for
+        // what it actually changes once a match has it: each player
+        // declares up to POWER_DUEL_SIDEBOARD_MAX_CARDS extra cards
+        // alongside their 15-card main deck on game 1, then may freely
+        // swap between the two (never introducing a card from outside
+        // that fixed pool) for game 2/3 -- the traditional TCG
+        // sideboarding rule, replacing this preset's own default "deck is
+        // locked, carried forward unchanged" behavior for the match.
+        bool $allowSideboarding = false,
     ): int {
         if (count($userIds) > self::MAX_PLAYERS) {
             throw new GameStateException('A game cannot have more than ' . self::MAX_PLAYERS . ' players');
@@ -1102,6 +1118,16 @@ final class GameService
         $createGameMatch = $bestOfThree && !in_array($deckType, self::DRAFT_DECK_TYPES, true)
             && ($format === 'duel' || self::isTeamFormat($format) || ($format === 'standard' && count($userIds) === 2));
 
+        // Power Duel sideboarding (see $allowSideboarding's own docblock
+        // above) only ever actually applies to a 'duel'/'custom_duel'
+        // game built under the 'power' preset -- everywhere else this is
+        // just a harmless no-op, same as $createGameMatch's own scoping
+        // just above. isset() guards $duelRulesPreset, which is only ever
+        // assigned inside the 'custom_duel' branch above.
+        $allowSideboardingForMatch = $allowSideboarding && $createGameMatch
+            && $format === 'duel' && $deckType === 'custom_duel'
+            && isset($duelRulesPreset) && $duelRulesPreset === 'power';
+
         $pdo = Connection::get();
         $pdo->beginTransaction();
 
@@ -1123,9 +1149,13 @@ final class GameService
             $gameMatchId = null;
             if ($createGameMatch) {
                 $insertGameMatch = $pdo->prepare(
-                    'INSERT INTO game_matches (format, created_by_user_id) VALUES (:format, :created_by)'
+                    'INSERT INTO game_matches (format, created_by_user_id, allow_sideboarding) VALUES (:format, :created_by, :allow_sideboarding)'
                 );
-                $insertGameMatch->execute(['format' => $format, 'created_by' => $createdByUserId]);
+                $insertGameMatch->execute([
+                    'format' => $format,
+                    'created_by' => $createdByUserId,
+                    'allow_sideboarding' => $allowSideboardingForMatch ? 1 : 0,
+                ]);
                 $gameMatchId = (int) $pdo->lastInsertId();
             }
 
@@ -1294,6 +1324,16 @@ final class GameService
      * single constant covers every case it applies to.
      */
     private const GAME_MATCH_GAMES_TO_WIN = 2;
+
+    /**
+     * Power Duel sideboarding's own cap on a declared sideboard's size --
+     * see createGame()'s own $allowSideboarding docblock and
+     * submitCustomDuelDeck(). Deliberately not tied to
+     * DuelDeckRules::POWER_RARITY_LIMITS/POWER_MIN_CARDS (the main deck's
+     * own shape) -- a sideboard is a separate bench of extra options, not
+     * a second deck subject to the same minimum/rarity rules.
+     */
+    private const POWER_DUEL_SIDEBOARD_MAX_CARDS = 5;
 
     /**
      * Every draft-based deck_type -- the same 5-item list already
@@ -1715,6 +1755,20 @@ final class GameService
      * or friendships of its own, so that call passes the human creator's
      * user id here instead, letting them pick from their own accessible
      * decklists for the bot the same way they already do for themselves.
+     *
+     * Power Duel sideboarding (migration 0228, issue #90 follow-up): when
+     * this game belongs to a game_match with allow_sideboarding set, game
+     * 1's own submission also declares a sideboard (up to
+     * POWER_DUEL_SIDEBOARD_MAX_CARDS extra cards, parsed the same
+     * optional-Sideboard-section way DecklistParser/a saved decklist's
+     * own sideboard_card_ids already work) alongside the main deck --
+     * see validateAndStorePowerDuelSideboardPool(). Game 2/3's own
+     * submission instead SWAPS within that already-declared pool -- see
+     * validateAndStorePowerDuelSideboardSwap() -- rather than declaring a
+     * fresh one, so only the new main deck needs submitting; the new
+     * sideboard is just whatever's left over. Every other custom_duel
+     * match (allow_sideboarding false, the default) is unaffected: main
+     * deck validated exactly as before, sideboard always stored null.
      */
     public function submitCustomDuelDeck(int $gameId, int $gamePlayerId, ?string $decklistText, ?int $savedDecklistId = null, ?int $accessCheckUserId = null): void
     {
@@ -1735,11 +1789,12 @@ final class GameService
         if ($ownerRow === false) {
             throw new GameStateException("Player {$gamePlayerId} is not seated in game {$gameId}");
         }
+        $ownerUserId = (int) $ownerRow['user_id'];
 
         $catalog = $this->loadCardCatalog();
 
         if ($savedDecklistId !== null) {
-            $parsed = $this->userDecklists->cardIdsForUse($accessCheckUserId ?? (int) $ownerRow['user_id'], $savedDecklistId);
+            $parsed = $this->userDecklists->cardIdsForUse($accessCheckUserId ?? $ownerUserId, $savedDecklistId);
         } else {
             if ($decklistText === null || trim($decklistText) === '') {
                 throw new GameStateException('A decklist is required');
@@ -1753,16 +1808,120 @@ final class GameService
             (array) json_decode((string) $game['custom_duel_duplicate_limits'], true),
             (array) json_decode((string) $game['custom_duel_even_color_distribution_rarities'], true),
         );
-        $rules->validate($parsed['cardIds'], $catalog['rowsById'], 'Your decklist');
+
+        $gameMatchId = $game['game_match_id'] !== null ? (int) $game['game_match_id'] : null;
+        $allowSideboarding = $gameMatchId !== null && (bool) $this->fetchGameMatch($gameMatchId)['allow_sideboarding'];
+
+        if (!$allowSideboarding) {
+            $rules->validate($parsed['cardIds'], $catalog['rowsById'], 'Your decklist');
+            $mainCardIds = $parsed['cardIds'];
+            $sideboardCardIds = [];
+        } elseif ((int) $game['match_game_number'] === 1) {
+            [$mainCardIds, $sideboardCardIds] = $this->validateAndStorePowerDuelSideboardPool($parsed, $rules, $catalog['rowsById']);
+        } else {
+            [$mainCardIds, $sideboardCardIds] = $this->validateAndStorePowerDuelSideboardSwap($gameMatchId, $ownerUserId, $parsed['cardIds'], $rules, $catalog['rowsById']);
+        }
 
         $update = Connection::get()->prepare(
-            'UPDATE game_players SET custom_deck_name = :name, custom_deck_card_ids = :card_ids WHERE id = :id'
+            'UPDATE game_players SET custom_deck_name = :name, custom_deck_card_ids = :card_ids, custom_deck_sideboard_card_ids = :sideboard_card_ids WHERE id = :id'
         );
         $update->execute([
             'name' => $parsed['name'],
-            'card_ids' => json_encode($parsed['cardIds']),
+            'card_ids' => json_encode($mainCardIds),
+            'sideboard_card_ids' => $sideboardCardIds !== [] ? json_encode($sideboardCardIds) : null,
             'id' => $gamePlayerId,
         ]);
+    }
+
+    /**
+     * Power Duel sideboarding's own game-1 half (see
+     * submitCustomDuelDeck()'s own docblock) -- validates the main deck
+     * exactly as every other custom_duel submission already does, plus
+     * the newly-declared sideboard: at most POWER_DUEL_SIDEBOARD_MAX_CARDS
+     * cards, and no card shared between the two zones (a card can only
+     * ever be in one place at a time, the same "singleton" idea
+     * DuelDeckRules' own $duplicateLimits already enforces within a
+     * single zone, just extended across both this match's own zones).
+     * Deliberately does NOT apply $rules' own rarity/mythic cap to the
+     * sideboard itself -- a second Mythic sitting benched is fine, as
+     * long as swapping it in always means swapping the active one out
+     * (validateAndStorePowerDuelSideboardSwap() re-validates the ACTIVE
+     * deck every time, which is what actually enforces "at most 1 in
+     * play").
+     *
+     * @param array{name: ?string, cardIds: int[], sideboardCardIds: int[]} $parsed
+     * @param array<int, array{name: string, rarity: string, color: string}> $catalogById
+     * @return array{0: int[], 1: int[]}
+     */
+    private function validateAndStorePowerDuelSideboardPool(array $parsed, DuelDeckRules $rules, array $catalogById): array
+    {
+        $mainCardIds = $parsed['cardIds'];
+        $sideboardCardIds = $parsed['sideboardCardIds'];
+
+        if (count($sideboardCardIds) > self::POWER_DUEL_SIDEBOARD_MAX_CARDS) {
+            throw new GameStateException(
+                'Your sideboard has ' . count($sideboardCardIds) . ' card(s), but at most '
+                . self::POWER_DUEL_SIDEBOARD_MAX_CARDS . ' are allowed.'
+            );
+        }
+        if (count($sideboardCardIds) !== count(array_unique($sideboardCardIds))) {
+            throw new GameStateException('Your sideboard cannot contain more than one copy of the same card.');
+        }
+        if (array_intersect($mainCardIds, $sideboardCardIds) !== []) {
+            throw new GameStateException('A card cannot be in both your deck and your sideboard.');
+        }
+
+        $rules->validate($mainCardIds, $catalogById, 'Your decklist');
+
+        return [$mainCardIds, $sideboardCardIds];
+    }
+
+    /**
+     * Power Duel sideboarding's own game-2/3 half (see
+     * submitCustomDuelDeck()'s own docblock) -- the new main deck must be
+     * assembled entirely from this player's own game-1 pool (their
+     * original main deck plus sideboard combined, fetched fresh here
+     * rather than trusting anything client-supplied), so a match can
+     * never smuggle in a card that was never declared on game 1. Any
+     * Sideboard section the resubmission itself might carry is ignored --
+     * the new sideboard is always just "whatever's left of the pool,"
+     * recomputed automatically rather than asked for a second time.
+     *
+     * @param int[] $newMainCardIds
+     * @param array<int, array{name: string, rarity: string, color: string}> $catalogById
+     * @return array{0: int[], 1: int[]}
+     */
+    private function validateAndStorePowerDuelSideboardSwap(int $gameMatchId, int $userId, array $newMainCardIds, DuelDeckRules $rules, array $catalogById): array
+    {
+        $poolStmt = Connection::get()->prepare(
+            'SELECT gp.custom_deck_card_ids, gp.custom_deck_sideboard_card_ids
+             FROM game_players gp JOIN games g ON g.id = gp.game_id
+             WHERE g.game_match_id = :match_id AND g.match_game_number = 1 AND gp.user_id = :user_id'
+        );
+        $poolStmt->execute(['match_id' => $gameMatchId, 'user_id' => $userId]);
+        $poolRow = $poolStmt->fetch();
+        if ($poolRow === false) {
+            throw new GameStateException('Could not find your original deck/sideboard for this match.');
+        }
+
+        $pool = array_merge(
+            array_map(intval(...), (array) json_decode((string) $poolRow['custom_deck_card_ids'], true)),
+            $poolRow['custom_deck_sideboard_card_ids'] !== null
+                ? array_map(intval(...), (array) json_decode((string) $poolRow['custom_deck_sideboard_card_ids'], true))
+                : [],
+        );
+
+        foreach ($newMainCardIds as $cardId) {
+            if (!in_array($cardId, $pool, true)) {
+                throw new GameStateException(
+                    'Your decklist has a card that isn\'t part of your original deck or sideboard -- sideboarding can only swap between the two, never add a new card.'
+                );
+            }
+        }
+
+        $rules->validate($newMainCardIds, $catalogById, 'Your decklist');
+
+        return [$newMainCardIds, array_values(array_diff($pool, $newMainCardIds))];
     }
 
     /**
@@ -8694,15 +8853,28 @@ final class GameService
      * Deck continuity between games needs no attention here for
      * structure/power/jceddy's 75/one of each (startGame() rebuilds them
      * from scratch every game, same as any standalone game of that
-     * deck_type) or custom_duel (this feature's whole "sideboarding"
-     * story: game_players.custom_deck_card_ids simply starts NULL on the
-     * new game row, same as it would for a brand new custom_duel game,
-     * so startGame()'s existing requireCustomDuelDecksSubmitted() gate
-     * naturally forces -- and freely allows -- a fresh decklist before
-     * the next game can start). 'custom' is the one exception: unlike
-     * every deck_type above, it's a single table-wide decklist supplied
-     * once at createGame() time with no per-game resubmission flow of its
-     * own, so it's carried forward explicitly below instead.
+     * deck_type) or most custom_duel matches (this feature's whole
+     * "sideboarding" story: game_players.custom_deck_card_ids simply
+     * starts NULL on the new game row, same as it would for a brand new
+     * custom_duel game, so startGame()'s existing
+     * requireCustomDuelDecksSubmitted() gate naturally forces -- and
+     * freely allows -- a fresh decklist before the next game can start).
+     * 'custom' is one exception: unlike every deck_type above, it's a
+     * single table-wide decklist supplied once at createGame() time with
+     * no per-game resubmission flow of its own, so it's carried forward
+     * explicitly below instead.
+     *
+     * A Power Duel match WITHOUT sideboarding (custom_duel_rules_preset
+     * 'power', game_matches.allow_sideboarding false -- migration 0228,
+     * issue #90 follow-up) is a second, narrower exception: rather than
+     * this preset's own otherwise-unrestricted "freely resubmit anything"
+     * default, its deck is locked for the whole match, so it's carried
+     * forward the exact same explicit way 'custom'/a bot's own custom_duel
+     * seat already are -- see $isLockedCustomDuelSeat below. A Power Duel
+     * match WITH sideboarding still resets to NULL every game like any
+     * other custom_duel match, since a genuine resubmission (constrained
+     * to swapping within the game-1-declared pool, see
+     * submitCustomDuelDeck()) is the whole point there.
      */
     private function advanceGameMatch(int $gameId, int $winnerGamePlayerId): void
     {
@@ -8732,16 +8904,24 @@ final class GameService
             return;
         }
 
-        // custom_deck_name/custom_deck_card_ids/is_bot are only actually
-        // used below for a custom_duel bot seat (see the INSERT loop's
-        // own $isBotCustomDuel branch) -- a practice bot can never submit
-        // its own decklist for the next game the way its human opponent
-        // does (see submitCustomDuelDeck()'s own docblock), so its exact
-        // previous decklist is carried forward unchanged rather than
-        // resubmitted. Harmlessly fetched for every other seat too,
-        // rather than a second, deck-type-conditional query.
+        // See this method's own docblock -- a Power Duel match's deck is
+        // locked for the whole match unless it opted into sideboarding.
+        $isPowerDuelMatch = $game['deck_type'] === 'custom_duel' && $game['custom_duel_rules_preset'] === 'power';
+        $isLockedPowerDuelMatch = $isPowerDuelMatch && !(bool) $this->fetchGameMatch($gameMatchId)['allow_sideboarding'];
+
+        // custom_deck_name/custom_deck_card_ids/custom_deck_sideboard_card_ids/
+        // is_bot are only actually used below for a seat this method
+        // itself carries forward (a custom_duel bot seat, or a locked
+        // Power Duel human seat -- see the INSERT loop's own
+        // $carryForwardCustomDeck branch) -- a practice bot can never
+        // submit its own decklist for the next game the way its human
+        // opponent does (see submitCustomDuelDeck()'s own docblock), so
+        // its exact previous decklist is carried forward unchanged rather
+        // than resubmitted, the same as a locked Power Duel seat's.
+        // Harmlessly fetched for every other seat too, rather than a
+        // second, deck-type-conditional query.
         $seatStmt = $pdo->prepare(
-            'SELECT gp.user_id, gp.seat_order, gp.team_id, gp.custom_deck_name, gp.custom_deck_card_ids, u.is_bot
+            'SELECT gp.user_id, gp.seat_order, gp.team_id, gp.custom_deck_name, gp.custom_deck_card_ids, gp.custom_deck_sideboard_card_ids, u.is_bot
              FROM game_players gp JOIN users u ON u.id = gp.user_id
              WHERE gp.game_id = :game_id ORDER BY gp.seat_order ASC'
         );
@@ -8783,21 +8963,23 @@ final class GameService
         $nextGameId = (int) $pdo->lastInsertId();
 
         $insertPlayer = $pdo->prepare(
-            'INSERT INTO game_players (game_id, user_id, seat_order, team_id, custom_deck_name, custom_deck_card_ids)
-             VALUES (:game_id, :user_id, :seat_order, :team_id, :custom_deck_name, :custom_deck_card_ids)'
+            'INSERT INTO game_players (game_id, user_id, seat_order, team_id, custom_deck_name, custom_deck_card_ids, custom_deck_sideboard_card_ids)
+             VALUES (:game_id, :user_id, :seat_order, :team_id, :custom_deck_name, :custom_deck_card_ids, :custom_deck_sideboard_card_ids)'
         );
         $humanCustomDuelSeatUserIds = [];
         foreach ($seats as $seat) {
             $isBotCustomDuel = $game['deck_type'] === 'custom_duel' && (bool) $seat['is_bot'];
+            $carryForwardCustomDeck = $isBotCustomDuel || $isLockedPowerDuelMatch;
             $insertPlayer->execute([
                 'game_id' => $nextGameId,
                 'user_id' => (int) $seat['user_id'],
                 'seat_order' => (int) $seat['seat_order'],
                 'team_id' => $seat['team_id'] !== null ? (int) $seat['team_id'] : null,
-                'custom_deck_name' => $isBotCustomDuel ? $seat['custom_deck_name'] : null,
-                'custom_deck_card_ids' => $isBotCustomDuel ? $seat['custom_deck_card_ids'] : null,
+                'custom_deck_name' => $carryForwardCustomDeck ? $seat['custom_deck_name'] : null,
+                'custom_deck_card_ids' => $carryForwardCustomDeck ? $seat['custom_deck_card_ids'] : null,
+                'custom_deck_sideboard_card_ids' => $carryForwardCustomDeck ? $seat['custom_deck_sideboard_card_ids'] : null,
             ]);
-            if ($game['deck_type'] === 'custom_duel' && !$seat['is_bot']) {
+            if ($game['deck_type'] === 'custom_duel' && !$seat['is_bot'] && !$isLockedPowerDuelMatch) {
                 $humanCustomDuelSeatUserIds[] = (int) $seat['user_id'];
             }
         }
@@ -11057,6 +11239,14 @@ final class GameService
             'games_to_win' => self::GAME_MATCH_GAMES_TO_WIN,
             'winner_username' => $winnerUsername,
             'players' => $players,
+            // Power Duel sideboarding (migration 0228) -- only ever true
+            // for a 'duel'/'custom_duel' match built under the 'power'
+            // preset with $allowSideboarding opted into at createGame()
+            // time; false for every other match. Lets the board's own
+            // decklist-submission waiting room (see submitCustomDuelDeck())
+            // know whether to show sideboarding-specific hints without
+            // needing to separately expose custom_duel_rules_preset here.
+            'allow_sideboarding' => (bool) $match['allow_sideboarding'],
         ];
     }
 
@@ -12511,6 +12701,44 @@ final class GameService
             ? CardCatalog::serialize(array_map(intval(...), json_decode((string) $game['custom_deck_card_ids'], true)))
             : null;
 
+        // Power Duel sideboarding (migration 0228, issue #90 follow-up):
+        // once game 2/3 resets custom_deck_card_ids/
+        // custom_deck_sideboard_card_ids to NULL (see advanceGameMatch()),
+        // the viewer has no way to see which cards they're actually
+        // allowed to resubmit -- their own game-1 pool (main deck +
+        // sideboard combined) -- without this. Viewer-only (never a
+        // teammate's/opponent's/spectator's), same CardCatalog::serialize()
+        // shape as $customDecklistCards above so
+        // web-static/js/game.js's own buildDecklistCardsText() can render
+        // it as a card grid and/or pre-fill the resubmission textarea.
+        // Null for game 1 itself (nothing declared yet to show) and for
+        // every non-sideboarding match.
+        $powerDuelSideboardPool = null;
+        if (
+            $viewerUserId !== null
+            && $game['deck_type'] === 'custom_duel'
+            && $game['game_match_id'] !== null
+            && (int) $game['match_game_number'] > 1
+            && (bool) $this->fetchGameMatch((int) $game['game_match_id'])['allow_sideboarding']
+        ) {
+            $poolStmt = $pdo->prepare(
+                'SELECT gp.custom_deck_card_ids, gp.custom_deck_sideboard_card_ids
+                 FROM game_players gp JOIN games g ON g.id = gp.game_id
+                 WHERE g.game_match_id = :match_id AND g.match_game_number = 1 AND gp.user_id = :user_id'
+            );
+            $poolStmt->execute(['match_id' => (int) $game['game_match_id'], 'user_id' => $viewerUserId]);
+            $poolRow = $poolStmt->fetch();
+            if ($poolRow !== false) {
+                $poolCardIds = array_merge(
+                    array_map(intval(...), (array) json_decode((string) $poolRow['custom_deck_card_ids'], true)),
+                    $poolRow['custom_deck_sideboard_card_ids'] !== null
+                        ? array_map(intval(...), (array) json_decode((string) $poolRow['custom_deck_sideboard_card_ids'], true))
+                        : [],
+                );
+                $powerDuelSideboardPool = CardCatalog::serialize($poolCardIds);
+            }
+        }
+
         $players = [];
         foreach ($playerRows as $row) {
             $botDecklistCards = null;
@@ -12710,6 +12938,10 @@ final class GameService
             // dispatch branch rather than just reusing gameMatchSummaryFor()
             // (the lobby's own 'game_match' summary) as-is.
             'game_match' => null,
+            // Power Duel sideboarding (migration 0228) -- see
+            // $powerDuelSideboardPool's own docblock just above for what
+            // this is and when it's non-null.
+            'power_duel_sideboard_pool' => $powerDuelSideboardPool,
         ];
 
         if ($viewerGamePlayerId !== null) {

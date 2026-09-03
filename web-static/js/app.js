@@ -129,7 +129,7 @@ function getCardStats() {
     return apiRequest('/stats/cards');
 }
 
-function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId, defaultSelectionsMode, botDecklistText, botSavedDecklistId, randomTeams, rotisserieDraftPoolSource, rotisserieDraftCustomPoolText, rotisserieDraftCutoffCount, tieredRotisserieDraftMode, tieredRotisserieDraftTiers, botGoesFirst, bestOfThree) {
+function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId, defaultSelectionsMode, botDecklistText, botSavedDecklistId, randomTeams, rotisserieDraftPoolSource, rotisserieDraftCustomPoolText, rotisserieDraftCutoffCount, tieredRotisserieDraftMode, tieredRotisserieDraftTiers, botGoesFirst, bestOfThree, allowSideboarding) {
     return apiRequest('/games', {
         method: 'POST',
         body: JSON.stringify({
@@ -197,6 +197,11 @@ function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText,
             // regardless of this flag. See "Best of three" in
             // web-static/README.md.
             best_of_three: bestOfThree,
+            // Only meaningful alongside best_of_three for format 'duel'
+            // with deck_type 'custom_duel' built under the "Power Duel"
+            // duel_deck_rules preset (issue #90 follow-up) -- see "Best of
+            // three" in web-static/README.md.
+            allow_sideboarding: allowSideboarding,
         }),
     });
 }

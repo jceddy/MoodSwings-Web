@@ -264,6 +264,7 @@ final class MatchmakingService
                     $params['tiered_rotisserie_draft_tiers'] ?? null,
                     false,
                     (bool) ($params['best_of_three'] ?? false),
+                    (bool) ($params['allow_sideboarding'] ?? false),
                 );
             } catch (GameStateException $e) {
                 // The creator's own choices turned out not to be valid

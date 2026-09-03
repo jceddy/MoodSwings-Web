@@ -294,7 +294,12 @@ final class UserDecklistIntegrationTest extends TestCase
         $this->decklists->view($friendId, $id);
     }
 
-    public function testCardIdsForUseOmitsSideboard(): void
+    // Power Duel sideboarding (migration 0228, issue #90 follow-up) --
+    // cardIdsForUse() now returns sideboardCardIds too, for
+    // submitCustomDuelDeck()'s own use (see its docblock). Every other
+    // existing consumer (createGame()'s 'custom' deck_type) simply
+    // ignores the extra key.
+    public function testCardIdsForUseAlsoReturnsSideboard(): void
     {
         $userId = $this->insertUser('alice');
         $id = $this->decklists->create($userId, 'My Deck', null, [3, 4], [5], 'private');
@@ -302,6 +307,16 @@ final class UserDecklistIntegrationTest extends TestCase
         $result = $this->decklists->cardIdsForUse($userId, $id);
 
         self::assertSame([3, 4], $result['cardIds']);
-        self::assertArrayNotHasKey('sideboardCardIds', $result);
+        self::assertSame([5], $result['sideboardCardIds']);
+    }
+
+    public function testCardIdsForUseReturnsEmptySideboardWhenNoneWasDeclared(): void
+    {
+        $userId = $this->insertUser('alice');
+        $id = $this->decklists->create($userId, 'My Deck', null, [3, 4], null, 'private');
+
+        $result = $this->decklists->cardIdsForUse($userId, $id);
+
+        self::assertSame([], $result['sideboardCardIds']);
     }
 }
