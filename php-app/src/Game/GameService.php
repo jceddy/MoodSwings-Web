@@ -1085,18 +1085,22 @@ final class GameService
             default => null,
         };
 
-        // Issue #90: Duel/Open Team Play/Closed Team Play's own best-of-
-        // three match wrapper (game_matches, migration 0223) -- the
+        // Issue #90: Duel/Open Team Play/Closed Team Play/Traditional's own
+        // best-of-three match wrapper (game_matches, migration 0223) -- the
         // non-draft counterpart to $draftPoolCardIds !== null's own
         // draft_matches row just below. Silently ignored (rather than
-        // thrown) for a draft-based deck_type or a format that doesn't
-        // support it -- $bestOfThree only ever arrives true from the New
-        // Game dialog's own checkbox, which is itself hidden for any
-        // combination that wouldn't reach here, so there's no real "user
-        // asked for X and got Y" case to guard against, just a harmless
-        // no-op if one ever did.
+        // thrown) for a draft-based deck_type or a format/player-count that
+        // doesn't support it -- $bestOfThree only ever arrives true from
+        // the New Game dialog's own checkbox, which is itself hidden for
+        // any combination that wouldn't reach here, so there's no real
+        // "user asked for X and got Y" case to guard against, just a
+        // harmless no-op if one ever did. 'standard' only qualifies at
+        // exactly 2 players (issue #90 follow-up, migration 0225) -- with
+        // 3-4, "first to 2 game wins" no longer names a single opponent,
+        // the same reason draftGamesToWin() itself falls back to a single
+        // game once more than 2 players share a draft match.
         $createGameMatch = $bestOfThree && !in_array($deckType, self::DRAFT_DECK_TYPES, true)
-            && ($format === 'duel' || self::isTeamFormat($format));
+            && ($format === 'duel' || self::isTeamFormat($format) || ($format === 'standard' && count($userIds) === 2));
 
         $pdo = Connection::get();
         $pdo->beginTransaction();
@@ -8668,8 +8672,8 @@ final class GameService
 
     /**
      * Issue #90's own best-of-three match progression for Duel/Open Team
-     * Play/Closed Team Play (games.game_match_id set, migration 0223) --
-     * a no-op for every other game, exactly like advanceDraftMatch(),
+     * Play/Closed Team Play/Traditional (games.game_match_id set,
+     * migration 0223) -- a no-op for every other game, exactly like advanceDraftMatch(),
      * whose overall shape this mirrors: credit the win, check for a
      * match-ending 2nd win, otherwise create game_match_number + 1 on the
      * same 2 seats and let the players get on with it.

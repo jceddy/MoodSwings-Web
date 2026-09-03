@@ -2033,11 +2033,42 @@
     // migration 0027), so this only ever applies to a non-draft deck_type
     // under one of the three non-draft formats.
     function isBestOfThreeAvailable(deckType, format) {
-        if (format !== 'duel' && format !== 'team' && format !== 'closed_team') {
+        const isDraftDeckType = ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck'].includes(deckType);
+        if (isDraftDeckType) {
             return false;
         }
+        if (format === 'duel' || format === 'team' || format === 'closed_team') {
+            return true;
+        }
+        // Traditional (issue #90 follow-up) only qualifies at exactly 2
+        // players -- with 3-4, "first to 2 game wins" no longer names a
+        // single opponent, the same reason a draft match itself falls
+        // back to a single game past 2 players (see createGame()'s own
+        // docblock in php-app/README.md's "Best of three" section).
+        if (format === 'standard') {
+            return currentNewGamePlayerCount() === 2;
+        }
 
-        return !['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck'].includes(deckType);
+        return false;
+    }
+
+    // How many total players (including the creator) the New Game
+    // dialog's current selections add up to -- Duel/the team formats
+    // already have a fixed count of their own, so this only matters for
+    // isBestOfThreeAvailable()'s own Traditional check above.
+    function currentNewGamePlayerCount() {
+        const format = effectiveNewGameFormat();
+        if (format === 'duel') {
+            return 2;
+        }
+        if (format === 'team' || format === 'closed_team') {
+            return 4;
+        }
+        if (document.getElementById('new-game-mode-open').checked) {
+            return Number(document.getElementById('new-game-open-player-count').value);
+        }
+
+        return 1 + opponentCheckboxes.querySelectorAll('input[type=checkbox]:checked').length;
     }
 
     // #new-game-format's own 'sealed_deck' option is a UI-only sentinel --
@@ -2764,6 +2795,10 @@
         // draft deck_types' own pool-source option labels (which depend
         // on it) need to stay in sync -- see updateDraftPoolSourceOptionLabels().
         updateDraftPoolSourceOptionLabels();
+        // Same reasoning (issue #90 follow-up): Traditional's own
+        // best-of-three checkbox depends on the current player count too
+        // (see currentNewGamePlayerCount()).
+        updateBestOfThreeFieldVisibility();
     }
 
     // Order matters for the two bot-related listeners here: a bot
@@ -2800,10 +2835,21 @@
 
         document.getElementById('new-game-submit-button').textContent = isOpenLobby ? 'Post to open lobby' : 'Create game';
         updateTeamFields();
+        // Issue #90 follow-up: switching modes changes which player-count
+        // source Traditional's own best-of-three check reads from (see
+        // currentNewGamePlayerCount()) even when neither the friends
+        // checkboxes nor the open-lobby player-count select themselves
+        // just changed.
+        updateBestOfThreeFieldVisibility();
     }
     document.getElementById('new-game-mode-friends').addEventListener('change', updateNewGameModeFields);
     document.getElementById('new-game-mode-open').addEventListener('change', updateNewGameModeFields);
     document.getElementById('new-game-format').addEventListener('change', updateNewGameModeFields);
+    // Issue #90 follow-up: the open-lobby player-count select is the
+    // player-count source currentNewGamePlayerCount() reads from in that
+    // mode, so a change to it can flip Traditional's own best-of-three
+    // checkbox's availability.
+    document.getElementById('new-game-open-player-count').addEventListener('change', updateBestOfThreeFieldVisibility);
 
     document.getElementById('new-game-format').addEventListener('change', updateOpponentSelectionLimit);
     document.getElementById('new-game-format').addEventListener('change', updateDeckTypeAvailability);
@@ -3426,6 +3472,10 @@
                 rotisserie_draft_cutoff_count: rotisserieDraftCutoffCount,
                 tiered_rotisserie_draft_mode: tieredRotisserieDraftMode,
                 tiered_rotisserie_draft_tiers: tieredRotisserieDraftTiers,
+                // Issue #90 follow-up: was missing here entirely, so
+                // checking "Best of three" while posting to the open
+                // lobby silently did nothing.
+                best_of_three: bestOfThree,
             });
 
             if (!ok) {

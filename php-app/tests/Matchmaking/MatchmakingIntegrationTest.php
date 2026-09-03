@@ -316,6 +316,26 @@ final class MatchmakingIntegrationTest extends TestCase
         self::assertCount(0, $this->matchmaking->listMyOpenGames($aliceId));
     }
 
+    // Issue #90 follow-up: 'best_of_three' was missing entirely from
+    // openGameCreateParamsFromRequestBody()/joinOpenGame()'s own
+    // createGame() call at first, so checking the New Game dialog's
+    // checkbox while posting to the open lobby silently did nothing.
+    public function testJoinCreatesADuelGameMatchWhenBestOfThreeWasRequested(): void
+    {
+        $aliceId = $this->insertUser('alice');
+        $bobId = $this->insertUser('bob');
+        $this->makeDiscoverable($aliceId);
+
+        $listingId = $this->postDuel($aliceId, ['best_of_three' => true]);
+
+        $result = $this->matchmaking->joinOpenGame($bobId, $listingId);
+        self::assertSame('started', $result['status']);
+
+        $game = $this->pdo->query("SELECT game_match_id, match_game_number FROM games WHERE id = {$result['game_id']}")->fetch();
+        self::assertNotNull($game['game_match_id']);
+        self::assertSame(1, (int) $game['match_game_number']);
+    }
+
     public function testCannotJoinOwnListing(): void
     {
         $aliceId = $this->insertUser('alice');
