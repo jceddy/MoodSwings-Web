@@ -1100,23 +1100,39 @@ Without it, a Power Duel best-of-three match's deck is locked for the
 whole match (see "Best of three" in `php-app/README.md`) -- the waiting
 room for game 2/3 never even appears, since `advanceGameMatch()` already
 carried the previous game's decklist forward and `startGame()`'s own
-gate is already satisfied. With it, `renderDuelDeckSubmission()` gains
-two small additions for game 2/3 specifically (`state.
-power_duel_sideboard_pool`, only ever non-null then): a hint,
-`#duel-deck-sideboard-hint` ("Sideboarding is on for this match -- your
-new deck can only use cards from your original deck and sideboard"),
-and its own `#duel-deck-load-sideboard-pool-button` ("Load your pool"),
-which fills the paste textarea with every card from that pool
-(`formatDecklistCardLines()`, the same per-card-line formatting
-`buildDecklistCardsText()` already uses, but as one flat list -- no
-`Sideboard` section here, since which of these end up in the new active
-deck vs. benched again is exactly what submitting decides, not something
-declared up front a second time). The player just trims it back down to
-their real deck (or types/pastes something else entirely, as long as
-every card came from that same pool) and submits normally --
-`submitCustomDuelDeck()` validates it's a subset of the original pool and
-recomputes the new sideboard as whatever's left over. Both elements hide
-again once `deck_submitted` is true, the same as the rest of that form.
+gate is already satisfied. With it, game 2/3's own `renderDuelDeckSubmission()`
+call (`state.power_duel_sideboard_pool`, only ever non-null then) shows
+`#duel-deck-sideboard-picker` INSTEAD of the plain paste/upload/saved-deck
+form (`#duel-deck-submit-form-container`, hidden for this case) -- a
+visual toggle picker (`renderDuelSideboardPicker()`, migration 0233)
+mirroring the draft formats' own `#draft-deck-building` sideboard screen
+rather than the earlier plain-text "Load your pool" button it replaced:
+every card from the player's own game-1 pool (main deck + sideboard
+combined, `state.power_duel_sideboard_pool`) renders as a toggleable
+thumbnail via the same `openCardDetail()` `selection` (Select/De-select
+popup) pattern `renderDraftDeckBuilding()` uses, dimmed with a dashed
+border (`buildCardThumb()`'s own `notPlayable` option) while excluded.
+`duelSideboardPickerSelection` (a plain `Set<card_id>` -- Power Duel's
+pool is always singleton, so no duplicate-card index tracking is needed
+the way `draftDeckSelection` requires) is seeded once per game
+(`duelSideboardPickerInitialized`, reset by `showBoard()`) from
+`state.power_duel_previous_deck_card_ids` -- the exact cards the player
+played in the immediately PRECEDING game (not always game 1's own
+original deck -- game 3's own "previous game" is game 2, itself possibly
+already a sideboard swap away from game 1), so the picker opens with
+last game's deck pre-selected rather than forcing a full retrim from
+scratch every time; falls back to selecting the whole pool only if that's
+ever unexpectedly absent. Submitting converts the current selection back
+into decklist text (`formatDecklistCardLines()`, the same per-card-line
+formatting `buildDecklistCardsText()` already uses) and posts it through
+the exact same `submitCustomDuelDeck()` endpoint the paste-based form
+already uses -- `submitCustomDuelDeck()`'s own pool-membership/format
+validation runs exactly the same way either way, so no new backend route
+was needed for this, only the extra `power_duel_previous_deck_card_ids`
+field (`GameService::getState()`, bare card ids alongside the already-
+serialized `power_duel_sideboard_pool`) for pre-selection. The picker
+hides again once `deck_submitted` is true, the same as the rest of that
+form.
 
 **Deck builder** -- the card-by-card Deck Builder (issue #93, see
 "Saved decklists" above) gained its own sideboard panel

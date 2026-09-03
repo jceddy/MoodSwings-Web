@@ -1065,6 +1065,66 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame([], $action['choices']);
     }
 
+    // -- Fear (confirmed by the maintainer) ----------------------------------
+
+    /**
+     * Fear (id 38, value 0) is always worth 0 points on its own, and the
+     * bot's hand holds no mood-counting or blue-caring synergy card to
+     * make its extra play worthwhile -- deprioritized behind Apathy (id
+     * 55, value 4, plain filler).
+     */
+    public function testChooseActionDeprioritizesFearWithNoSynergyCardInHand(): void
+    {
+        $state = $this->boardState(hands: [1 => [38, 55]]);
+
+        $action = $this->bot->chooseAction($state, [38, 55], 1);
+
+        self::assertSame(55, $action['card_id']);
+    }
+
+    /**
+     * With Euphoria (id 117, a MOOD_COUNTING_EFFECT_KEYS card) also in
+     * hand, Fear's extra play can put it into play the very same turn --
+     * Fear reverts to its ordinary EARLY_PRIORITY_EFFECT_KEYS boosted
+     * treatment (0 + 10 = 10), outranking Apathy's plain 4.
+     */
+    public function testChooseActionPrioritizesFearWithAMoodCountingSynergyCardInHand(): void
+    {
+        $state = $this->boardState(hands: [1 => [38, 117, 55]]);
+
+        $action = $this->bot->chooseAction($state, [38, 55], 1);
+
+        self::assertSame(38, $action['card_id']);
+    }
+
+    /**
+     * Same policy, Love (id 127, a BLUE_CARING_EFFECT_KEYS card whose own
+     * value depends on a blue mood being in play among others) -- Fear is
+     * itself blue, so playing it directly feeds Love's own condition.
+     */
+    public function testChooseActionPrioritizesFearWithABlueCaringSynergyCardInHand(): void
+    {
+        $state = $this->boardState(hands: [1 => [38, 127, 55]]);
+
+        $action = $this->bot->chooseAction($state, [38, 55], 1);
+
+        self::assertSame(38, $action['card_id']);
+    }
+
+    /**
+     * With nothing else playable, Fear is still played -- deprioritized
+     * WHEN, never skipped outright.
+     */
+    public function testChooseActionStillPlaysFearWhenNothingElseIsPlayable(): void
+    {
+        $state = $this->boardState(hands: [1 => [38]]);
+
+        $action = $this->bot->chooseAction($state, [38], 1);
+
+        self::assertSame(38, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
     // -- Denial (confirmed by the maintainer) -------------------------------
 
     /**
@@ -1211,6 +1271,73 @@ final class BotPlayerServiceTest extends TestCase
 
         self::assertSame(34, $action['card_id']);
         self::assertSame(['target_mood_ids' => [3, 20]], $action['choices']);
+    }
+
+    /**
+     * With no target to bounce (nothing in play at all) and no scenario
+     * where Denial's own plain value (1) would win the round (both
+     * players tied at 0 already), Denial is deprioritized behind Apathy
+     * (id 55, value 4, plain filler) -- "avoid playing it unless there's
+     * a good target, or the point alone wins the round" per the
+     * maintainer.
+     */
+    public function testChooseActionDeprioritizesDenialWithNoGoodTargetAndNoRoundWinningValue(): void
+    {
+        $state = $this->boardState(hands: [1 => [34, 55]]);
+
+        $action = $this->bot->chooseAction($state, [34, 55], 1);
+
+        self::assertSame(55, $action['card_id']);
+    }
+
+    /**
+     * Player 2's own Apathy (id 55, value 4) and Complacency (id 5, value
+     * 4) pair is a "significant swing" (combined 8, clears
+     * DENIAL_SIGNIFICANT_SWING_THRESHOLD) but NOT a round-winning one --
+     * player 3's own Chaos (id 85, value 6) stays completely unaffected
+     * and still exceeds the bot's post-play total (1) either way, the
+     * same non-winning setup as
+     * testChooseActionDoesNotTargetALosingOpponentPairWhenPlayingDenial()
+     * above, just with a bigger (8, not 2) pair. That's still a genuinely
+     * meaningful cost to player 2 even without flipping the round's own
+     * outcome, so Denial is NOT deprioritized -- it beats Creativity (id
+     * 32, value 0, plain filler) -- and denialTargetMoodIds() itself
+     * chases that same pair (denialSignificantSwingTargetMoodIds(), its
+     * own priority 2, since priority 1's own winning check still fails).
+     */
+    public function testChooseActionTargetsASignificantNonWinningSwingWhenPlayingDenial(): void
+    {
+        $state = $this->boardState(hands: [1 => [34, 32], 2 => [55, 5], 3 => [85]]);
+        $state->moveHandToInPlay(2, 55);
+        $state->moveHandToInPlay(2, 5);
+        $state->moveHandToInPlay(3, 85);
+
+        $action = $this->bot->chooseAction($state, [34, 32], 1);
+
+        self::assertSame(34, $action['card_id']);
+        self::assertSame(['target_mood_ids' => [55, 5]], $action['choices']);
+    }
+
+    /**
+     * Player 2's own Charity (id 3, value 1) is the round's current best
+     * rival score, one point ahead of the bot's own total (0) -- with
+     * only a single opponent mood in play, no pair (winning, significant
+     * swing, or otherwise) is even possible, so Denial has no good target
+     * to bounce. But playing it for its own plain value alone (1, no
+     * target at all) brings the bot's own total up to meet player 2's --
+     * "the point from it will win the round" exception, worth playing
+     * even with no good target to bounce. Beats Creativity (id 32, value
+     * 0, plain filler).
+     */
+    public function testChooseActionPlaysDenialWithNoGoodTargetWhenItsOwnPlainValueWinsTheRound(): void
+    {
+        $state = $this->boardState(hands: [1 => [34, 32], 2 => [3]]);
+        $state->moveHandToInPlay(2, 3);
+
+        $action = $this->bot->chooseAction($state, [34, 32], 1);
+
+        self::assertSame(34, $action['card_id']);
+        self::assertSame([], $action['choices']);
     }
 
     // -- Envy (confirmed by the maintainer) ----------------------------------

@@ -16,7 +16,7 @@ use MoodSwings\Rules\RoundScorer;
  * Team Play (issue #360), its own turn-order/draw-recipient team-decision
  * proposal and Closed Team Play's blind pregame card pass. Deliberately
  * "legal, not strategic" -- see BotChoiceResolver's own docblock for the
- * field-filling policy this builds on -- with twenty deliberate
+ * field-filling policy this builds on -- with twenty-two deliberate
  * exceptions: shouldAttemptValueBoostDiscard() below, a scoring-aware,
  * partly probabilistic policy for Dignity/Embarrassment/Cheer/Delight's
  * own "you may discard a card to boost this mood's value" choice; the
@@ -183,7 +183,20 @@ use MoodSwings\Rules\RoundScorer;
  * including why -- unlike Hate/Contempt's own OPTIONAL "you may" target
  * field -- convictionTargetMoodId() must still supply SOME legal target
  * even with no qualifying opponent mood, since ConvictionEffect's own
- * field is required.
+ * field is required; and fearHasAGoodReasonToPlayNow()/sortPriorityValue()
+ * once more (confirmed by the maintainer), which deprioritizes Fear (the
+ * same PHP_INT_MIN treatment) unless the bot's own hand holds a card
+ * whose value scales with mood count (MOOD_COUNTING_EFFECT_KEYS) or
+ * specifically with blue moods in play (BLUE_CARING_EFFECT_KEYS) -- Fear
+ * itself is always worth 0 points, so leading with it only pays off when
+ * something else already in hand turns that extra play/extra mood into
+ * real value; and denialHasAGoodReasonToPlayNow()/sortPriorityValue()
+ * once more (confirmed by the maintainer), which deprioritizes Denial
+ * unless it has a round-winning target pair, a target pair costing a
+ * non-teammate opponent a significant combined swing
+ * (denialSignificantSwingTargetMoodIds(), new), a replay-target pair, or
+ * playing it for its own plain printed value alone would win the round
+ * -- see that method's own docblock for the full policy.
  * GameService is the only caller
  * (see its own "Practice bots" section in php-app/README.md for how this
  * fits into the request lifecycle) -- legality itself
@@ -255,6 +268,46 @@ final class BotPlayerService
      * @var string[]
      */
     private const DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS = ['sadness', 'wonder'];
+
+    /**
+     * Every effect key whose own printed value scales with a mood COUNT
+     * rather than anything about the discard pile -- Euphoria (+1 per
+     * mood in play, any owner), Serenity/Tranquility (a fixed alt value
+     * once its own owner's mood count is even/odd), Vanity and
+     * Superiority (both compare/scale off an owner's own mood count).
+     * Used only by fearHasAGoodReasonToPlayNow() below (confirmed by the
+     * maintainer) -- Fear's own printed value is always 0 (no alt value
+     * either), so putting one more mood into play only pays for itself
+     * when something else in hand actually cares how many moods are out
+     * there.
+     *
+     * @var string[]
+     */
+    private const MOOD_COUNTING_EFFECT_KEYS = ['euphoria', 'serenity', 'tranquility', 'vanity', 'superiority'];
+
+    /**
+     * Every effect key whose own printed value depends specifically on
+     * how many BLUE moods are in play -- the PairedColorThresholdEffect
+     * registrations that pair blue with another color (Loyalty: green/
+     * blue, Frustration: white/blue, Disregard: blue/black, Pity: blue/
+     * red -- see DefaultEffectRegistry) plus Love (needs one mood of
+     * every color, blue included). Fear is itself blue, so playing it
+     * directly feeds whichever of these the bot happens to be holding.
+     * Used only by fearHasAGoodReasonToPlayNow() below (confirmed by the
+     * maintainer).
+     *
+     * @var string[]
+     */
+    private const BLUE_CARING_EFFECT_KEYS = ['loyalty', 'frustration', 'disregard', 'pity', 'love'];
+
+    /**
+     * @see denialHasAGoodReasonToPlayNow()'s own docblock. Chosen as a
+     * genuinely meaningful combined removal -- roughly a full mid-value
+     * card's worth -- rather than the marginal single-point nibbles that
+     * would make the bot fish for opponent setbacks with no real payoff,
+     * confirmed by the maintainer.
+     */
+    private const DENIAL_SIGNIFICANT_SWING_THRESHOLD = 4;
 
     public function __construct(
         private readonly BotChoiceResolver $resolver,
@@ -743,6 +796,37 @@ final class BotPlayerService
      * card in it, Nostalgia reverts to its ordinary
      * EARLY_PRIORITY_EFFECT_KEYS boosted treatment above (it's already
      * listed there).
+     *
+     * Fear (confirmed by the maintainer) gets the same PHP_INT_MIN
+     * treatment via fearHasAGoodReasonToPlayNow() below whenever the
+     * bot's own hand holds no card whose value would actually benefit
+     * from one more mood sitting in play -- FearEffect's own printed
+     * value is always 0 (no alt value either), so on its own it's
+     * purely a worthless opening/filler play, never worth leading with
+     * the way EARLY_PRIORITY_EFFECT_KEYS' boost would otherwise treat
+     * its extra-play grant. The moment the bot holds a MOOD_COUNTING_
+     * EFFECT_KEYS or BLUE_CARING_EFFECT_KEYS card, though, Fear reverts
+     * to its ordinary boosted treatment -- the extra play it grants lets
+     * that synergy card be played the very same turn.
+     *
+     * Denial (confirmed by the maintainer) gets the same PHP_INT_MIN
+     * treatment via denialHasAGoodReasonToPlayNow() below unless it has
+     * a genuinely good reason to be played right now: a target pair that
+     * wins the round outright (denialWinningTargetMoodIds(), the same
+     * check its own targeting policy above already tries first), a
+     * target pair costing a non-teammate opponent a significant combined
+     * swing even without winning outright (denialSignificantSwingTargetMoodIds(),
+     * new below), a target pair letting the bot replay one of its own
+     * cheap "after playing this mood" cards (denialReplayTargetMoodIds(),
+     * its own targeting policy's second priority), or -- the "point wins
+     * the round" exception -- playing Denial for its own plain printed
+     * value (1, no target at all) would be the deciding difference
+     * between the bot's own group NOT currently having the highest score
+     * this round and having it (wouldBecomeHighestScore(), reused with
+     * an $unboostedValue of 0, the same pattern Cynicism/Contempt/
+     * Conviction already use). Denial's own printed value (1) is
+     * otherwise too marginal to lead with blind, unlike most cards'
+     * plain-baseValue() default.
      */
     private function sortPriorityValue(BoardState $state, int $cardId, int $botGamePlayerId, array $playableCardIds): int
     {
@@ -778,6 +862,12 @@ final class BotPlayerService
             return PHP_INT_MIN;
         }
         if ($effectKey === 'nostalgia' && $state->discardPile() === []) {
+            return PHP_INT_MIN;
+        }
+        if ($effectKey === 'fear' && !$this->fearHasAGoodReasonToPlayNow($state, $botGamePlayerId)) {
+            return PHP_INT_MIN;
+        }
+        if ($effectKey === 'denial' && !$this->denialHasAGoodReasonToPlayNow($state, $cardId, $botGamePlayerId)) {
             return PHP_INT_MIN;
         }
         if ($this->envyDiscouragesPlayingThisCard($state, $cardId, $effectKey, $botGamePlayerId, $playableCardIds)) {
@@ -1612,6 +1702,31 @@ final class BotPlayerService
     private const CYNICISM_LOW_VALUE_DISCARD_THRESHOLD = 2;
 
     /**
+     * Fear's own "is this actually worth playing right now" policy
+     * (confirmed by the maintainer) -- FearEffect's own printed value is
+     * always 0 (no alt value either), so on its own it's purely a
+     * worthless opening/filler play with nothing to show for it. Worth
+     * playing NOW only when the bot's own hand holds a card that would
+     * actually benefit from the mood Fear puts into play, which Fear's
+     * own extra-play grant then lets be played the very same turn -- one
+     * whose value scales with mood count (MOOD_COUNTING_EFFECT_KEYS) or
+     * specifically with blue moods in play (BLUE_CARING_EFFECT_KEYS --
+     * Fear itself is blue). Otherwise PHP_INT_MIN via sortPriorityValue().
+     */
+    private function fearHasAGoodReasonToPlayNow(BoardState $state, int $botGamePlayerId): bool
+    {
+        foreach ($state->hand($botGamePlayerId) as $handCardId) {
+            $effectKey = $state->catalogRow($state->effectiveCardId($handCardId))['effectKey'];
+            if (in_array($effectKey, self::MOOD_COUNTING_EFFECT_KEYS, true)
+                || in_array($effectKey, self::BLUE_CARING_EFFECT_KEYS, true)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * Cynicism's own "should this be played at all right now" policy
      * (confirmed by the maintainer) -- unlike Rationalization, there's no
      * unconditionally-safe mode to fall back on here (boosting genuinely
@@ -2278,20 +2393,26 @@ final class BotPlayerService
      *    marginal opponent setbacks with no real payoff -- the same
      *    "only when it actually wins" discipline sneakinessTargetPlayerId()
      *    already applies for the identical reason.
-     * 2. Failing that, denialReplayTargetMoodIds() -- one of the bot's
-     *    own moods cheap enough (DENIAL_REPLAY_MAX_VALUE) to give up for
-     *    a replay of its own "after playing this mood" ability, paired
-     *    with whatever else qualifies.
+     * 2. Failing that, denialSignificantSwingTargetMoodIds() (confirmed
+     *    by the maintainer, new) -- a pair of non-teammate opponents' own
+     *    in-play moods whose combined value clears
+     *    DENIAL_SIGNIFICANT_SWING_THRESHOLD even without winning the
+     *    round outright. Genuinely hurting an opponent is worth doing on
+     *    its own, even short of a decisive win -- unlike priority 1's own
+     *    all-or-nothing bar, this only asks that the cost actually be
+     *    meaningful, not marginal.
+     * 3. Failing that too, denialReplayTargetMoodIds() -- one of the
+     *    bot's own moods cheap enough (DENIAL_REPLAY_MAX_VALUE) to give
+     *    up for a replay of its own "after playing this mood" ability,
+     *    paired with whatever else qualifies.
      *
      * Returns [] (Denial still legally playable as a plain 1-point blue
      * mood, per DenialEffect's own `if ($targets === []) { return; }`)
-     * when NEITHER priority finds a qualifying pair -- unlike Pacifism/
-     * Harmony/Nostalgia above, this doesn't deprioritize Denial itself
-     * via sortPriorityValue() when that happens; a same-color-or-value
-     * pair genuinely doesn't always exist among whatever's in play, and
-     * Denial's own printed value is ordinary enough (1) that leading
-     * with it purely by baseValue() the way most cards do is still a
-     * perfectly reasonable default in that case.
+     * when NONE of the three priorities finds a qualifying pair --
+     * denialHasAGoodReasonToPlayNow() below (confirmed by the maintainer)
+     * deprioritizes Denial itself via sortPriorityValue() in that case,
+     * UNLESS playing it for its own plain value alone would win the
+     * round; see that method's own docblock for the full policy.
      */
     private function denialTargetMoodIds(BoardState $state, int $cardId, int $botGamePlayerId): array
     {
@@ -2300,7 +2421,80 @@ final class BotPlayerService
             return $winningTargetMoodIds;
         }
 
+        $significantSwingTargetMoodIds = $this->denialSignificantSwingTargetMoodIds($state, $botGamePlayerId);
+        if ($significantSwingTargetMoodIds !== null) {
+            return $significantSwingTargetMoodIds;
+        }
+
         return $this->denialReplayTargetMoodIds($state, $botGamePlayerId) ?? [];
+    }
+
+    /**
+     * Denial's own "is this actually worth playing right now" policy
+     * (confirmed by the maintainer) -- unlike most cards, Denial's own
+     * printed value (1) is too marginal to lead with blind, so this is
+     * worth playing NOW only if either denialTargetMoodIds() itself
+     * finds a real target to bounce (any of its own three priorities --
+     * a round-winning pair, a significant swing against a non-teammate
+     * opponent, or a replay opportunity for one of the bot's own cheap
+     * cards), or -- the exception, worth playing even with no good
+     * target at all -- playing $cardId for its own plain printed value
+     * would be the deciding difference between the bot's own group NOT
+     * currently having the highest score this round and having it
+     * (wouldBecomeHighestScore(), reused here with an $unboostedValue of
+     * 0, the same pattern Cynicism/Contempt/Conviction already use).
+     * Otherwise PHP_INT_MIN via sortPriorityValue() -- deprioritized
+     * behind everything else, the same "avoid it until it actually pays
+     * off" treatment those three cards already get.
+     */
+    private function denialHasAGoodReasonToPlayNow(BoardState $state, int $cardId, int $botGamePlayerId): bool
+    {
+        if ($this->denialTargetMoodIds($state, $cardId, $botGamePlayerId) !== []) {
+            return true;
+        }
+
+        return $this->wouldBecomeHighestScore($state, $botGamePlayerId, 0, $this->baseValue($state, $cardId));
+    }
+
+    /**
+     * @see denialHasAGoodReasonToPlayNow()'s own docblock. A same-color-
+     * or-value pair among non-teammate opponents' own in-play moods whose
+     * combined value is at least DENIAL_SIGNIFICANT_SWING_THRESHOLD --
+     * unlike denialWinningTargetMoodIds() below (which only qualifies a
+     * pair that wins the round OUTRIGHT), this is satisfied by any pair
+     * costing an opponent a genuinely meaningful amount, even without
+     * flipping the round's own outcome. Prefers the highest-combined-
+     * value qualifying pair. skipScoringOwnerId() non-null short-circuits
+     * straight to null, the same "nothing to win this round regardless of
+     * who's targeted" guard denialWinningTargetMoodIds() below already
+     * applies. Returns null when no pair clears the bar.
+     *
+     * @return ?int[]
+     */
+    private function denialSignificantSwingTargetMoodIds(BoardState $state, int $botGamePlayerId): ?array
+    {
+        if ($state->skipScoringOwnerId() !== null) {
+            return null;
+        }
+
+        $opponentMoodIds = [];
+        foreach ($state->moodsInPlay() as $mood) {
+            if ($mood->ownerId !== $botGamePlayerId && !$state->isTeammate($botGamePlayerId, $mood->ownerId)) {
+                $opponentMoodIds[] = $mood->cardId;
+            }
+        }
+
+        $bestPair = null;
+        $bestValue = self::DENIAL_SIGNIFICANT_SWING_THRESHOLD - 1;
+        foreach ($this->sameColorOrValuePairs($state, $opponentMoodIds) as $pair) {
+            $combined = $state->valueOf($pair[0]) + $state->valueOf($pair[1]);
+            if ($combined > $bestValue) {
+                $bestValue = $combined;
+                $bestPair = $pair;
+            }
+        }
+
+        return $bestPair;
     }
 
     /**
