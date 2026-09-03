@@ -916,6 +916,25 @@ same "don't wait for Settings to be opened" reasoning as
 the Settings dialog, so switching the preference takes effect live
 without a reload.
 
+### Bot is thinking indicator (issue #419)
+
+The "Tactical Bot" tier (`php-app/README.md`'s own "Tactical Bot" section)
+searches for its play rather than picking one instantly, in a background
+job that can take up to a couple of minutes -- `state.bot_thinking`
+(`{game_player_id, username, time_budget_seconds}`, or `null`), already
+present on every `refreshBoard()` poll's response, is all this needs.
+`renderBoard()` checks it right alongside the existing "your turn"/
+"waiting on another player"/"&lt;name&gt;'s turn" logic that fills in
+`#board-round-status`'s own turn suffix, and overrides all three with
+"— &lt;username&gt; is thinking…" whenever it's set, since that's more
+specific and more useful to say about that same turn regardless of
+viewer. Needs no dedicated polling of its own -- the existing 4-second
+`refreshBoard()` cadence already picks up the job resolving and clears
+the text on its own next poll -- and applies identically for a spectator
+(`getSpectatorGameState()` exposes the same field) as for either seated
+player, so nobody watching a Tactical Bot's own game is left staring at
+"waiting on another player" with no idea why it's taking a while.
+
 ### Custom card/effect formats preference (issue #405 follow-up)
 
 `#settings-allow-custom-content-checkbox`, in the Settings dialog's
@@ -1663,6 +1682,16 @@ deck's `cards`.
     friend), so a human can play WITH a bot teammate, not just against
     one. See "Practice bots" in `php-app/README.md` for the full
     feature.
+
+    The bot picker's own checkbox list is every `is_bot = 1` user
+    (`GET /games/bots`) with no distinction drawn between the plain
+    heuristic roster and the opt-in "Tactical Bot" (`BotSage`,
+    `users.uses_tactical_ai` -- see "Tactical Bot" in `php-app/README.md`)
+    -- picking it needs no dialog changes of its own, since it's seated
+    exactly like any other bot. Its own turn can take noticeably longer
+    than the instant heuristic bots (up to a couple of minutes, run in a
+    background job rather than blocking the request) -- see "Bot is
+    thinking indicator" below for the one place that shows up in this UI.
 
     Checking a bot while `deckType` is `custom_duel` (issue #140's Duel
     extension -- see "Practice bots in Duel with a custom decklist" in

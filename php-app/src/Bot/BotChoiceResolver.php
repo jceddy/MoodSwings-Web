@@ -160,6 +160,31 @@ final class BotChoiceResolver
         return in_array($fieldKey, self::ALWAYS_FILLED_OPTIONAL_FIELDS[$effectKey] ?? [], true);
     }
 
+    /**
+     * The full, unranked legal candidate list for a 'mood' field -- the
+     * same set resolveMoodField() itself picks from, exposed for
+     * MoodSwings\Bot\LegalChoiceEnumerator's own search-action generation
+     * (see its own docblock for why a search engine needs every legal
+     * candidate, not just this class's own single non-strategic pick).
+     *
+     * @return int[]
+     */
+    public function moodFieldCandidates(BoardState $state, array $field, int $actingPlayerId, int $ownCardId): array
+    {
+        return $this->moodCandidates($state, $field, $actingPlayerId, $ownCardId);
+    }
+
+    /**
+     * The full, unranked legal candidate list for a 'player' field -- see
+     * moodFieldCandidates()'s own docblock for why this is exposed.
+     *
+     * @return int[]
+     */
+    public function playerFieldCandidates(BoardState $state, array $field, int $actingPlayerId, bool $excludeSelf = false): array
+    {
+        return $this->playerCandidates($state, $field, $actingPlayerId, $excludeSelf);
+    }
+
     private function resolveMode(array $field, string $effectKey): ?string
     {
         $options = $field['options'] ?? [];

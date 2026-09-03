@@ -6,11 +6,13 @@ namespace MoodSwings\Game;
 
 use MoodSwings\Bot\BotChoiceResolver;
 use MoodSwings\Bot\BotPlayerService;
+use MoodSwings\Bot\SearchBotPlayerService;
 use MoodSwings\Database\Connection;
 use MoodSwings\Deck\UserDecklistService;
 use MoodSwings\Game\Exceptions\GameStateException;
 use MoodSwings\Notifications\NotificationService;
 use MoodSwings\Presence\PresenceService;
+use MoodSwings\Repository\BotSearchJobRepository;
 use MoodSwings\Repository\GameChatRepository;
 use MoodSwings\Repository\GameNoteRepository;
 use MoodSwings\Repository\SessionRepository;
@@ -693,6 +695,9 @@ final class GameService
     /** @var array<int, string> chaos_effects.id => rarity, memoized per instance by chaosEffectRarity() -- global catalog data, not scoped per game */
     private array $chaosEffectRarityCache = [];
 
+    /** Issue #419's own Tactical Bot tier -- see advanceTacticalBotSearch()'s own docblock. Set in the constructor body (not a promoted property default), since its own default construction needs $this->plays/$this->scorer/$this->bots, which a promoted property's default value expression can't reference (those are sibling parameters, not yet $this at that point). */
+    private readonly SearchBotPlayerService $tacticalBots;
+
     public function __construct(
         private readonly BoardStateRepository $boardStates,
         private readonly MoodPlayService $plays,
@@ -707,7 +712,31 @@ final class GameService
         private readonly GameChatRepository $chat = new GameChatRepository(),
         private readonly BotPlayerService $bots = new BotPlayerService(new BotChoiceResolver()),
         private readonly ChaosEffectRegistry $chaosRegistry = new ChaosEffectRegistry(),
+        ?SearchBotPlayerService $tacticalBots = null,
+        private readonly BotSearchJobRepository $botSearchJobs = new BotSearchJobRepository(),
+        /** Overridable purely so tests can keep a Tactical Bot's own search fast rather than waiting out the real production budget every time. */
+        private readonly int $botSearchTimeBudgetSeconds = self::BOT_SEARCH_TIME_BUDGET_SECONDS,
+        /**
+         * Overridable purely so tests can exercise launchTacticalBotSearchJob()'s
+         * own job-row bookkeeping without ALSO spawning a real detached
+         * `php bin/run_bot_search.php` OS process every time -- that real
+         * subprocess inherits the test's own env (including its test-DB
+         * connection details) and races the foreground test's own
+         * assertions/backdating against the SAME bot_search_jobs row,
+         * which is exactly the kind of nondeterminism that produced
+         * intermittent "It is not player N's turn" / wrong-status
+         * failures in BotSearchIntegrationTest before this flag existed.
+         * Tests instead drive runTacticalBotSearchJob() explicitly
+         * whenever they want the job to actually resolve.
+         */
+        private readonly bool $spawnBotSearchProcesses = true,
     ) {
+        $this->tacticalBots = $tacticalBots ?? new SearchBotPlayerService(
+            $this->plays,
+            $this->scorer,
+            $this->bots,
+            SearchBotPlayerService::defaultEnumeratorFor($this->bots),
+        );
     }
 
     /**
@@ -4755,6 +4784,27 @@ final class GameService
     private const MAX_AUTOMATED_ACTIONS_PER_REQUEST = 200;
 
     /**
+     * Issue #419's own Tactical Bot tier -- how long a single background
+     * search (SearchBotPlayerService::chooseAction()) is allowed to run
+     * before advanceTacticalBotSearch() gives up waiting on it and falls
+     * back to the ordinary fast heuristic bot instead, treating the job
+     * as crashed. Chosen (per the maintainer) to comfortably clear a
+     * PHP-FPM/CLI max_execution_time of 300s while still leaving real
+     * headroom below it; tune from here based on how it actually performs
+     * once live.
+     */
+    private const BOT_SEARCH_TIME_BUDGET_SECONDS = 150;
+
+    /**
+     * Extra time beyond BOT_SEARCH_TIME_BUDGET_SECONDS a job is allowed
+     * before advanceTacticalBotSearch() gives up on it as stale/crashed --
+     * covers the background process's own bootstrap/DB-round-trip
+     * overhead on top of the search itself, so a merely-slow-to-start job
+     * isn't mistaken for a dead one.
+     */
+    private const BOT_SEARCH_STALE_GRACE_SECONDS = 30;
+
+    /**
      * Drives every practice bot's (issue #140) own turn/decision-answer,
      * AND every opted-in real player's own empty-hand auto-pass (see
      * "Auto-pass on empty hand" below), in a row -- immediately after a
@@ -4815,6 +4865,7 @@ final class GameService
     public function advanceAutomatedTurns(int $gameId): ?array
     {
         $botGamePlayerIds = $this->botGamePlayerIds($gameId);
+        $tacticalBotGamePlayerIds = $this->tacticalBotGamePlayerIds($gameId);
         $autoPassGamePlayerIds = $this->autoPassEmptyHandGamePlayerIds($gameId);
         $autoApplyScoringBonusGamePlayerIds = $this->autoApplyScoringBonusGamePlayerIds($gameId);
         if ($botGamePlayerIds === [] && $autoPassGamePlayerIds === [] && $autoApplyScoringBonusGamePlayerIds === []) {
@@ -4822,6 +4873,8 @@ final class GameService
         }
 
         $lastResult = null;
+        /** @var array<int, true> $tacticalFallbackGamePlayerIds see the tactical-bot branch below for what this tracks */
+        $tacticalFallbackGamePlayerIds = [];
         for ($i = 0; $i < self::MAX_AUTOMATED_ACTIONS_PER_REQUEST; $i++) {
             // A still-drafting/deck-building game (issue #359) is checked
             // even before the team decision below -- exactly the same
@@ -4973,6 +5026,40 @@ final class GameService
             // "waiting on a real player" case already in this loop.
             if ($this->chaosDraftRoundOffersBlockPlay($gameId, $this->fetchGame($gameId), $round)) {
                 break;
+            }
+
+            if (in_array($currentTurnGamePlayerId, $tacticalBotGamePlayerIds, true)) {
+                // Issue #419's own Tactical Bot tier -- a search call can
+                // legitimately take up to BOT_SEARCH_TIME_BUDGET_SECONDS,
+                // far too long to run inline within this (or any other)
+                // HTTP request, so this hands off to a background process
+                // instead of calling $this->bots directly -- see
+                // advanceTacticalBotSearch()'s own docblock for the full
+                // launch/poll/stale-fallback state machine.
+                //
+                // $tacticalFallbackGamePlayerIds (scoped to just this one
+                // advanceAutomatedTurns() call, never persisted) is what
+                // keeps a stale-job fallback from immediately trying to
+                // launch a FRESH search job for this exact same bot's
+                // NEXT play, the moment this loop reaches it again a few
+                // lines below -- once a turn's own job has been judged
+                // stale/crashed, every remaining play of that SAME turn
+                // (a bot's own turn can span several grants) stays on the
+                // fast heuristic bot too; only a genuinely later turn
+                // (reached only after control has actually left this
+                // seat at least once) gets to try search fresh again.
+                if (isset($tacticalFallbackGamePlayerIds[$currentTurnGamePlayerId])) {
+                    $lastResult = $this->playViaHeuristicBotFallback($gameId, $currentTurnGamePlayerId);
+                    continue;
+                }
+
+                $searchResult = $this->advanceTacticalBotSearch($gameId, $currentTurnGamePlayerId, $tacticalFallbackGamePlayerIds);
+                if ($searchResult !== null) {
+                    $lastResult = $searchResult;
+                    continue;
+                }
+
+                break; // handed off to (or still waiting on) the background search job -- nothing more to drive this request
             }
 
             if (in_array($currentTurnGamePlayerId, $botGamePlayerIds, true)) {
@@ -5876,6 +5963,198 @@ final class GameService
         $stmt->execute(['game_id' => $gameId]);
 
         return array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
+    }
+
+    /**
+     * @return int[] every game_players.id in $gameId whose owning user is
+     *     a Tactical Bot (issue #419, users.uses_tactical_ai) -- always a
+     *     subset of botGamePlayerIds() above, never disjoint from it
+     *     (uses_tactical_ai is meaningless for a non-bot user).
+     */
+    private function tacticalBotGamePlayerIds(int $gameId): array
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT gp.id FROM game_players gp JOIN users u ON u.id = gp.user_id WHERE gp.game_id = :game_id AND u.is_bot = 1 AND u.uses_tactical_ai = 1'
+        );
+        $stmt->execute(['game_id' => $gameId]);
+
+        return array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
+    }
+
+    /**
+     * Issue #419's own Tactical Bot tier -- the launch/poll/stale-fallback
+     * state machine advanceAutomatedTurns() hands a Tactical Bot's own
+     * turn-to-play off to, instead of calling $this->bots directly the
+     * way it does for an ordinary heuristic bot (see
+     * SearchBotPlayerService::chooseAction()'s own docblock for why a
+     * search call is too slow to run inline within this synchronous HTTP
+     * request in the first place).
+     *
+     * - No job yet for this seat -> launches one (bot_search_jobs row +
+     *   a detached background `php bin/run_bot_search.php <jobId>`
+     *   process, via runTacticalBotSearchJob()) and returns null --
+     *   nothing to apply THIS request, the bot is now "thinking" (see
+     *   getState()'s own bot_thinking field, computed from this same
+     *   table).
+     * - A job already 'running' and still within its own time budget
+     *   (+ BOT_SEARCH_STALE_GRACE_SECONDS) -> still thinking, returns
+     *   null again -- the caller (a later poll, or another player's own
+     *   request) will check back later exactly the same way.
+     * - A job 'running' but past its own budget + grace -> presumed
+     *   crashed (a dev-server restart, PHP-FPM recycling the worker that
+     *   spawned it, etc.) -- marked 'failed' here, and this method falls
+     *   back to playing immediately via the ordinary fast heuristic bot
+     *   instead, so the game is never left stuck waiting on a dead
+     *   process. Also flips on $tacticalFallbackGamePlayerIds[$gamePlayerId]
+     *   (passed in BY REFERENCE from advanceAutomatedTurns()'s own local,
+     *   per-call-only tracking, never persisted) -- a bot's own turn can
+     *   span several plays (extra grants), and once one has been judged
+     *   stale/crashed there's no reason to trust a FRESH search job for
+     *   this turn's remaining plays either; the caller checks this flag
+     *   before ever calling this method again for the same seat, going
+     *   straight to the heuristic instead for as long as the loop keeps
+     *   reaching the same still-open turn.
+     * - A job already 'done'/'failed' from a PAST turn (this seat had the
+     *   turn before, that turn's own job resolved one way or the other,
+     *   and control has genuinely moved on since) -- ordinarily
+     *   unreachable here at all: $tacticalFallbackGamePlayerIds already
+     *   intercepts a same-turn continuation before this method is even
+     *   called again, so reaching this method with such a job on record
+     *   only happens for this seat's own NEXT genuine turn -- launches a
+     *   fresh job, exactly like the "no job yet" case.
+     *
+     * @param array<int, true> $tacticalFallbackGamePlayerIds see the docblock above -- mutated by reference
+     */
+    private function advanceTacticalBotSearch(int $gameId, int $gamePlayerId, array &$tacticalFallbackGamePlayerIds): ?array
+    {
+        $job = $this->botSearchJobs->mostRecentFor($gamePlayerId);
+        if ($job !== null && $job['status'] === 'running') {
+            $ageSeconds = time() - strtotime($job['started_at']);
+            if ($ageSeconds <= $job['time_budget_seconds'] + self::BOT_SEARCH_STALE_GRACE_SECONDS) {
+                return null; // still within budget -- keep waiting
+            }
+
+            $this->botSearchJobs->markFailed($job['id'], 'stale (exceeded its own time budget + grace, presumed crashed)');
+            $tacticalFallbackGamePlayerIds[$gamePlayerId] = true;
+
+            return $this->playViaHeuristicBotFallback($gameId, $gamePlayerId);
+        }
+
+        $this->launchTacticalBotSearchJob($gameId, $gamePlayerId);
+
+        return null;
+    }
+
+    /** The ordinary heuristic bot's own play/pass, applied immediately -- see advanceTacticalBotSearch()'s own stale-job fallback and runTacticalBotSearchJob()'s own on-error fallback. */
+    private function playViaHeuristicBotFallback(int $gameId, int $gamePlayerId): array
+    {
+        $state = $this->boardStates->load($gameId);
+        $playableCardIds = array_values(array_filter(
+            $this->candidatePlayCardIds($state, $gamePlayerId),
+            fn (int $cardId) => $this->plays->isPlayable($state, $gamePlayerId, $cardId),
+        ));
+        $action = $this->bots->chooseAction($state, $playableCardIds, $gamePlayerId);
+
+        return $action !== null
+            ? $this->playMood($gameId, $gamePlayerId, $action['card_id'], $action['choices'])
+            : $this->pass($gameId, $gamePlayerId, automated: true);
+    }
+
+    /**
+     * Inserts the bot_search_jobs row and spawns a detached background
+     * PHP process to actually run the search and apply its result --
+     * `exec()` with a trailing `&` and redirected output is what makes
+     * this non-blocking: the shell backgrounds the child and this call
+     * returns immediately once the process has been started, without
+     * waiting for it to finish. Requires `exec()` to not be in the
+     * server's own `disable_functions` -- see php-app/README.md's
+     * "Tactical Bot" section for this deployment prerequisite.
+     */
+    private function launchTacticalBotSearchJob(int $gameId, int $gamePlayerId): void
+    {
+        $jobId = $this->botSearchJobs->create($gameId, $gamePlayerId, $this->botSearchTimeBudgetSeconds);
+
+        if (!$this->spawnBotSearchProcesses) {
+            return;
+        }
+
+        $script = escapeshellarg(dirname(__DIR__, 2) . '/bin/run_bot_search.php');
+        $phpBinary = escapeshellarg(PHP_BINARY);
+        $jobIdArg = escapeshellarg((string) $jobId);
+        exec("{$phpBinary} {$script} {$jobIdArg} > /dev/null 2>&1 &");
+    }
+
+    /**
+     * The background process's own entry point (called from
+     * bin/run_bot_search.php, which does nothing but bootstrap a
+     * standalone GameService and call this) -- runs the actual search
+     * against a fresh, freely-mutable BoardState (SearchBotPlayerService
+     * operates on a determinized CLONE internally regardless -- see its
+     * own docblock -- so there's no need to protect this particular load
+     * with a game lock the way an ordinary mutating request would), then
+     * applies whichever action it settled on through the exact same
+     * public playMood()/pass() entry points a live request would use
+     * (fully subject to the same withGameLock() serialization as
+     * everything else). On any exception -- including the search simply
+     * running long and getting killed by the OS, though that shouldn't
+     * happen within its own time budget -- marks the job 'failed' and
+     * falls back to the ordinary fast heuristic bot instead of leaving
+     * the turn stuck.
+     *
+     * Re-validates that it's genuinely still $gamePlayerId's own turn to
+     * play before applying anything: nothing else CAN legitimately act
+     * while a single-current-player turn is open, but this guards against
+     * the pathological case of a stale/duplicate job somehow surviving
+     * past a turn that already resolved another way (e.g. the stale-job
+     * fallback in advanceTacticalBotSearch() already having played this
+     * turn out from under a job that was actually still alive, just slow)
+     * -- silently marking such a job 'done' with nothing further applied,
+     * rather than throwing or corrupting an unrelated later turn.
+     */
+    public function runTacticalBotSearchJob(int $jobId): void
+    {
+        $job = $this->botSearchJobs->get($jobId);
+        if ($job === null) {
+            return;
+        }
+
+        try {
+            $state = $this->boardStates->load($job['game_id']);
+            if ($state->currentPlayerId() !== $job['game_player_id']) {
+                $this->botSearchJobs->markDone($jobId);
+
+                return;
+            }
+
+            $playableCardIds = array_values(array_filter(
+                $this->candidatePlayCardIds($state, $job['game_player_id']),
+                fn (int $cardId) => $this->plays->isPlayable($state, $job['game_player_id'], $cardId),
+            ));
+            $action = $this->tacticalBots->chooseAction($state, $playableCardIds, $job['game_player_id'], (float) $job['time_budget_seconds']);
+
+            if ($action !== null) {
+                $this->playMood($job['game_id'], $job['game_player_id'], $action['card_id'], $action['choices']);
+            } else {
+                $this->pass($job['game_id'], $job['game_player_id'], automated: true);
+            }
+
+            $this->botSearchJobs->markDone($jobId);
+        } catch (Throwable $e) {
+            error_log("runTacticalBotSearchJob({$jobId}): search failed, falling back to the heuristic bot -- " . $e);
+            $this->botSearchJobs->markFailed($jobId, $e->getMessage());
+
+            try {
+                $this->playViaHeuristicBotFallback($job['game_id'], $job['game_player_id']);
+            } catch (Throwable $fallbackError) {
+                // Mirrors advanceAutomatedTurns()'s own catch-all: even the
+                // fallback failing must never leave this uncaught (the
+                // background process has no HTTP response to 500 into,
+                // but an uncaught exception here would still be a
+                // silently-dropped, permanently-stuck turn with nothing
+                // left to retry it).
+                error_log("runTacticalBotSearchJob({$jobId}): heuristic fallback ALSO failed -- " . $fallbackError);
+            }
+        }
     }
 
     /**
@@ -13362,8 +13641,57 @@ final class GameService
         // is what a spectator reads instead.
         $response['deck_count'] = $viewerGamePlayerId !== null ? count($state->deck($viewerGamePlayerId)) : 0;
         $response['recent_events'] = $this->recentEvents($gameId, $players);
+        $response['bot_thinking'] = $this->botThinkingStateFor($gameId, $players);
 
         return $response;
+    }
+
+    /**
+     * Non-null exactly when a Tactical Bot's own background search job
+     * (issue #419) is currently running for one of this game's seats --
+     * lets the frontend show a "Bot is thinking..." indicator instead of
+     * looking stuck while advanceAutomatedTurns() has handed a turn off
+     * to the background process instead of answering inline -- see
+     * advanceTacticalBotSearch()'s own docblock. A stale/crashed job
+     * (past its own time budget + grace) reads the same as "not
+     * thinking" here -- the very next advanceAutomatedTurns() call (this
+     * same GET /games/state request's own best-effort poll trigger
+     * included) will notice and fall back to the heuristic bot, so
+     * there's nothing worth surfacing about a job that's already
+     * effectively dead.
+     *
+     * @param array<int, array{game_player_id: int, username: string}> $players
+     * @return ?array{game_player_id: int, username: ?string, time_budget_seconds: int}
+     */
+    private function botThinkingStateFor(int $gameId, array $players): ?array
+    {
+        foreach ($this->tacticalBotGamePlayerIds($gameId) as $gamePlayerId) {
+            $job = $this->botSearchJobs->mostRecentFor($gamePlayerId);
+            if ($job === null || $job['status'] !== 'running') {
+                continue;
+            }
+
+            $ageSeconds = time() - strtotime($job['started_at']);
+            if ($ageSeconds > $job['time_budget_seconds'] + self::BOT_SEARCH_STALE_GRACE_SECONDS) {
+                continue;
+            }
+
+            $username = null;
+            foreach ($players as $player) {
+                if ($player['game_player_id'] === $gamePlayerId) {
+                    $username = $player['username'];
+                    break;
+                }
+            }
+
+            return [
+                'game_player_id' => $gamePlayerId,
+                'username' => $username,
+                'time_budget_seconds' => $job['time_budget_seconds'],
+            ];
+        }
+
+        return null;
     }
 
     /**

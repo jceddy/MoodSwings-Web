@@ -410,6 +410,52 @@ final class BoardState
     }
 
     /**
+     * Every mutable field here is a plain array (or scalar), so PHP's
+     * default `clone` already copies all of them correctly on its own
+     * (arrays are copy-on-write value types) -- EXCEPT $moodsInPlay, whose
+     * array holds MoodInPlay *objects*, which a bare `clone` would only
+     * shallow-copy (the clone and the original would keep pointing at the
+     * very same MoodInPlay instances). Since effects mutate a MoodInPlay's
+     * own ownerId/suppressions/effectState in place throughout this class
+     * (giveInPlayToPlayer(), suppress(), setEffectState(), ...), that would
+     * let mutating a clone silently corrupt the original it was cloned
+     * from -- exactly the bug a search/simulation engine's hypothetical
+     * rollouts (SearchBotPlayerService) need `clone $state` to NOT have,
+     * since a rollout clones the real, live BoardState to explore
+     * hypothetical plays against without ever touching the game actually
+     * being played. MoodInPlay itself needs no clone() of its own -- every
+     * one of its properties is already a plain scalar/array.
+     *
+     * Also resets the handful of $pending* fields that are pure,
+     * write-only event-log bookkeeping for GameService's own history
+     * construction (consumed and cleared once per real request -- see
+     * e.g. consumeCardMoves()) -- irrelevant to rules/search and never
+     * read back out by anything in this class, so a throwaway rollout
+     * clone has no reason to keep accumulating them across many simulated
+     * plays. Deliberately NOT reset here: $pendingEffectState and
+     * $playGrants, both genuine mid-resolution game state (not merely
+     * event-log staging) that a clone must keep intact.
+     */
+    public function __clone(): void
+    {
+        foreach ($this->moodsInPlay as $cardId => $mood) {
+            $this->moodsInPlay[$cardId] = clone $mood;
+        }
+
+        $this->pendingChaosDiscardEvents = [];
+        $this->pendingChaosSuppressionEvents = [];
+        $this->pendingRevealedCardIds = [];
+        $this->pendingCardMoves = [];
+        $this->pendingOwnershipChanges = [];
+        $this->pendingDraws = [];
+        $this->pendingSuppressionChanges = [];
+        $this->pendingEffectStateChanges = [];
+        $this->pendingGrantsCreated = [];
+        $this->pendingGrantsLost = [];
+        $this->pendingGrantUsed = null;
+    }
+
+    /**
      * Whether $a and $b are teammates in Open Team Play -- always false
      * for every non-team game (empty $teamIdByPlayer) and for a player
      * compared against themselves, so a bare "!== $ownerId"/"!== $playerId"
@@ -680,6 +726,41 @@ final class BoardState
     public function hasSeparateDecks(): bool
     {
         return $this->hasSeparateDecks;
+    }
+
+    /**
+     * Wholesale-replaces every hand and every deck at once -- unlike every
+     * other mutator in this class (which moves individual cards one at a
+     * time as an actual game unfolds), this exists purely for
+     * MoodSwings\Bot\Determinizer's own determinization step: a search
+     * rollout (SearchBotPlayerService) must reason about the parts of the
+     * game genuinely hidden from the acting player -- every OTHER player's
+     * hand, and every deck's still-undrawn cards (including the acting
+     * player's own -- nobody knows their own future draws either, see
+     * Determinizer's own docblock) -- without secretly reading the real,
+     * actual hidden card identities straight out of this object (hand()/
+     * deck() return any player's own cards to any caller with no
+     * visibility check of their own -- this class enforces no hand/deck
+     * secrecy on its own; that's purely a convention every OTHER caller
+     * already follows). Determinizer samples a fresh, independently-
+     * shuffled deal of exactly the same still-hidden card ids (preserving
+     * every hand's and every deck's own current SIZE, never card
+     * identities) and hands the result straight back here. Always called
+     * on a `clone`, never the real BoardState actually driving a live
+     * game.
+     *
+     * @param array<int, int[]> $hands playerId => hand card ids, same
+     *     shape as the constructor's own $hands param
+     * @param array<int, int[]> $decks deck key => card ids, same shape
+     *     decks() itself returns (SHARED_DECK_KEY alone, or one entry per
+     *     player for a 'duel' game) -- NOT the constructor's own $deck
+     *     param shape, which additionally special-cases a flat list for
+     *     the non-separate-decks case.
+     */
+    public function redistributeHiddenZones(array $hands, array $decks): void
+    {
+        $this->hands = $hands;
+        $this->decks = $decks;
     }
 
     /** The last-known owner of a card currently sitting in the discard pile, if tracked (see $discardOwners) -- only meaningful, and only ever consulted, in a 'duel' game. */
