@@ -2258,6 +2258,14 @@ dialog#game-chat-dialog[open] {
     margin-top: 0.5rem;
 }
 
+/* Tighter horizontal padding than the generic button rule -- every label
+   here is a handful of characters at most (GL;HF/GG/a single emoji), so
+   the default 0.8rem side padding wastes space that would otherwise let
+   more of these fit per row before flex-wrap kicks in. */
+#game-chat-quick-buttons button {
+    padding: 0.4rem 0.5rem;
+}
+
 /* A small notification dot on #view-chat-button while the currently
    viewed game has chat messages that haven't been seen yet (dialog never
    opened, or closed before catching up) -- see renderChat() in game.js,
