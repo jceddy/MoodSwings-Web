@@ -884,10 +884,34 @@
     // openDeckView() already use rather than a { cardId: count } map --
     // keeps add/remove/sort all operating on one flat array.
     let deckBuilderCardIds = [];
+    // The sideboard under construction (migration 0228, issue #90
+    // follow-up) -- same flat-array convention as deckBuilderCardIds,
+    // only ever addable to for the two formats
+    // deckBuilderFormatSupportsSideboard() allows (Free-form/Power Duel);
+    // otherwise-format cards already sitting here from an earlier edit
+    // are left untouched, same as deckBuilderCardIds' own "switching
+    // formats mid-build never retroactively removes anything" rule.
+    let deckBuilderSideboardCardIds = [];
     // Set by openDeckBuilder(existingId) when editing an existing owned
     // deck via its "Build" row action -- null means "Build a new deck"
     // (create on save), non-null means "update this deck (id) on save".
     let deckBuilderEditingId = null;
+
+    // Mirrors GameService::POWER_DUEL_SIDEBOARD_MAX_CARDS -- Power Duel's
+    // own cap on a declared sideboard's size (see "Best of three" in
+    // web-static/README.md). Free-form has no cap of its own, same as its
+    // main deck.
+    const POWER_DUEL_SIDEBOARD_MAX_CARDS = 5;
+
+    // Sideboarding is only ever offered for the two formats with no
+    // fixed rarity/color shape of their own to conflict with a second,
+    // separate zone -- Structure Deck/jceddy's 75 Card's own rarity/color
+    // targets (see DECK_BUILDER_FORMATS) are already exact-match
+    // constraints on the WHOLE deck, so there's no natural "extra bench"
+    // concept for them today.
+    function deckBuilderFormatSupportsSideboard(formatKey) {
+        return formatKey === 'free_form' || formatKey === 'power';
+    }
 
     async function ensureDeckBuilderCatalogLoaded() {
         if (deckBuilderCatalog !== null) {
@@ -964,6 +988,28 @@
         return colorRarityCount < spec.count;
     }
 
+    // Sideboarding's own analog of canAddCardToBuilderDeck() -- Free-form
+    // is unrestricted (same policy as its own main deck); Power Duel caps
+    // the sideboard at POWER_DUEL_SIDEBOARD_MAX_CARDS total and singleton
+    // within it (mirrors GameService::validateAndStorePowerDuelSideboardPool()'s
+    // own validation), plus never lets the same card sit in both zones at
+    // once -- a card is either in your deck or benched, never both.
+    // $deckCardIds is passed in (rather than read from the module-level
+    // deckBuilderCardIds directly) so this stays a pure function of its
+    // own arguments, same as canAddCardToBuilderDeck() above.
+    function canAddCardToBuilderSideboard(formatKey, sideboardCardIds, deckCardIds, card) {
+        if (deckCardIds.includes(card.card_id)) {
+            return false;
+        }
+        if (formatKey !== 'power') {
+            return true;
+        }
+        if (sideboardCardIds.length >= POWER_DUEL_SIDEBOARD_MAX_CARDS) {
+            return false;
+        }
+        return !sideboardCardIds.includes(card.card_id);
+    }
+
     // Running total-vs-target summary line for #deck-builder-deck-summary
     // -- just a card count for free-form (no target to compare against),
     // "current/target" for every other format so the caps
@@ -993,6 +1039,25 @@
         }
         renderDeckBuilderCatalog();
         renderDeckBuilderDeck();
+    }
+
+    function addCardToBuilderSideboard(card) {
+        const formatKey = document.getElementById('deck-builder-format').value;
+        if (!canAddCardToBuilderSideboard(formatKey, deckBuilderSideboardCardIds, deckBuilderCardIds, card)) {
+            return;
+        }
+        deckBuilderSideboardCardIds.push(card.card_id);
+        renderDeckBuilderCatalog();
+        renderDeckBuilderSideboard();
+    }
+
+    function removeCardFromBuilderSideboard(cardId) {
+        const index = deckBuilderSideboardCardIds.indexOf(cardId);
+        if (index !== -1) {
+            deckBuilderSideboardCardIds.splice(index, 1);
+        }
+        renderDeckBuilderCatalog();
+        renderDeckBuilderSideboard();
     }
 
     // Comparator for one sort key (see SORT_COMPARATORS below) -- color
@@ -1069,29 +1134,36 @@
     }
 
     // Wraps a card-thumb (click = inspect, same as everywhere else this
-    // app shows a card) with a distinct "Add"/"Remove" button underneath
-    // -- buildCardThumb() itself stays untouched (its own onClick is
-    // shared by every OTHER caller for "open the detail dialog", not
-    // "add/remove this specific card"), so the deck builder's own
-    // add/remove action lives in a sibling button instead of overloading
-    // the thumb's own click.
-    function buildDeckBuilderCardItem(card, actionLabel, onAction, disabled) {
+    // app shows a card) with one or more distinct action buttons
+    // underneath -- buildCardThumb() itself stays untouched (its own
+    // onClick is shared by every OTHER caller for "open the detail
+    // dialog", not "add/remove this specific card"), so the deck
+    // builder's own add/remove actions live in sibling buttons instead of
+    // overloading the thumb's own click. $actions is an array of
+    // {label, onAction, disabled} -- a catalog item gets two (add to
+    // deck, add to sideboard, the latter only when
+    // deckBuilderFormatSupportsSideboard() allows it), a deck/sideboard
+    // item gets just its own single "Remove".
+    function buildDeckBuilderCardItem(card, actions) {
         const item = document.createElement('div');
         item.className = 'deck-builder-card-item';
         item.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
 
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.textContent = actionLabel;
-        button.disabled = disabled;
-        button.addEventListener('click', onAction);
-        item.appendChild(button);
+        for (const { label, onAction, disabled } of actions) {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.textContent = label;
+            button.disabled = disabled;
+            button.addEventListener('click', onAction);
+            item.appendChild(button);
+        }
 
         return item;
     }
 
     function renderDeckBuilderCatalog() {
         const formatKey = document.getElementById('deck-builder-format').value;
+        const sideboardSupported = deckBuilderFormatSupportsSideboard(formatKey);
         const filters = deckBuilderCatalogFilters();
         const filtered = deckBuilderCatalog.filter((card) => cardMatchesDeckBuilderFilters(card, filters));
         const cards = sortBuilderCards(filtered, 'deck-builder-catalog-sort');
@@ -1101,8 +1173,13 @@
         document.getElementById('deck-builder-catalog-empty').hidden = cards.length > 0;
 
         for (const card of cards) {
-            const canAdd = canAddCardToBuilderDeck(formatKey, deckBuilderCardIds, card);
-            gridEl.appendChild(buildDeckBuilderCardItem(card, '+ Add', () => addCardToBuilderDeck(card), !canAdd));
+            const canAddToDeck = canAddCardToBuilderDeck(formatKey, deckBuilderCardIds, card);
+            const actions = [{ label: '+ Deck', onAction: () => addCardToBuilderDeck(card), disabled: !canAddToDeck }];
+            if (sideboardSupported) {
+                const canAddToSideboard = canAddCardToBuilderSideboard(formatKey, deckBuilderSideboardCardIds, deckBuilderCardIds, card);
+                actions.push({ label: '+ Sideboard', onAction: () => addCardToBuilderSideboard(card), disabled: !canAddToSideboard });
+            }
+            gridEl.appendChild(buildDeckBuilderCardItem(card, actions));
         }
     }
 
@@ -1116,10 +1193,32 @@
         document.getElementById('deck-builder-deck-empty').hidden = sorted.length > 0;
 
         for (const card of sorted) {
-            gridEl.appendChild(buildDeckBuilderCardItem(card, 'Remove', () => removeCardFromBuilderDeck(card.card_id), false));
+            gridEl.appendChild(buildDeckBuilderCardItem(card, [{ label: 'Remove', onAction: () => removeCardFromBuilderDeck(card.card_id), disabled: false }]));
         }
 
         document.getElementById('deck-builder-deck-summary').textContent = deckBuilderSummaryText(formatKey, deckBuilderCardIds);
+    }
+
+    // Sideboarding's own analog of renderDeckBuilderDeck() -- the section
+    // itself is shown/hidden by the '#deck-builder-format' change
+    // listener below (deckBuilderFormatSupportsSideboard()), so this only
+    // needs to worry about its own contents.
+    function renderDeckBuilderSideboard() {
+        const formatKey = document.getElementById('deck-builder-format').value;
+        const cardsInSideboard = deckBuilderSideboardCardIds.map((id) => deckBuilderCatalogById.get(id));
+        const sorted = sortBuilderCards(cardsInSideboard, 'deck-builder-sideboard-sort');
+
+        const gridEl = document.getElementById('deck-builder-sideboard-cards');
+        gridEl.innerHTML = '';
+        document.getElementById('deck-builder-sideboard-empty').hidden = sorted.length > 0;
+
+        for (const card of sorted) {
+            gridEl.appendChild(buildDeckBuilderCardItem(card, [{ label: 'Remove', onAction: () => removeCardFromBuilderSideboard(card.card_id), disabled: false }]));
+        }
+
+        document.getElementById('deck-builder-sideboard-summary').textContent = formatKey === 'power'
+            ? deckBuilderSideboardCardIds.length + ' / ' + POWER_DUEL_SIDEBOARD_MAX_CARDS + ' card(s) in your sideboard.'
+            : deckBuilderSideboardCardIds.length + ' card(s) in your sideboard.';
     }
 
     function resetDeckBuilderForm() {
@@ -1131,7 +1230,7 @@
         document.getElementById('deck-builder-filter-color').value = '';
         document.getElementById('deck-builder-filter-rarity').value = '';
         document.getElementById('deck-builder-filter-text').value = '';
-        for (const prefix of ['deck-builder-catalog-sort', 'deck-builder-deck-sort']) {
+        for (const prefix of ['deck-builder-catalog-sort', 'deck-builder-deck-sort', 'deck-builder-sideboard-sort']) {
             document.getElementById(prefix + '-1').value = 'color';
             document.getElementById(prefix + '-2').value = 'rarity';
             document.getElementById(prefix + '-3').value = 'name';
@@ -1140,7 +1239,13 @@
         document.getElementById('deck-builder-success').hidden = true;
         document.getElementById('deck-builder-format-description').textContent = DECK_BUILDER_FORMATS.free_form.description;
         deckBuilderCardIds = [];
+        deckBuilderSideboardCardIds = [];
         deckBuilderEditingId = null;
+        // Always visible right after a reset -- resetDeckBuilderForm()
+        // always starts a fresh build at 'free_form', one of the two
+        // sideboard-supporting formats (see
+        // deckBuilderFormatSupportsSideboard()).
+        document.getElementById('deck-builder-sideboard-section').hidden = false;
     }
 
     // existingDeckId: omit (or null) for "Build a new deck" starting
@@ -1169,11 +1274,13 @@
             document.getElementById('deck-builder-name').value = deck.name;
             document.getElementById('deck-builder-friends-visible').checked = deck.visibility === 'friends';
             deckBuilderCardIds = deck.cards.map((card) => card.card_id);
+            deckBuilderSideboardCardIds = deck.sideboard_cards.map((card) => card.card_id);
             deckBuilderEditingId = deck.id;
         }
 
         renderDeckBuilderCatalog();
         renderDeckBuilderDeck();
+        renderDeckBuilderSideboard();
         document.getElementById('deck-builder-dialog').showModal();
     }
 
@@ -2743,6 +2850,29 @@
         if (!show) {
             document.getElementById('new-game-best-of-three').checked = false;
         }
+        // Power Duel sideboarding (migration 0228, issue #90 follow-up)
+        // only ever makes sense once "Best of three" is itself both
+        // available AND actually checked, so any change that could flip
+        // either needs to re-run this too.
+        updateAllowSideboardingFieldVisibility();
+    }
+
+    // Power Duel sideboarding's own checkbox -- see
+    // GameService::createGame()'s own $allowSideboarding docblock. Only
+    // ever offered for a best-of-three Duel game using deck_type
+    // 'custom_duel' built under the "Power Duel" duel_deck_rules preset;
+    // hidden (and unchecked, same as every other conditionally-shown New
+    // Game field) for everything else.
+    function updateAllowSideboardingFieldVisibility() {
+        const format = effectiveNewGameFormat();
+        const deckType = document.getElementById('new-game-deck-type').value;
+        const preset = document.getElementById('new-game-duel-rules-preset').value;
+        const bestOfThreeChecked = document.getElementById('new-game-best-of-three').checked;
+        const show = format === 'duel' && deckType === 'custom_duel' && preset === 'power' && bestOfThreeChecked;
+        document.getElementById('new-game-allow-sideboarding-label').hidden = !show;
+        if (!show) {
+            document.getElementById('new-game-allow-sideboarding').checked = false;
+        }
     }
 
     // Hides (and, if checked, unchecks) every bot checkbox -- and their
@@ -2864,6 +2994,11 @@
     document.getElementById('new-game-saved-decklist').addEventListener('change', updateDeckTypeDescription);
     document.getElementById('new-game-bot-saved-decklist').addEventListener('change', updateBotDecklistFieldsVisibility);
     document.getElementById('new-game-duel-rules-preset').addEventListener('change', updateDuelRulesPresetVisibility);
+    // Power Duel sideboarding's own checkbox depends on both the current
+    // preset AND whether "Best of three" is itself checked -- see
+    // updateAllowSideboardingFieldVisibility().
+    document.getElementById('new-game-duel-rules-preset').addEventListener('change', updateAllowSideboardingFieldVisibility);
+    document.getElementById('new-game-best-of-three').addEventListener('change', updateAllowSideboardingFieldVisibility);
     document.getElementById('new-game-quick-draft-pool-source').addEventListener('change', updateQuickDraftPoolSourceVisibility);
     document.getElementById('new-game-winston-draft-pool-source').addEventListener('change', updateWinstonDraftPoolSourceVisibility);
     document.getElementById('new-game-grid-draft-pool-source').addEventListener('change', updateGridDraftPoolSourceVisibility);
@@ -3441,6 +3576,12 @@
         // whenever hidden (updateBestOfThreeFieldVisibility()), so reading
         // .checked unconditionally here already reflects that.
         const bestOfThree = document.getElementById('new-game-best-of-three').checked;
+        // Power Duel sideboarding (issue #90 follow-up) -- see
+        // updateAllowSideboardingFieldVisibility() for when this field is
+        // actually shown; #new-game-allow-sideboarding is itself
+        // unchecked whenever hidden, so reading .checked unconditionally
+        // here already reflects that.
+        const allowSideboarding = document.getElementById('new-game-allow-sideboarding').checked;
 
         // Issue #116: post to the open lobby instead of creating the game
         // directly -- mirrors createGame()'s own params (see above) minus
@@ -3476,6 +3617,7 @@
                 // checking "Best of three" while posting to the open
                 // lobby silently did nothing.
                 best_of_three: bestOfThree,
+                allow_sideboarding: allowSideboarding,
             });
 
             if (!ok) {
@@ -3517,6 +3659,7 @@
             tieredRotisserieDraftTiers,
             botGoesFirst,
             bestOfThree,
+            allowSideboarding,
         );
 
         if (!ok) {
@@ -7411,6 +7554,13 @@
             duelSavedDecklistSelectPopulated = true;
             populateSavedDecklistSelect(document.getElementById('duel-deck-submit-saved-decklist'));
         }
+
+        // Power Duel sideboarding (migration 0228, issue #90 follow-up) --
+        // power_duel_sideboard_pool is only ever non-null for game 2/3 of
+        // a match that opted into it, and only while you haven't
+        // resubmitted yet (deck_submitted above), so the hint/button
+        // don't linger once you have.
+        document.getElementById('duel-deck-sideboard-hint').hidden = you.deck_submitted || !state.power_duel_sideboard_pool;
     }
 
     document.getElementById('duel-deck-submit-file').addEventListener('change', async (event) => {
@@ -7424,6 +7574,24 @@
 
     document.getElementById('duel-deck-submit-saved-decklist').addEventListener('change', (event) => {
         document.getElementById('duel-deck-submit-paste-fields').hidden = event.target.value !== '';
+    });
+
+    // Power Duel sideboarding (migration 0228, issue #90 follow-up) --
+    // fills the paste field with every card from your original deck +
+    // sideboard (currentState.power_duel_sideboard_pool, read fresh
+    // rather than stashed at render time, so this still works after any
+    // number of intervening polls) as one flat list -- there's no
+    // Sideboard section here, since which of these end up in your new
+    // deck vs. benched again is entirely up to what you leave in vs. trim
+    // out, not something to declare separately.
+    document.getElementById('duel-deck-load-sideboard-pool-button').addEventListener('click', () => {
+        const pool = currentState && currentState.power_duel_sideboard_pool;
+        if (!pool) {
+            return;
+        }
+        document.getElementById('duel-deck-submit-saved-decklist').value = '';
+        document.getElementById('duel-deck-submit-paste-fields').hidden = false;
+        document.getElementById('duel-deck-submit-text').value = formatDecklistCardLines(pool).join('\n');
     });
 
     document.getElementById('duel-deck-submit-button').addEventListener('click', async () => {
@@ -8761,8 +8929,17 @@
     document.getElementById('deck-builder-format').addEventListener('change', (event) => {
         document.getElementById('deck-builder-format-description').textContent =
             DECK_BUILDER_FORMATS[event.target.value].description;
+        // Sideboarding (migration 0228, issue #90 follow-up) -- the
+        // section itself hides for Structure Deck/jceddy's 75 Card
+        // (whatever's already in deckBuilderSideboardCardIds from an
+        // earlier format is left untouched, same as switching away never
+        // retroactively removes anything from the main deck either), and
+        // the catalog's own "+ Sideboard" buttons need to appear/disappear
+        // to match.
+        document.getElementById('deck-builder-sideboard-section').hidden = !deckBuilderFormatSupportsSideboard(event.target.value);
         renderDeckBuilderCatalog();
         renderDeckBuilderDeck();
+        renderDeckBuilderSideboard();
     });
 
     // Every filter/catalog-sort control re-renders just the catalog
@@ -8779,6 +8956,9 @@
     for (const id of ['deck-builder-deck-sort-1', 'deck-builder-deck-sort-2', 'deck-builder-deck-sort-3']) {
         document.getElementById(id).addEventListener('change', renderDeckBuilderDeck);
     }
+    for (const id of ['deck-builder-sideboard-sort-1', 'deck-builder-sideboard-sort-2', 'deck-builder-sideboard-sort-3']) {
+        document.getElementById(id).addEventListener('change', renderDeckBuilderSideboard);
+    }
 
     document.getElementById('deck-builder-save-button').addEventListener('click', async () => {
         const errorEl = document.getElementById('deck-builder-error');
@@ -8788,10 +8968,15 @@
 
         const name = document.getElementById('deck-builder-name').value;
         const visibility = document.getElementById('deck-builder-friends-visible').checked ? 'friends' : 'private';
+        // Sideboarding (migration 0228, issue #90 follow-up) -- undefined
+        // (not an empty array) when there's nothing in it, matching
+        // createDecklist()/updateDecklist()'s own existing convention for
+        // "no sideboard" from the paste/upload form.
+        const sideboardCardIds = deckBuilderSideboardCardIds.length > 0 ? deckBuilderSideboardCardIds : undefined;
 
         const { ok, body } = deckBuilderEditingId
-            ? await updateDecklist(deckBuilderEditingId, name, undefined, deckBuilderCardIds, undefined, visibility)
-            : await createDecklist(name, undefined, deckBuilderCardIds, undefined, visibility);
+            ? await updateDecklist(deckBuilderEditingId, name, undefined, deckBuilderCardIds, sideboardCardIds, visibility)
+            : await createDecklist(name, undefined, deckBuilderCardIds, sideboardCardIds, visibility);
 
         if (!ok) {
             errorEl.textContent = body.message || 'Could not save that deck.';

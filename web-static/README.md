@@ -1075,6 +1075,79 @@ custom_duel game) renders identically with no changes of its own needed;
 opening the new game from the lobby (or its own "it's your turn"
 notification, tag `'custom-duel-deck'`) is all a player needs to do.
 
+**Power Duel sideboarding** -- a second, narrower opt-in (migration
+0228) for the exact scope `GameService::createGame()`'s own
+`$allowSideboarding` docblock describes: a best-of-three Duel match
+using `custom_duel`'s existing "Power Duel" preset. `#new-game-allow-
+sideboarding-label` (a checkbox right below `#new-game-best-of-three-
+label`) is shown by `updateAllowSideboardingFieldVisibility()` only once
+format is `duel`, deck_type is `custom_duel`, `#new-game-duel-rules-
+preset` is `power`, AND `#new-game-best-of-three` is itself checked --
+wired to that checkbox's own `change` (in addition to the format/deck-
+type/preset `change` events `updateBestOfThreeFieldVisibility()` already
+listens to, which now also calls this one so toggling "Best of three"
+itself keeps this in sync) and unchecked, same as every other
+conditionally-shown New Game field, whenever it goes out of view.
+Checking it sends `allow_sideboarding: true` (`createGame()`'s new last
+parameter, both here and in app.js's own wrapper) to `POST /games`, or
+`allow_sideboarding` in the payload to `POST /open-games`
+(`postOpenGame()`) -- threaded through `create_game_params` to
+`MatchmakingService::joinOpenGame()`'s own eventual `createGame()` call
+from the start this time, unlike `best_of_three`'s own initial open-lobby
+gap (see above).
+
+Without it, a Power Duel best-of-three match's deck is locked for the
+whole match (see "Best of three" in `php-app/README.md`) -- the waiting
+room for game 2/3 never even appears, since `advanceGameMatch()` already
+carried the previous game's decklist forward and `startGame()`'s own
+gate is already satisfied. With it, `renderDuelDeckSubmission()` gains
+two small additions for game 2/3 specifically (`state.
+power_duel_sideboard_pool`, only ever non-null then): a hint,
+`#duel-deck-sideboard-hint` ("Sideboarding is on for this match -- your
+new deck can only use cards from your original deck and sideboard"),
+and its own `#duel-deck-load-sideboard-pool-button` ("Load your pool"),
+which fills the paste textarea with every card from that pool
+(`formatDecklistCardLines()`, the same per-card-line formatting
+`buildDecklistCardsText()` already uses, but as one flat list -- no
+`Sideboard` section here, since which of these end up in the new active
+deck vs. benched again is exactly what submitting decides, not something
+declared up front a second time). The player just trims it back down to
+their real deck (or types/pastes something else entirely, as long as
+every card came from that same pool) and submits normally --
+`submitCustomDuelDeck()` validates it's a subset of the original pool and
+recomputes the new sideboard as whatever's left over. Both elements hide
+again once `deck_submitted` is true, the same as the rest of that form.
+
+**Deck builder** -- the card-by-card Deck Builder (issue #93, see
+"Saved decklists" above) gained its own sideboard panel
+(`#deck-builder-sideboard-section`), shown only for the Free-form/Power
+Duel formats (`deckBuilderFormatSupportsSideboard()`) -- Structure
+Deck/jceddy's 75 Card stay exactly as they were, an exact-match rarity/
+color shape for the WHOLE deck with no natural "extra bench" concept of
+their own. `deckBuilderSideboardCardIds` mirrors `deckBuilderCardIds`'
+own flat one-entry-per-copy array; every catalog card now offers two
+actions instead of one (`buildDeckBuilderCardItem()` widened to take an
+array of `{label, onAction, disabled}` specs) -- "+ Deck" (renamed from
+the old unlabeled "+ Add", now that there are two zones to add to) always,
+plus "+ Sideboard" whenever the current format supports it.
+`canAddCardToBuilderSideboard()` mirrors `canAddCardToBuilderDeck()`'s
+own per-format cap logic: Free-form is unrestricted (matching its own
+main-deck policy), Power Duel caps the sideboard at
+`POWER_DUEL_SIDEBOARD_MAX_CARDS` (5) cards, singleton within it, and
+never lets the same card sit in both zones at once. The sideboard panel
+itself (`renderDeckBuilderSideboard()`) is a third card grid alongside
+the catalog/deck ones, with its own independent 3-select multi-sort
+(`#deck-builder-sideboard-sort-1/2/3`) and running `<count>`/`<count> /
+<target>` summary line, same conventions the deck panel already
+established. Saving threads `deckBuilderSideboardCardIds` through to
+`createDecklist()`/`updateDecklist()`'s own existing `sideboard_card_ids`
+parameter (already wired end-to-end server-side since issue #92 -- this
+was purely a missing piece of client-side UI, not a new backend
+capability); opening the builder on an existing owned deck
+(`openDeckBuilder(existingId)`) now also loads its own
+`sideboard_cards` back in, the same way it already did for the main
+deck's `cards`.
+
 ## Pages
 
 - `index.html` (`/`) — Login form. If the visitor already has an active
