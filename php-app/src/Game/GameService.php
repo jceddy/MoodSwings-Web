@@ -6290,10 +6290,13 @@ final class GameService
         if (self::isTeamFormat($game['format'])) {
             $resigningTeamId = $this->teamIdByGamePlayer($gameId)[$resigningGamePlayerId];
             $winnerTeamId = $resigningTeamId === 0 ? 1 : 0;
-            // Lowest seat_order member of the winning team, matching
-            // finishTeamScoringAndAdvance()'s own representative
-            // convention -- winner_team_id (set below) stays the
-            // authoritative record either way (see totalWinsForTeam()).
+            // Lowest seat_order member of the winning team -- purely a
+            // stand-in for this row's own FK/display purposes, same as
+            // finishTeamScoringAndAdvance()'s own representative (which
+            // picks by highest individual score instead, so the two don't
+            // actually pick the same teammate game to game). winner_team_id
+            // (set below) is the authoritative, stable-across-games record
+            // either way -- see totalWinsForTeam() and advanceGameMatch().
             $winnerGamePlayerId = $this->teamMembers($gameId, $winnerTeamId)[0];
 
             // Closes out a still-open draw_recipient/turn_order decision
@@ -8840,15 +8843,18 @@ final class GameService
      * Unlike advanceDraftMatch(), there's no draft_match_players-style
      * table to credit a win onto or read back from -- see game_matches'
      * own migration 0223 docblock for why a completed game's own
-     * winner_game_player_id (resolved to its user_id) is both sufficient
-     * and, for a team format, already equivalent to crediting the whole
-     * winning team: $winnerGamePlayerId there is always that game's
-     * winning team's lowest-seat_order member (the same representative
-     * convention completeGameByResignation()/finishTeamScoringAndAdvance()
-     * already use to pick a single winner_game_player_id for a team
-     * game), and a match's seats -- so each team's own representative --
-     * are carried forward unchanged from game to game below, exactly like
-     * advanceDraftMatch()'s own seat carry-forward.
+     * winner_game_player_id (resolved to its user_id) is sufficient for a
+     * non-team match. A team format's own $winnerGamePlayerId, though, is
+     * only ever a stand-in for FK/display purposes -- completeGameByResignation()
+     * always picks the winning team's lowest-seat_order member, but
+     * finishTeamScoringAndAdvance() (via determineRoundWinner()) instead
+     * picks whichever teammate scored the higher individual point total in
+     * the game's own final round, which can be a DIFFERENT teammate game
+     * to game even though it's the same team winning -- so match-win
+     * counting for a team format is done by games.winner_team_id below
+     * instead (itself stable across games, since team_id is one of the
+     * seats carried forward unchanged from game to game, exactly like
+     * advanceDraftMatch()'s own seat carry-forward).
      *
      * Deck continuity between games needs no attention here for
      * structure/power/jceddy's 75/one of each (startGame() rebuilds them
@@ -8889,11 +8895,31 @@ final class GameService
         $winnerUserStmt->execute(['id' => $winnerGamePlayerId]);
         $winnerUserId = (int) $winnerUserStmt->fetchColumn();
 
-        $winsStmt = $pdo->prepare(
-            "SELECT COUNT(*) FROM games g JOIN game_players gp ON gp.id = g.winner_game_player_id
-             WHERE g.game_match_id = :match_id AND g.status = 'completed' AND gp.user_id = :user_id"
-        );
-        $winsStmt->execute(['match_id' => $gameMatchId, 'user_id' => $winnerUserId]);
+        // For a team format, $winnerGamePlayerId is only ever a stand-in
+        // representative for FK/display purposes -- determineRoundWinner()
+        // picks whichever teammate scored the higher individual point
+        // total in the game's own final round (ties to lowest seat_order),
+        // NOT always the same lowest-seat_order player game to game, so
+        // counting completed-game wins by that representative's user_id
+        // can split a single team's 2 match wins across two different
+        // teammates and never reach GAME_MATCH_GAMES_TO_WIN. games.
+        // winner_team_id (already written by both completion paths --
+        // finishTeamScoringAndAdvance() and completeGameByResignation() --
+        // before this method runs) is the actually-stable per-team record,
+        // since team_id itself is one of the seats carried forward
+        // unchanged from game to game below.
+        if (self::isTeamFormat($game['format'])) {
+            $winsStmt = $pdo->prepare(
+                "SELECT COUNT(*) FROM games WHERE game_match_id = :match_id AND status = 'completed' AND winner_team_id = :team_id"
+            );
+            $winsStmt->execute(['match_id' => $gameMatchId, 'team_id' => (int) $game['winner_team_id']]);
+        } else {
+            $winsStmt = $pdo->prepare(
+                "SELECT COUNT(*) FROM games g JOIN game_players gp ON gp.id = g.winner_game_player_id
+                 WHERE g.game_match_id = :match_id AND g.status = 'completed' AND gp.user_id = :user_id"
+            );
+            $winsStmt->execute(['match_id' => $gameMatchId, 'user_id' => $winnerUserId]);
+        }
         $winnerMatchWins = (int) $winsStmt->fetchColumn();
 
         if ($winnerMatchWins >= self::GAME_MATCH_GAMES_TO_WIN) {
@@ -9085,9 +9111,9 @@ final class GameService
             // Unlike the team draft case just above, issue #90's own
             // best-of-three match wrapper for Team Play/Closed Team Play
             // genuinely does progress through this branch -- see
-            // advanceGameMatch()'s own docblock for why crediting just
-            // this representative's user_id is equivalent to crediting
-            // the whole winning team.
+            // advanceGameMatch()'s own docblock for why it counts a team
+            // format's match wins off games.winner_team_id rather than off
+            // this representative's own user_id.
             $this->advanceGameMatch($gameId, $winnerRepresentative);
 
             return ['round_scored' => true, 'game_completed' => true, 'winner_game_player_id' => $winnerRepresentative];
