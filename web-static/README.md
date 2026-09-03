@@ -1014,6 +1014,48 @@ every other Settings checkbox (`POST /user/matchmaking-discoverable-preference`)
 Only gates whether YOUR OWN listings are shown to strangers -- joining
 someone else's listing needs no opt-in of its own.
 
+### Best of three (issue #90)
+
+`#new-game-best-of-three-label` (a checkbox, right above the Deck
+dropdown) opts a Duel/Open Team Play/Closed Team Play game into a
+best-of-three match -- see "Best of three" in `php-app/README.md` for the
+full backend writeup (`game_matches`, migration 0223). Shown/hidden by
+`updateBestOfThreeFieldVisibility()` (`isBestOfThreeAvailable()`, wired to
+the same format/deck-type `change` events `updateDeckTypeAvailability()`
+already listens to, plus run once when the dialog opens): visible only
+for `duel`/`team`/`closed_team` with a non-draft deck type -- every
+draft-based deck type already gets its own best-of-three match regardless
+(`draft_match_id`), so the checkbox stays hidden there rather than
+offering a second, meaningless toggle. Checking it sends `best_of_three:
+true` (`createGame()`'s new last parameter, both here and in app.js's own
+wrapper) to `POST /games`; unavailable in "Post to the open lobby" mode,
+same as several other New Game dialog options `postOpenGame()` doesn't
+thread through.
+
+**Lobby grouping** -- `GameService::gameMatchSummaryFor()` returns the
+exact same shape `draftMatchSummaryFor()` already does (`status`/
+`your_wins`/`opponent_wins`/`games_to_win`/`winner_username`/`players`),
+exposed as `game.game_match`/`game.game_match_id` right alongside the
+existing `game.draft_match`/`game.draft_match_id`. `groupGameEntries()`'s
+own `matchGroupKey()` picks whichever of the two a game actually carries
+(never both) to group its up-to-3 games into one `buildMatchGroupRow()`
+entry, and that function itself reads `firstGame.draft_match ||
+firstGame.game_match` -- since the two shapes are identical, every bit of
+match-group rendering (the "Match score: you X, opponent Y (first to Z
+wins)" line, the "... won the match" result line, each game's own compact
+sub-row) already works for either kind of match with no branching. The
+one genuine difference: "View draft pool" (issue #314) stays gated
+specifically on `firstGame.draft_match_id !== null` -- issue #90's own
+match has no shared pool to view at all (no draft ever happened), unlike
+every draft-family deck type.
+
+**Sideboarding** -- a custom_duel match's game 2/3 is a completely
+ordinary fresh `games` row with no submitted decklist yet, so the
+EXISTING "submit your decklist" flow (already built for a brand new
+custom_duel game) renders identically with no changes of its own needed;
+opening the new game from the lobby (or its own "it's your turn"
+notification, tag `'custom-duel-deck'`) is all a player needs to do.
+
 ## Pages
 
 - `index.html` (`/`) — Login form. If the visitor already has an active

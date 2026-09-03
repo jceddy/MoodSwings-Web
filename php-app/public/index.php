@@ -1034,6 +1034,9 @@ if ($path === '/games' && $method === 'POST') {
     // a non-team format with at least one practice bot seated. See
     // createGame()'s own docblock.
     $botGoesFirst = (bool) ($body['bot_goes_first'] ?? false);
+    // Only meaningful for format 'duel'/'team'/'closed_team' with a
+    // non-draft deck_type (issue #90) -- see createGame()'s own docblock.
+    $bestOfThree = (bool) ($body['best_of_three'] ?? false);
     // Only meaningful for deck_type 'rotisserie_draft' -- see createGame()'s own docblock.
     $rotisserieDraftPoolSource = isset($body['rotisserie_draft_pool_source']) ? (string) $body['rotisserie_draft_pool_source'] : null;
     $rotisserieDraftCustomPoolText = isset($body['rotisserie_draft_custom_pool_text']) ? (string) $body['rotisserie_draft_custom_pool_text'] : null;
@@ -1090,6 +1093,7 @@ if ($path === '/games' && $method === 'POST') {
             $tieredRotisserieDraftMode,
             $tieredRotisserieDraftTiers,
             $botGoesFirst,
+            $bestOfThree,
         );
         respond(201, ['status' => 'ok', 'game_id' => $gameId]);
     } catch (GameStateException $e) {

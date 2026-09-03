@@ -3669,6 +3669,84 @@ while `draft_matches.status === 'drafting'` (never true for Sealed Deck), a
 bot seated here goes straight to submitting its own deck the very first time
 `advanceAutomatedTurns()` runs, with no pick-turn logic needed at all.
 
+### Best of three (issue #90)
+
+Every draft-family deck type has had its own best-of-three match wrapper
+since Quick Draft (issue #88, `draft_matches`/`draft_match_players`,
+migration 0027). Issue #90 extends the same "first to 2 game wins, with a
+fresh game auto-created after each one" idea to the three NON-draft
+formats -- Duel, Open Team Play, and Closed Team Play -- via a separate,
+purpose-built `game_matches` table (migration 0223), opted into per game
+with `createGame()`'s own `$bestOfThree` parameter (`best_of_three` in the
+API/New Game dialog). It's ignored (not an error) for any draft-based
+`deck_type`, which already gets its own match regardless.
+
+**Why a separate table, not `draft_matches` reused** -- `draft_matches`'
+own `pool_source`/`pool_card_ids`/`current_round` columns, and
+`draft_match_players`' own `drafted_card_ids`/`deck_card_ids`/`wins`,
+exist purely for draft's live drafting/deck-building mechanic and a
+shared pool that doesn't exist here. `game_matches` carries only what
+this feature actually needs: `format`, `created_by_user_id`, `status`
+(`'in_progress'`/`'completed'`), `winner_user_id`, and timestamps.
+`games.game_match_id` (alongside the existing `draft_match_id`) links a
+game back to its match; `games.match_game_number` (already nullable) is
+reused as-is for either match wrapper's own 1/2/3 numbering -- a game
+belongs to at most one of `draft_match_id`/`game_match_id`, never both,
+so one shared numbering column is unambiguous.
+
+**No `game_match_players` table at all** -- unlike `draft_match_players`,
+which needs a row per player regardless (to hold the drafted pool/current
+deck), this feature has nothing per-player to persist, so a match's own
+win count is simply recomputed on demand from its (at most 3) `games`
+rows: `advanceGameMatch()` resolves the just-completed game's
+`winner_game_player_id` back to a `user_id`, then counts how many of the
+match's own completed games that same `user_id` has already won. This
+also correctly covers Team Play/Closed Team Play without a separate
+`winner_team_id` column: a team game's own `winner_game_player_id` is
+always that game's winning team's lowest-seat_order member (the same
+representative convention `completeGameByResignation()`/
+`finishTeamScoringAndAdvance()` already use to pick one game_player id
+for a team win), and since a match's seats -- and so each team's own
+representative -- carry forward unchanged from game to game (same
+`seat_order`/`team_id`, just re-inserted for the new `games` row), tallying
+by that representative's `user_id` across the match is equivalent to
+tallying by team.
+
+**Sideboarding** -- explicitly limited in this pass to custom_duel's own
+existing per-game decklist submission, which already needs no new
+mechanism at all: a fresh `games`/`game_players` row for game 2/3 starts
+with `custom_deck_card_ids` NULL, same as any brand new custom_duel game,
+so `startGame()`'s existing `requireCustomDuelDecksSubmitted()` gate
+naturally forces -- and freely allows -- an edited decklist before the
+next game can start (no separate sideboard pool, no swap-count limit). A
+seated practice bot is the one exception: since it can never submit its
+own decklist the way its human opponent does, `advanceGameMatch()` copies
+its previous game's own `custom_deck_name`/`custom_deck_card_ids`
+straight onto its new `game_players` row, unchanged, rather than leaving
+it NULL like a human seat.
+
+`structure`/`power`/`jceddy's 75`/`one of each` need no attention either
+way -- `startGame()` already rebuilds a fresh deck from scratch for these
+every game, matching a standalone game of the same deck_type exactly.
+`custom` is the one deck_type that DOES need explicit handling: it's a
+single table-wide decklist supplied once at the match's own creation with
+no per-game resubmission flow of its own (unlike custom_duel), so
+`advanceGameMatch()` copies `custom_deck_name`/`custom_deck_card_ids`
+forward onto the new game unchanged, the same way it does for a bot's own
+custom_duel decklist above -- real sideboarding for a single shared
+decklist (a distinct pool to swap from) is left to a future issue, same
+as the draft-family's own sideboarding was itself once a separate,
+later addition.
+
+**Who goes first in game 2/3** is decided by the ordinary uniform-random
+`resolveFirstPlayerId()` path, not the draft-family's own
+`setPlayFirstNextMatchGame()` (the previous game's loser choosing) --
+that mechanic is gated specifically on `draft_match_id !== null`, so it
+never applies here. A future issue could extend it if this format ever
+wants the same "loser decides" fairness rule.
+
+**Frontend** -- see "Best of three" in `web-static/README.md`.
+
 ### Open Team Play
 
 `format: 'team'` seats exactly 4 players as two teams of two, sitting next

@@ -865,6 +865,7 @@ final class GameService
         ?string $tieredRotisserieDraftMode = null,
         ?array $tieredRotisserieDraftTiers = null,
         bool $botGoesFirst = false,
+        bool $bestOfThree = false,
     ): int {
         if (count($userIds) > self::MAX_PLAYERS) {
             throw new GameStateException('A game cannot have more than ' . self::MAX_PLAYERS . ' players');
@@ -1084,6 +1085,19 @@ final class GameService
             default => null,
         };
 
+        // Issue #90: Duel/Open Team Play/Closed Team Play's own best-of-
+        // three match wrapper (game_matches, migration 0223) -- the
+        // non-draft counterpart to $draftPoolCardIds !== null's own
+        // draft_matches row just below. Silently ignored (rather than
+        // thrown) for a draft-based deck_type or a format that doesn't
+        // support it -- $bestOfThree only ever arrives true from the New
+        // Game dialog's own checkbox, which is itself hidden for any
+        // combination that wouldn't reach here, so there's no real "user
+        // asked for X and got Y" case to guard against, just a harmless
+        // no-op if one ever did.
+        $createGameMatch = $bestOfThree && !in_array($deckType, self::DRAFT_DECK_TYPES, true)
+            && ($format === 'duel' || self::isTeamFormat($format));
+
         $pdo = Connection::get();
         $pdo->beginTransaction();
 
@@ -1102,16 +1116,25 @@ final class GameService
                 $draftMatchId = (int) $pdo->lastInsertId();
             }
 
+            $gameMatchId = null;
+            if ($createGameMatch) {
+                $insertGameMatch = $pdo->prepare(
+                    'INSERT INTO game_matches (format, created_by_user_id) VALUES (:format, :created_by)'
+                );
+                $insertGameMatch->execute(['format' => $format, 'created_by' => $createdByUserId]);
+                $gameMatchId = (int) $pdo->lastInsertId();
+            }
+
             $insertGame = $pdo->prepare(
                 "INSERT INTO games (
                     format, deck_type, custom_deck_name, custom_deck_card_ids,
                     custom_duel_rules_preset, custom_duel_min_cards, custom_duel_rarity_limits, custom_duel_duplicate_limits,
-                    custom_duel_even_color_distribution_rarities, draft_match_id, match_game_number,
+                    custom_duel_even_color_distribution_rarities, draft_match_id, game_match_id, match_game_number,
                     status, created_by_user_id, wins_needed, default_selections_mode, bot_goes_first
                  ) VALUES (
                     :format, :deck_type, :custom_deck_name, :custom_deck_card_ids,
                     :duel_rules_preset, :duel_min_cards, :duel_rarity_limits, :duel_duplicate_limits,
-                    :duel_even_color_distribution_rarities, :draft_match_id, :match_game_number,
+                    :duel_even_color_distribution_rarities, :draft_match_id, :game_match_id, :match_game_number,
                     'waiting', :created_by, :wins_needed, :default_selections_mode, :bot_goes_first
                  )"
             );
@@ -1126,7 +1149,8 @@ final class GameService
                 'duel_duplicate_limits' => $duelDuplicateLimits !== null ? json_encode($duelDuplicateLimits) : null,
                 'duel_even_color_distribution_rarities' => $duelEvenColorDistributionRarities !== null ? json_encode($duelEvenColorDistributionRarities) : null,
                 'draft_match_id' => $draftMatchId,
-                'match_game_number' => $draftMatchId !== null ? 1 : null,
+                'game_match_id' => $gameMatchId,
+                'match_game_number' => ($draftMatchId !== null || $gameMatchId !== null) ? 1 : null,
                 'created_by' => $createdByUserId,
                 'wins_needed' => $winsNeeded,
                 'default_selections_mode' => $defaultSelectionsMode ? 1 : 0,
@@ -1255,6 +1279,17 @@ final class GameService
      * but that's unrelated to bot support specifically.
      */
     private const BOT_SUPPORTED_DECK_TYPES = ['structure', 'power', 'jceddys_75', 'one_of_each', 'custom'];
+
+    /**
+     * Issue #90's own best-of-three match wrapper (game_matches, migration
+     * 0223) for Duel/Open Team Play/Closed Team Play always plays to
+     * exactly this many game wins -- unlike draftGamesToWin(), which
+     * varies with player count (a 4-player team draft is best-of-one),
+     * there's no equivalent short-format case here: this feature only
+     * ever wraps a fixed 2-player duel or a fixed 2v2 team match, so a
+     * single constant covers every case it applies to.
+     */
+    private const GAME_MATCH_GAMES_TO_WIN = 2;
 
     /**
      * Every draft-based deck_type -- the same 5-item list already
@@ -6120,6 +6155,7 @@ final class GameService
 
         // A no-op for every non-draft game -- see its own docblock.
         $this->advanceDraftMatch($gameId, $winnerGamePlayerId);
+        $this->advanceGameMatch($gameId, $winnerGamePlayerId);
 
         return ['round_scored' => false, 'game_completed' => true, 'winner_game_player_id' => $winnerGamePlayerId];
     }
@@ -8493,6 +8529,7 @@ final class GameService
             // A no-op for every non-quick_draft game (games.draft_match_id
             // is only ever set for that deck_type) -- see its own docblock.
             $this->advanceDraftMatch($gameId, $winnerId);
+            $this->advanceGameMatch($gameId, $winnerId);
 
             return ['round_scored' => true, 'game_completed' => true, 'winner_game_player_id' => $winnerId];
         }
@@ -8630,6 +8667,143 @@ final class GameService
     }
 
     /**
+     * Issue #90's own best-of-three match progression for Duel/Open Team
+     * Play/Closed Team Play (games.game_match_id set, migration 0223) --
+     * a no-op for every other game, exactly like advanceDraftMatch(),
+     * whose overall shape this mirrors: credit the win, check for a
+     * match-ending 2nd win, otherwise create game_match_number + 1 on the
+     * same 2 seats and let the players get on with it.
+     *
+     * Unlike advanceDraftMatch(), there's no draft_match_players-style
+     * table to credit a win onto or read back from -- see game_matches'
+     * own migration 0223 docblock for why a completed game's own
+     * winner_game_player_id (resolved to its user_id) is both sufficient
+     * and, for a team format, already equivalent to crediting the whole
+     * winning team: $winnerGamePlayerId there is always that game's
+     * winning team's lowest-seat_order member (the same representative
+     * convention completeGameByResignation()/finishTeamScoringAndAdvance()
+     * already use to pick a single winner_game_player_id for a team
+     * game), and a match's seats -- so each team's own representative --
+     * are carried forward unchanged from game to game below, exactly like
+     * advanceDraftMatch()'s own seat carry-forward.
+     *
+     * Deck continuity between games needs no attention here for
+     * structure/power/jceddy's 75/one of each (startGame() rebuilds them
+     * from scratch every game, same as any standalone game of that
+     * deck_type) or custom_duel (this feature's whole "sideboarding"
+     * story: game_players.custom_deck_card_ids simply starts NULL on the
+     * new game row, same as it would for a brand new custom_duel game,
+     * so startGame()'s existing requireCustomDuelDecksSubmitted() gate
+     * naturally forces -- and freely allows -- a fresh decklist before
+     * the next game can start). 'custom' is the one exception: unlike
+     * every deck_type above, it's a single table-wide decklist supplied
+     * once at createGame() time with no per-game resubmission flow of its
+     * own, so it's carried forward explicitly below instead.
+     */
+    private function advanceGameMatch(int $gameId, int $winnerGamePlayerId): void
+    {
+        $game = $this->fetchGame($gameId);
+        if ($game['game_match_id'] === null) {
+            return;
+        }
+        $gameMatchId = (int) $game['game_match_id'];
+        $pdo = Connection::get();
+
+        $winnerUserStmt = $pdo->prepare('SELECT user_id FROM game_players WHERE id = :id');
+        $winnerUserStmt->execute(['id' => $winnerGamePlayerId]);
+        $winnerUserId = (int) $winnerUserStmt->fetchColumn();
+
+        $winsStmt = $pdo->prepare(
+            "SELECT COUNT(*) FROM games g JOIN game_players gp ON gp.id = g.winner_game_player_id
+             WHERE g.game_match_id = :match_id AND g.status = 'completed' AND gp.user_id = :user_id"
+        );
+        $winsStmt->execute(['match_id' => $gameMatchId, 'user_id' => $winnerUserId]);
+        $winnerMatchWins = (int) $winsStmt->fetchColumn();
+
+        if ($winnerMatchWins >= self::GAME_MATCH_GAMES_TO_WIN) {
+            $pdo->prepare(
+                "UPDATE game_matches SET status = 'completed', winner_user_id = :winner, completed_at = NOW() WHERE id = :id"
+            )->execute(['winner' => $winnerUserId, 'id' => $gameMatchId]);
+
+            return;
+        }
+
+        // custom_deck_name/custom_deck_card_ids/is_bot are only actually
+        // used below for a custom_duel bot seat (see the INSERT loop's
+        // own $isBotCustomDuel branch) -- a practice bot can never submit
+        // its own decklist for the next game the way its human opponent
+        // does (see submitCustomDuelDeck()'s own docblock), so its exact
+        // previous decklist is carried forward unchanged rather than
+        // resubmitted. Harmlessly fetched for every other seat too,
+        // rather than a second, deck-type-conditional query.
+        $seatStmt = $pdo->prepare(
+            'SELECT gp.user_id, gp.seat_order, gp.team_id, gp.custom_deck_name, gp.custom_deck_card_ids, u.is_bot
+             FROM game_players gp JOIN users u ON u.id = gp.user_id
+             WHERE gp.game_id = :game_id ORDER BY gp.seat_order ASC'
+        );
+        $seatStmt->execute(['game_id' => $gameId]);
+        $seats = $seatStmt->fetchAll();
+
+        $insertGame = $pdo->prepare(
+            "INSERT INTO games (
+                format, deck_type, custom_deck_name, custom_deck_card_ids,
+                custom_duel_rules_preset, custom_duel_min_cards, custom_duel_rarity_limits, custom_duel_duplicate_limits,
+                custom_duel_even_color_distribution_rarities, game_match_id, match_game_number,
+                status, created_by_user_id, wins_needed, default_selections_mode
+             ) VALUES (
+                :format, :deck_type, :custom_deck_name, :custom_deck_card_ids,
+                :duel_rules_preset, :duel_min_cards, :duel_rarity_limits, :duel_duplicate_limits,
+                :duel_even_color_distribution_rarities, :game_match_id, :match_game_number,
+                'waiting', :created_by, :wins_needed, :default_selections_mode
+             )"
+        );
+        $insertGame->execute([
+            'format' => $game['format'],
+            'deck_type' => $game['deck_type'],
+            // 'custom' is the one deck_type this feature carries forward
+            // itself -- see this method's own docblock. Every other
+            // deck_type leaves these NULL, same as a fresh game.
+            'custom_deck_name' => $game['deck_type'] === 'custom' ? $game['custom_deck_name'] : null,
+            'custom_deck_card_ids' => $game['deck_type'] === 'custom' ? $game['custom_deck_card_ids'] : null,
+            'duel_rules_preset' => $game['custom_duel_rules_preset'],
+            'duel_min_cards' => $game['custom_duel_min_cards'],
+            'duel_rarity_limits' => $game['custom_duel_rarity_limits'],
+            'duel_duplicate_limits' => $game['custom_duel_duplicate_limits'],
+            'duel_even_color_distribution_rarities' => $game['custom_duel_even_color_distribution_rarities'],
+            'game_match_id' => $gameMatchId,
+            'match_game_number' => (int) $game['match_game_number'] + 1,
+            'created_by' => (int) $game['created_by_user_id'],
+            'wins_needed' => (int) $game['wins_needed'],
+            'default_selections_mode' => (int) $game['default_selections_mode'],
+        ]);
+        $nextGameId = (int) $pdo->lastInsertId();
+
+        $insertPlayer = $pdo->prepare(
+            'INSERT INTO game_players (game_id, user_id, seat_order, team_id, custom_deck_name, custom_deck_card_ids)
+             VALUES (:game_id, :user_id, :seat_order, :team_id, :custom_deck_name, :custom_deck_card_ids)'
+        );
+        $humanCustomDuelSeatUserIds = [];
+        foreach ($seats as $seat) {
+            $isBotCustomDuel = $game['deck_type'] === 'custom_duel' && (bool) $seat['is_bot'];
+            $insertPlayer->execute([
+                'game_id' => $nextGameId,
+                'user_id' => (int) $seat['user_id'],
+                'seat_order' => (int) $seat['seat_order'],
+                'team_id' => $seat['team_id'] !== null ? (int) $seat['team_id'] : null,
+                'custom_deck_name' => $isBotCustomDuel ? $seat['custom_deck_name'] : null,
+                'custom_deck_card_ids' => $isBotCustomDuel ? $seat['custom_deck_card_ids'] : null,
+            ]);
+            if ($game['deck_type'] === 'custom_duel' && !$seat['is_bot']) {
+                $humanCustomDuelSeatUserIds[] = (int) $seat['user_id'];
+            }
+        }
+
+        if ($humanCustomDuelSeatUserIds !== []) {
+            $this->notifyDraftUsersItsYourTurn($nextGameId, $humanCustomDuelSeatUserIds, "Game #{$nextGameId} needs your decklist before the next game.", 'custom-duel-deck');
+        }
+    }
+
+    /**
      * Team-format counterpart to the rest of finishScoringAndAdvance() --
      * $scores is already computed exactly like every other format
      * (Sneakiness's swap, Enthusiasm's/Passion's bonus, etc. all already
@@ -8722,6 +8896,13 @@ final class GameService
             // winner_game_player_id already uses for every other
             // team-format completion.
             $this->advanceDraftMatch($gameId, $winnerRepresentative);
+            // Unlike the team draft case just above, issue #90's own
+            // best-of-three match wrapper for Team Play/Closed Team Play
+            // genuinely does progress through this branch -- see
+            // advanceGameMatch()'s own docblock for why crediting just
+            // this representative's user_id is equivalent to crediting
+            // the whole winning team.
+            $this->advanceGameMatch($gameId, $winnerRepresentative);
 
             return ['round_scored' => true, 'game_completed' => true, 'winner_game_player_id' => $winnerRepresentative];
         }
@@ -10296,6 +10477,7 @@ final class GameService
         }
 
         $draftMatchId = $game['draft_match_id'] !== null ? (int) $game['draft_match_id'] : null;
+        $gameMatchId = $game['game_match_id'] !== null ? (int) $game['game_match_id'] : null;
 
         $currentTurnGamePlayerId = null;
         $awaitingYourResponse = false;
@@ -10417,6 +10599,17 @@ final class GameService
             'match_game_number' => $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null,
             'draft_match' => ($draftMatchId !== null && $viewerUserId !== null)
                 ? $this->draftMatchSummaryFor($draftMatchId, $viewerUserId)
+                : null,
+            // Issue #90's own best-of-three match wrapper for Duel/Open
+            // Team Play/Closed Team Play -- the non-draft counterpart to
+            // draft_match_id/draft_match just above, grouping this
+            // feature's own up-to-3 games rows (same game_match_id) the
+            // same way the lobby already groups a draft match's. Mutually
+            // exclusive with draft_match_id/draft_match (a game belongs
+            // to at most one of the two match wrappers, never both).
+            'game_match_id' => $gameMatchId,
+            'game_match' => ($gameMatchId !== null && $viewerUserId !== null)
+                ? $this->gameMatchSummaryFor($gameMatchId, $viewerUserId)
                 : null,
         ];
     }
@@ -10742,6 +10935,124 @@ final class GameService
             'winner_username' => $winnerUsername,
             'players' => $players,
         ];
+    }
+
+    /**
+     * gameSummaryFor()'s own game_match/'game_match' shape (issue #90's
+     * best-of-three match wrapper for Duel/Open Team Play/Closed Team
+     * Play) -- deliberately the same field names as draftMatchSummaryFor()
+     * (status/your_wins/opponent_wins/games_to_win/winner_username/players)
+     * so the lobby's own draft-match-grouping rendering can treat either
+     * shape identically, keyed off whichever of draft_match/game_match a
+     * row actually carries (see web-static/js/game.js's own match summary
+     * rendering).
+     *
+     * Unlike draftMatchSummaryFor(), there's no draft_match_players-style
+     * table to read wins/usernames back from -- see game_matches' own
+     * migration 0223 docblock for why a completed game's own
+     * winner_game_player_id (resolved to its user_id) is sufficient,
+     * including for Team Play/Closed Team Play. Seating (and so each
+     * team's own membership) is read from the match's own MOST RECENT
+     * games row rather than $gameId's specifically -- both are identical
+     * in practice (advanceGameMatch() always carries seats forward
+     * unchanged), but the most recent game is unambiguously still part
+     * of the match even after it's the one that just completed it.
+     *
+     * @return array<string, mixed>
+     */
+    private function gameMatchSummaryFor(int $gameMatchId, int $viewerUserId): array
+    {
+        $match = $this->fetchGameMatch($gameMatchId);
+        $isTeamFormat = self::isTeamFormat($match['format']);
+
+        $seatStmt = Connection::get()->prepare(
+            'SELECT gp.user_id, gp.team_id, u.username FROM game_players gp
+             JOIN games g ON g.id = gp.game_id
+             JOIN users u ON u.id = gp.user_id
+             WHERE g.game_match_id = :match_id
+             ORDER BY g.match_game_number DESC, gp.seat_order ASC
+             LIMIT ' . ($isTeamFormat ? 4 : 2)
+        );
+        $seatStmt->execute(['match_id' => $gameMatchId]);
+        $seats = $seatStmt->fetchAll();
+
+        $winsByUserStmt = Connection::get()->prepare(
+            "SELECT gp.user_id, COUNT(*) AS wins FROM games g
+             JOIN game_players gp ON gp.id = g.winner_game_player_id
+             WHERE g.game_match_id = :match_id AND g.status = 'completed'
+             GROUP BY gp.user_id"
+        );
+        $winsByUserStmt->execute(['match_id' => $gameMatchId]);
+        $winsByUser = [];
+        foreach ($winsByUserStmt->fetchAll() as $row) {
+            $winsByUser[(int) $row['user_id']] = (int) $row['wins'];
+        }
+
+        $viewerSideKey = null;
+        foreach ($seats as $seat) {
+            if ((int) $seat['user_id'] === $viewerUserId) {
+                $viewerSideKey = $isTeamFormat ? (int) $seat['team_id'] : $viewerUserId;
+                break;
+            }
+        }
+
+        $winsBySide = [];
+        foreach ($seats as $seat) {
+            $sideKey = $isTeamFormat ? (int) $seat['team_id'] : (int) $seat['user_id'];
+            $winsBySide[$sideKey] = ($winsBySide[$sideKey] ?? 0) + ($winsByUser[(int) $seat['user_id']] ?? 0);
+        }
+
+        $yourWins = $viewerSideKey !== null ? ($winsBySide[$viewerSideKey] ?? 0) : 0;
+        $opponentWins = 0;
+        foreach ($winsBySide as $sideKey => $wins) {
+            if ($sideKey !== $viewerSideKey) {
+                $opponentWins = $wins;
+                break;
+            }
+        }
+
+        $winnerUsername = null;
+        if ($match['winner_user_id'] !== null) {
+            foreach ($seats as $seat) {
+                if ((int) $seat['user_id'] === (int) $match['winner_user_id']) {
+                    $winnerUsername = $seat['username'];
+                    break;
+                }
+            }
+        }
+
+        $players = [];
+        foreach ($seats as $seat) {
+            $sideKey = $isTeamFormat ? (int) $seat['team_id'] : (int) $seat['user_id'];
+            $players[] = [
+                'user_id' => (int) $seat['user_id'],
+                'username' => $seat['username'],
+                'wins' => $winsBySide[$sideKey] ?? 0,
+                'is_you' => (int) $seat['user_id'] === $viewerUserId,
+            ];
+        }
+
+        return [
+            'status' => $match['status'],
+            'your_wins' => $yourWins,
+            'opponent_wins' => $opponentWins,
+            'games_to_win' => self::GAME_MATCH_GAMES_TO_WIN,
+            'winner_username' => $winnerUsername,
+            'players' => $players,
+        ];
+    }
+
+    private function fetchGameMatch(int $gameMatchId): array
+    {
+        $stmt = Connection::get()->prepare('SELECT * FROM game_matches WHERE id = :id');
+        $stmt->execute(['id' => $gameMatchId]);
+        $match = $stmt->fetch();
+
+        if ($match === false) {
+            throw new GameStateException("No such game match {$gameMatchId}");
+        }
+
+        return $match;
     }
 
     /**
