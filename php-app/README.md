@@ -6795,6 +6795,16 @@ since it already holds that dependency):
   pile is enough. The instant the pile has even one card in it, Harmony
   reverts to its ordinary `EARLY_PRIORITY_EFFECT_KEYS` boosted treatment.
 
+  **Grief** (confirmed by the maintainer) gets the identical
+  `sortPriorityValue()` `PHP_INT_MIN` treatment as Harmony above --
+  `GriefEffect::afterPlaying()` grants its own two extra plays with the
+  same `['source' => 'discard']` restriction, so an empty discard pile
+  leaves both plays with nothing to take from, "avoid playing it until
+  there are cards in the discard pile to play" same as Harmony, just
+  granting two plays instead of one. The instant the pile has even one
+  card in it, Grief reverts to its ordinary `EARLY_PRIORITY_EFFECT_KEYS`
+  boosted treatment.
+
   **Nostalgia** (confirmed by the maintainer) gets the identical
   `sortPriorityValue()` `PHP_INT_MIN` treatment as Harmony above,
   "save it until there's something in the discard pile for it to
