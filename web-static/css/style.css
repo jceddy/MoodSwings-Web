@@ -2563,11 +2563,12 @@ dialog#deck-builder-dialog[open] {
     flex-shrink: 0;
 }
 
-/* Fixed width (wide enough for "Watch replay" (issue #240), now the
-   longest of the possible labels) so every row's buttons line up in a
-   column regardless of which label its own game's status/action picked. */
+/* Fixed width (wide enough for "Download data" (issue #99), now the
+   longest of the possible labels, without wrapping) so every row's
+   buttons line up in a column regardless of which label its own game's
+   status/action picked. */
 .lobby-actions button {
-    width: 7rem;
+    width: 9.5rem;
 }
 
 .lobby-format {
