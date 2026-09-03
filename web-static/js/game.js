@@ -988,6 +988,23 @@
         return colorRarityCount < spec.count;
     }
 
+    // The most copies of $card the deck's own format allows -- null means
+    // no cap (free-form). Used only by deckBuilderCardDetailActions()
+    // below, to show "current / max" alongside canAddCardToBuilderDeck()'s
+    // own pass/fail so the card-detail popup's copy-count indicator stays
+    // in sync with whatever actually gates the "+ Deck" button.
+    function deckBuilderMaxCopiesForCard(formatKey, card) {
+        const format = DECK_BUILDER_FORMATS[formatKey];
+        if (!format || formatKey === 'free_form') {
+            return null;
+        }
+        if (format.singleton) {
+            return 1;
+        }
+        const spec = format.raritySpec[card.rarity];
+        return spec ? spec.maxCopies : null;
+    }
+
     // Sideboarding's own analog of canAddCardToBuilderDeck() -- Free-form
     // is unrestricted (same policy as its own main deck); Power Duel caps
     // the sideboard at POWER_DUEL_SIDEBOARD_MAX_CARDS total and singleton
@@ -1140,10 +1157,11 @@
     // dialog", not "add/remove this specific card"), so the deck
     // builder's own add/remove actions live in sibling buttons instead of
     // overloading the thumb's own click. $actions is an array of
-    // {label, onAction, disabled} -- a catalog item gets two (add to
-    // deck, add to sideboard, the latter only when
-    // deckBuilderFormatSupportsSideboard() allows it), a deck/sideboard
-    // item gets just its own single "Remove".
+    // {label, onAction, disabled} -- used only by the deck/sideboard
+    // panels below for their own single "Remove" action; the catalog
+    // panel's own "+ Deck"/"+ Sideboard" actions moved into the
+    // card-detail popup instead (see deckBuilderCardDetailActions()),
+    // so a catalog item is just a bare thumb (openDeckBuilderCardDetail()).
     function buildDeckBuilderCardItem(card, actions) {
         const item = document.createElement('div');
         item.className = 'deck-builder-card-item';
@@ -1161,9 +1179,77 @@
         return item;
     }
 
-    function renderDeckBuilderCatalog() {
+    // A copy-count indicator's text for the card-detail popup's own
+    // "+ Deck"/"+ Sideboard" rows -- "current / max" once $max is known
+    // (every format but free-form caps copies somehow, see
+    // deckBuilderMaxCopiesForCard()), otherwise just the running count.
+    function deckBuilderCopiesLabel(copies, max, suffix) {
+        return copies + (max !== null ? ' / ' + max : '') + ' ' + suffix;
+    }
+
+    // The card-detail popup's own Deck Builder catalog actions (issue #93
+    // follow-up) -- "+ Deck" always, "+ Sideboard" too when
+    // deckBuilderFormatSupportsSideboard() allows it for the format
+    // currently selected. Each pairs a copy-count indicator with the
+    // same canAddCardToBuilderDeck()/canAddCardToBuilderSideboard() checks
+    // the old under-thumbnail buttons used, and re-opens this same popup
+    // (openDeckBuilderCardDetail()) after adding so the indicator and
+    // disabled state stay current for a player adding several copies in
+    // a row without closing the dialog.
+    function deckBuilderCardDetailActions(card) {
         const formatKey = document.getElementById('deck-builder-format').value;
-        const sideboardSupported = deckBuilderFormatSupportsSideboard(formatKey);
+
+        const copiesInDeck = deckBuilderCardIds.filter((id) => id === card.card_id).length;
+        const actions = [{
+            label: '+ Deck',
+            count: deckBuilderCopiesLabel(copiesInDeck, deckBuilderMaxCopiesForCard(formatKey, card), 'in deck'),
+            disabled: !canAddCardToBuilderDeck(formatKey, deckBuilderCardIds, card),
+            onAction: () => {
+                addCardToBuilderDeck(card);
+                openDeckBuilderCardDetail(card);
+            },
+        }];
+
+        if (deckBuilderFormatSupportsSideboard(formatKey)) {
+            const copiesInSideboard = deckBuilderSideboardCardIds.filter((id) => id === card.card_id).length;
+            // Power Duel's sideboard is singleton (canAddCardToBuilderSideboard()'s
+            // own !sideboardCardIds.includes(card.card_id) check) -- Free-form's
+            // has no cap of its own, same as its main deck.
+            const sideboardMax = formatKey === 'power' ? 1 : null;
+            actions.push({
+                label: '+ Sideboard',
+                count: deckBuilderCopiesLabel(copiesInSideboard, sideboardMax, 'in sideboard'),
+                disabled: !canAddCardToBuilderSideboard(formatKey, deckBuilderSideboardCardIds, deckBuilderCardIds, card),
+                onAction: () => {
+                    addCardToBuilderSideboard(card);
+                    openDeckBuilderCardDetail(card);
+                },
+            });
+        }
+
+        return actions;
+    }
+
+    // Opens the shared card-detail popup with this card's own Deck
+    // Builder actions -- the catalog panel's only way to add a card now
+    // (see buildDeckBuilderCatalogCardItem() below), and also how each
+    // "+ Deck"/"+ Sideboard" click above refreshes the popup in place.
+    function openDeckBuilderCardDetail(card) {
+        openCardDetail(card, null, null, null, deckBuilderCardDetailActions(card));
+    }
+
+    // The catalog panel's own card item -- unlike buildDeckBuilderCardItem()
+    // above (deck/sideboard panels' single "Remove" button), a catalog
+    // item carries no buttons of its own at all; its thumb's click opens
+    // the card-detail popup where "+ Deck"/"+ Sideboard" now live.
+    function buildDeckBuilderCatalogCardItem(card) {
+        const item = document.createElement('div');
+        item.className = 'deck-builder-card-item';
+        item.appendChild(buildCardThumb(card, { onClick: () => openDeckBuilderCardDetail(card) }));
+        return item;
+    }
+
+    function renderDeckBuilderCatalog() {
         const filters = deckBuilderCatalogFilters();
         const filtered = deckBuilderCatalog.filter((card) => cardMatchesDeckBuilderFilters(card, filters));
         const cards = sortBuilderCards(filtered, 'deck-builder-catalog-sort');
@@ -1173,13 +1259,7 @@
         document.getElementById('deck-builder-catalog-empty').hidden = cards.length > 0;
 
         for (const card of cards) {
-            const canAddToDeck = canAddCardToBuilderDeck(formatKey, deckBuilderCardIds, card);
-            const actions = [{ label: '+ Deck', onAction: () => addCardToBuilderDeck(card), disabled: !canAddToDeck }];
-            if (sideboardSupported) {
-                const canAddToSideboard = canAddCardToBuilderSideboard(formatKey, deckBuilderSideboardCardIds, deckBuilderCardIds, card);
-                actions.push({ label: '+ Sideboard', onAction: () => addCardToBuilderSideboard(card), disabled: !canAddToSideboard });
-            }
-            gridEl.appendChild(buildDeckBuilderCardItem(card, actions));
+            gridEl.appendChild(buildDeckBuilderCatalogCardItem(card));
         }
     }
 
@@ -3966,8 +4046,17 @@
     // when passed (and `selection` isn't), is the simpler one-shot form of
     // the same button -- { label, onClick, disabled } -- for a single
     // immediate action rather than a toggle, e.g. Rotisserie Draft's own
-    // "Draft" button (see renderRotisserieDraftDrafting()).
-    function openCardDetail(card, ownerLabel, selection, actionButton) {
+    // "Draft" button (see renderRotisserieDraftDrafting()). `deckBuilderActions`,
+    // when passed, is the Deck Builder catalog's own multi-action form --
+    // an array of { label, count, onAction, disabled }, one row per
+    // action (its own "+ Deck"/"+ Sideboard" buttons, each paired with a
+    // copy-count indicator) -- see deckBuilderCardDetailActions(). Unlike
+    // `selection`/`actionButton`, clicking one of these does NOT close the
+    // dialog, since adding a copy is something a player plausibly repeats
+    // several times in a row without needing to reopen the popup; the
+    // caller (openDeckBuilderCardDetail()) re-invokes this function to
+    // refresh the counts/disabled state in place instead.
+    function openCardDetail(card, ownerLabel, selection, actionButton, deckBuilderActions) {
         const artEl = document.getElementById('card-detail-art');
         setCardArt(artEl, card);
         artEl.alt = card.name + '. ' + (card.rules_text || 'No ability.');
@@ -4135,7 +4224,40 @@
             selectButton.onclick = null;
         }
 
-        cardDetailDialog.showModal();
+        const deckBuilderActionsEl = document.getElementById('card-detail-deck-builder-actions');
+        deckBuilderActionsEl.innerHTML = '';
+        if (deckBuilderActions && deckBuilderActions.length > 0) {
+            for (const { label, count, onAction, disabled } of deckBuilderActions) {
+                const row = document.createElement('div');
+                row.className = 'card-detail-deck-builder-action';
+
+                const countEl = document.createElement('span');
+                countEl.textContent = count;
+                row.appendChild(countEl);
+
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.textContent = label;
+                button.disabled = disabled || false;
+                button.addEventListener('click', onAction);
+                row.appendChild(button);
+
+                deckBuilderActionsEl.appendChild(row);
+            }
+            deckBuilderActionsEl.hidden = false;
+        } else {
+            deckBuilderActionsEl.hidden = true;
+        }
+
+        // openDeckBuilderCardDetail() re-invokes this function (via its
+        // own actions' onAction above) to refresh the counts/disabled
+        // state in place after each add -- showModal() on an
+        // already-open <dialog> throws, so this only opens it the first
+        // time, same guard a Chaos Draft re-render of an already-open
+        // dialog would otherwise need.
+        if (!cardDetailDialog.open) {
+            cardDetailDialog.showModal();
+        }
     }
 
     document.getElementById('card-detail-close-button').addEventListener('click', () => {

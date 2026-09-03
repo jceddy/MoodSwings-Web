@@ -1125,11 +1125,21 @@ Duel formats (`deckBuilderFormatSupportsSideboard()`) -- Structure
 Deck/jceddy's 75 Card stay exactly as they were, an exact-match rarity/
 color shape for the WHOLE deck with no natural "extra bench" concept of
 their own. `deckBuilderSideboardCardIds` mirrors `deckBuilderCardIds`'
-own flat one-entry-per-copy array; every catalog card now offers two
-actions instead of one (`buildDeckBuilderCardItem()` widened to take an
-array of `{label, onAction, disabled}` specs) -- "+ Deck" (renamed from
-the old unlabeled "+ Add", now that there are two zones to add to) always,
-plus "+ Sideboard" whenever the current format supports it.
+own flat one-entry-per-copy array. A catalog item's "+ Deck"/"+
+Sideboard" actions live in the shared card-detail popup rather than
+under its own thumbnail (`buildDeckBuilderCatalogCardItem()`'s thumb
+click opens `openDeckBuilderCardDetail()`, which computes them via
+`deckBuilderCardDetailActions()`) -- "+ Deck" always, plus "+
+Sideboard" whenever the current format supports it, each paired with
+its own copy-count indicator (`deckBuilderCopiesLabel()`: "2 in deck"
+for an uncapped zone, "2 / 3 in deck" once `deckBuilderMaxCopiesForCard()`
+knows a cap) on its own line under the card image. Clicking one adds
+the copy and re-opens the SAME popup in place (`openCardDetail()`'s own
+`deckBuilderActions` parameter skips `showModal()` on an already-open
+dialog) rather than closing it, so adding several copies in a row --
+or "+ Deck" then "+ Sideboard" for two different cards -- never means
+reopening the dialog each time; the two actions also gate each other
+live, since a card already in one zone can't be added to the other.
 `canAddCardToBuilderSideboard()` mirrors `canAddCardToBuilderDeck()`'s
 own per-format cap logic: Free-form is unrestricted (matching its own
 main-deck policy), Power Duel caps the sideboard at
@@ -1139,7 +1149,9 @@ itself (`renderDeckBuilderSideboard()`) is a third card grid alongside
 the catalog/deck ones, with its own independent 3-select multi-sort
 (`#deck-builder-sideboard-sort-1/2/3`) and running `<count>`/`<count> /
 <target>` summary line, same conventions the deck panel already
-established. Saving threads `deckBuilderSideboardCardIds` through to
+established; a deck/sideboard item's own single "Remove" action stays
+under its thumbnail (`buildDeckBuilderCardItem()`), unaffected by the
+catalog's move into the popup. Saving threads `deckBuilderSideboardCardIds` through to
 `createDecklist()`/`updateDecklist()`'s own existing `sideboard_card_ids`
 parameter (already wired end-to-end server-side since issue #92 -- this
 was purely a missing piece of client-side UI, not a new backend
