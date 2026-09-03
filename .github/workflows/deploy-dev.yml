@@ -41,27 +41,9 @@ jobs:
       # workaround: stash the secret in `env` once, then gate on
       # `env.MIGRATION_DEPLOY_KEY != ''` instead of `secrets.MIGRATION_DEPLOY_KEY != ''`.
       MIGRATION_DEPLOY_KEY: ${{ secrets.MIGRATION_DEPLOY_KEY }}
-      # Same reasoning, for the "Announce deploy on Discord" step's own
-      # `if:` below -- this is the app's own dev-environment Discord
-      # bot's token (DEV_DISCORD_BOT_TOKEN, already used above to
-      # populate dist/.env), a distinct Discord application from
-      # production's own DISCORD_BOT_TOKEN, matching every other
-      # DEV_-prefixed Discord secret already in this workflow. Posts into
-      # the SAME channel deploy.yml (production) announces into, though
-      # -- DISCORD_ANNOUNCE_CHANNEL_ID below is deliberately not
-      # DEV_-prefixed, since both this bot and the production one need to
-      # be members of that one shared channel with permission to post.
-      DISCORD_ANNOUNCE_BOT_TOKEN: ${{ secrets.DEV_DISCORD_BOT_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-        with:
-          # Full history, not the default shallow (depth-1) clone -- the
-          # "Announce deploy on Discord" step below diffs from
-          # `github.event.before` (the commit this push moved
-          # `development` away from) to `github.sha`, which needs that
-          # commit to actually be present locally to walk back to.
-          fetch-depth: 0
 
       - name: Set up PHP
         uses: shivammathur/setup-php@v2
@@ -257,44 +239,3 @@ jobs:
             -A "Mozilla/5.0 (compatible; MoodSwingsCD/1.0)" \
             -H "Accept: application/json" \
             "$SITE_URL/app/health"
-
-      - name: Announce deploy on Discord
-        # Mirrors deploy.yml (production)'s own step exactly, aside from
-        # DEV_SITE_URL/"development" here vs SITE_URL/"production" there
-        # and using the dev bot's own token (DISCORD_ANNOUNCE_BOT_TOKEN,
-        # stashed from DEV_DISCORD_BOT_TOKEN at job level above) -- see
-        # that step's own comment for the full rationale (why this is
-        # gated on success() implicitly, why it posts directly rather
-        # than through DiscordNotificationChannel.php's DM-only path, and
-        # why it no-ops entirely rather than failing when unconfigured).
-        # DISCORD_ANNOUNCE_CHANNEL_ID is deliberately the SAME repo
-        # variable deploy.yml reads -- both bots post into one shared
-        # channel, so a reader sees dev and production deploys together
-        # in one place rather than needing to watch two channels.
-        if: ${{ vars.DEV_SITE_URL != '' && vars.DISCORD_ANNOUNCE_CHANNEL_ID != '' && env.DISCORD_ANNOUNCE_BOT_TOKEN != '' }}
-        env:
-          SITE_URL: ${{ vars.DEV_SITE_URL }}
-          DISCORD_ANNOUNCE_CHANNEL_ID: ${{ vars.DISCORD_ANNOUNCE_CHANNEL_ID }}
-        run: |
-          set -euo pipefail
-          VERSION="$(tr -d '[:space:]' < VERSION)"
-          RELEASE_NOTES_FILE=".github/release-notes/${VERSION}.md"
-
-          # A curated summary for this exact version takes priority over
-          # the auto-generated commit-subject list (.github/scripts/
-          # auto_changelog.sh) -- see .github/release-notes/README.md and
-          # deploy.yml's own copy of this step for the full rationale.
-          if [ -f "$RELEASE_NOTES_FILE" ]; then
-            CHANGES="$(cat "$RELEASE_NOTES_FILE")"
-          else
-            CHANGES="$(bash .github/scripts/auto_changelog.sh "${{ github.event.before }}" "$GITHUB_SHA")"
-          fi
-
-          CONTENT="$(printf '🚀 **MoodSwings** \`%s\` deployed to development: %s\n\n%s' "$VERSION" "$SITE_URL" "$CHANGES")"
-          PAYLOAD="$(jq -n --arg content "$CONTENT" '{content: $content}')"
-
-          curl -fsS -X POST \
-            -H "Authorization: Bot ${DISCORD_ANNOUNCE_BOT_TOKEN}" \
-            -H "Content-Type: application/json" \
-            -d "$PAYLOAD" \
-            "https://discord.com/api/v10/channels/${DISCORD_ANNOUNCE_CHANNEL_ID}/messages"

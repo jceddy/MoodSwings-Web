@@ -1268,9 +1268,20 @@ final class BotPlayerService
      * field with no legal answer makes the whole card unplayable this
      * way, same as a required base field would.
      *
+     * Public (not just chooseAction()'s own internal use) so
+     * MoodSwings\Bot\LegalChoiceEnumerator can reuse this exact,
+     * already-tested choice-building logic as the one guaranteed-legal
+     * default action for a given card, then vary just the schema-driven
+     * single-target field (if this card's effect has one -- see
+     * usesBespokeChoiceBuilding()) into a handful of alternate targeting
+     * variants for a search engine to actually compare via simulation,
+     * rather than reimplementing full legal-choice enumeration for every
+     * one of buildBaseChoicesForCard()'s many bespoke per-effect-key
+     * branches from scratch.
+     *
      * @return ?array<string, mixed>
      */
-    private function buildChoicesForCard(BoardState $state, int $cardId, int $botGamePlayerId): ?array
+    public function buildChoicesForCard(BoardState $state, int $cardId, int $botGamePlayerId): ?array
     {
         $choices = $this->buildBaseChoicesForCard($state, $cardId, $botGamePlayerId);
         if ($choices === null) {
@@ -1292,6 +1303,37 @@ final class BotPlayerService
         }
 
         return $choices;
+    }
+
+    /**
+     * Every effect key buildBaseChoicesForCard() below answers with its
+     * own bespoke, hand-tuned choice-building logic instead of the
+     * generic CardChoiceSchema/BotChoiceResolver field loop -- kept as an
+     * explicit, single-source-of-truth list purely for
+     * usesBespokeChoiceBuilding() below (see its own docblock); the
+     * if-chain right below is the actual dispatch and stays exactly as
+     * it was regardless of this list's contents.
+     */
+    private const BESPOKE_CHOICE_EFFECT_KEYS = [
+        'rationalization', 'avoidance', 'cynicism', 'intimidation', 'paranoia',
+        'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
+        'nostalgia', 'contempt', 'sneakiness',
+    ];
+
+    /**
+     * Whether $effectKey is answered by one of buildBaseChoicesForCard()'s
+     * own bespoke per-card branches rather than the generic
+     * CardChoiceSchema field loop -- exposed for
+     * MoodSwings\Bot\LegalChoiceEnumerator, which can only safely
+     * generate alternate TARGETING variants (see its own docblock) for a
+     * card whose choices came from that generic, schema-driven path in
+     * the first place; a bespoke branch's own returned choice keys have
+     * no schema field definition to look up a legal candidate list from
+     * at all.
+     */
+    public function usesBespokeChoiceBuilding(string $effectKey): bool
+    {
+        return in_array($effectKey, self::BESPOKE_CHOICE_EFFECT_KEYS, true);
     }
 
     /** @return ?array<string, mixed> */

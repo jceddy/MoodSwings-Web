@@ -5686,6 +5686,16 @@
             } else if (state.you.is_your_turn) {
                 turnSuffix = ' — your turn';
             }
+            // Issue #419's own Tactical Bot tier: while its background
+            // search job is still running, state.bot_thinking (see
+            // GameService::botThinkingStateFor()) names the seat -- this
+            // always wins over the plain "waiting on another player"/
+            // "<name>'s turn" text above, for every viewer (spectators
+            // included), since it's the more specific and more useful
+            // thing to say about that same turn.
+            if (state.bot_thinking) {
+                turnSuffix = ' — ' + state.bot_thinking.username + ' is thinking…';
+            }
             document.getElementById('board-round-status').textContent =
                 'Round ' + state.round.round_number + turnSuffix;
         }
