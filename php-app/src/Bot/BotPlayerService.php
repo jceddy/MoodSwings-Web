@@ -331,13 +331,25 @@ final class BotPlayerService
      * all the way down to passing if truly nothing works.
      *
      * @param int[] $playableCardIds
+     * @param ?int $roundWinsNeededToWinGame how many MORE round wins the
+     *     bot's own side (team, in a team format) needs to win the whole
+     *     GAME outright, counting a win of the round in progress right
+     *     now as the first candidate -- 1 means winning THIS round would
+     *     end it. Null (the default) means "unknown/not applicable"
+     *     (e.g. a draft-format decision with no game_id context yet, or
+     *     a caller that simply hasn't been updated to compute it), which
+     *     behaves exactly as it always did before this parameter
+     *     existed. See rationalizationHasAGoodReasonToPlayNow()'s own
+     *     docblock for the one place this currently matters (reported
+     *     live: "[Rationalization] should not be played for points to
+     *     win a round unless it's going to win the entire game").
      * @return ?array{card_id: int, choices: array<string, mixed>} null means pass.
      */
-    public function chooseAction(BoardState $state, array $playableCardIds, int $botGamePlayerId): ?array
+    public function chooseAction(BoardState $state, array $playableCardIds, int $botGamePlayerId, ?int $roundWinsNeededToWinGame = null): ?array
     {
         usort(
             $playableCardIds,
-            fn (int $a, int $b) => $this->sortPriorityValue($state, $b, $botGamePlayerId, $playableCardIds) <=> $this->sortPriorityValue($state, $a, $botGamePlayerId, $playableCardIds),
+            fn (int $a, int $b) => $this->sortPriorityValue($state, $b, $botGamePlayerId, $playableCardIds, $roundWinsNeededToWinGame) <=> $this->sortPriorityValue($state, $a, $botGamePlayerId, $playableCardIds, $roundWinsNeededToWinGame),
         );
 
         foreach ($playableCardIds as $cardId) {
@@ -828,61 +840,91 @@ final class BotPlayerService
      * otherwise too marginal to lead with blind, unlike most cards'
      * plain-baseValue() default.
      */
-    private function sortPriorityValue(BoardState $state, int $cardId, int $botGamePlayerId, array $playableCardIds): int
+    private function sortPriorityValue(BoardState $state, int $cardId, int $botGamePlayerId, array $playableCardIds, ?int $roundWinsNeededToWinGame = null): int
     {
-        $effectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
-        if ($effectKey === 'rationalization' && !$this->rationalizationHasAGoodReasonToPlayNow($state, $cardId, $botGamePlayerId)) {
-            return PHP_INT_MIN;
-        }
-        if ($effectKey === 'cynicism' && !$this->cynicismHasAGoodReasonToPlayNow($state, $cardId, $botGamePlayerId, $playableCardIds)) {
-            return PHP_INT_MIN;
-        }
-        if ($effectKey === 'contempt' && !$this->contemptHasAGoodReasonToPlayNow($state, $cardId, $botGamePlayerId)) {
-            return PHP_INT_MIN;
-        }
-        if ($effectKey === 'conviction' && !$this->convictionHasAGoodReasonToPlayNow($state, $cardId, $botGamePlayerId)) {
-            return PHP_INT_MIN;
-        }
-        if ($effectKey === 'intimidation' && $this->intimidationTargetPlayerId($state, $botGamePlayerId) === null) {
-            return PHP_INT_MIN;
-        }
-        if ($effectKey === 'paranoia' && $this->paranoiaTargetPlayerId($state, $botGamePlayerId) === null) {
-            return PHP_INT_MIN;
-        }
-        if ($effectKey === 'pacifism' && $this->pacifismTargetMoodIds($state, $botGamePlayerId) === []) {
-            return PHP_INT_MIN;
-        }
-        if ($effectKey === 'anger' && $this->angerTargetMoodIds($state, $cardId, $botGamePlayerId) === []) {
-            return PHP_INT_MIN;
-        }
-        if ($effectKey === 'harmony' && $state->discardPile() === []) {
-            return PHP_INT_MIN;
-        }
-        if ($effectKey === 'grief' && $state->discardPile() === []) {
-            return PHP_INT_MIN;
-        }
-        if ($effectKey === 'nostalgia' && $state->discardPile() === []) {
-            return PHP_INT_MIN;
-        }
-        if ($effectKey === 'fear' && !$this->fearHasAGoodReasonToPlayNow($state, $botGamePlayerId)) {
-            return PHP_INT_MIN;
-        }
-        if ($effectKey === 'denial' && !$this->denialHasAGoodReasonToPlayNow($state, $cardId, $botGamePlayerId)) {
-            return PHP_INT_MIN;
-        }
-        if ($effectKey === 'exhilaration' && !$this->exhilarationHasAGoodReasonToPlayNow($state, $botGamePlayerId)) {
-            return PHP_INT_MIN;
-        }
-        if ($this->envyDiscouragesPlayingThisCard($state, $cardId, $effectKey, $botGamePlayerId, $playableCardIds)) {
+        if (!$this->hasGoodReasonToPlayNow($state, $cardId, $botGamePlayerId, $playableCardIds, $roundWinsNeededToWinGame)) {
             return PHP_INT_MIN;
         }
 
+        $effectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
         $priority = $this->baseValue($state, $cardId);
         if (in_array($effectKey, self::EARLY_PRIORITY_EFFECT_KEYS, true)) {
             $priority += self::EARLY_PRIORITY_BONUS;
         }
 
         return $priority;
+    }
+
+    /**
+     * Every "hold this for a genuinely good moment rather than leading
+     * with it blindly" veto in one place -- extracted from
+     * sortPriorityValue() (still this method's only caller for the plain
+     * heuristic bot's own greedy card-selection loop) so
+     * `SearchBotPlayerService`'s own search engine can consult the SAME
+     * policy for its own root-action candidates, which it couldn't
+     * before: `sortPriorityValue()`'s `PHP_INT_MIN` only ever affected
+     * `chooseAction()`'s own sort order, invisible to anything else, so
+     * the search treated every one of these vetoed cards (Rationalization
+     * included) as an equally-eligible action to search over regardless
+     * -- reported live for Rationalization specifically ("bots should not
+     * play Rationalization without choosing a mode, I think we made a
+     * change around this before, but it seems like the tactical bots are
+     * ignoring it"), but the same gap silently applied to every other
+     * card listed here too.
+     *
+     * @param int[] $playableCardIds
+     * @see chooseAction()'s own docblock for $roundWinsNeededToWinGame.
+     */
+    public function hasGoodReasonToPlayNow(BoardState $state, int $cardId, int $botGamePlayerId, array $playableCardIds, ?int $roundWinsNeededToWinGame = null): bool
+    {
+        $effectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
+        if ($effectKey === 'rationalization' && !$this->rationalizationHasAGoodReasonToPlayNow($state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame)) {
+            return false;
+        }
+        if ($effectKey === 'cynicism' && !$this->cynicismHasAGoodReasonToPlayNow($state, $cardId, $botGamePlayerId, $playableCardIds)) {
+            return false;
+        }
+        if ($effectKey === 'contempt' && !$this->contemptHasAGoodReasonToPlayNow($state, $cardId, $botGamePlayerId)) {
+            return false;
+        }
+        if ($effectKey === 'conviction' && !$this->convictionHasAGoodReasonToPlayNow($state, $cardId, $botGamePlayerId)) {
+            return false;
+        }
+        if ($effectKey === 'intimidation' && $this->intimidationTargetPlayerId($state, $botGamePlayerId) === null) {
+            return false;
+        }
+        if ($effectKey === 'paranoia' && $this->paranoiaTargetPlayerId($state, $botGamePlayerId) === null) {
+            return false;
+        }
+        if ($effectKey === 'pacifism' && $this->pacifismTargetMoodIds($state, $botGamePlayerId) === []) {
+            return false;
+        }
+        if ($effectKey === 'anger' && $this->angerTargetMoodIds($state, $cardId, $botGamePlayerId) === []) {
+            return false;
+        }
+        if ($effectKey === 'harmony' && $state->discardPile() === []) {
+            return false;
+        }
+        if ($effectKey === 'grief' && $state->discardPile() === []) {
+            return false;
+        }
+        if ($effectKey === 'nostalgia' && $state->discardPile() === []) {
+            return false;
+        }
+        if ($effectKey === 'fear' && !$this->fearHasAGoodReasonToPlayNow($state, $botGamePlayerId)) {
+            return false;
+        }
+        if ($effectKey === 'denial' && !$this->denialHasAGoodReasonToPlayNow($state, $cardId, $botGamePlayerId)) {
+            return false;
+        }
+        if ($effectKey === 'exhilaration' && !$this->exhilarationHasAGoodReasonToPlayNow($state, $botGamePlayerId)) {
+            return false;
+        }
+        if ($this->envyDiscouragesPlayingThisCard($state, $cardId, $effectKey, $botGamePlayerId, $playableCardIds)) {
+            return false;
+        }
+
+        return true;
     }
 
     /**
@@ -1603,11 +1645,61 @@ final class BotPlayerService
         return $bestDirection;
     }
 
-    /** @see sortPriorityValue()'s own docblock for how this is used. */
-    private function rationalizationHasAGoodReasonToPlayNow(BoardState $state, int $cardId, int $botGamePlayerId): bool
+    /**
+     * @see hasGoodReasonToPlayNow()'s own docblock for how this is used.
+     * Reported live: "Rationalization should be saved until it can be
+     * used to rotate hands and get the bot at least a 3 card increase in
+     * hand size, it should not be played for points to win a round
+     * unless it's going to win the entire game" -- the first two clauses
+     * are exactly rationalizationLowValueHand()/rationalizationStealDirection()
+     * above (already existing, unchanged); rationalizationWouldClinchTheGame()
+     * below is the third, new clause.
+     */
+    private function rationalizationHasAGoodReasonToPlayNow(BoardState $state, int $cardId, int $botGamePlayerId, ?int $roundWinsNeededToWinGame = null): bool
     {
         return $this->rationalizationLowValueHand($state, $cardId, $botGamePlayerId)
-            || $this->rationalizationStealDirection($state, $botGamePlayerId) !== null;
+            || $this->rationalizationStealDirection($state, $botGamePlayerId) !== null
+            || $this->rationalizationWouldClinchTheGame($state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame);
+    }
+
+    /**
+     * "Unless it's going to win the entire game" -- true only when BOTH
+     * (a) $roundWinsNeededToWinGame says winning the round in progress
+     * right now would complete the whole game for the bot's own side
+     * (accounting for Corruption's own "the round's winner wins two
+     * rounds instead of one" marker, mirroring GameService::
+     * hasExtraWinMarker() -- duplicated here rather than shared across
+     * the Bot/Game namespace boundary, the same convention ShockEffect::
+     * MAXIMUM_VALUE/SHOCK_MAX_TARGET_VALUE above already established),
+     * AND (b) playing Rationalization purely for its own plain printed
+     * value (no mode -- refresh's own hand-swap doesn't change what
+     * counts toward THIS round's score either way, so only the base
+     * value matters here) is what actually TAKES the round's own lead
+     * (wouldBecomeHighestScore(), the same "is this the deciding margin"
+     * check Dignity/Embarrassment/Cheer/Delight's own value-boost
+     * discard policy already uses). Both are required: a bot one round
+     * win away from winning the game but not actually in contention to
+     * win THIS particular round gains nothing from cashing Rationalization
+     * in early, since it wouldn't have won the round anyway.
+     */
+    private function rationalizationWouldClinchTheGame(BoardState $state, int $cardId, int $botGamePlayerId, ?int $roundWinsNeededToWinGame): bool
+    {
+        if ($roundWinsNeededToWinGame === null) {
+            return false;
+        }
+
+        $predictedRoundWinsAwarded = 1;
+        foreach ($state->moodsInPlay() as $mood) {
+            if ($state->effectState($mood->cardId, 'awardsExtraWin')) {
+                $predictedRoundWinsAwarded = 2;
+                break;
+            }
+        }
+        if ($roundWinsNeededToWinGame > $predictedRoundWinsAwarded) {
+            return false;
+        }
+
+        return $this->wouldBecomeHighestScore($state, $botGamePlayerId, 0, $this->baseValue($state, $cardId));
     }
 
     /**

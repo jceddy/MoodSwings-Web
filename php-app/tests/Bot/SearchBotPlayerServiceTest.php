@@ -96,4 +96,75 @@ final class SearchBotPlayerServiceTest extends TestCase
         self::assertSame([], $state->hand(2));
         self::assertSame([], $state->moodsInPlay());
     }
+
+    /**
+     * Reported live: "bots should not play Rationalization without
+     * choosing a mode, I think we made a change around this before, but
+     * it seems like the tactical bots are ignoring it." Rationalization
+     * (49, value 3) has neither existing "worth playing now" trigger
+     * available here (Discipline, id 9/value 6, keeps the remaining-hand
+     * average comfortably above RATIONALIZATION_LOW_VALUE_HAND_AVERAGE,
+     * and player 2 has no oversized hand to steal), so
+     * BotPlayerService::hasGoodReasonToPlayNow() says no -- but its own
+     * plain printed value (3) alone would still score BETTER in a single-
+     * round rollout than Courage's (7, value 1), so without
+     * SearchBotPlayerService's own veto-respecting fix, the search would
+     * incorrectly prefer it purely on that raw reward. Courage is chosen
+     * instead, matching exactly what the plain heuristic bot itself
+     * would do with this same hand (see BotPlayerServiceTest's own
+     * `testChooseActionSavesRationalizationForLastWhenNeitherTriggerApplies`
+     * for the non-search equivalent of this exact scenario).
+     */
+    public function testChooseActionExcludesRationalizationWhenNoTriggerAppliesAndABetterCardExists(): void
+    {
+        $state = $this->boardState([1 => [49, 9, 7], 2 => []]);
+        $state->startTurn(1);
+
+        $action = $this->search->chooseAction($state, [49, 7], 1, timeBudgetSeconds: 0.2);
+
+        self::assertNotNull($action);
+        self::assertSame(7, $action['card_id']);
+    }
+
+    /**
+     * With Rationalization as the ONLY playable card, there's no "better
+     * candidate" for withoutPrematurelyPlayedCards() to prefer instead --
+     * it's still offered as a root action (mirroring
+     * BotPlayerService::chooseAction()'s own "deprioritized WHEN, never
+     * skipped outright" semantics), and the search still commits to a
+     * real mode rather than passing.
+     */
+    public function testChooseActionStillPlaysRationalizationAloneEvenWithoutATrigger(): void
+    {
+        $state = $this->boardState([1 => [49, 9], 2 => []]);
+        $state->startTurn(1);
+
+        $action = $this->search->chooseAction($state, [49], 1, timeBudgetSeconds: 0.2);
+
+        self::assertNotNull($action);
+        self::assertSame(49, $action['card_id']);
+        self::assertSame(['mode' => 'refresh'], $action['choices']);
+    }
+
+    /**
+     * $roundWinsNeededToWinGame threaded all the way through from
+     * chooseAction() into BotPlayerService::hasGoodReasonToPlayNow() --
+     * with it saying winning the round in progress would win the whole
+     * game, and Rationalization's own plain value (3) enough to overtake
+     * player 2's own current total (Suspicion, id 78, value 3, in play),
+     * Rationalization now DOES have a good reason to play, so the search
+     * correctly includes and picks it over Courage instead of excluding
+     * it.
+     */
+    public function testChooseActionPlaysRationalizationForPointsWhenItWouldWinTheGame(): void
+    {
+        $state = $this->boardState([1 => [49, 9, 7], 2 => [78]]);
+        $state->startTurn(1);
+        $state->moveHandToInPlay(2, 78);
+
+        $action = $this->search->chooseAction($state, [49, 7], 1, timeBudgetSeconds: 0.2, roundWinsNeededToWinGame: 1);
+
+        self::assertNotNull($action);
+        self::assertSame(49, $action['card_id']);
+    }
 }
