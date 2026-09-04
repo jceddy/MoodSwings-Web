@@ -14815,6 +14815,23 @@ final class GameService
             // just new ones.
             return $label . ': ' . ($cardNames[(int) $value] ?? 'a card');
         }
+        // Reported live: a Duplicity repeat rendered as "(duplicity
+        // repeat: 1, Array)" in the recent-plays log. Unlike every other
+        // REACTIONS-templated key, CardChoiceSchema's own 'duplicity_repeat'
+        // template says 'bool', but the answer actually stored is a nested
+        // {repeat, choices} pair (the repeated card's own fresh choices,
+        // per MoodPlayService::duplicityRepeatOfferRequest()) -- the
+        // repeated play's own consequences already show up via this same
+        // event's card_moves/ownership_changes, so there's nothing further
+        // to summarize here beyond whether it happened at all. Collapses
+        // back down to how a plain bool answer already reads just below
+        // (the label alone if true, nothing at all if false) instead of
+        // falling through to the generic array branch, which would
+        // otherwise implode() over a bool and a nested array together and
+        // print the literal word "Array".
+        if ($key === 'duplicity_repeat' && is_array($value)) {
+            return ($value['repeat'] ?? false) === true ? $label : null;
+        }
         if ($value === true) {
             return $label;
         }

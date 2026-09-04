@@ -6367,6 +6367,51 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertStringNotContainsString((string) $scornId, $description);
     }
 
+    /**
+     * A bug caught live: "(duplicity repeat: 1, Array)" in the recent-
+     * plays log. Unlike every other REACTIONS-templated key,
+     * CardChoiceSchema's own 'duplicity_repeat' template says 'bool',
+     * but the answer actually stored is a nested {repeat, choices} pair
+     * (the repeated card's own fresh choices) -- describeChoiceEntry()'s
+     * generic array fallback imploded over that bool-plus-nested-array
+     * pair, printing the literal word "Array" (PHP's own string cast for
+     * the un-imploded 'choices' sub-array) right after "1" (the cast
+     * bool). It now collapses to the same "label alone" rendering a
+     * plain bool answer already gets.
+     */
+    public function testDuplicityRepeatLogEntryDoesNotPrintTheRawNestedArray(): void
+    {
+        $u1 = $this->insertUser('duplog1');
+        $u2 = $this->insertUser('duplog2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 37, 'in_play', $p1); // Duplicity
+        $dignityId = $this->insertGameCard($gameId, 8, 'hand', $p1); // Dignity
+        $charityId = $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity, value 1 -- discarded by the first invocation
+        $chivalryId = $this->insertGameCard($gameId, 4, 'hand', $p1); // Chivalry, value 3 -- discarded by the repeat
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $playResult = $this->games->playMood($gameId, $p1, $dignityId, ['discard_card_id' => $charityId]);
+        self::assertTrue($playResult['pending_decision'] ?? false);
+
+        $respondResult = $this->games->respondToDecision($gameId, $p1, [
+            'duplicity_repeat' => ['repeat' => true, 'choices' => ['discard_card_id' => $chivalryId]],
+        ]);
+        self::assertArrayNotHasKey('pending_decision', $respondResult);
+
+        $description = $this->games->getState($gameId, $u1)['recent_events'][0]['description'];
+        self::assertStringContainsString('duplicity repeat', $description);
+        self::assertStringNotContainsString('Array', $description);
+    }
+
     public function testCompulsionPausesForP2sOwnChoiceAndOnlyCompletesAfterTheyRespond(): void
     {
         $u1 = $this->insertUser('comp1');

@@ -196,4 +196,33 @@ final class SearchBotPlayerServiceTest extends TestCase
         self::assertSame(53, $action['card_id']);
         self::assertSame(['discard_card_id' => 7], $action['choices']);
     }
+
+    /**
+     * Reported live: with the bot at 2 cards (Rationalization plus
+     * Courage, id 7/value 1 -- a remaining-hand average well under
+     * RATIONALIZATION_LOW_VALUE_HAND_AVERAGE) and an opponent holding 6
+     * cards, the bot refreshed its own single leftover card instead of
+     * stealing the opponent's much larger hand. Rationalization is
+     * bespoke (BotPlayerService::usesBespokeChoiceBuilding()), so
+     * LegalChoiceEnumerator never varies its own targeting -- the
+     * Tactical Bot's only candidate action for it is whatever
+     * buildChoicesForCard()'s own default builds, so the same
+     * rationalizationChoices() reordering fix that makes the plain
+     * heuristic bot prefer 'rotate' over 'refresh' here (see
+     * BotPlayerServiceTest's own
+     * `testChooseActionPrefersStealingAnOverstuffedHandOverRefreshingAWeakOne`)
+     * fixes the Tactical Bot too, with no separate search-side change
+     * needed.
+     */
+    public function testChooseActionPrefersStealingAnOverstuffedHandOverRefreshingAWeakOne(): void
+    {
+        $state = $this->boardState([1 => [49, 7], 2 => [38, 39, 20, 3, 8, 9]]);
+        $state->startTurn(1);
+
+        $action = $this->search->chooseAction($state, [49], 1, timeBudgetSeconds: 0.2);
+
+        self::assertNotNull($action);
+        self::assertSame(49, $action['card_id']);
+        self::assertSame(['mode' => 'rotate', 'direction' => 'left'], $action['choices']);
+    }
 }

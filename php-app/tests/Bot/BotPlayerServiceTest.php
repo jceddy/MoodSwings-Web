@@ -2618,6 +2618,31 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame(['mode' => 'rotate', 'direction' => 'left'], $action['choices']);
     }
 
+    /**
+     * Reported live: with the bot at 2 cards (Rationalization plus
+     * Courage, id 7/value 1 -- a remaining-hand average of 1, well under
+     * RATIONALIZATION_LOW_VALUE_HAND_AVERAGE) and an opponent holding 6
+     * cards, the bot rotated to REFRESH its own single leftover card
+     * instead of stealing the opponent's much larger hand.
+     * rationalizationLowValueHand() and rationalizationStealDirection()
+     * both fire here -- 'rotate' must win: gaining several more cards
+     * outright is always better than gambling a random redraw of one
+     * card, so a live steal opportunity takes priority over a merely
+     * weak remaining hand.
+     */
+    public function testChooseActionPrefersStealingAnOverstuffedHandOverRefreshingAWeakOne(): void
+    {
+        $state = $this->boardState(hands: [
+            1 => [49, 7],
+            2 => [38, 39, 20, 3, 8, 9], // 6 cards -- well past the steal threshold
+        ]);
+
+        $action = $this->bot->chooseAction($state, [49], 1);
+
+        self::assertSame(49, $action['card_id']);
+        self::assertSame(['mode' => 'rotate', 'direction' => 'right'], $action['choices']);
+    }
+
     /** Exactly RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE (3) more cards is enough to qualify -- 2 more is not. */
     public function testChooseActionDoesNotRotateForAnUnderstuffedNeighbor(): void
     {

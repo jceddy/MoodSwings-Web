@@ -1558,14 +1558,21 @@ final class BotPlayerService
      * interdependent ('direction' only means anything once 'mode' is
      * 'rotate') and the choice between them needs real board state, not
      * just "first legal option":
-     * - 'refresh' (bottom the whole hand, then redraw that many) once
-     *   the bot's own remaining hand is weak enough to gamble on a
-     *   fresh draw (rationalizationLowValueHand()) -- checked first, and
-     *   the ONLY case 'refresh' is chosen at all.
-     * - Otherwise 'rotate' toward whichever neighbor
-     *   rationalizationStealDirection() finds currently overstuffed
-     *   enough to be worth taking their hand at the cost of the bot's
-     *   own.
+     * - 'rotate' toward whichever neighbor rationalizationStealDirection()
+     *   finds currently overstuffed enough to be worth taking their hand
+     *   at the cost of the bot's own -- checked FIRST (reported live: a
+     *   bot at 2 cards, one of them Rationalization, refreshed instead of
+     *   stealing an opponent's 6-card hand). rationalizationStealDirection()'s
+     *   own RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE threshold already
+     *   only fires for a neighbor overstuffed enough to be clearly worth
+     *   taking regardless of what the bot's own remaining hand looks
+     *   like -- gaining several more cards outright always beats
+     *   gambling a random redraw of the bot's own (typically small, at
+     *   that point) remaining hand, so a live steal opportunity always
+     *   wins over a merely-weak hand once both apply at once.
+     * - Otherwise 'refresh' (bottom the whole hand, then redraw that
+     *   many) once the bot's own remaining hand is weak enough to gamble
+     *   on a fresh draw (rationalizationLowValueHand()).
      * - Otherwise, decline both modes entirely (an empty choice set --
      *   RationalizationEffect::afterPlaying()'s own `if ($mode === null)
      *   return;` treats this exactly like Guile-style genuine
@@ -1591,13 +1598,13 @@ final class BotPlayerService
      */
     private function rationalizationChoices(BoardState $state, int $cardId, int $botGamePlayerId): array
     {
-        if ($this->rationalizationLowValueHand($state, $cardId, $botGamePlayerId)) {
-            return ['mode' => 'refresh'];
-        }
-
         $direction = $this->rationalizationStealDirection($state, $botGamePlayerId);
         if ($direction !== null) {
             return ['mode' => 'rotate', 'direction' => $direction];
+        }
+
+        if ($this->rationalizationLowValueHand($state, $cardId, $botGamePlayerId)) {
+            return ['mode' => 'refresh'];
         }
 
         return [];

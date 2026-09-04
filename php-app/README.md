@@ -6658,16 +6658,7 @@ since it already holds that dependency):
   option, so `buildChoicesForCard()` special-cases `effectKey ===
   'rationalization'` to `rationalizationChoices()` entirely, bypassing
   the generic per-field `CardChoiceSchema` loop for this one card:
-  - `rationalizationLowValueHand(BoardState $state, int $cardId, int
-    $botGamePlayerId): bool` -- `'refresh'` whenever the bot's own
-    remaining hand (every OTHER card still in hand once Rationalization
-    itself is played -- it's still sitting in hand at the point this
-    runs) averages `RATIONALIZATION_LOW_VALUE_HAND_AVERAGE` (2, roughly
-    the real catalog's own overall average base value) or below --
-    including an empty remaining hand, which counts as trivially "low"
-    (refreshing nothing is free). Checked first: always safe (nothing is
-    ever given away), regardless of what any neighbor's hand looks like.
-  - Otherwise, `rationalizationStealDirection(BoardState $state, int
+  - `rationalizationStealDirection(BoardState $state, int
     $botGamePlayerId): ?string` -- `'rotate'` toward whichever seat
     neighbor currently holds at least
     `RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE` (3) more cards than the
@@ -6680,10 +6671,27 @@ since it already holds that dependency):
     "`'left'` is index+1" rule means a neighbor at the bot's own
     `'right'` is the one whose OWN `'left'` pass lands on the bot, and
     vice versa. Whichever of the two neighbors qualifies AND holds the
-    larger hand wins if both do; `null` (falls through to `'refresh'`
-    below) if neither does, which a heads-up duel's own single shared
-    "neighbor" either direction resolves to always agrees with itself
-    on.
+    larger hand wins if both do; `null` (falls through to
+    `rationalizationLowValueHand()` below) if neither does, which a
+    heads-up duel's own single shared "neighbor" either direction
+    resolves to always agrees with itself on. Checked FIRST (reported
+    live: a bot at 2 cards, one of them Rationalization, refreshed its
+    own single leftover card instead of stealing an opponent's 6-card
+    hand) -- the `RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE` threshold
+    already only fires for a neighbor overstuffed enough to be clearly
+    worth taking regardless of what the bot's own remaining hand looks
+    like, so gaining several more cards outright always beats gambling a
+    random redraw of the bot's own (typically small, at that point)
+    remaining hand -- a live steal opportunity wins over a merely weak
+    hand whenever both apply at once.
+  - Otherwise, `rationalizationLowValueHand(BoardState $state, int
+    $cardId, int $botGamePlayerId): bool` -- `'refresh'` whenever the
+    bot's own remaining hand (every OTHER card still in hand once
+    Rationalization itself is played -- it's still sitting in hand at
+    the point this runs) averages `RATIONALIZATION_LOW_VALUE_HAND_AVERAGE`
+    (2, roughly the real catalog's own overall average base value) or
+    below -- including an empty remaining hand, which counts as
+    trivially "low" (refreshing nothing is free).
   - Otherwise (reported live, follow-up: "I am seeing bots play it to
     refresh hands when they have a good hand"), neither mode -- an empty
     choice set, which `RationalizationEffect::afterPlaying()`'s own `if
