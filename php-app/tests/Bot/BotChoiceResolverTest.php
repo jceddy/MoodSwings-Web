@@ -42,13 +42,19 @@ final class BotChoiceResolverTest extends TestCase
         self::assertSame('white', $this->resolver->resolve($state, $field, 1, 0, 'imagination'));
     }
 
-    public function testModeFieldUsesTheHandAuthoredOverrideForGuiltContemptRedemption(): void
+    /**
+     * Guilt/Contempt share this exact mode+target shape too, but are no
+     * longer resolved through this generic path at all -- BotPlayerService::
+     * guiltChoices()/contemptTargetMoodId() answer both bespoke instead
+     * (see BotPlayerService::usesBespokeChoiceBuilding()), so
+     * MODE_FIELD_OVERRIDES no longer carries entries for either; only
+     * Redemption still relies on this override.
+     */
+    public function testModeFieldUsesTheHandAuthoredOverrideForRedemption(): void
     {
         $state = $this->boardState();
         $field = ['key' => 'mode', 'type' => 'mode', 'required' => true, 'options' => ['single', 'all']];
 
-        self::assertSame('all', $this->resolver->resolve($state, $field, 1, 0, 'guilt'));
-        self::assertSame('all', $this->resolver->resolve($state, $field, 1, 0, 'contempt'));
         self::assertSame('all', $this->resolver->resolve($state, $field, 1, 0, 'redemption'));
         // Every other effect key with a plain 'mode' field gets the
         // ordinary "first option" policy, not the override.

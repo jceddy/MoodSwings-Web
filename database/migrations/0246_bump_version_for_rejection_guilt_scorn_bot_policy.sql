@@ -1,0 +1,33 @@
+-- Three bot policy fixes, reported live together:
+--
+-- 1. "Bots shouldn't play Rejection with no targets - exception when
+-- it being in play will pump another mood enough to win a round."
+-- Rejection had NO bot targeting at all before this (its own optional
+-- target_mood_ids field was never volunteered for by the generic
+-- resolver) -- new rejectionTargetMoodIds() mirrors Denial's own
+-- winning/significant-swing priorities (minus its replay tier, since
+-- Rejection discards permanently rather than returning to hand), and
+-- rejectionHasAGoodReasonToPlayNow() holds it back otherwise, unless
+-- rejectionWouldPumpAnotherMoodToWinTheRound() (a real board-state
+-- simulation, since Rejection's own printed value is always 0) says
+-- playing it with no target at all would still flip the round via
+-- some other mood-count-scaling card (e.g. Euphoria).
+--
+-- 2. "bots should consider whether suppressing a single opponent mood
+-- would net them more of a point swing than choosing the 'all' mode."
+-- New guiltChoices() compares the best single-target swing against
+-- 'all' mode's combined swing (which can cost the bot its OWN
+-- black/red moods too) and picks whichever nets more, replacing
+-- BotChoiceResolver's former MODE_FIELD_OVERRIDES['guilt'] = 'all'
+-- hardcode.
+--
+-- 3. A bot's mandatory Scorn suppression targeted the human's own mood
+-- when it should have targeted the other player's copy of the same
+-- card. New scornTargetMoodId() prefers a non-teammate opponent's own
+-- highest-value mood, falling back to the highest-value other mood
+-- overall only when no opponent mood exists (Scorn's own target field
+-- is required).
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.33.10' WHERE id = 1;
