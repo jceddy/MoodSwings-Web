@@ -1317,7 +1317,7 @@ final class BotPlayerService
     private const BESPOKE_CHOICE_EFFECT_KEYS = [
         'rationalization', 'avoidance', 'cynicism', 'intimidation', 'paranoia',
         'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
-        'nostalgia', 'contempt', 'sneakiness',
+        'nostalgia', 'contempt', 'sneakiness', 'shock',
     ];
 
     /**
@@ -1367,6 +1367,12 @@ final class BotPlayerService
 
         if ($effectKey === 'pacifism') {
             $targetMoodIds = $this->pacifismTargetMoodIds($state, $botGamePlayerId);
+
+            return $targetMoodIds !== [] ? ['target_mood_ids' => $targetMoodIds] : [];
+        }
+
+        if ($effectKey === 'shock') {
+            $targetMoodIds = $this->shockTargetMoodIds($state, $botGamePlayerId);
 
             return $targetMoodIds !== [] ? ['target_mood_ids' => $targetMoodIds] : [];
         }
@@ -2384,6 +2390,65 @@ final class BotPlayerService
 
             $bestMoodId = null;
             foreach ($state->moodsOwnedBy($playerId) as $mood) {
+                if ($bestMoodId === null || $state->valueOf($mood->cardId) > $state->valueOf($bestMoodId)) {
+                    $bestMoodId = $mood->cardId;
+                }
+            }
+
+            if ($bestMoodId !== null) {
+                $bestMoodIdByOpponent[] = $bestMoodId;
+            }
+        }
+
+        usort($bestMoodIdByOpponent, fn (int $a, int $b) => $state->valueOf($b) <=> $state->valueOf($a));
+
+        return array_slice($bestMoodIdByOpponent, 0, 2);
+    }
+
+    /**
+     * Mirrors ShockEffect::MAXIMUM_VALUE (that class's own private
+     * constant, so duplicated here rather than referenced directly) --
+     * a mood above this value is never a legal Shock target at all, so
+     * shockTargetMoodIds() below has to apply this same filter itself
+     * before ranking candidates, unlike pacifismTargetMoodIds() (whose
+     * own field has no value cap) just above.
+     */
+    private const SHOCK_MAX_TARGET_VALUE = 3;
+
+    /**
+     * Shock's own "who to discard from" policy -- structurally identical
+     * to pacifismTargetMoodIds() just above (up to two moods, at most one
+     * per non-teammate opponent, each opponent's own highest-value
+     * qualifying mood, preferring two different opponents over a single
+     * opponent's own one mood), except a candidate mood must also be
+     * worth SHOCK_MAX_TARGET_VALUE or less to be legal at all (Shock's
+     * own printed text: "a value of 3 or less"). Without this bespoke
+     * policy, Shock's own CardChoiceSchema field (scope 'any', fully
+     * optional) would either go entirely unfilled -- the generic
+     * resolver only fills a REQUIRED field or one of a short explicit
+     * always-fill list, and Shock's own field is neither -- or, if
+     * forced, risk the generic resolver picking the bot's OWN
+     * highest-value qualifying mood over a weaker opponent one (scope
+     * 'any' means it doesn't automatically exclude the acting player);
+     * either way the bot's own discard ability would go to waste or turn
+     * on itself instead of an opponent (reported live: "bots should
+     * choose an opponent's mood to target with shock when playing it").
+     *
+     * @return int[]
+     */
+    private function shockTargetMoodIds(BoardState $state, int $botGamePlayerId): array
+    {
+        $bestMoodIdByOpponent = [];
+        foreach ($state->activePlayerOrder() as $playerId) {
+            if ($playerId === $botGamePlayerId || $state->isTeammate($botGamePlayerId, $playerId)) {
+                continue;
+            }
+
+            $bestMoodId = null;
+            foreach ($state->moodsOwnedBy($playerId) as $mood) {
+                if ($state->valueOf($mood->cardId) > self::SHOCK_MAX_TARGET_VALUE) {
+                    continue;
+                }
                 if ($bestMoodId === null || $state->valueOf($mood->cardId) > $state->valueOf($bestMoodId)) {
                     $bestMoodId = $mood->cardId;
                 }

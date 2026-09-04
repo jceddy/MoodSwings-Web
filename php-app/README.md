@@ -6799,6 +6799,31 @@ since it already holds that dependency):
   exists it reverts to plain `baseValue()`, no boost, just no longer
   vetoed.
 
+  **Shock** (reported live: "bots should choose an opponent's mood to
+  target with shock when playing it") gets its own targeting exception
+  too, via `shockTargetMoodIds()`: `buildChoicesForCard()` special-cases
+  `effectKey === 'shock'` instead of falling through to
+  `CardChoiceSchema`'s generic per-field loop, which would otherwise
+  leave `target_mood_ids` unfilled -- it's optional and not in
+  `ALWAYS_FILLED_OPTIONAL_FIELDS`, so the bot was previously playing
+  Shock as a plain 2-value mood, its own "discard up to two players' own
+  moods worth 3 or less" ability going entirely unused. Structurally
+  identical to `pacifismTargetMoodIds()` (up to two moods, at most one
+  per non-teammate opponent via `CardChoiceSchema`'s own
+  `'distinct_owners'` constraint, each opponent's own highest-value
+  qualifying mood, sorted so two different opponents are preferred over
+  a single opponent's own one mood), plus its own extra filter: a
+  candidate must also be `SHOCK_MAX_TARGET_VALUE` (3) or less, mirroring
+  `ShockEffect`'s own printed-text cap (that class's own private
+  `MAXIMUM_VALUE` constant, duplicated here rather than referenced
+  directly). Deliberately excludes both the acting player and any
+  teammate the same "an opponent means neither" way Intimidation/
+  Paranoia/Pacifism above do -- `CardChoiceSchema`'s own field is scope
+  `'any'` (Shock's printed text says "choose up to two players" with no
+  restriction against the acting player), so left to `BotChoiceResolver`'s
+  generic default the bot could just as easily have discarded its OWN
+  mood instead of an opponent's.
+
   **Creativity** (confirmed by the maintainer) gets its own targeting
   exception via `creativityBestCopyTargetId()`: `buildChoicesForCard()`
   special-cases `effectKey === 'creativity'` to it instead of falling
@@ -7554,10 +7579,10 @@ the bot its turn.
 **Legal actions (`LegalChoiceEnumerator`).** Reuses
 `BotPlayerService::buildChoicesForCard()`'s own existing, already-tested
 choice-set as the always-included default action per playable card. For
-the ~14 hand-written "bespoke" per-effect-key choice builders inside it
+the ~15 hand-written "bespoke" per-effect-key choice builders inside it
 (Rationalization, Avoidance, Cynicism, Intimidation, Paranoia, Pacifism,
 Creativity, Anger, Denial, Hate, Conviction, Nostalgia, Contempt,
-Sneakiness -- `BotPlayerService::usesBespokeChoiceBuilding()`), that
+Sneakiness, Shock -- `BotPlayerService::usesBespokeChoiceBuilding()`), that
 default is the ONLY action generated for that card; reimplementing full
 legal-choice enumeration for each of these wasn't worth it just to widen
 the search over cards the heuristic already handles reasonably. For

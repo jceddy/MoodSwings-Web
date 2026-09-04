@@ -835,6 +835,98 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame(76, $action['card_id']);
     }
 
+    // -- Shock (reported live: bots should target an opponent's mood) ------
+
+    public function testChooseActionTargetsAnOpponentsMoodWhenPlayingShock(): void
+    {
+        $state = $this->boardState(hands: [1 => [101], 2 => [8]]); // Shock, Dignity (value 3)
+        $state->moveHandToInPlay(2, 8);
+
+        $action = $this->bot->chooseAction($state, [101], 1);
+
+        self::assertSame(101, $action['card_id']);
+        self::assertSame(['target_mood_ids' => [8]], $action['choices']);
+    }
+
+    /**
+     * "One mood from each of two opponents, when possible" -- same
+     * `distinct_owners`-driven preference pacifismTargetMoodIds() applies,
+     * sorted highest-qualifying-value first: player 2's own Dignity
+     * (id 8, value 3) beats player 3's own Spite (id 76, value 1).
+     */
+    public function testChooseActionTargetsOneMoodFromEachOfTwoOpponentsWhenPlayingShock(): void
+    {
+        $state = $this->boardState(hands: [1 => [101], 2 => [8], 3 => [76]]);
+        $state->moveHandToInPlay(2, 8);
+        $state->moveHandToInPlay(3, 76);
+
+        $action = $this->bot->chooseAction($state, [101], 1);
+
+        self::assertSame(101, $action['card_id']);
+        self::assertSame(['target_mood_ids' => [8, 76]], $action['choices']);
+    }
+
+    /**
+     * When a single opponent has multiple qualifying moods in play, Shock
+     * only ever targets that opponent's own HIGHEST-value one (mirroring
+     * Pacifism) -- Dignity (id 8, value 3) beats Courage (id 7, value 1),
+     * both owned by player 2 and both within the value-3 cap.
+     */
+    public function testChooseActionTargetsTheHighestQualifyingValueMoodWhenOneOpponentHasSeveral(): void
+    {
+        $state = $this->boardState(hands: [1 => [101], 2 => [8, 7]]);
+        $state->moveHandToInPlay(2, 8);
+        $state->moveHandToInPlay(2, 7);
+
+        $action = $this->bot->chooseAction($state, [101], 1);
+
+        self::assertSame(101, $action['card_id']);
+        self::assertSame(['target_mood_ids' => [8]], $action['choices']);
+    }
+
+    /**
+     * Discipline (id 9, value 6) exceeds Shock's own value-3 cap, so it's
+     * never a legal target at all -- with no other opponent mood in play,
+     * Shock's own optional field stays unfilled rather than the bot
+     * illegally (or pointlessly) reaching for it.
+     */
+    public function testChooseActionDoesNotTargetAMoodAboveTheValueLimitWhenPlayingShock(): void
+    {
+        $state = $this->boardState(hands: [1 => [101], 2 => [9]]);
+        $state->moveHandToInPlay(2, 9);
+
+        $action = $this->bot->chooseAction($state, [101], 1);
+
+        self::assertSame(101, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
+    /**
+     * A teammate's mood in play doesn't count as a valid target, even
+     * though Shock's own CardChoiceSchema field is scope 'any' (its
+     * printed text says "choose up to two players" with no restriction
+     * against the acting player or a teammate) -- "an opponent" means
+     * neither, the same policy Pacifism above already applies. Player 2
+     * (the bot's own teammate) has Dignity in play; player 3 (the only
+     * actual opponent) has no mood at all -- no valid target exists.
+     */
+    public function testChooseActionDoesNotCountATeammatesMoodAsAValidShockTarget(): void
+    {
+        $state = new BoardState(
+            $this->sampleCatalog(),
+            DefaultEffectRegistry::build(),
+            [1, 2, 3],
+            hands: [1 => [101], 2 => [8]],
+            teamIdByPlayer: [1 => 0, 2 => 0, 3 => 1],
+        );
+        $state->moveHandToInPlay(2, 8);
+
+        $action = $this->bot->chooseAction($state, [101], 1);
+
+        self::assertSame(101, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
     // -- Harmony (confirmed by the maintainer) -----------------------------
 
     /**
