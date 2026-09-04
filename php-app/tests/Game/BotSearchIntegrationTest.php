@@ -178,6 +178,73 @@ final class BotSearchIntegrationTest extends TestCase
         self::assertSame(['running'], $jobs, 'the bot\'s own turn must hand off to exactly one background job, not play inline');
     }
 
+    /**
+     * Reported live: a Tactical Bot took its full time budget on every
+     * turn, even a genuinely empty-hand one with no legal play at all,
+     * because advanceAutomatedTurns()'s own tactical-bot branch had no
+     * upfront "does this seat even have a legal play" check (unlike the
+     * ordinary heuristic-bot branch and the auto-pass branch, which both
+     * already had one) -- it always launched the background search job
+     * machinery regardless, which only ever short-circuited correctly
+     * INSIDE that job, after the job had already been launched and its
+     * full budget waited out. This drains ONLY the bot's own hand plus
+     * the shared discard pile (candidatePlayCardIds() is hand plus
+     * discard) into the in-play zone -- nothing left anywhere
+     * isPlayable() could approve for this seat specifically -- and
+     * asserts NO bot_search_jobs row is ever created, with the turn
+     * passed immediately and automatically instead. Deliberately leaves
+     * the HUMAN's own hand untouched: draining it too would make the
+     * human ALSO auto-pass (issue #96's own default-on preference), which
+     * would end the round outright and deal a fresh hand for the next one
+     * -- masking the very bug this asserts against instead of proving it
+     * fixed.
+     */
+    public function testAdvanceAutomatedTurnsPassesImmediatelyWithNoBackgroundJobWhenTheBotHasNoLegalPlay(): void
+    {
+        $human = $this->insertUser('bs-human-' . uniqid());
+        $bot = $this->insertTacticalBotUser('bs-bot-' . uniqid());
+        $gameId = $this->games->createGame($human, [$human, $bot], format: 'duel', deckType: 'structure');
+        $this->games->startGame($gameId);
+
+        $humanPlayerId = $this->games->gamePlayerIdFor($gameId, $human);
+        $botPlayerId = $this->games->gamePlayerIdFor($gameId, $bot);
+        $currentTurnGamePlayerId = (int) $this->pdo
+            ->query("SELECT current_turn_game_player_id FROM game_rounds WHERE game_id = {$gameId} ORDER BY round_number DESC LIMIT 1")
+            ->fetchColumn();
+        if ($currentTurnGamePlayerId === $humanPlayerId) {
+            $this->games->pass($gameId, $humanPlayerId);
+        }
+
+        // Empties candidatePlayCardIds()'s own two sources for the BOT
+        // specifically (its own hand, plus the whole shared discard pile)
+        // by moving everything sitting in either into the in-play zone
+        // instead -- isPlayable() never even gets a candidate to
+        // consider. The human's own hand is left alone -- see this test's
+        // own docblock for why.
+        $this->pdo->exec(
+            "UPDATE game_cards SET zone = 'in_play'
+             WHERE game_id = {$gameId} AND (zone = 'discard' OR (zone = 'hand' AND owner_game_player_id = {$botPlayerId}))"
+        );
+
+        $this->games->advanceAutomatedTurns($gameId);
+
+        $jobCountStmt = $this->pdo->prepare('SELECT COUNT(*) FROM bot_search_jobs WHERE game_player_id = :id');
+        $jobCountStmt->execute(['id' => $botPlayerId]);
+        self::assertSame(
+            0,
+            (int) $jobCountStmt->fetchColumn(),
+            'a bot with no legal play at all must never have a background search job launched for it'
+        );
+
+        $eventStmt = $this->pdo->prepare(
+            "SELECT details FROM game_events WHERE game_id = :game_id AND acting_game_player_id = :bot_id AND event_type = 'turn_passed' ORDER BY id DESC LIMIT 1"
+        );
+        $eventStmt->execute(['game_id' => $gameId, 'bot_id' => $botPlayerId]);
+        $eventDetails = $eventStmt->fetchColumn();
+        self::assertNotFalse($eventDetails, 'the bot must have passed automatically instead of being left waiting on a job');
+        self::assertSame(['automated' => true], json_decode((string) $eventDetails, true));
+    }
+
     public function testAdvanceAutomatedTurnsDoesNotLaunchADuplicateJobWhileOneIsAlreadyRunning(): void
     {
         ['bot' => $bot, 'gameId' => $gameId] = $this->createTacticalBotGame();

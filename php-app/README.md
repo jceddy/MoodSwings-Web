@@ -7477,18 +7477,38 @@ practice bot above uses. Everything else about a bot -- identity, seating,
 decision answers, team-decision/draft-pick policies -- is untouched; this
 only replaces the ONE decision of "what do I play on my own turn."
 
-**Identity.** A 4th named bot account, `BotSage` (migration `0236`), with
-`users.uses_tactical_ai = 1` alongside the existing `is_bot = 1` --
-meaningless for a non-bot user, so no schema concerns beyond "off unless a
-bot row is deliberately flipped." One account, not a roster of 3 like
+**Identity.** Three named bot accounts, each with `users.uses_tactical_ai
+= 1` alongside the existing `is_bot = 1` -- meaningless for a non-bot
+user, so no schema concerns beyond "off unless a bot row is deliberately
+flipped." Not a roster of 3 interchangeable seats like
 `BotAlice`/`BotBen`/`BotCleo`: a Tactical Bot seat is always chosen
-deliberately (the New Game dialog's own bot picker), not drawn from an
-interchangeable pool, so there's no need for more than one.
-`uses_tactical_ai` gates ONLY `chooseAction()` (its own turn's play/pass) --
-`GameService::listPracticeBots()` still returns every `is_bot = 1` row for
-the picker, and every other bot decision (decision answers, team-decision
-proposals, draft picks) still goes through the plain heuristic
-`BotPlayerService` regardless of this flag.
+deliberately (the New Game dialog's own bot picker), so all three can
+coexist without ambiguity -- they're distinguished by SPEED, not by being
+drawn from a pool. `uses_tactical_ai` gates ONLY `chooseAction()` (its own
+turn's play/pass) -- `GameService::listPracticeBots()` still returns
+every `is_bot = 1` row for the picker, and every other bot decision
+(decision answers, team-decision proposals, draft picks) still goes
+through the plain heuristic `BotPlayerService` regardless of this flag.
+
+**Speed tiers (migration `0237`).** `users.tactical_ai_time_budget_seconds`
+gives each Tactical Bot account its OWN search budget -- a per-bot column
+rather than a second global constant, so a future tier (or a
+maintainer-tuned budget for one specific bot) needs no further schema
+change. `BotSage` (migration `0236`, the original single Tactical Bot)
+kept its identity as the "standard" tier but moved from the original
+`BOT_SEARCH_TIME_BUDGET_SECONDS = 150` down to `60`; `BotSageQuick` (`30`)
+and `BotSageDeep` (`90`) joined it -- 150s turned out, in live testing, to
+be too long to comfortably iterate against. The New Game dialog's own bot
+picker (`web-static/js/game.js`) badges each one green/gold/red by this
+value (`tacticalBotTierClass()`), reusing the existing
+`--color-success`/`--color-pending`/`--color-error` theme variables rather
+than introducing new theme colors just for this -- see "New game dialog"
+in `web-static/README.md`. `GameService::launchTacticalBotSearchJob()`
+looks this value up per-seat (`tacticalBotTimeBudgetSeconds()`) rather
+than using the constructor's own `botSearchTimeBudgetSeconds`, which is
+now `null` by default and reserved purely for a test wanting to force
+EVERY Tactical Bot fast uniformly regardless of which one is actually
+seated.
 
 **The search itself (`SearchBotPlayerService`).** A flat Monte
 Carlo/UCB1 bandit, not a full growing-tree MCTS: search branches ONLY at
@@ -7563,18 +7583,37 @@ play, it launches a detached background process
 immediately -- the game simply shows a "bot is thinking" indicator (see
 `bot_thinking` below) until a later poll finds the job resolved.
 
+- **Empty-hand short-circuit.** Before ever touching the job machinery
+  below, `advanceAutomatedTurns()`'s own Tactical Bot branch checks
+  `candidatePlayCardIds()` filtered through `isPlayable()` -- the exact
+  same "any legal play at all" check its ordinary heuristic-bot branch and
+  its auto-pass-on-empty-hand branch both already use -- and passes
+  immediately if there's nothing to play, rather than launching a
+  background search job (and waiting out that seat's own full time
+  budget) over zero candidate actions. Fixes a bug reported live: a
+  Tactical Bot took its full time budget on every turn, even a genuinely
+  empty-hand one with no legal play, because this dispatch layer (unlike
+  the other two branches) had no upfront legality check of its own --
+  `SearchBotPlayerService::chooseAction()` itself already short-circuited
+  correctly on zero legal actions, but only AFTER a job had already been
+  launched and its full budget waited out end-to-end.
 - **`bot_search_jobs`** (migration `0236`) tracks one row per Tactical
   Bot seat's in-flight (or just-finished) decision: `status`
   (`running`/`done`/`failed`), `time_budget_seconds`, `started_at`,
   `finished_at`, `error_message`. A new turn's own job simply `INSERT`s a
   fresh row rather than reusing the previous one, so a seat's last few
   decisions stay around for free (no separate history table).
-- **`BOT_SEARCH_TIME_BUDGET_SECONDS = 150`** -- how long
-  `SearchBotPlayerService::chooseAction()` is allowed to run, chosen to
-  comfortably clear a 300-second PHP `max_execution_time` while leaving
-  real headroom below it; tune from here based on how it performs in
-  practice. Overridable via `GameService`'s own constructor purely so
-  tests don't have to wait out the real production budget.
+- **Per-bot time budget (migration `0237`)** -- how long
+  `SearchBotPlayerService::chooseAction()` is allowed to run for a given
+  seat, read from that seat's OWN `users.tactical_ai_time_budget_seconds`
+  (`GameService::tacticalBotTimeBudgetSeconds()`) rather than one global
+  value -- see "Speed tiers" above. `BOT_SEARCH_TIME_BUDGET_SECONDS = 150`
+  still exists as a defensive fallback only (a row somehow missing its own
+  value); every real Tactical Bot account carries an explicit one via
+  migration `0237`'s own seed/`UPDATE`. Still overridable via
+  `GameService`'s own constructor (now `?int`, `null` by default) purely
+  so tests can force every Tactical Bot fast uniformly rather than waiting
+  out whatever real budget that bot's own row carries.
 - **Stale/crashed job fallback.** If a job is still `'running'` past its
   own budget plus `BOT_SEARCH_STALE_GRACE_SECONDS = 30` (covering the
   background process's own bootstrap/DB round-trip overhead on top of the

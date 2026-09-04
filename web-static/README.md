@@ -920,7 +920,9 @@ without a reload.
 
 The "Tactical Bot" tier (`php-app/README.md`'s own "Tactical Bot" section)
 searches for its play rather than picking one instantly, in a background
-job that can take up to a couple of minutes -- `state.bot_thinking`
+job that can take up to that bot's own time budget (30/60/90 seconds
+depending which of the three accounts -- see "New game dialog" above) --
+`state.bot_thinking`
 (`{game_player_id, username, time_budget_seconds}`, or `null`), already
 present on every `refreshBoard()` poll's response, is all this needs.
 `renderBoard()` checks it right alongside the existing "your turn"/
@@ -1705,12 +1707,16 @@ deck's `cards`.
     feature.
 
     The bot picker's own checkbox list is every `is_bot = 1` user
-    (`GET /games/bots`) with no distinction drawn between the plain
-    heuristic roster and the opt-in "Tactical Bot" (`BotSage`,
-    `users.uses_tactical_ai` -- see "Tactical Bot" in `php-app/README.md`)
-    -- picking it needs no dialog changes of its own, since it's seated
-    exactly like any other bot. Its own turn can take noticeably longer
-    than the instant heuristic bots (up to a couple of minutes, run in a
+    (`GET /games/bots`) -- picking one needs no dialog changes of its own,
+    since it's seated exactly like any other bot. The three opt-in
+    "Tactical Bot" accounts (`BotSage`/`BotSageQuick`/`BotSageDeep`,
+    `users.uses_tactical_ai` -- see "Tactical Bot" in
+    `php-app/README.md`) each get a small colored `Tactical · up to Ns`
+    badge next to their name (`tacticalBotTierClass()`, green/gold/red for
+    30/60/90 seconds respectively) so a maintainer testing against a range
+    of speeds can tell them apart at a glance; the plain heuristic bots
+    get no badge. A Tactical Bot's own turn can take noticeably longer
+    than the instant heuristic bots (up to its own budget, run in a
     background job rather than blocking the request) -- see "Bot is
     thinking indicator" below for the one place that shows up in this UI.
 
