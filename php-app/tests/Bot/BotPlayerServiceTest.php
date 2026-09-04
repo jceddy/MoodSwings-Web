@@ -2570,6 +2570,109 @@ final class BotPlayerServiceTest extends TestCase
     }
 
     /**
+     * Reported live: "Rationalization should be saved... it should not
+     * be played for points to win a round unless it's going to win the
+     * entire game." Neither existing trigger applies here (Discipline id
+     * 9/value 6 and Courage id 7/value 1 keep the remaining-hand average
+     * above RATIONALIZATION_LOW_VALUE_HAND_AVERAGE, and no other player
+     * has an oversized hand to steal), so WITHOUT the game-win context
+     * Rationalization is still saved for last behind Courage -- this
+     * first test just re-confirms that baseline (passing no fourth
+     * argument at all, same as every test above).
+     */
+    public function testChooseActionSavesRationalizationForLastWithoutGameWinContext(): void
+    {
+        $state = $this->boardState(hands: [1 => [49, 9, 7], 2 => [78]]); // player 2's own Suspicion (value 3, no alt value/no while-in-play wrinkle)
+        $state->moveHandToInPlay(2, 78);
+
+        $action = $this->bot->chooseAction($state, [49, 7], 1);
+
+        self::assertSame(7, $action['card_id']);
+    }
+
+    /**
+     * Same board as above, but now told winning the round in progress
+     * would win the whole GAME ($roundWinsNeededToWinGame: 1) -- and
+     * playing Rationalization purely for its own value (3) is exactly
+     * enough to overtake player 2's own current total (3, all from their
+     * own in-play Suspicion) per wouldBecomeHighestScore(). Both
+     * conditions hold, so Rationalization is played for points instead
+     * of being saved -- still committing to 'refresh' (always safe, see
+     * rationalizationChoices()'s own docblock), just for a different
+     * reason than either existing trigger.
+     */
+    public function testChooseActionPlaysRationalizationForPointsWhenItWouldWinTheGame(): void
+    {
+        $state = $this->boardState(hands: [1 => [49, 9, 7], 2 => [78]]);
+        $state->moveHandToInPlay(2, 78);
+
+        $action = $this->bot->chooseAction($state, [49, 7], 1, 1);
+
+        self::assertSame(49, $action['card_id']);
+        self::assertSame(['mode' => 'refresh'], $action['choices']);
+    }
+
+    /**
+     * Identical board/win-margin as the "wins the game" test above, but
+     * $roundWinsNeededToWinGame is 2 -- winning THIS round wouldn't be
+     * enough on its own, so the carve-out doesn't apply and
+     * Rationalization is saved for last as usual.
+     */
+    public function testChooseActionDoesNotPlayRationalizationForPointsWhenGameWinIsNotClose(): void
+    {
+        $state = $this->boardState(hands: [1 => [49, 9, 7], 2 => [78]]);
+        $state->moveHandToInPlay(2, 78);
+
+        $action = $this->bot->chooseAction($state, [49, 7], 1, 2);
+
+        self::assertSame(7, $action['card_id']);
+    }
+
+    /**
+     * $roundWinsNeededToWinGame is 1 again (winning this round WOULD win
+     * the game), but player 2's own in-play total (Discipline, id 9,
+     * value 6 -- moved into play instead of Suspicion) is too far ahead
+     * for Rationalization's own value (3) to close: 0 + 3 = 3 is still
+     * short of 6, so wouldBecomeHighestScore() says no. Being close to
+     * winning the game isn't enough by itself -- the round has to be
+     * winnable too.
+     */
+    public function testChooseActionDoesNotPlayRationalizationForPointsWhenItWouldNotTakeTheRoundLead(): void
+    {
+        // Confusion (31, value 4) is purely a remaining-hand filler here,
+        // keeping the average above RATIONALIZATION_LOW_VALUE_HAND_AVERAGE
+        // so the EXISTING low-value-hand trigger doesn't also fire and
+        // muddy what this test is actually checking.
+        $state = $this->boardState(hands: [1 => [49, 7, 31], 2 => [9]]);
+        $state->moveHandToInPlay(2, 9);
+
+        $action = $this->bot->chooseAction($state, [49, 7], 1, 1);
+
+        self::assertSame(7, $action['card_id']);
+    }
+
+    /**
+     * Corruption's own live "awardsExtraWin" marker (GameService::
+     * hasExtraWinMarker()'s own tag, duplicated here per
+     * rationalizationWouldClinchTheGame()'s own docblock) means the
+     * round's winner wins TWO rounds at once -- so $roundWinsNeededToWinGame
+     * of 2 (which the earlier "not close" test above shows is normally
+     * NOT enough) is enough here, since 2 round-wins is exactly what this
+     * round is worth with Corruption's marker active.
+     */
+    public function testChooseActionPlaysRationalizationForPointsWithCorruptionsDoubleWinMarker(): void
+    {
+        $state = $this->boardState(hands: [1 => [49, 9, 7, 60], 2 => [78]]);
+        $state->moveHandToInPlay(2, 78);
+        $state->moveHandToInPlay(1, 60);
+        $state->setEffectState(60, 'awardsExtraWin', true);
+
+        $action = $this->bot->chooseAction($state, [49, 7], 1, 2);
+
+        self::assertSame(49, $action['card_id']);
+    }
+
+    /**
      * A bug caught live (issue #196): Compulsion's own required
      * `target_player_id` field (CardChoiceSchema's `'compulsion'` entry,
      * scope 'other') has no special-cased choice-building of its own --

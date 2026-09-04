@@ -6661,17 +6661,66 @@ since it already holds that dependency):
     opponent the way an unwarranted `'rotate'` would.
 
   `chooseAction()`'s own highest-printed-value sort additionally treats
-  Rationalization specially via `sortPriorityValue()`: rather than
-  leading with it purely because of its own unremarkable printed value
-  (3), it's demoted to `PHP_INT_MIN` -- guaranteed last -- UNLESS
-  `rationalizationLowValueHand()` or `rationalizationStealDirection()`
-  already says it's worth playing right now (same two checks
-  `rationalizationChoices()` itself makes, just used here to decide
-  WHETHER/WHEN rather than HOW) -- "save it to play last" per the
-  maintainer, so a mediocre Rationalization never displaces a
-  genuinely useful play, but it's still never skipped outright: once
-  it's the only legal candidate left (or a trigger fires), it's played
-  the same as anything else, always committing to a real mode.
+  Rationalization specially via `sortPriorityValue()`/`hasGoodReasonToPlayNow()`
+  (see the latter's own docblock -- extracted from `sortPriorityValue()`
+  for the reason given there): rather than leading with it purely
+  because of its own unremarkable printed value (3), it's demoted to
+  `PHP_INT_MIN` -- guaranteed last -- UNLESS `rationalizationLowValueHand()`,
+  `rationalizationStealDirection()`, or (reported live, follow-up)
+  `rationalizationWouldClinchTheGame()` already says it's worth playing
+  right now (the first two are the same checks `rationalizationChoices()`
+  itself makes, just used here to decide WHETHER/WHEN rather than HOW)
+  -- "save it to play last" per the maintainer, so a mediocre
+  Rationalization never displaces a genuinely useful play, but it's
+  still never skipped outright: once it's the only legal candidate left
+  (or a trigger fires), it's played the same as anything else, always
+  committing to a real mode.
+
+  **`rationalizationWouldClinchTheGame()`** (reported live: "Rationalization
+  should be saved until it can be used to rotate hands and get the bot
+  at least a 3 card increase in hand size, it should not be played for
+  points to win a round unless it's going to win the entire game") --
+  the "unless" carve-out: true only when BOTH (a) `$roundWinsNeededToWinGame`
+  (see `chooseAction()`'s own docblock for what this new parameter means
+  and where `GameService::roundWinsStillNeededToWinGame()` computes it)
+  says winning the round in progress right now would complete the whole
+  GAME for the bot's own side -- accounting for Corruption's own "the
+  round's winner wins two rounds instead of one" marker, mirroring
+  `GameService::hasExtraWinMarker()` (duplicated rather than shared
+  across the Bot/Game namespace boundary, the same convention
+  `ShockEffect::MAXIMUM_VALUE`/`SHOCK_MAX_TARGET_VALUE` established) --
+  AND (b) playing Rationalization purely for its own plain printed value
+  (no mode -- `'refresh'`'s own hand-swap doesn't change what counts
+  toward THIS round's score either way, so only the base value matters
+  here) is what actually TAKES the round's own lead
+  (`wouldBecomeHighestScore()`, the same "is this the deciding margin"
+  check `shouldAttemptValueBoostDiscard()`'s own Dignity/Embarrassment/
+  Cheer/Delight policy already uses). Both are required: a bot one round
+  win away from winning the game but not actually in contention to win
+  THIS particular round gains nothing from cashing Rationalization in
+  early, since it wouldn't have won the round anyway.
+
+  **The Tactical Bot (issue #419) was silently exempt from ALL of the
+  above until this same fix** (reported live: "I think we made a change
+  around this before, but it seems like the tactical bots are ignoring
+  it"). `sortPriorityValue()`'s own `PHP_INT_MIN` veto only ever affected
+  `BotPlayerService::chooseAction()`'s own sort order for the plain
+  heuristic bot -- `SearchBotPlayerService`'s own root-action search had
+  no equivalent at all, so it happily UCB1'd over (and often picked) a
+  vetoed card like Rationalization purely because playing it scored well
+  THIS round, with zero notion that it should be held back. Now
+  `hasGoodReasonToPlayNow()` (the veto, extracted to a `public` method
+  precisely so this could be fixed) is also consulted by
+  `SearchBotPlayerService::withoutPrematurelyPlayedCards()` -- see that
+  method's own docblock for exactly how it mirrors `chooseAction()`'s own
+  "deprioritized WHEN, never skipped outright" semantics for a UCB1
+  search, which has no sorted-list fallback to lean on the way a greedy
+  loop does. The same gap silently applied to every other
+  `sortPriorityValue()`-vetoed card too (Cynicism, Contempt, Conviction,
+  Intimidation, Paranoia, Pacifism, Anger, Fear, Denial, Exhilaration,
+  Harmony, Grief, Nostalgia) -- Rationalization was simply the one
+  reported live, but this fix closes the same hole for all of them at
+  once, since they all route through the same shared method.
 - **Policy: Cynicism** (confirmed by the maintainer) -- "you may put a
   card from the discard pile into an opponent's hand; if you do, this
   mood's value becomes 6" (base 3, so a +3 swing). Its own two fields
@@ -7625,6 +7674,30 @@ set of variants (the heuristic's own default pick, "target everyone
 eligible up to the max," "target just the minimum required") rather than
 full `K`-choose-`N` combinatorial enumeration, which would blow up the
 action space for the cards that have one.
+
+**Root-action filtering (`SearchBotPlayerService::withoutPrematurelyPlayedCards()`,
+follow-up fix).** `LegalChoiceEnumerator::enumerate()` above builds one
+root action per legally-playable card with no opinion on whether NOW is
+actually a good moment to play it -- that judgment lives entirely in
+`BotPlayerService::hasGoodReasonToPlayNow()` (the "Rationalization"/
+"Practice bots" policy write-up above explains the individual per-card
+vetoes this covers), which used to be consulted ONLY by the plain
+heuristic bot's own `chooseAction()`, invisible to this search engine
+entirely (reported live: a Tactical Bot was ignoring a maintainer-
+confirmed Rationalization policy that the plain heuristic bot already
+respected). `chooseAction()` now calls `withoutPrematurelyPlayedCards()`
+on the enumerator's own output before running UCB1 over it: a candidate
+whose card currently has no good reason to be played is dropped, but
+only when at least one OTHER playable card in this exact turn's own
+candidate set DOES have one right now -- if every playable card is
+vetoed, none are excluded, since the search ranking among them by actual
+simulated outcome is strictly more informed than the heuristic's own
+arbitrary tie-break in that corner case anyway. `$roundWinsNeededToWinGame`
+(see `BotPlayerService::chooseAction()`'s own docblock) is threaded
+through from `SearchBotPlayerService::chooseAction()`'s own same-named
+parameter into this filter too, so the Tactical Bot gets the exact same
+game-clinching carve-out as the plain heuristic bot for a card like
+Rationalization.
 
 **Async "bot is thinking" job (issue #419's own performance
 constraint).** `GameService::advanceAutomatedTurns()` runs synchronously

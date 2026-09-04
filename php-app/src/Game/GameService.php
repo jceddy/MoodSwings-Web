@@ -5105,7 +5105,7 @@ final class GameService
                     $this->candidatePlayCardIds($state, $currentTurnGamePlayerId),
                     fn (int $cardId) => $this->plays->isPlayable($state, $currentTurnGamePlayerId, $cardId),
                 ));
-                $action = $this->bots->chooseAction($state, $playableCardIds, $currentTurnGamePlayerId);
+                $action = $this->bots->chooseAction($state, $playableCardIds, $currentTurnGamePlayerId, $this->roundWinsStillNeededToWinGame($gameId, $currentTurnGamePlayerId));
                 try {
                     $lastResult = $action !== null
                         ? $this->playMood($gameId, $currentTurnGamePlayerId, $action['card_id'], $action['choices'])
@@ -6110,7 +6110,7 @@ final class GameService
             $this->candidatePlayCardIds($state, $gamePlayerId),
             fn (int $cardId) => $this->plays->isPlayable($state, $gamePlayerId, $cardId),
         ));
-        $action = $this->bots->chooseAction($state, $playableCardIds, $gamePlayerId);
+        $action = $this->bots->chooseAction($state, $playableCardIds, $gamePlayerId, $this->roundWinsStillNeededToWinGame($gameId, $gamePlayerId));
 
         return $action !== null
             ? $this->playMood($gameId, $gamePlayerId, $action['card_id'], $action['choices'])
@@ -6188,7 +6188,7 @@ final class GameService
                 $this->candidatePlayCardIds($state, $job['game_player_id']),
                 fn (int $cardId) => $this->plays->isPlayable($state, $job['game_player_id'], $cardId),
             ));
-            $action = $this->tacticalBots->chooseAction($state, $playableCardIds, $job['game_player_id'], (float) $job['time_budget_seconds']);
+            $action = $this->tacticalBots->chooseAction($state, $playableCardIds, $job['game_player_id'], (float) $job['time_budget_seconds'], $this->roundWinsStillNeededToWinGame($job['game_id'], $job['game_player_id']));
 
             if ($action !== null) {
                 $this->playMood($job['game_id'], $job['game_player_id'], $action['card_id'], $action['choices']);
@@ -9776,6 +9776,42 @@ final class GameService
             : $this->totalWinsFor($gameId, $outcome['winnerGamePlayerId']);
 
         return $totalWins + $predictedWinsAwarded >= $winsNeeded;
+    }
+
+    /**
+     * The bot-facing counterpart to roundWouldCompleteGame() above --
+     * that one answers "did the round whose OUTCOME I already know just
+     * win the game," called after scoring; this one answers "how many
+     * MORE round wins does MY side still need," computed BEFORE a bot's
+     * own turn decision, when nobody's won the round yet at all. Threaded
+     * into GameService::advanceAutomatedTurns()/playViaHeuristicBotFallback()/
+     * runTacticalBotSearchJob() so BotPlayerService::chooseAction()'s own
+     * $roundWinsNeededToWinGame parameter (see its own docblock) has real
+     * data to work with, rather than always the "unknown" null default --
+     * see BotPlayerService::rationalizationHasAGoodReasonToPlayNow()'s
+     * own docblock for the one policy this currently feeds (reported
+     * live: "[Rationalization] should not be played for points to win a
+     * round unless it's going to win the entire game").
+     *
+     * Doesn't (and can't) know who'll actually win the round in progress
+     * -- that's exactly what the bot is still deciding -- only how close
+     * $botGamePlayerId's own side already is, which is fixed regardless
+     * of anything that happens the rest of this round.
+     */
+    private function roundWinsStillNeededToWinGame(int $gameId, int $botGamePlayerId): int
+    {
+        $game = $this->fetchGame($gameId);
+        $winsNeeded = (int) $game['wins_needed'];
+
+        if (self::isTeamFormat($game['format'])) {
+            $teamIdStmt = Connection::get()->prepare('SELECT team_id FROM game_players WHERE id = :id');
+            $teamIdStmt->execute(['id' => $botGamePlayerId]);
+            $totalWins = $this->totalWinsForTeam($gameId, (int) $teamIdStmt->fetchColumn());
+        } else {
+            $totalWins = $this->totalWinsFor($gameId, $botGamePlayerId);
+        }
+
+        return $winsNeeded - $totalWins;
     }
 
     /**

@@ -121,13 +121,21 @@ final class SearchBotPlayerService
      * this asynchronous, not this method itself.
      *
      * @param int[] $playableCardIds
+     * @param ?int $roundWinsNeededToWinGame see BotPlayerService::
+     *     chooseAction()'s own docblock -- forwarded to
+     *     withoutPrematurelyPlayedCards() below, the search engine's own
+     *     equivalent of that class's sortPriorityValue()/
+     *     hasGoodReasonToPlayNow() veto (reported live: a Tactical Bot
+     *     was ignoring that same policy entirely -- see
+     *     withoutPrematurelyPlayedCards()'s own docblock for why).
      * @return ?array{card_id: int, choices: array<string, mixed>}
      */
-    public function chooseAction(BoardState $state, array $playableCardIds, int $botGamePlayerId, float $timeBudgetSeconds): ?array
+    public function chooseAction(BoardState $state, array $playableCardIds, int $botGamePlayerId, float $timeBudgetSeconds, ?int $roundWinsNeededToWinGame = null): ?array
     {
         $deadline = microtime(true) + max(0.0, $timeBudgetSeconds);
 
         $rootActions = $this->enumerator->enumerate($state, $playableCardIds, $botGamePlayerId);
+        $rootActions = $this->withoutPrematurelyPlayedCards($state, $rootActions, $botGamePlayerId, $playableCardIds, $roundWinsNeededToWinGame);
         $rootActions[] = null; // "pass" is always itself a candidate
 
         if (count($rootActions) <= 1) {
@@ -147,6 +155,58 @@ final class SearchBotPlayerService
         } while ($iteration % self::DEADLINE_CHECK_INTERVAL !== 0 || microtime(true) < $deadline);
 
         return $rootActions[$this->bestArmByAverage($visits, $totals)];
+    }
+
+    /**
+     * BotPlayerService::hasGoodReasonToPlayNow()'s own veto (Rationalization/
+     * Cynicism/Contempt/Conviction/Intimidation/Paranoia/Pacifism/Anger/
+     * Fear/Denial/Exhilaration/Harmony/Grief/Nostalgia -- see that
+     * method's own docblock) previously had NO effect at all on this
+     * search engine's own root-action candidates: it lives entirely
+     * inside BotPlayerService::sortPriorityValue(), which only ever
+     * affects `chooseAction()`'s own sort order for the PLAIN heuristic
+     * bot -- `LegalChoiceEnumerator::enumerate()` (this method's own
+     * caller, just above) builds one root action per playable card
+     * regardless, so a Tactical Bot's own search would happily UCB1 over
+     * (and often pick) a card like Rationalization purely because
+     * playing it scores well THIS round, with no notion that the plain
+     * heuristic bot would have held it back for a genuinely good moment
+     * instead (reported live: "bots should not play Rationalization
+     * without choosing a mode, I think we made a change around this
+     * before, but it seems like the tactical bots are ignoring it").
+     *
+     * Mirrors `chooseAction()`'s own "deprioritized WHEN, never skipped
+     * outright" semantics as closely as a UCB1 search (which has no
+     * sorted-list fallback to lean on the way a greedy loop does) can:
+     * a vetoed card's action is dropped ONLY when at least one OTHER
+     * playable card currently has a good reason to be played right now
+     * (so the search still has a genuinely better option to consider
+     * instead) -- if EVERY playable card is vetoed, none are excluded,
+     * letting the search rank among them by actual simulated outcome
+     * rather than the heuristic's own arbitrary tie-break, which is
+     * strictly more informed anyway.
+     *
+     * @param array<int, array{card_id: int, choices: array<string, mixed>}> $rootActions
+     * @param int[] $playableCardIds
+     * @return array<int, array{card_id: int, choices: array<string, mixed>}>
+     */
+    private function withoutPrematurelyPlayedCards(BoardState $state, array $rootActions, int $botGamePlayerId, array $playableCardIds, ?int $roundWinsNeededToWinGame): array
+    {
+        $anyCardHasGoodReason = false;
+        foreach ($playableCardIds as $candidateCardId) {
+            if ($this->heuristic->hasGoodReasonToPlayNow($state, $candidateCardId, $botGamePlayerId, $playableCardIds, $roundWinsNeededToWinGame)) {
+                $anyCardHasGoodReason = true;
+                break;
+            }
+        }
+        if (!$anyCardHasGoodReason) {
+            return $rootActions;
+        }
+
+        return array_values(array_filter(
+            $rootActions,
+            fn (array $action) => $this->heuristic->hasGoodReasonToPlayNow($state, $action['card_id'], $botGamePlayerId, $playableCardIds, $roundWinsNeededToWinGame),
+        ));
     }
 
     /** @param int[] $visits @param float[] $totals */
