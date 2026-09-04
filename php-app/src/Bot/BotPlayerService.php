@@ -196,7 +196,59 @@ use MoodSwings\Rules\RoundScorer;
  * non-teammate opponent a significant combined swing
  * (denialSignificantSwingTargetMoodIds(), new), a replay-target pair, or
  * playing it for its own plain printed value alone would win the round
- * -- see that method's own docblock for the full policy.
+ * -- see that method's own docblock for the full policy; and
+ * rejectionHasAGoodReasonToPlayNow()/sortPriorityValue() once more
+ * (reported live: "Bots shouldn't play Rejection with no targets"),
+ * which deprioritizes Rejection unless rejectionTargetMoodIds() finds a
+ * legal same-color-or-value pair among non-teammate opponents' own
+ * moods (a round-winning pair, or one costing a significant combined
+ * swing -- rejectionWinningTargetMoodIds()/rejectionSignificantSwingTargetMoodIds(),
+ * mirroring Denial's own priority order above minus its own cheap-
+ * replay tier, since Rejection permanently discards rather than
+ * returning to hand, so there's no replay angle for the bot's own
+ * moods), or -- the reported exception -- playing it with no target at
+ * all would still pump some OTHER in-play mood that scales with mood
+ * count enough to flip the round to a win
+ * (rejectionWouldPumpAnotherMoodToWinTheRound(), new). Unlike every
+ * other card's own single-value wouldBecomeHighestScore() comparison,
+ * this actually simulates the board with Rejection moved into play (a
+ * real BoardState clone, scored via RoundScorer), since Rejection's own
+ * printed value is always 0 and the entire swing here comes from a
+ * SEPARATE card's own live recomputation (e.g. Euphoria's "+1 per mood
+ * in play, any owner"), not from anything wouldBecomeHighestScore()'s
+ * single-card delta could capture; see that method's own docblock for
+ * the full policy; guiltChoices() (reported live: "bots should consider
+ * whether suppressing a single opponent mood would net them more of a
+ * point swing than choosing the 'all' mode"), which now picks whichever
+ * of Guilt's two modes actually maximizes the net swing -- 'all'
+ * unconditionally suppresses every black/red mood in play regardless of
+ * owner, so it costs the bot its OWN black/red moods just as readily as
+ * an opponent's, while 'single' can cherry-pick just the best one;
+ * replaces BotChoiceResolver's own former `MODE_FIELD_OVERRIDES['guilt']
+ * = 'all'` hardcode, which never considered 'single' at all; and
+ * scornTargetMoodId() (reported live: a bot's mandatory Scorn
+ * suppression targeted the human's own mood when it should have
+ * targeted the other player's copy of the same card instead -- Scorn's
+ * own required target_mood_id had no bespoke targeting at all, so the
+ * generic resolver's plain "highest value, any owner" policy could pick
+ * either player's copy of an identically-valued card with no real
+ * preference between them). Now prefers a non-teammate opponent's own
+ * highest-value mood first, the same contemptTargetMoodId()-style
+ * priority already used elsewhere, falling back to the highest-value
+ * OTHER mood overall only when no opponent one exists (a required
+ * field, unlike Contempt/Hate's own optional one, so it must still
+ * supply SOME legal target even then -- the same reasoning
+ * convictionTargetMoodId() already documents); and
+ * shockHasAGoodReasonToPlayNow()/sortPriorityValue() once more (reported
+ * live: "Bots should avoid playing Shock without a target opponent mood
+ * for it - exception for when they just need 2 points to win a game"),
+ * which deprioritizes Shock unless either shockTargetMoodIds() finds a
+ * legal opponent mood to discard from, or -- the reported exception --
+ * shockWouldClinchTheGame() says playing it for its own plain printed
+ * value alone (2, no target) would both take the round's lead AND win
+ * the entire game outright, the exact same
+ * rationalizationWouldClinchTheGame()-shaped check (duplicated, not
+ * shared) Rationalization's own game-win carve-out above already uses.
  * GameService is the only caller
  * (see its own "Practice bots" section in php-app/README.md for how this
  * fits into the request lifecycle) -- legality itself
@@ -340,9 +392,12 @@ final class BotPlayerService
      *     a caller that simply hasn't been updated to compute it), which
      *     behaves exactly as it always did before this parameter
      *     existed. See rationalizationHasAGoodReasonToPlayNow()'s own
-     *     docblock for the one place this currently matters (reported
-     *     live: "[Rationalization] should not be played for points to
-     *     win a round unless it's going to win the entire game").
+     *     docblock for where this originally mattered (reported live:
+     *     "[Rationalization] should not be played for points to win a
+     *     round unless it's going to win the entire game") and
+     *     shockHasAGoodReasonToPlayNow()'s own docblock for the other
+     *     place it's since been reused (reported live: Shock "except for
+     *     when they just need 2 points to win a game").
      * @return ?array{card_id: int, choices: array<string, mixed>} null means pass.
      */
     public function chooseAction(BoardState $state, array $playableCardIds, int $botGamePlayerId, ?int $roundWinsNeededToWinGame = null): ?array
@@ -899,6 +954,9 @@ final class BotPlayerService
         if ($effectKey === 'pacifism' && $this->pacifismTargetMoodIds($state, $botGamePlayerId) === []) {
             return false;
         }
+        if ($effectKey === 'shock' && !$this->shockHasAGoodReasonToPlayNow($state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame)) {
+            return false;
+        }
         if ($effectKey === 'anger' && $this->angerTargetMoodIds($state, $cardId, $botGamePlayerId) === []) {
             return false;
         }
@@ -915,6 +973,9 @@ final class BotPlayerService
             return false;
         }
         if ($effectKey === 'denial' && !$this->denialHasAGoodReasonToPlayNow($state, $cardId, $botGamePlayerId)) {
+            return false;
+        }
+        if ($effectKey === 'rejection' && !$this->rejectionHasAGoodReasonToPlayNow($state, $cardId, $botGamePlayerId)) {
             return false;
         }
         if ($effectKey === 'exhilaration' && !$this->exhilarationHasAGoodReasonToPlayNow($state, $botGamePlayerId)) {
@@ -1363,6 +1424,7 @@ final class BotPlayerService
         'rationalization', 'avoidance', 'cynicism', 'intimidation', 'paranoia',
         'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
         'nostalgia', 'contempt', 'sneakiness', 'shock', 'exhilaration',
+        'rejection', 'guilt', 'scorn',
     ];
 
     /**
@@ -1470,6 +1532,22 @@ final class BotPlayerService
 
         if ($effectKey === 'exhilaration') {
             return ['discard_mood_id' => $this->exhilarationDiscardMoodId($state, $botGamePlayerId)];
+        }
+
+        if ($effectKey === 'rejection') {
+            $targetMoodIds = $this->rejectionTargetMoodIds($state, $botGamePlayerId);
+
+            return $targetMoodIds !== [] ? ['target_mood_ids' => $targetMoodIds] : [];
+        }
+
+        if ($effectKey === 'guilt') {
+            return $this->guiltChoices($state, $botGamePlayerId);
+        }
+
+        if ($effectKey === 'scorn') {
+            $targetMoodId = $this->scornTargetMoodId($state, $cardId, $botGamePlayerId);
+
+            return $targetMoodId !== null ? ['target_mood_id' => $targetMoodId] : null;
         }
 
         return $this->resolveSchemaFields(CardChoiceSchema::forEffectKey($effectKey), $state, $cardId, $botGamePlayerId, $effectKey);
@@ -2723,6 +2801,63 @@ final class BotPlayerService
     }
 
     /**
+     * Shock's own "is this actually worth playing right now" policy
+     * (reported live: "Bots should avoid playing Shock without a target
+     * opponent mood for it - exception for when they just need 2 points
+     * to win a game"). Without a legal opponent mood to discard from
+     * (shockTargetMoodIds()), Shock is just a plain 2-point card with
+     * nothing else to show for it -- worth playing NOW only if either a
+     * real target exists, or -- the reported exception --
+     * shockWouldClinchTheGame() says playing it for its own plain
+     * printed value alone (no target at all) would be the deciding
+     * difference between the bot's own group NOT currently having the
+     * highest score this round and having it, AND that round win would
+     * win the entire game outright. Otherwise PHP_INT_MIN via
+     * sortPriorityValue() -- deprioritized behind everything else, the
+     * same "avoid it until it actually pays off" treatment Rationalization/
+     * Denial/Rejection above already get.
+     */
+    private function shockHasAGoodReasonToPlayNow(BoardState $state, int $cardId, int $botGamePlayerId, ?int $roundWinsNeededToWinGame): bool
+    {
+        if ($this->shockTargetMoodIds($state, $botGamePlayerId) !== []) {
+            return true;
+        }
+
+        return $this->shockWouldClinchTheGame($state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame);
+    }
+
+    /**
+     * @see shockHasAGoodReasonToPlayNow()'s own docblock. Identical logic
+     * to rationalizationWouldClinchTheGame() (duplicated rather than
+     * shared, the same "small per-card helper" convention
+     * SHOCK_MAX_TARGET_VALUE's own docblock already established for this
+     * card) -- true only once $roundWinsNeededToWinGame says winning the
+     * round in progress would win the whole game outright (accounting
+     * for Corruption's own double-win marker the same way), AND playing
+     * $cardId for its own plain printed value alone would take the
+     * round's lead (wouldBecomeHighestScore(), $unboostedValue 0).
+     */
+    private function shockWouldClinchTheGame(BoardState $state, int $cardId, int $botGamePlayerId, ?int $roundWinsNeededToWinGame): bool
+    {
+        if ($roundWinsNeededToWinGame === null) {
+            return false;
+        }
+
+        $predictedRoundWinsAwarded = 1;
+        foreach ($state->moodsInPlay() as $mood) {
+            if ($state->effectState($mood->cardId, 'awardsExtraWin')) {
+                $predictedRoundWinsAwarded = 2;
+                break;
+            }
+        }
+        if ($roundWinsNeededToWinGame > $predictedRoundWinsAwarded) {
+            return false;
+        }
+
+        return $this->wouldBecomeHighestScore($state, $botGamePlayerId, 0, $this->baseValue($state, $cardId));
+    }
+
+    /**
      * The highest printed value a mood can have and still count as
      * "cheap enough to sacrifice for a replay" for
      * denialReplayTargetMoodIds() below -- confirmed by the maintainer.
@@ -3042,10 +3177,11 @@ final class BotPlayerService
     }
 
     /**
-     * Every distinct pair from $cardIds satisfying Denial's own
-     * same-color-or-value constraint, used by both
-     * denialWinningTargetMoodIds() and denialReplayTargetMoodIds()'s own
-     * two-own-candidates case above.
+     * Every distinct pair from $cardIds satisfying Denial's/Rejection's
+     * own identically-shaped same-color-or-value constraint, used by
+     * denialWinningTargetMoodIds(), denialReplayTargetMoodIds()'s own
+     * two-own-candidates case above, and rejectionWinningTargetMoodIds()/
+     * rejectionSignificantSwingTargetMoodIds() below.
      *
      * @param int[] $cardIds
      * @return int[][]
@@ -3063,6 +3199,383 @@ final class BotPlayerService
         }
 
         return $pairs;
+    }
+
+    /**
+     * @see rejectionHasAGoodReasonToPlayNow()'s own docblock. Chosen as
+     * a genuinely meaningful combined removal -- the same bar Denial's
+     * own DENIAL_SIGNIFICANT_SWING_THRESHOLD sets for its identically-
+     * shaped pair, not a separate maintainer-tuned number, since
+     * Rejection's own removal is if anything the stronger of the two
+     * (permanent, not a return-to-hand).
+     */
+    private const REJECTION_SIGNIFICANT_SWING_THRESHOLD = self::DENIAL_SIGNIFICANT_SWING_THRESHOLD;
+
+    /**
+     * Rejection's own "what to target" policy -- two priorities, tried
+     * in order, both constrained to a legal same-color-or-value pair
+     * (CardChoiceSchema's own `'same_color_or_value'` constraint for
+     * this field, identical to Denial's) the same way RejectionEffect
+     * itself validates. No third "replay" tier the way
+     * denialTargetMoodIds() has: Denial's replay tier sacrifices one of
+     * the bot's OWN cheap moods to get it back in hand for a replay, but
+     * Rejection permanently discards its targets instead of returning
+     * them, so touching the bot's own board here is pure self-harm with
+     * no upside to weigh against it -- both tiers below only ever
+     * target non-teammate opponents' own moods.
+     *
+     * 1. rejectionWinningTargetMoodIds() -- a pair whose combined
+     *    removal (into the discard pile, off the board entirely for
+     *    scoring purposes) would win the round outright for the bot's
+     *    own group.
+     * 2. Failing that, rejectionSignificantSwingTargetMoodIds() -- a
+     *    pair whose combined value clears REJECTION_SIGNIFICANT_SWING_THRESHOLD
+     *    even without winning the round outright.
+     *
+     * Returns [] (Rejection still legally playable as a plain 0-point
+     * black mood, per RejectionEffect's own `if ($targets === []) { return; }`)
+     * when neither priority finds a qualifying pair --
+     * rejectionHasAGoodReasonToPlayNow() below deprioritizes Rejection
+     * itself via sortPriorityValue() in that case, unless playing it
+     * with no target at all would still pump some other mood enough to
+     * win the round; see that method's own docblock for the full policy.
+     *
+     * @return int[]
+     */
+    private function rejectionTargetMoodIds(BoardState $state, int $botGamePlayerId): array
+    {
+        $winningTargetMoodIds = $this->rejectionWinningTargetMoodIds($state, $botGamePlayerId);
+        if ($winningTargetMoodIds !== null) {
+            return $winningTargetMoodIds;
+        }
+
+        return $this->rejectionSignificantSwingTargetMoodIds($state, $botGamePlayerId) ?? [];
+    }
+
+    /**
+     * @see rejectionTargetMoodIds()'s own docblock, priority 1.
+     * skipScoringOwnerId() non-null short-circuits straight to null, the
+     * same "nothing to win this round regardless of who's targeted"
+     * guard denialWinningTargetMoodIds() already applies. null means no
+     * qualifying pair wins the round outright.
+     *
+     * @return ?int[]
+     */
+    private function rejectionWinningTargetMoodIds(BoardState $state, int $botGamePlayerId): ?array
+    {
+        if ($state->skipScoringOwnerId() !== null) {
+            return null;
+        }
+
+        $opponentMoodIds = $this->nonTeammateOpponentMoodIds($state, $botGamePlayerId);
+
+        $pairs = $this->sameColorOrValuePairs($state, $opponentMoodIds);
+        usort(
+            $pairs,
+            fn (array $a, array $b) => ($state->valueOf($b[0]) + $state->valueOf($b[1])) <=> ($state->valueOf($a[0]) + $state->valueOf($a[1])),
+        );
+
+        foreach ($pairs as $pair) {
+            if ($this->rejectionWouldWinRoundByRemoving($state, $botGamePlayerId, $pair)) {
+                return $pair;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @see rejectionTargetMoodIds()'s own docblock, priority 2. Prefers
+     * the highest-combined-value qualifying pair. Returns null when no
+     * pair clears REJECTION_SIGNIFICANT_SWING_THRESHOLD.
+     *
+     * @return ?int[]
+     */
+    private function rejectionSignificantSwingTargetMoodIds(BoardState $state, int $botGamePlayerId): ?array
+    {
+        if ($state->skipScoringOwnerId() !== null) {
+            return null;
+        }
+
+        $opponentMoodIds = $this->nonTeammateOpponentMoodIds($state, $botGamePlayerId);
+
+        $bestPair = null;
+        $bestValue = self::REJECTION_SIGNIFICANT_SWING_THRESHOLD - 1;
+        foreach ($this->sameColorOrValuePairs($state, $opponentMoodIds) as $pair) {
+            $combined = $state->valueOf($pair[0]) + $state->valueOf($pair[1]);
+            if ($combined > $bestValue) {
+                $bestValue = $combined;
+                $bestPair = $pair;
+            }
+        }
+
+        return $bestPair;
+    }
+
+    /**
+     * Whether removing $targetCardIds (each into the discard pile, per
+     * RejectionEffect -- off the board entirely for scoring purposes,
+     * same as denialWouldWinRoundByRemoving()'s own return-to-hand
+     * removal) would move the bot's own group from BELOW the best
+     * remaining rival group's current round score to AT OR ABOVE it.
+     * Rejection's own base value is always 0, so unlike
+     * denialWouldWinRoundByRemoving() there's no meaningful per-card
+     * printed value to add in for the card actually being played.
+     *
+     * @param int[] $targetCardIds
+     */
+    private function rejectionWouldWinRoundByRemoving(BoardState $state, int $botGamePlayerId, array $targetCardIds): bool
+    {
+        $scores = (new RoundScorer())->score($state);
+        foreach ($targetCardIds as $targetCardId) {
+            $ownerId = $state->ownerOf($targetCardId);
+            $scores[$ownerId] = ($scores[$ownerId] ?? 0) - $state->valueOf($targetCardId);
+        }
+
+        $activeIds = $state->activePlayerOrder();
+        $myGroupIds = array_values(array_filter(
+            $activeIds,
+            fn (int $id): bool => $id === $botGamePlayerId || $state->isTeammate($botGamePlayerId, $id),
+        ));
+        $myTotal = array_sum(array_map(fn (int $id) => $scores[$id] ?? 0, $myGroupIds));
+
+        $rivalIds = array_values(array_diff($activeIds, $myGroupIds));
+        $groupedRivalIds = [];
+        $rivalBest = 0;
+        foreach ($rivalIds as $id) {
+            if (in_array($id, $groupedRivalIds, true)) {
+                continue;
+            }
+            $group = array_values(array_filter(
+                $rivalIds,
+                fn (int $other): bool => $other === $id || $state->isTeammate($id, $other),
+            ));
+            $groupedRivalIds = array_merge($groupedRivalIds, $group);
+            $rivalBest = max($rivalBest, array_sum(array_map(fn (int $gid) => $scores[$gid] ?? 0, $group)));
+        }
+
+        return $myTotal >= $rivalBest;
+    }
+
+    /** Every non-teammate opponent's own in-play mood, used by both Rejection tiers above. @return int[] */
+    private function nonTeammateOpponentMoodIds(BoardState $state, int $botGamePlayerId): array
+    {
+        $opponentMoodIds = [];
+        foreach ($state->moodsInPlay() as $mood) {
+            if ($mood->ownerId !== $botGamePlayerId && !$state->isTeammate($botGamePlayerId, $mood->ownerId)) {
+                $opponentMoodIds[] = $mood->cardId;
+            }
+        }
+
+        return $opponentMoodIds;
+    }
+
+    /**
+     * Rejection's own "is this actually worth playing right now" policy
+     * (reported live: "Bots shouldn't play Rejection with no targets -
+     * exception when it being in play will pump another mood enough to
+     * win a round"). Rejection's own printed value is always 0, so
+     * unlike most cards this is worth playing NOW only if either
+     * rejectionTargetMoodIds() finds a real pair to remove, or -- the
+     * reported exception -- rejectionWouldPumpAnotherMoodToWinTheRound()
+     * says playing it with no target at all would still flip the round
+     * to a win purely by being one more mood in play. Otherwise
+     * PHP_INT_MIN via sortPriorityValue() -- deprioritized behind
+     * everything else, the same "avoid it until it actually pays off"
+     * treatment Denial/Contempt/Conviction already get.
+     */
+    private function rejectionHasAGoodReasonToPlayNow(BoardState $state, int $cardId, int $botGamePlayerId): bool
+    {
+        if ($this->rejectionTargetMoodIds($state, $botGamePlayerId) !== []) {
+            return true;
+        }
+
+        return $this->rejectionWouldPumpAnotherMoodToWinTheRound($state, $cardId, $botGamePlayerId);
+    }
+
+    /**
+     * @see rejectionHasAGoodReasonToPlayNow()'s own docblock. Rejection
+     * entering play (with no target chosen at all -- RejectionEffect's
+     * own `if ($targets === []) { return; }`) still increases the live
+     * in-play mood COUNT, which can pump some OTHER already-in-play
+     * mood that scales with it (Euphoria's own "+1 per mood in play, any
+     * owner" -- MOOD_COUNTING_EFFECT_KEYS' own docblock) regardless of
+     * who owns either mood. Unlike wouldBecomeHighestScore() (a single
+     * card's own value delta, added in by hand against a score that
+     * doesn't need recomputing), this can't be modeled that way: the
+     * swing here comes from a SEPARATE card's own live recomputation,
+     * which depends on the actual board state including Rejection --
+     * so this clones $state, actually moves Rejection into play on the
+     * clone, and compares real RoundScorer() totals before and after
+     * (via groupTotals() below). True only if the bot's own group is
+     * currently BELOW the best rival group's total but would be AT OR
+     * ABOVE it once Rejection is actually in play.
+     */
+    private function rejectionWouldPumpAnotherMoodToWinTheRound(BoardState $state, int $cardId, int $botGamePlayerId): bool
+    {
+        [$myTotalBefore, $rivalBestBefore] = $this->groupTotals($state, $botGamePlayerId, (new RoundScorer())->score($state));
+        if ($myTotalBefore >= $rivalBestBefore) {
+            return false; // already at/above the best rival group -- nothing to flip
+        }
+
+        $hypothetical = clone $state;
+        $hypothetical->moveHandToInPlay($botGamePlayerId, $cardId);
+
+        [$myTotalAfter, $rivalBestAfter] = $this->groupTotals($hypothetical, $botGamePlayerId, (new RoundScorer())->score($hypothetical));
+
+        return $myTotalAfter >= $rivalBestAfter;
+    }
+
+    /**
+     * The bot's own group total (itself plus any BoardState::isTeammate())
+     * and the best remaining rival group's total, from an already-computed
+     * RoundScorer::score() array -- the same grouping
+     * wouldBecomeHighestScore()/denialWouldWinRoundByRemoving() each
+     * already do inline, factored out here purely so
+     * rejectionWouldPumpAnotherMoodToWinTheRound() can run it twice
+     * (before and after a hypothetical board mutation) without
+     * duplicating it.
+     *
+     * @param array<int, int> $scores
+     * @return array{0: int, 1: int} [myGroupTotal, bestRivalGroupTotal]
+     */
+    private function groupTotals(BoardState $state, int $botGamePlayerId, array $scores): array
+    {
+        $activeIds = $state->activePlayerOrder();
+        $myGroupIds = array_values(array_filter(
+            $activeIds,
+            fn (int $id): bool => $id === $botGamePlayerId || $state->isTeammate($botGamePlayerId, $id),
+        ));
+        $myTotal = array_sum(array_map(fn (int $id) => $scores[$id] ?? 0, $myGroupIds));
+
+        $rivalIds = array_values(array_diff($activeIds, $myGroupIds));
+        $groupedRivalIds = [];
+        $rivalBest = 0;
+        foreach ($rivalIds as $id) {
+            if (in_array($id, $groupedRivalIds, true)) {
+                continue;
+            }
+            $group = array_values(array_filter(
+                $rivalIds,
+                fn (int $other): bool => $other === $id || $state->isTeammate($id, $other),
+            ));
+            $groupedRivalIds = array_merge($groupedRivalIds, $group);
+            $rivalBest = max($rivalBest, array_sum(array_map(fn (int $gid) => $scores[$gid] ?? 0, $group)));
+        }
+
+        return [$myTotal, $rivalBest];
+    }
+
+    /**
+     * Guilt's own signed swing contribution for suppressing $cardId
+     * (assumed already black/red, per GuiltEffect::QUALIFYING_COLORS)
+     * -- +value if it belongs to a non-teammate opponent (a genuine loss
+     * inflicted on a rival), -value if it belongs to the bot's own group
+     * (a self-inflicted loss 'all' mode can't avoid the way 'single'
+     * targeting can).
+     */
+    private function guiltSwingContribution(BoardState $state, int $botGamePlayerId, int $cardId): int
+    {
+        $value = $state->valueOf($cardId);
+        $ownerId = $state->ownerOf($cardId);
+
+        return ($ownerId === $botGamePlayerId || $state->isTeammate($botGamePlayerId, $ownerId)) ? -$value : $value;
+    }
+
+    /**
+     * Guilt's own "which mode" policy (reported live: "bots should
+     * consider whether suppressing a single opponent mood would net
+     * them more of a point swing than choosing the 'all' mode").
+     * GuiltEffect's own 'all' mode suppresses EVERY black/red mood in
+     * play regardless of owner -- including the bot's own -- while
+     * 'single' can cherry-pick just one. Compares the best achievable
+     * 'single' target's own signed swing (guiltSwingContribution())
+     * against 'all' mode's combined signed swing across every
+     * qualifying mood, and picks whichever is actually larger, rather
+     * than always defaulting to 'all' the way BotChoiceResolver's own
+     * former MODE_FIELD_OVERRIDES hardcode did. With no qualifying mood
+     * in play at all, 'all' is a harmless no-op (nothing to discard
+     * from, per GuiltEffect's own `allQualifyingMoods()`), so that case
+     * short-circuits straight to it rather than leaving 'single' with no
+     * legal target to fill in.
+     */
+    private function guiltChoices(BoardState $state, int $botGamePlayerId): array
+    {
+        $qualifyingMoodIds = [];
+        foreach ($state->moodsInPlay() as $mood) {
+            if (in_array($state->colorOf($mood->cardId), ['black', 'red'], true)) {
+                $qualifyingMoodIds[] = $mood->cardId;
+            }
+        }
+
+        if ($qualifyingMoodIds === []) {
+            return ['mode' => 'all'];
+        }
+
+        $bestSingleTargetId = null;
+        $bestSingleSwing = PHP_INT_MIN;
+        $allSwing = 0;
+        foreach ($qualifyingMoodIds as $targetCardId) {
+            $swing = $this->guiltSwingContribution($state, $botGamePlayerId, $targetCardId);
+            $allSwing += $swing;
+            if ($swing > $bestSingleSwing) {
+                $bestSingleSwing = $swing;
+                $bestSingleTargetId = $targetCardId;
+            }
+        }
+
+        if ($bestSingleTargetId !== null && $bestSingleSwing > $allSwing) {
+            return ['mode' => 'single', 'target_mood_id' => $bestSingleTargetId];
+        }
+
+        return ['mode' => 'all'];
+    }
+
+    /**
+     * Scorn's own mandatory "suppress any mood" target (reported live: a
+     * bot's Scorn suppression targeted the human's own mood when it
+     * should have targeted the other player's copy of the same card
+     * instead). CardChoiceSchema's own `target_mood_id` field for this
+     * is scope 'any' with no owner preference at all, so the generic
+     * resolver's plain "highest value" policy could pick either
+     * player's copy of an identically-valued card with no real
+     * preference between them -- the same class of gap Contempt/
+     * Conviction/Hate/Denial already needed a bespoke opponent-
+     * preferring method for. Prefers a non-teammate opponent's own
+     * highest-value mood, the same contemptTargetMoodId()-style
+     * priority; falling back to the highest-value OTHER mood overall
+     * (excluding Scorn itself) only when no opponent mood exists at
+     * all, since this field is REQUIRED (unlike Contempt/Hate's own
+     * optional one) and must still supply SOME legal target even then --
+     * the same reasoning convictionTargetMoodId() already documents.
+     * Returns null only in the practically-unreachable case of no legal
+     * target existing at all (Scorn itself the only mood in play), the
+     * exact same corner case the generic resolver would already fail on
+     * too.
+     */
+    private function scornTargetMoodId(BoardState $state, int $cardId, int $botGamePlayerId): ?int
+    {
+        $bestOpponentId = null;
+        foreach ($this->nonTeammateOpponentMoodIds($state, $botGamePlayerId) as $candidateId) {
+            if ($bestOpponentId === null || $state->valueOf($candidateId) > $state->valueOf($bestOpponentId)) {
+                $bestOpponentId = $candidateId;
+            }
+        }
+        if ($bestOpponentId !== null) {
+            return $bestOpponentId;
+        }
+
+        $bestAnyId = null;
+        foreach ($state->moodsInPlay() as $mood) {
+            if ($mood->cardId === $cardId) {
+                continue;
+            }
+            if ($bestAnyId === null || $state->valueOf($mood->cardId) > $state->valueOf($bestAnyId)) {
+                $bestAnyId = $mood->cardId;
+            }
+        }
+
+        return $bestAnyId;
     }
 
     /**

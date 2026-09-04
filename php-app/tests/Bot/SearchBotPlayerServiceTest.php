@@ -33,10 +33,16 @@ final class SearchBotPlayerServiceTest extends TestCase
         );
     }
 
-    /** @param array<int, int[]> $hands */
-    private function boardState(array $hands): BoardState
+    /**
+     * @param array<int, int[]> $hands
+     * @param array<int, int> $catalogCardIdFor instance id => catalog id,
+     *     for a test needing two DIFFERENT physical instances sharing the
+     *     SAME catalog entry -- see BotPlayerServiceTest's own identical
+     *     helper for why.
+     */
+    private function boardState(array $hands, array $catalogCardIdFor = []): BoardState
     {
-        return new BoardState($this->sampleCatalog(), DefaultEffectRegistry::build(), [1, 2], $hands);
+        return new BoardState($this->sampleCatalog(), DefaultEffectRegistry::build(), [1, 2], $hands, catalogCardIdFor: $catalogCardIdFor);
     }
 
     public function testChooseActionPrefersTheHigherValueOfTwoInertCards(): void
@@ -224,5 +230,64 @@ final class SearchBotPlayerServiceTest extends TestCase
         self::assertNotNull($action);
         self::assertSame(49, $action['card_id']);
         self::assertSame(['mode' => 'rotate', 'direction' => 'left'], $action['choices']);
+    }
+
+    /**
+     * Reported live: a bot's mandatory Scorn suppression targeted the
+     * human's own mood when it should have targeted the other player's
+     * copy of the same card instead. Both players hold their own
+     * separate physical Determination (112) -- distinct instance ids
+     * (1120/1121) mapped to the SAME catalog entry, genuinely identical
+     * in every printed respect. Scorn's own required target_mood_id is a
+     * scope-'any' mood field LegalChoiceEnumerator would otherwise vary
+     * across every legal candidate (both copies included), but Scorn is
+     * now bespoke (BotPlayerService::usesBespokeChoiceBuilding()), so
+     * the Tactical Bot's only candidate action for it is
+     * scornTargetMoodId()'s own opponent-preferring default -- the same
+     * fix that corrects the plain heuristic bot (see
+     * BotPlayerServiceTest's own
+     * `testChooseActionTargetsTheOpponentsCopyOverTheBotsOwnIdenticalMoodWhenPlayingScorn`)
+     * fixes the Tactical Bot too, with no separate search-side change
+     * needed.
+     */
+    public function testChooseActionTargetsTheOpponentsCopyOverTheBotsOwnIdenticalMoodWhenPlayingScorn(): void
+    {
+        $state = $this->boardState(
+            [1 => [24, 1120], 2 => [1121]],
+            catalogCardIdFor: [1120 => 112, 1121 => 112],
+        );
+        $state->startTurn(1);
+        $state->moveHandToInPlay(1, 1120);
+        $state->moveHandToInPlay(2, 1121);
+
+        $action = $this->search->chooseAction($state, [24], 1, timeBudgetSeconds: 0.2);
+
+        self::assertNotNull($action);
+        self::assertSame(24, $action['card_id']);
+        self::assertSame(['target_mood_id' => 1121], $action['choices']);
+    }
+
+    /**
+     * Reported live: "Bots should avoid playing Shock without a target
+     * opponent mood for it - exception for when they just need 2 points
+     * to win a game." With no opponent mood in play at all for
+     * shockTargetMoodIds() to find, and no game-win context making
+     * Shock's own plain value worth it either, the Tactical Bot excludes
+     * it (withoutPrematurelyPlayedCards()) in favor of Courage -- the
+     * same hasGoodReasonToPlayNow() veto that fixes the plain heuristic
+     * bot (see BotPlayerServiceTest's own
+     * `testChooseActionDemotesShockBehindALowerValueCardWhenNoTargetExists`)
+     * reaches the Tactical Bot's own search too, since both consult the
+     * exact same method.
+     */
+    public function testChooseActionExcludesShockWhenNoTargetExistsAndABetterCardIsAvailable(): void
+    {
+        $state = $this->boardState([1 => [101, 7], 2 => []]);
+        $state->startTurn(1);
+
+        $action = $this->search->chooseAction($state, [101, 7], 1, timeBudgetSeconds: 0.2);
+
+        self::assertNotNull($action);
+        self::assertSame(7, $action['card_id']);
     }
 }

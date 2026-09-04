@@ -6919,6 +6919,22 @@ since it already holds that dependency):
   generic default the bot could just as easily have discarded its OWN
   mood instead of an opponent's.
 
+  Shock also gets a hold-back veto, `shockHasAGoodReasonToPlayNow()`
+  (reported live: "Bots should avoid playing Shock without a target
+  opponent mood for it - exception for when they just need 2 points to
+  win a game"): with no legal target at all
+  (`shockTargetMoodIds() === []`), Shock is just a plain 2-point card
+  with nothing else to show for it, so `sortPriorityValue()`
+  deprioritizes it (the same `PHP_INT_MIN` treatment Rationalization/
+  Denial/Rejection above already get) UNLESS `shockWouldClinchTheGame()`
+  says playing it for that plain printed value alone would both take the
+  round's lead (`wouldBecomeHighestScore()`, `$unboostedValue` 0) and win
+  the entire game outright -- the exact same
+  `rationalizationWouldClinchTheGame()`-shaped check (duplicated, not
+  shared, the same "small per-card helper" convention
+  `SHOCK_MAX_TARGET_VALUE`'s own docblock already established for this
+  card) Rationalization's own game-win carve-out uses.
+
   **Exhilaration** (reported live: "bots should not target Bliss to put
   into the discard pile with Exhilaration unless it is very clear that
   it will bring an immediate point advantage - sacrificing Bliss to
@@ -7210,6 +7226,72 @@ since it already holds that dependency):
   playing even with nothing to bounce. Denial's own printed value (1) is
   otherwise too marginal to lead with blind, unlike most cards' plain
   `baseValue()` default.
+
+  **Rejection** (reported live: "Bots shouldn't play Rejection with no
+  targets - exception when it being in play will pump another mood
+  enough to win a round") gets the same treatment via
+  `rejectionTargetMoodIds()`, mirroring Denial's own first two
+  priorities (`rejectionWinningTargetMoodIds()`/
+  `rejectionSignificantSwingTargetMoodIds()`, sharing
+  `sameColorOrValuePairs()`) but with NO third "replay" tier: Denial
+  returns its targets to their owners' hands, so sacrificing one of the
+  bot's own cheap moods gets it back for a replay; Rejection discards
+  its targets permanently instead (contrast the Denial section above),
+  so touching the bot's own board here is pure self-harm with no
+  replay upside to weigh against it. Both tiers therefore only ever
+  target non-teammate opponents' own moods.
+  `rejectionHasAGoodReasonToPlayNow()` deprioritizes Rejection (the same
+  `PHP_INT_MIN` treatment) when neither tier finds a pair, with one
+  exception distinct from every other card's own `wouldBecomeHighestScore()`
+  pattern: Rejection's own printed value is always 0, so boosting a
+  single card's value can never be the mechanism here. Instead
+  `rejectionWouldPumpAnotherMoodToWinTheRound()` (new) actually clones
+  the board, moves Rejection into play on the clone (contributing
+  nothing itself but raising the live in-play mood COUNT by one), and
+  compares real `RoundScorer()` totals before and after -- worth playing
+  with no target at all if that alone pumps some OTHER already-in-play
+  mood that scales with mood count (Euphoria's own "+1 per mood in
+  play, any owner") enough to flip the round from a loss to a win.
+
+  **Guilt** (reported live: "bots should consider whether suppressing a
+  single opponent mood would net them more of a point swing than
+  choosing the 'all' mode") gets its own bespoke `guiltChoices()`,
+  replacing `BotChoiceResolver`'s former `MODE_FIELD_OVERRIDES['guilt']
+  = 'all'` hardcode (see that class's own docblock), which never
+  considered `'single'` at all. `GuiltEffect`'s own `'all'` mode
+  suppresses EVERY black/red mood currently in play regardless of
+  owner -- including the bot's own -- while `'single'` can cherry-pick
+  just one. For every qualifying (black/red) mood in play,
+  `guiltSwingContribution()` scores its own suppression as +value if it
+  belongs to a non-teammate opponent (a genuine loss inflicted on a
+  rival) or -value if it belongs to the bot's own group (a
+  self-inflicted loss `'all'` can't avoid the way `'single'` targeting
+  can); `guiltChoices()` then compares the single BEST such
+  contribution against the sum of ALL of them, and picks whichever mode
+  actually nets the larger swing. With no qualifying mood in play at
+  all, `'all'` is used as a harmless no-op (`GuiltEffect::
+  allQualifyingMoods()` finds nothing to suppress either way) rather
+  than leaving `'single'` with no legal target to fill in.
+
+  **Scorn** (reported live: a bot's mandatory suppression targeted the
+  human's own mood when it should have targeted the other player's copy
+  of the same card instead -- "not sure whether this is a bug (the
+  targeting code couldn't distinguish between the two [identical
+  cards]) or just a bad play") gets `scornTargetMoodId()`.
+  `CardChoiceSchema`'s own `target_mood_id` field for Scorn's own
+  mandatory "suppress any mood" play is scope `'any'` with no owner
+  preference at all, so without this the generic resolver's plain
+  "highest value" policy could pick either player's copy of an
+  identically-valued card with no real preference between them -- the
+  same class of gap Contempt/Conviction/Hate/Denial above already
+  needed a bespoke opponent-preferring method for. Prefers a
+  non-teammate opponent's own highest-value mood first, the same
+  `contemptTargetMoodId()`-style priority already used elsewhere,
+  falling back to the highest-value OTHER mood overall (excluding Scorn
+  itself) only when no opponent mood exists at all -- this field is
+  REQUIRED (unlike Contempt/Hate's own optional one), so it must still
+  supply SOME legal target even then, the same reasoning
+  `convictionTargetMoodId()` already documents.
 - **Nostalgia's own discard-pickup targeting** (confirmed by the
   maintainer), via `nostalgiaDiscardCardId()`: always takes the
   highest-`baseValue()` card currently in the discard pile when playing

@@ -1028,6 +1028,18 @@ dialog#decks-dialog #decks-form textarea {
 
 body.game-page {
     max-width: 60rem;
+    /* #in-play-board's own full-bleed `width: 100vw` (see its own
+       docblock) measures the ENTIRE viewport including the vertical
+       scrollbar's gutter, but its `left: 50%; transform: translateX(-50%)`
+       centering has no way to account for that asymmetry -- whenever a
+       vertical scrollbar is actually present (most of the time on a
+       tall desktop page), the board ends up slightly wider than the
+       true visible area and sticks out past the right edge by exactly
+       the scrollbar's own width, forcing an unwanted horizontal
+       scrollbar. That sliver is purely cosmetic overflow with nothing
+       meaningful to scroll to, so it's simplest to just clip it here
+       rather than reworking the full-bleed technique itself. */
+    overflow-x: hidden;
 }
 
 #lobby-view ul,

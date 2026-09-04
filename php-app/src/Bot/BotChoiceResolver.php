@@ -32,18 +32,20 @@ final class BotChoiceResolver
      * field conditionally required (via CardChoiceSchema's own "required
      * if mode is X" phrasing, which the schema can't statically encode as
      * a real 'required' flag) is hand-overridden to whichever option
-     * needs no companion field at all -- currently every card with this
-     * shape (Guilt/Contempt/Redemption's own mode+target pair) uses the
-     * same options ['single', 'all'], where 'all' alone needs nothing
-     * else filled in. A bot that only ever fills REQUIRED fields (see
-     * this class's own docblock) would otherwise pick 'single' -- schema
-     * options[0] -- and then leave the conditionally-required target
-     * blank, since the target field's own 'required' is statically
-     * false.
+     * needs no companion field at all -- Redemption's own mode+target
+     * pair uses options ['single', 'all'], where 'all' alone needs
+     * nothing else filled in. A bot that only ever fills REQUIRED fields
+     * (see this class's own docblock) would otherwise pick 'single' --
+     * schema options[0] -- and then leave the conditionally-required
+     * target blank, since the target field's own 'required' is
+     * statically false. Guilt/Contempt share this exact same mode+target
+     * shape but are no longer resolved through this generic path at all
+     * -- BotPlayerService::guiltChoices()/contemptTargetMoodId() answer
+     * both bespoke instead (see BotPlayerService::usesBespokeChoiceBuilding()),
+     * so a 'guilt'/'contempt' entry here would never actually be
+     * consulted.
      */
     private const MODE_FIELD_OVERRIDES = [
-        'guilt' => 'all',
-        'contempt' => 'all',
         'redemption' => 'all',
     ];
 
