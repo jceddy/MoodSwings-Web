@@ -2562,6 +2562,59 @@ dialog#deck-builder-dialog[open] {
     padding-left: 0.75rem;
 }
 
+/* A field.multi field's own checkbox list (Malice's "choose two of your
+   moods," Infatuation's two-hand-card discard, etc.) -- replaces what
+   used to be a native <select multiple> (a live bug report caught this:
+   selecting a SECOND, non-adjacent option there requires holding Ctrl/Cmd
+   while clicking, which isn't obvious from looking at it, and a plain
+   click silently replaces the first selection instead of adding to it).
+   Bordered box matching .card-order-field's own "a distinct control, not
+   just loose text" treatment. */
+.choice-field-multi {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    border: 1px solid var(--color-border);
+    border-radius: 0.25rem;
+    padding: 0.4rem 0.6rem;
+    margin-top: 0.25rem;
+    max-height: 12rem;
+    overflow-y: auto;
+}
+
+.choice-field-multi-option {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.15rem 0;
+    cursor: pointer;
+}
+
+/* Overrides #choices-panel/#pending-decision-panel's own blanket
+   "checkbox follows label text, so give it breathing room" margin --
+   here the checkbox is the FIRST thing in its own row (the option's own
+   label text comes after it instead), so that margin would just misalign
+   it against .choice-field-multi's own left edge. */
+#choices-panel .choice-field-multi-option input[type="checkbox"],
+#pending-decision-panel .choice-field-multi-option input[type="checkbox"] {
+    margin-left: 0;
+}
+
+/* One 'mood' field's own owner grouping (fieldOptions()'s ownerLabel --
+   see appendGroupedMoodCheckboxes() in game.js), the checkbox-list
+   equivalent of a <select>'s <optgroup>. */
+.choice-field-multi-group:not(:first-child) {
+    margin-top: 0.4rem;
+    padding-top: 0.4rem;
+    border-top: 1px solid var(--color-border-subtle);
+}
+
+.choice-field-multi-group-label {
+    font-weight: bold;
+    font-size: 0.85em;
+    color: var(--color-muted);
+}
+
 .card-order-field ol {
     list-style: none;
     margin: 0;
