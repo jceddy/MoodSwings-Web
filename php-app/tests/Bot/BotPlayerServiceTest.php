@@ -927,6 +927,72 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame([], $action['choices']);
     }
 
+    // -- Exhilaration (reported live: don't sacrifice Bliss to it) ---------
+
+    public function testChooseActionAvoidsSacrificingBlissWhenAnotherMoodIsAvailable(): void
+    {
+        $state = $this->boardState(hands: [1 => [89, 108, 38]]); // Exhilaration, Bliss, Fear (value 0)
+        $state->moveHandToInPlay(1, 108);
+        $state->moveHandToInPlay(1, 38);
+
+        $action = $this->bot->chooseAction($state, [89], 1);
+
+        self::assertSame(89, $action['card_id']);
+        self::assertSame(['discard_mood_id' => 38], $action['choices']);
+    }
+
+    /**
+     * Bliss (id 108, value 2) has a LOWER face value than Discipline
+     * (id 9, value 6) -- the generic "give up whatever's cheapest" policy
+     * would have picked Bliss precisely because of that. Exhilaration's
+     * own bespoke policy ignores face value entirely for Bliss, so
+     * Discipline is sacrificed instead despite being "more expensive."
+     */
+    public function testChooseActionAvoidsSacrificingBlissEvenWhenItsFaceValueIsLower(): void
+    {
+        $state = $this->boardState(hands: [1 => [89, 108, 9]]); // Exhilaration, Bliss, Discipline (value 6)
+        $state->moveHandToInPlay(1, 108);
+        $state->moveHandToInPlay(1, 9);
+
+        $action = $this->bot->chooseAction($state, [89], 1);
+
+        self::assertSame(89, $action['card_id']);
+        self::assertSame(['discard_mood_id' => 9], $action['choices']);
+    }
+
+    /**
+     * With Bliss as the bot's own ONLY mood in play, paying Exhilaration's
+     * cost means discarding Bliss regardless -- Exhilaration is
+     * deprioritized behind Spite (id 76, value 1, plain filler) rather
+     * than led with blindly, the same "other plays should be prioritized
+     * above it" treatment Pacifism/Denial above already get.
+     */
+    public function testChooseActionDeprioritizesExhilarationWhenBlissIsTheOnlyMoodInPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [89, 76, 108]]);
+        $state->moveHandToInPlay(1, 108);
+
+        $action = $this->bot->chooseAction($state, [89, 76], 1);
+
+        self::assertSame(76, $action['card_id']);
+    }
+
+    /**
+     * With nothing else playable, Exhilaration is still played --
+     * deprioritized WHEN, never skipped outright -- forced to sacrifice
+     * Bliss since it's the bot's only own mood in play.
+     */
+    public function testChooseActionStillPlaysExhilarationSacrificingBlissWhenNothingElseIsPlayable(): void
+    {
+        $state = $this->boardState(hands: [1 => [89, 108]]);
+        $state->moveHandToInPlay(1, 108);
+
+        $action = $this->bot->chooseAction($state, [89], 1);
+
+        self::assertSame(89, $action['card_id']);
+        self::assertSame(['discard_mood_id' => 108], $action['choices']);
+    }
+
     // -- Harmony (confirmed by the maintainer) -----------------------------
 
     /**

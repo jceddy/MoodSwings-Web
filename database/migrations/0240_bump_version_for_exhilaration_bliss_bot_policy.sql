@@ -1,0 +1,12 @@
+-- Bot policy fix (reported live: "bots should not target Bliss to put
+-- into the discard pile with Exhilaration unless it is very clear that
+-- it will bring an immediate point advantage - sacrificing Bliss to
+-- Exhilaration on an empty board is almost never the correct play") --
+-- the bot's own generic "give up whatever's cheapest" cost policy could
+-- happily hand over Bliss, whose real worth (an ongoing scoring
+-- multiplier) far exceeds its own low face value. See
+-- BotPlayerService::exhilarationDiscardMoodId()/
+-- exhilarationHasAGoodReasonToPlayNow() for the fix. No schema change,
+-- just the version bump MaintenanceGate needs to see this deploy as
+-- caught up with the code.
+UPDATE schema_version SET version = '1.33.4' WHERE id = 1;

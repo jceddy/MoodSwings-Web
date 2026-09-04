@@ -6824,6 +6824,37 @@ since it already holds that dependency):
   generic default the bot could just as easily have discarded its OWN
   mood instead of an opponent's.
 
+  **Exhilaration** (reported live: "bots should not target Bliss to put
+  into the discard pile with Exhilaration unless it is very clear that
+  it will bring an immediate point advantage - sacrificing Bliss to
+  Exhilaration on an empty board is almost never the correct play") gets
+  a bespoke `discard_mood_id` policy via `exhilarationDiscardMoodId()`,
+  dispatched instead of `CardChoiceSchema`'s generic per-field loop the
+  same way Pacifism/Anger/Shock above are. Exhilaration's own "to play"
+  cost (`ExhilarationEffect::payToPlayCost()`) is mandatory -- discard
+  ONE of the bot's own in-play moods, a `required` field with no legal
+  way to skip it -- so the generic resolver's own scope-`'own'` default
+  ("give up whatever's cheapest," lowest live value first) would happily
+  hand over Bliss precisely because its face value (2) often undersells
+  it: Bliss's real worth is its own ongoing "while in play" scoring
+  multiplier (`RoundScorer::score()`'s own
+  `AUTOMATIC_SCORE_MULTIPLYING_EFFECT_KEYS` -- triples every own mood
+  sharing a color with whatever card paid ITS OWN cost), not its printed
+  number. `exhilarationDiscardMoodId()` instead prefers ANY other own
+  mood over Bliss regardless of relative face value, and only falls back
+  to Bliss when it's the bot's ONLY own mood in play at all (forced --
+  Exhilaration's own field has no legal alternative). That one remaining
+  case is covered by `exhilarationHasAGoodReasonToPlayNow()`'s own
+  `sortPriorityValue()` veto (`PHP_INT_MIN`, the same "deprioritized
+  WHEN, never skipped outright" treatment Pacifism/Denial above get) --
+  provably never worth it rather than merely a heuristic guess: with
+  Bliss gone and nothing else of the bot's own left in play, Exhilaration's
+  own "score your moods an extra time" bonus doubles a board worth
+  exactly 0 (its own printed value is 0), while simply not playing it
+  keeps Bliss's own guaranteed-positive contribution instead -- strictly
+  worse every time, so no runtime scoring simulation is needed to rule it
+  out.
+
   **Creativity** (confirmed by the maintainer) gets its own targeting
   exception via `creativityBestCopyTargetId()`: `buildChoicesForCard()`
   special-cases `effectKey === 'creativity'` to it instead of falling
@@ -7579,10 +7610,10 @@ the bot its turn.
 **Legal actions (`LegalChoiceEnumerator`).** Reuses
 `BotPlayerService::buildChoicesForCard()`'s own existing, already-tested
 choice-set as the always-included default action per playable card. For
-the ~15 hand-written "bespoke" per-effect-key choice builders inside it
+the ~16 hand-written "bespoke" per-effect-key choice builders inside it
 (Rationalization, Avoidance, Cynicism, Intimidation, Paranoia, Pacifism,
 Creativity, Anger, Denial, Hate, Conviction, Nostalgia, Contempt,
-Sneakiness, Shock -- `BotPlayerService::usesBespokeChoiceBuilding()`), that
+Sneakiness, Shock, Exhilaration -- `BotPlayerService::usesBespokeChoiceBuilding()`), that
 default is the ONLY action generated for that card; reimplementing full
 legal-choice enumeration for each of these wasn't worth it just to widen
 the search over cards the heuristic already handles reasonably. For

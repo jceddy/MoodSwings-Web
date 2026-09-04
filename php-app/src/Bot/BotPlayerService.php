@@ -870,6 +870,9 @@ final class BotPlayerService
         if ($effectKey === 'denial' && !$this->denialHasAGoodReasonToPlayNow($state, $cardId, $botGamePlayerId)) {
             return PHP_INT_MIN;
         }
+        if ($effectKey === 'exhilaration' && !$this->exhilarationHasAGoodReasonToPlayNow($state, $botGamePlayerId)) {
+            return PHP_INT_MIN;
+        }
         if ($this->envyDiscouragesPlayingThisCard($state, $cardId, $effectKey, $botGamePlayerId, $playableCardIds)) {
             return PHP_INT_MIN;
         }
@@ -1317,7 +1320,7 @@ final class BotPlayerService
     private const BESPOKE_CHOICE_EFFECT_KEYS = [
         'rationalization', 'avoidance', 'cynicism', 'intimidation', 'paranoia',
         'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
-        'nostalgia', 'contempt', 'sneakiness', 'shock',
+        'nostalgia', 'contempt', 'sneakiness', 'shock', 'exhilaration',
     ];
 
     /**
@@ -1421,6 +1424,10 @@ final class BotPlayerService
             $targetPlayerId = $this->sneakinessTargetPlayerId($state, $botGamePlayerId);
 
             return $targetPlayerId !== null ? ['opponent_player_id' => $targetPlayerId] : null;
+        }
+
+        if ($effectKey === 'exhilaration') {
+            return ['discard_mood_id' => $this->exhilarationDiscardMoodId($state, $botGamePlayerId)];
         }
 
         return $this->resolveSchemaFields(CardChoiceSchema::forEffectKey($effectKey), $state, $cardId, $botGamePlayerId, $effectKey);
@@ -2403,6 +2410,86 @@ final class BotPlayerService
         usort($bestMoodIdByOpponent, fn (int $a, int $b) => $state->valueOf($b) <=> $state->valueOf($a));
 
         return array_slice($bestMoodIdByOpponent, 0, 2);
+    }
+
+    /**
+     * Exhilaration's own "to play" cost (ExhilarationEffect::
+     * payToPlayCost()) is mandatory: discard ONE of the bot's own in-play
+     * moods, required field, no legal way to skip it -- canPayToPlayCost()
+     * already guarantees at least one exists before this card is even
+     * offered as playable, so this always returns a concrete id.
+     *
+     * Deliberately steers away from Bliss (reported live: "bots should
+     * not target Bliss to put into the discard pile with Exhilaration
+     * unless it is very clear that it will bring an immediate point
+     * advantage") whenever ANY other own mood is available to sacrifice
+     * instead, regardless of Bliss's own printed value (2) relative to
+     * theirs -- Bliss's real worth is its own ongoing "while in play"
+     * scoring multiplier (RoundScorer::score()'s own
+     * AUTOMATIC_SCORE_MULTIPLYING_EFFECT_KEYS -- triples every own mood
+     * sharing a color with whatever card paid ITS OWN cost), not its face
+     * value, so the generic "give up whatever's cheapest" policy
+     * (BotChoiceResolver's own scope-'own' default) would happily gut
+     * that entire ongoing engine for a one-time board-doubling that's
+     * usually worth far less. Among the remaining (non-Bliss) candidates,
+     * still prefers the lowest live value -- same "minimize what's given
+     * up" policy the generic resolver would have applied anyway, just
+     * with Bliss excluded from consideration.
+     *
+     * Only reachable branch left needing a "is this actually worth it"
+     * check is exhilarationHasAGoodReasonToPlayNow() below, for the one
+     * case this method can't dodge: Bliss is the bot's ONLY own mood in
+     * play at all, so it's the forced answer regardless.
+     */
+    private function exhilarationDiscardMoodId(BoardState $state, int $botGamePlayerId): int
+    {
+        $bestNonBlissMoodId = null;
+        $fallbackBlissMoodId = null;
+        foreach ($state->moodsOwnedBy($botGamePlayerId) as $mood) {
+            $effectKey = $state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'];
+            if ($effectKey === 'bliss') {
+                $fallbackBlissMoodId = $mood->cardId;
+                continue;
+            }
+            if ($bestNonBlissMoodId === null || $state->valueOf($mood->cardId) < $state->valueOf($bestNonBlissMoodId)) {
+                $bestNonBlissMoodId = $mood->cardId;
+            }
+        }
+
+        // $fallbackBlissMoodId is guaranteed non-null here (every own mood
+        // was Bliss, and canPayToPlayCost()'s own precondition guarantees
+        // at least one own mood exists at all), so this is the forced
+        // Bliss-only fallback, never a genuinely unset return.
+        return $bestNonBlissMoodId ?? $fallbackBlissMoodId;
+    }
+
+    /**
+     * Whether Exhilaration is worth playing RIGHT NOW -- true in every
+     * case except the one exhilarationDiscardMoodId() above can't avoid:
+     * Bliss is the bot's ONLY own mood in play, so paying Exhilaration's
+     * cost means discarding Bliss regardless. That specific trade is
+     * PROVABLY never a genuine "immediate point advantage" (reported
+     * live: "sacrificing Bliss to Exhilaration on an empty board is
+     * almost never the correct play") -- with Bliss removed and nothing
+     * else of the bot's own left in play, Exhilaration's own "score your
+     * moods an extra time" bonus doubles a board worth exactly 0 (its own
+     * printed value is 0, and there's nothing else left to double),
+     * while simply NOT playing it keeps Bliss's own guaranteed-positive
+     * contribution (at least its own printed value, plus its own color-
+     * matching bonus if any) intact instead -- strictly worse, never
+     * merely marginal, so no runtime scoring comparison is even needed
+     * to rule it out.
+     */
+    private function exhilarationHasAGoodReasonToPlayNow(BoardState $state, int $botGamePlayerId): bool
+    {
+        foreach ($state->moodsOwnedBy($botGamePlayerId) as $mood) {
+            $effectKey = $state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'];
+            if ($effectKey !== 'bliss') {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
