@@ -1,0 +1,16 @@
+-- Reported live: "when a bot only has one card in hand, cut its max
+-- thinking time in half."
+--
+-- GameService::launchTacticalBotSearchJob() now halves (via intdiv())
+-- the seat's own usual tactical_ai_time_budget_seconds before creating
+-- its bot_search_jobs row whenever the Tactical Bot's own hand holds
+-- exactly one card -- a single legal card leaves search with no rival
+-- card to weigh it against. A genuinely empty hand was already handled
+-- by advanceAutomatedTurns()'s own earlier empty-hand short-circuit
+-- (no job launched at all); this only covers the one-card case, which
+-- still goes through the job machinery since a single card can still
+-- need real deliberation over which mode/target to choose.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.33.9' WHERE id = 1;

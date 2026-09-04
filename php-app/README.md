@@ -7770,6 +7770,20 @@ immediately -- the game simply shows a "bot is thinking" indicator (see
   `SearchBotPlayerService::chooseAction()` itself already short-circuited
   correctly on zero legal actions, but only AFTER a job had already been
   launched and its full budget waited out end-to-end.
+- **Single-card halved budget** (reported live: "when a bot only has
+  one card in hand, cut its max thinking time in half"). A ZERO-card
+  turn is already caught by the empty-hand short-circuit just above;
+  exactly ONE still goes through the job machinery below (it may still
+  need real deliberation over which MODE/TARGET to choose), just with
+  half the seat's own usual budget --
+  `launchTacticalBotSearchJob()` checks `count($state->hand($gamePlayerId))
+  === 1` and halves `$timeBudgetSeconds` (via `intdiv()`) before creating
+  the `bot_search_jobs` row, since there's no rival CARD left to weigh a
+  single one against the way a multi-card hand would need. The stored
+  `time_budget_seconds` is exactly what `runTacticalBotSearchJob()` later
+  reads back to bound the real search and what
+  `advanceTacticalBotSearch()`'s own staleness check compares elapsed
+  time against, so halving it here alone shortens both consistently.
 - **`bot_search_jobs`** (migration `0236`) tracks one row per Tactical
   Bot seat's in-flight (or just-finished) decision: `status`
   (`running`/`done`/`failed`), `time_budget_seconds`, `started_at`,
