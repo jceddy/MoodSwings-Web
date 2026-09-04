@@ -6126,10 +6126,30 @@ final class GameService
      * waiting for it to finish. Requires `exec()` to not be in the
      * server's own `disable_functions` -- see php-app/README.md's
      * "Tactical Bot" section for this deployment prerequisite.
+     *
+     * Reported live: "when a bot only has one card in hand, cut its max
+     * thinking time in half." advanceAutomatedTurns()'s own "no legal
+     * play at all" fast path just before this method's only caller
+     * already skips search entirely for a ZERO-card turn; a single
+     * remaining card still goes through the search job below (it may
+     * still need real deliberation over WHICH mode/target to choose),
+     * just with half the usual time budget, since there's no rival CARD
+     * to weigh it against the way a multi-card hand would need. The
+     * stored `time_budget_seconds` this creates the job with is exactly
+     * what runTacticalBotSearchJob() later reads back to bound the real
+     * search, and what advanceTacticalBotSearch()'s own staleness check
+     * compares elapsed time against -- halving it here alone is enough
+     * to shorten both consistently.
      */
     private function launchTacticalBotSearchJob(int $gameId, int $gamePlayerId): void
     {
         $timeBudgetSeconds = $this->botSearchTimeBudgetSeconds ?? $this->tacticalBotTimeBudgetSeconds($gamePlayerId);
+
+        $state = $this->boardStates->load($gameId);
+        if (count($state->hand($gamePlayerId)) === 1) {
+            $timeBudgetSeconds = intdiv($timeBudgetSeconds, 2);
+        }
+
         $jobId = $this->botSearchJobs->create($gameId, $gamePlayerId, $timeBudgetSeconds);
 
         if (!$this->spawnBotSearchProcesses) {

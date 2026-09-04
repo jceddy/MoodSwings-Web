@@ -110,6 +110,32 @@ final class BotSearchIntegrationTest extends TestCase
         );
     }
 
+    /**
+     * A fresh GameService instance carrying its own explicit
+     * botSearchTimeBudgetSeconds override -- unlike $this->games'
+     * own fixed 0 (see setUp()'s own docblock, tuned for job-wiring
+     * tests that don't care what the budget actually IS), the halved-
+     * budget tests below need a genuinely non-zero starting value to
+     * tell "halved" apart from "not halved" at all.
+     */
+    private function gamesWithBudget(int $seconds): GameService
+    {
+        $registry = DefaultEffectRegistry::build();
+
+        return new GameService(
+            new BoardStateRepository($registry),
+            new MoodPlayService($registry),
+            new RoundScorer(),
+            new UserDecklistService(
+                new UserDecklistRepository(),
+                new FriendshipService(new UserRepository(), new FriendshipRepository()),
+            ),
+            new ReplayStateBuilder($registry),
+            botSearchTimeBudgetSeconds: $seconds,
+            spawnBotSearchProcesses: false,
+        );
+    }
+
     private function insertUser(string $username): int
     {
         $stmt = $this->pdo->prepare(
@@ -164,6 +190,103 @@ final class BotSearchIntegrationTest extends TestCase
         $this->games->advanceAutomatedTurns($gameId);
 
         return ['human' => $human, 'bot' => $bot, 'gameId' => $gameId];
+    }
+
+    private function insertGamePlayer(int $gameId, int $userId, int $seatOrder): int
+    {
+        $stmt = $this->pdo->prepare(
+            'INSERT INTO game_players (game_id, user_id, seat_order) VALUES (:game_id, :user_id, :seat_order)'
+        );
+        $stmt->execute(['game_id' => $gameId, 'user_id' => $userId, 'seat_order' => $seatOrder]);
+
+        return (int) $this->pdo->lastInsertId();
+    }
+
+    private function insertGameCard(int $gameId, int $cardId, string $zone, ?int $owner = null): void
+    {
+        $stmt = $this->pdo->prepare(
+            'INSERT INTO game_cards (game_id, card_id, zone, owner_game_player_id) VALUES (:game_id, :card_id, :zone, :owner)'
+        );
+        $stmt->execute(['game_id' => $gameId, 'card_id' => $cardId, 'zone' => $zone, 'owner' => $owner]);
+    }
+
+    private function insertGameRound(int $gameId, int $roundNumber, int $firstPlayerId, int $currentTurnPlayerId, int $playsRemaining): void
+    {
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, status)
+             VALUES (:game_id, :round_number, :first_player, :current_turn, :plays_remaining, 'in_progress')"
+        );
+        $stmt->execute([
+            'game_id' => $gameId,
+            'round_number' => $roundNumber,
+            'first_player' => $firstPlayerId,
+            'current_turn' => $currentTurnPlayerId,
+            'plays_remaining' => $playsRemaining,
+        ]);
+    }
+
+    /**
+     * Builds a game directly via raw inserts (bypassing createGame()/
+     * startGame()'s own real deck-building/dealing entirely) so the
+     * Tactical Bot's own hand can be pinned to an EXACT set of card ids
+     * -- both cards used below (55 = Apathy, 7 = Courage) have no
+     * hasToPlay precondition at all, so either is always legally
+     * playable regardless of board state, guaranteeing the search job
+     * actually gets launched rather than short-circuiting through the
+     * "no legal play" fast path.
+     *
+     * @param int[] $botHandCardIds
+     * @return array{gameId: int, botPlayerId: int}
+     */
+    private function createRawTacticalBotGame(GameService $games, array $botHandCardIds): array
+    {
+        $human = $this->insertUser('bs-raw-human-' . uniqid());
+        $bot = $this->insertTacticalBotUser('bs-raw-bot-' . uniqid());
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $human]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $this->insertGamePlayer($gameId, $human, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $bot, 1);
+
+        foreach ($botHandCardIds as $cardId) {
+            $this->insertGameCard($gameId, $cardId, 'hand', $botPlayerId);
+        }
+        $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
+
+        $games->advanceAutomatedTurns($gameId);
+
+        return ['gameId' => $gameId, 'botPlayerId' => $botPlayerId];
+    }
+
+    /**
+     * Reported live: "when a bot only has one card in hand, cut its max
+     * thinking time in half." A single legal card leaves search with no
+     * rival card to weigh it against, so launchTacticalBotSearchJob()
+     * now stores half the usual time_budget_seconds for a one-card hand.
+     */
+    public function testLaunchesWithHalfTheTimeBudgetWhenTheBotHasExactlyOneCardInHand(): void
+    {
+        $games = $this->gamesWithBudget(20);
+        ['botPlayerId' => $botPlayerId] = $this->createRawTacticalBotGame($games, [55]); // Apathy alone
+
+        $stmt = $this->pdo->prepare('SELECT time_budget_seconds FROM bot_search_jobs WHERE game_player_id = :id');
+        $stmt->execute(['id' => $botPlayerId]);
+        self::assertSame(10, (int) $stmt->fetchColumn());
+    }
+
+    /** Control for the halving test above -- a normal, multi-card hand keeps the full budget. */
+    public function testLaunchesWithTheFullTimeBudgetWhenTheBotHasMoreThanOneCardInHand(): void
+    {
+        $games = $this->gamesWithBudget(20);
+        ['botPlayerId' => $botPlayerId] = $this->createRawTacticalBotGame($games, [55, 7]); // Apathy, Courage
+
+        $stmt = $this->pdo->prepare('SELECT time_budget_seconds FROM bot_search_jobs WHERE game_player_id = :id');
+        $stmt->execute(['id' => $botPlayerId]);
+        self::assertSame(20, (int) $stmt->fetchColumn());
     }
 
     public function testAdvanceAutomatedTurnsLaunchesABackgroundJobInsteadOfPlayingInline(): void
