@@ -181,7 +181,12 @@ pattern, plus its own Hurt Feelings art:
 `img/cards/MSW/futuristic/32-creativity.webp`,
 `img/cards/MSW/futuristic/67-intimidation.webp`,
 `img/cards/MSW/futuristic/134-smugness.webp`, and
-`img/hurt-feelings-futuristic.webp`. Neon's own matching set followed
+`img/hurt-feelings-futuristic.webp` -- since joined by the same four
+Chaos Draft token moods Steampunk's own coverage grew with above:
+`img/cards/MSW/futuristic/135-unconcern.webp`,
+`img/cards/MSW/futuristic/136-passivity.webp`,
+`img/cards/MSW/futuristic/137-tedium.webp`, and
+`img/cards/MSW/futuristic/138-idleness.webp`. Neon's own matching set followed
 the same pattern: `img/cards/MSW/neon/32-creativity.webp`,
 `img/cards/MSW/neon/67-intimidation.webp`,
 `img/cards/MSW/neon/134-smugness.webp`, and
