@@ -198,7 +198,10 @@ token moods as the other two skins:
 `img/cards/MSW/neon/135-unconcern.webp`,
 `img/cards/MSW/neon/136-passivity.webp`,
 `img/cards/MSW/neon/137-tedium.webp`, and
-`img/cards/MSW/neon/138-idleness.webp`. Any future skin (or these three, for any
+`img/cards/MSW/neon/138-idleness.webp`, plus the same
+Rationalization/Recklessness pair as the other two skins:
+`img/cards/MSW/neon/49-rationalization.webp` and
+`img/cards/MSW/neon/100-recklessness.webp`. Any future skin (or these three, for any
 card not yet covered) without its own themed file for a given card still
 404s and falls back to the plain print through the exact same mechanism.
 
