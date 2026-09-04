@@ -238,7 +238,17 @@ use MoodSwings\Rules\RoundScorer;
  * OTHER mood overall only when no opponent one exists (a required
  * field, unlike Contempt/Hate's own optional one, so it must still
  * supply SOME legal target even then -- the same reasoning
- * convictionTargetMoodId() already documents).
+ * convictionTargetMoodId() already documents); and
+ * shockHasAGoodReasonToPlayNow()/sortPriorityValue() once more (reported
+ * live: "Bots should avoid playing Shock without a target opponent mood
+ * for it - exception for when they just need 2 points to win a game"),
+ * which deprioritizes Shock unless either shockTargetMoodIds() finds a
+ * legal opponent mood to discard from, or -- the reported exception --
+ * shockWouldClinchTheGame() says playing it for its own plain printed
+ * value alone (2, no target) would both take the round's lead AND win
+ * the entire game outright, the exact same
+ * rationalizationWouldClinchTheGame()-shaped check (duplicated, not
+ * shared) Rationalization's own game-win carve-out above already uses.
  * GameService is the only caller
  * (see its own "Practice bots" section in php-app/README.md for how this
  * fits into the request lifecycle) -- legality itself
@@ -382,9 +392,12 @@ final class BotPlayerService
      *     a caller that simply hasn't been updated to compute it), which
      *     behaves exactly as it always did before this parameter
      *     existed. See rationalizationHasAGoodReasonToPlayNow()'s own
-     *     docblock for the one place this currently matters (reported
-     *     live: "[Rationalization] should not be played for points to
-     *     win a round unless it's going to win the entire game").
+     *     docblock for where this originally mattered (reported live:
+     *     "[Rationalization] should not be played for points to win a
+     *     round unless it's going to win the entire game") and
+     *     shockHasAGoodReasonToPlayNow()'s own docblock for the other
+     *     place it's since been reused (reported live: Shock "except for
+     *     when they just need 2 points to win a game").
      * @return ?array{card_id: int, choices: array<string, mixed>} null means pass.
      */
     public function chooseAction(BoardState $state, array $playableCardIds, int $botGamePlayerId, ?int $roundWinsNeededToWinGame = null): ?array
@@ -939,6 +952,9 @@ final class BotPlayerService
             return false;
         }
         if ($effectKey === 'pacifism' && $this->pacifismTargetMoodIds($state, $botGamePlayerId) === []) {
+            return false;
+        }
+        if ($effectKey === 'shock' && !$this->shockHasAGoodReasonToPlayNow($state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame)) {
             return false;
         }
         if ($effectKey === 'anger' && $this->angerTargetMoodIds($state, $cardId, $botGamePlayerId) === []) {
@@ -2782,6 +2798,63 @@ final class BotPlayerService
         usort($bestMoodIdByOpponent, fn (int $a, int $b) => $state->valueOf($b) <=> $state->valueOf($a));
 
         return array_slice($bestMoodIdByOpponent, 0, 2);
+    }
+
+    /**
+     * Shock's own "is this actually worth playing right now" policy
+     * (reported live: "Bots should avoid playing Shock without a target
+     * opponent mood for it - exception for when they just need 2 points
+     * to win a game"). Without a legal opponent mood to discard from
+     * (shockTargetMoodIds()), Shock is just a plain 2-point card with
+     * nothing else to show for it -- worth playing NOW only if either a
+     * real target exists, or -- the reported exception --
+     * shockWouldClinchTheGame() says playing it for its own plain
+     * printed value alone (no target at all) would be the deciding
+     * difference between the bot's own group NOT currently having the
+     * highest score this round and having it, AND that round win would
+     * win the entire game outright. Otherwise PHP_INT_MIN via
+     * sortPriorityValue() -- deprioritized behind everything else, the
+     * same "avoid it until it actually pays off" treatment Rationalization/
+     * Denial/Rejection above already get.
+     */
+    private function shockHasAGoodReasonToPlayNow(BoardState $state, int $cardId, int $botGamePlayerId, ?int $roundWinsNeededToWinGame): bool
+    {
+        if ($this->shockTargetMoodIds($state, $botGamePlayerId) !== []) {
+            return true;
+        }
+
+        return $this->shockWouldClinchTheGame($state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame);
+    }
+
+    /**
+     * @see shockHasAGoodReasonToPlayNow()'s own docblock. Identical logic
+     * to rationalizationWouldClinchTheGame() (duplicated rather than
+     * shared, the same "small per-card helper" convention
+     * SHOCK_MAX_TARGET_VALUE's own docblock already established for this
+     * card) -- true only once $roundWinsNeededToWinGame says winning the
+     * round in progress would win the whole game outright (accounting
+     * for Corruption's own double-win marker the same way), AND playing
+     * $cardId for its own plain printed value alone would take the
+     * round's lead (wouldBecomeHighestScore(), $unboostedValue 0).
+     */
+    private function shockWouldClinchTheGame(BoardState $state, int $cardId, int $botGamePlayerId, ?int $roundWinsNeededToWinGame): bool
+    {
+        if ($roundWinsNeededToWinGame === null) {
+            return false;
+        }
+
+        $predictedRoundWinsAwarded = 1;
+        foreach ($state->moodsInPlay() as $mood) {
+            if ($state->effectState($mood->cardId, 'awardsExtraWin')) {
+                $predictedRoundWinsAwarded = 2;
+                break;
+            }
+        }
+        if ($roundWinsNeededToWinGame > $predictedRoundWinsAwarded) {
+            return false;
+        }
+
+        return $this->wouldBecomeHighestScore($state, $botGamePlayerId, 0, $this->baseValue($state, $cardId));
     }
 
     /**

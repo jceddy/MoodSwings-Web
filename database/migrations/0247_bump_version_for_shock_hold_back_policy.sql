@@ -1,0 +1,18 @@
+-- Bot policy fix (reported live: "Bots should avoid playing Shock
+-- without a target opponent mood for it - exception for when they just
+-- need 2 points to win a game").
+--
+-- shockTargetMoodIds() already existed (issue: "bots should choose an
+-- opponent's mood to target with shock when playing it"), but nothing
+-- vetoed Shock itself when no legal target existed -- it was still
+-- always considered "worth playing" for its own plain 2-point value
+-- alone. New shockHasAGoodReasonToPlayNow()/shockWouldClinchTheGame()
+-- (the same rationalizationWouldClinchTheGame()-shaped check
+-- Rationalization's own game-win carve-out already uses) now
+-- deprioritizes Shock via sortPriorityValue() whenever no legal target
+-- exists, unless playing it for its own plain value alone would both
+-- take the round's lead and win the entire game outright.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.33.11' WHERE id = 1;

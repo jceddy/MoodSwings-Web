@@ -6919,6 +6919,22 @@ since it already holds that dependency):
   generic default the bot could just as easily have discarded its OWN
   mood instead of an opponent's.
 
+  Shock also gets a hold-back veto, `shockHasAGoodReasonToPlayNow()`
+  (reported live: "Bots should avoid playing Shock without a target
+  opponent mood for it - exception for when they just need 2 points to
+  win a game"): with no legal target at all
+  (`shockTargetMoodIds() === []`), Shock is just a plain 2-point card
+  with nothing else to show for it, so `sortPriorityValue()`
+  deprioritizes it (the same `PHP_INT_MIN` treatment Rationalization/
+  Denial/Rejection above already get) UNLESS `shockWouldClinchTheGame()`
+  says playing it for that plain printed value alone would both take the
+  round's lead (`wouldBecomeHighestScore()`, `$unboostedValue` 0) and win
+  the entire game outright -- the exact same
+  `rationalizationWouldClinchTheGame()`-shaped check (duplicated, not
+  shared, the same "small per-card helper" convention
+  `SHOCK_MAX_TARGET_VALUE`'s own docblock already established for this
+  card) Rationalization's own game-win carve-out uses.
+
   **Exhilaration** (reported live: "bots should not target Bliss to put
   into the discard pile with Exhilaration unless it is very clear that
   it will bring an immediate point advantage - sacrificing Bliss to

@@ -266,4 +266,28 @@ final class SearchBotPlayerServiceTest extends TestCase
         self::assertSame(24, $action['card_id']);
         self::assertSame(['target_mood_id' => 1121], $action['choices']);
     }
+
+    /**
+     * Reported live: "Bots should avoid playing Shock without a target
+     * opponent mood for it - exception for when they just need 2 points
+     * to win a game." With no opponent mood in play at all for
+     * shockTargetMoodIds() to find, and no game-win context making
+     * Shock's own plain value worth it either, the Tactical Bot excludes
+     * it (withoutPrematurelyPlayedCards()) in favor of Courage -- the
+     * same hasGoodReasonToPlayNow() veto that fixes the plain heuristic
+     * bot (see BotPlayerServiceTest's own
+     * `testChooseActionDemotesShockBehindALowerValueCardWhenNoTargetExists`)
+     * reaches the Tactical Bot's own search too, since both consult the
+     * exact same method.
+     */
+    public function testChooseActionExcludesShockWhenNoTargetExistsAndABetterCardIsAvailable(): void
+    {
+        $state = $this->boardState([1 => [101, 7], 2 => []]);
+        $state->startTurn(1);
+
+        $action = $this->search->chooseAction($state, [101, 7], 1, timeBudgetSeconds: 0.2);
+
+        self::assertNotNull($action);
+        self::assertSame(7, $action['card_id']);
+    }
 }

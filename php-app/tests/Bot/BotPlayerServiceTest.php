@@ -994,6 +994,88 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame([], $action['choices']);
     }
 
+    /**
+     * Reported live: "Bots should avoid playing Shock without a target
+     * opponent mood for it - exception for when they just need 2 points
+     * to win a game." With no in-play moods at all (nothing for
+     * shockTargetMoodIds() to find), Shock (value 2) is deprioritized
+     * behind Courage (value 1) despite its own higher printed value --
+     * without the veto, Shock's own 2 would otherwise win the sort
+     * outright.
+     */
+    public function testChooseActionDemotesShockBehindALowerValueCardWhenNoTargetExists(): void
+    {
+        $state = $this->boardState(hands: [1 => [101, 7]]);
+
+        $action = $this->bot->chooseAction($state, [101, 7], 1);
+
+        self::assertSame(7, $action['card_id']);
+    }
+
+    /**
+     * The reported exception: the opponent's only mood, Confusion (id
+     * 31, value 4), is ABOVE SHOCK_MAX_TARGET_VALUE (3) -- not a legal
+     * Shock target at all, so shockTargetMoodIds() finds nothing. The
+     * bot's own Benevolence (id 2, value 2, already in play) keeps its
+     * own baseline BELOW the opponent's 4, but playing Shock for its own
+     * plain printed value (2) alone closes the gap exactly (2 + 2 = 4),
+     * taking the round's lead, AND $roundWinsNeededToWinGame says
+     * winning this round would win the whole game outright.
+     */
+    public function testShockHasAGoodReasonToPlayNowWhenItWouldWinTheGame(): void
+    {
+        $state = $this->boardState(hands: [1 => [101, 2], 2 => [31]]);
+        $state->moveHandToInPlay(1, 2);
+        $state->moveHandToInPlay(2, 31);
+
+        self::assertTrue($this->bot->hasGoodReasonToPlayNow($state, 101, 1, [101], roundWinsNeededToWinGame: 1));
+    }
+
+    /** Same board as above, but $roundWinsNeededToWinGame is 2 -- winning THIS round wouldn't be enough on its own, so the carve-out doesn't apply. */
+    public function testShockHasNoGoodReasonToPlayNowWhenGameWinIsNotClose(): void
+    {
+        $state = $this->boardState(hands: [1 => [101, 2], 2 => [31]]);
+        $state->moveHandToInPlay(1, 2);
+        $state->moveHandToInPlay(2, 31);
+
+        self::assertFalse($this->bot->hasGoodReasonToPlayNow($state, 101, 1, [101], roundWinsNeededToWinGame: 2));
+    }
+
+    /**
+     * $roundWinsNeededToWinGame is 1 again (winning this round WOULD win
+     * the game), but the opponent's own in-play total (Betrayal, id 56,
+     * value 6 -- also above SHOCK_MAX_TARGET_VALUE, so still no legal
+     * target) is too far ahead for Shock's own value (2) to close: 0 + 2
+     * = 2 is still short of 6. Being close to winning the game isn't
+     * enough by itself -- the round has to be winnable too.
+     */
+    public function testShockHasNoGoodReasonToPlayNowWhenItWouldNotTakeTheRoundLead(): void
+    {
+        $state = $this->boardState(hands: [1 => [101], 2 => [56]]);
+        $state->moveHandToInPlay(2, 56);
+
+        self::assertFalse($this->bot->hasGoodReasonToPlayNow($state, 101, 1, [101], roundWinsNeededToWinGame: 1));
+    }
+
+    /**
+     * Corruption's own live "awardsExtraWin" marker means winning the
+     * round in progress would award 2 round wins at once, so
+     * $roundWinsNeededToWinGame of 2 still counts as "winning this round
+     * wins the game." Bot's own baseline (Corruption itself, value 2) is
+     * behind the opponent's Confusion (id 31, value 4 -- above
+     * SHOCK_MAX_TARGET_VALUE, so still no legal target), but adding
+     * Shock's own value (2) reaches 4, taking the lead.
+     */
+    public function testChooseActionPlaysShockForPointsWithCorruptionsDoubleWinMarker(): void
+    {
+        $state = $this->boardState(hands: [1 => [101, 60], 2 => [31]]);
+        $state->moveHandToInPlay(2, 31);
+        $state->moveHandToInPlay(1, 60);
+        $state->setEffectState(60, 'awardsExtraWin', true);
+
+        self::assertTrue($this->bot->hasGoodReasonToPlayNow($state, 101, 1, [101], roundWinsNeededToWinGame: 2));
+    }
+
     // -- Exhilaration (reported live: don't sacrifice Bliss to it) ---------
 
     public function testChooseActionAvoidsSacrificingBlissWhenAnotherMoodIsAvailable(): void
