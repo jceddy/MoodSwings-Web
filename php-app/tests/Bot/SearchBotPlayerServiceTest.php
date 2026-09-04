@@ -131,8 +131,11 @@ final class SearchBotPlayerServiceTest extends TestCase
      * candidate" for withoutPrematurelyPlayedCards() to prefer instead --
      * it's still offered as a root action (mirroring
      * BotPlayerService::chooseAction()'s own "deprioritized WHEN, never
-     * skipped outright" semantics), and the search still commits to a
-     * real mode rather than passing.
+     * skipped outright" semantics). Discipline (id 9, value 6) keeps the
+     * remaining hand well above RATIONALIZATION_LOW_VALUE_HAND_AVERAGE,
+     * so it declines both modes rather than gambling a good hand away on
+     * a random refresh (reported live: "playing it to refresh hands when
+     * they have a good hand").
      */
     public function testChooseActionStillPlaysRationalizationAloneEvenWithoutATrigger(): void
     {
@@ -143,7 +146,7 @@ final class SearchBotPlayerServiceTest extends TestCase
 
         self::assertNotNull($action);
         self::assertSame(49, $action['card_id']);
-        self::assertSame(['mode' => 'refresh'], $action['choices']);
+        self::assertSame([], $action['choices']);
     }
 
     /**

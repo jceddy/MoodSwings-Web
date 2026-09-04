@@ -6656,9 +6656,19 @@ since it already holds that dependency):
     below) if neither does, which a heads-up duel's own single shared
     "neighbor" either direction resolves to always agrees with itself
     on.
-  - Otherwise, still `'refresh'` -- the strictly safer of the two once
-    neither trigger applies, since it never gives anything away to an
-    opponent the way an unwarranted `'rotate'` would.
+  - Otherwise (reported live, follow-up: "I am seeing bots play it to
+    refresh hands when they have a good hand"), neither mode -- an empty
+    choice set, which `RationalizationEffect::afterPlaying()`'s own `if
+    ($mode === null) return;` already treats as a clean no-op. `'refresh'`
+    only ever avoids giving anything away when the hand it's redrawing is
+    already bad (that's exactly what `rationalizationLowValueHand()`
+    above checks); reaching this branch means it ISN'T, so refreshing
+    here would gamble a genuinely good hand's quality away for nothing --
+    not the "strictly safer" default it was previously treated as. This
+    branch is only reached at all when Rationalization is played anyway
+    despite neither trigger firing (the forced-last-resort case below, or
+    `rationalizationWouldClinchTheGame()`), so declining both modes is a
+    real, intentional outcome here, not a bug.
 
   `chooseAction()`'s own highest-printed-value sort additionally treats
   Rationalization specially via `sortPriorityValue()`/`hasGoodReasonToPlayNow()`

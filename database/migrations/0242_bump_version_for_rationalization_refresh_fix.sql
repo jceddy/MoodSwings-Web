@@ -1,0 +1,19 @@
+-- Bot policy fix (reported live: "can we reinforce that rationalization
+-- should be saved until rotating hands is viable or it is needed for
+-- points? I am seeing bots play it to refresh hands when they have a
+-- good hand, and want to nip that in the bud").
+--
+-- rationalizationChoices()'s final fallback -- reached only when
+-- Rationalization is played despite neither rationalizationLowValueHand()
+-- nor rationalizationStealDirection() triggering (the forced-last-resort
+-- case, or rationalizationWouldClinchTheGame()) -- previously defaulted
+-- unconditionally to `['mode' => 'refresh']` on the flawed assumption
+-- that refresh is always safe. Refresh preserves hand SIZE but gambles
+-- hand QUALITY; reaching this branch means the remaining hand is, by
+-- construction, NOT weak, so refreshing it away is a pure negative-
+-- expected-value gamble. Now declines both modes (`[]`), which
+-- RationalizationEffect::afterPlaying()'s own `if ($mode === null)
+-- return;` already treats as a clean no-op. No schema change, just the
+-- version bump MaintenanceGate needs to see this deploy as caught up
+-- with the code.
+UPDATE schema_version SET version = '1.33.6' WHERE id = 1;

@@ -2485,10 +2485,14 @@ final class BotPlayerServiceTest extends TestCase
     }
 
     /**
-     * Still played (and still commits to a mode) once it's the only
-     * legal candidate left, even with neither trigger active -- the
-     * demotion only ever changes ORDER, never whether Rationalization is
-     * worth playing at all.
+     * Still played once it's the only legal candidate left, even with
+     * neither trigger active -- the demotion only ever changes ORDER,
+     * never whether Rationalization is worth playing at all. Declines
+     * BOTH modes rather than defaulting to 'refresh' here (reported
+     * live: "playing it to refresh hands when they have a good hand") --
+     * Chivalry (id 4, value 3) keeps the remaining hand comfortably
+     * above RATIONALIZATION_LOW_VALUE_HAND_AVERAGE, so gambling it away
+     * on a random redraw would be a pure downside, not a free action.
      */
     public function testChooseActionStillPlaysRationalizationAloneEvenWithoutATrigger(): void
     {
@@ -2497,7 +2501,7 @@ final class BotPlayerServiceTest extends TestCase
         $action = $this->bot->chooseAction($state, [49], 1);
 
         self::assertSame(49, $action['card_id']);
-        self::assertSame(['mode' => 'refresh'], $action['choices']);
+        self::assertSame([], $action['choices']);
     }
 
     /**
@@ -2597,9 +2601,10 @@ final class BotPlayerServiceTest extends TestCase
      * enough to overtake player 2's own current total (3, all from their
      * own in-play Suspicion) per wouldBecomeHighestScore(). Both
      * conditions hold, so Rationalization is played for points instead
-     * of being saved -- still committing to 'refresh' (always safe, see
-     * rationalizationChoices()'s own docblock), just for a different
-     * reason than either existing trigger.
+     * of being saved -- declining both modes (the remaining hand isn't
+     * weak and there's no steal opportunity, so there's nothing to gain
+     * from refreshing or rotating; the game's about to be won on points
+     * alone), just for a different reason than either existing trigger.
      */
     public function testChooseActionPlaysRationalizationForPointsWhenItWouldWinTheGame(): void
     {
@@ -2609,7 +2614,7 @@ final class BotPlayerServiceTest extends TestCase
         $action = $this->bot->chooseAction($state, [49, 7], 1, 1);
 
         self::assertSame(49, $action['card_id']);
-        self::assertSame(['mode' => 'refresh'], $action['choices']);
+        self::assertSame([], $action['choices']);
     }
 
     /**
@@ -2670,6 +2675,7 @@ final class BotPlayerServiceTest extends TestCase
         $action = $this->bot->chooseAction($state, [49, 7], 1, 2);
 
         self::assertSame(49, $action['card_id']);
+        self::assertSame([], $action['choices']);
     }
 
     /**
