@@ -735,6 +735,37 @@ dialog#resources-dialog #resources-close-button {
     }
 }
 
+/* Issue #419 follow-up: board-round-status's own "<name> is thinking…"
+   text (see game.js's DOM-building for it, right after the Tactical Bot's
+   own bot_thinking check) gets an animated, typing-style ellipsis instead
+   of a static "…" -- each dot fades in/out on its own staggered delay, so
+   the three read as one repeating "..." loop rather than a single
+   unchanging glyph. */
+.thinking-ellipsis span {
+    opacity: 0.2;
+    animation: thinking-ellipsis-fade 1.4s infinite;
+}
+
+.thinking-ellipsis span:nth-child(2) {
+    animation-delay: 0.2s;
+}
+
+.thinking-ellipsis span:nth-child(3) {
+    animation-delay: 0.4s;
+}
+
+@keyframes thinking-ellipsis-fade {
+    0%, 80%, 100% { opacity: 0.2; }
+    40% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .thinking-ellipsis span {
+        animation: none;
+        opacity: 1;
+    }
+}
+
 /* Loading overlay (see #loading-overlay's own comment in game/index.html)
    -- fixed/inset:0 so it sits above whichever view (lobby or board) is
    currently underneath it regardless of scroll position. Every other
@@ -978,6 +1009,14 @@ body.game-page {
    to be visible. */
 #resign-button {
     margin-top: 1rem;
+}
+
+/* Breathing room between the "View log"/"View decklist" buttons and the
+   collapsible recent-plays list right below them (#recent-events-details)
+   -- without this the list's own <summary> sat flush against the buttons
+   above it. */
+#recent-plays-actions {
+    margin-bottom: 0.75rem;
 }
 
 #lobby-view li button {
@@ -1945,6 +1984,25 @@ body.game-page {
    sets it apart from "offline", not a different color. */
 .player-flag--presenceOnline {
     color: var(--color-success);
+}
+
+/* A Tactical Bot's own presence flag (issue #419 follow-up -- see
+   buildPresenceFlag()'s own isThinking param in game.js) while its
+   background search job is genuinely in flight: tinted --color-info (this
+   app's established "something worth noticing" color) and pulsing via the
+   same waiting-icon-pulse animation the "waiting for other players"
+   hourglass icons already use, as a second, glanceable echo of
+   board-round-status's own "<name> is thinking…" text right next to that
+   seat's name in the Players list. */
+.player-flag--presenceThinking {
+    color: var(--color-info);
+    animation: waiting-icon-pulse 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .player-flag--presenceThinking {
+        animation: none;
+    }
 }
 
 /* Team affiliation (Open/Closed Team Play only, player.team_id !== null --

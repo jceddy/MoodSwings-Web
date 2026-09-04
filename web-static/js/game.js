@@ -5193,14 +5193,27 @@
     // and the board's own Players list, both of which get a `presence`
     // field ('online'/'offline'/'hidden') per person from the backend
     // (see PresenceService). `username` only feeds the tooltip/aria-label
-    // text, not any lookup.
-    function buildPresenceFlag(username, presence) {
+    // text, not any lookup. `isThinking` (issue #419 follow-up) is true
+    // only for a Tactical Bot seat whose background search job is
+    // genuinely in flight right now (state.bot_thinking) -- a practice
+    // bot's own `share_presence = 0` (see "Practice bots" in
+    // php-app/README.md) means its presence always reads 'hidden', so
+    // this has to layer onto whichever variant actually renders rather
+    // than assuming 'online' specifically.
+    function buildPresenceFlag(username, presence, isThinking) {
         if (presence === 'hidden') {
-            return buildPlayerFlag('presenceHidden', username + ' has turned off sharing their online status.');
+            const label = isThinking
+                ? username + ' is thinking…'
+                : username + ' has turned off sharing their online status.';
+            return buildPlayerFlag('presenceHidden', label, isThinking ? 'player-flag--presenceThinking' : null);
         }
 
         const label = presence === 'online' ? username + ' is online now.' : username + ' is offline.';
-        return buildPlayerFlag('presence', label, presence === 'online' ? 'player-flag--presenceOnline' : null);
+        const extraClasses = [
+            presence === 'online' ? 'player-flag--presenceOnline' : null,
+            isThinking ? 'player-flag--presenceThinking' : null,
+        ].filter(Boolean).join(' ');
+        return buildPlayerFlag('presence', label, extraClasses || null);
     }
 
     async function refreshBoard() {
@@ -5498,8 +5511,14 @@
                 // (see buildPlayerStat()/buildPlayerFlag()) so none of that
                 // information is lost, just no longer spelled out inline.
                 // Online/presence indicator (issue #110) -- first, so it's
-                // the first thing seen next to the name.
-                iconsEl.appendChild(buildPresenceFlag(player.username, player.presence));
+                // the first thing seen next to the name. isThinking (issue
+                // #419 follow-up) pulses this same icon for a Tactical
+                // Bot's own seat while its search job is in flight -- a
+                // second, glanceable echo of board-round-status's own
+                // "<name> is thinking…" text, right next to that seat's
+                // name in the Players list.
+                const isThinking = Boolean(state.bot_thinking) && state.bot_thinking.game_player_id === player.game_player_id;
+                iconsEl.appendChild(buildPresenceFlag(player.username, player.presence, isThinking));
                 // Team affiliation (Open/Closed Team Play only) -- color,
                 // not the team NUMBER, is what actually matters to the
                 // viewer at a glance: green for their own team (including
@@ -5692,12 +5711,24 @@
             // always wins over the plain "waiting on another player"/
             // "<name>'s turn" text above, for every viewer (spectators
             // included), since it's the more specific and more useful
-            // thing to say about that same turn.
+            // thing to say about that same turn. Rendered as DOM nodes
+            // rather than a single textContent string so the ellipsis can
+            // be its own animated element (see .thinking-ellipsis in
+            // style.css) -- CSS can't animate part of a plain text node.
+            const boardRoundStatusEl = document.getElementById('board-round-status');
             if (state.bot_thinking) {
-                turnSuffix = ' — ' + state.bot_thinking.username + ' is thinking…';
+                boardRoundStatusEl.textContent =
+                    'Round ' + state.round.round_number + ' — ' + state.bot_thinking.username + ' is thinking';
+                const dots = document.createElement('span');
+                dots.className = 'thinking-ellipsis';
+                dots.setAttribute('aria-hidden', 'true');
+                dots.appendChild(document.createElement('span')).textContent = '.';
+                dots.appendChild(document.createElement('span')).textContent = '.';
+                dots.appendChild(document.createElement('span')).textContent = '.';
+                boardRoundStatusEl.appendChild(dots);
+            } else {
+                boardRoundStatusEl.textContent = 'Round ' + state.round.round_number + turnSuffix;
             }
-            document.getElementById('board-round-status').textContent =
-                'Round ' + state.round.round_number + turnSuffix;
         }
 
         const pendingDecision = state.round && state.round.pending_decision;
