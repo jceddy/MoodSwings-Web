@@ -172,7 +172,9 @@ moods (`cards.is_token = 1`, same `cardArtUrl()` path as any other
 card): Unconcern (`img/cards/MSW/steampunk/135-unconcern.webp`),
 Passivity (`img/cards/MSW/steampunk/136-passivity.webp`), Tedium
 (`img/cards/MSW/steampunk/137-tedium.webp`), and Idleness
-(`img/cards/MSW/steampunk/138-idleness.webp`).
+(`img/cards/MSW/steampunk/138-idleness.webp`), plus two ordinary base-set
+moods: Rationalization (`img/cards/MSW/steampunk/49-rationalization.webp`)
+and Recklessness (`img/cards/MSW/steampunk/100-recklessness.webp`).
 
 Futuristic's first three pieces of real card-skin art followed the same
 pattern, plus its own Hurt Feelings art:
