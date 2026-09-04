@@ -536,6 +536,64 @@ final class BotPlayerServiceTest extends TestCase
     }
 
     /**
+     * Reported live: "when a bot plays ambition, it should discard a
+     * card for another play if it has 3+ cards in hand and it has
+     * another play that will net it points." With three cards in hand
+     * (Ambition, id 53, plus Courage id 7/value 1 and Apathy id 55/
+     * value 4), the bot volunteers for Ambition's own optional
+     * discard_card_id field -- unlike every other unforced-optional-
+     * field card, which would leave it unfilled by default -- and
+     * BotChoiceResolver's own generic "N lowest-value legal candidates"
+     * policy picks Courage (the cheapest OTHER hand card) as the
+     * discard, leaving Apathy (value 4) to spend the unlocked extra
+     * play on.
+     */
+    public function testChooseActionDiscardsForAmbitionsExtraPlayWithEnoughHandAndAScoringFollowUp(): void
+    {
+        $state = $this->boardState(hands: [1 => [53, 7, 55]]);
+
+        $action = $this->bot->chooseAction($state, [53], 1);
+
+        self::assertSame(53, $action['card_id']);
+        self::assertSame(['discard_card_id' => 7], $action['choices']);
+    }
+
+    /**
+     * Only two cards in hand total (Ambition plus one other) -- below
+     * AMBITION_MIN_HAND_SIZE_TO_DISCARD (3) -- so discarding the other
+     * card would leave nothing to spend the unlocked extra play on, a
+     * pure loss for nothing. Ambition's own optional field stays
+     * unfilled, the same as any other unforced optional field.
+     */
+    public function testChooseActionDoesNotDiscardForAmbitionWithTooSmallAHand(): void
+    {
+        $state = $this->boardState(hands: [1 => [53, 7]]);
+
+        $action = $this->bot->chooseAction($state, [53], 1);
+
+        self::assertSame(53, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
+    /**
+     * Three cards in hand (enough by count), but once the cheapest
+     * other hand card (Fickleness or Disorientation, both value 0) is
+     * set aside as the discard cost, the only card left to spend the
+     * unlocked extra play on is the OTHER value-0 card -- no genuine
+     * scoring play to unlock, so Ambition's own optional field stays
+     * unfilled rather than burning a hand card for nothing.
+     */
+    public function testChooseActionDoesNotDiscardForAmbitionWithNoScoringFollowUp(): void
+    {
+        $state = $this->boardState(hands: [1 => [53, 39, 35]]);
+
+        $action = $this->bot->chooseAction($state, [53], 1);
+
+        self::assertSame(53, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
+    /**
      * Intimidation's own "always target an opponent" policy (confirmed
      * by the maintainer): player 2 has a card in hand, so it's the only
      * legal, non-teammate target -- the bot volunteers for its own
@@ -2558,6 +2616,31 @@ final class BotPlayerServiceTest extends TestCase
 
         self::assertSame(49, $action['card_id']);
         self::assertSame(['mode' => 'rotate', 'direction' => 'left'], $action['choices']);
+    }
+
+    /**
+     * Reported live: with the bot at 2 cards (Rationalization plus
+     * Courage, id 7/value 1 -- a remaining-hand average of 1, well under
+     * RATIONALIZATION_LOW_VALUE_HAND_AVERAGE) and an opponent holding 6
+     * cards, the bot rotated to REFRESH its own single leftover card
+     * instead of stealing the opponent's much larger hand.
+     * rationalizationLowValueHand() and rationalizationStealDirection()
+     * both fire here -- 'rotate' must win: gaining several more cards
+     * outright is always better than gambling a random redraw of one
+     * card, so a live steal opportunity takes priority over a merely
+     * weak remaining hand.
+     */
+    public function testChooseActionPrefersStealingAnOverstuffedHandOverRefreshingAWeakOne(): void
+    {
+        $state = $this->boardState(hands: [
+            1 => [49, 7],
+            2 => [38, 39, 20, 3, 8, 9], // 6 cards -- well past the steal threshold
+        ]);
+
+        $action = $this->bot->chooseAction($state, [49], 1);
+
+        self::assertSame(49, $action['card_id']);
+        self::assertSame(['mode' => 'rotate', 'direction' => 'right'], $action['choices']);
     }
 
     /** Exactly RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE (3) more cards is enough to qualify -- 2 more is not. */

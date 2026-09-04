@@ -1498,6 +1498,7 @@ final class BotPlayerService
                 $this->resolver->isAlwaysFilledOptionalField($effectKey, $field['key'])
                 || $this->shouldAttemptValueBoostDiscard($state, $effectKey, $field['key'], $cardId, $botGamePlayerId)
                 || $this->shouldAttemptZealCycle($state, $effectKey, $field['key'], $cardId, $botGamePlayerId)
+                || $this->shouldAttemptAmbitionDiscard($state, $effectKey, $field['key'], $cardId, $botGamePlayerId)
             );
             if (!$required && !$forced) {
                 continue;
@@ -1557,14 +1558,21 @@ final class BotPlayerService
      * interdependent ('direction' only means anything once 'mode' is
      * 'rotate') and the choice between them needs real board state, not
      * just "first legal option":
-     * - 'refresh' (bottom the whole hand, then redraw that many) once
-     *   the bot's own remaining hand is weak enough to gamble on a
-     *   fresh draw (rationalizationLowValueHand()) -- checked first, and
-     *   the ONLY case 'refresh' is chosen at all.
-     * - Otherwise 'rotate' toward whichever neighbor
-     *   rationalizationStealDirection() finds currently overstuffed
-     *   enough to be worth taking their hand at the cost of the bot's
-     *   own.
+     * - 'rotate' toward whichever neighbor rationalizationStealDirection()
+     *   finds currently overstuffed enough to be worth taking their hand
+     *   at the cost of the bot's own -- checked FIRST (reported live: a
+     *   bot at 2 cards, one of them Rationalization, refreshed instead of
+     *   stealing an opponent's 6-card hand). rationalizationStealDirection()'s
+     *   own RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE threshold already
+     *   only fires for a neighbor overstuffed enough to be clearly worth
+     *   taking regardless of what the bot's own remaining hand looks
+     *   like -- gaining several more cards outright always beats
+     *   gambling a random redraw of the bot's own (typically small, at
+     *   that point) remaining hand, so a live steal opportunity always
+     *   wins over a merely-weak hand once both apply at once.
+     * - Otherwise 'refresh' (bottom the whole hand, then redraw that
+     *   many) once the bot's own remaining hand is weak enough to gamble
+     *   on a fresh draw (rationalizationLowValueHand()).
      * - Otherwise, decline both modes entirely (an empty choice set --
      *   RationalizationEffect::afterPlaying()'s own `if ($mode === null)
      *   return;` treats this exactly like Guile-style genuine
@@ -1590,13 +1598,13 @@ final class BotPlayerService
      */
     private function rationalizationChoices(BoardState $state, int $cardId, int $botGamePlayerId): array
     {
-        if ($this->rationalizationLowValueHand($state, $cardId, $botGamePlayerId)) {
-            return ['mode' => 'refresh'];
-        }
-
         $direction = $this->rationalizationStealDirection($state, $botGamePlayerId);
         if ($direction !== null) {
             return ['mode' => 'rotate', 'direction' => $direction];
+        }
+
+        if ($this->rationalizationLowValueHand($state, $cardId, $botGamePlayerId)) {
+            return ['mode' => 'refresh'];
         }
 
         return [];
@@ -1798,6 +1806,67 @@ final class BotPlayerService
         }
 
         return $cheapestOtherHandCardValue <= self::ZEAL_LOW_VALUE_HAND_CARD_THRESHOLD;
+    }
+
+    /**
+     * How many cards the bot's own hand needs -- Ambition itself
+     * included, still sitting there at this point the same way every
+     * other "still in hand" check in this class works -- before
+     * discarding one for Ambition's extra play is even worth
+     * considering: one to actually spend as the discard, and at least
+     * one more left over afterward to spend the unlocked extra play on.
+     * With only two cards total (Ambition plus one other), discarding
+     * that one other card would leave nothing to play with the extra
+     * play it unlocks -- a pure loss for nothing.
+     */
+    private const AMBITION_MIN_HAND_SIZE_TO_DISCARD = 3;
+
+    /**
+     * Ambition's own "should this optional field be attempted" policy
+     * (reported live: bots should discard for the extra play "if it has
+     * 3+ cards in hand and it has another play that will net it
+     * points -- this is especially important in the last round of the
+     * game when it can make the difference between winning and losing
+     * the game"). Feeds resolveSchemaFields()'s own $forced the same way
+     * shouldAttemptZealCycle() does: once forced, BotChoiceResolver's
+     * own generic 'hand_card' field policy already picks the LOWEST-
+     * value legal candidate to discard on its own (the same "minimize
+     * what's given up" bias resolveOwnResourceField() documents), so
+     * there's no need to separately pick WHICH card here -- only WHETHER
+     * to bother at all.
+     *
+     * True only once AMBITION_MIN_HAND_SIZE_TO_DISCARD is met AND, after
+     * setting aside the cheapest OTHER hand card as the discard cost, at
+     * least one hand card still remains with a positive base value -- a
+     * genuine scoring play worth unlocking the extra play for, not just
+     * "some card to burn it on." This same rule already covers "make the
+     * difference between winning and losing the game" in the last round
+     * without any separate last-round-specific logic: a positive-value
+     * card the bot couldn't otherwise fit into this turn is exactly the
+     * kind of play that can flip a round's (and so the game's) outcome,
+     * every round this condition holds, last round included.
+     */
+    private function shouldAttemptAmbitionDiscard(BoardState $state, string $effectKey, string $fieldKey, int $cardId, int $botGamePlayerId): bool
+    {
+        if ($effectKey !== 'ambition' || $fieldKey !== 'discard_card_id') {
+            return false;
+        }
+
+        $otherCardValues = [];
+        foreach ($state->hand($botGamePlayerId) as $handCardId) {
+            if ($handCardId !== $cardId) {
+                $otherCardValues[] = $this->baseValue($state, $handCardId);
+            }
+        }
+
+        if (count($otherCardValues) + 1 < self::AMBITION_MIN_HAND_SIZE_TO_DISCARD) {
+            return false;
+        }
+
+        sort($otherCardValues);
+        array_shift($otherCardValues);
+
+        return $otherCardValues !== [] && max($otherCardValues) > 0;
     }
 
     /**

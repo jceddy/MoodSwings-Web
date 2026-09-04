@@ -1,0 +1,20 @@
+-- Bot policy fix (reported live: "when a bot plays ambition, it should
+-- discard a card for another play if it has 3+ cards in hand and it has
+-- another play that will net it points - this is especially important
+-- in the last round of the game when it can make the difference between
+-- winning and losing the game").
+--
+-- Ambition's own optional `discard_card_id` field ("you may discard a
+-- card from your hand; if you do, you may play an additional mood this
+-- turn") was never volunteered for at all -- the bot never took the
+-- extra play Ambition offers, regardless of hand size or value. New
+-- BotPlayerService::shouldAttemptAmbitionDiscard() forces the field
+-- once AMBITION_MIN_HAND_SIZE_TO_DISCARD (3) is met and, after setting
+-- aside the cheapest other hand card as the discard cost, at least one
+-- hand card remains with a positive base value -- a genuine scoring
+-- play worth unlocking the extra play for. LegalChoiceEnumerator has no
+-- required schema field to vary Ambition's own targeting over, so this
+-- fixes the Tactical Bot too, with no search-side change needed. No
+-- schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.33.7' WHERE id = 1;
