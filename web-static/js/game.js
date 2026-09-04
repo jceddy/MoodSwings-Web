@@ -8307,9 +8307,6 @@
             return select;
         }
 
-        const select = document.createElement('select');
-        select.id = 'choice-field-' + path;
-
         const options = field.type === 'mode'
             ? field.options.map((value) => {
                 let label = capitalize(value).replace(/_/g, ' ');
@@ -8323,9 +8320,25 @@
             })
             : fieldOptions(field, card);
 
+        // A multi-select field (Malice's "choose two of your moods,"
+        // Infatuation's two-hand-card discard, etc.) used to be a native
+        // <select multiple> -- a live bug report caught this: selecting a
+        // SECOND, non-adjacent option in one of these requires holding
+        // Ctrl/Cmd while clicking, standard browser behavior for
+        // <select multiple> that isn't remotely obvious from looking at
+        // it, and a plain click on a second option silently replaces the
+        // first selection instead of adding to it. A checkbox list needs
+        // no modifier key and makes "already selected" visually obvious
+        // per-item, so every field.multi field builds one of these
+        // instead now -- see buildMultiCheckboxField() below.
         if (field.multi) {
-            select.multiple = true;
-        } else if (!(field.required && options.length === 1)) {
+            return buildMultiCheckboxField(field, options, path);
+        }
+
+        const select = document.createElement('select');
+        select.id = 'choice-field-' + path;
+
+        if (!(field.required && options.length === 1)) {
             // 'grant_choice' (grant_source_card_id) reads differently from
             // every other optional field here: leaving it blank doesn't
             // mean "use no grant" (a play always uses one), just "no
@@ -8362,22 +8375,88 @@
         // every viewer agrees on what "the default" is for the same
         // field, rather than each client deriving its own. Pre-selects
         // it, but the player can still change it before submitting --
-        // this is a starting point, not a locked-in answer.
-        if (!field.multi && field.default !== undefined && field.default !== null) {
+        // this is a starting point, not a locked-in answer. (field.multi
+        // never carries a default -- see the early return above -- so no
+        // guard is needed here.)
+        if (field.default !== undefined && field.default !== null) {
             select.value = String(field.default);
         }
 
         return select;
     }
 
-    // Groups a 'mood' field's <option>s into one <optgroup> per owner
-    // (fieldOptions()'s 'mood' case stamps an ownerLabel onto each option
-    // for exactly this) instead of one flat list -- with 3+ players in
-    // play, picking a specific player's mood out of a single long list got
-    // tedious. Groups appear in the order each owner's first option is
-    // encountered (itself currentState.in_play's own order), not re-sorted
-    // by seat, consistent with every other consumer of currentState.in_play
-    // in this file.
+    // A field.multi field's own widget -- one checkbox per candidate,
+    // grouped by owner for 'mood' fields the same way the single-select
+    // path groups into <optgroup>s (see appendGroupedMoodCheckboxes()
+    // below), a flat list otherwise. Replaces a native <select multiple>
+    // (see buildFieldWidget()'s own comment on why) -- the container
+    // itself carries the 'choice-field-<path>' id every other widget
+    // uses, and a native 'change' event on any checkbox inside it bubbles
+    // up to it, so buildFieldRow()'s own `widget.addEventListener('change',
+    // onChange)` keeps working unchanged. fieldHasValue()/
+    // selectedCandidates()/buildChoicesFromFields() read the checked
+    // checkboxes directly rather than through any <select>-shaped API.
+    function buildMultiCheckboxField(field, options, path) {
+        const container = document.createElement('div');
+        container.id = 'choice-field-' + path;
+        container.className = 'choice-field-multi';
+        container.setAttribute('role', 'group');
+
+        if (field.type === 'mood') {
+            appendGroupedMoodCheckboxes(container, options);
+        } else {
+            for (const option of options) {
+                container.appendChild(buildCheckboxOption(option));
+            }
+        }
+
+        return container;
+    }
+
+    function buildCheckboxOption(option) {
+        const label = document.createElement('label');
+        label.className = 'choice-field-multi-option';
+
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.value = String(option.value);
+        label.appendChild(checkbox);
+        label.appendChild(document.createTextNode(' ' + option.label));
+
+        return label;
+    }
+
+    // Groups a 'mood' multi field's own checkboxes by owner (fieldOptions()'s
+    // 'mood' case stamps an ownerLabel onto each option for exactly this),
+    // the checkbox-list equivalent of appendGroupedMoodOptions() below --
+    // same "with 3+ players in play, a flat list got tedious" reasoning,
+    // same encounter-order grouping.
+    function appendGroupedMoodCheckboxes(container, options) {
+        const groupsByOwner = new Map();
+        for (const option of options) {
+            let group = groupsByOwner.get(option.ownerLabel);
+            if (!group) {
+                group = document.createElement('div');
+                group.className = 'choice-field-multi-group';
+                const heading = document.createElement('div');
+                heading.className = 'choice-field-multi-group-label';
+                heading.textContent = option.ownerLabel;
+                group.appendChild(heading);
+                groupsByOwner.set(option.ownerLabel, group);
+                container.appendChild(group);
+            }
+            group.appendChild(buildCheckboxOption(option));
+        }
+    }
+
+    // Groups a single-select 'mood' field's <option>s into one <optgroup>
+    // per owner (fieldOptions()'s 'mood' case stamps an ownerLabel onto
+    // each option for exactly this) instead of one flat list -- with 3+
+    // players in play, picking a specific player's mood out of a single
+    // long list got tedious. Groups appear in the order each owner's
+    // first option is encountered (itself currentState.in_play's own
+    // order), not re-sorted by seat, consistent with every other consumer
+    // of currentState.in_play in this file.
     function appendGroupedMoodOptions(select, options) {
         const groupsByOwner = new Map();
         for (const option of options) {
@@ -8452,7 +8531,7 @@
     function fieldHasValue(widget, field) {
         if (field.type === 'bool') return true; // a checkbox always has a value (checked or not)
         if (field.type === 'card_order') return true; // reordering field.cards is always a complete answer, even untouched
-        if (field.multi) return widget.selectedOptions.length > 0;
+        if (field.multi) return widget.querySelectorAll('input:checked').length > 0;
         return widget.value !== '';
     }
 
@@ -8465,9 +8544,7 @@
     // the server re-validates the same rules regardless.
 
     function selectedCandidates(field, widget) {
-        const ids = Array.from(widget.selectedOptions)
-            .filter((option) => option.value !== '')
-            .map((option) => Number(option.value));
+        const ids = Array.from(widget.querySelectorAll('input:checked')).map((input) => Number(input.value));
         const source = field.type === 'mood' ? currentState.in_play
             : field.type === 'hand_card' ? currentState.you.hand
             : field.type === 'discard_card' ? currentState.discard_pile
@@ -9008,7 +9085,7 @@
             } else if (field.type === 'card_order') {
                 choices[field.key] = Array.from(widget.querySelectorAll('li')).map((item) => Number(item.dataset.cardId));
             } else if (field.multi) {
-                const values = Array.from(widget.selectedOptions).map((option) => option.value);
+                const values = Array.from(widget.querySelectorAll('input:checked')).map((input) => input.value);
                 if (values.length > 0) {
                     choices[field.key] = field.type === 'mode' ? values : values.map(Number);
                 }

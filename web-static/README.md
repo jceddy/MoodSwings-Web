@@ -1519,6 +1519,27 @@ deck's `cards`.
     the per-player icons below); a row is never highlighted purely because
     it's some OTHER player's turn or they're the one being waited on.
 
+    `--color-your-turn-bg`/`--color-awaiting-response-bg` were originally
+    defined only in the base (light) `:root`, the `prefers-color-scheme:
+    dark` media query, and `:root[data-theme="dark"]` -- so a user whose
+    OS/browser itself was in light mode but who explicitly picked one of
+    the OTHER named dark themes (Jade, High Contrast Dark, or one of the
+    three dark skins) still got the plain light palette's pale mint/cream
+    boxes, since a named theme's own `color-scheme: dark` doesn't make
+    `prefers-color-scheme: dark` match -- that media feature only tracks
+    the OS/browser's own setting, never a page's explicit theme choice
+    (reported live: looked fine on a mobile device in OS dark mode, wrong
+    on a desktop browser in OS light mode, despite the same theme being
+    selected on both). Fixed by giving every named dark theme its own
+    explicit pair of these two variables, tuned to read as part of that
+    theme's own palette rather than reusing the plain dark theme's colors
+    verbatim (see `css/style.css`'s own comment on Jade's block for the
+    full explanation, and each subsequent theme's block for its own color
+    choice) -- Jade, High Contrast Dark, Steampunk, Futuristic, and Neon
+    each get a palette-tinted pair, while Noir -- whose background is a
+    neutral near-black rather than hue-tinted -- just reuses the plain
+    dark theme's own green/amber since there's no clashing hue to avoid.
+
     Rather than the old "(your turn)"/"(waiting on &lt;username&gt;)" text
     tags (which could only ever name the viewer, even when a pending
     decision was actually paused on a different player), each opponent's
@@ -2866,15 +2887,39 @@ deck's `cards`.
     two chosen moods must share a color or value, Courage's must belong to
     different players, Anger's combined value can't exceed 5) — Play stays
     disabled with an inline message until the selection is actually legal,
-    without a round trip to find out. A `type: 'mood'` field's `<select>`
-    (Faith's `target_mood_id`, Malice's multi-select cascade, etc.) groups
-    its options into one `<optgroup>` per owner (`buildFieldWidget()`'s
+    without a round trip to find out. A `type: 'mood'` field's own
+    single-select `<select>` (Faith's `target_mood_id`, etc.) groups its
+    options into one `<optgroup>` per owner (`buildFieldWidget()`'s
     `appendGroupedMoodOptions()`, driven by an `ownerLabel` on each option
     from `fieldOptions()`) rather than one flat list — with 3+ players in
     a game, picking a specific player's mood out of a single long list got
     tedious, and grouping by owner mirrors how the in-play board itself is
     already organized by seating position. Groups appear in the order
     each owner's first candidate is encountered, not resorted by seat.
+
+    A `field.multi` field (Malice's own two-mood cascade, Self-Loathing's
+    own discard cost, Infatuation's two-hand-card discard, etc.) renders as
+    a bordered checkbox list (`.choice-field-multi`, `buildMultiCheckboxField()`),
+    not a `<select multiple>` — a live bug report caught the reason why:
+    selecting a SECOND, non-adjacent option in a native multi-select
+    requires holding Ctrl/Cmd while clicking, standard browser behavior
+    that isn't remotely obvious from looking at one, and a plain click on
+    a second option there silently REPLACES the first selection instead of
+    adding to it ("I had to pick two cards, but it only allowed me to pick
+    two cards next to each other on the list"). A checkbox needs no
+    modifier key and makes "already selected" visually obvious per-item,
+    so `fieldHasValue()`/`selectedCandidates()`/`buildChoicesFromFields()`
+    all read `.querySelectorAll('input:checked')` off the container instead
+    of a `<select>`'s own `.selectedOptions`. A `type: 'mood'` multi field
+    groups its own checkboxes by owner the same way the single-select case
+    above groups into `<optgroup>`s (`appendGroupedMoodCheckboxes()`, same
+    `ownerLabel`-driven, encounter-order grouping) — every other multi
+    field type (`hand_card`/`discard_card`/`player`) renders one flat
+    checkbox list instead, since none of those have an "owner" of their
+    own the way an in-play mood does. A native `change` event on any
+    checkbox inside the container still bubbles up to it, so
+    `buildFieldRow()`'s own single `widget.addEventListener('change', ...)`
+    call (shared with every other field type) needed no change at all.
     A `type: 'mood'` field's candidate list is normally built from the
     board as it stands *before* this play (the card being played itself
     isn't in play yet, from the browser's own point of view, until the
