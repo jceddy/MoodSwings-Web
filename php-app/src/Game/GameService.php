@@ -714,8 +714,15 @@ final class GameService
         private readonly ChaosEffectRegistry $chaosRegistry = new ChaosEffectRegistry(),
         ?SearchBotPlayerService $tacticalBots = null,
         private readonly BotSearchJobRepository $botSearchJobs = new BotSearchJobRepository(),
-        /** Overridable purely so tests can keep a Tactical Bot's own search fast rather than waiting out the real production budget every time. */
-        private readonly int $botSearchTimeBudgetSeconds = self::BOT_SEARCH_TIME_BUDGET_SECONDS,
+        /**
+         * Null (the default) means "use whichever budget this specific
+         * bot's own users.tactical_ai_time_budget_seconds row carries" --
+         * see tacticalBotTimeBudgetSeconds(). Overridable purely so tests
+         * can force EVERY Tactical Bot's search fast (uniformly, regardless
+         * of which bot row is actually seated) rather than waiting out
+         * whatever real budget that bot's own row carries every time.
+         */
+        private readonly ?int $botSearchTimeBudgetSeconds = null,
         /**
          * Overridable purely so tests can exercise launchTacticalBotSearchJob()'s
          * own job-row bookkeeping without ALSO spawning a real detached
@@ -1436,16 +1443,28 @@ final class GameService
     /**
      * The full practice-bot (issue #140) roster -- every users.is_bot
      * row, ordered by id (i.e. migration 0090's own seeding order,
-     * BotAlice/BotBen/BotCleo), for the New Game dialog's own bot picker.
+     * BotAlice/BotBen/BotCleo, then migrations 0236/0237's own Tactical
+     * Bot tiers), for the New Game dialog's own bot picker. Includes each
+     * Tactical Bot's own uses_tactical_ai/tactical_ai_time_budget_seconds
+     * (migration 0237) purely so that picker can color-code the three
+     * speed tiers -- a plain heuristic bot's own budget is always null,
+     * since the column is meaningless (never read) for one.
      *
-     * @return array<int, array{user_id: int, username: string}>
+     * @return array<int, array{user_id: int, username: string, uses_tactical_ai: bool, tactical_ai_time_budget_seconds: ?int}>
      */
     public function listPracticeBots(): array
     {
-        $stmt = Connection::get()->query('SELECT id, username FROM users WHERE is_bot = 1 ORDER BY id ASC');
+        $stmt = Connection::get()->query(
+            'SELECT id, username, uses_tactical_ai, tactical_ai_time_budget_seconds FROM users WHERE is_bot = 1 ORDER BY id ASC'
+        );
 
         return array_map(
-            static fn (array $row) => ['user_id' => (int) $row['id'], 'username' => $row['username']],
+            static fn (array $row) => [
+                'user_id' => (int) $row['id'],
+                'username' => $row['username'],
+                'uses_tactical_ai' => (bool) $row['uses_tactical_ai'],
+                'tactical_ai_time_budget_seconds' => $row['uses_tactical_ai'] ? (int) $row['tactical_ai_time_budget_seconds'] : null,
+            ],
             $stmt->fetchAll(),
         );
     }
@@ -4784,14 +4803,18 @@ final class GameService
     private const MAX_AUTOMATED_ACTIONS_PER_REQUEST = 200;
 
     /**
-     * Issue #419's own Tactical Bot tier -- how long a single background
-     * search (SearchBotPlayerService::chooseAction()) is allowed to run
-     * before advanceTacticalBotSearch() gives up waiting on it and falls
-     * back to the ordinary fast heuristic bot instead, treating the job
-     * as crashed. Chosen (per the maintainer) to comfortably clear a
-     * PHP-FPM/CLI max_execution_time of 300s while still leaving real
-     * headroom below it; tune from here based on how it actually performs
-     * once live.
+     * Issue #419's own Tactical Bot tier -- fallback default for how long
+     * a single background search (SearchBotPlayerService::chooseAction())
+     * is allowed to run, used only as a defensive fallback in
+     * tacticalBotTimeBudgetSeconds() (a users row somehow missing its own
+     * tactical_ai_time_budget_seconds) since migration 0237 gave each
+     * Tactical Bot account its OWN per-bot budget rather than one global
+     * value -- see that migration's own docblock for why (a maintainer
+     * testing against a spread of speeds, colored green/gold/red in the
+     * New Game dialog's own bot picker). Whatever value a bot's own row
+     * carries, advanceTacticalBotSearch() still gives up waiting on it
+     * and falls back to the ordinary fast heuristic bot the same way, once
+     * that bot's own budget (+ BOT_SEARCH_STALE_GRACE_SECONDS) elapses.
      */
     private const BOT_SEARCH_TIME_BUDGET_SECONDS = 150;
 
@@ -5029,10 +5052,33 @@ final class GameService
             }
 
             if (in_array($currentTurnGamePlayerId, $tacticalBotGamePlayerIds, true)) {
+                // A Tactical Bot with no legal play AT ALL (candidatePlayCardIds()
+                // filtered through isPlayable(), the exact same check the
+                // ordinary heuristic-bot branch below and the auto-pass
+                // branch further down both already use) should pass
+                // immediately, same as those two -- NOT be handed off to
+                // the launch/poll/stale-fallback search-job machinery
+                // below, which has nothing to search over anyway and would
+                // otherwise burn this seat's own full time budget waiting
+                // on a background job before the stale-fallback finally
+                // lets it pass (reported live: "the bot seems to take its
+                // full time for every turn... even when it has an empty
+                // hand and no legal play to make").
+                $state = $this->boardStates->load($gameId);
+                $hasLegalPlay = array_filter(
+                    $this->candidatePlayCardIds($state, $currentTurnGamePlayerId),
+                    fn (int $cardId) => $this->plays->isPlayable($state, $currentTurnGamePlayerId, $cardId),
+                ) !== [];
+                if (!$hasLegalPlay) {
+                    $lastResult = $this->pass($gameId, $currentTurnGamePlayerId, automated: true);
+                    continue;
+                }
+
                 // Issue #419's own Tactical Bot tier -- a search call can
-                // legitimately take up to BOT_SEARCH_TIME_BUDGET_SECONDS,
-                // far too long to run inline within this (or any other)
-                // HTTP request, so this hands off to a background process
+                // legitimately take up to this bot's own
+                // tactical_ai_time_budget_seconds (migration 0237), far too
+                // long to run inline within this (or any other) HTTP
+                // request, so this hands off to a background process
                 // instead of calling $this->bots directly -- see
                 // advanceTacticalBotSearch()'s own docblock for the full
                 // launch/poll/stale-fallback state machine.
@@ -5982,6 +6028,26 @@ final class GameService
     }
 
     /**
+     * Migration 0237's own per-bot search budget for $gamePlayerId's
+     * owning user -- see launchTacticalBotSearchJob(), the only caller.
+     * Falls back to BOT_SEARCH_TIME_BUDGET_SECONDS purely as a defensive
+     * default (a row somehow missing its own value); every real Tactical
+     * Bot account carries an explicit one via that migration's own seed/
+     * UPDATE, so this fallback should never actually be exercised in
+     * practice.
+     */
+    private function tacticalBotTimeBudgetSeconds(int $gamePlayerId): int
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT u.tactical_ai_time_budget_seconds FROM game_players gp JOIN users u ON u.id = gp.user_id WHERE gp.id = :game_player_id'
+        );
+        $stmt->execute(['game_player_id' => $gamePlayerId]);
+        $seconds = $stmt->fetchColumn();
+
+        return $seconds !== false ? (int) $seconds : self::BOT_SEARCH_TIME_BUDGET_SECONDS;
+    }
+
+    /**
      * Issue #419's own Tactical Bot tier -- the launch/poll/stale-fallback
      * state machine advanceAutomatedTurns() hands a Tactical Bot's own
      * turn-to-play off to, instead of calling $this->bots directly the
@@ -6072,7 +6138,8 @@ final class GameService
      */
     private function launchTacticalBotSearchJob(int $gameId, int $gamePlayerId): void
     {
-        $jobId = $this->botSearchJobs->create($gameId, $gamePlayerId, $this->botSearchTimeBudgetSeconds);
+        $timeBudgetSeconds = $this->botSearchTimeBudgetSeconds ?? $this->tacticalBotTimeBudgetSeconds($gamePlayerId);
+        $jobId = $this->botSearchJobs->create($gameId, $gamePlayerId, $timeBudgetSeconds);
 
         if (!$this->spawnBotSearchProcesses) {
             return;
