@@ -6,11 +6,13 @@ namespace MoodSwings\Game;
 
 use MoodSwings\Bot\BotChoiceResolver;
 use MoodSwings\Bot\BotPlayerService;
+use MoodSwings\Bot\SearchBotPlayerService;
 use MoodSwings\Database\Connection;
 use MoodSwings\Deck\UserDecklistService;
 use MoodSwings\Game\Exceptions\GameStateException;
 use MoodSwings\Notifications\NotificationService;
 use MoodSwings\Presence\PresenceService;
+use MoodSwings\Repository\BotSearchJobRepository;
 use MoodSwings\Repository\GameChatRepository;
 use MoodSwings\Repository\GameNoteRepository;
 use MoodSwings\Repository\SessionRepository;
@@ -693,6 +695,9 @@ final class GameService
     /** @var array<int, string> chaos_effects.id => rarity, memoized per instance by chaosEffectRarity() -- global catalog data, not scoped per game */
     private array $chaosEffectRarityCache = [];
 
+    /** Issue #419's own Tactical Bot tier -- see advanceTacticalBotSearch()'s own docblock. Set in the constructor body (not a promoted property default), since its own default construction needs $this->plays/$this->scorer/$this->bots, which a promoted property's default value expression can't reference (those are sibling parameters, not yet $this at that point). */
+    private readonly SearchBotPlayerService $tacticalBots;
+
     public function __construct(
         private readonly BoardStateRepository $boardStates,
         private readonly MoodPlayService $plays,
@@ -707,7 +712,38 @@ final class GameService
         private readonly GameChatRepository $chat = new GameChatRepository(),
         private readonly BotPlayerService $bots = new BotPlayerService(new BotChoiceResolver()),
         private readonly ChaosEffectRegistry $chaosRegistry = new ChaosEffectRegistry(),
+        ?SearchBotPlayerService $tacticalBots = null,
+        private readonly BotSearchJobRepository $botSearchJobs = new BotSearchJobRepository(),
+        /**
+         * Null (the default) means "use whichever budget this specific
+         * bot's own users.tactical_ai_time_budget_seconds row carries" --
+         * see tacticalBotTimeBudgetSeconds(). Overridable purely so tests
+         * can force EVERY Tactical Bot's search fast (uniformly, regardless
+         * of which bot row is actually seated) rather than waiting out
+         * whatever real budget that bot's own row carries every time.
+         */
+        private readonly ?int $botSearchTimeBudgetSeconds = null,
+        /**
+         * Overridable purely so tests can exercise launchTacticalBotSearchJob()'s
+         * own job-row bookkeeping without ALSO spawning a real detached
+         * `php bin/run_bot_search.php` OS process every time -- that real
+         * subprocess inherits the test's own env (including its test-DB
+         * connection details) and races the foreground test's own
+         * assertions/backdating against the SAME bot_search_jobs row,
+         * which is exactly the kind of nondeterminism that produced
+         * intermittent "It is not player N's turn" / wrong-status
+         * failures in BotSearchIntegrationTest before this flag existed.
+         * Tests instead drive runTacticalBotSearchJob() explicitly
+         * whenever they want the job to actually resolve.
+         */
+        private readonly bool $spawnBotSearchProcesses = true,
     ) {
+        $this->tacticalBots = $tacticalBots ?? new SearchBotPlayerService(
+            $this->plays,
+            $this->scorer,
+            $this->bots,
+            SearchBotPlayerService::defaultEnumeratorFor($this->bots),
+        );
     }
 
     /**
@@ -865,6 +901,23 @@ final class GameService
         ?string $tieredRotisserieDraftMode = null,
         ?array $tieredRotisserieDraftTiers = null,
         bool $botGoesFirst = false,
+        bool $bestOfThree = false,
+        // Power Duel sideboarding: only ever actually takes effect for a
+        // best-of-three 'duel' game using deck_type 'custom_duel' built
+        // under the "Power Duel" duel_deck_rules preset ($duelRulesPreset
+        // === 'power', resolved just below) -- silently ignored (not an
+        // error) for every other format/deck_type/preset combination, the
+        // same "harmless no-op outside its own narrow scope" convention
+        // $bestOfThree's own Traditional-at-2-players restriction already
+        // established. See submitCustomDuelDeck()/advanceGameMatch() for
+        // what it actually changes once a match has it: each player
+        // declares up to POWER_DUEL_SIDEBOARD_MAX_CARDS extra cards
+        // alongside their 15-card main deck on game 1, then may freely
+        // swap between the two (never introducing a card from outside
+        // that fixed pool) for game 2/3 -- the traditional TCG
+        // sideboarding rule, replacing this preset's own default "deck is
+        // locked, carried forward unchanged" behavior for the match.
+        bool $allowSideboarding = false,
     ): int {
         if (count($userIds) > self::MAX_PLAYERS) {
             throw new GameStateException('A game cannot have more than ' . self::MAX_PLAYERS . ' players');
@@ -1084,6 +1137,33 @@ final class GameService
             default => null,
         };
 
+        // Issue #90: Duel/Open Team Play/Closed Team Play/Traditional's own
+        // best-of-three match wrapper (game_matches, migration 0223) -- the
+        // non-draft counterpart to $draftPoolCardIds !== null's own
+        // draft_matches row just below. Silently ignored (rather than
+        // thrown) for a draft-based deck_type or a format/player-count that
+        // doesn't support it -- $bestOfThree only ever arrives true from
+        // the New Game dialog's own checkbox, which is itself hidden for
+        // any combination that wouldn't reach here, so there's no real
+        // "user asked for X and got Y" case to guard against, just a
+        // harmless no-op if one ever did. 'standard' only qualifies at
+        // exactly 2 players (issue #90 follow-up, migration 0225) -- with
+        // 3-4, "first to 2 game wins" no longer names a single opponent,
+        // the same reason draftGamesToWin() itself falls back to a single
+        // game once more than 2 players share a draft match.
+        $createGameMatch = $bestOfThree && !in_array($deckType, self::DRAFT_DECK_TYPES, true)
+            && ($format === 'duel' || self::isTeamFormat($format) || ($format === 'standard' && count($userIds) === 2));
+
+        // Power Duel sideboarding (see $allowSideboarding's own docblock
+        // above) only ever actually applies to a 'duel'/'custom_duel'
+        // game built under the 'power' preset -- everywhere else this is
+        // just a harmless no-op, same as $createGameMatch's own scoping
+        // just above. isset() guards $duelRulesPreset, which is only ever
+        // assigned inside the 'custom_duel' branch above.
+        $allowSideboardingForMatch = $allowSideboarding && $createGameMatch
+            && $format === 'duel' && $deckType === 'custom_duel'
+            && isset($duelRulesPreset) && $duelRulesPreset === 'power';
+
         $pdo = Connection::get();
         $pdo->beginTransaction();
 
@@ -1102,16 +1182,29 @@ final class GameService
                 $draftMatchId = (int) $pdo->lastInsertId();
             }
 
+            $gameMatchId = null;
+            if ($createGameMatch) {
+                $insertGameMatch = $pdo->prepare(
+                    'INSERT INTO game_matches (format, created_by_user_id, allow_sideboarding) VALUES (:format, :created_by, :allow_sideboarding)'
+                );
+                $insertGameMatch->execute([
+                    'format' => $format,
+                    'created_by' => $createdByUserId,
+                    'allow_sideboarding' => $allowSideboardingForMatch ? 1 : 0,
+                ]);
+                $gameMatchId = (int) $pdo->lastInsertId();
+            }
+
             $insertGame = $pdo->prepare(
                 "INSERT INTO games (
                     format, deck_type, custom_deck_name, custom_deck_card_ids,
                     custom_duel_rules_preset, custom_duel_min_cards, custom_duel_rarity_limits, custom_duel_duplicate_limits,
-                    custom_duel_even_color_distribution_rarities, draft_match_id, match_game_number,
+                    custom_duel_even_color_distribution_rarities, draft_match_id, game_match_id, match_game_number,
                     status, created_by_user_id, wins_needed, default_selections_mode, bot_goes_first
                  ) VALUES (
                     :format, :deck_type, :custom_deck_name, :custom_deck_card_ids,
                     :duel_rules_preset, :duel_min_cards, :duel_rarity_limits, :duel_duplicate_limits,
-                    :duel_even_color_distribution_rarities, :draft_match_id, :match_game_number,
+                    :duel_even_color_distribution_rarities, :draft_match_id, :game_match_id, :match_game_number,
                     'waiting', :created_by, :wins_needed, :default_selections_mode, :bot_goes_first
                  )"
             );
@@ -1126,7 +1219,8 @@ final class GameService
                 'duel_duplicate_limits' => $duelDuplicateLimits !== null ? json_encode($duelDuplicateLimits) : null,
                 'duel_even_color_distribution_rarities' => $duelEvenColorDistributionRarities !== null ? json_encode($duelEvenColorDistributionRarities) : null,
                 'draft_match_id' => $draftMatchId,
-                'match_game_number' => $draftMatchId !== null ? 1 : null,
+                'game_match_id' => $gameMatchId,
+                'match_game_number' => ($draftMatchId !== null || $gameMatchId !== null) ? 1 : null,
                 'created_by' => $createdByUserId,
                 'wins_needed' => $winsNeeded,
                 'default_selections_mode' => $defaultSelectionsMode ? 1 : 0,
@@ -1257,6 +1351,27 @@ final class GameService
     private const BOT_SUPPORTED_DECK_TYPES = ['structure', 'power', 'jceddys_75', 'one_of_each', 'custom'];
 
     /**
+     * Issue #90's own best-of-three match wrapper (game_matches, migration
+     * 0223) for Duel/Open Team Play/Closed Team Play always plays to
+     * exactly this many game wins -- unlike draftGamesToWin(), which
+     * varies with player count (a 4-player team draft is best-of-one),
+     * there's no equivalent short-format case here: this feature only
+     * ever wraps a fixed 2-player duel or a fixed 2v2 team match, so a
+     * single constant covers every case it applies to.
+     */
+    private const GAME_MATCH_GAMES_TO_WIN = 2;
+
+    /**
+     * Power Duel sideboarding's own cap on a declared sideboard's size --
+     * see createGame()'s own $allowSideboarding docblock and
+     * submitCustomDuelDeck(). Deliberately not tied to
+     * DuelDeckRules::POWER_RARITY_LIMITS/POWER_MIN_CARDS (the main deck's
+     * own shape) -- a sideboard is a separate bench of extra options, not
+     * a second deck subject to the same minimum/rarity rules.
+     */
+    private const POWER_DUEL_SIDEBOARD_MAX_CARDS = 5;
+
+    /**
      * Every draft-based deck_type -- the same 5-item list already
      * repeated inline throughout this file's own draft methods (each
      * predating this constant), pulled out here purely for
@@ -1328,7 +1443,10 @@ final class GameService
     /**
      * The full practice-bot (issue #140) roster -- every users.is_bot
      * row, ordered by id (i.e. migration 0090's own seeding order,
-     * BotAlice/BotBen/BotCleo), for the New Game dialog's own bot picker.
+     * BotAlice/BotBen/BotCleo, then migrations 0236/0237's own Tactical
+     * Bot tiers -- BotSage/BotSageQuick/BotSageDeep, whose own names
+     * already say enough about relative speed that the picker draws no
+     * further distinction), for the New Game dialog's own bot picker.
      *
      * @return array<int, array{user_id: int, username: string}>
      */
@@ -1676,6 +1794,20 @@ final class GameService
      * or friendships of its own, so that call passes the human creator's
      * user id here instead, letting them pick from their own accessible
      * decklists for the bot the same way they already do for themselves.
+     *
+     * Power Duel sideboarding (migration 0228, issue #90 follow-up): when
+     * this game belongs to a game_match with allow_sideboarding set, game
+     * 1's own submission also declares a sideboard (up to
+     * POWER_DUEL_SIDEBOARD_MAX_CARDS extra cards, parsed the same
+     * optional-Sideboard-section way DecklistParser/a saved decklist's
+     * own sideboard_card_ids already work) alongside the main deck --
+     * see validateAndStorePowerDuelSideboardPool(). Game 2/3's own
+     * submission instead SWAPS within that already-declared pool -- see
+     * validateAndStorePowerDuelSideboardSwap() -- rather than declaring a
+     * fresh one, so only the new main deck needs submitting; the new
+     * sideboard is just whatever's left over. Every other custom_duel
+     * match (allow_sideboarding false, the default) is unaffected: main
+     * deck validated exactly as before, sideboard always stored null.
      */
     public function submitCustomDuelDeck(int $gameId, int $gamePlayerId, ?string $decklistText, ?int $savedDecklistId = null, ?int $accessCheckUserId = null): void
     {
@@ -1696,11 +1828,12 @@ final class GameService
         if ($ownerRow === false) {
             throw new GameStateException("Player {$gamePlayerId} is not seated in game {$gameId}");
         }
+        $ownerUserId = (int) $ownerRow['user_id'];
 
         $catalog = $this->loadCardCatalog();
 
         if ($savedDecklistId !== null) {
-            $parsed = $this->userDecklists->cardIdsForUse($accessCheckUserId ?? (int) $ownerRow['user_id'], $savedDecklistId);
+            $parsed = $this->userDecklists->cardIdsForUse($accessCheckUserId ?? $ownerUserId, $savedDecklistId);
         } else {
             if ($decklistText === null || trim($decklistText) === '') {
                 throw new GameStateException('A decklist is required');
@@ -1714,16 +1847,120 @@ final class GameService
             (array) json_decode((string) $game['custom_duel_duplicate_limits'], true),
             (array) json_decode((string) $game['custom_duel_even_color_distribution_rarities'], true),
         );
-        $rules->validate($parsed['cardIds'], $catalog['rowsById'], 'Your decklist');
+
+        $gameMatchId = $game['game_match_id'] !== null ? (int) $game['game_match_id'] : null;
+        $allowSideboarding = $gameMatchId !== null && (bool) $this->fetchGameMatch($gameMatchId)['allow_sideboarding'];
+
+        if (!$allowSideboarding) {
+            $rules->validate($parsed['cardIds'], $catalog['rowsById'], 'Your decklist');
+            $mainCardIds = $parsed['cardIds'];
+            $sideboardCardIds = [];
+        } elseif ((int) $game['match_game_number'] === 1) {
+            [$mainCardIds, $sideboardCardIds] = $this->validateAndStorePowerDuelSideboardPool($parsed, $rules, $catalog['rowsById']);
+        } else {
+            [$mainCardIds, $sideboardCardIds] = $this->validateAndStorePowerDuelSideboardSwap($gameMatchId, $ownerUserId, $parsed['cardIds'], $rules, $catalog['rowsById']);
+        }
 
         $update = Connection::get()->prepare(
-            'UPDATE game_players SET custom_deck_name = :name, custom_deck_card_ids = :card_ids WHERE id = :id'
+            'UPDATE game_players SET custom_deck_name = :name, custom_deck_card_ids = :card_ids, custom_deck_sideboard_card_ids = :sideboard_card_ids WHERE id = :id'
         );
         $update->execute([
             'name' => $parsed['name'],
-            'card_ids' => json_encode($parsed['cardIds']),
+            'card_ids' => json_encode($mainCardIds),
+            'sideboard_card_ids' => $sideboardCardIds !== [] ? json_encode($sideboardCardIds) : null,
             'id' => $gamePlayerId,
         ]);
+    }
+
+    /**
+     * Power Duel sideboarding's own game-1 half (see
+     * submitCustomDuelDeck()'s own docblock) -- validates the main deck
+     * exactly as every other custom_duel submission already does, plus
+     * the newly-declared sideboard: at most POWER_DUEL_SIDEBOARD_MAX_CARDS
+     * cards, and no card shared between the two zones (a card can only
+     * ever be in one place at a time, the same "singleton" idea
+     * DuelDeckRules' own $duplicateLimits already enforces within a
+     * single zone, just extended across both this match's own zones).
+     * Deliberately does NOT apply $rules' own rarity/mythic cap to the
+     * sideboard itself -- a second Mythic sitting benched is fine, as
+     * long as swapping it in always means swapping the active one out
+     * (validateAndStorePowerDuelSideboardSwap() re-validates the ACTIVE
+     * deck every time, which is what actually enforces "at most 1 in
+     * play").
+     *
+     * @param array{name: ?string, cardIds: int[], sideboardCardIds: int[]} $parsed
+     * @param array<int, array{name: string, rarity: string, color: string}> $catalogById
+     * @return array{0: int[], 1: int[]}
+     */
+    private function validateAndStorePowerDuelSideboardPool(array $parsed, DuelDeckRules $rules, array $catalogById): array
+    {
+        $mainCardIds = $parsed['cardIds'];
+        $sideboardCardIds = $parsed['sideboardCardIds'];
+
+        if (count($sideboardCardIds) > self::POWER_DUEL_SIDEBOARD_MAX_CARDS) {
+            throw new GameStateException(
+                'Your sideboard has ' . count($sideboardCardIds) . ' card(s), but at most '
+                . self::POWER_DUEL_SIDEBOARD_MAX_CARDS . ' are allowed.'
+            );
+        }
+        if (count($sideboardCardIds) !== count(array_unique($sideboardCardIds))) {
+            throw new GameStateException('Your sideboard cannot contain more than one copy of the same card.');
+        }
+        if (array_intersect($mainCardIds, $sideboardCardIds) !== []) {
+            throw new GameStateException('A card cannot be in both your deck and your sideboard.');
+        }
+
+        $rules->validate($mainCardIds, $catalogById, 'Your decklist');
+
+        return [$mainCardIds, $sideboardCardIds];
+    }
+
+    /**
+     * Power Duel sideboarding's own game-2/3 half (see
+     * submitCustomDuelDeck()'s own docblock) -- the new main deck must be
+     * assembled entirely from this player's own game-1 pool (their
+     * original main deck plus sideboard combined, fetched fresh here
+     * rather than trusting anything client-supplied), so a match can
+     * never smuggle in a card that was never declared on game 1. Any
+     * Sideboard section the resubmission itself might carry is ignored --
+     * the new sideboard is always just "whatever's left of the pool,"
+     * recomputed automatically rather than asked for a second time.
+     *
+     * @param int[] $newMainCardIds
+     * @param array<int, array{name: string, rarity: string, color: string}> $catalogById
+     * @return array{0: int[], 1: int[]}
+     */
+    private function validateAndStorePowerDuelSideboardSwap(int $gameMatchId, int $userId, array $newMainCardIds, DuelDeckRules $rules, array $catalogById): array
+    {
+        $poolStmt = Connection::get()->prepare(
+            'SELECT gp.custom_deck_card_ids, gp.custom_deck_sideboard_card_ids
+             FROM game_players gp JOIN games g ON g.id = gp.game_id
+             WHERE g.game_match_id = :match_id AND g.match_game_number = 1 AND gp.user_id = :user_id'
+        );
+        $poolStmt->execute(['match_id' => $gameMatchId, 'user_id' => $userId]);
+        $poolRow = $poolStmt->fetch();
+        if ($poolRow === false) {
+            throw new GameStateException('Could not find your original deck/sideboard for this match.');
+        }
+
+        $pool = array_merge(
+            array_map(intval(...), (array) json_decode((string) $poolRow['custom_deck_card_ids'], true)),
+            $poolRow['custom_deck_sideboard_card_ids'] !== null
+                ? array_map(intval(...), (array) json_decode((string) $poolRow['custom_deck_sideboard_card_ids'], true))
+                : [],
+        );
+
+        foreach ($newMainCardIds as $cardId) {
+            if (!in_array($cardId, $pool, true)) {
+                throw new GameStateException(
+                    'Your decklist has a card that isn\'t part of your original deck or sideboard -- sideboarding can only swap between the two, never add a new card.'
+                );
+            }
+        }
+
+        $rules->validate($newMainCardIds, $catalogById, 'Your decklist');
+
+        return [$newMainCardIds, array_values(array_diff($pool, $newMainCardIds))];
     }
 
     /**
@@ -4557,6 +4794,31 @@ final class GameService
     private const MAX_AUTOMATED_ACTIONS_PER_REQUEST = 200;
 
     /**
+     * Issue #419's own Tactical Bot tier -- fallback default for how long
+     * a single background search (SearchBotPlayerService::chooseAction())
+     * is allowed to run, used only as a defensive fallback in
+     * tacticalBotTimeBudgetSeconds() (a users row somehow missing its own
+     * tactical_ai_time_budget_seconds) since migration 0237 gave each
+     * Tactical Bot account its OWN per-bot budget rather than one global
+     * value -- see that migration's own docblock for why (a maintainer
+     * testing against a spread of speeds, colored green/gold/red in the
+     * New Game dialog's own bot picker). Whatever value a bot's own row
+     * carries, advanceTacticalBotSearch() still gives up waiting on it
+     * and falls back to the ordinary fast heuristic bot the same way, once
+     * that bot's own budget (+ BOT_SEARCH_STALE_GRACE_SECONDS) elapses.
+     */
+    private const BOT_SEARCH_TIME_BUDGET_SECONDS = 150;
+
+    /**
+     * Extra time beyond BOT_SEARCH_TIME_BUDGET_SECONDS a job is allowed
+     * before advanceTacticalBotSearch() gives up on it as stale/crashed --
+     * covers the background process's own bootstrap/DB-round-trip
+     * overhead on top of the search itself, so a merely-slow-to-start job
+     * isn't mistaken for a dead one.
+     */
+    private const BOT_SEARCH_STALE_GRACE_SECONDS = 30;
+
+    /**
      * Drives every practice bot's (issue #140) own turn/decision-answer,
      * AND every opted-in real player's own empty-hand auto-pass (see
      * "Auto-pass on empty hand" below), in a row -- immediately after a
@@ -4617,6 +4879,7 @@ final class GameService
     public function advanceAutomatedTurns(int $gameId): ?array
     {
         $botGamePlayerIds = $this->botGamePlayerIds($gameId);
+        $tacticalBotGamePlayerIds = $this->tacticalBotGamePlayerIds($gameId);
         $autoPassGamePlayerIds = $this->autoPassEmptyHandGamePlayerIds($gameId);
         $autoApplyScoringBonusGamePlayerIds = $this->autoApplyScoringBonusGamePlayerIds($gameId);
         if ($botGamePlayerIds === [] && $autoPassGamePlayerIds === [] && $autoApplyScoringBonusGamePlayerIds === []) {
@@ -4624,6 +4887,8 @@ final class GameService
         }
 
         $lastResult = null;
+        /** @var array<int, true> $tacticalFallbackGamePlayerIds see the tactical-bot branch below for what this tracks */
+        $tacticalFallbackGamePlayerIds = [];
         for ($i = 0; $i < self::MAX_AUTOMATED_ACTIONS_PER_REQUEST; $i++) {
             // A still-drafting/deck-building game (issue #359) is checked
             // even before the team decision below -- exactly the same
@@ -4777,13 +5042,70 @@ final class GameService
                 break;
             }
 
+            if (in_array($currentTurnGamePlayerId, $tacticalBotGamePlayerIds, true)) {
+                // A Tactical Bot with no legal play AT ALL (candidatePlayCardIds()
+                // filtered through isPlayable(), the exact same check the
+                // ordinary heuristic-bot branch below and the auto-pass
+                // branch further down both already use) should pass
+                // immediately, same as those two -- NOT be handed off to
+                // the launch/poll/stale-fallback search-job machinery
+                // below, which has nothing to search over anyway and would
+                // otherwise burn this seat's own full time budget waiting
+                // on a background job before the stale-fallback finally
+                // lets it pass (reported live: "the bot seems to take its
+                // full time for every turn... even when it has an empty
+                // hand and no legal play to make").
+                $state = $this->boardStates->load($gameId);
+                $hasLegalPlay = array_filter(
+                    $this->candidatePlayCardIds($state, $currentTurnGamePlayerId),
+                    fn (int $cardId) => $this->plays->isPlayable($state, $currentTurnGamePlayerId, $cardId),
+                ) !== [];
+                if (!$hasLegalPlay) {
+                    $lastResult = $this->pass($gameId, $currentTurnGamePlayerId, automated: true);
+                    continue;
+                }
+
+                // Issue #419's own Tactical Bot tier -- a search call can
+                // legitimately take up to this bot's own
+                // tactical_ai_time_budget_seconds (migration 0237), far too
+                // long to run inline within this (or any other) HTTP
+                // request, so this hands off to a background process
+                // instead of calling $this->bots directly -- see
+                // advanceTacticalBotSearch()'s own docblock for the full
+                // launch/poll/stale-fallback state machine.
+                //
+                // $tacticalFallbackGamePlayerIds (scoped to just this one
+                // advanceAutomatedTurns() call, never persisted) is what
+                // keeps a stale-job fallback from immediately trying to
+                // launch a FRESH search job for this exact same bot's
+                // NEXT play, the moment this loop reaches it again a few
+                // lines below -- once a turn's own job has been judged
+                // stale/crashed, every remaining play of that SAME turn
+                // (a bot's own turn can span several grants) stays on the
+                // fast heuristic bot too; only a genuinely later turn
+                // (reached only after control has actually left this
+                // seat at least once) gets to try search fresh again.
+                if (isset($tacticalFallbackGamePlayerIds[$currentTurnGamePlayerId])) {
+                    $lastResult = $this->playViaHeuristicBotFallback($gameId, $currentTurnGamePlayerId);
+                    continue;
+                }
+
+                $searchResult = $this->advanceTacticalBotSearch($gameId, $currentTurnGamePlayerId, $tacticalFallbackGamePlayerIds);
+                if ($searchResult !== null) {
+                    $lastResult = $searchResult;
+                    continue;
+                }
+
+                break; // handed off to (or still waiting on) the background search job -- nothing more to drive this request
+            }
+
             if (in_array($currentTurnGamePlayerId, $botGamePlayerIds, true)) {
                 $state = $this->boardStates->load($gameId);
                 $playableCardIds = array_values(array_filter(
                     $this->candidatePlayCardIds($state, $currentTurnGamePlayerId),
                     fn (int $cardId) => $this->plays->isPlayable($state, $currentTurnGamePlayerId, $cardId),
                 ));
-                $action = $this->bots->chooseAction($state, $playableCardIds, $currentTurnGamePlayerId);
+                $action = $this->bots->chooseAction($state, $playableCardIds, $currentTurnGamePlayerId, $this->roundWinsStillNeededToWinGame($gameId, $currentTurnGamePlayerId));
                 try {
                     $lastResult = $action !== null
                         ? $this->playMood($gameId, $currentTurnGamePlayerId, $action['card_id'], $action['choices'])
@@ -5681,6 +6003,239 @@ final class GameService
     }
 
     /**
+     * @return int[] every game_players.id in $gameId whose owning user is
+     *     a Tactical Bot (issue #419, users.uses_tactical_ai) -- always a
+     *     subset of botGamePlayerIds() above, never disjoint from it
+     *     (uses_tactical_ai is meaningless for a non-bot user).
+     */
+    private function tacticalBotGamePlayerIds(int $gameId): array
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT gp.id FROM game_players gp JOIN users u ON u.id = gp.user_id WHERE gp.game_id = :game_id AND u.is_bot = 1 AND u.uses_tactical_ai = 1'
+        );
+        $stmt->execute(['game_id' => $gameId]);
+
+        return array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
+    }
+
+    /**
+     * Migration 0237's own per-bot search budget for $gamePlayerId's
+     * owning user -- see launchTacticalBotSearchJob(), the only caller.
+     * Falls back to BOT_SEARCH_TIME_BUDGET_SECONDS purely as a defensive
+     * default (a row somehow missing its own value); every real Tactical
+     * Bot account carries an explicit one via that migration's own seed/
+     * UPDATE, so this fallback should never actually be exercised in
+     * practice.
+     */
+    private function tacticalBotTimeBudgetSeconds(int $gamePlayerId): int
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT u.tactical_ai_time_budget_seconds FROM game_players gp JOIN users u ON u.id = gp.user_id WHERE gp.id = :game_player_id'
+        );
+        $stmt->execute(['game_player_id' => $gamePlayerId]);
+        $seconds = $stmt->fetchColumn();
+
+        return $seconds !== false ? (int) $seconds : self::BOT_SEARCH_TIME_BUDGET_SECONDS;
+    }
+
+    /**
+     * Issue #419's own Tactical Bot tier -- the launch/poll/stale-fallback
+     * state machine advanceAutomatedTurns() hands a Tactical Bot's own
+     * turn-to-play off to, instead of calling $this->bots directly the
+     * way it does for an ordinary heuristic bot (see
+     * SearchBotPlayerService::chooseAction()'s own docblock for why a
+     * search call is too slow to run inline within this synchronous HTTP
+     * request in the first place).
+     *
+     * - No job yet for this seat -> launches one (bot_search_jobs row +
+     *   a detached background `php bin/run_bot_search.php <jobId>`
+     *   process, via runTacticalBotSearchJob()) and returns null --
+     *   nothing to apply THIS request, the bot is now "thinking" (see
+     *   getState()'s own bot_thinking field, computed from this same
+     *   table).
+     * - A job already 'running' and still within its own time budget
+     *   (+ BOT_SEARCH_STALE_GRACE_SECONDS) -> still thinking, returns
+     *   null again -- the caller (a later poll, or another player's own
+     *   request) will check back later exactly the same way.
+     * - A job 'running' but past its own budget + grace -> presumed
+     *   crashed (a dev-server restart, PHP-FPM recycling the worker that
+     *   spawned it, etc.) -- marked 'failed' here, and this method falls
+     *   back to playing immediately via the ordinary fast heuristic bot
+     *   instead, so the game is never left stuck waiting on a dead
+     *   process. Also flips on $tacticalFallbackGamePlayerIds[$gamePlayerId]
+     *   (passed in BY REFERENCE from advanceAutomatedTurns()'s own local,
+     *   per-call-only tracking, never persisted) -- a bot's own turn can
+     *   span several plays (extra grants), and once one has been judged
+     *   stale/crashed there's no reason to trust a FRESH search job for
+     *   this turn's remaining plays either; the caller checks this flag
+     *   before ever calling this method again for the same seat, going
+     *   straight to the heuristic instead for as long as the loop keeps
+     *   reaching the same still-open turn.
+     * - A job already 'done'/'failed' from a PAST turn (this seat had the
+     *   turn before, that turn's own job resolved one way or the other,
+     *   and control has genuinely moved on since) -- ordinarily
+     *   unreachable here at all: $tacticalFallbackGamePlayerIds already
+     *   intercepts a same-turn continuation before this method is even
+     *   called again, so reaching this method with such a job on record
+     *   only happens for this seat's own NEXT genuine turn -- launches a
+     *   fresh job, exactly like the "no job yet" case.
+     *
+     * @param array<int, true> $tacticalFallbackGamePlayerIds see the docblock above -- mutated by reference
+     */
+    private function advanceTacticalBotSearch(int $gameId, int $gamePlayerId, array &$tacticalFallbackGamePlayerIds): ?array
+    {
+        $job = $this->botSearchJobs->mostRecentFor($gamePlayerId);
+        if ($job !== null && $job['status'] === 'running') {
+            $ageSeconds = time() - strtotime($job['started_at']);
+            if ($ageSeconds <= $job['time_budget_seconds'] + self::BOT_SEARCH_STALE_GRACE_SECONDS) {
+                return null; // still within budget -- keep waiting
+            }
+
+            $this->botSearchJobs->markFailed($job['id'], 'stale (exceeded its own time budget + grace, presumed crashed)');
+            $tacticalFallbackGamePlayerIds[$gamePlayerId] = true;
+
+            return $this->playViaHeuristicBotFallback($gameId, $gamePlayerId);
+        }
+
+        $this->launchTacticalBotSearchJob($gameId, $gamePlayerId);
+
+        return null;
+    }
+
+    /** The ordinary heuristic bot's own play/pass, applied immediately -- see advanceTacticalBotSearch()'s own stale-job fallback and runTacticalBotSearchJob()'s own on-error fallback. */
+    private function playViaHeuristicBotFallback(int $gameId, int $gamePlayerId): array
+    {
+        $state = $this->boardStates->load($gameId);
+        $playableCardIds = array_values(array_filter(
+            $this->candidatePlayCardIds($state, $gamePlayerId),
+            fn (int $cardId) => $this->plays->isPlayable($state, $gamePlayerId, $cardId),
+        ));
+        $action = $this->bots->chooseAction($state, $playableCardIds, $gamePlayerId, $this->roundWinsStillNeededToWinGame($gameId, $gamePlayerId));
+
+        return $action !== null
+            ? $this->playMood($gameId, $gamePlayerId, $action['card_id'], $action['choices'])
+            : $this->pass($gameId, $gamePlayerId, automated: true);
+    }
+
+    /**
+     * Inserts the bot_search_jobs row and spawns a detached background
+     * PHP process to actually run the search and apply its result --
+     * `exec()` with a trailing `&` and redirected output is what makes
+     * this non-blocking: the shell backgrounds the child and this call
+     * returns immediately once the process has been started, without
+     * waiting for it to finish. Requires `exec()` to not be in the
+     * server's own `disable_functions` -- see php-app/README.md's
+     * "Tactical Bot" section for this deployment prerequisite.
+     *
+     * Reported live: "when a bot only has one card in hand, cut its max
+     * thinking time in half." advanceAutomatedTurns()'s own "no legal
+     * play at all" fast path just before this method's only caller
+     * already skips search entirely for a ZERO-card turn; a single
+     * remaining card still goes through the search job below (it may
+     * still need real deliberation over WHICH mode/target to choose),
+     * just with half the usual time budget, since there's no rival CARD
+     * to weigh it against the way a multi-card hand would need. The
+     * stored `time_budget_seconds` this creates the job with is exactly
+     * what runTacticalBotSearchJob() later reads back to bound the real
+     * search, and what advanceTacticalBotSearch()'s own staleness check
+     * compares elapsed time against -- halving it here alone is enough
+     * to shorten both consistently.
+     */
+    private function launchTacticalBotSearchJob(int $gameId, int $gamePlayerId): void
+    {
+        $timeBudgetSeconds = $this->botSearchTimeBudgetSeconds ?? $this->tacticalBotTimeBudgetSeconds($gamePlayerId);
+
+        $state = $this->boardStates->load($gameId);
+        if (count($state->hand($gamePlayerId)) === 1) {
+            $timeBudgetSeconds = intdiv($timeBudgetSeconds, 2);
+        }
+
+        $jobId = $this->botSearchJobs->create($gameId, $gamePlayerId, $timeBudgetSeconds);
+
+        if (!$this->spawnBotSearchProcesses) {
+            return;
+        }
+
+        $script = escapeshellarg(dirname(__DIR__, 2) . '/bin/run_bot_search.php');
+        $phpBinary = escapeshellarg(PHP_BINARY);
+        $jobIdArg = escapeshellarg((string) $jobId);
+        exec("{$phpBinary} {$script} {$jobIdArg} > /dev/null 2>&1 &");
+    }
+
+    /**
+     * The background process's own entry point (called from
+     * bin/run_bot_search.php, which does nothing but bootstrap a
+     * standalone GameService and call this) -- runs the actual search
+     * against a fresh, freely-mutable BoardState (SearchBotPlayerService
+     * operates on a determinized CLONE internally regardless -- see its
+     * own docblock -- so there's no need to protect this particular load
+     * with a game lock the way an ordinary mutating request would), then
+     * applies whichever action it settled on through the exact same
+     * public playMood()/pass() entry points a live request would use
+     * (fully subject to the same withGameLock() serialization as
+     * everything else). On any exception -- including the search simply
+     * running long and getting killed by the OS, though that shouldn't
+     * happen within its own time budget -- marks the job 'failed' and
+     * falls back to the ordinary fast heuristic bot instead of leaving
+     * the turn stuck.
+     *
+     * Re-validates that it's genuinely still $gamePlayerId's own turn to
+     * play before applying anything: nothing else CAN legitimately act
+     * while a single-current-player turn is open, but this guards against
+     * the pathological case of a stale/duplicate job somehow surviving
+     * past a turn that already resolved another way (e.g. the stale-job
+     * fallback in advanceTacticalBotSearch() already having played this
+     * turn out from under a job that was actually still alive, just slow)
+     * -- silently marking such a job 'done' with nothing further applied,
+     * rather than throwing or corrupting an unrelated later turn.
+     */
+    public function runTacticalBotSearchJob(int $jobId): void
+    {
+        $job = $this->botSearchJobs->get($jobId);
+        if ($job === null) {
+            return;
+        }
+
+        try {
+            $state = $this->boardStates->load($job['game_id']);
+            if ($state->currentPlayerId() !== $job['game_player_id']) {
+                $this->botSearchJobs->markDone($jobId);
+
+                return;
+            }
+
+            $playableCardIds = array_values(array_filter(
+                $this->candidatePlayCardIds($state, $job['game_player_id']),
+                fn (int $cardId) => $this->plays->isPlayable($state, $job['game_player_id'], $cardId),
+            ));
+            $action = $this->tacticalBots->chooseAction($state, $playableCardIds, $job['game_player_id'], (float) $job['time_budget_seconds'], $this->roundWinsStillNeededToWinGame($job['game_id'], $job['game_player_id']));
+
+            if ($action !== null) {
+                $this->playMood($job['game_id'], $job['game_player_id'], $action['card_id'], $action['choices']);
+            } else {
+                $this->pass($job['game_id'], $job['game_player_id'], automated: true);
+            }
+
+            $this->botSearchJobs->markDone($jobId);
+        } catch (Throwable $e) {
+            error_log("runTacticalBotSearchJob({$jobId}): search failed, falling back to the heuristic bot -- " . $e);
+            $this->botSearchJobs->markFailed($jobId, $e->getMessage());
+
+            try {
+                $this->playViaHeuristicBotFallback($job['game_id'], $job['game_player_id']);
+            } catch (Throwable $fallbackError) {
+                // Mirrors advanceAutomatedTurns()'s own catch-all: even the
+                // fallback failing must never leave this uncaught (the
+                // background process has no HTTP response to 500 into,
+                // but an uncaught exception here would still be a
+                // silently-dropped, permanently-stuck turn with nothing
+                // left to retry it).
+                error_log("runTacticalBotSearchJob({$jobId}): heuristic fallback ALSO failed -- " . $fallbackError);
+            }
+        }
+    }
+
+    /**
      * @return int[] every game_players.id in $gameId whose owning user
      *     opted into "auto-pass on empty hand" (users.auto_pass_on_empty_hand,
      *     migration 0096) -- whether they actually have no legal play
@@ -6092,10 +6647,13 @@ final class GameService
         if (self::isTeamFormat($game['format'])) {
             $resigningTeamId = $this->teamIdByGamePlayer($gameId)[$resigningGamePlayerId];
             $winnerTeamId = $resigningTeamId === 0 ? 1 : 0;
-            // Lowest seat_order member of the winning team, matching
-            // finishTeamScoringAndAdvance()'s own representative
-            // convention -- winner_team_id (set below) stays the
-            // authoritative record either way (see totalWinsForTeam()).
+            // Lowest seat_order member of the winning team -- purely a
+            // stand-in for this row's own FK/display purposes, same as
+            // finishTeamScoringAndAdvance()'s own representative (which
+            // picks by highest individual score instead, so the two don't
+            // actually pick the same teammate game to game). winner_team_id
+            // (set below) is the authoritative, stable-across-games record
+            // either way -- see totalWinsForTeam() and advanceGameMatch().
             $winnerGamePlayerId = $this->teamMembers($gameId, $winnerTeamId)[0];
 
             // Closes out a still-open draw_recipient/turn_order decision
@@ -6120,6 +6678,7 @@ final class GameService
 
         // A no-op for every non-draft game -- see its own docblock.
         $this->advanceDraftMatch($gameId, $winnerGamePlayerId);
+        $this->advanceGameMatch($gameId, $winnerGamePlayerId);
 
         return ['round_scored' => false, 'game_completed' => true, 'winner_game_player_id' => $winnerGamePlayerId];
     }
@@ -8493,6 +9052,7 @@ final class GameService
             // A no-op for every non-quick_draft game (games.draft_match_id
             // is only ever set for that deck_type) -- see its own docblock.
             $this->advanceDraftMatch($gameId, $winnerId);
+            $this->advanceGameMatch($gameId, $winnerId);
 
             return ['round_scored' => true, 'game_completed' => true, 'winner_game_player_id' => $winnerId];
         }
@@ -8630,6 +9190,189 @@ final class GameService
     }
 
     /**
+     * Issue #90's own best-of-three match progression for Duel/Open Team
+     * Play/Closed Team Play/Traditional (games.game_match_id set,
+     * migration 0223) -- a no-op for every other game, exactly like advanceDraftMatch(),
+     * whose overall shape this mirrors: credit the win, check for a
+     * match-ending 2nd win, otherwise create game_match_number + 1 on the
+     * same 2 seats and let the players get on with it.
+     *
+     * Unlike advanceDraftMatch(), there's no draft_match_players-style
+     * table to credit a win onto or read back from -- see game_matches'
+     * own migration 0223 docblock for why a completed game's own
+     * winner_game_player_id (resolved to its user_id) is sufficient for a
+     * non-team match. A team format's own $winnerGamePlayerId, though, is
+     * only ever a stand-in for FK/display purposes -- completeGameByResignation()
+     * always picks the winning team's lowest-seat_order member, but
+     * finishTeamScoringAndAdvance() (via determineRoundWinner()) instead
+     * picks whichever teammate scored the higher individual point total in
+     * the game's own final round, which can be a DIFFERENT teammate game
+     * to game even though it's the same team winning -- so match-win
+     * counting for a team format is done by games.winner_team_id below
+     * instead (itself stable across games, since team_id is one of the
+     * seats carried forward unchanged from game to game, exactly like
+     * advanceDraftMatch()'s own seat carry-forward).
+     *
+     * Deck continuity between games needs no attention here for
+     * structure/power/jceddy's 75/one of each (startGame() rebuilds them
+     * from scratch every game, same as any standalone game of that
+     * deck_type) or most custom_duel matches (this feature's whole
+     * "sideboarding" story: game_players.custom_deck_card_ids simply
+     * starts NULL on the new game row, same as it would for a brand new
+     * custom_duel game, so startGame()'s existing
+     * requireCustomDuelDecksSubmitted() gate naturally forces -- and
+     * freely allows -- a fresh decklist before the next game can start).
+     * 'custom' is one exception: unlike every deck_type above, it's a
+     * single table-wide decklist supplied once at createGame() time with
+     * no per-game resubmission flow of its own, so it's carried forward
+     * explicitly below instead.
+     *
+     * A Power Duel match WITHOUT sideboarding (custom_duel_rules_preset
+     * 'power', game_matches.allow_sideboarding false -- migration 0228,
+     * issue #90 follow-up) is a second, narrower exception: rather than
+     * this preset's own otherwise-unrestricted "freely resubmit anything"
+     * default, its deck is locked for the whole match, so it's carried
+     * forward the exact same explicit way 'custom'/a bot's own custom_duel
+     * seat already are -- see $isLockedCustomDuelSeat below. A Power Duel
+     * match WITH sideboarding still resets to NULL every game like any
+     * other custom_duel match, since a genuine resubmission (constrained
+     * to swapping within the game-1-declared pool, see
+     * submitCustomDuelDeck()) is the whole point there.
+     */
+    private function advanceGameMatch(int $gameId, int $winnerGamePlayerId): void
+    {
+        $game = $this->fetchGame($gameId);
+        if ($game['game_match_id'] === null) {
+            return;
+        }
+        $gameMatchId = (int) $game['game_match_id'];
+        $pdo = Connection::get();
+
+        $winnerUserStmt = $pdo->prepare('SELECT user_id FROM game_players WHERE id = :id');
+        $winnerUserStmt->execute(['id' => $winnerGamePlayerId]);
+        $winnerUserId = (int) $winnerUserStmt->fetchColumn();
+
+        // For a team format, $winnerGamePlayerId is only ever a stand-in
+        // representative for FK/display purposes -- determineRoundWinner()
+        // picks whichever teammate scored the higher individual point
+        // total in the game's own final round (ties to lowest seat_order),
+        // NOT always the same lowest-seat_order player game to game, so
+        // counting completed-game wins by that representative's user_id
+        // can split a single team's 2 match wins across two different
+        // teammates and never reach GAME_MATCH_GAMES_TO_WIN. games.
+        // winner_team_id (already written by both completion paths --
+        // finishTeamScoringAndAdvance() and completeGameByResignation() --
+        // before this method runs) is the actually-stable per-team record,
+        // since team_id itself is one of the seats carried forward
+        // unchanged from game to game below.
+        if (self::isTeamFormat($game['format'])) {
+            $winsStmt = $pdo->prepare(
+                "SELECT COUNT(*) FROM games WHERE game_match_id = :match_id AND status = 'completed' AND winner_team_id = :team_id"
+            );
+            $winsStmt->execute(['match_id' => $gameMatchId, 'team_id' => (int) $game['winner_team_id']]);
+        } else {
+            $winsStmt = $pdo->prepare(
+                "SELECT COUNT(*) FROM games g JOIN game_players gp ON gp.id = g.winner_game_player_id
+                 WHERE g.game_match_id = :match_id AND g.status = 'completed' AND gp.user_id = :user_id"
+            );
+            $winsStmt->execute(['match_id' => $gameMatchId, 'user_id' => $winnerUserId]);
+        }
+        $winnerMatchWins = (int) $winsStmt->fetchColumn();
+
+        if ($winnerMatchWins >= self::GAME_MATCH_GAMES_TO_WIN) {
+            $pdo->prepare(
+                "UPDATE game_matches SET status = 'completed', winner_user_id = :winner, completed_at = NOW() WHERE id = :id"
+            )->execute(['winner' => $winnerUserId, 'id' => $gameMatchId]);
+
+            return;
+        }
+
+        // See this method's own docblock -- a Power Duel match's deck is
+        // locked for the whole match unless it opted into sideboarding.
+        $isPowerDuelMatch = $game['deck_type'] === 'custom_duel' && $game['custom_duel_rules_preset'] === 'power';
+        $isLockedPowerDuelMatch = $isPowerDuelMatch && !(bool) $this->fetchGameMatch($gameMatchId)['allow_sideboarding'];
+
+        // custom_deck_name/custom_deck_card_ids/custom_deck_sideboard_card_ids/
+        // is_bot are only actually used below for a seat this method
+        // itself carries forward (a custom_duel bot seat, or a locked
+        // Power Duel human seat -- see the INSERT loop's own
+        // $carryForwardCustomDeck branch) -- a practice bot can never
+        // submit its own decklist for the next game the way its human
+        // opponent does (see submitCustomDuelDeck()'s own docblock), so
+        // its exact previous decklist is carried forward unchanged rather
+        // than resubmitted, the same as a locked Power Duel seat's.
+        // Harmlessly fetched for every other seat too, rather than a
+        // second, deck-type-conditional query.
+        $seatStmt = $pdo->prepare(
+            'SELECT gp.user_id, gp.seat_order, gp.team_id, gp.custom_deck_name, gp.custom_deck_card_ids, gp.custom_deck_sideboard_card_ids, u.is_bot
+             FROM game_players gp JOIN users u ON u.id = gp.user_id
+             WHERE gp.game_id = :game_id ORDER BY gp.seat_order ASC'
+        );
+        $seatStmt->execute(['game_id' => $gameId]);
+        $seats = $seatStmt->fetchAll();
+
+        $insertGame = $pdo->prepare(
+            "INSERT INTO games (
+                format, deck_type, custom_deck_name, custom_deck_card_ids,
+                custom_duel_rules_preset, custom_duel_min_cards, custom_duel_rarity_limits, custom_duel_duplicate_limits,
+                custom_duel_even_color_distribution_rarities, game_match_id, match_game_number,
+                status, created_by_user_id, wins_needed, default_selections_mode
+             ) VALUES (
+                :format, :deck_type, :custom_deck_name, :custom_deck_card_ids,
+                :duel_rules_preset, :duel_min_cards, :duel_rarity_limits, :duel_duplicate_limits,
+                :duel_even_color_distribution_rarities, :game_match_id, :match_game_number,
+                'waiting', :created_by, :wins_needed, :default_selections_mode
+             )"
+        );
+        $insertGame->execute([
+            'format' => $game['format'],
+            'deck_type' => $game['deck_type'],
+            // 'custom' is the one deck_type this feature carries forward
+            // itself -- see this method's own docblock. Every other
+            // deck_type leaves these NULL, same as a fresh game.
+            'custom_deck_name' => $game['deck_type'] === 'custom' ? $game['custom_deck_name'] : null,
+            'custom_deck_card_ids' => $game['deck_type'] === 'custom' ? $game['custom_deck_card_ids'] : null,
+            'duel_rules_preset' => $game['custom_duel_rules_preset'],
+            'duel_min_cards' => $game['custom_duel_min_cards'],
+            'duel_rarity_limits' => $game['custom_duel_rarity_limits'],
+            'duel_duplicate_limits' => $game['custom_duel_duplicate_limits'],
+            'duel_even_color_distribution_rarities' => $game['custom_duel_even_color_distribution_rarities'],
+            'game_match_id' => $gameMatchId,
+            'match_game_number' => (int) $game['match_game_number'] + 1,
+            'created_by' => (int) $game['created_by_user_id'],
+            'wins_needed' => (int) $game['wins_needed'],
+            'default_selections_mode' => (int) $game['default_selections_mode'],
+        ]);
+        $nextGameId = (int) $pdo->lastInsertId();
+
+        $insertPlayer = $pdo->prepare(
+            'INSERT INTO game_players (game_id, user_id, seat_order, team_id, custom_deck_name, custom_deck_card_ids, custom_deck_sideboard_card_ids)
+             VALUES (:game_id, :user_id, :seat_order, :team_id, :custom_deck_name, :custom_deck_card_ids, :custom_deck_sideboard_card_ids)'
+        );
+        $humanCustomDuelSeatUserIds = [];
+        foreach ($seats as $seat) {
+            $isBotCustomDuel = $game['deck_type'] === 'custom_duel' && (bool) $seat['is_bot'];
+            $carryForwardCustomDeck = $isBotCustomDuel || $isLockedPowerDuelMatch;
+            $insertPlayer->execute([
+                'game_id' => $nextGameId,
+                'user_id' => (int) $seat['user_id'],
+                'seat_order' => (int) $seat['seat_order'],
+                'team_id' => $seat['team_id'] !== null ? (int) $seat['team_id'] : null,
+                'custom_deck_name' => $carryForwardCustomDeck ? $seat['custom_deck_name'] : null,
+                'custom_deck_card_ids' => $carryForwardCustomDeck ? $seat['custom_deck_card_ids'] : null,
+                'custom_deck_sideboard_card_ids' => $carryForwardCustomDeck ? $seat['custom_deck_sideboard_card_ids'] : null,
+            ]);
+            if ($game['deck_type'] === 'custom_duel' && !$seat['is_bot'] && !$isLockedPowerDuelMatch) {
+                $humanCustomDuelSeatUserIds[] = (int) $seat['user_id'];
+            }
+        }
+
+        if ($humanCustomDuelSeatUserIds !== []) {
+            $this->notifyDraftUsersItsYourTurn($nextGameId, $humanCustomDuelSeatUserIds, "Game #{$nextGameId} needs your decklist before the next game.", 'custom-duel-deck');
+        }
+    }
+
+    /**
      * Team-format counterpart to the rest of finishScoringAndAdvance() --
      * $scores is already computed exactly like every other format
      * (Sneakiness's swap, Enthusiasm's/Passion's bonus, etc. all already
@@ -8722,6 +9465,13 @@ final class GameService
             // winner_game_player_id already uses for every other
             // team-format completion.
             $this->advanceDraftMatch($gameId, $winnerRepresentative);
+            // Unlike the team draft case just above, issue #90's own
+            // best-of-three match wrapper for Team Play/Closed Team Play
+            // genuinely does progress through this branch -- see
+            // advanceGameMatch()'s own docblock for why it counts a team
+            // format's match wins off games.winner_team_id rather than off
+            // this representative's own user_id.
+            $this->advanceGameMatch($gameId, $winnerRepresentative);
 
             return ['round_scored' => true, 'game_completed' => true, 'winner_game_player_id' => $winnerRepresentative];
         }
@@ -9046,6 +9796,42 @@ final class GameService
             : $this->totalWinsFor($gameId, $outcome['winnerGamePlayerId']);
 
         return $totalWins + $predictedWinsAwarded >= $winsNeeded;
+    }
+
+    /**
+     * The bot-facing counterpart to roundWouldCompleteGame() above --
+     * that one answers "did the round whose OUTCOME I already know just
+     * win the game," called after scoring; this one answers "how many
+     * MORE round wins does MY side still need," computed BEFORE a bot's
+     * own turn decision, when nobody's won the round yet at all. Threaded
+     * into GameService::advanceAutomatedTurns()/playViaHeuristicBotFallback()/
+     * runTacticalBotSearchJob() so BotPlayerService::chooseAction()'s own
+     * $roundWinsNeededToWinGame parameter (see its own docblock) has real
+     * data to work with, rather than always the "unknown" null default --
+     * see BotPlayerService::rationalizationHasAGoodReasonToPlayNow()'s
+     * own docblock for the one policy this currently feeds (reported
+     * live: "[Rationalization] should not be played for points to win a
+     * round unless it's going to win the entire game").
+     *
+     * Doesn't (and can't) know who'll actually win the round in progress
+     * -- that's exactly what the bot is still deciding -- only how close
+     * $botGamePlayerId's own side already is, which is fixed regardless
+     * of anything that happens the rest of this round.
+     */
+    private function roundWinsStillNeededToWinGame(int $gameId, int $botGamePlayerId): int
+    {
+        $game = $this->fetchGame($gameId);
+        $winsNeeded = (int) $game['wins_needed'];
+
+        if (self::isTeamFormat($game['format'])) {
+            $teamIdStmt = Connection::get()->prepare('SELECT team_id FROM game_players WHERE id = :id');
+            $teamIdStmt->execute(['id' => $botGamePlayerId]);
+            $totalWins = $this->totalWinsForTeam($gameId, (int) $teamIdStmt->fetchColumn());
+        } else {
+            $totalWins = $this->totalWinsFor($gameId, $botGamePlayerId);
+        }
+
+        return $winsNeeded - $totalWins;
     }
 
     /**
@@ -10001,13 +10787,25 @@ final class GameService
         // advanceTurn()'s active-player filtering) or win it, so from
         // their own perspective it's just as much history as a completed
         // game -- listPastGamesForUser() picks it up via the same column.
+        //
+        // The game_matches LEFT JOIN/OR-clause is issue #90's own
+        // non-draft best-of-three match wrapper's exact analog of the
+        // draft_matches one just above -- a finished game 1 of a still
+        // in_progress Duel/Team/Closed Team Play/2-player Traditional
+        // match is just as much "currently being played" as a draft
+        // match's own finished game 1 is, not history yet.
         $gameIdsStmt = $pdo->prepare(
             "SELECT g.id FROM games g
              JOIN game_players gp ON gp.game_id = g.id
              LEFT JOIN draft_matches dm ON dm.id = g.draft_match_id
+             LEFT JOIN game_matches gm ON gm.id = g.game_match_id
              WHERE gp.user_id = :user_id
                AND gp.resigned_at IS NULL
-               AND (g.status NOT IN ('completed', 'abandoned') OR (g.draft_match_id IS NOT NULL AND dm.status != 'completed'))
+               AND (
+                 g.status NOT IN ('completed', 'abandoned')
+                 OR (g.draft_match_id IS NOT NULL AND dm.status != 'completed')
+                 OR (g.game_match_id IS NOT NULL AND gm.status != 'completed')
+               )
              ORDER BY
                  (g.status IN ('waiting', 'in_progress')) DESC,
                  COALESCE(g.last_move_at, g.started_at, g.created_at) DESC,
@@ -10050,12 +10848,14 @@ final class GameService
             "SELECT g.id FROM games g
              JOIN game_players gp ON gp.game_id = g.id
              LEFT JOIN draft_matches dm ON dm.id = g.draft_match_id
+             LEFT JOIN game_matches gm ON gm.id = g.game_match_id
              WHERE gp.user_id = :user_id
                AND (
                  gp.resigned_at IS NOT NULL
                  OR (
                    g.status IN ('completed', 'abandoned')
                    AND (g.draft_match_id IS NULL OR dm.status = 'completed')
+                   AND (g.game_match_id IS NULL OR gm.status = 'completed')
                  )
                )
              ORDER BY COALESCE(g.completed_at, g.last_move_at, g.started_at, g.created_at) DESC, g.id DESC"
@@ -10296,6 +11096,7 @@ final class GameService
         }
 
         $draftMatchId = $game['draft_match_id'] !== null ? (int) $game['draft_match_id'] : null;
+        $gameMatchId = $game['game_match_id'] !== null ? (int) $game['game_match_id'] : null;
 
         $currentTurnGamePlayerId = null;
         $awaitingYourResponse = false;
@@ -10417,6 +11218,17 @@ final class GameService
             'match_game_number' => $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null,
             'draft_match' => ($draftMatchId !== null && $viewerUserId !== null)
                 ? $this->draftMatchSummaryFor($draftMatchId, $viewerUserId)
+                : null,
+            // Issue #90's own best-of-three match wrapper for Duel/Open
+            // Team Play/Closed Team Play -- the non-draft counterpart to
+            // draft_match_id/draft_match just above, grouping this
+            // feature's own up-to-3 games rows (same game_match_id) the
+            // same way the lobby already groups a draft match's. Mutually
+            // exclusive with draft_match_id/draft_match (a game belongs
+            // to at most one of the two match wrappers, never both).
+            'game_match_id' => $gameMatchId,
+            'game_match' => ($gameMatchId !== null && $viewerUserId !== null)
+                ? $this->gameMatchSummaryFor($gameMatchId, $viewerUserId)
                 : null,
         ];
     }
@@ -10742,6 +11554,190 @@ final class GameService
             'winner_username' => $winnerUsername,
             'players' => $players,
         ];
+    }
+
+    /**
+     * gameSummaryFor()'s own game_match/'game_match' shape (issue #90's
+     * best-of-three match wrapper for Duel/Open Team Play/Closed Team
+     * Play) -- deliberately close to draftMatchSummaryFor()'s own field
+     * names (status/your_wins/opponent_wins/games_to_win/players, plus
+     * its own 'winner_usernames' -- see below) so the lobby's own
+     * draft-match-grouping rendering can treat either shape identically,
+     * keyed off whichever of draft_match/game_match a row actually
+     * carries (see web-static/js/game.js's own match summary rendering).
+     *
+     * Unlike draftMatchSummaryFor(), there's no draft_match_players-style
+     * table to read wins/usernames back from -- see game_matches' own
+     * migration 0223 docblock for why a completed game's own
+     * winner_game_player_id (resolved to its user_id) is sufficient for
+     * win-counting purposes, including for Team Play/Closed Team Play
+     * (see totalWinsForTeam()/advanceGameMatch()'s own docblocks for why
+     * that representative isn't necessarily the same teammate game to
+     * game, which is why 'winner_usernames' below resolves the WHOLE
+     * winning team from that representative's own seat's team_id, rather
+     * than assuming it's always the same one or two teammates).
+     * Seating (and so each team's own membership) is read from the
+     * match's own MOST RECENT games row rather than $gameId's
+     * specifically -- both are identical in practice (advanceGameMatch()
+     * always carries seats forward unchanged), but the most recent game
+     * is unambiguously still part of the match even after it's the one
+     * that just completed it.
+     *
+     * @return array<string, mixed>
+     */
+    private function gameMatchSummaryFor(int $gameMatchId, int $viewerUserId): array
+    {
+        $match = $this->fetchGameMatch($gameMatchId);
+        $isTeamFormat = self::isTeamFormat($match['format']);
+
+        $seatStmt = Connection::get()->prepare(
+            'SELECT gp.user_id, gp.team_id, u.username FROM game_players gp
+             JOIN games g ON g.id = gp.game_id
+             JOIN users u ON u.id = gp.user_id
+             WHERE g.game_match_id = :match_id
+             ORDER BY g.match_game_number DESC, gp.seat_order ASC
+             LIMIT ' . ($isTeamFormat ? 4 : 2)
+        );
+        $seatStmt->execute(['match_id' => $gameMatchId]);
+        $seats = $seatStmt->fetchAll();
+
+        $winsByUserStmt = Connection::get()->prepare(
+            "SELECT gp.user_id, COUNT(*) AS wins FROM games g
+             JOIN game_players gp ON gp.id = g.winner_game_player_id
+             WHERE g.game_match_id = :match_id AND g.status = 'completed'
+             GROUP BY gp.user_id"
+        );
+        $winsByUserStmt->execute(['match_id' => $gameMatchId]);
+        $winsByUser = [];
+        foreach ($winsByUserStmt->fetchAll() as $row) {
+            $winsByUser[(int) $row['user_id']] = (int) $row['wins'];
+        }
+
+        $viewerSideKey = null;
+        foreach ($seats as $seat) {
+            if ((int) $seat['user_id'] === $viewerUserId) {
+                $viewerSideKey = $isTeamFormat ? (int) $seat['team_id'] : $viewerUserId;
+                break;
+            }
+        }
+
+        $winsBySide = [];
+        foreach ($seats as $seat) {
+            $sideKey = $isTeamFormat ? (int) $seat['team_id'] : (int) $seat['user_id'];
+            $winsBySide[$sideKey] = ($winsBySide[$sideKey] ?? 0) + ($winsByUser[(int) $seat['user_id']] ?? 0);
+        }
+
+        $yourWins = $viewerSideKey !== null ? ($winsBySide[$viewerSideKey] ?? 0) : 0;
+        $opponentWins = 0;
+        foreach ($winsBySide as $sideKey => $wins) {
+            if ($sideKey !== $viewerSideKey) {
+                $opponentWins = $wins;
+                break;
+            }
+        }
+
+        // Same "credit the whole winning team" convention as getState()'s
+        // own per-game 'winner_usernames' -- both teammates on the winning
+        // team for a team-format win, just the one player's otherwise.
+        // $match['winner_user_id'] is only ever a stand-in representative
+        // for a team format (see advanceGameMatch()'s own docblock), so
+        // its own seat's team_id -- not just that one user_id -- decides
+        // who else gets credited.
+        $winnerUsernames = [];
+        if ($match['winner_user_id'] !== null) {
+            $winnerTeamId = null;
+            foreach ($seats as $seat) {
+                if ((int) $seat['user_id'] === (int) $match['winner_user_id']) {
+                    $winnerTeamId = $isTeamFormat ? (int) $seat['team_id'] : null;
+                    break;
+                }
+            }
+            foreach ($seats as $seat) {
+                if ($isTeamFormat ? (int) $seat['team_id'] === $winnerTeamId : (int) $seat['user_id'] === (int) $match['winner_user_id']) {
+                    $winnerUsernames[] = $seat['username'];
+                }
+            }
+        }
+
+        $players = [];
+        foreach ($seats as $seat) {
+            $sideKey = $isTeamFormat ? (int) $seat['team_id'] : (int) $seat['user_id'];
+            $players[] = [
+                'user_id' => (int) $seat['user_id'],
+                'username' => $seat['username'],
+                'wins' => $winsBySide[$sideKey] ?? 0,
+                'is_you' => (int) $seat['user_id'] === $viewerUserId,
+            ];
+        }
+
+        return [
+            'status' => $match['status'],
+            'your_wins' => $yourWins,
+            'opponent_wins' => $opponentWins,
+            'games_to_win' => self::GAME_MATCH_GAMES_TO_WIN,
+            'winner_usernames' => $winnerUsernames,
+            'players' => $players,
+            // Power Duel sideboarding (migration 0228) -- only ever true
+            // for a 'duel'/'custom_duel' match built under the 'power'
+            // preset with $allowSideboarding opted into at createGame()
+            // time; false for every other match. Lets the board's own
+            // decklist-submission waiting room (see submitCustomDuelDeck())
+            // know whether to show sideboarding-specific hints without
+            // needing to separately expose custom_duel_rules_preset here.
+            'allow_sideboarding' => (bool) $match['allow_sideboarding'],
+        ];
+    }
+
+    /**
+     * getState()'s own top-level 'game_match' field -- the non-draft
+     * best-of-three match's counterpart of quickDraftStateFor()'s own
+     * 'quick_draft' field (and its Winston/Grid/Rotisserie/Sealed Deck
+     * siblings), giving the board a "go to next game" button the moment
+     * this game finishes and advanceGameMatch() has already created the
+     * next one. Deliberately a separate function from gameMatchSummaryFor()
+     * (the lobby's own grouped-match-row summary) rather than folding
+     * next_game_id into that one: the lobby's summary is generic (any
+     * viewer, no specific "current game" in mind -- it doesn't need
+     * next_game_id at all, since every game in the match, including a
+     * freshly created next one, is already listed there as its own row),
+     * while this needs the specific game just finished to know whether
+     * IT is the match's most recent game or an older one to route past --
+     * same distinction quickDraftStateFor()'s own next_game_id has always
+     * drawn against the shared draftMatchSummaryFor() shape.
+     *
+     * @return array<string, mixed>
+     */
+    private function gameMatchStateFor(array $game, int $viewerUserId): array
+    {
+        $gameMatchId = (int) $game['game_match_id'];
+        $summary = $this->gameMatchSummaryFor($gameMatchId, $viewerUserId);
+
+        $nextGameId = null;
+        if ($game['status'] === 'completed' && $summary['status'] !== 'completed') {
+            $nextGameStmt = Connection::get()->prepare(
+                'SELECT id FROM games WHERE game_match_id = :match_id ORDER BY match_game_number DESC LIMIT 1'
+            );
+            $nextGameStmt->execute(['match_id' => $gameMatchId]);
+            $latestGameId = (int) $nextGameStmt->fetchColumn();
+            if ($latestGameId !== (int) $game['id']) {
+                $nextGameId = $latestGameId;
+            }
+        }
+
+        return $summary + ['next_game_id' => $nextGameId];
+    }
+
+    private function fetchGameMatch(int $gameMatchId): array
+    {
+        $stmt = Connection::get()->prepare('SELECT * FROM game_matches WHERE id = :id');
+        $stmt->execute(['id' => $gameMatchId]);
+        $match = $stmt->fetch();
+
+        if ($match === false) {
+            throw new GameStateException("No such game match {$gameMatchId}");
+        }
+
+        return $match;
     }
 
     /**
@@ -12143,6 +13139,71 @@ final class GameService
             ? CardCatalog::serialize(array_map(intval(...), json_decode((string) $game['custom_deck_card_ids'], true)))
             : null;
 
+        // Power Duel sideboarding (migration 0228, issue #90 follow-up):
+        // once game 2/3 resets custom_deck_card_ids/
+        // custom_deck_sideboard_card_ids to NULL (see advanceGameMatch()),
+        // the viewer has no way to see which cards they're actually
+        // allowed to resubmit -- their own game-1 pool (main deck +
+        // sideboard combined) -- without this. Viewer-only (never a
+        // teammate's/opponent's/spectator's), same CardCatalog::serialize()
+        // shape as $customDecklistCards above so
+        // web-static/js/game.js's own buildDecklistCardsText() can render
+        // it as a card grid and/or pre-fill the resubmission textarea.
+        // Null for game 1 itself (nothing declared yet to show) and for
+        // every non-sideboarding match.
+        $powerDuelSideboardPool = null;
+        $powerDuelPreviousDeckCardIds = null;
+        if (
+            $viewerUserId !== null
+            && $game['deck_type'] === 'custom_duel'
+            && $game['game_match_id'] !== null
+            && (int) $game['match_game_number'] > 1
+            && (bool) $this->fetchGameMatch((int) $game['game_match_id'])['allow_sideboarding']
+        ) {
+            $poolStmt = $pdo->prepare(
+                'SELECT gp.custom_deck_card_ids, gp.custom_deck_sideboard_card_ids
+                 FROM game_players gp JOIN games g ON g.id = gp.game_id
+                 WHERE g.game_match_id = :match_id AND g.match_game_number = 1 AND gp.user_id = :user_id'
+            );
+            $poolStmt->execute(['match_id' => (int) $game['game_match_id'], 'user_id' => $viewerUserId]);
+            $poolRow = $poolStmt->fetch();
+            if ($poolRow !== false) {
+                $poolCardIds = array_merge(
+                    array_map(intval(...), (array) json_decode((string) $poolRow['custom_deck_card_ids'], true)),
+                    $poolRow['custom_deck_sideboard_card_ids'] !== null
+                        ? array_map(intval(...), (array) json_decode((string) $poolRow['custom_deck_sideboard_card_ids'], true))
+                        : [],
+                );
+                $powerDuelSideboardPool = CardCatalog::serialize($poolCardIds);
+            }
+
+            // The viewer's own main deck from the immediately PRECEDING
+            // game (match_game_number - 1, not always game 1 -- game 3's
+            // own "previous game" is game 2, which may itself already be a
+            // sideboard swap away from game 1's original main deck) --
+            // exposed as bare card ids (not CardCatalog::serialize()'d,
+            // unlike $powerDuelSideboardPool above) purely so the
+            // frontend's own visual picker can pre-select "whatever I
+            // actually played last game" the same way the draft
+            // deck-building screen's own previous_deck_card_ids already
+            // does, without needing a second full card shape for the same
+            // ids already present in the pool above.
+            $previousGameStmt = $pdo->prepare(
+                'SELECT gp.custom_deck_card_ids
+                 FROM game_players gp JOIN games g ON g.id = gp.game_id
+                 WHERE g.game_match_id = :match_id AND g.match_game_number = :prev_game_number AND gp.user_id = :user_id'
+            );
+            $previousGameStmt->execute([
+                'match_id' => (int) $game['game_match_id'],
+                'prev_game_number' => (int) $game['match_game_number'] - 1,
+                'user_id' => $viewerUserId,
+            ]);
+            $previousGameRow = $previousGameStmt->fetch();
+            $powerDuelPreviousDeckCardIds = $previousGameRow !== false && $previousGameRow['custom_deck_card_ids'] !== null
+                ? array_map(intval(...), (array) json_decode((string) $previousGameRow['custom_deck_card_ids'], true))
+                : null;
+        }
+
         $players = [];
         foreach ($playerRows as $row) {
             $botDecklistCards = null;
@@ -12333,6 +13394,23 @@ final class GameService
             // 'drafting' sub-field always stays null in practice (no live
             // drafting phase exists for this deck_type at all).
             'sealed_deck' => null,
+            // Issue #90's own best-of-three match wrapper for Duel/Open
+            // Team Play/Closed Team Play/2-player Traditional -- the
+            // non-draft counterpart of 'quick_draft' etc. immediately
+            // above, populated the same "only while this game's own
+            // deck_type/match actually applies" way. See
+            // gameMatchStateFor()'s own docblock for why it needs its own
+            // dispatch branch rather than just reusing gameMatchSummaryFor()
+            // (the lobby's own 'game_match' summary) as-is.
+            'game_match' => null,
+            // Power Duel sideboarding (migration 0228) -- see
+            // $powerDuelSideboardPool's own docblock just above for what
+            // this is and when it's non-null.
+            'power_duel_sideboard_pool' => $powerDuelSideboardPool,
+            // $powerDuelPreviousDeckCardIds's own docblock just above --
+            // bare ids for the visual picker's own pre-selection, null
+            // under the exact same conditions $powerDuelSideboardPool is.
+            'power_duel_previous_deck_card_ids' => $powerDuelPreviousDeckCardIds,
         ];
 
         if ($viewerGamePlayerId !== null) {
@@ -12360,6 +13438,8 @@ final class GameService
                 $response['tiered_rotisserie_draft'] = $this->tieredRotisserieDraftStateFor($game, $viewerUserId);
             } elseif ($game['deck_type'] === 'sealed_deck' && $game['draft_match_id'] !== null) {
                 $response['sealed_deck'] = $this->sealedDeckStateFor($game, $viewerUserId);
+            } elseif ($game['game_match_id'] !== null) {
+                $response['game_match'] = $this->gameMatchStateFor($game, $viewerUserId);
             }
         }
 
@@ -12675,8 +13755,57 @@ final class GameService
         // is what a spectator reads instead.
         $response['deck_count'] = $viewerGamePlayerId !== null ? count($state->deck($viewerGamePlayerId)) : 0;
         $response['recent_events'] = $this->recentEvents($gameId, $players);
+        $response['bot_thinking'] = $this->botThinkingStateFor($gameId, $players);
 
         return $response;
+    }
+
+    /**
+     * Non-null exactly when a Tactical Bot's own background search job
+     * (issue #419) is currently running for one of this game's seats --
+     * lets the frontend show a "Bot is thinking..." indicator instead of
+     * looking stuck while advanceAutomatedTurns() has handed a turn off
+     * to the background process instead of answering inline -- see
+     * advanceTacticalBotSearch()'s own docblock. A stale/crashed job
+     * (past its own time budget + grace) reads the same as "not
+     * thinking" here -- the very next advanceAutomatedTurns() call (this
+     * same GET /games/state request's own best-effort poll trigger
+     * included) will notice and fall back to the heuristic bot, so
+     * there's nothing worth surfacing about a job that's already
+     * effectively dead.
+     *
+     * @param array<int, array{game_player_id: int, username: string}> $players
+     * @return ?array{game_player_id: int, username: ?string, time_budget_seconds: int}
+     */
+    private function botThinkingStateFor(int $gameId, array $players): ?array
+    {
+        foreach ($this->tacticalBotGamePlayerIds($gameId) as $gamePlayerId) {
+            $job = $this->botSearchJobs->mostRecentFor($gamePlayerId);
+            if ($job === null || $job['status'] !== 'running') {
+                continue;
+            }
+
+            $ageSeconds = time() - strtotime($job['started_at']);
+            if ($ageSeconds > $job['time_budget_seconds'] + self::BOT_SEARCH_STALE_GRACE_SECONDS) {
+                continue;
+            }
+
+            $username = null;
+            foreach ($players as $player) {
+                if ($player['game_player_id'] === $gamePlayerId) {
+                    $username = $player['username'];
+                    break;
+                }
+            }
+
+            return [
+                'game_player_id' => $gamePlayerId,
+                'username' => $username,
+                'time_budget_seconds' => $job['time_budget_seconds'],
+            ];
+        }
+
+        return null;
     }
 
     /**
@@ -13705,6 +14834,23 @@ final class GameService
             // fixes every ALREADY-logged event carrying the old key, not
             // just new ones.
             return $label . ': ' . ($cardNames[(int) $value] ?? 'a card');
+        }
+        // Reported live: a Duplicity repeat rendered as "(duplicity
+        // repeat: 1, Array)" in the recent-plays log. Unlike every other
+        // REACTIONS-templated key, CardChoiceSchema's own 'duplicity_repeat'
+        // template says 'bool', but the answer actually stored is a nested
+        // {repeat, choices} pair (the repeated card's own fresh choices,
+        // per MoodPlayService::duplicityRepeatOfferRequest()) -- the
+        // repeated play's own consequences already show up via this same
+        // event's card_moves/ownership_changes, so there's nothing further
+        // to summarize here beyond whether it happened at all. Collapses
+        // back down to how a plain bool answer already reads just below
+        // (the label alone if true, nothing at all if false) instead of
+        // falling through to the generic array branch, which would
+        // otherwise implode() over a bool and a nested array together and
+        // print the literal word "Array".
+        if ($key === 'duplicity_repeat' && is_array($value)) {
+            return ($value['repeat'] ?? false) === true ? $label : null;
         }
         if ($value === true) {
             return $label;

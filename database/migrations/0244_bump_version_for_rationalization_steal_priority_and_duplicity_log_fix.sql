@@ -1,0 +1,27 @@
+-- Two fixes reported live together:
+--
+-- 1. "in a situation when I have six cards in hand and the bot has two
+-- cards in hand, one of which is Rationalization, the bot should play
+-- Rationalization with the rotate mode to steal my much larger hand,
+-- instead of playing Rationalization in cycle mode and cycling a single
+-- card." rationalizationChoices() checked rationalizationLowValueHand()
+-- (refresh) before rationalizationStealDirection() (rotate), so a weak
+-- one-card remaining hand won a live steal opportunity by pure
+-- accident of check order. Reordered: a qualifying steal (already
+-- gated by RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE to only fire when
+-- clearly worth it) is now checked first and always wins over a merely
+-- weak remaining hand.
+--
+-- 2. "I noticed this in the recent plays text - '(duplicity repeat: 1,
+-- Array)' - can we make 'Array' something useful for a human to see
+-- there?" GameService::describeChoiceEntry()'s generic array fallback
+-- imploded over 'duplicity_repeat's own nested {repeat, choices}
+-- answer shape (CardChoiceSchema's own template says 'bool', but the
+-- stored answer is a nested pair), printing the literal word "Array"
+-- for the un-imploded 'choices' sub-array. Now collapses to the same
+-- "label alone if true, nothing at all if false" rendering a plain
+-- bool answer already gets.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.33.8' WHERE id = 1;

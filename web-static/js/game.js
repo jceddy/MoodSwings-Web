@@ -884,10 +884,34 @@
     // openDeckView() already use rather than a { cardId: count } map --
     // keeps add/remove/sort all operating on one flat array.
     let deckBuilderCardIds = [];
+    // The sideboard under construction (migration 0228, issue #90
+    // follow-up) -- same flat-array convention as deckBuilderCardIds,
+    // only ever addable to for the two formats
+    // deckBuilderFormatSupportsSideboard() allows (Free-form/Power Duel);
+    // otherwise-format cards already sitting here from an earlier edit
+    // are left untouched, same as deckBuilderCardIds' own "switching
+    // formats mid-build never retroactively removes anything" rule.
+    let deckBuilderSideboardCardIds = [];
     // Set by openDeckBuilder(existingId) when editing an existing owned
     // deck via its "Build" row action -- null means "Build a new deck"
     // (create on save), non-null means "update this deck (id) on save".
     let deckBuilderEditingId = null;
+
+    // Mirrors GameService::POWER_DUEL_SIDEBOARD_MAX_CARDS -- Power Duel's
+    // own cap on a declared sideboard's size (see "Best of three" in
+    // web-static/README.md). Free-form has no cap of its own, same as its
+    // main deck.
+    const POWER_DUEL_SIDEBOARD_MAX_CARDS = 5;
+
+    // Sideboarding is only ever offered for the two formats with no
+    // fixed rarity/color shape of their own to conflict with a second,
+    // separate zone -- Structure Deck/jceddy's 75 Card's own rarity/color
+    // targets (see DECK_BUILDER_FORMATS) are already exact-match
+    // constraints on the WHOLE deck, so there's no natural "extra bench"
+    // concept for them today.
+    function deckBuilderFormatSupportsSideboard(formatKey) {
+        return formatKey === 'free_form' || formatKey === 'power';
+    }
 
     async function ensureDeckBuilderCatalogLoaded() {
         if (deckBuilderCatalog !== null) {
@@ -964,6 +988,45 @@
         return colorRarityCount < spec.count;
     }
 
+    // The most copies of $card the deck's own format allows -- null means
+    // no cap (free-form). Used only by deckBuilderCardDetailActions()
+    // below, to show "current / max" alongside canAddCardToBuilderDeck()'s
+    // own pass/fail so the card-detail popup's copy-count indicator stays
+    // in sync with whatever actually gates the "+ Deck" button.
+    function deckBuilderMaxCopiesForCard(formatKey, card) {
+        const format = DECK_BUILDER_FORMATS[formatKey];
+        if (!format || formatKey === 'free_form') {
+            return null;
+        }
+        if (format.singleton) {
+            return 1;
+        }
+        const spec = format.raritySpec[card.rarity];
+        return spec ? spec.maxCopies : null;
+    }
+
+    // Sideboarding's own analog of canAddCardToBuilderDeck() -- Free-form
+    // is unrestricted (same policy as its own main deck); Power Duel caps
+    // the sideboard at POWER_DUEL_SIDEBOARD_MAX_CARDS total and singleton
+    // within it (mirrors GameService::validateAndStorePowerDuelSideboardPool()'s
+    // own validation), plus never lets the same card sit in both zones at
+    // once -- a card is either in your deck or benched, never both.
+    // $deckCardIds is passed in (rather than read from the module-level
+    // deckBuilderCardIds directly) so this stays a pure function of its
+    // own arguments, same as canAddCardToBuilderDeck() above.
+    function canAddCardToBuilderSideboard(formatKey, sideboardCardIds, deckCardIds, card) {
+        if (deckCardIds.includes(card.card_id)) {
+            return false;
+        }
+        if (formatKey !== 'power') {
+            return true;
+        }
+        if (sideboardCardIds.length >= POWER_DUEL_SIDEBOARD_MAX_CARDS) {
+            return false;
+        }
+        return !sideboardCardIds.includes(card.card_id);
+    }
+
     // Running total-vs-target summary line for #deck-builder-deck-summary
     // -- just a card count for free-form (no target to compare against),
     // "current/target" for every other format so the caps
@@ -993,6 +1056,25 @@
         }
         renderDeckBuilderCatalog();
         renderDeckBuilderDeck();
+    }
+
+    function addCardToBuilderSideboard(card) {
+        const formatKey = document.getElementById('deck-builder-format').value;
+        if (!canAddCardToBuilderSideboard(formatKey, deckBuilderSideboardCardIds, deckBuilderCardIds, card)) {
+            return;
+        }
+        deckBuilderSideboardCardIds.push(card.card_id);
+        renderDeckBuilderCatalog();
+        renderDeckBuilderSideboard();
+    }
+
+    function removeCardFromBuilderSideboard(cardId) {
+        const index = deckBuilderSideboardCardIds.indexOf(cardId);
+        if (index !== -1) {
+            deckBuilderSideboardCardIds.splice(index, 1);
+        }
+        renderDeckBuilderCatalog();
+        renderDeckBuilderSideboard();
     }
 
     // Comparator for one sort key (see SORT_COMPARATORS below) -- color
@@ -1069,29 +1151,105 @@
     }
 
     // Wraps a card-thumb (click = inspect, same as everywhere else this
-    // app shows a card) with a distinct "Add"/"Remove" button underneath
-    // -- buildCardThumb() itself stays untouched (its own onClick is
-    // shared by every OTHER caller for "open the detail dialog", not
-    // "add/remove this specific card"), so the deck builder's own
-    // add/remove action lives in a sibling button instead of overloading
-    // the thumb's own click.
-    function buildDeckBuilderCardItem(card, actionLabel, onAction, disabled) {
+    // app shows a card) with one or more distinct action buttons
+    // underneath -- buildCardThumb() itself stays untouched (its own
+    // onClick is shared by every OTHER caller for "open the detail
+    // dialog", not "add/remove this specific card"), so the deck
+    // builder's own add/remove actions live in sibling buttons instead of
+    // overloading the thumb's own click. $actions is an array of
+    // {label, onAction, disabled} -- used only by the deck/sideboard
+    // panels below for their own single "Remove" action; the catalog
+    // panel's own "+ Deck"/"+ Sideboard" actions moved into the
+    // card-detail popup instead (see deckBuilderCardDetailActions()),
+    // so a catalog item is just a bare thumb (openDeckBuilderCardDetail()).
+    function buildDeckBuilderCardItem(card, actions) {
         const item = document.createElement('div');
         item.className = 'deck-builder-card-item';
         item.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
 
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.textContent = actionLabel;
-        button.disabled = disabled;
-        button.addEventListener('click', onAction);
-        item.appendChild(button);
+        for (const { label, onAction, disabled } of actions) {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.textContent = label;
+            button.disabled = disabled;
+            button.addEventListener('click', onAction);
+            item.appendChild(button);
+        }
 
         return item;
     }
 
-    function renderDeckBuilderCatalog() {
+    // A copy-count indicator's text for the card-detail popup's own
+    // "+ Deck"/"+ Sideboard" rows -- "current / max" once $max is known
+    // (every format but free-form caps copies somehow, see
+    // deckBuilderMaxCopiesForCard()), otherwise just the running count.
+    function deckBuilderCopiesLabel(copies, max, suffix) {
+        return copies + (max !== null ? ' / ' + max : '') + ' ' + suffix;
+    }
+
+    // The card-detail popup's own Deck Builder catalog actions (issue #93
+    // follow-up) -- "+ Deck" always, "+ Sideboard" too when
+    // deckBuilderFormatSupportsSideboard() allows it for the format
+    // currently selected. Each pairs a copy-count indicator with the
+    // same canAddCardToBuilderDeck()/canAddCardToBuilderSideboard() checks
+    // the old under-thumbnail buttons used, and re-opens this same popup
+    // (openDeckBuilderCardDetail()) after adding so the indicator and
+    // disabled state stay current for a player adding several copies in
+    // a row without closing the dialog.
+    function deckBuilderCardDetailActions(card) {
         const formatKey = document.getElementById('deck-builder-format').value;
+
+        const copiesInDeck = deckBuilderCardIds.filter((id) => id === card.card_id).length;
+        const actions = [{
+            label: '+ Deck',
+            count: deckBuilderCopiesLabel(copiesInDeck, deckBuilderMaxCopiesForCard(formatKey, card), 'in deck'),
+            disabled: !canAddCardToBuilderDeck(formatKey, deckBuilderCardIds, card),
+            onAction: () => {
+                addCardToBuilderDeck(card);
+                openDeckBuilderCardDetail(card);
+            },
+        }];
+
+        if (deckBuilderFormatSupportsSideboard(formatKey)) {
+            const copiesInSideboard = deckBuilderSideboardCardIds.filter((id) => id === card.card_id).length;
+            // Power Duel's sideboard is singleton (canAddCardToBuilderSideboard()'s
+            // own !sideboardCardIds.includes(card.card_id) check) -- Free-form's
+            // has no cap of its own, same as its main deck.
+            const sideboardMax = formatKey === 'power' ? 1 : null;
+            actions.push({
+                label: '+ Sideboard',
+                count: deckBuilderCopiesLabel(copiesInSideboard, sideboardMax, 'in sideboard'),
+                disabled: !canAddCardToBuilderSideboard(formatKey, deckBuilderSideboardCardIds, deckBuilderCardIds, card),
+                onAction: () => {
+                    addCardToBuilderSideboard(card);
+                    openDeckBuilderCardDetail(card);
+                },
+            });
+        }
+
+        return actions;
+    }
+
+    // Opens the shared card-detail popup with this card's own Deck
+    // Builder actions -- the catalog panel's only way to add a card now
+    // (see buildDeckBuilderCatalogCardItem() below), and also how each
+    // "+ Deck"/"+ Sideboard" click above refreshes the popup in place.
+    function openDeckBuilderCardDetail(card) {
+        openCardDetail(card, null, null, null, deckBuilderCardDetailActions(card));
+    }
+
+    // The catalog panel's own card item -- unlike buildDeckBuilderCardItem()
+    // above (deck/sideboard panels' single "Remove" button), a catalog
+    // item carries no buttons of its own at all; its thumb's click opens
+    // the card-detail popup where "+ Deck"/"+ Sideboard" now live.
+    function buildDeckBuilderCatalogCardItem(card) {
+        const item = document.createElement('div');
+        item.className = 'deck-builder-card-item';
+        item.appendChild(buildCardThumb(card, { onClick: () => openDeckBuilderCardDetail(card) }));
+        return item;
+    }
+
+    function renderDeckBuilderCatalog() {
         const filters = deckBuilderCatalogFilters();
         const filtered = deckBuilderCatalog.filter((card) => cardMatchesDeckBuilderFilters(card, filters));
         const cards = sortBuilderCards(filtered, 'deck-builder-catalog-sort');
@@ -1101,8 +1259,7 @@
         document.getElementById('deck-builder-catalog-empty').hidden = cards.length > 0;
 
         for (const card of cards) {
-            const canAdd = canAddCardToBuilderDeck(formatKey, deckBuilderCardIds, card);
-            gridEl.appendChild(buildDeckBuilderCardItem(card, '+ Add', () => addCardToBuilderDeck(card), !canAdd));
+            gridEl.appendChild(buildDeckBuilderCatalogCardItem(card));
         }
     }
 
@@ -1116,10 +1273,32 @@
         document.getElementById('deck-builder-deck-empty').hidden = sorted.length > 0;
 
         for (const card of sorted) {
-            gridEl.appendChild(buildDeckBuilderCardItem(card, 'Remove', () => removeCardFromBuilderDeck(card.card_id), false));
+            gridEl.appendChild(buildDeckBuilderCardItem(card, [{ label: 'Remove', onAction: () => removeCardFromBuilderDeck(card.card_id), disabled: false }]));
         }
 
         document.getElementById('deck-builder-deck-summary').textContent = deckBuilderSummaryText(formatKey, deckBuilderCardIds);
+    }
+
+    // Sideboarding's own analog of renderDeckBuilderDeck() -- the section
+    // itself is shown/hidden by the '#deck-builder-format' change
+    // listener below (deckBuilderFormatSupportsSideboard()), so this only
+    // needs to worry about its own contents.
+    function renderDeckBuilderSideboard() {
+        const formatKey = document.getElementById('deck-builder-format').value;
+        const cardsInSideboard = deckBuilderSideboardCardIds.map((id) => deckBuilderCatalogById.get(id));
+        const sorted = sortBuilderCards(cardsInSideboard, 'deck-builder-sideboard-sort');
+
+        const gridEl = document.getElementById('deck-builder-sideboard-cards');
+        gridEl.innerHTML = '';
+        document.getElementById('deck-builder-sideboard-empty').hidden = sorted.length > 0;
+
+        for (const card of sorted) {
+            gridEl.appendChild(buildDeckBuilderCardItem(card, [{ label: 'Remove', onAction: () => removeCardFromBuilderSideboard(card.card_id), disabled: false }]));
+        }
+
+        document.getElementById('deck-builder-sideboard-summary').textContent = formatKey === 'power'
+            ? deckBuilderSideboardCardIds.length + ' / ' + POWER_DUEL_SIDEBOARD_MAX_CARDS + ' card(s) in your sideboard.'
+            : deckBuilderSideboardCardIds.length + ' card(s) in your sideboard.';
     }
 
     function resetDeckBuilderForm() {
@@ -1131,7 +1310,7 @@
         document.getElementById('deck-builder-filter-color').value = '';
         document.getElementById('deck-builder-filter-rarity').value = '';
         document.getElementById('deck-builder-filter-text').value = '';
-        for (const prefix of ['deck-builder-catalog-sort', 'deck-builder-deck-sort']) {
+        for (const prefix of ['deck-builder-catalog-sort', 'deck-builder-deck-sort', 'deck-builder-sideboard-sort']) {
             document.getElementById(prefix + '-1').value = 'color';
             document.getElementById(prefix + '-2').value = 'rarity';
             document.getElementById(prefix + '-3').value = 'name';
@@ -1140,7 +1319,13 @@
         document.getElementById('deck-builder-success').hidden = true;
         document.getElementById('deck-builder-format-description').textContent = DECK_BUILDER_FORMATS.free_form.description;
         deckBuilderCardIds = [];
+        deckBuilderSideboardCardIds = [];
         deckBuilderEditingId = null;
+        // Always visible right after a reset -- resetDeckBuilderForm()
+        // always starts a fresh build at 'free_form', one of the two
+        // sideboard-supporting formats (see
+        // deckBuilderFormatSupportsSideboard()).
+        document.getElementById('deck-builder-sideboard-section').hidden = false;
     }
 
     // existingDeckId: omit (or null) for "Build a new deck" starting
@@ -1169,11 +1354,13 @@
             document.getElementById('deck-builder-name').value = deck.name;
             document.getElementById('deck-builder-friends-visible').checked = deck.visibility === 'friends';
             deckBuilderCardIds = deck.cards.map((card) => card.card_id);
+            deckBuilderSideboardCardIds = deck.sideboard_cards.map((card) => card.card_id);
             deckBuilderEditingId = deck.id;
         }
 
         renderDeckBuilderCatalog();
         renderDeckBuilderDeck();
+        renderDeckBuilderSideboard();
         document.getElementById('deck-builder-dialog').showModal();
     }
 
@@ -1300,6 +1487,19 @@
     // poll's re-render of the SAME game -- see renderDuelDeckSubmission().
     let duelSavedDecklistSelectPopulated = false;
 
+    // Power Duel sideboarding (migration 0228/0233, issue #90 follow-up)
+    // -- the visual sideboard picker's own toggle selection, tracked as a
+    // plain Set<card_id> rather than draftDeckSelection's own indices
+    // below, since Power Duel's own pool is always singleton (no
+    // duplicate cards, unlike a drafted pool -- see DuelDeckRules' own
+    // 'power' preset), so a card_id alone always identifies exactly one
+    // pool entry. Reset in showBoard() (same reasoning as
+    // duelSavedDecklistSelectPopulated above) so switching games always
+    // re-seeds rather than carrying a stale selection into a different
+    // game's picker.
+    let duelSideboardPickerSelection = new Set();
+    let duelSideboardPickerInitialized = false;
+
     // refreshBoard() can overlap with itself -- the 4-second poll timer
     // doesn't wait for a prior call to finish, and a user action (Start
     // game, Play, Pass, ...) triggers its own refreshBoard() independent
@@ -1374,6 +1574,8 @@
         pushDisplayHistoryEntry();
         currentGameId = gameId;
         duelSavedDecklistSelectPopulated = false;
+        duelSideboardPickerSelection = new Set();
+        duelSideboardPickerInitialized = false;
         lobbyView.hidden = true;
         boardView.hidden = false;
         // boardMessage ("Game complete!"/"Round scored...") is otherwise
@@ -2026,6 +2228,51 @@
         }
     }
 
+    // Issue #90: Duel/Open Team Play/Closed Team Play's own best-of-three
+    // match wrapper (see GameService::createGame()'s own $bestOfThree
+    // docblock) -- every draft-based deck_type already gets a best-of-
+    // three match of its own regardless of this checkbox (games.draft_match_id,
+    // migration 0027), so this only ever applies to a non-draft deck_type
+    // under one of the three non-draft formats.
+    function isBestOfThreeAvailable(deckType, format) {
+        const isDraftDeckType = ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck'].includes(deckType);
+        if (isDraftDeckType) {
+            return false;
+        }
+        if (format === 'duel' || format === 'team' || format === 'closed_team') {
+            return true;
+        }
+        // Traditional (issue #90 follow-up) only qualifies at exactly 2
+        // players -- with 3-4, "first to 2 game wins" no longer names a
+        // single opponent, the same reason a draft match itself falls
+        // back to a single game past 2 players (see createGame()'s own
+        // docblock in php-app/README.md's "Best of three" section).
+        if (format === 'standard') {
+            return currentNewGamePlayerCount() === 2;
+        }
+
+        return false;
+    }
+
+    // How many total players (including the creator) the New Game
+    // dialog's current selections add up to -- Duel/the team formats
+    // already have a fixed count of their own, so this only matters for
+    // isBestOfThreeAvailable()'s own Traditional check above.
+    function currentNewGamePlayerCount() {
+        const format = effectiveNewGameFormat();
+        if (format === 'duel') {
+            return 2;
+        }
+        if (format === 'team' || format === 'closed_team') {
+            return 4;
+        }
+        if (document.getElementById('new-game-mode-open').checked) {
+            return Number(document.getElementById('new-game-open-player-count').value);
+        }
+
+        return 1 + opponentCheckboxes.querySelectorAll('input[type=checkbox]:checked').length;
+    }
+
     // #new-game-format's own 'sealed_deck' option is a UI-only sentinel --
     // Sealed Deck has no separate backend format at all, it's still an
     // ordinary format: 'draft' game (deck_type: 'sealed_deck'), just
@@ -2363,7 +2610,18 @@
     function buildMatchGroupRow(matchGames) {
         const games = matchGames.slice().sort((a, b) => b.match_game_number - a.match_game_number);
         const firstGame = games[0];
-        const match = firstGame.draft_match;
+        // Issue #90's own game_match carries almost the identical shape as
+        // draft_match (status/your_wins/opponent_wins/games_to_win/players
+        // -- see GameService::gameMatchSummaryFor()'s own docblock), so
+        // everything below renders either one exactly the same way
+        // without needing to know which kind of match it is. The one
+        // difference is the winner field -- draft_match's own singular
+        // winner_username (a draft-based match is never team-format
+        // best-of-three, see draftMatchSummaryFor()'s own docblock) vs.
+        // game_match's own winner_usernames array (both teammates for a
+        // team-format win) -- normalized to an array below either way.
+        const match = firstGame.draft_match || firstGame.game_match;
+        const matchWinnerUsernames = match.winner_usernames || (match.winner_username ? [match.winner_username] : []);
 
         const li = document.createElement('li');
         li.className = 'lobby-match-group';
@@ -2393,15 +2651,15 @@
             + ' (first to ' + match.games_to_win + ' wins)';
         headerEl.appendChild(scoreEl);
 
-        // winner_username is only ever set once draft_match.status is
-        // 'completed' (see GameService::draftMatchSummaryFor()) --
-        // this is the match's own overall result, distinct from (and shown
-        // alongside, not instead of) each individual game's own
-        // winner_usernames, which buildGameRow() still renders per sub-row.
-        if (match.winner_username) {
+        // matchWinnerUsernames is only ever non-empty once the match
+        // itself is 'completed' -- this is the match's own overall
+        // result, distinct from (and shown alongside, not instead of)
+        // each individual game's own winner_usernames, which
+        // buildGameRow() still renders per sub-row.
+        if (matchWinnerUsernames.length > 0) {
             const resultEl = document.createElement('div');
             resultEl.className = 'lobby-winner';
-            resultEl.textContent = match.winner_username + ' won the match';
+            resultEl.textContent = matchWinnerUsernames.join(' & ') + ' won the match';
             headerEl.appendChild(resultEl);
         }
 
@@ -2421,14 +2679,18 @@
         // headerEl itself. Match-level, not per-game (the pool is shared
         // across the whole match, see GameService::draftMatchPoolView()),
         // so this lives in the group's own header rather than on any one
-        // sub-row. Same "status is 'completed'" gate as winner_username
+        // sub-row. Same "status is 'completed'" gate as matchWinnerUsernames
         // above -- the pool view itself also enforces this server-side,
         // but gating the button too avoids offering it for a
         // still-undecided match's own dead end.
         const headerRowEl = document.createElement('div');
         headerRowEl.className = 'lobby-row';
         headerRowEl.appendChild(headerEl);
-        if (match.status === 'completed') {
+        // Only a draft-based match actually has a shared pool to show --
+        // issue #90's own game_match wrapper has no equivalent (there's no
+        // pool at all for structure/power/custom_duel/etc.), so this stays
+        // gated on draft_match_id specifically, not just "any match".
+        if (match.status === 'completed' && firstGame.draft_match_id !== null) {
             const poolActionsEl = document.createElement('div');
             poolActionsEl.className = 'lobby-match-actions';
             poolActionsEl.appendChild(actionButton('View draft pool', () => openDraftPoolView(firstGame.id)));
@@ -2456,30 +2718,48 @@
     // refreshPastGames() below -- draft_match_id grouping works
     // identically for either list, the backend query is what decides
     // which games (and which whole matches) belong in which one.
+    // Issue #90's own best-of-three match wrapper for Duel/Open Team
+    // Play/Closed Team Play (games.game_match_id) groups the exact same
+    // way a draft-based match's own games.draft_match_id already does --
+    // a game belongs to at most one of the two, never both, so this key
+    // just picks whichever one is actually set. Namespaced ('draft:'/
+    // 'game:') purely so the two id spaces can never collide.
+    function matchGroupKey(game) {
+        if (game.draft_match_id !== null) {
+            return 'draft:' + game.draft_match_id;
+        }
+        if (game.game_match_id !== null) {
+            return 'game:' + game.game_match_id;
+        }
+        return null;
+    }
+
     function groupGameEntries(games) {
-        const matchGamesById = new Map();
+        const matchGamesByKey = new Map();
         for (const game of games) {
-            if (game.draft_match_id === null) {
+            const key = matchGroupKey(game);
+            if (key === null) {
                 continue;
             }
-            if (!matchGamesById.has(game.draft_match_id)) {
-                matchGamesById.set(game.draft_match_id, []);
+            if (!matchGamesByKey.has(key)) {
+                matchGamesByKey.set(key, []);
             }
-            matchGamesById.get(game.draft_match_id).push(game);
+            matchGamesByKey.get(key).push(game);
         }
 
         const entries = [];
-        const renderedMatchIds = new Set();
+        const renderedMatchKeys = new Set();
         for (const game of games) {
-            if (game.draft_match_id === null) {
+            const key = matchGroupKey(game);
+            if (key === null) {
                 entries.push(() => buildGameRow(game));
                 continue;
             }
-            if (renderedMatchIds.has(game.draft_match_id)) {
+            if (renderedMatchKeys.has(key)) {
                 continue;
             }
-            renderedMatchIds.add(game.draft_match_id);
-            const matchGames = matchGamesById.get(game.draft_match_id);
+            renderedMatchKeys.add(key);
+            const matchGames = matchGamesByKey.get(key);
             entries.push(() => buildMatchGroupRow(matchGames));
         }
 
@@ -2660,6 +2940,42 @@
         }
     }
 
+    // Issue #90's own "Best of three" checkbox -- shown/hidden by the
+    // same format/deck-type change events updateDeckTypeAvailability()
+    // already listens to (see this function's own registration below).
+    function updateBestOfThreeFieldVisibility() {
+        const format = effectiveNewGameFormat();
+        const deckType = document.getElementById('new-game-deck-type').value;
+        const show = isBestOfThreeAvailable(deckType, format);
+        document.getElementById('new-game-best-of-three-label').hidden = !show;
+        if (!show) {
+            document.getElementById('new-game-best-of-three').checked = false;
+        }
+        // Power Duel sideboarding (migration 0228, issue #90 follow-up)
+        // only ever makes sense once "Best of three" is itself both
+        // available AND actually checked, so any change that could flip
+        // either needs to re-run this too.
+        updateAllowSideboardingFieldVisibility();
+    }
+
+    // Power Duel sideboarding's own checkbox -- see
+    // GameService::createGame()'s own $allowSideboarding docblock. Only
+    // ever offered for a best-of-three Duel game using deck_type
+    // 'custom_duel' built under the "Power Duel" duel_deck_rules preset;
+    // hidden (and unchecked, same as every other conditionally-shown New
+    // Game field) for everything else.
+    function updateAllowSideboardingFieldVisibility() {
+        const format = effectiveNewGameFormat();
+        const deckType = document.getElementById('new-game-deck-type').value;
+        const preset = document.getElementById('new-game-duel-rules-preset').value;
+        const bestOfThreeChecked = document.getElementById('new-game-best-of-three').checked;
+        const show = format === 'duel' && deckType === 'custom_duel' && preset === 'power' && bestOfThreeChecked;
+        document.getElementById('new-game-allow-sideboarding-label').hidden = !show;
+        if (!show) {
+            document.getElementById('new-game-allow-sideboarding').checked = false;
+        }
+    }
+
     // Hides (and, if checked, unchecks) every bot checkbox -- and their
     // own "Practice bots" heading -- whenever the current format/deck_type
     // combination doesn't support seating one (see botsSupportedFor()).
@@ -2710,6 +3026,10 @@
         // draft deck_types' own pool-source option labels (which depend
         // on it) need to stay in sync -- see updateDraftPoolSourceOptionLabels().
         updateDraftPoolSourceOptionLabels();
+        // Same reasoning (issue #90 follow-up): Traditional's own
+        // best-of-three checkbox depends on the current player count too
+        // (see currentNewGamePlayerCount()).
+        updateBestOfThreeFieldVisibility();
     }
 
     // Order matters for the two bot-related listeners here: a bot
@@ -2746,22 +3066,40 @@
 
         document.getElementById('new-game-submit-button').textContent = isOpenLobby ? 'Post to open lobby' : 'Create game';
         updateTeamFields();
+        // Issue #90 follow-up: switching modes changes which player-count
+        // source Traditional's own best-of-three check reads from (see
+        // currentNewGamePlayerCount()) even when neither the friends
+        // checkboxes nor the open-lobby player-count select themselves
+        // just changed.
+        updateBestOfThreeFieldVisibility();
     }
     document.getElementById('new-game-mode-friends').addEventListener('change', updateNewGameModeFields);
     document.getElementById('new-game-mode-open').addEventListener('change', updateNewGameModeFields);
     document.getElementById('new-game-format').addEventListener('change', updateNewGameModeFields);
+    // Issue #90 follow-up: the open-lobby player-count select is the
+    // player-count source currentNewGamePlayerCount() reads from in that
+    // mode, so a change to it can flip Traditional's own best-of-three
+    // checkbox's availability.
+    document.getElementById('new-game-open-player-count').addEventListener('change', updateBestOfThreeFieldVisibility);
 
     document.getElementById('new-game-format').addEventListener('change', updateOpponentSelectionLimit);
     document.getElementById('new-game-format').addEventListener('change', updateDeckTypeAvailability);
     document.getElementById('new-game-format').addEventListener('change', updateBotCheckboxAvailability);
     document.getElementById('new-game-format').addEventListener('change', updateTeamFields);
+    document.getElementById('new-game-format').addEventListener('change', updateBestOfThreeFieldVisibility);
     document.getElementById('new-game-random-teams').addEventListener('change', updateTeamFields);
     document.getElementById('new-game-deck-type').addEventListener('change', updateDeckTypeDescription);
     document.getElementById('new-game-deck-type').addEventListener('change', updateOpponentSelectionLimit);
     document.getElementById('new-game-deck-type').addEventListener('change', updateBotCheckboxAvailability);
+    document.getElementById('new-game-deck-type').addEventListener('change', updateBestOfThreeFieldVisibility);
     document.getElementById('new-game-saved-decklist').addEventListener('change', updateDeckTypeDescription);
     document.getElementById('new-game-bot-saved-decklist').addEventListener('change', updateBotDecklistFieldsVisibility);
     document.getElementById('new-game-duel-rules-preset').addEventListener('change', updateDuelRulesPresetVisibility);
+    // Power Duel sideboarding's own checkbox depends on both the current
+    // preset AND whether "Best of three" is itself checked -- see
+    // updateAllowSideboardingFieldVisibility().
+    document.getElementById('new-game-duel-rules-preset').addEventListener('change', updateAllowSideboardingFieldVisibility);
+    document.getElementById('new-game-best-of-three').addEventListener('change', updateAllowSideboardingFieldVisibility);
     document.getElementById('new-game-quick-draft-pool-source').addEventListener('change', updateQuickDraftPoolSourceVisibility);
     document.getElementById('new-game-winston-draft-pool-source').addEventListener('change', updateWinstonDraftPoolSourceVisibility);
     document.getElementById('new-game-grid-draft-pool-source').addEventListener('change', updateGridDraftPoolSourceVisibility);
@@ -2987,6 +3325,7 @@
 
         updateBotCheckboxAvailability();
         updateTeamFields();
+        updateBestOfThreeFieldVisibility();
         await populateSavedDecklistSelect(document.getElementById('new-game-saved-decklist'));
         await populateSavedDecklistSelect(document.getElementById('new-game-bot-saved-decklist'));
         // Issue #290's own three draft-type pickers, sharing the exact
@@ -3333,6 +3672,17 @@
         // itself unchecked whenever hidden, so reading .checked
         // unconditionally here already reflects that.
         const botGoesFirst = document.getElementById('new-game-bot-goes-first').checked;
+        // Issue #90 -- see isBestOfThreeAvailable() for when this field is
+        // actually shown; #new-game-best-of-three is itself unchecked
+        // whenever hidden (updateBestOfThreeFieldVisibility()), so reading
+        // .checked unconditionally here already reflects that.
+        const bestOfThree = document.getElementById('new-game-best-of-three').checked;
+        // Power Duel sideboarding (issue #90 follow-up) -- see
+        // updateAllowSideboardingFieldVisibility() for when this field is
+        // actually shown; #new-game-allow-sideboarding is itself
+        // unchecked whenever hidden, so reading .checked unconditionally
+        // here already reflects that.
+        const allowSideboarding = document.getElementById('new-game-allow-sideboarding').checked;
 
         // Issue #116: post to the open lobby instead of creating the game
         // directly -- mirrors createGame()'s own params (see above) minus
@@ -3364,6 +3714,11 @@
                 rotisserie_draft_cutoff_count: rotisserieDraftCutoffCount,
                 tiered_rotisserie_draft_mode: tieredRotisserieDraftMode,
                 tiered_rotisserie_draft_tiers: tieredRotisserieDraftTiers,
+                // Issue #90 follow-up: was missing here entirely, so
+                // checking "Best of three" while posting to the open
+                // lobby silently did nothing.
+                best_of_three: bestOfThree,
+                allow_sideboarding: allowSideboarding,
             });
 
             if (!ok) {
@@ -3404,6 +3759,8 @@
             tieredRotisserieDraftMode,
             tieredRotisserieDraftTiers,
             botGoesFirst,
+            bestOfThree,
+            allowSideboarding,
         );
 
         if (!ok) {
@@ -3710,8 +4067,17 @@
     // when passed (and `selection` isn't), is the simpler one-shot form of
     // the same button -- { label, onClick, disabled } -- for a single
     // immediate action rather than a toggle, e.g. Rotisserie Draft's own
-    // "Draft" button (see renderRotisserieDraftDrafting()).
-    function openCardDetail(card, ownerLabel, selection, actionButton) {
+    // "Draft" button (see renderRotisserieDraftDrafting()). `deckBuilderActions`,
+    // when passed, is the Deck Builder catalog's own multi-action form --
+    // an array of { label, count, onAction, disabled }, one row per
+    // action (its own "+ Deck"/"+ Sideboard" buttons, each paired with a
+    // copy-count indicator) -- see deckBuilderCardDetailActions(). Unlike
+    // `selection`/`actionButton`, clicking one of these does NOT close the
+    // dialog, since adding a copy is something a player plausibly repeats
+    // several times in a row without needing to reopen the popup; the
+    // caller (openDeckBuilderCardDetail()) re-invokes this function to
+    // refresh the counts/disabled state in place instead.
+    function openCardDetail(card, ownerLabel, selection, actionButton, deckBuilderActions) {
         const artEl = document.getElementById('card-detail-art');
         setCardArt(artEl, card);
         artEl.alt = card.name + '. ' + (card.rules_text || 'No ability.');
@@ -3879,7 +4245,40 @@
             selectButton.onclick = null;
         }
 
-        cardDetailDialog.showModal();
+        const deckBuilderActionsEl = document.getElementById('card-detail-deck-builder-actions');
+        deckBuilderActionsEl.innerHTML = '';
+        if (deckBuilderActions && deckBuilderActions.length > 0) {
+            for (const { label, count, onAction, disabled } of deckBuilderActions) {
+                const row = document.createElement('div');
+                row.className = 'card-detail-deck-builder-action';
+
+                const countEl = document.createElement('span');
+                countEl.textContent = count;
+                row.appendChild(countEl);
+
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.textContent = label;
+                button.disabled = disabled || false;
+                button.addEventListener('click', onAction);
+                row.appendChild(button);
+
+                deckBuilderActionsEl.appendChild(row);
+            }
+            deckBuilderActionsEl.hidden = false;
+        } else {
+            deckBuilderActionsEl.hidden = true;
+        }
+
+        // openDeckBuilderCardDetail() re-invokes this function (via its
+        // own actions' onAction above) to refresh the counts/disabled
+        // state in place after each add -- showModal() on an
+        // already-open <dialog> throws, so this only opens it the first
+        // time, same guard a Chaos Draft re-render of an already-open
+        // dialog would otherwise need.
+        if (!cardDetailDialog.open) {
+            cardDetailDialog.showModal();
+        }
     }
 
     document.getElementById('card-detail-close-button').addEventListener('click', () => {
@@ -4794,14 +5193,27 @@
     // and the board's own Players list, both of which get a `presence`
     // field ('online'/'offline'/'hidden') per person from the backend
     // (see PresenceService). `username` only feeds the tooltip/aria-label
-    // text, not any lookup.
-    function buildPresenceFlag(username, presence) {
+    // text, not any lookup. `isThinking` (issue #419 follow-up) is true
+    // only for a Tactical Bot seat whose background search job is
+    // genuinely in flight right now (state.bot_thinking) -- a practice
+    // bot's own `share_presence = 0` (see "Practice bots" in
+    // php-app/README.md) means its presence always reads 'hidden', so
+    // this has to layer onto whichever variant actually renders rather
+    // than assuming 'online' specifically.
+    function buildPresenceFlag(username, presence, isThinking) {
         if (presence === 'hidden') {
-            return buildPlayerFlag('presenceHidden', username + ' has turned off sharing their online status.');
+            const label = isThinking
+                ? username + ' is thinking…'
+                : username + ' has turned off sharing their online status.';
+            return buildPlayerFlag('presenceHidden', label, isThinking ? 'player-flag--presenceThinking' : null);
         }
 
         const label = presence === 'online' ? username + ' is online now.' : username + ' is offline.';
-        return buildPlayerFlag('presence', label, presence === 'online' ? 'player-flag--presenceOnline' : null);
+        const extraClasses = [
+            presence === 'online' ? 'player-flag--presenceOnline' : null,
+            isThinking ? 'player-flag--presenceThinking' : null,
+        ].filter(Boolean).join(' ');
+        return buildPlayerFlag('presence', label, extraClasses || null);
     }
 
     async function refreshBoard() {
@@ -5099,8 +5511,14 @@
                 // (see buildPlayerStat()/buildPlayerFlag()) so none of that
                 // information is lost, just no longer spelled out inline.
                 // Online/presence indicator (issue #110) -- first, so it's
-                // the first thing seen next to the name.
-                iconsEl.appendChild(buildPresenceFlag(player.username, player.presence));
+                // the first thing seen next to the name. isThinking (issue
+                // #419 follow-up) pulses this same icon for a Tactical
+                // Bot's own seat while its search job is in flight -- a
+                // second, glanceable echo of board-round-status's own
+                // "<name> is thinking…" text, right next to that seat's
+                // name in the Players list.
+                const isThinking = Boolean(state.bot_thinking) && state.bot_thinking.game_player_id === player.game_player_id;
+                iconsEl.appendChild(buildPresenceFlag(player.username, player.presence, isThinking));
                 // Team affiliation (Open/Closed Team Play only) -- color,
                 // not the team NUMBER, is what actually matters to the
                 // viewer at a glance: green for their own team (including
@@ -5287,8 +5705,30 @@
             } else if (state.you.is_your_turn) {
                 turnSuffix = ' — your turn';
             }
-            document.getElementById('board-round-status').textContent =
-                'Round ' + state.round.round_number + turnSuffix;
+            // Issue #419's own Tactical Bot tier: while its background
+            // search job is still running, state.bot_thinking (see
+            // GameService::botThinkingStateFor()) names the seat -- this
+            // always wins over the plain "waiting on another player"/
+            // "<name>'s turn" text above, for every viewer (spectators
+            // included), since it's the more specific and more useful
+            // thing to say about that same turn. Rendered as DOM nodes
+            // rather than a single textContent string so the ellipsis can
+            // be its own animated element (see .thinking-ellipsis in
+            // style.css) -- CSS can't animate part of a plain text node.
+            const boardRoundStatusEl = document.getElementById('board-round-status');
+            if (state.bot_thinking) {
+                boardRoundStatusEl.textContent =
+                    'Round ' + state.round.round_number + ' — ' + state.bot_thinking.username + ' is thinking';
+                const dots = document.createElement('span');
+                dots.className = 'thinking-ellipsis';
+                dots.setAttribute('aria-hidden', 'true');
+                dots.appendChild(document.createElement('span')).textContent = '.';
+                dots.appendChild(document.createElement('span')).textContent = '.';
+                dots.appendChild(document.createElement('span')).textContent = '.';
+                boardRoundStatusEl.appendChild(dots);
+            } else {
+                boardRoundStatusEl.textContent = 'Round ' + state.round.round_number + turnSuffix;
+            }
         }
 
         const pendingDecision = state.round && state.round.pending_decision;
@@ -6026,7 +6466,13 @@
             return false;
         }
 
-        const draftState = state.quick_draft || state.winston_draft || state.grid_draft || state.rotisserie_draft || state.tiered_rotisserie_draft || state.sealed_deck;
+        // state.game_match (issue #90's non-draft best-of-three match
+        // wrapper) belongs in this same OR-chain -- without it, Rematch
+        // was wrongly offered the moment game 1 of a Duel/Team/Closed
+        // Team Play/Traditional best-of-three match finished, alongside
+        // (rather than in place of) draft-match-next-game-button's own
+        // "there's already a next game" case.
+        const draftState = state.quick_draft || state.winston_draft || state.grid_draft || state.rotisserie_draft || state.tiered_rotisserie_draft || state.sealed_deck || state.game_match;
 
         return !draftState || draftState.status === 'completed';
     }
@@ -6088,11 +6534,26 @@
     // (Quick Draft/Winston Draft/Grid Draft/Rotisserie Draft) here --
     // that's already shown elsewhere on the board (the title), so this
     // line stays purely about the match's own progress.
+    //
+    // state.game_match (issue #90's own non-draft best-of-three match
+    // wrapper for Duel/Open Team Play/Closed Team Play/2-player
+    // Traditional -- see GameService::gameMatchStateFor()) shares that
+    // exact same your_wins/opponent_wins/games_to_win/next_game_id shape,
+    // so it joins the same OR-chain below via its own matchState
+    // fallback -- kept separate from draftState itself, though, since the
+    // "more than 2 players" branch just below only ever applies to a real
+    // 3-4 player single-game Quick Draft (draftState.players there is
+    // per-competitor); a game_match's own players[] can just as easily be
+    // 4 entries for Open/Closed Team Play, but those are always a genuine
+    // two-SIDED best-of-three (your_wins/opponent_wins already aggregate
+    // each side's team), never a free-for-all single game the way that
+    // branch assumes.
     function renderDraftMatchScoreline(state) {
         const el = document.getElementById('draft-match-scoreline');
         const nextGameButton = document.getElementById('draft-match-next-game-button');
         const draftState = state.quick_draft || state.winston_draft || state.grid_draft || state.rotisserie_draft || state.tiered_rotisserie_draft || state.sealed_deck;
-        if (!draftState) {
+        const matchState = draftState || state.game_match;
+        if (!matchState) {
             el.hidden = true;
             nextGameButton.hidden = true;
             return;
@@ -6107,7 +6568,7 @@
         // single game (games_to_win === 1) rather than a real best-of-three,
         // so they get their own phrasing built from draftState.players
         // (every seated player's own username/wins/is_you) instead.
-        if (draftState.players && draftState.players.length > 2) {
+        if (draftState && draftState.players && draftState.players.length > 2) {
             const scores = draftState.players
                 .map((p) => (p.is_you ? 'you' : p.username) + ' ' + p.wins)
                 .join(', ');
@@ -6120,24 +6581,25 @@
             // to name); otherwise whichever side is ahead is named first --
             // "you" or the opponent's own username -- with their own win
             // count first, e.g. "you 2-1"/"Dr Potato 2-1", never "1-2".
-            const scoreText = draftState.your_wins === draftState.opponent_wins
-                ? 'tied ' + draftState.your_wins + '-' + draftState.opponent_wins
-                : draftState.your_wins > draftState.opponent_wins
-                    ? 'you ' + draftState.your_wins + '-' + draftState.opponent_wins
-                    : opponentUsername + ' ' + draftState.opponent_wins + '-' + draftState.your_wins;
+            const scoreText = matchState.your_wins === matchState.opponent_wins
+                ? 'tied ' + matchState.your_wins + '-' + matchState.opponent_wins
+                : matchState.your_wins > matchState.opponent_wins
+                    ? 'you ' + matchState.your_wins + '-' + matchState.opponent_wins
+                    : opponentUsername + ' ' + matchState.opponent_wins + '-' + matchState.your_wins;
 
-            el.textContent = 'Best of ' + (draftState.games_to_win * 2 - 1) + ' match, game ' +
+            el.textContent = 'Best of ' + (matchState.games_to_win * 2 - 1) + ' match, game ' +
                 (state.game.match_game_number || 1) + ', ' + scoreText;
         }
 
         // next_game_id is only ever set once this game has completed and
-        // advanceDraftMatch() has already created the next one -- see
-        // GameService::quickDraftStateFor()/winstonDraftStateFor(). A
-        // prominent button right next to the scoreline (rather than
-        // making the player go back to the lobby and find it themselves)
-        // takes them straight to it.
-        nextGameButton.hidden = !draftState.next_game_id;
-        nextGameButton.onclick = draftState.next_game_id ? () => showBoard(draftState.next_game_id) : null;
+        // advanceDraftMatch()/advanceGameMatch() has already created the
+        // next one -- see GameService::quickDraftStateFor()/
+        // winstonDraftStateFor()/gameMatchStateFor(). A prominent button
+        // right next to the scoreline (rather than making the player go
+        // back to the lobby and find it themselves) takes them straight
+        // to it.
+        nextGameButton.hidden = !matchState.next_game_id;
+        nextGameButton.onclick = matchState.next_game_id ? () => showBoard(matchState.next_game_id) : null;
     }
 
     // Tracks *indices* into drafting.pack rather than card_ids -- a
@@ -7267,14 +7729,98 @@
         );
 
         const you = state.players.find((p) => p.game_player_id === state.you.game_player_id);
-        document.getElementById('duel-deck-submit-form-container').hidden = you.deck_submitted;
         document.getElementById('duel-deck-submitted-message').hidden = !you.deck_submitted;
         if (you.deck_submitted) {
             document.getElementById('duel-deck-submitted-message').textContent =
                 'You submitted: ' + (you.custom_deck_name || 'Uploaded Deck');
-        } else if (!duelSavedDecklistSelectPopulated) {
+            document.getElementById('duel-deck-sideboard-picker').hidden = true;
+            document.getElementById('duel-deck-submit-form-container').hidden = true;
+            return;
+        }
+
+        // Power Duel sideboarding (migration 0228/0233, issue #90
+        // follow-up) -- power_duel_sideboard_pool is only ever non-null
+        // for game 2/3 of a match that opted into it; when present, the
+        // visual picker below REPLACES the plain paste/upload/saved-deck
+        // form entirely, since your new deck can only be assembled from
+        // this fixed pool anyway (see renderDuelSideboardPicker()'s own
+        // docblock).
+        if (state.power_duel_sideboard_pool) {
+            document.getElementById('duel-deck-submit-form-container').hidden = true;
+            renderDuelSideboardPicker(state);
+            return;
+        }
+
+        document.getElementById('duel-deck-sideboard-picker').hidden = true;
+        document.getElementById('duel-deck-submit-form-container').hidden = false;
+        if (!duelSavedDecklistSelectPopulated) {
             duelSavedDecklistSelectPopulated = true;
             populateSavedDecklistSelect(document.getElementById('duel-deck-submit-saved-decklist'));
+        }
+    }
+
+    // Power Duel sideboarding's own visual card-toggle picker (migration
+    // 0233, issue #90 follow-up) -- mirrors the draft formats' own
+    // #draft-deck-building screen (renderDraftDeckBuilding()): every card
+    // from your original game-1 deck + sideboard combined
+    // (state.power_duel_sideboard_pool) shown as a toggleable thumbnail
+    // (via openCardDetail()'s own `selection` form, the same Select/
+    // De-select popup pattern renderDraftDeckBuilding() uses), pre-
+    // selected from whichever of those you actually played in the
+    // immediately preceding game (state.power_duel_previous_deck_card_ids)
+    // rather than forcing a full retrim from scratch every game. A plain
+    // Set<card_id> is enough to track the selection (unlike
+    // draftDeckSelection's own indices) since Power Duel's own pool is
+    // always singleton -- no duplicate cards to disambiguate. Submitting
+    // converts the current selection back into decklist text
+    // (formatDecklistCardLines(), the same helper the old "Load your
+    // pool" button used to pre-fill the paste field with) and posts it
+    // through the exact same submitCustomDuelDeck() endpoint the
+    // paste-based form already uses -- GameService::submitCustomDuelDeck()'s
+    // own pool-membership/format validation runs exactly the same way
+    // either way, so no new backend route was needed for this, only the
+    // extra power_duel_previous_deck_card_ids field for pre-selection.
+    function renderDuelSideboardPicker(state) {
+        document.getElementById('duel-deck-sideboard-picker').hidden = false;
+
+        const pool = state.power_duel_sideboard_pool;
+        if (!duelSideboardPickerInitialized) {
+            duelSideboardPickerSelection = new Set(
+                state.power_duel_previous_deck_card_ids && state.power_duel_previous_deck_card_ids.length > 0
+                    ? state.power_duel_previous_deck_card_ids
+                    : pool.map((card) => card.card_id)
+            );
+            duelSideboardPickerInitialized = true;
+        }
+
+        document.getElementById('duel-deck-sideboard-picker-status').textContent =
+            'Sideboarding is on for this match -- select the cards for your new deck from your original deck and sideboard below (' +
+            duelSideboardPickerSelection.size + ' selected). Tap a card to select/de-select it.';
+
+        const cardsEl = document.getElementById('duel-deck-sideboard-picker-cards');
+        cardsEl.innerHTML = '';
+        for (const card of pool) {
+            const selected = duelSideboardPickerSelection.has(card.card_id);
+            const thumb = buildCardThumb(card, {
+                onClick: () => openCardDetail(card, null, {
+                    selected,
+                    disabled: false,
+                    onToggle: () => {
+                        if (duelSideboardPickerSelection.has(card.card_id)) {
+                            duelSideboardPickerSelection.delete(card.card_id);
+                        } else {
+                            duelSideboardPickerSelection.add(card.card_id);
+                        }
+                        renderDuelSideboardPicker(state);
+                    },
+                }),
+                // Same dimmed/dashed-border ".not-playable" treatment
+                // renderDraftDeckBuilding() reuses for "not currently in
+                // the deck" -- see its own docblock.
+                notPlayable: !selected,
+            });
+            thumb.classList.toggle('selected', selected);
+            cardsEl.appendChild(thumb);
         }
     }
 
@@ -7289,6 +7835,35 @@
 
     document.getElementById('duel-deck-submit-saved-decklist').addEventListener('change', (event) => {
         document.getElementById('duel-deck-submit-paste-fields').hidden = event.target.value !== '';
+    });
+
+    // Power Duel sideboarding's own visual picker submit (migration 0233,
+    // issue #90 follow-up) -- converts the current toggle selection back
+    // into decklist text (formatDecklistCardLines(), the same helper the
+    // old "Load your pool" button used) and posts it through the exact
+    // same endpoint the paste-based form's own submit button uses below;
+    // reads currentState fresh rather than a stashed reference so this
+    // still works after any number of intervening polls.
+    document.getElementById('duel-deck-sideboard-picker-submit-button').addEventListener('click', async () => {
+        const errorEl = document.getElementById('duel-deck-sideboard-picker-error');
+        errorEl.hidden = true;
+
+        const pool = currentState && currentState.power_duel_sideboard_pool;
+        if (!pool) {
+            return;
+        }
+        const selectedCards = pool.filter((card) => duelSideboardPickerSelection.has(card.card_id));
+        const decklistText = formatDecklistCardLines(selectedCards).join('\n');
+        const { ok, body } = await submitCustomDuelDeck(currentGameId, decklistText, undefined);
+
+        if (!ok) {
+            errorEl.textContent = body.message || 'Could not submit that deck.';
+            errorEl.hidden = false;
+            return;
+        }
+
+        duelSideboardPickerInitialized = false;
+        await refreshBoard();
     });
 
     document.getElementById('duel-deck-submit-button').addEventListener('click', async () => {
@@ -7732,9 +8307,6 @@
             return select;
         }
 
-        const select = document.createElement('select');
-        select.id = 'choice-field-' + path;
-
         const options = field.type === 'mode'
             ? field.options.map((value) => {
                 let label = capitalize(value).replace(/_/g, ' ');
@@ -7748,9 +8320,25 @@
             })
             : fieldOptions(field, card);
 
+        // A multi-select field (Malice's "choose two of your moods,"
+        // Infatuation's two-hand-card discard, etc.) used to be a native
+        // <select multiple> -- a live bug report caught this: selecting a
+        // SECOND, non-adjacent option in one of these requires holding
+        // Ctrl/Cmd while clicking, standard browser behavior for
+        // <select multiple> that isn't remotely obvious from looking at
+        // it, and a plain click on a second option silently replaces the
+        // first selection instead of adding to it. A checkbox list needs
+        // no modifier key and makes "already selected" visually obvious
+        // per-item, so every field.multi field builds one of these
+        // instead now -- see buildMultiCheckboxField() below.
         if (field.multi) {
-            select.multiple = true;
-        } else if (!(field.required && options.length === 1)) {
+            return buildMultiCheckboxField(field, options, path);
+        }
+
+        const select = document.createElement('select');
+        select.id = 'choice-field-' + path;
+
+        if (!(field.required && options.length === 1)) {
             // 'grant_choice' (grant_source_card_id) reads differently from
             // every other optional field here: leaving it blank doesn't
             // mean "use no grant" (a play always uses one), just "no
@@ -7787,22 +8375,88 @@
         // every viewer agrees on what "the default" is for the same
         // field, rather than each client deriving its own. Pre-selects
         // it, but the player can still change it before submitting --
-        // this is a starting point, not a locked-in answer.
-        if (!field.multi && field.default !== undefined && field.default !== null) {
+        // this is a starting point, not a locked-in answer. (field.multi
+        // never carries a default -- see the early return above -- so no
+        // guard is needed here.)
+        if (field.default !== undefined && field.default !== null) {
             select.value = String(field.default);
         }
 
         return select;
     }
 
-    // Groups a 'mood' field's <option>s into one <optgroup> per owner
-    // (fieldOptions()'s 'mood' case stamps an ownerLabel onto each option
-    // for exactly this) instead of one flat list -- with 3+ players in
-    // play, picking a specific player's mood out of a single long list got
-    // tedious. Groups appear in the order each owner's first option is
-    // encountered (itself currentState.in_play's own order), not re-sorted
-    // by seat, consistent with every other consumer of currentState.in_play
-    // in this file.
+    // A field.multi field's own widget -- one checkbox per candidate,
+    // grouped by owner for 'mood' fields the same way the single-select
+    // path groups into <optgroup>s (see appendGroupedMoodCheckboxes()
+    // below), a flat list otherwise. Replaces a native <select multiple>
+    // (see buildFieldWidget()'s own comment on why) -- the container
+    // itself carries the 'choice-field-<path>' id every other widget
+    // uses, and a native 'change' event on any checkbox inside it bubbles
+    // up to it, so buildFieldRow()'s own `widget.addEventListener('change',
+    // onChange)` keeps working unchanged. fieldHasValue()/
+    // selectedCandidates()/buildChoicesFromFields() read the checked
+    // checkboxes directly rather than through any <select>-shaped API.
+    function buildMultiCheckboxField(field, options, path) {
+        const container = document.createElement('div');
+        container.id = 'choice-field-' + path;
+        container.className = 'choice-field-multi';
+        container.setAttribute('role', 'group');
+
+        if (field.type === 'mood') {
+            appendGroupedMoodCheckboxes(container, options);
+        } else {
+            for (const option of options) {
+                container.appendChild(buildCheckboxOption(option));
+            }
+        }
+
+        return container;
+    }
+
+    function buildCheckboxOption(option) {
+        const label = document.createElement('label');
+        label.className = 'choice-field-multi-option';
+
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.value = String(option.value);
+        label.appendChild(checkbox);
+        label.appendChild(document.createTextNode(' ' + option.label));
+
+        return label;
+    }
+
+    // Groups a 'mood' multi field's own checkboxes by owner (fieldOptions()'s
+    // 'mood' case stamps an ownerLabel onto each option for exactly this),
+    // the checkbox-list equivalent of appendGroupedMoodOptions() below --
+    // same "with 3+ players in play, a flat list got tedious" reasoning,
+    // same encounter-order grouping.
+    function appendGroupedMoodCheckboxes(container, options) {
+        const groupsByOwner = new Map();
+        for (const option of options) {
+            let group = groupsByOwner.get(option.ownerLabel);
+            if (!group) {
+                group = document.createElement('div');
+                group.className = 'choice-field-multi-group';
+                const heading = document.createElement('div');
+                heading.className = 'choice-field-multi-group-label';
+                heading.textContent = option.ownerLabel;
+                group.appendChild(heading);
+                groupsByOwner.set(option.ownerLabel, group);
+                container.appendChild(group);
+            }
+            group.appendChild(buildCheckboxOption(option));
+        }
+    }
+
+    // Groups a single-select 'mood' field's <option>s into one <optgroup>
+    // per owner (fieldOptions()'s 'mood' case stamps an ownerLabel onto
+    // each option for exactly this) instead of one flat list -- with 3+
+    // players in play, picking a specific player's mood out of a single
+    // long list got tedious. Groups appear in the order each owner's
+    // first option is encountered (itself currentState.in_play's own
+    // order), not re-sorted by seat, consistent with every other consumer
+    // of currentState.in_play in this file.
     function appendGroupedMoodOptions(select, options) {
         const groupsByOwner = new Map();
         for (const option of options) {
@@ -7877,7 +8531,7 @@
     function fieldHasValue(widget, field) {
         if (field.type === 'bool') return true; // a checkbox always has a value (checked or not)
         if (field.type === 'card_order') return true; // reordering field.cards is always a complete answer, even untouched
-        if (field.multi) return widget.selectedOptions.length > 0;
+        if (field.multi) return widget.querySelectorAll('input:checked').length > 0;
         return widget.value !== '';
     }
 
@@ -7890,9 +8544,7 @@
     // the server re-validates the same rules regardless.
 
     function selectedCandidates(field, widget) {
-        const ids = Array.from(widget.selectedOptions)
-            .filter((option) => option.value !== '')
-            .map((option) => Number(option.value));
+        const ids = Array.from(widget.querySelectorAll('input:checked')).map((input) => Number(input.value));
         const source = field.type === 'mood' ? currentState.in_play
             : field.type === 'hand_card' ? currentState.you.hand
             : field.type === 'discard_card' ? currentState.discard_pile
@@ -8433,7 +9085,7 @@
             } else if (field.type === 'card_order') {
                 choices[field.key] = Array.from(widget.querySelectorAll('li')).map((item) => Number(item.dataset.cardId));
             } else if (field.multi) {
-                const values = Array.from(widget.selectedOptions).map((option) => option.value);
+                const values = Array.from(widget.querySelectorAll('input:checked')).map((input) => input.value);
                 if (values.length > 0) {
                     choices[field.key] = field.type === 'mode' ? values : values.map(Number);
                 }
@@ -8626,8 +9278,17 @@
     document.getElementById('deck-builder-format').addEventListener('change', (event) => {
         document.getElementById('deck-builder-format-description').textContent =
             DECK_BUILDER_FORMATS[event.target.value].description;
+        // Sideboarding (migration 0228, issue #90 follow-up) -- the
+        // section itself hides for Structure Deck/jceddy's 75 Card
+        // (whatever's already in deckBuilderSideboardCardIds from an
+        // earlier format is left untouched, same as switching away never
+        // retroactively removes anything from the main deck either), and
+        // the catalog's own "+ Sideboard" buttons need to appear/disappear
+        // to match.
+        document.getElementById('deck-builder-sideboard-section').hidden = !deckBuilderFormatSupportsSideboard(event.target.value);
         renderDeckBuilderCatalog();
         renderDeckBuilderDeck();
+        renderDeckBuilderSideboard();
     });
 
     // Every filter/catalog-sort control re-renders just the catalog
@@ -8644,6 +9305,9 @@
     for (const id of ['deck-builder-deck-sort-1', 'deck-builder-deck-sort-2', 'deck-builder-deck-sort-3']) {
         document.getElementById(id).addEventListener('change', renderDeckBuilderDeck);
     }
+    for (const id of ['deck-builder-sideboard-sort-1', 'deck-builder-sideboard-sort-2', 'deck-builder-sideboard-sort-3']) {
+        document.getElementById(id).addEventListener('change', renderDeckBuilderSideboard);
+    }
 
     document.getElementById('deck-builder-save-button').addEventListener('click', async () => {
         const errorEl = document.getElementById('deck-builder-error');
@@ -8653,10 +9317,15 @@
 
         const name = document.getElementById('deck-builder-name').value;
         const visibility = document.getElementById('deck-builder-friends-visible').checked ? 'friends' : 'private';
+        // Sideboarding (migration 0228, issue #90 follow-up) -- undefined
+        // (not an empty array) when there's nothing in it, matching
+        // createDecklist()/updateDecklist()'s own existing convention for
+        // "no sideboard" from the paste/upload form.
+        const sideboardCardIds = deckBuilderSideboardCardIds.length > 0 ? deckBuilderSideboardCardIds : undefined;
 
         const { ok, body } = deckBuilderEditingId
-            ? await updateDecklist(deckBuilderEditingId, name, undefined, deckBuilderCardIds, undefined, visibility)
-            : await createDecklist(name, undefined, deckBuilderCardIds, undefined, visibility);
+            ? await updateDecklist(deckBuilderEditingId, name, undefined, deckBuilderCardIds, sideboardCardIds, visibility)
+            : await createDecklist(name, undefined, deckBuilderCardIds, sideboardCardIds, visibility);
 
         if (!ok) {
             errorEl.textContent = body.message || 'Could not save that deck.';

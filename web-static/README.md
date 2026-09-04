@@ -167,16 +167,41 @@ wired in separately -- it takes an optional third `fallbackSrc` argument
 (unused by its only other caller) so a themed preview that 404s swaps
 back to the default print instead of showing a broken-image icon.
 
+Steampunk's coverage grew further with four more Chaos Draft token
+moods (`cards.is_token = 1`, same `cardArtUrl()` path as any other
+card): Unconcern (`img/cards/MSW/steampunk/135-unconcern.webp`),
+Passivity (`img/cards/MSW/steampunk/136-passivity.webp`), Tedium
+(`img/cards/MSW/steampunk/137-tedium.webp`), and Idleness
+(`img/cards/MSW/steampunk/138-idleness.webp`), plus two ordinary base-set
+moods: Rationalization (`img/cards/MSW/steampunk/49-rationalization.webp`)
+and Recklessness (`img/cards/MSW/steampunk/100-recklessness.webp`).
+
 Futuristic's first three pieces of real card-skin art followed the same
 pattern, plus its own Hurt Feelings art:
 `img/cards/MSW/futuristic/32-creativity.webp`,
 `img/cards/MSW/futuristic/67-intimidation.webp`,
 `img/cards/MSW/futuristic/134-smugness.webp`, and
-`img/hurt-feelings-futuristic.webp`. Neon's own matching set followed
+`img/hurt-feelings-futuristic.webp` -- since joined by the same four
+Chaos Draft token moods Steampunk's own coverage grew with above:
+`img/cards/MSW/futuristic/135-unconcern.webp`,
+`img/cards/MSW/futuristic/136-passivity.webp`,
+`img/cards/MSW/futuristic/137-tedium.webp`, and
+`img/cards/MSW/futuristic/138-idleness.webp`, plus Steampunk's own
+Rationalization/Recklessness pair:
+`img/cards/MSW/futuristic/49-rationalization.webp` and
+`img/cards/MSW/futuristic/100-recklessness.webp`. Neon's own matching set followed
 the same pattern: `img/cards/MSW/neon/32-creativity.webp`,
 `img/cards/MSW/neon/67-intimidation.webp`,
 `img/cards/MSW/neon/134-smugness.webp`, and
-`img/hurt-feelings-neon.webp`. Any future skin (or these three, for any
+`img/hurt-feelings-neon.webp` -- joined by the same four Chaos Draft
+token moods as the other two skins:
+`img/cards/MSW/neon/135-unconcern.webp`,
+`img/cards/MSW/neon/136-passivity.webp`,
+`img/cards/MSW/neon/137-tedium.webp`, and
+`img/cards/MSW/neon/138-idleness.webp`, plus the same
+Rationalization/Recklessness pair as the other two skins:
+`img/cards/MSW/neon/49-rationalization.webp` and
+`img/cards/MSW/neon/100-recklessness.webp`. Any future skin (or these three, for any
 card not yet covered) without its own themed file for a given card still
 404s and falls back to the plain print through the exact same mechanism.
 
@@ -916,6 +941,27 @@ same "don't wait for Settings to be opened" reasoning as
 the Settings dialog, so switching the preference takes effect live
 without a reload.
 
+### Bot is thinking indicator (issue #419)
+
+The "Tactical Bot" tier (`php-app/README.md`'s own "Tactical Bot" section)
+searches for its play rather than picking one instantly, in a background
+job that can take up to that bot's own time budget (30/60/90 seconds
+depending which of the three accounts -- see "New game dialog" above) --
+`state.bot_thinking`
+(`{game_player_id, username, time_budget_seconds}`, or `null`), already
+present on every `refreshBoard()` poll's response, is all this needs.
+`renderBoard()` checks it right alongside the existing "your turn"/
+"waiting on another player"/"&lt;name&gt;'s turn" logic that fills in
+`#board-round-status`'s own turn suffix, and overrides all three with
+"— &lt;username&gt; is thinking…" whenever it's set, since that's more
+specific and more useful to say about that same turn regardless of
+viewer. Needs no dedicated polling of its own -- the existing 4-second
+`refreshBoard()` cadence already picks up the job resolving and clears
+the text on its own next poll -- and applies identically for a spectator
+(`getSpectatorGameState()` exposes the same field) as for either seated
+player, so nobody watching a Tactical Bot's own game is left staring at
+"waiting on another player" with no idea why it's taking a while.
+
 ### Custom card/effect formats preference (issue #405 follow-up)
 
 `#settings-allow-custom-content-checkbox`, in the Settings dialog's
@@ -1013,6 +1059,186 @@ explicitly turn it on. Same "sync on open, save on change" wiring as
 every other Settings checkbox (`POST /user/matchmaking-discoverable-preference`).
 Only gates whether YOUR OWN listings are shown to strangers -- joining
 someone else's listing needs no opt-in of its own.
+
+### Best of three (issue #90)
+
+`#new-game-best-of-three-label` (a checkbox, right above the Deck
+dropdown) opts a Duel/Open Team Play/Closed Team Play/Traditional game
+into a best-of-three match -- see "Best of three" in `php-app/README.md`
+for the full backend writeup (`game_matches`, migration 0223). Shown/
+hidden by `updateBestOfThreeFieldVisibility()` (`isBestOfThreeAvailable()`,
+wired to the same format/deck-type `change` events
+`updateDeckTypeAvailability()` already listens to, plus the opponent
+checkboxes/open-lobby player-count select/mode radios, and run once when
+the dialog opens): visible for `duel`/`team`/`closed_team` with a
+non-draft deck type unconditionally, or for `standard` only once the
+dialog's current selections add up to exactly 2 total players
+(`currentNewGamePlayerCount()`) -- with 3+ players there's no single
+"the opponent" for a best-of-three race to be between, the same reason
+`isDeckTypeAvailableForFormat()`'s own draft deck types already fall back
+to a single game past 2 players. Every draft-based deck type already gets
+its own best-of-three match regardless (`draft_match_id`), so the
+checkbox stays hidden there too rather than offering a second,
+meaningless toggle. Checking it sends `best_of_three: true`
+(`createGame()`'s new last parameter, both here and in app.js's own
+wrapper) to `POST /games`, or -- issue #90 follow-up, this was missing
+entirely at first, so checking the box while posting to the open lobby
+silently did nothing -- `best_of_three` in the payload to `POST
+/open-games` (`postOpenGame()`), threaded through `create_game_params` to
+`MatchmakingService::joinOpenGame()`'s own eventual `createGame()` call
+once the roster fills.
+
+**Lobby grouping** -- `GameService::gameMatchSummaryFor()` returns almost
+the exact same shape `draftMatchSummaryFor()` already does (`status`/
+`your_wins`/`opponent_wins`/`games_to_win`/`players`), exposed as
+`game.game_match`/`game.game_match_id` right alongside the existing
+`game.draft_match`/`game.draft_match_id`. `groupGameEntries()`'s own
+`matchGroupKey()` picks whichever of the two a game actually carries
+(never both) to group its up-to-3 games into one `buildMatchGroupRow()`
+entry, and that function itself reads `firstGame.draft_match ||
+firstGame.game_match` -- since the two shapes are otherwise identical,
+every bit of match-group rendering (the "Match score: you X, opponent Y
+(first to Z wins)" line, the "... won the match" result line, each game's
+own compact sub-row) already works for either kind of match with no
+branching. The one genuine difference: "View draft pool" (issue #314)
+stays gated specifically on `firstGame.draft_match_id !== null` -- issue
+#90's own match has no shared pool to view at all (no draft ever
+happened), unlike every draft-family deck type.
+
+**Both teammates as the match winner (bugfix, follow-up to issue #90)** --
+`gameMatchSummaryFor()`'s own winner field is `winner_usernames` (an
+array), not `draftMatchSummaryFor()`'s singular `winner_username` (a
+draft-based match is never team-format best-of-three, so this never came
+up there -- see `draftMatchSummaryFor()`'s own docblock). For a
+team-format best-of-three match, it holds BOTH teammates on the winning
+team (resolved from the winning representative's own seat's `team_id`,
+not just that one representative's `user_id` -- see
+`GameService::advanceGameMatch()`'s own docblock for why that
+representative isn't necessarily the same teammate game to game), rather
+than crediting just whichever teammate happened to complete the deciding
+game. Non-team matches fall back to the single winner's username, same as
+before. `buildMatchGroupRow()`'s own `matchWinnerUsernames` normalizes
+either shape (`match.winner_usernames` or the older single
+`match.winner_username`) into one array and joins it with `' & '`, the
+same convention `game.winner_usernames` already uses for a single game's
+own "Game over" result line.
+
+This grouping only ever has both games to group in the first place if
+the backend's own lobby queries actually return both -- `listGamesForUser()`/
+`listPastGamesForUser()` were missing their own `game_matches` carve-out
+at first (a second issue #90 follow-up), so a completed game 1 of a
+still in_progress match jumped straight to Past games instead of staying
+listed alongside its still-active game 2 the way a draft match's own
+game 1 already does; see `php-app/README.md`'s own "Lobby grouping and
+the board's own 'next game' button" writeup for the fix.
+
+**Sideboarding** -- a custom_duel match's game 2/3 is a completely
+ordinary fresh `games` row with no submitted decklist yet, so the
+EXISTING "submit your decklist" flow (already built for a brand new
+custom_duel game) renders identically with no changes of its own needed;
+opening the new game from the lobby (or its own "it's your turn"
+notification, tag `'custom-duel-deck'`) is all a player needs to do.
+
+**Power Duel sideboarding** -- a second, narrower opt-in (migration
+0228) for the exact scope `GameService::createGame()`'s own
+`$allowSideboarding` docblock describes: a best-of-three Duel match
+using `custom_duel`'s existing "Power Duel" preset. `#new-game-allow-
+sideboarding-label` (a checkbox right below `#new-game-best-of-three-
+label`) is shown by `updateAllowSideboardingFieldVisibility()` only once
+format is `duel`, deck_type is `custom_duel`, `#new-game-duel-rules-
+preset` is `power`, AND `#new-game-best-of-three` is itself checked --
+wired to that checkbox's own `change` (in addition to the format/deck-
+type/preset `change` events `updateBestOfThreeFieldVisibility()` already
+listens to, which now also calls this one so toggling "Best of three"
+itself keeps this in sync) and unchecked, same as every other
+conditionally-shown New Game field, whenever it goes out of view.
+Checking it sends `allow_sideboarding: true` (`createGame()`'s new last
+parameter, both here and in app.js's own wrapper) to `POST /games`, or
+`allow_sideboarding` in the payload to `POST /open-games`
+(`postOpenGame()`) -- threaded through `create_game_params` to
+`MatchmakingService::joinOpenGame()`'s own eventual `createGame()` call
+from the start this time, unlike `best_of_three`'s own initial open-lobby
+gap (see above).
+
+Without it, a Power Duel best-of-three match's deck is locked for the
+whole match (see "Best of three" in `php-app/README.md`) -- the waiting
+room for game 2/3 never even appears, since `advanceGameMatch()` already
+carried the previous game's decklist forward and `startGame()`'s own
+gate is already satisfied. With it, game 2/3's own `renderDuelDeckSubmission()`
+call (`state.power_duel_sideboard_pool`, only ever non-null then) shows
+`#duel-deck-sideboard-picker` INSTEAD of the plain paste/upload/saved-deck
+form (`#duel-deck-submit-form-container`, hidden for this case) -- a
+visual toggle picker (`renderDuelSideboardPicker()`, migration 0233)
+mirroring the draft formats' own `#draft-deck-building` sideboard screen
+rather than the earlier plain-text "Load your pool" button it replaced:
+every card from the player's own game-1 pool (main deck + sideboard
+combined, `state.power_duel_sideboard_pool`) renders as a toggleable
+thumbnail via the same `openCardDetail()` `selection` (Select/De-select
+popup) pattern `renderDraftDeckBuilding()` uses, dimmed with a dashed
+border (`buildCardThumb()`'s own `notPlayable` option) while excluded.
+`duelSideboardPickerSelection` (a plain `Set<card_id>` -- Power Duel's
+pool is always singleton, so no duplicate-card index tracking is needed
+the way `draftDeckSelection` requires) is seeded once per game
+(`duelSideboardPickerInitialized`, reset by `showBoard()`) from
+`state.power_duel_previous_deck_card_ids` -- the exact cards the player
+played in the immediately PRECEDING game (not always game 1's own
+original deck -- game 3's own "previous game" is game 2, itself possibly
+already a sideboard swap away from game 1), so the picker opens with
+last game's deck pre-selected rather than forcing a full retrim from
+scratch every time; falls back to selecting the whole pool only if that's
+ever unexpectedly absent. Submitting converts the current selection back
+into decklist text (`formatDecklistCardLines()`, the same per-card-line
+formatting `buildDecklistCardsText()` already uses) and posts it through
+the exact same `submitCustomDuelDeck()` endpoint the paste-based form
+already uses -- `submitCustomDuelDeck()`'s own pool-membership/format
+validation runs exactly the same way either way, so no new backend route
+was needed for this, only the extra `power_duel_previous_deck_card_ids`
+field (`GameService::getState()`, bare card ids alongside the already-
+serialized `power_duel_sideboard_pool`) for pre-selection. The picker
+hides again once `deck_submitted` is true, the same as the rest of that
+form.
+
+**Deck builder** -- the card-by-card Deck Builder (issue #93, see
+"Saved decklists" above) gained its own sideboard panel
+(`#deck-builder-sideboard-section`), shown only for the Free-form/Power
+Duel formats (`deckBuilderFormatSupportsSideboard()`) -- Structure
+Deck/jceddy's 75 Card stay exactly as they were, an exact-match rarity/
+color shape for the WHOLE deck with no natural "extra bench" concept of
+their own. `deckBuilderSideboardCardIds` mirrors `deckBuilderCardIds`'
+own flat one-entry-per-copy array. A catalog item's "+ Deck"/"+
+Sideboard" actions live in the shared card-detail popup rather than
+under its own thumbnail (`buildDeckBuilderCatalogCardItem()`'s thumb
+click opens `openDeckBuilderCardDetail()`, which computes them via
+`deckBuilderCardDetailActions()`) -- "+ Deck" always, plus "+
+Sideboard" whenever the current format supports it, each paired with
+its own copy-count indicator (`deckBuilderCopiesLabel()`: "2 in deck"
+for an uncapped zone, "2 / 3 in deck" once `deckBuilderMaxCopiesForCard()`
+knows a cap) on its own line under the card image. Clicking one adds
+the copy and re-opens the SAME popup in place (`openCardDetail()`'s own
+`deckBuilderActions` parameter skips `showModal()` on an already-open
+dialog) rather than closing it, so adding several copies in a row --
+or "+ Deck" then "+ Sideboard" for two different cards -- never means
+reopening the dialog each time; the two actions also gate each other
+live, since a card already in one zone can't be added to the other.
+`canAddCardToBuilderSideboard()` mirrors `canAddCardToBuilderDeck()`'s
+own per-format cap logic: Free-form is unrestricted (matching its own
+main-deck policy), Power Duel caps the sideboard at
+`POWER_DUEL_SIDEBOARD_MAX_CARDS` (5) cards, singleton within it, and
+never lets the same card sit in both zones at once. The sideboard panel
+itself (`renderDeckBuilderSideboard()`) is a third card grid alongside
+the catalog/deck ones, with its own independent 3-select multi-sort
+(`#deck-builder-sideboard-sort-1/2/3`) and running `<count>`/`<count> /
+<target>` summary line, same conventions the deck panel already
+established; a deck/sideboard item's own single "Remove" action stays
+under its thumbnail (`buildDeckBuilderCardItem()`), unaffected by the
+catalog's move into the popup. Saving threads `deckBuilderSideboardCardIds` through to
+`createDecklist()`/`updateDecklist()`'s own existing `sideboard_card_ids`
+parameter (already wired end-to-end server-side since issue #92 -- this
+was purely a missing piece of client-side UI, not a new backend
+capability); opening the builder on an existing owned deck
+(`openDeckBuilder(existingId)`) now also loads its own
+`sideboard_cards` back in, the same way it already did for the main
+deck's `cards`.
 
 ## Pages
 
@@ -1320,6 +1546,27 @@ someone else's listing needs no opt-in of its own.
     the per-player icons below); a row is never highlighted purely because
     it's some OTHER player's turn or they're the one being waited on.
 
+    `--color-your-turn-bg`/`--color-awaiting-response-bg` were originally
+    defined only in the base (light) `:root`, the `prefers-color-scheme:
+    dark` media query, and `:root[data-theme="dark"]` -- so a user whose
+    OS/browser itself was in light mode but who explicitly picked one of
+    the OTHER named dark themes (Jade, High Contrast Dark, or one of the
+    three dark skins) still got the plain light palette's pale mint/cream
+    boxes, since a named theme's own `color-scheme: dark` doesn't make
+    `prefers-color-scheme: dark` match -- that media feature only tracks
+    the OS/browser's own setting, never a page's explicit theme choice
+    (reported live: looked fine on a mobile device in OS dark mode, wrong
+    on a desktop browser in OS light mode, despite the same theme being
+    selected on both). Fixed by giving every named dark theme its own
+    explicit pair of these two variables, tuned to read as part of that
+    theme's own palette rather than reusing the plain dark theme's colors
+    verbatim (see `css/style.css`'s own comment on Jade's block for the
+    full explanation, and each subsequent theme's block for its own color
+    choice) -- Jade, High Contrast Dark, Steampunk, Futuristic, and Neon
+    each get a palette-tinted pair, while Noir -- whose background is a
+    neutral near-black rather than hue-tinted -- just reuses the plain
+    dark theme's own green/amber since there's no clashing hue to avoid.
+
     Rather than the old "(your turn)"/"(waiting on &lt;username&gt;)" text
     tags (which could only ever name the viewer, even when a pending
     decision was actually paused on a different player), each opponent's
@@ -1483,6 +1730,19 @@ someone else's listing needs no opt-in of its own.
     friend), so a human can play WITH a bot teammate, not just against
     one. See "Practice bots" in `php-app/README.md` for the full
     feature.
+
+    The bot picker's own checkbox list is every `is_bot = 1` user
+    (`GET /games/bots`) with no distinction drawn between the plain
+    heuristic roster and the three opt-in "Tactical Bot" accounts
+    (`BotSage`/`BotSageQuick`/`BotSageDeep`, `users.uses_tactical_ai` --
+    see "Tactical Bot" in `php-app/README.md`) -- picking one needs no
+    dialog changes of its own, since it's seated exactly like any other
+    bot. Each Tactical Bot's own name already says enough about its
+    relative speed (Quick/plain/Deep) that the picker draws no further
+    visual distinction. A Tactical Bot's own turn can take noticeably
+    longer than the instant heuristic bots (up to its own budget, run in a
+    background job rather than blocking the request) -- see "Bot is
+    thinking indicator" below for the one place that shows up in this UI.
 
     Checking a bot while `deckType` is `custom_duel` (issue #140's Duel
     extension -- see "Practice bots in Duel with a custom decklist" in
@@ -2039,34 +2299,49 @@ someone else's listing needs no opt-in of its own.
     ability, additive rather than replacing it.
 
     A `#draft-match-scoreline` line (`renderDraftMatchScoreline()`, reading
-    whichever of `state.quick_draft`/`state.winston_draft`/`state.grid_draft`
-    is non-null --
-    all three share an identical outer shape, `your_wins`/`opponent_wins`/
-    `games_to_win`/`next_game_id`/`players`, even though their own `drafting`
-    sub-shapes differ -- hidden for every other deck_type) sits just below
-    the round-status line and is always shown once a `quick_draft`/
-    `winston_draft`/`grid_draft` game
+    whichever of `state.quick_draft`/`state.winston_draft`/`state.grid_draft`/
+    `state.rotisserie_draft`/`state.tiered_rotisserie_draft`/`state.sealed_deck`
+    (`draftState`) is non-null, falling back to `state.game_match`
+    (`matchState`) for a non-draft best-of-three match (issue #90, `format`
+    `duel`/`team`/`closed_team`/2-player `standard`) -- every one of those
+    shares an identical outer shape, `your_wins`/`opponent_wins`/
+    `games_to_win`/`next_game_id`/`players` (see `GameService::
+    gameMatchStateFor()`'s own docblock in `../php-app/README.md` for why
+    it needs its own function rather than reusing the lobby's
+    `gameMatchSummaryFor()` as-is), even though the draft-family's own
+    `drafting` sub-shapes differ -- hidden only when NEITHER is present)
+    sits just below the round-status line and is shown once any of them
     exists, regardless of whether the game itself is `waiting`/
     `in_progress`/`completed` -- "Best of 3 match, game N, you lead X-Y"
     (or "tied X-X"/"<opponent> leads Y-X", whichever side is actually
-    ahead) for a 2-player Quick Draft/Winston Draft/Grid Draft match.
-    A 3-4 player match of any of the three (issue #189, always
-    single-game -- `games_to_win` is 1) has more than one rival to show a
-    score for, so it branches on `players.length > 2` instead and builds
-    its text from `players` (every seated player's own username/wins/is_you,
-    populated identically by `quickDraftStateFor()`/`winstonDraftStateFor()`/
-    `gridDraftStateFor()` for any player count) -- "Single-game match -- you 0, Alice 0, Bob 1"
-    rather than the "Best of N"/leader-vs-opponent phrasing. No
-    deck_type-specific label here (Quick Draft/Winston
-    Draft/Grid Draft) -- that's already shown elsewhere on the board (the
-    title), so this line stays purely about the match's own progress. The same function also
-    owns `#draft-match-next-game-button`, right next to the scoreline:
-    hidden unless `next_game_id` is set (only true once
-    this specific game has completed but the match itself hasn't --
-    `advanceDraftMatch()` already created the next game), and its
-    `onclick` is just `showBoard(next_game_id)` -- a direct, prominent
-    link to the next game from a just-finished one, instead of making the
-    player go back to the lobby and pick the new `waiting` row out by hand.
+    ahead). A 3-4 player Quick Draft/Winston Draft/Grid Draft/Rotisserie
+    Draft match (issue #189, always single-game -- `games_to_win` is 1)
+    has more than one rival to show a score for, so it branches on
+    `draftState.players.length > 2` instead and builds its text from
+    `players` (every seated player's own username/wins/is_you, populated
+    identically by `quickDraftStateFor()`/`winstonDraftStateFor()`/etc. for
+    any player count) -- "Single-game match -- you 0, Alice 0, Bob 1"
+    rather than the "Best of N"/leader-vs-opponent phrasing. This branch is
+    deliberately keyed off `draftState` specifically, not the shared
+    `matchState` fallback -- a `game_match`'s own `players[]` can just as
+    easily be 4 entries for Open/Closed Team Play, but that's always a
+    genuine two-SIDED best-of-three (`your_wins`/`opponent_wins` already
+    aggregate each side/team), never a free-for-all single game the way
+    this branch assumes. No deck_type-specific label here (Quick Draft/
+    Winston Draft/Grid Draft) -- that's already shown elsewhere on the
+    board (the title), so this line stays purely about the match's own
+    progress. The same function also owns `#draft-match-next-game-button`,
+    right next to the scoreline: hidden unless `matchState.next_game_id` is
+    set (only true once this specific game has completed but the match
+    itself hasn't -- `advanceDraftMatch()`/`advanceGameMatch()` already
+    created the next game), and its `onclick` is just
+    `showBoard(matchState.next_game_id)` -- a direct, prominent link to the
+    next game from a just-finished one, instead of making the player go
+    back to the lobby and pick the new `waiting` row out by hand. This was
+    missing entirely for `game_match` at first (issue #90 follow-up):
+    `getState()` never exposed a `game_match` field at all, so a finished
+    game 1 of a non-draft best-of-three match had no way to reach game 2
+    except going back to the lobby by hand.
     **Rematch (issue #398).** Right below `#draft-match-next-game-button`,
     `#rematch-button` -- `renderRematchButton(state)`, called from
     `renderBoard()` alongside `renderDraftMatchScoreline(state)`, hides it
@@ -2075,13 +2350,13 @@ someone else's listing needs no opt-in of its own.
     buildGameState()`'s own new field -- see "Rematch" in
     `../php-app/README.md`), the game is genuinely `'completed'` (nobody
     resigned, `winner_usernames` non-empty -- an expired game has
-    neither), and, for a draft-based deck_type, only once the whole match
+    neither), and, for a match of any kind, only once the whole match
     itself has completed too (the same `draftState.status === 'completed'`
     check `renderDraftMatchScoreline()` reads, via the identical
-    `state.quick_draft || state.winston_draft || ...` OR-chain) --
-    `#draft-match-next-game-button` already owns the "this game finished
-    but the match continues" case, so Rematch would just be redundant (or
-    confusing) sitting next to it there. Its own `onclick` is
+    `state.quick_draft || state.winston_draft || ... || state.game_match`
+    OR-chain) -- `#draft-match-next-game-button` already owns the "this
+    game finished but the match continues" case, so Rematch would just be
+    redundant (or confusing) sitting next to it there. Its own `onclick` is
     `openNewGameDialog(buildRematchPrefill(state))` -- opens the *same*
     `#new-game-dialog` the plain "New game" button does (deliberately, not
     a second parallel creation flow -- that dialog already has ~20
@@ -2642,15 +2917,39 @@ someone else's listing needs no opt-in of its own.
     two chosen moods must share a color or value, Courage's must belong to
     different players, Anger's combined value can't exceed 5) — Play stays
     disabled with an inline message until the selection is actually legal,
-    without a round trip to find out. A `type: 'mood'` field's `<select>`
-    (Faith's `target_mood_id`, Malice's multi-select cascade, etc.) groups
-    its options into one `<optgroup>` per owner (`buildFieldWidget()`'s
+    without a round trip to find out. A `type: 'mood'` field's own
+    single-select `<select>` (Faith's `target_mood_id`, etc.) groups its
+    options into one `<optgroup>` per owner (`buildFieldWidget()`'s
     `appendGroupedMoodOptions()`, driven by an `ownerLabel` on each option
     from `fieldOptions()`) rather than one flat list — with 3+ players in
     a game, picking a specific player's mood out of a single long list got
     tedious, and grouping by owner mirrors how the in-play board itself is
     already organized by seating position. Groups appear in the order
     each owner's first candidate is encountered, not resorted by seat.
+
+    A `field.multi` field (Malice's own two-mood cascade, Self-Loathing's
+    own discard cost, Infatuation's two-hand-card discard, etc.) renders as
+    a bordered checkbox list (`.choice-field-multi`, `buildMultiCheckboxField()`),
+    not a `<select multiple>` — a live bug report caught the reason why:
+    selecting a SECOND, non-adjacent option in a native multi-select
+    requires holding Ctrl/Cmd while clicking, standard browser behavior
+    that isn't remotely obvious from looking at one, and a plain click on
+    a second option there silently REPLACES the first selection instead of
+    adding to it ("I had to pick two cards, but it only allowed me to pick
+    two cards next to each other on the list"). A checkbox needs no
+    modifier key and makes "already selected" visually obvious per-item,
+    so `fieldHasValue()`/`selectedCandidates()`/`buildChoicesFromFields()`
+    all read `.querySelectorAll('input:checked')` off the container instead
+    of a `<select>`'s own `.selectedOptions`. A `type: 'mood'` multi field
+    groups its own checkboxes by owner the same way the single-select case
+    above groups into `<optgroup>`s (`appendGroupedMoodCheckboxes()`, same
+    `ownerLabel`-driven, encounter-order grouping) — every other multi
+    field type (`hand_card`/`discard_card`/`player`) renders one flat
+    checkbox list instead, since none of those have an "owner" of their
+    own the way an in-play mood does. A native `change` event on any
+    checkbox inside the container still bubbles up to it, so
+    `buildFieldRow()`'s own single `widget.addEventListener('change', ...)`
+    call (shared with every other field type) needed no change at all.
     A `type: 'mood'` field's candidate list is normally built from the
     board as it stands *before* this play (the card being played itself
     isn't in play yet, from the browser's own point of view, until the
@@ -3022,6 +3321,18 @@ someone else's listing needs no opt-in of its own.
     of a card's zone). A round-scored line names every player's own final
     score and who won, not just that scoring happened.
 
+    The list itself is wrapped in a plain `<details id="recent-events-details"
+    open>` (its own `<summary>` doubling as both the "Recent plays" label
+    and the collapse/expand toggle, the same unstyled-`<details>`
+    convention "Plays left" already uses above) -- defaults open so
+    nothing about the existing layout changes for someone who's never
+    touched it, but a player who finds it too tall (a long game) can
+    collapse it out of the way without losing anything, since it's pure
+    `<details>` state, not tied to any poll. The "View log"/"View
+    decklist" buttons sit in their own `#recent-plays-actions` wrapper
+    directly above it, with a small margin-bottom so they don't sit flush
+    against the list's own `<summary>`.
+
     Drawing a card gets its own segment too -- "Alice drew a card" -- but
     deliberately never names *which* card, unlike every other zone move
     described above: a card drawn into a hand was never previously public,
@@ -3058,10 +3369,10 @@ someone else's listing needs no opt-in of its own.
 
     **Game log (issue #98).** The "Recent plays" list above is capped at
     15 entries and shows only the current game's board -- a "View log"
-    button next to its own `<h3>Recent plays</h3>` heading, and a second
-    one under every lobby row's own Play/View button (so a *completed*
-    game's log is reachable without reopening its board at all), each
-    open the same `#game-log-dialog` (`openGameLog()`), fetching the
+    button above it, and a second one under every lobby row's own
+    Play/View button (so a *completed* game's log is reachable without
+    reopening its board at all), each open the same `#game-log-dialog`
+    (`openGameLog()`), fetching the
     game's ENTIRE history via `GET /games/log`
     (`GameService::fullEventLog()`, chronological oldest-first, no cap --
     see `php-app/README.md`). Reusing recentEvents' own `describeEvent()`

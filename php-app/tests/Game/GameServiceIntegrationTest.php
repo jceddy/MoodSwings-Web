@@ -1762,6 +1762,50 @@ final class GameServiceIntegrationTest extends TestCase
         }
     }
 
+    // Issue #90's own non-draft best-of-three match wrapper (game_matches/
+    // games.game_match_id) needs the exact same listGamesForUser()/
+    // listPastGamesForUser() carve-out testListGamesForUserKeepsACompletedDraftMatchGameVisibleWhileASiblingGameIsStillInProgress()
+    // above already covers for draft_match_id -- a finished game 1 of a
+    // still-undecided Duel/Team/Closed Team Play/Traditional best-of-three
+    // match must stay in the main lobby, not jump to Past games, until the
+    // whole match is decided. Checked from Bob's perspective only -- Alice
+    // resigns from every game below (the simplest way to end one without
+    // playing it out), which routes each game straight to HER OWN Past
+    // games immediately via gp.resigned_at, a separate and already-tested
+    // mechanism unrelated to the game_match carve-out this test targets.
+    public function testListGamesForUserKeepsAnInProgressGameMatchsFinishedGameVisibleWhileMatchContinues(): void
+    {
+        $alice = $this->insertUser('bo3-lobby-alice');
+        $bob = $this->insertUser('bo3-lobby-bob');
+
+        $gameId = $this->games->createGame($alice, [$alice, $bob], format: 'duel', deckType: 'structure', bestOfThree: true);
+        $this->games->startGame($gameId);
+
+        $gameMatchId = (int) $this->fetchGame($gameId)['game_match_id'];
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $alice));
+
+        self::assertSame('completed', $this->fetchGame($gameId)['status']);
+        self::assertSame('in_progress', $this->fetchGameMatch($gameMatchId)['status'], 'one game win is not enough to decide a best-of-three match');
+
+        self::assertContains($gameId, array_column($this->games->listGamesForUser($bob), 'id'), 'completed game 1 of an in-progress best-of-three match must stay in the main lobby');
+        self::assertNotContains($gameId, array_column($this->games->listPastGamesForUser($bob), 'id'), 'and must NOT yet appear in Past games');
+
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE game_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $gameMatchId]);
+        $game2Id = (int) $nextGameStmt->fetchColumn();
+        $this->games->startGame($game2Id);
+        $this->games->resignGame($game2Id, $this->games->gamePlayerIdFor($game2Id, $alice));
+
+        self::assertSame('completed', $this->fetchGameMatch($gameMatchId)['status'], 'the match is now decided 2-0');
+
+        self::assertNotContains($gameId, array_column($this->games->listGamesForUser($bob), 'id'), 'game 1 moves out of the main lobby once the whole match is decided');
+        self::assertNotContains($game2Id, array_column($this->games->listGamesForUser($bob), 'id'), 'game 2 moves out of the main lobby too');
+        self::assertContains($gameId, array_column($this->games->listPastGamesForUser($bob), 'id'), 'game 1 now appears in Past games');
+        self::assertContains($game2Id, array_column($this->games->listPastGamesForUser($bob), 'id'), 'as does game 2');
+    }
+
     // -- Cleanup cron (issue #84) --------------------------------------------
 
     private function markGameStale(int $gameId, int $daysAgo): void
@@ -6323,6 +6367,51 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertStringNotContainsString((string) $scornId, $description);
     }
 
+    /**
+     * A bug caught live: "(duplicity repeat: 1, Array)" in the recent-
+     * plays log. Unlike every other REACTIONS-templated key,
+     * CardChoiceSchema's own 'duplicity_repeat' template says 'bool',
+     * but the answer actually stored is a nested {repeat, choices} pair
+     * (the repeated card's own fresh choices) -- describeChoiceEntry()'s
+     * generic array fallback imploded over that bool-plus-nested-array
+     * pair, printing the literal word "Array" (PHP's own string cast for
+     * the un-imploded 'choices' sub-array) right after "1" (the cast
+     * bool). It now collapses to the same "label alone" rendering a
+     * plain bool answer already gets.
+     */
+    public function testDuplicityRepeatLogEntryDoesNotPrintTheRawNestedArray(): void
+    {
+        $u1 = $this->insertUser('duplog1');
+        $u2 = $this->insertUser('duplog2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 37, 'in_play', $p1); // Duplicity
+        $dignityId = $this->insertGameCard($gameId, 8, 'hand', $p1); // Dignity
+        $charityId = $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity, value 1 -- discarded by the first invocation
+        $chivalryId = $this->insertGameCard($gameId, 4, 'hand', $p1); // Chivalry, value 3 -- discarded by the repeat
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $playResult = $this->games->playMood($gameId, $p1, $dignityId, ['discard_card_id' => $charityId]);
+        self::assertTrue($playResult['pending_decision'] ?? false);
+
+        $respondResult = $this->games->respondToDecision($gameId, $p1, [
+            'duplicity_repeat' => ['repeat' => true, 'choices' => ['discard_card_id' => $chivalryId]],
+        ]);
+        self::assertArrayNotHasKey('pending_decision', $respondResult);
+
+        $description = $this->games->getState($gameId, $u1)['recent_events'][0]['description'];
+        self::assertStringContainsString('duplicity repeat', $description);
+        self::assertStringNotContainsString('Array', $description);
+    }
+
     public function testCompulsionPausesForP2sOwnChoiceAndOnlyCompletesAfterTheyRespond(): void
     {
         $u1 = $this->insertUser('comp1');
@@ -9405,6 +9494,17 @@ final class GameServiceIntegrationTest extends TestCase
     {
         $stmt = $this->pdo->prepare('SELECT * FROM draft_matches WHERE id = :id');
         $stmt->execute(['id' => $draftMatchId]);
+
+        return $stmt->fetch();
+    }
+
+    // Issue #90's own best-of-three match wrapper for Duel/Open Team
+    // Play/Closed Team Play -- the non-draft counterpart to
+    // fetchDraftMatch() above.
+    private function fetchGameMatch(int $gameMatchId): array
+    {
+        $stmt = $this->pdo->prepare('SELECT * FROM game_matches WHERE id = :id');
+        $stmt->execute(['id' => $gameMatchId]);
 
         return $stmt->fetch();
     }
@@ -17061,6 +17161,787 @@ final class GameServiceIntegrationTest extends TestCase
         );
 
         self::assertSame(2, $this->games->getState($gameId, $alice)['sealed_deck']['games_to_win'], 'A 2-player Sealed Deck match should be best-of-three, same as every other draft deck_type (issue #189)');
+    }
+
+    // Issue #90: Duel/Open Team Play/Closed Team Play's own best-of-three
+    // match wrapper (game_matches, migration 0223) for non-draft deck
+    // types -- the following tests mirror testQuickDraftMatchProgressesGamesAndCompletesAtTwoWins()'s
+    // own shape, but drive each game to completion via resignGame() rather
+    // than simulating actual round scoring, since GameService::advanceGameMatch()
+    // only cares that a game completed and who won, not how.
+
+    public function testCreateGameBestOfThreeForDuelCreatesAGameMatch(): void
+    {
+        $alice = $this->insertUser('bo3-duel-create-alice');
+        $bob = $this->insertUser('bo3-duel-create-bob');
+
+        $gameId = $this->games->createGame($alice, [$alice, $bob], format: 'duel', deckType: 'structure', bestOfThree: true);
+
+        $game = $this->fetchGame($gameId);
+        self::assertNotNull($game['game_match_id']);
+        self::assertNull($game['draft_match_id'], 'a non-draft match must never also carry a draft_match_id');
+        self::assertSame(1, (int) $game['match_game_number']);
+    }
+
+    public function testCreateGameWithoutBestOfThreeNeverCreatesAGameMatch(): void
+    {
+        $alice = $this->insertUser('bo3-duel-off-alice');
+        $bob = $this->insertUser('bo3-duel-off-bob');
+
+        $gameId = $this->games->createGame($alice, [$alice, $bob], format: 'duel', deckType: 'structure');
+
+        $game = $this->fetchGame($gameId);
+        self::assertNull($game['game_match_id']);
+        self::assertNull($game['match_game_number']);
+    }
+
+    public function testCreateGameBestOfThreeIsIgnoredForADraftDeckType(): void
+    {
+        $alice = $this->insertUser('bo3-draft-ignored-alice');
+        $bob = $this->insertUser('bo3-draft-ignored-bob');
+
+        // Every draft-based deck_type already gets its own best-of-three
+        // match (draft_match_id) regardless of this flag -- $bestOfThree
+        // must be a harmless no-op here, not a second, conflicting match
+        // wrapper.
+        $gameId = $this->games->createGame($alice, [$alice, $bob], format: 'draft', deckType: 'quick_draft', quickDraftPoolSource: 'random_48', bestOfThree: true);
+
+        $game = $this->fetchGame($gameId);
+        self::assertNotNull($game['draft_match_id']);
+        self::assertNull($game['game_match_id']);
+    }
+
+    // Issue #90 follow-up: Traditional (format: 'standard') qualifies for
+    // a best-of-three match too, but only at exactly 2 players -- with
+    // 3-4, "first to 2 game wins" no longer names a single opponent.
+    public function testCreateGameBestOfThreeForStandardWithTwoPlayersCreatesAGameMatch(): void
+    {
+        $alice = $this->insertUser('bo3-standard-2p-alice');
+        $bob = $this->insertUser('bo3-standard-2p-bob');
+
+        $gameId = $this->games->createGame($alice, [$alice, $bob], format: 'standard', deckType: 'structure', bestOfThree: true);
+
+        $game = $this->fetchGame($gameId);
+        self::assertNotNull($game['game_match_id']);
+        self::assertSame(1, (int) $game['match_game_number']);
+    }
+
+    public function testCreateGameBestOfThreeForStandardWithThreePlayersIsIgnored(): void
+    {
+        $userIds = $this->insertUsers('bo3-standard-3p-' . uniqid(), 3);
+
+        $gameId = $this->games->createGame($userIds[0], $userIds, format: 'standard', deckType: 'structure', bestOfThree: true);
+
+        $game = $this->fetchGame($gameId);
+        self::assertNull($game['game_match_id']);
+        self::assertNull($game['match_game_number']);
+    }
+
+    public function testBestOfThreeStandardMatchProgressesAndCompletesAtTwoWins(): void
+    {
+        $alice = $this->insertUser('bo3-standard-progress-alice');
+        $bob = $this->insertUser('bo3-standard-progress-bob');
+
+        $gameId = $this->games->createGame($alice, [$alice, $bob], format: 'standard', deckType: 'structure', bestOfThree: true);
+        $this->games->startGame($gameId);
+
+        $gameMatchId = (int) $this->fetchGame($gameId)['game_match_id'];
+
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $alice));
+        self::assertSame('in_progress', $this->fetchGameMatch($gameMatchId)['status']);
+
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE game_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $gameMatchId]);
+        $game2Id = (int) $nextGameStmt->fetchColumn();
+        self::assertSame(2, (int) $this->fetchGame($game2Id)['match_game_number']);
+
+        $this->games->startGame($game2Id);
+        $this->games->resignGame($game2Id, $this->games->gamePlayerIdFor($game2Id, $alice));
+
+        $completedMatch = $this->fetchGameMatch($gameMatchId);
+        self::assertSame('completed', $completedMatch['status']);
+        self::assertSame($bob, (int) $completedMatch['winner_user_id']);
+    }
+
+    public function testBestOfThreeDuelMatchProgressesAndCompletesAtTwoWins(): void
+    {
+        $alice = $this->insertUser('bo3-duel-progress-alice');
+        $bob = $this->insertUser('bo3-duel-progress-bob');
+
+        $gameId = $this->games->createGame($alice, [$alice, $bob], format: 'duel', deckType: 'structure', bestOfThree: true);
+        $this->games->startGame($gameId);
+
+        $gameMatchId = (int) $this->fetchGame($gameId)['game_match_id'];
+
+        // Game 1: Alice resigns, so Bob wins it.
+        $alicePlayerId1 = $this->games->gamePlayerIdFor($gameId, $alice);
+        $this->games->resignGame($gameId, $alicePlayerId1);
+
+        $match = $this->fetchGameMatch($gameMatchId);
+        self::assertSame('in_progress', $match['status'], 'one game win is not enough to end a best-of-three match');
+
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE game_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $gameMatchId]);
+        $game2Id = (int) $nextGameStmt->fetchColumn();
+        self::assertNotSame($gameId, $game2Id, 'a fresh game must exist for the match to continue');
+        self::assertSame(2, (int) $this->fetchGame($game2Id)['match_game_number']);
+
+        $this->games->startGame($game2Id);
+
+        // Game 2: Bob resigns this time, so Alice ties the match 1-1.
+        $bobPlayerId2 = $this->games->gamePlayerIdFor($game2Id, $bob);
+        $this->games->resignGame($game2Id, $bobPlayerId2);
+
+        self::assertSame('in_progress', $this->fetchGameMatch($gameMatchId)['status'], 'a tied 1-1 match is not over');
+
+        $nextGameStmt->execute(['match_id' => $gameMatchId]);
+        $game3Id = (int) $nextGameStmt->fetchColumn();
+        self::assertSame(3, (int) $this->fetchGame($game3Id)['match_game_number']);
+
+        $this->games->startGame($game3Id);
+
+        // Game 3: Alice resigns again, giving Bob his 2nd game win and the match.
+        $alicePlayerId3 = $this->games->gamePlayerIdFor($game3Id, $alice);
+        $this->games->resignGame($game3Id, $alicePlayerId3);
+
+        $completedMatch = $this->fetchGameMatch($gameMatchId);
+        self::assertSame('completed', $completedMatch['status']);
+        self::assertSame($bob, (int) $completedMatch['winner_user_id']);
+        self::assertNotNull($completedMatch['completed_at']);
+
+        $nextGameStmt->execute(['match_id' => $gameMatchId]);
+        self::assertFalse($nextGameStmt->fetchColumn(), 'a best-of-three match can never need a 4th game');
+    }
+
+    // getState()'s own top-level 'game_match' field (GameService::
+    // gameMatchStateFor()) is what drives the board's "Go to next game"
+    // button once a non-draft best-of-three game finishes but the match
+    // continues -- the exact same next_game_id mechanism draft-based
+    // matches already have via quick_draft/winston_draft/etc. (see
+    // renderDraftMatchScoreline() in web-static/js/game.js).
+    public function testGameMatchStateExposesNextGameIdOnceAGameFinishesButTheMatchContinues(): void
+    {
+        $alice = $this->insertUser('bo3-nextgame-alice');
+        $bob = $this->insertUser('bo3-nextgame-bob');
+
+        $gameId = $this->games->createGame($alice, [$alice, $bob], format: 'duel', deckType: 'structure', bestOfThree: true);
+        $this->games->startGame($gameId);
+
+        self::assertNull($this->games->getState($gameId, $bob)['game_match']['next_game_id'], 'game 1 is still being played -- there is no next game yet');
+
+        $gameMatchId = (int) $this->fetchGame($gameId)['game_match_id'];
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $alice));
+
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE game_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $gameMatchId]);
+        $game2Id = (int) $nextGameStmt->fetchColumn();
+
+        $state = $this->games->getState($gameId, $bob);
+        self::assertSame('in_progress', $state['game_match']['status']);
+        self::assertSame(1, $state['game_match']['your_wins']);
+        self::assertSame(0, $state['game_match']['opponent_wins']);
+        self::assertSame($game2Id, $state['game_match']['next_game_id'], 'game 1 finished but the match continues -- the board must offer a way to jump straight to game 2');
+
+        // Game 2's own state has no next_game_id yet -- it's the current,
+        // still-unfinished game.
+        $this->games->startGame($game2Id);
+        self::assertNull($this->games->getState($game2Id, $bob)['game_match']['next_game_id']);
+
+        $this->games->resignGame($game2Id, $this->games->gamePlayerIdFor($game2Id, $alice));
+        $completedState = $this->games->getState($gameId, $bob);
+        self::assertSame('completed', $completedState['game_match']['status'], 'the match is now decided 2-0');
+        self::assertNull($completedState['game_match']['next_game_id'], 'a completed match has no next game to route to');
+    }
+
+    public function testBestOfThreeCustomDuelResetsTheDecklistForTheNextGame(): void
+    {
+        $alice = $this->insertUser('bo3-customduel-alice');
+        $bob = $this->insertUser('bo3-customduel-bob');
+        $decklistText = "1 Charity\n1 Chivalry\n1 Complacency\n1 Benevolence\n1 Conviction\n1 Encouragement\n1 Faith";
+
+        $gameId = $this->games->createGame(
+            $alice,
+            [$alice, $bob],
+            format: 'duel',
+            deckType: 'custom_duel',
+            duelDeckRules: ['preset' => 'user_defined', 'min_cards' => 7],
+            bestOfThree: true,
+        );
+        $this->games->submitCustomDuelDeck($gameId, $this->games->gamePlayerIdFor($gameId, $alice), $decklistText);
+        $this->games->submitCustomDuelDeck($gameId, $this->games->gamePlayerIdFor($gameId, $bob), $decklistText);
+        $this->games->startGame($gameId);
+
+        $gameMatchId = (int) $this->fetchGame($gameId)['game_match_id'];
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $alice));
+
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE game_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $gameMatchId]);
+        $game2Id = (int) $nextGameStmt->fetchColumn();
+
+        foreach ([$alice, $bob] as $userId) {
+            $playerId = $this->games->gamePlayerIdFor($game2Id, $userId);
+            self::assertNull(
+                $this->fetchGamePlayer($playerId)['custom_deck_card_ids'],
+                "user {$userId}'s custom_duel decklist must reset to NULL so a fresh (freely-edited) one is required before game 2 can start -- this is the feature's whole sideboarding story",
+            );
+        }
+
+        $this->expectException(GameStateException::class);
+        $this->games->startGame($game2Id);
+    }
+
+    // Power Duel sideboarding (migration 0228, issue #90 follow-up) --
+    // $allowSideboarding only ever actually takes effect for a
+    // best-of-three 'duel' game using deck_type 'custom_duel' built under
+    // the "Power Duel" duel_deck_rules preset; silently ignored (not an
+    // error) for anything else, the same "harmless no-op outside its own
+    // narrow scope" convention $bestOfThree's own Traditional-at-2-players
+    // restriction already established.
+    public function testAllowSideboardingOnlyAppliesToPowerDuelBestOfThree(): void
+    {
+        $alice = $this->insertUser('sb-scope-alice');
+        $bob = $this->insertUser('sb-scope-bob');
+
+        $powerBo3Id = $this->games->createGame(
+            $alice,
+            [$alice, $bob],
+            format: 'duel',
+            deckType: 'custom_duel',
+            duelDeckRules: ['preset' => 'power'],
+            bestOfThree: true,
+            allowSideboarding: true,
+        );
+        $powerBo3MatchId = (int) $this->fetchGame($powerBo3Id)['game_match_id'];
+        self::assertTrue((bool) $this->fetchGameMatch($powerBo3MatchId)['allow_sideboarding']);
+
+        // Same preset, but no best-of-three at all -- there's no match to
+        // carry the flag on in the first place.
+        $noMatchId = $this->games->createGame(
+            $alice,
+            [$alice, $bob],
+            format: 'duel',
+            deckType: 'custom_duel',
+            duelDeckRules: ['preset' => 'power'],
+            bestOfThree: false,
+            allowSideboarding: true,
+        );
+        self::assertNull($this->fetchGame($noMatchId)['game_match_id']);
+
+        // Best-of-three, but a different preset -- ignored, not an error.
+        $userDefinedBo3Id = $this->games->createGame(
+            $alice,
+            [$alice, $bob],
+            format: 'duel',
+            deckType: 'custom_duel',
+            duelDeckRules: ['preset' => 'user_defined', 'min_cards' => 7],
+            bestOfThree: true,
+            allowSideboarding: true,
+        );
+        $userDefinedMatchId = (int) $this->fetchGame($userDefinedBo3Id)['game_match_id'];
+        self::assertFalse((bool) $this->fetchGameMatch($userDefinedMatchId)['allow_sideboarding'], 'allow_sideboarding only ever applies to the "power" preset');
+    }
+
+    /** @return string[] */
+    private function fetchNonMythicCardNames(int $count, int $offset = 0): array
+    {
+        $stmt = $this->pdo->prepare("SELECT name FROM cards WHERE rarity != 'mythic' ORDER BY id LIMIT :count OFFSET :offset");
+        $stmt->bindValue('count', $count, \PDO::PARAM_INT);
+        $stmt->bindValue('offset', $offset, \PDO::PARAM_INT);
+        $stmt->execute();
+
+        return $stmt->fetchAll(\PDO::FETCH_COLUMN);
+    }
+
+    /**
+     * @param string[] $mainCardNames
+     * @param string[] $sideboardCardNames
+     */
+    private function buildPowerDuelDecklistText(array $mainCardNames, array $sideboardCardNames = []): string
+    {
+        $lines = array_map(static fn (string $name): string => "1 {$name}", $mainCardNames);
+        if ($sideboardCardNames !== []) {
+            $lines[] = '';
+            $lines[] = 'Sideboard';
+            foreach ($sideboardCardNames as $name) {
+                $lines[] = "1 {$name}";
+            }
+        }
+
+        return implode("\n", $lines);
+    }
+
+    public function testPowerDuelSideboardDeclarationEnforcesCapAndNoOverlapWithTheMainDeck(): void
+    {
+        $alice = $this->insertUser('sb-declare-alice');
+        $bob = $this->insertUser('sb-declare-bob');
+        $mainNames = $this->fetchNonMythicCardNames(15);
+        $sixCardSideboard = $this->fetchNonMythicCardNames(6, 15);
+
+        $gameId = $this->games->createGame(
+            $alice,
+            [$alice, $bob],
+            format: 'duel',
+            deckType: 'custom_duel',
+            duelDeckRules: ['preset' => 'power'],
+            bestOfThree: true,
+            allowSideboarding: true,
+        );
+        $alicePlayerId = $this->games->gamePlayerIdFor($gameId, $alice);
+
+        try {
+            $this->games->submitCustomDuelDeck($gameId, $alicePlayerId, $this->buildPowerDuelDecklistText($mainNames, $sixCardSideboard));
+            self::fail('A 6-card sideboard should be rejected -- Power Duel caps it at 5.');
+        } catch (GameStateException $e) {
+            self::assertStringContainsString('sideboard', $e->getMessage());
+        }
+
+        try {
+            $overlapSideboard = [$mainNames[0], ...$this->fetchNonMythicCardNames(2, 15)];
+            $this->games->submitCustomDuelDeck($gameId, $alicePlayerId, $this->buildPowerDuelDecklistText($mainNames, $overlapSideboard));
+            self::fail('A card cannot be declared in both the deck and the sideboard at once.');
+        } catch (GameStateException $e) {
+            self::assertStringContainsString('both your deck and your sideboard', $e->getMessage());
+        }
+
+        // A legal declaration (5-card sideboard, no overlap) succeeds.
+        $sideboardNames = $this->fetchNonMythicCardNames(5, 15);
+        $this->games->submitCustomDuelDeck($gameId, $alicePlayerId, $this->buildPowerDuelDecklistText($mainNames, $sideboardNames));
+        $stored = $this->fetchGamePlayer($alicePlayerId);
+        self::assertCount(15, json_decode((string) $stored['custom_deck_card_ids'], true));
+        self::assertCount(5, json_decode((string) $stored['custom_deck_sideboard_card_ids'], true));
+    }
+
+    public function testPowerDuelSideboardingSwapsWithinTheDeclaredPoolAcrossGames(): void
+    {
+        $alice = $this->insertUser('sb-swap-alice');
+        $bob = $this->insertUser('sb-swap-bob');
+        $aliceMain = $this->fetchNonMythicCardNames(15);
+        $aliceSideboard = $this->fetchNonMythicCardNames(5, 15);
+        $bobMain = $this->fetchNonMythicCardNames(15, 20);
+        $bobSideboard = $this->fetchNonMythicCardNames(5, 35);
+        $outsideCardName = $this->fetchNonMythicCardNames(1, 40)[0];
+
+        $gameId = $this->games->createGame(
+            $alice,
+            [$alice, $bob],
+            format: 'duel',
+            deckType: 'custom_duel',
+            duelDeckRules: ['preset' => 'power'],
+            bestOfThree: true,
+            allowSideboarding: true,
+        );
+        $this->games->submitCustomDuelDeck($gameId, $this->games->gamePlayerIdFor($gameId, $alice), $this->buildPowerDuelDecklistText($aliceMain, $aliceSideboard));
+        $this->games->submitCustomDuelDeck($gameId, $this->games->gamePlayerIdFor($gameId, $bob), $this->buildPowerDuelDecklistText($bobMain, $bobSideboard));
+        $this->games->startGame($gameId);
+
+        $gameMatchId = (int) $this->fetchGame($gameId)['game_match_id'];
+        // Alice resigns, so Bob wins game 1.
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $alice));
+
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE game_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $gameMatchId]);
+        $game2Id = (int) $nextGameStmt->fetchColumn();
+
+        foreach ([$alice, $bob] as $userId) {
+            $playerId = $this->games->gamePlayerIdFor($game2Id, $userId);
+            $row = $this->fetchGamePlayer($playerId);
+            self::assertNull($row['custom_deck_card_ids'], "user {$userId} must resubmit for game 2 -- sideboarding is on for this match");
+            self::assertNull($row['custom_deck_sideboard_card_ids']);
+        }
+
+        $bobPlayerId2 = $this->games->gamePlayerIdFor($game2Id, $bob);
+
+        // Bob tries to sneak in a card from outside his own declared pool.
+        $illegalSwap = [...array_slice($bobMain, 1), $outsideCardName];
+        try {
+            $this->games->submitCustomDuelDeck($game2Id, $bobPlayerId2, $this->buildPowerDuelDecklistText($illegalSwap));
+            self::fail('A card outside the declared deck/sideboard pool must be rejected.');
+        } catch (GameStateException $e) {
+            self::assertStringContainsString('original deck or sideboard', $e->getMessage());
+        }
+
+        // A legal swap: bench bobMain[0], bring in bobSideboard[0] instead.
+        $legalSwap = [...array_slice($bobMain, 1), $bobSideboard[0]];
+        $this->games->submitCustomDuelDeck($game2Id, $bobPlayerId2, $this->buildPowerDuelDecklistText($legalSwap));
+
+        $updated = $this->fetchGamePlayer($bobPlayerId2);
+        $newMain = array_map(intval(...), json_decode((string) $updated['custom_deck_card_ids'], true));
+        $newSideboard = array_map(intval(...), json_decode((string) $updated['custom_deck_sideboard_card_ids'], true));
+        $catalogIds = $this->loadCardCatalogIdsByName();
+        self::assertContains($catalogIds[mb_strtolower($bobSideboard[0])], $newMain, 'the swapped-in sideboard card must now be in the active deck');
+        self::assertContains($catalogIds[mb_strtolower($bobMain[0])], $newSideboard, 'the swapped-out deck card must now be benched');
+        self::assertCount(15, $newMain);
+        self::assertCount(5, $newSideboard);
+    }
+
+    /** @return array<string, int> lowercased card name => catalog id */
+    private function loadCardCatalogIdsByName(): array
+    {
+        $rows = $this->pdo->query('SELECT id, name FROM cards')->fetchAll();
+        $byName = [];
+        foreach ($rows as $row) {
+            $byName[mb_strtolower($row['name'])] = (int) $row['id'];
+        }
+
+        return $byName;
+    }
+
+    /**
+     * GameService::getState()'s own visual-sideboard-picker fields
+     * (migration 0233, issue #90 follow-up): 'power_duel_sideboard_pool'
+     * (main deck + sideboard combined, only ever non-null from game 2 of
+     * a sideboarding match onward) and 'power_duel_previous_deck_card_ids'
+     * (the viewer's own main deck from the immediately preceding game --
+     * here, since Alice never resubmits for game 2, that's still exactly
+     * her game-1 main deck).
+     */
+    public function testGetStateExposesThePowerDuelSideboardPoolAndPreviousDeckForGame2(): void
+    {
+        $alice = $this->insertUser('sb-prev-alice');
+        $bob = $this->insertUser('sb-prev-bob');
+        $aliceMain = $this->fetchNonMythicCardNames(15);
+        $aliceSideboard = $this->fetchNonMythicCardNames(5, 15);
+        $bobMain = $this->fetchNonMythicCardNames(15, 20);
+        $bobSideboard = $this->fetchNonMythicCardNames(5, 35);
+
+        $gameId = $this->games->createGame(
+            $alice,
+            [$alice, $bob],
+            format: 'duel',
+            deckType: 'custom_duel',
+            duelDeckRules: ['preset' => 'power'],
+            bestOfThree: true,
+            allowSideboarding: true,
+        );
+        $this->games->submitCustomDuelDeck($gameId, $this->games->gamePlayerIdFor($gameId, $alice), $this->buildPowerDuelDecklistText($aliceMain, $aliceSideboard));
+        $this->games->submitCustomDuelDeck($gameId, $this->games->gamePlayerIdFor($gameId, $bob), $this->buildPowerDuelDecklistText($bobMain, $bobSideboard));
+        $this->games->startGame($gameId);
+
+        $game1State = $this->games->getState($gameId, $alice);
+        self::assertNull($game1State['power_duel_sideboard_pool'], 'nothing to show yet for game 1 itself');
+        self::assertNull($game1State['power_duel_previous_deck_card_ids']);
+
+        $gameMatchId = (int) $this->fetchGame($gameId)['game_match_id'];
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $alice));
+
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE game_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $gameMatchId]);
+        $game2Id = (int) $nextGameStmt->fetchColumn();
+
+        $catalogIds = $this->loadCardCatalogIdsByName();
+        $aliceMainIds = array_map(static fn (string $name): int => $catalogIds[mb_strtolower($name)], $aliceMain);
+        $aliceSideboardIds = array_map(static fn (string $name): int => $catalogIds[mb_strtolower($name)], $aliceSideboard);
+
+        $game2State = $this->games->getState($game2Id, $alice);
+        $poolIds = array_map(static fn (array $card): int => $card['card_id'], $game2State['power_duel_sideboard_pool']);
+        sort($poolIds);
+        $expectedPoolIds = [...$aliceMainIds, ...$aliceSideboardIds];
+        sort($expectedPoolIds);
+        self::assertSame($expectedPoolIds, $poolIds, 'the pool is main deck + sideboard combined from game 1');
+
+        $previousDeckIds = $game2State['power_duel_previous_deck_card_ids'];
+        sort($previousDeckIds);
+        sort($aliceMainIds);
+        self::assertSame($aliceMainIds, $previousDeckIds, 'Alice never resubmitted, so the previous deck is still exactly her game-1 main deck');
+    }
+
+    /**
+     * The "previous deck" is always the immediately PRECEDING game, not
+     * always game 1 -- game 3's own previous game is game 2, which here
+     * is already a sideboard swap away from Bob's original game-1 main
+     * deck.
+     */
+    public function testGetStatePreviousDeckIsTheImmediatelyPrecedingGameNotAlwaysGameOne(): void
+    {
+        $alice = $this->insertUser('sb-prev2-alice');
+        $bob = $this->insertUser('sb-prev2-bob');
+        $aliceMain = $this->fetchNonMythicCardNames(15);
+        $aliceSideboard = $this->fetchNonMythicCardNames(5, 15);
+        $bobMain = $this->fetchNonMythicCardNames(15, 20);
+        $bobSideboard = $this->fetchNonMythicCardNames(5, 35);
+
+        $gameId = $this->games->createGame(
+            $alice,
+            [$alice, $bob],
+            format: 'duel',
+            deckType: 'custom_duel',
+            duelDeckRules: ['preset' => 'power'],
+            bestOfThree: true,
+            allowSideboarding: true,
+        );
+        $this->games->submitCustomDuelDeck($gameId, $this->games->gamePlayerIdFor($gameId, $alice), $this->buildPowerDuelDecklistText($aliceMain, $aliceSideboard));
+        $this->games->submitCustomDuelDeck($gameId, $this->games->gamePlayerIdFor($gameId, $bob), $this->buildPowerDuelDecklistText($bobMain, $bobSideboard));
+        $this->games->startGame($gameId);
+        $gameMatchId = (int) $this->fetchGame($gameId)['game_match_id'];
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $alice)); // Bob wins game 1
+
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE game_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $gameMatchId]);
+        $game2Id = (int) $nextGameStmt->fetchColumn();
+
+        // Bob swaps for game 2: bench bobMain[0], bring in bobSideboard[0].
+        $bobGame2Deck = [...array_slice($bobMain, 1), $bobSideboard[0]];
+        $this->games->submitCustomDuelDeck($game2Id, $this->games->gamePlayerIdFor($game2Id, $bob), $this->buildPowerDuelDecklistText($bobGame2Deck));
+        $this->games->submitCustomDuelDeck($game2Id, $this->games->gamePlayerIdFor($game2Id, $alice), $this->buildPowerDuelDecklistText($aliceMain));
+        $this->games->startGame($game2Id);
+        $this->games->resignGame($game2Id, $this->games->gamePlayerIdFor($game2Id, $bob)); // Alice wins game 2 -- 1-1, game 3 needed
+
+        $nextGameStmt->execute(['match_id' => $gameMatchId]);
+        $game3Id = (int) $nextGameStmt->fetchColumn();
+
+        $catalogIds = $this->loadCardCatalogIdsByName();
+        $bobGame2DeckIds = array_map(static fn (string $name): int => $catalogIds[mb_strtolower($name)], $bobGame2Deck);
+        sort($bobGame2DeckIds);
+
+        $previousDeckIds = $this->games->getState($game3Id, $bob)['power_duel_previous_deck_card_ids'];
+        sort($previousDeckIds);
+        self::assertSame($bobGame2DeckIds, $previousDeckIds, "game 3's previous deck must be Bob's game-2 swap, not his original game-1 main deck");
+    }
+
+    public function testPowerDuelWithoutSideboardingLocksTheDeckAcrossGames(): void
+    {
+        $alice = $this->insertUser('sb-locked-alice');
+        $bob = $this->insertUser('sb-locked-bob');
+        $mainNames = $this->fetchNonMythicCardNames(15);
+
+        $gameId = $this->games->createGame(
+            $alice,
+            [$alice, $bob],
+            format: 'duel',
+            deckType: 'custom_duel',
+            duelDeckRules: ['preset' => 'power'],
+            bestOfThree: true,
+            // allowSideboarding defaults to false.
+        );
+        $decklistText = $this->buildPowerDuelDecklistText($mainNames);
+        $this->games->submitCustomDuelDeck($gameId, $this->games->gamePlayerIdFor($gameId, $alice), $decklistText);
+        $this->games->submitCustomDuelDeck($gameId, $this->games->gamePlayerIdFor($gameId, $bob), $decklistText);
+        $this->games->startGame($gameId);
+
+        $game1Alice = $this->fetchGamePlayer($this->games->gamePlayerIdFor($gameId, $alice));
+        $gameMatchId = (int) $this->fetchGame($gameId)['game_match_id'];
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $alice));
+
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE game_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $gameMatchId]);
+        $game2Id = (int) $nextGameStmt->fetchColumn();
+
+        $game2Alice = $this->fetchGamePlayer($this->games->gamePlayerIdFor($game2Id, $alice));
+        self::assertSame(
+            $game1Alice['custom_deck_card_ids'],
+            $game2Alice['custom_deck_card_ids'],
+            'without sideboarding, a Power Duel deck is locked for the whole match -- it must carry forward automatically, not reset to NULL',
+        );
+        self::assertNull($game2Alice['custom_deck_sideboard_card_ids']);
+
+        // Since the decklist is already there, game 2 can start immediately.
+        $this->games->startGame($game2Id);
+        self::assertSame('in_progress', $this->fetchGame($game2Id)['status']);
+    }
+
+    public function testBestOfThreeCustomDeckTypeCarriesTheSameDecklistForwardAutomatically(): void
+    {
+        [$u1, $u2, $u3, $u4] = $this->insertUsers('bo3-custom-' . uniqid(), 4);
+        // 'custom' is a single table-wide shared deck (games.custom_deck_card_ids),
+        // with no per-game resubmission flow of its own -- see
+        // GameService::advanceGameMatch()'s own docblock for why this
+        // deck_type is the one exception that needs its decklist carried
+        // forward explicitly, rather than resetting the way custom_duel's
+        // own per-seat decklist does.
+        $decklistText = $this->buildCustomDecklistText(self::TEAM_MIN_CUSTOM_DECK_SIZE);
+
+        $gameId = $this->games->createGame(
+            $u1,
+            [$u1, $u2, $u3, $u4],
+            format: 'team',
+            deckType: 'custom',
+            decklistText: $decklistText,
+            partnerUserId: $u2,
+            bestOfThree: true,
+        );
+        $this->games->startGame($gameId);
+        $game1 = $this->fetchGame($gameId);
+        self::assertNotNull($game1['custom_deck_card_ids']);
+
+        $gameMatchId = (int) $game1['game_match_id'];
+        // p1 (team 0) resigns, so team 1 (u3/u4) wins game 1.
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $u1));
+
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE game_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $gameMatchId]);
+        $game2Id = (int) $nextGameStmt->fetchColumn();
+
+        $game2 = $this->fetchGame($game2Id);
+        self::assertSame($game1['custom_deck_name'], $game2['custom_deck_name']);
+        self::assertSame(
+            $game1['custom_deck_card_ids'],
+            $game2['custom_deck_card_ids'],
+            "'custom' has no per-game resubmission flow, so its decklist must carry forward automatically rather than starting NULL",
+        );
+
+        // Since the decklist is already there, game 2 can start immediately,
+        // with no resubmission step required from anyone.
+        $this->games->startGame($game2Id);
+        self::assertSame('in_progress', $this->fetchGame($game2Id)['status']);
+    }
+
+    /**
+     * The bug report behind this test: a best-of-three team match wasn't
+     * ending once a team reached 2 game wins. Root cause -- games.
+     * winner_game_player_id for a team-format game is only ever a stand-in
+     * representative, and finishTeamScoringAndAdvance() (via
+     * determineRoundWinner()) picks that representative by whichever
+     * teammate scored the higher individual point total in the game's own
+     * final round, NOT always the same lowest-seat_order teammate game to
+     * game (unlike completeGameByResignation(), which always does pick the
+     * lowest-seat_order one). advanceGameMatch() used to count a team's
+     * match wins by that representative's own user_id, so the same team
+     * winning games 1 and 2 via two DIFFERENT representatives never
+     * reached GAME_MATCH_GAMES_TO_WIN for either individual user, and the
+     * match stayed 'in_progress' forever. Fixed by counting off games.
+     * winner_team_id instead, which is stable across a match's games since
+     * team_id is one of the seats carried forward unchanged.
+     */
+    public function testBestOfThreeTeamMatchCompletesWhenTheWinningRepresentativeDiffersBetweenGames(): void
+    {
+        [$u1, $u2, $u3, $u4] = $this->insertUsers('bo3-team-rep-' . uniqid(), 4);
+        $decklistText = $this->buildCustomDecklistText(self::TEAM_MIN_CUSTOM_DECK_SIZE);
+
+        $gameId = $this->games->createGame(
+            $u1,
+            [$u1, $u2, $u3, $u4],
+            format: 'team',
+            deckType: 'custom',
+            decklistText: $decklistText,
+            partnerUserId: $u2,
+            bestOfThree: true,
+        );
+        $this->games->startGame($gameId);
+        $gameMatchId = (int) $this->fetchGame($gameId)['game_match_id'];
+
+        // Game 1: team 1 (u3/u4) resigns, so team 0 wins it --
+        // completeGameByResignation() always credits the LOWEST-seat_order
+        // teammate (u1) as the representative.
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $u3));
+
+        self::assertSame('in_progress', $this->fetchGameMatch($gameMatchId)['status'], 'one game win is not enough to end a best-of-three match');
+
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE game_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $gameMatchId]);
+        $game2Id = (int) $nextGameStmt->fetchColumn();
+        $this->games->startGame($game2Id);
+
+        // Game 2: team 0 wins AGAIN, but this time u2 (not u1) is credited
+        // as the representative -- exactly what determineRoundWinner()
+        // does when u2 scores the higher individual total in the game's
+        // own final round. Driving real gameplay to a specific individual
+        // score split isn't practical here, so the game-scoring completion
+        // finishTeamScoringAndAdvance() would itself perform is applied
+        // directly, then advanceGameMatch() (the method this bug is in) is
+        // invoked exactly as that method would have.
+        $u2PlayerId2 = $this->games->gamePlayerIdFor($game2Id, $u2);
+        $this->pdo->prepare(
+            "UPDATE games SET status = 'completed', winner_game_player_id = :winner, winner_team_id = 0, completed_at = NOW() WHERE id = :game_id"
+        )->execute(['winner' => $u2PlayerId2, 'game_id' => $game2Id]);
+        (new \ReflectionMethod($this->games, 'advanceGameMatch'))->invoke($this->games, $game2Id, $u2PlayerId2);
+
+        $completedMatch = $this->fetchGameMatch($gameMatchId);
+        self::assertSame(
+            'completed',
+            $completedMatch['status'],
+            'team 0 has now won both games of the match even though a different teammate was credited as the representative each time',
+        );
+        self::assertSame($u2, (int) $completedMatch['winner_user_id']);
+    }
+
+    /**
+     * The lobby-facing counterpart to the fix above: even a completed
+     * team-format best-of-three match's own single `winner_user_id` (a
+     * stand-in representative -- see advanceGameMatch()'s own docblock)
+     * used to be all `gameMatchSummaryFor()` named as "the match winner"
+     * in the lobby, crediting only whichever teammate happened to
+     * complete the deciding game rather than both members of the winning
+     * team.
+     */
+    public function testGameMatchSummaryCreditsBothTeammatesAsTheMatchWinner(): void
+    {
+        [$u1, $u2, $u3, $u4] = $this->insertUsers('bo3-team-winners-' . uniqid(), 4);
+        $decklistText = $this->buildCustomDecklistText(self::TEAM_MIN_CUSTOM_DECK_SIZE);
+
+        $gameId = $this->games->createGame(
+            $u1,
+            [$u1, $u2, $u3, $u4],
+            format: 'team',
+            deckType: 'custom',
+            decklistText: $decklistText,
+            partnerUserId: $u2,
+            bestOfThree: true,
+        );
+        $this->games->startGame($gameId);
+
+        // Team 1 (u3/u4) resigns both games, so team 0 (u1/u2) wins the
+        // match 2-0 -- completeGameByResignation() always credits the
+        // lowest-seat_order teammate (u1) as game_matches.winner_user_id's
+        // own stand-in representative, so this exercises the exact case
+        // where naming only that one user would previously have left u2
+        // out of the match's own "who won" display despite being just as
+        // much a winner.
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $u3));
+
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE game_match_id = (SELECT game_match_id FROM games WHERE id = :game_id) AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['game_id' => $gameId]);
+        $game2Id = (int) $nextGameStmt->fetchColumn();
+        $this->games->startGame($game2Id);
+        $this->games->resignGame($game2Id, $this->games->gamePlayerIdFor($game2Id, $u4));
+
+        $state = $this->games->getState($game2Id, $u1);
+        self::assertSame('completed', $state['game_match']['status']);
+        self::assertEqualsCanonicalizing(
+            [$this->usernameFor($u1), $this->usernameFor($u2)],
+            $state['game_match']['winner_usernames'],
+            'both members of the winning team should be named as the match winner, not just whichever one happened to complete the deciding game',
+        );
+    }
+
+    private function usernameFor(int $userId): string
+    {
+        $stmt = $this->pdo->prepare('SELECT username FROM users WHERE id = :id');
+        $stmt->execute(['id' => $userId]);
+
+        return (string) $stmt->fetchColumn();
+    }
+
+    private const TEAM_MIN_CUSTOM_DECK_SIZE = 45;
+
+    private function buildCustomDecklistText(int $cardCount): string
+    {
+        $stmt = $this->pdo->prepare('SELECT name FROM cards ORDER BY id LIMIT :count');
+        $stmt->bindValue('count', $cardCount, \PDO::PARAM_INT);
+        $stmt->execute();
+
+        return implode("\n", array_map(static fn (string $name): string => "1 {$name}", $stmt->fetchAll(\PDO::FETCH_COLUMN)));
     }
 
     public function testCreateGameSealedDeckThreeOrFourPlayerIsSingleGame(): void

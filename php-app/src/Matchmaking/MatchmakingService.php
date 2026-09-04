@@ -45,7 +45,10 @@ final class MatchmakingService
      *   creator) this listing needs before the game is created -- forced
      *   to the only legal value for 'duel' (2) and 'team'/'closed_team'
      *   (4) regardless of what's passed; only 'draft'/'standard' actually
-     *   let the creator choose (2-4)
+     *   let the creator choose (2-4). $createGameParams' own
+     *   'best_of_three' (issue #90 follow-up) is silently a no-op for
+     *   'standard' unless this ends up exactly 2 -- see createGame()'s own
+     *   docblock for why.
      */
     public function postOpenGame(int $userId, array $createGameParams, int $targetPlayerCount): int
     {
@@ -260,6 +263,8 @@ final class MatchmakingService
                     $params['tiered_rotisserie_draft_mode'] ?? null,
                     $params['tiered_rotisserie_draft_tiers'] ?? null,
                     false,
+                    (bool) ($params['best_of_three'] ?? false),
+                    (bool) ($params['allow_sideboarding'] ?? false),
                 );
             } catch (GameStateException $e) {
                 // The creator's own choices turned out not to be valid

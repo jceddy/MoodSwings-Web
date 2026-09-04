@@ -1,0 +1,13 @@
+-- Best-of-three team matches (issue #90) weren't always ending after a
+-- team reached 2 game wins. GameService::advanceGameMatch() used to count
+-- a team's match wins by the winning representative's own user_id, but
+-- the representative credited on games.winner_game_player_id for a team
+-- format isn't always the same teammate game to game (completeGameByResignation()
+-- always picks the lowest-seat_order member, while finishTeamScoringAndAdvance()
+-- picks whichever teammate scored higher individually that round) -- so a
+-- team's 2 wins could get split across two different teammates' user_ids
+-- and never reach the match-win threshold. Fixed to count by
+-- games.winner_team_id instead, which stays consistent across a match's
+-- games. A bug fix, not a new feature, so this only bumps the patch
+-- version per CLAUDE.md's own versioning convention.
+UPDATE schema_version SET version = '1.32.5' WHERE id = 1;

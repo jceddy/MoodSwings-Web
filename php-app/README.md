@@ -3669,6 +3669,253 @@ while `draft_matches.status === 'drafting'` (never true for Sealed Deck), a
 bot seated here goes straight to submitting its own deck the very first time
 `advanceAutomatedTurns()` runs, with no pick-turn logic needed at all.
 
+### Best of three (issue #90)
+
+Every draft-family deck type has had its own best-of-three match wrapper
+since Quick Draft (issue #88, `draft_matches`/`draft_match_players`,
+migration 0027). Issue #90 extends the same "first to 2 game wins, with a
+fresh game auto-created after each one" idea to the non-draft formats --
+Duel, Open Team Play, Closed Team Play, and (issue #90 follow-up,
+migration 0225) Traditional -- via a separate, purpose-built
+`game_matches` table (migration 0223), opted into per game with
+`createGame()`'s own `$bestOfThree` parameter (`best_of_three` in the
+API/New Game dialog). It's ignored (not an error) for any draft-based
+`deck_type`, which already gets its own match regardless.
+
+**Traditional (`format: 'standard'`) only qualifies at exactly 2
+players** -- unlike Duel (always 2) and the team formats (always 4, and
+so always exactly 2 SIDES of 2), Traditional supports 2-4 individual
+players with no inherent pairing between them. "First to 2 game wins"
+only names a single, unambiguous opponent when there are exactly 2
+players to begin with; with 3-4, whoever wins game 1 might lose game 2 to
+a DIFFERENT player, so the whole "best of three" premise stops making
+sense. This mirrors `draftGamesToWin()`'s own identical rule for a draft
+match (best-of-three at 2 players, single-game at 3-4) -- `createGame()`
+checks `count($userIds) === 2` before creating a `game_matches` row for
+`'standard'`, silently skipping it (not an error) otherwise, same as the
+New Game dialog's own checkbox staying hidden whenever more than 1
+opponent is checked (or, in open-lobby mode, whenever the target player
+count isn't 2).
+
+**Why a separate table, not `draft_matches` reused** -- `draft_matches`'
+own `pool_source`/`pool_card_ids`/`current_round` columns, and
+`draft_match_players`' own `drafted_card_ids`/`deck_card_ids`/`wins`,
+exist purely for draft's live drafting/deck-building mechanic and a
+shared pool that doesn't exist here. `game_matches` carries only what
+this feature actually needs: `format`, `created_by_user_id`, `status`
+(`'in_progress'`/`'completed'`), `winner_user_id`, and timestamps.
+`games.game_match_id` (alongside the existing `draft_match_id`) links a
+game back to its match; `games.match_game_number` (already nullable) is
+reused as-is for either match wrapper's own 1/2/3 numbering -- a game
+belongs to at most one of `draft_match_id`/`game_match_id`, never both,
+so one shared numbering column is unambiguous.
+
+**No `game_match_players` table at all** -- unlike `draft_match_players`,
+which needs a row per player regardless (to hold the drafted pool/current
+deck), this feature has nothing per-player to persist, so a match's own
+win count is simply recomputed on demand from its (at most 3) `games`
+rows. For a non-team match, `advanceGameMatch()` resolves the just-completed
+game's `winner_game_player_id` back to a `user_id`, then counts how many of
+the match's own completed games that same `user_id` has already won.
+
+**Team Play/Closed Team Play count by `games.winner_team_id` instead**
+(bugfix, follow-up to issue #90) -- a team game's own
+`winner_game_player_id` is only ever a stand-in representative for that
+row's own FK/display purposes, and the two completion paths don't pick the
+same one consistently: `completeGameByResignation()` always credits the
+winning team's lowest-seat_order member, but `finishTeamScoringAndAdvance()`
+(via `determineRoundWinner()`) instead credits whichever teammate scored
+the higher individual point total in the game's own final round, which can
+be a *different* teammate game to game even when the same team keeps
+winning. Counting match wins off that representative's `user_id` (as
+originally implemented) could therefore split one team's 2 match wins
+across two different teammates' `user_id`s and never end the match.
+`games.winner_team_id` doesn't have this problem -- it's set directly by
+both completion paths and stays consistent across a match's games since
+`team_id` is one of the seats carried forward unchanged (same `seat_order`/
+`team_id`, just re-inserted for the new `games` row) -- so `advanceGameMatch()`
+counts a team format's match wins by `winner_team_id` matching the
+just-completed game's own, rather than by the representative's `user_id`.
+
+**Lobby match-winner display credits the whole team too** (bugfix,
+follow-up to the above) -- `gameMatchSummaryFor()`'s own `winner_usernames`
+(an array, renamed from the old singular `winner_username`) resolves the
+WHOLE winning team from `game_matches.winner_user_id`'s own seat's
+`team_id`, rather than assuming that one representative is the only
+teammate worth naming. Before this, the lobby's "... won the match" line
+for a completed team-format best-of-three match named only whichever
+teammate happened to complete the deciding game, even though the match
+was actually won by both of them together -- the same "credit the whole
+team" gap `getState()`'s own per-game `winner_usernames` field was fixed
+for earlier (see "Winner display" below), just at the match-summary level
+instead of the single-game one. Non-team matches fall back to the single
+winner's username, same as before. `web-static/js/game.js`'s
+`buildMatchGroupRow()` normalizes either the new `winner_usernames` array
+or the older singular `winner_username` (still what `draftMatchSummaryFor()`
+returns, since a draft-based match is never team-format best-of-three) into
+one array before rendering, so both match kinds keep sharing the same
+render path.
+
+**Sideboarding** -- explicitly limited in this pass to custom_duel's own
+existing per-game decklist submission, which already needs no new
+mechanism at all: a fresh `games`/`game_players` row for game 2/3 starts
+with `custom_deck_card_ids` NULL, same as any brand new custom_duel game,
+so `startGame()`'s existing `requireCustomDuelDecksSubmitted()` gate
+naturally forces -- and freely allows -- an edited decklist before the
+next game can start (no separate sideboard pool, no swap-count limit). A
+seated practice bot is the one exception: since it can never submit its
+own decklist the way its human opponent does, `advanceGameMatch()` copies
+its previous game's own `custom_deck_name`/`custom_deck_card_ids`
+straight onto its new `game_players` row, unchanged, rather than leaving
+it NULL like a human seat.
+
+`structure`/`power`/`jceddy's 75`/`one of each` need no attention either
+way -- `startGame()` already rebuilds a fresh deck from scratch for these
+every game, matching a standalone game of the same deck_type exactly.
+`custom` is the one deck_type that DOES need explicit handling: it's a
+single table-wide decklist supplied once at the match's own creation with
+no per-game resubmission flow of its own (unlike custom_duel), so
+`advanceGameMatch()` copies `custom_deck_name`/`custom_deck_card_ids`
+forward onto the new game unchanged, the same way it does for a bot's own
+custom_duel decklist above -- real sideboarding for a single shared
+decklist (a distinct pool to swap from) is left to a future issue, same
+as the draft-family's own sideboarding was itself once a separate,
+later addition.
+
+**Who goes first in game 2/3** is decided by the ordinary uniform-random
+`resolveFirstPlayerId()` path, not the draft-family's own
+`setPlayFirstNextMatchGame()` (the previous game's loser choosing) --
+that mechanic is gated specifically on `draft_match_id !== null`, so it
+never applies here. A future issue could extend it if this format ever
+wants the same "loser decides" fairness rule.
+
+**Open lobby matchmaking** -- `best_of_three` is threaded through
+`create_game_params` (`openGameCreateParamsFromRequestBody()`,
+`MatchmakingService::joinOpenGame()`'s own `createGame()` call) the same
+as every other `createGame()` option a posted listing carries. This was
+missing entirely at first (issue #90 follow-up): checking the New Game
+dialog's own checkbox while posting to the open lobby silently did
+nothing, since `joinOpenGame()`'s hardcoded `createGame()` call never
+passed a value for this parameter at all.
+
+**Lobby grouping and the board's own "next game" button** -- both
+`listGamesForUser()`/`listPastGamesForUser()` and `getState()` were
+missing their own `game_match` awareness at first (a second issue #90
+follow-up): the two lobby queries only carved out an in-progress
+`draft_matches` row from moving a finished game to Past games, with no
+`game_matches` equivalent, so a completed game 1 of a still-undecided
+Duel/Team Play/Closed Team Play/Traditional match jumped straight to
+Past games instead of staying grouped with its still-active sibling the
+way a draft match's own game 1 already does. Fixed by adding the same
+`LEFT JOIN game_matches`/`gm.status != 'completed'` carve-out those two
+queries already had for `draft_matches`. Separately, `getState()` never
+exposed a `game_match` field at all (only the draft-family deck types get
+a `quick_draft`/`winston_draft`/etc. field, each carrying its own
+`next_game_id` once that particular game finishes and
+`advanceDraftMatch()` has created the next one) -- so the board's own "Go
+to next game" button, wired to whichever of those fields is present,
+never appeared for a finished game 1 of a non-draft best-of-three match
+either. `gameMatchStateFor()` fills that gap: it wraps
+`gameMatchSummaryFor()`'s own status/your_wins/opponent_wins/
+games_to_win/winner_usernames/players shape (the lobby's own grouped-match
+summary) with the same next_game_id computation the draft-family's own
+`*StateFor()` methods already use, exposed as `getState()`'s own
+top-level `game_match` field.
+
+**Frontend** -- see "Best of three" in `web-static/README.md`.
+
+### Power Duel sideboarding
+
+A second, narrower opt-in on top of best-of-three (migration 0228):
+`createGame()`'s own `$allowSideboarding` parameter (`allow_sideboarding`
+in the API/New Game dialog) lets a best-of-three Duel match built under
+`custom_duel`'s existing "Power Duel" `duel_deck_rules` preset
+(`custom_duel_rules_preset === 'power'`) swap cards between a 15-card
+main deck and a declared bench, the traditional TCG sideboarding rule --
+silently ignored (not an error) for any other preset/format/deck_type
+combination, or without `best_of_three` itself, the same "harmless
+no-op outside its own narrow scope" convention `best_of_three`'s own
+Traditional-at-2-players restriction already established.
+`game_matches.allow_sideboarding` (`BOOLEAN`) carries the choice for the
+whole match; `game_players.custom_deck_sideboard_card_ids` (`JSON`,
+nullable) holds a seated player's own currently-benched cards, alongside
+the existing `custom_deck_card_ids`.
+
+**Why this needed its own opt-in, not just reusing custom_duel's
+existing free resubmission** -- every other `custom_duel` best-of-three
+match already lets a player submit a COMPLETELY different decklist for
+every game, no restriction at all (see "Best of three" above). Power
+Duel's own default instead LOCKS the deck for the whole match once
+`allow_sideboarding` is off: `advanceGameMatch()` carries
+`custom_deck_name`/`custom_deck_card_ids`/`custom_deck_sideboard_card_ids`
+forward onto the new game unchanged, the same explicit carry-forward
+`custom`/a seated bot's own `custom_duel` seat already get, rather than
+resetting to `NULL` and forcing a fresh (and, for every other preset,
+totally unconstrained) resubmission. This is a deliberate design choice,
+not an oversight: Power Duel is meant to approximate the algorithmic
+`power` deck_type's own single, fixed-for-the-match deck, so "anything
+goes every game" would defeat that resemblance entirely. Checking
+`allow_sideboarding` is what unlocks a constrained, traditional sideboard
+swap instead of full lock-in.
+
+**Declaring the pool (game 1)** -- `submitCustomDuelDeck()` dispatches to
+`validateAndStorePowerDuelSideboardPool()` for a sideboarding match's own
+game 1: the main deck is validated exactly as any other `custom_duel`
+submission (`DuelDeckRules::validate()`, so still capped at 1 mythic/
+singleton/≥15 cards), and the sideboard (parsed the same optional
+`Sideboard` section `DecklistParser`/a saved decklist's own
+`sideboard_card_ids` already support -- see "Saved decklists" below) is
+capped at `POWER_DUEL_SIDEBOARD_MAX_CARDS` (5) cards, singleton within
+itself, and may never share a card with the main deck -- a card is
+either in your deck or benched, never both. Deliberately does NOT apply
+the mythic cap to the sideboard itself: a second Mythic sitting benched
+is fine, since swapping it in always means swapping the active one out,
+which the game-2/3 validation below re-enforces on the ACTIVE deck every
+time regardless.
+
+**Swapping within the pool (game 2/3)** -- `advanceGameMatch()` resets
+both columns to `NULL` for a sideboarding match (same as every other
+`custom_duel` match's own default), so a resubmission is still required.
+`validateAndStorePowerDuelSideboardSwap()` handles it: rather than
+declaring a whole new pool, the player submits only their new main deck
+(no `Sideboard` section needed -- any submitted one is ignored), which
+must be assembled entirely from their OWN game-1-declared pool (fetched
+fresh from that game's own `game_players` row, keyed by `user_id` --
+never trusted from the client) and still passes the ordinary
+`DuelDeckRules::validate()` check. The new sideboard is then just
+whatever's left over (`pool` minus the new main deck), computed
+automatically rather than asked for a second time -- there's no way to
+introduce a card from outside the fixed game-1 pool this way.
+
+**Visual sideboard picker (game 2/3)** -- `GameService::getState()`
+exposes two viewer-only fields for game 2/3 of a sideboarding match, both
+`null` for game 1 itself and every non-sideboarding match:
+`power_duel_sideboard_pool` (the game-1-declared pool -- main deck +
+sideboard combined -- `CardCatalog::serialize()`'d for rendering) and
+`power_duel_previous_deck_card_ids` (bare card ids, not a serialized
+shape, since these are always a subset of the pool above): the viewer's
+own main deck from the immediately PRECEDING game (`match_game_number -
+1`, not always game 1 -- game 3's own "previous game" is game 2, itself
+possibly already a sideboard swap away from game 1's original main deck).
+The frontend's own visual picker (see "Best of three"'s own "Power Duel
+sideboarding" subsection in `web-static/README.md`) uses the pool for its
+toggleable card grid and the previous deck to pre-select whichever of
+those cards the player actually played last game, mirroring the draft
+formats' own sideboard screen (`deckBuilding.drafted_cards`/
+`previous_deck_card_ids`). Submitting still goes through the exact same
+`submitCustomDuelDeck()`/`validateAndStorePowerDuelSideboardSwap()` path
+described above -- the picker only changes how the player assembles the
+decklist text client-side, not how it's validated server-side.
+
+**Saved decklists** -- `UserDecklistService::cardIdsForUse()` now also
+returns `sideboardCardIds` (previously always omitted, since neither of
+its two callers had any sideboard concept before this) so a saved Power
+Duel deck's own declared sideboard flows straight into game 1's
+declaration the same way its main deck already did.
+
+**Frontend** -- see "Best of three"'s own "Power Duel sideboarding"
+subsection in `web-static/README.md`.
+
 ### Open Team Play
 
 `format: 'team'` seats exactly 4 players as two teams of two, sitting next
@@ -6372,6 +6619,34 @@ since it already holds that dependency):
   card) has nothing to cycle, so it stays unfilled -- "if it has one to
   cycle" per the maintainer.
 
+  **Ambition** (reported live: "when a bot plays ambition, it should
+  discard a card for another play if it has 3+ cards in hand and it has
+  another play that will net it points -- this is especially important
+  in the last round of the game when it can make the difference between
+  winning and losing the game") gets the same `shouldAttemptZealCycle()`-
+  shaped treatment (`shouldAttemptAmbitionDiscard()`), for "you may
+  discard a card from your hand; if you do, you may play an additional
+  mood this turn" rather than a bottom-and-redraw -- worth attempting
+  once `AMBITION_MIN_HAND_SIZE_TO_DISCARD` (3, Ambition itself included,
+  still sitting in hand at this point the same way `ZEAL_LOW_VALUE_HAND_CARD_THRESHOLD`'s
+  own check works) is met AND, after setting aside the cheapest OTHER
+  hand card as the discard cost, at least one hand card still remains
+  with a positive base value -- a genuine scoring play worth unlocking
+  the extra play for, not just "some card to burn it on." Once forced,
+  `BotChoiceResolver`'s own generic `'hand_card'` field policy already
+  picks the LOWEST-value legal candidate as the discard on its own, so
+  `shouldAttemptAmbitionDiscard()` only ever decides WHETHER to bother,
+  never WHICH card, the same division of labor as `shouldAttemptZealCycle()`.
+  This same rule already covers "make the difference between winning and
+  losing the game" in the last round without any separate last-round-
+  specific logic: a positive-value card the bot couldn't otherwise fit
+  into this turn is exactly the kind of play that can flip a round's
+  (and so the game's) outcome, every round this condition holds, last
+  round included. `LegalChoiceEnumerator` has no required schema field
+  to vary Ambition's own targeting over, so the Tactical Bot's only
+  candidate action for it is this same default choice set -- this fix
+  therefore covers both bots with no search-side change needed.
+
   **Rationalization** (confirmed by the maintainer) gets its own
   bespoke, two-part policy, since "you may choose one: refresh your own
   hand, or rotate hands with the table" (`CardChoiceSchema`'s own
@@ -6383,16 +6658,7 @@ since it already holds that dependency):
   option, so `buildChoicesForCard()` special-cases `effectKey ===
   'rationalization'` to `rationalizationChoices()` entirely, bypassing
   the generic per-field `CardChoiceSchema` loop for this one card:
-  - `rationalizationLowValueHand(BoardState $state, int $cardId, int
-    $botGamePlayerId): bool` -- `'refresh'` whenever the bot's own
-    remaining hand (every OTHER card still in hand once Rationalization
-    itself is played -- it's still sitting in hand at the point this
-    runs) averages `RATIONALIZATION_LOW_VALUE_HAND_AVERAGE` (2, roughly
-    the real catalog's own overall average base value) or below --
-    including an empty remaining hand, which counts as trivially "low"
-    (refreshing nothing is free). Checked first: always safe (nothing is
-    ever given away), regardless of what any neighbor's hand looks like.
-  - Otherwise, `rationalizationStealDirection(BoardState $state, int
+  - `rationalizationStealDirection(BoardState $state, int
     $botGamePlayerId): ?string` -- `'rotate'` toward whichever seat
     neighbor currently holds at least
     `RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE` (3) more cards than the
@@ -6405,26 +6671,102 @@ since it already holds that dependency):
     "`'left'` is index+1" rule means a neighbor at the bot's own
     `'right'` is the one whose OWN `'left'` pass lands on the bot, and
     vice versa. Whichever of the two neighbors qualifies AND holds the
-    larger hand wins if both do; `null` (falls through to `'refresh'`
-    below) if neither does, which a heads-up duel's own single shared
-    "neighbor" either direction resolves to always agrees with itself
-    on.
-  - Otherwise, still `'refresh'` -- the strictly safer of the two once
-    neither trigger applies, since it never gives anything away to an
-    opponent the way an unwarranted `'rotate'` would.
+    larger hand wins if both do; `null` (falls through to
+    `rationalizationLowValueHand()` below) if neither does, which a
+    heads-up duel's own single shared "neighbor" either direction
+    resolves to always agrees with itself on. Checked FIRST (reported
+    live: a bot at 2 cards, one of them Rationalization, refreshed its
+    own single leftover card instead of stealing an opponent's 6-card
+    hand) -- the `RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE` threshold
+    already only fires for a neighbor overstuffed enough to be clearly
+    worth taking regardless of what the bot's own remaining hand looks
+    like, so gaining several more cards outright always beats gambling a
+    random redraw of the bot's own (typically small, at that point)
+    remaining hand -- a live steal opportunity wins over a merely weak
+    hand whenever both apply at once.
+  - Otherwise, `rationalizationLowValueHand(BoardState $state, int
+    $cardId, int $botGamePlayerId): bool` -- `'refresh'` whenever the
+    bot's own remaining hand (every OTHER card still in hand once
+    Rationalization itself is played -- it's still sitting in hand at
+    the point this runs) averages `RATIONALIZATION_LOW_VALUE_HAND_AVERAGE`
+    (2, roughly the real catalog's own overall average base value) or
+    below -- including an empty remaining hand, which counts as
+    trivially "low" (refreshing nothing is free).
+  - Otherwise (reported live, follow-up: "I am seeing bots play it to
+    refresh hands when they have a good hand"), neither mode -- an empty
+    choice set, which `RationalizationEffect::afterPlaying()`'s own `if
+    ($mode === null) return;` already treats as a clean no-op. `'refresh'`
+    only ever avoids giving anything away when the hand it's redrawing is
+    already bad (that's exactly what `rationalizationLowValueHand()`
+    above checks); reaching this branch means it ISN'T, so refreshing
+    here would gamble a genuinely good hand's quality away for nothing --
+    not the "strictly safer" default it was previously treated as. This
+    branch is only reached at all when Rationalization is played anyway
+    despite neither trigger firing (the forced-last-resort case below, or
+    `rationalizationWouldClinchTheGame()`), so declining both modes is a
+    real, intentional outcome here, not a bug.
 
   `chooseAction()`'s own highest-printed-value sort additionally treats
-  Rationalization specially via `sortPriorityValue()`: rather than
-  leading with it purely because of its own unremarkable printed value
-  (3), it's demoted to `PHP_INT_MIN` -- guaranteed last -- UNLESS
-  `rationalizationLowValueHand()` or `rationalizationStealDirection()`
-  already says it's worth playing right now (same two checks
-  `rationalizationChoices()` itself makes, just used here to decide
-  WHETHER/WHEN rather than HOW) -- "save it to play last" per the
-  maintainer, so a mediocre Rationalization never displaces a
-  genuinely useful play, but it's still never skipped outright: once
-  it's the only legal candidate left (or a trigger fires), it's played
-  the same as anything else, always committing to a real mode.
+  Rationalization specially via `sortPriorityValue()`/`hasGoodReasonToPlayNow()`
+  (see the latter's own docblock -- extracted from `sortPriorityValue()`
+  for the reason given there): rather than leading with it purely
+  because of its own unremarkable printed value (3), it's demoted to
+  `PHP_INT_MIN` -- guaranteed last -- UNLESS `rationalizationLowValueHand()`,
+  `rationalizationStealDirection()`, or (reported live, follow-up)
+  `rationalizationWouldClinchTheGame()` already says it's worth playing
+  right now (the first two are the same checks `rationalizationChoices()`
+  itself makes, just used here to decide WHETHER/WHEN rather than HOW)
+  -- "save it to play last" per the maintainer, so a mediocre
+  Rationalization never displaces a genuinely useful play, but it's
+  still never skipped outright: once it's the only legal candidate left
+  (or a trigger fires), it's played the same as anything else, always
+  committing to a real mode.
+
+  **`rationalizationWouldClinchTheGame()`** (reported live: "Rationalization
+  should be saved until it can be used to rotate hands and get the bot
+  at least a 3 card increase in hand size, it should not be played for
+  points to win a round unless it's going to win the entire game") --
+  the "unless" carve-out: true only when BOTH (a) `$roundWinsNeededToWinGame`
+  (see `chooseAction()`'s own docblock for what this new parameter means
+  and where `GameService::roundWinsStillNeededToWinGame()` computes it)
+  says winning the round in progress right now would complete the whole
+  GAME for the bot's own side -- accounting for Corruption's own "the
+  round's winner wins two rounds instead of one" marker, mirroring
+  `GameService::hasExtraWinMarker()` (duplicated rather than shared
+  across the Bot/Game namespace boundary, the same convention
+  `ShockEffect::MAXIMUM_VALUE`/`SHOCK_MAX_TARGET_VALUE` established) --
+  AND (b) playing Rationalization purely for its own plain printed value
+  (no mode -- `'refresh'`'s own hand-swap doesn't change what counts
+  toward THIS round's score either way, so only the base value matters
+  here) is what actually TAKES the round's own lead
+  (`wouldBecomeHighestScore()`, the same "is this the deciding margin"
+  check `shouldAttemptValueBoostDiscard()`'s own Dignity/Embarrassment/
+  Cheer/Delight policy already uses). Both are required: a bot one round
+  win away from winning the game but not actually in contention to win
+  THIS particular round gains nothing from cashing Rationalization in
+  early, since it wouldn't have won the round anyway.
+
+  **The Tactical Bot (issue #419) was silently exempt from ALL of the
+  above until this same fix** (reported live: "I think we made a change
+  around this before, but it seems like the tactical bots are ignoring
+  it"). `sortPriorityValue()`'s own `PHP_INT_MIN` veto only ever affected
+  `BotPlayerService::chooseAction()`'s own sort order for the plain
+  heuristic bot -- `SearchBotPlayerService`'s own root-action search had
+  no equivalent at all, so it happily UCB1'd over (and often picked) a
+  vetoed card like Rationalization purely because playing it scored well
+  THIS round, with zero notion that it should be held back. Now
+  `hasGoodReasonToPlayNow()` (the veto, extracted to a `public` method
+  precisely so this could be fixed) is also consulted by
+  `SearchBotPlayerService::withoutPrematurelyPlayedCards()` -- see that
+  method's own docblock for exactly how it mirrors `chooseAction()`'s own
+  "deprioritized WHEN, never skipped outright" semantics for a UCB1
+  search, which has no sorted-list fallback to lean on the way a greedy
+  loop does. The same gap silently applied to every other
+  `sortPriorityValue()`-vetoed card too (Cynicism, Contempt, Conviction,
+  Intimidation, Paranoia, Pacifism, Anger, Fear, Denial, Exhilaration,
+  Harmony, Grief, Nostalgia) -- Rationalization was simply the one
+  reported live, but this fix closes the same hole for all of them at
+  once, since they all route through the same shared method.
 - **Policy: Cynicism** (confirmed by the maintainer) -- "you may put a
   card from the discard pile into an opponent's hand; if you do, this
   mood's value becomes 6" (base 3, so a +3 swing). Its own two fields
@@ -6552,6 +6894,78 @@ since it already holds that dependency):
   exists it reverts to plain `baseValue()`, no boost, just no longer
   vetoed.
 
+  **Shock** (reported live: "bots should choose an opponent's mood to
+  target with shock when playing it") gets its own targeting exception
+  too, via `shockTargetMoodIds()`: `buildChoicesForCard()` special-cases
+  `effectKey === 'shock'` instead of falling through to
+  `CardChoiceSchema`'s generic per-field loop, which would otherwise
+  leave `target_mood_ids` unfilled -- it's optional and not in
+  `ALWAYS_FILLED_OPTIONAL_FIELDS`, so the bot was previously playing
+  Shock as a plain 2-value mood, its own "discard up to two players' own
+  moods worth 3 or less" ability going entirely unused. Structurally
+  identical to `pacifismTargetMoodIds()` (up to two moods, at most one
+  per non-teammate opponent via `CardChoiceSchema`'s own
+  `'distinct_owners'` constraint, each opponent's own highest-value
+  qualifying mood, sorted so two different opponents are preferred over
+  a single opponent's own one mood), plus its own extra filter: a
+  candidate must also be `SHOCK_MAX_TARGET_VALUE` (3) or less, mirroring
+  `ShockEffect`'s own printed-text cap (that class's own private
+  `MAXIMUM_VALUE` constant, duplicated here rather than referenced
+  directly). Deliberately excludes both the acting player and any
+  teammate the same "an opponent means neither" way Intimidation/
+  Paranoia/Pacifism above do -- `CardChoiceSchema`'s own field is scope
+  `'any'` (Shock's printed text says "choose up to two players" with no
+  restriction against the acting player), so left to `BotChoiceResolver`'s
+  generic default the bot could just as easily have discarded its OWN
+  mood instead of an opponent's.
+
+  Shock also gets a hold-back veto, `shockHasAGoodReasonToPlayNow()`
+  (reported live: "Bots should avoid playing Shock without a target
+  opponent mood for it - exception for when they just need 2 points to
+  win a game"): with no legal target at all
+  (`shockTargetMoodIds() === []`), Shock is just a plain 2-point card
+  with nothing else to show for it, so `sortPriorityValue()`
+  deprioritizes it (the same `PHP_INT_MIN` treatment Rationalization/
+  Denial/Rejection above already get) UNLESS `shockWouldClinchTheGame()`
+  says playing it for that plain printed value alone would both take the
+  round's lead (`wouldBecomeHighestScore()`, `$unboostedValue` 0) and win
+  the entire game outright -- the exact same
+  `rationalizationWouldClinchTheGame()`-shaped check (duplicated, not
+  shared, the same "small per-card helper" convention
+  `SHOCK_MAX_TARGET_VALUE`'s own docblock already established for this
+  card) Rationalization's own game-win carve-out uses.
+
+  **Exhilaration** (reported live: "bots should not target Bliss to put
+  into the discard pile with Exhilaration unless it is very clear that
+  it will bring an immediate point advantage - sacrificing Bliss to
+  Exhilaration on an empty board is almost never the correct play") gets
+  a bespoke `discard_mood_id` policy via `exhilarationDiscardMoodId()`,
+  dispatched instead of `CardChoiceSchema`'s generic per-field loop the
+  same way Pacifism/Anger/Shock above are. Exhilaration's own "to play"
+  cost (`ExhilarationEffect::payToPlayCost()`) is mandatory -- discard
+  ONE of the bot's own in-play moods, a `required` field with no legal
+  way to skip it -- so the generic resolver's own scope-`'own'` default
+  ("give up whatever's cheapest," lowest live value first) would happily
+  hand over Bliss precisely because its face value (2) often undersells
+  it: Bliss's real worth is its own ongoing "while in play" scoring
+  multiplier (`RoundScorer::score()`'s own
+  `AUTOMATIC_SCORE_MULTIPLYING_EFFECT_KEYS` -- triples every own mood
+  sharing a color with whatever card paid ITS OWN cost), not its printed
+  number. `exhilarationDiscardMoodId()` instead prefers ANY other own
+  mood over Bliss regardless of relative face value, and only falls back
+  to Bliss when it's the bot's ONLY own mood in play at all (forced --
+  Exhilaration's own field has no legal alternative). That one remaining
+  case is covered by `exhilarationHasAGoodReasonToPlayNow()`'s own
+  `sortPriorityValue()` veto (`PHP_INT_MIN`, the same "deprioritized
+  WHEN, never skipped outright" treatment Pacifism/Denial above get) --
+  provably never worth it rather than merely a heuristic guess: with
+  Bliss gone and nothing else of the bot's own left in play, Exhilaration's
+  own "score your moods an extra time" bonus doubles a board worth
+  exactly 0 (its own printed value is 0), while simply not playing it
+  keeps Bliss's own guaranteed-positive contribution instead -- strictly
+  worse every time, so no runtime scoring simulation is needed to rule it
+  out.
+
   **Creativity** (confirmed by the maintainer) gets its own targeting
   exception via `creativityBestCopyTargetId()`: `buildChoicesForCard()`
   special-cases `effectKey === 'creativity'` to it instead of falling
@@ -6596,6 +7010,16 @@ since it already holds that dependency):
   pile is enough. The instant the pile has even one card in it, Harmony
   reverts to its ordinary `EARLY_PRIORITY_EFFECT_KEYS` boosted treatment.
 
+  **Grief** (confirmed by the maintainer) gets the identical
+  `sortPriorityValue()` `PHP_INT_MIN` treatment as Harmony above --
+  `GriefEffect::afterPlaying()` grants its own two extra plays with the
+  same `['source' => 'discard']` restriction, so an empty discard pile
+  leaves both plays with nothing to take from, "avoid playing it until
+  there are cards in the discard pile to play" same as Harmony, just
+  granting two plays instead of one. The instant the pile has even one
+  card in it, Grief reverts to its ordinary `EARLY_PRIORITY_EFFECT_KEYS`
+  boosted treatment.
+
   **Nostalgia** (confirmed by the maintainer) gets the identical
   `sortPriorityValue()` `PHP_INT_MIN` treatment as Harmony above,
   "save it until there's something in the discard pile for it to
@@ -6615,6 +7039,26 @@ since it already holds that dependency):
   Nostalgia reverts to its ordinary `EARLY_PRIORITY_EFFECT_KEYS`
   boosted treatment (it's already listed there, alongside Charity/
   Duplicity/Harmony/Grief and the rest of the extra-play family).
+
+  **Fear** (confirmed by the maintainer) gets a `sortPriorityValue()`
+  `PHP_INT_MIN` treatment via `fearHasAGoodReasonToPlayNow()` -- unlike
+  Harmony/Grief/Nostalgia above, this isn't conditioned on the discard
+  pile; `FearEffect`'s own printed value is always 0 (no alt value
+  either), so on its own it's purely a worthless opening/filler play with
+  nothing to show for it -- "not as an opening move, and not for zero
+  points at all" per the maintainer, which for Fear is the same veto
+  either way since it never scores anything on its own. The one
+  exception: the bot's own hand holds a card that would actually benefit
+  from the extra mood Fear puts into play, which Fear's own unconditional
+  extra-play grant then lets be played the very same turn -- one whose
+  value scales with mood count (`MOOD_COUNTING_EFFECT_KEYS`: Euphoria,
+  Serenity, Tranquility, Vanity, Superiority) or specifically with blue
+  moods in play (`BLUE_CARING_EFFECT_KEYS`: the `PairedColorThresholdEffect`
+  registrations pairing blue with another color -- Loyalty, Frustration,
+  Disregard, Pity -- plus Love, which needs one mood of every color; Fear
+  itself is blue, so playing it directly feeds whichever of these the bot
+  is holding). The instant either kind of synergy card sits in hand, Fear
+  reverts to its ordinary `EARLY_PRIORITY_EFFECT_KEYS` boosted treatment.
 
   **Anger** (confirmed by the maintainer) gets its own targeting
   exception too, via `angerTargetMoodIds()` -- `buildChoicesForCard()`
@@ -6715,10 +7159,10 @@ since it already holds that dependency):
   above, since `target_mood_ids` is optional and not in
   `ALWAYS_FILLED_OPTIONAL_FIELDS`, so the generic resolver would
   otherwise always leave it unfilled. "Put two chosen moods that share a
-  color or value into their players' hands" is used for one of two
-  purposes, tried in order, both constrained to a legal
+  color or value into their players' hands" is used for one of three
+  purposes, tried in order, all constrained to a legal
   same-color-or-value pair the same way `DenialEffect` itself validates
-  (`sameColorOrValuePairs()`, shared by both):
+  (`sameColorOrValuePairs()`, shared by all three):
   - `denialWinningTargetMoodIds()` -- targeting opponent card(s) to
     remove them from play and win the round outright. Every pair of
     non-teammate opponents' own in-play moods that satisfies the
@@ -6738,7 +7182,14 @@ since it already holds that dependency):
     !== null` (Awe or similar) short-circuits straight to "no winning
     pair," the same "nothing to win this round regardless of who's
     targeted" guard `sneakinessTargetPlayerId()` already applies.
-  - Failing that, `denialReplayTargetMoodIds()` -- picking up one of the
+  - Failing that, `denialSignificantSwingTargetMoodIds()` (confirmed by
+    the maintainer, new) -- the same non-teammate-opponent-pair search as
+    above, but asking only that the pair's combined live value clear
+    `DENIAL_SIGNIFICANT_SWING_THRESHOLD` (4), not that removing it win
+    the round outright. Genuinely costing an opponent a meaningful amount
+    is worth doing on its own even short of a decisive win; the
+    highest-combined-value qualifying pair is preferred.
+  - Failing that too, `denialReplayTargetMoodIds()` -- picking up one of the
     bot's OWN low-point (`DENIAL_REPLAY_MAX_VALUE`, 0-2) moods with its
     own "after playing this mood" ability to re-play: `DenialEffect`
     returns a targeted mood to its own OWNER's hand (`BoardState::
@@ -6761,13 +7212,86 @@ since it already holds that dependency):
 
   Returns `[]` (Denial still legally playable as a plain 1-point blue
   mood, per `DenialEffect`'s own `if ($targets === []) { return; }`)
-  when NEITHER priority finds a qualifying pair -- unlike Harmony/
-  Nostalgia/Pacifism above, this doesn't deprioritize Denial itself via
-  `sortPriorityValue()` in that case; a same-color-or-value pair
-  genuinely doesn't always exist among whatever's in play, and Denial's
-  own printed value (1) is ordinary enough that leading with it purely
-  by `baseValue()` the way most cards do is still a reasonable default
-  then.
+  when NONE of the three priorities finds a qualifying pair.
+  `denialHasAGoodReasonToPlayNow()` (confirmed by the maintainer, new)
+  then deprioritizes Denial itself via `sortPriorityValue()` (the same
+  `PHP_INT_MIN` treatment Harmony/Nostalgia/Pacifism above get) in that
+  case -- "avoid playing Denial unless there's a good target to bounce"
+  -- UNLESS playing it for its own plain printed value alone (no target
+  at all) would be the deciding difference between the bot's own group
+  NOT currently having the highest score this round and having it
+  (`wouldBecomeHighestScore()`, reused with an `$unboostedValue` of 0,
+  the same pattern Cynicism/Contempt/Conviction use elsewhere in this
+  section) -- "the point from it will win the round" exception, worth
+  playing even with nothing to bounce. Denial's own printed value (1) is
+  otherwise too marginal to lead with blind, unlike most cards' plain
+  `baseValue()` default.
+
+  **Rejection** (reported live: "Bots shouldn't play Rejection with no
+  targets - exception when it being in play will pump another mood
+  enough to win a round") gets the same treatment via
+  `rejectionTargetMoodIds()`, mirroring Denial's own first two
+  priorities (`rejectionWinningTargetMoodIds()`/
+  `rejectionSignificantSwingTargetMoodIds()`, sharing
+  `sameColorOrValuePairs()`) but with NO third "replay" tier: Denial
+  returns its targets to their owners' hands, so sacrificing one of the
+  bot's own cheap moods gets it back for a replay; Rejection discards
+  its targets permanently instead (contrast the Denial section above),
+  so touching the bot's own board here is pure self-harm with no
+  replay upside to weigh against it. Both tiers therefore only ever
+  target non-teammate opponents' own moods.
+  `rejectionHasAGoodReasonToPlayNow()` deprioritizes Rejection (the same
+  `PHP_INT_MIN` treatment) when neither tier finds a pair, with one
+  exception distinct from every other card's own `wouldBecomeHighestScore()`
+  pattern: Rejection's own printed value is always 0, so boosting a
+  single card's value can never be the mechanism here. Instead
+  `rejectionWouldPumpAnotherMoodToWinTheRound()` (new) actually clones
+  the board, moves Rejection into play on the clone (contributing
+  nothing itself but raising the live in-play mood COUNT by one), and
+  compares real `RoundScorer()` totals before and after -- worth playing
+  with no target at all if that alone pumps some OTHER already-in-play
+  mood that scales with mood count (Euphoria's own "+1 per mood in
+  play, any owner") enough to flip the round from a loss to a win.
+
+  **Guilt** (reported live: "bots should consider whether suppressing a
+  single opponent mood would net them more of a point swing than
+  choosing the 'all' mode") gets its own bespoke `guiltChoices()`,
+  replacing `BotChoiceResolver`'s former `MODE_FIELD_OVERRIDES['guilt']
+  = 'all'` hardcode (see that class's own docblock), which never
+  considered `'single'` at all. `GuiltEffect`'s own `'all'` mode
+  suppresses EVERY black/red mood currently in play regardless of
+  owner -- including the bot's own -- while `'single'` can cherry-pick
+  just one. For every qualifying (black/red) mood in play,
+  `guiltSwingContribution()` scores its own suppression as +value if it
+  belongs to a non-teammate opponent (a genuine loss inflicted on a
+  rival) or -value if it belongs to the bot's own group (a
+  self-inflicted loss `'all'` can't avoid the way `'single'` targeting
+  can); `guiltChoices()` then compares the single BEST such
+  contribution against the sum of ALL of them, and picks whichever mode
+  actually nets the larger swing. With no qualifying mood in play at
+  all, `'all'` is used as a harmless no-op (`GuiltEffect::
+  allQualifyingMoods()` finds nothing to suppress either way) rather
+  than leaving `'single'` with no legal target to fill in.
+
+  **Scorn** (reported live: a bot's mandatory suppression targeted the
+  human's own mood when it should have targeted the other player's copy
+  of the same card instead -- "not sure whether this is a bug (the
+  targeting code couldn't distinguish between the two [identical
+  cards]) or just a bad play") gets `scornTargetMoodId()`.
+  `CardChoiceSchema`'s own `target_mood_id` field for Scorn's own
+  mandatory "suppress any mood" play is scope `'any'` with no owner
+  preference at all, so without this the generic resolver's plain
+  "highest value" policy could pick either player's copy of an
+  identically-valued card with no real preference between them -- the
+  same class of gap Contempt/Conviction/Hate/Denial above already
+  needed a bespoke opponent-preferring method for. Prefers a
+  non-teammate opponent's own highest-value mood first, the same
+  `contemptTargetMoodId()`-style priority already used elsewhere,
+  falling back to the highest-value OTHER mood overall (excluding Scorn
+  itself) only when no opponent mood exists at all -- this field is
+  REQUIRED (unlike Contempt/Hate's own optional one), so it must still
+  supply SOME legal target even then, the same reasoning
+  `convictionTargetMoodId()` already documents.
 - **Nostalgia's own discard-pickup targeting** (confirmed by the
   maintainer), via `nostalgiaDiscardCardId()`: always takes the
   highest-`baseValue()` card currently in the discard pile when playing
@@ -7177,6 +7701,230 @@ after creation, via `POST /games/decklist`; `startGame()`'s existing
 so the game simply sits `waiting` (bot's deck already submitted, human's
 still pending) until the human does. See "New game dialog" in
 `web-static/README.md` for the picker/decklist fields this adds.
+
+### Tactical Bot (issue #419)
+
+A second, opt-in bot tier that actually searches for a good play on its
+own turn, rather than the "legal, not strategic" heuristic every other
+practice bot above uses. Everything else about a bot -- identity, seating,
+decision answers, team-decision/draft-pick policies -- is untouched; this
+only replaces the ONE decision of "what do I play on my own turn."
+
+**Identity.** Three named bot accounts, each with `users.uses_tactical_ai
+= 1` alongside the existing `is_bot = 1` -- meaningless for a non-bot
+user, so no schema concerns beyond "off unless a bot row is deliberately
+flipped." Not a roster of 3 interchangeable seats like
+`BotAlice`/`BotBen`/`BotCleo`: a Tactical Bot seat is always chosen
+deliberately (the New Game dialog's own bot picker), so all three can
+coexist without ambiguity -- they're distinguished by SPEED, not by being
+drawn from a pool. `uses_tactical_ai` gates ONLY `chooseAction()` (its own
+turn's play/pass) -- `GameService::listPracticeBots()` still returns
+every `is_bot = 1` row for the picker, and every other bot decision
+(decision answers, team-decision proposals, draft picks) still goes
+through the plain heuristic `BotPlayerService` regardless of this flag.
+
+**Speed tiers (migration `0237`).** `users.tactical_ai_time_budget_seconds`
+gives each Tactical Bot account its OWN search budget -- a per-bot column
+rather than a second global constant, so a future tier (or a
+maintainer-tuned budget for one specific bot) needs no further schema
+change. `BotSage` (migration `0236`, the original single Tactical Bot)
+kept its identity as the "standard" tier but moved from the original
+`BOT_SEARCH_TIME_BUDGET_SECONDS = 150` down to `60`; `BotSageQuick` (`30`)
+and `BotSageDeep` (`90`) joined it -- 150s turned out, in live testing, to
+be too long to comfortably iterate against. The New Game dialog's own bot
+picker draws no visual distinction between the three (or between them and
+the plain heuristic roster) -- each account's own name already says
+enough about its relative speed. `GameService::launchTacticalBotSearchJob()`
+looks this value up per-seat (`tacticalBotTimeBudgetSeconds()`) rather
+than using the constructor's own `botSearchTimeBudgetSeconds`, which is
+now `null` by default and reserved purely for a test wanting to force
+EVERY Tactical Bot fast uniformly regardless of which one is actually
+seated.
+
+**The search itself (`SearchBotPlayerService`).** A flat Monte
+Carlo/UCB1 bandit, not a full growing-tree MCTS: search branches ONLY at
+the root -- which of the enumerated legal actions (or an implicit pass) to
+take for THIS `chooseAction()` call. Every subsequent decision within a
+rollout (the acting bot's own further plays this turn, every other
+player's/team's entire turn, all pending-decision answers along the way)
+is resolved via the existing heuristic `BotPlayerService` as a fixed
+default policy. This is a deliberate scope-narrowing: turn/round
+orchestration (`advanceTurn()`/`scoreRoundAndAdvance()`) lives only in
+`GameService`, tightly coupled to DB persistence, not in the pure `Rules`
+layer, so modeling every player's own full strategic choice inside a
+rollout wasn't tractable to build a first version around. A future
+version could widen this (e.g. searching the acting bot's OWN subsequent
+plays this turn too), but even this narrower scope already lets the bot
+compare "play card A" vs. "play card B" vs. "pass" by actually looking at
+where each one leads, rather than a fixed heuristic ranking.
+
+Each rollout:
+
+1. **Determinizes** (`Determinizer`) -- hidden-information handling for a
+   fair (non-omniscient) search. Clones the `BoardState` and reshuffles
+   every player's hand EXCEPT the acting bot's own, plus every deck
+   (including the bot's OWN deck -- nobody knows their own future draws
+   either), pooling same-sized zones together and reshuffling; discard
+   piles and in-play cards (already public) are untouched.
+2. Applies the root action being evaluated, fully resolving any pending
+   decision chain it creates via the heuristic bot's own
+   `chooseDecisionAnswer()`.
+3. Finishes the acting bot's own remaining plays this turn (extra grants)
+   via the heuristic.
+4. Plays out every remaining player's/team's own turn for the rest of the
+   round via the heuristic (deliberately NOT modeling Hurt Feelings or
+   banked plays for these FUTURE simulated turns -- a v1 simplification).
+5. Scores the round (`RoundScorer`; Enthusiasm/Passion decisions always
+   decline) and computes a reward: the acting bot's own side's total score
+   (teammates pooled) minus the single highest-scoring OTHER side's total.
+
+`UCB1_EXPLORATION_CONSTANT = sqrt(2)` balances trying every action enough
+times against spending more rollouts on the ones already looking best.
+Any exception inside a single rollout is caught and scored as `-INF`
+rather than crashing the whole search -- one bad rollout shouldn't cost
+the bot its turn.
+
+**Legal actions (`LegalChoiceEnumerator`).** Reuses
+`BotPlayerService::buildChoicesForCard()`'s own existing, already-tested
+choice-set as the always-included default action per playable card. For
+the ~16 hand-written "bespoke" per-effect-key choice builders inside it
+(Rationalization, Avoidance, Cynicism, Intimidation, Paranoia, Pacifism,
+Creativity, Anger, Denial, Hate, Conviction, Nostalgia, Contempt,
+Sneakiness, Shock, Exhilaration -- `BotPlayerService::usesBespokeChoiceBuilding()`), that
+default is the ONLY action generated for that card; reimplementing full
+legal-choice enumeration for each of these wasn't worth it just to widen
+the search over cards the heuristic already handles reasonably. For
+every other card, if its `CardChoiceSchema` has a single-target
+`mood`/`player` field (scope `other`/`any`), additional variants are
+generated by re-targeting that one field across every legal candidate
+(capped at 6, deduplicated); a multi-target field instead gets a bounded
+set of variants (the heuristic's own default pick, "target everyone
+eligible up to the max," "target just the minimum required") rather than
+full `K`-choose-`N` combinatorial enumeration, which would blow up the
+action space for the cards that have one.
+
+**Root-action filtering (`SearchBotPlayerService::withoutPrematurelyPlayedCards()`,
+follow-up fix).** `LegalChoiceEnumerator::enumerate()` above builds one
+root action per legally-playable card with no opinion on whether NOW is
+actually a good moment to play it -- that judgment lives entirely in
+`BotPlayerService::hasGoodReasonToPlayNow()` (the "Rationalization"/
+"Practice bots" policy write-up above explains the individual per-card
+vetoes this covers), which used to be consulted ONLY by the plain
+heuristic bot's own `chooseAction()`, invisible to this search engine
+entirely (reported live: a Tactical Bot was ignoring a maintainer-
+confirmed Rationalization policy that the plain heuristic bot already
+respected). `chooseAction()` now calls `withoutPrematurelyPlayedCards()`
+on the enumerator's own output before running UCB1 over it: a candidate
+whose card currently has no good reason to be played is dropped, but
+only when at least one OTHER playable card in this exact turn's own
+candidate set DOES have one right now -- if every playable card is
+vetoed, none are excluded, since the search ranking among them by actual
+simulated outcome is strictly more informed than the heuristic's own
+arbitrary tie-break in that corner case anyway. `$roundWinsNeededToWinGame`
+(see `BotPlayerService::chooseAction()`'s own docblock) is threaded
+through from `SearchBotPlayerService::chooseAction()`'s own same-named
+parameter into this filter too, so the Tactical Bot gets the exact same
+game-clinching carve-out as the plain heuristic bot for a card like
+Rationalization.
+
+**Async "bot is thinking" job (issue #419's own performance
+constraint).** `GameService::advanceAutomatedTurns()` runs synchronously
+inline with an HTTP request, and a real search can legitimately take up
+to a couple of minutes -- far too long to hold open every human-facing
+request that happens to trigger a Tactical Bot's own turn. Instead, the
+first time `advanceAutomatedTurns()` sees a Tactical Bot's own turn to
+play, it launches a detached background process
+(`php bin/run_bot_search.php <job_id>`, via `exec(... '&')`) and returns
+immediately -- the game simply shows a "bot is thinking" indicator (see
+`bot_thinking` below) until a later poll finds the job resolved.
+
+- **Empty-hand short-circuit.** Before ever touching the job machinery
+  below, `advanceAutomatedTurns()`'s own Tactical Bot branch checks
+  `candidatePlayCardIds()` filtered through `isPlayable()` -- the exact
+  same "any legal play at all" check its ordinary heuristic-bot branch and
+  its auto-pass-on-empty-hand branch both already use -- and passes
+  immediately if there's nothing to play, rather than launching a
+  background search job (and waiting out that seat's own full time
+  budget) over zero candidate actions. Fixes a bug reported live: a
+  Tactical Bot took its full time budget on every turn, even a genuinely
+  empty-hand one with no legal play, because this dispatch layer (unlike
+  the other two branches) had no upfront legality check of its own --
+  `SearchBotPlayerService::chooseAction()` itself already short-circuited
+  correctly on zero legal actions, but only AFTER a job had already been
+  launched and its full budget waited out end-to-end.
+- **Single-card halved budget** (reported live: "when a bot only has
+  one card in hand, cut its max thinking time in half"). A ZERO-card
+  turn is already caught by the empty-hand short-circuit just above;
+  exactly ONE still goes through the job machinery below (it may still
+  need real deliberation over which MODE/TARGET to choose), just with
+  half the seat's own usual budget --
+  `launchTacticalBotSearchJob()` checks `count($state->hand($gamePlayerId))
+  === 1` and halves `$timeBudgetSeconds` (via `intdiv()`) before creating
+  the `bot_search_jobs` row, since there's no rival CARD left to weigh a
+  single one against the way a multi-card hand would need. The stored
+  `time_budget_seconds` is exactly what `runTacticalBotSearchJob()` later
+  reads back to bound the real search and what
+  `advanceTacticalBotSearch()`'s own staleness check compares elapsed
+  time against, so halving it here alone shortens both consistently.
+- **`bot_search_jobs`** (migration `0236`) tracks one row per Tactical
+  Bot seat's in-flight (or just-finished) decision: `status`
+  (`running`/`done`/`failed`), `time_budget_seconds`, `started_at`,
+  `finished_at`, `error_message`. A new turn's own job simply `INSERT`s a
+  fresh row rather than reusing the previous one, so a seat's last few
+  decisions stay around for free (no separate history table).
+- **Per-bot time budget (migration `0237`)** -- how long
+  `SearchBotPlayerService::chooseAction()` is allowed to run for a given
+  seat, read from that seat's OWN `users.tactical_ai_time_budget_seconds`
+  (`GameService::tacticalBotTimeBudgetSeconds()`) rather than one global
+  value -- see "Speed tiers" above. `BOT_SEARCH_TIME_BUDGET_SECONDS = 150`
+  still exists as a defensive fallback only (a row somehow missing its own
+  value); every real Tactical Bot account carries an explicit one via
+  migration `0237`'s own seed/`UPDATE`. Still overridable via
+  `GameService`'s own constructor (now `?int`, `null` by default) purely
+  so tests can force every Tactical Bot fast uniformly rather than waiting
+  out whatever real budget that bot's own row carries.
+- **Stale/crashed job fallback.** If a job is still `'running'` past its
+  own budget plus `BOT_SEARCH_STALE_GRACE_SECONDS = 30` (covering the
+  background process's own bootstrap/DB round-trip overhead on top of the
+  search itself), `advanceTacticalBotSearch()` marks it `'failed'` and
+  plays immediately via the ordinary heuristic bot instead, so a dev-server
+  restart or a killed PHP-FPM worker mid-search never leaves a game stuck
+  forever. A bot's own turn can span several plays (extra grants); once one
+  play this turn has fallen back to the heuristic, the rest of that SAME
+  turn keeps using it too (tracked via a local, per-request, never-persisted
+  set passed by reference through `advanceAutomatedTurns()`'s own loop) --
+  there's no reason to trust a fresh search job for a turn already deemed
+  crashed.
+- **`bot_thinking`** (`GameService::buildGameState()`, shared by both
+  `getState()` and `getSpectatorState()`) -- `{game_player_id, username,
+  time_budget_seconds}` while a job is genuinely still in flight for this
+  game, else `null`. See "Bot is thinking indicator" in
+  `web-static/README.md` for how this renders.
+- **`bin/run_bot_search.php`** is a thin CLI wrapper: bootstraps a
+  standalone `GameService` (mirroring `bin/expire_and_delete_stale_games.php`'s
+  own no-HTTP-context bootstrap pattern) and calls
+  `GameService::runTacticalBotSearchJob(int $jobId)`, which does the real
+  work -- load the job, re-validate it's still genuinely that seat's turn
+  (guards against a stale/duplicate job surviving past a turn resolved
+  another way), run the search, apply the chosen action through the exact
+  same `playMood()`/`pass()` entry points a live request would use (so
+  it's subject to the same `withGameLock()` serialization as everything
+  else), and mark the job `done` -- or `failed`, falling back to the
+  heuristic bot, on any exception.
+
+**Deployment prerequisite.** `exec()` must not be in PHP's
+`disable_functions` on wherever this is deployed -- some shared hosts
+disable it by default. Without it, `launchTacticalBotSearchJob()`'s call
+would either throw or silently no-op depending on configuration, leaving
+a Tactical Bot's own turn permanently stuck (no fallback exists for
+"couldn't even launch the job" -- only for a job that launched and then
+went stale). `GameService`'s own `spawnBotSearchProcesses` constructor
+flag (default `true`) exists purely so tests can exercise
+`launchTacticalBotSearchJob()`'s job-row bookkeeping without ALSO forking
+a real OS process every time -- that real subprocess would otherwise
+inherit the test's own environment (including its test-database
+connection) and race the test's own assertions against the very same
+`bot_search_jobs` row.
 
 ### Auto-pass on empty hand
 

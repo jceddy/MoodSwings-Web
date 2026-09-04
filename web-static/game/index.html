@@ -201,6 +201,23 @@
                 <h3>Deck submissions</h3>
                 <ul id="duel-deck-submission-status"></ul>
 
+                <!-- Power Duel sideboarding (migration 0228/0233, issue #90
+                     follow-up) -- shown INSTEAD of
+                     #duel-deck-submit-form-container for game 2/3 of a
+                     match that opted into it (GameService::getState()'s
+                     own 'power_duel_sideboard_pool'/
+                     'power_duel_previous_deck_card_ids'). A visual toggle
+                     picker over your original deck + sideboard combined,
+                     mirroring the draft formats' own #draft-deck-building
+                     sideboard screen -- pre-selects whichever of those
+                     cards you actually played last game. -->
+                <div id="duel-deck-sideboard-picker" hidden>
+                    <p id="duel-deck-sideboard-picker-status"></p>
+                    <div id="duel-deck-sideboard-picker-cards"></div>
+                    <button id="duel-deck-sideboard-picker-submit-button" type="button">Submit deck</button>
+                    <p id="duel-deck-sideboard-picker-error" class="error" hidden></p>
+                </div>
+
                 <div id="duel-deck-submit-form-container">
                     <label>Use a saved deck
                         <select id="duel-deck-submit-saved-decklist">
@@ -443,11 +460,15 @@
 
                 <button id="pass-button" type="button">Pass</button>
 
-                <h3>Recent plays</h3>
-                <button id="view-log-button" type="button">View log</button>
-                <button id="view-shared-deck-button" type="button" hidden>View decklist</button>
-                <ul id="recent-events-list"></ul>
-                <p id="recent-events-empty" hidden>Nothing has happened yet.</p>
+                <div id="recent-plays-actions">
+                    <button id="view-log-button" type="button">View log</button>
+                    <button id="view-shared-deck-button" type="button" hidden>View decklist</button>
+                </div>
+                <details id="recent-events-details" open>
+                    <summary>Recent plays</summary>
+                    <ul id="recent-events-list"></ul>
+                    <p id="recent-events-empty" hidden>Nothing has happened yet.</p>
+                </details>
             </div>
 
             <!-- Outside #in-progress-area so it stays reachable while a
@@ -537,6 +558,10 @@
                     <select id="new-game-partner"></select>
                 </label>
             </div>
+
+            <label class="new-game-field" id="new-game-best-of-three-label" hidden><input type="checkbox" id="new-game-best-of-three"> Best of three (create the next game automatically if this one doesn't decide it)</label>
+
+            <label class="new-game-field" id="new-game-allow-sideboarding-label" hidden><input type="checkbox" id="new-game-allow-sideboarding"> Allow sideboarding (up to 5 cards, swapped freely between games)</label>
 
             <label class="new-game-field" id="new-game-deck-type-label">Deck
                 <select id="new-game-deck-type">
@@ -928,6 +953,7 @@
 
     <dialog id="card-detail-dialog">
         <img id="card-detail-art" class="card-detail-art">
+        <div id="card-detail-deck-builder-actions" hidden></div>
         <p id="card-detail-meta"></p>
         <p id="card-detail-creativity-copy" hidden></p>
         <p id="card-detail-chaos-effect" hidden></p>
@@ -1423,6 +1449,46 @@
                 <p id="deck-builder-deck-summary"></p>
                 <p id="deck-builder-deck-empty" hidden>No cards in this deck yet -- add some from the catalog.</p>
                 <div id="deck-builder-deck-cards" class="deck-builder-card-grid"></div>
+            </section>
+
+            <!-- Sideboarding (migration 0228, issue #90 follow-up) --
+                 shown only for Free-form/Power Duel (see
+                 deckBuilderFormatSupportsSideboard() in game.js); Power
+                 Duel best-of-three sideboarding (see "Best of three" in
+                 web-static/README.md) caps this at
+                 POWER_DUEL_SIDEBOARD_MAX_CARDS cards, Free-form has no
+                 cap of its own, same as its main deck. -->
+            <section class="deck-builder-sideboard" id="deck-builder-sideboard-section" hidden>
+                <h3>Your sideboard</h3>
+                <div class="deck-builder-sort">
+                    <label>Sort by
+                        <select id="deck-builder-sideboard-sort-1" class="deck-builder-sort-select">
+                            <option value="">(unsorted)</option>
+                            <option value="color">Color</option>
+                            <option value="rarity">Rarity</option>
+                            <option value="name">Name</option>
+                        </select>
+                    </label>
+                    <label>then
+                        <select id="deck-builder-sideboard-sort-2" class="deck-builder-sort-select">
+                            <option value="">(nothing)</option>
+                            <option value="color">Color</option>
+                            <option value="rarity">Rarity</option>
+                            <option value="name">Name</option>
+                        </select>
+                    </label>
+                    <label>then
+                        <select id="deck-builder-sideboard-sort-3" class="deck-builder-sort-select">
+                            <option value="">(nothing)</option>
+                            <option value="color">Color</option>
+                            <option value="rarity">Rarity</option>
+                            <option value="name">Name</option>
+                        </select>
+                    </label>
+                </div>
+                <p id="deck-builder-sideboard-summary"></p>
+                <p id="deck-builder-sideboard-empty" hidden>No cards in your sideboard yet -- add some from the catalog.</p>
+                <div id="deck-builder-sideboard-cards" class="deck-builder-card-grid"></div>
             </section>
         </div>
 

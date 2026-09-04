@@ -122,12 +122,15 @@ final class UserDecklistService
     }
 
     /**
-     * The resolved {name, cardIds} shape GameService::createGame()/
-     * submitCustomDuelDeck() consume in place of DecklistParser::parse()'s
-     * own return value -- deliberately omits sideboardCardIds, since
-     * neither of those two flows has any concept of a sideboard today.
+     * The resolved {name, cardIds, sideboardCardIds} shape
+     * GameService::createGame()/submitCustomDuelDeck() consume in place
+     * of DecklistParser::parse()'s own return value. sideboardCardIds is
+     * always present (empty array when the saved decklist has none) --
+     * createGame()'s own 'custom' deck_type usage simply ignores it (that
+     * flow has no sideboard concept), while submitCustomDuelDeck() reads
+     * it for Power Duel sideboarding (migration 0228).
      *
-     * @return array{name: ?string, cardIds: int[]}
+     * @return array{name: ?string, cardIds: int[], sideboardCardIds: int[]}
      */
     public function cardIdsForUse(int $viewerUserId, int $decklistId): array
     {
@@ -136,6 +139,9 @@ final class UserDecklistService
         return [
             'name' => $row['name'],
             'cardIds' => array_map(intval(...), (array) json_decode((string) $row['card_ids'], true)),
+            'sideboardCardIds' => $row['sideboard_card_ids'] !== null
+                ? array_map(intval(...), (array) json_decode((string) $row['sideboard_card_ids'], true))
+                : [],
         ];
     }
 

@@ -22,9 +22,18 @@ final class BotPlayerServiceTest extends TestCase
         $this->bot = new BotPlayerService(new BotChoiceResolver());
     }
 
-    private function boardState(array $hands = []): BoardState
+    /**
+     * @param array<int, int> $catalogCardIdFor instance id => catalog id,
+     *     for a test that needs two DIFFERENT physical instances sharing
+     *     the SAME catalog entry (e.g. two players each with their own
+     *     copy of Determination) -- every other test leaves this empty,
+     *     which BoardState::catalogCardId() already treats as "instance
+     *     id doubles as its own catalog id" (this fixture's usual
+     *     convention throughout the rest of this file).
+     */
+    private function boardState(array $hands = [], array $catalogCardIdFor = []): BoardState
     {
-        return new BoardState($this->sampleCatalog(), DefaultEffectRegistry::build(), [1, 2, 3], $hands);
+        return new BoardState($this->sampleCatalog(), DefaultEffectRegistry::build(), [1, 2, 3], $hands, catalogCardIdFor: $catalogCardIdFor);
     }
 
     public function testChooseActionPicksTheHighestValuePlayableCard(): void
@@ -536,6 +545,64 @@ final class BotPlayerServiceTest extends TestCase
     }
 
     /**
+     * Reported live: "when a bot plays ambition, it should discard a
+     * card for another play if it has 3+ cards in hand and it has
+     * another play that will net it points." With three cards in hand
+     * (Ambition, id 53, plus Courage id 7/value 1 and Apathy id 55/
+     * value 4), the bot volunteers for Ambition's own optional
+     * discard_card_id field -- unlike every other unforced-optional-
+     * field card, which would leave it unfilled by default -- and
+     * BotChoiceResolver's own generic "N lowest-value legal candidates"
+     * policy picks Courage (the cheapest OTHER hand card) as the
+     * discard, leaving Apathy (value 4) to spend the unlocked extra
+     * play on.
+     */
+    public function testChooseActionDiscardsForAmbitionsExtraPlayWithEnoughHandAndAScoringFollowUp(): void
+    {
+        $state = $this->boardState(hands: [1 => [53, 7, 55]]);
+
+        $action = $this->bot->chooseAction($state, [53], 1);
+
+        self::assertSame(53, $action['card_id']);
+        self::assertSame(['discard_card_id' => 7], $action['choices']);
+    }
+
+    /**
+     * Only two cards in hand total (Ambition plus one other) -- below
+     * AMBITION_MIN_HAND_SIZE_TO_DISCARD (3) -- so discarding the other
+     * card would leave nothing to spend the unlocked extra play on, a
+     * pure loss for nothing. Ambition's own optional field stays
+     * unfilled, the same as any other unforced optional field.
+     */
+    public function testChooseActionDoesNotDiscardForAmbitionWithTooSmallAHand(): void
+    {
+        $state = $this->boardState(hands: [1 => [53, 7]]);
+
+        $action = $this->bot->chooseAction($state, [53], 1);
+
+        self::assertSame(53, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
+    /**
+     * Three cards in hand (enough by count), but once the cheapest
+     * other hand card (Fickleness or Disorientation, both value 0) is
+     * set aside as the discard cost, the only card left to spend the
+     * unlocked extra play on is the OTHER value-0 card -- no genuine
+     * scoring play to unlock, so Ambition's own optional field stays
+     * unfilled rather than burning a hand card for nothing.
+     */
+    public function testChooseActionDoesNotDiscardForAmbitionWithNoScoringFollowUp(): void
+    {
+        $state = $this->boardState(hands: [1 => [53, 39, 35]]);
+
+        $action = $this->bot->chooseAction($state, [53], 1);
+
+        self::assertSame(53, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
+    /**
      * Intimidation's own "always target an opponent" policy (confirmed
      * by the maintainer): player 2 has a card in hand, so it's the only
      * legal, non-teammate target -- the bot volunteers for its own
@@ -835,6 +902,246 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame(76, $action['card_id']);
     }
 
+    // -- Shock (reported live: bots should target an opponent's mood) ------
+
+    public function testChooseActionTargetsAnOpponentsMoodWhenPlayingShock(): void
+    {
+        $state = $this->boardState(hands: [1 => [101], 2 => [8]]); // Shock, Dignity (value 3)
+        $state->moveHandToInPlay(2, 8);
+
+        $action = $this->bot->chooseAction($state, [101], 1);
+
+        self::assertSame(101, $action['card_id']);
+        self::assertSame(['target_mood_ids' => [8]], $action['choices']);
+    }
+
+    /**
+     * "One mood from each of two opponents, when possible" -- same
+     * `distinct_owners`-driven preference pacifismTargetMoodIds() applies,
+     * sorted highest-qualifying-value first: player 2's own Dignity
+     * (id 8, value 3) beats player 3's own Spite (id 76, value 1).
+     */
+    public function testChooseActionTargetsOneMoodFromEachOfTwoOpponentsWhenPlayingShock(): void
+    {
+        $state = $this->boardState(hands: [1 => [101], 2 => [8], 3 => [76]]);
+        $state->moveHandToInPlay(2, 8);
+        $state->moveHandToInPlay(3, 76);
+
+        $action = $this->bot->chooseAction($state, [101], 1);
+
+        self::assertSame(101, $action['card_id']);
+        self::assertSame(['target_mood_ids' => [8, 76]], $action['choices']);
+    }
+
+    /**
+     * When a single opponent has multiple qualifying moods in play, Shock
+     * only ever targets that opponent's own HIGHEST-value one (mirroring
+     * Pacifism) -- Dignity (id 8, value 3) beats Courage (id 7, value 1),
+     * both owned by player 2 and both within the value-3 cap.
+     */
+    public function testChooseActionTargetsTheHighestQualifyingValueMoodWhenOneOpponentHasSeveral(): void
+    {
+        $state = $this->boardState(hands: [1 => [101], 2 => [8, 7]]);
+        $state->moveHandToInPlay(2, 8);
+        $state->moveHandToInPlay(2, 7);
+
+        $action = $this->bot->chooseAction($state, [101], 1);
+
+        self::assertSame(101, $action['card_id']);
+        self::assertSame(['target_mood_ids' => [8]], $action['choices']);
+    }
+
+    /**
+     * Discipline (id 9, value 6) exceeds Shock's own value-3 cap, so it's
+     * never a legal target at all -- with no other opponent mood in play,
+     * Shock's own optional field stays unfilled rather than the bot
+     * illegally (or pointlessly) reaching for it.
+     */
+    public function testChooseActionDoesNotTargetAMoodAboveTheValueLimitWhenPlayingShock(): void
+    {
+        $state = $this->boardState(hands: [1 => [101], 2 => [9]]);
+        $state->moveHandToInPlay(2, 9);
+
+        $action = $this->bot->chooseAction($state, [101], 1);
+
+        self::assertSame(101, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
+    /**
+     * A teammate's mood in play doesn't count as a valid target, even
+     * though Shock's own CardChoiceSchema field is scope 'any' (its
+     * printed text says "choose up to two players" with no restriction
+     * against the acting player or a teammate) -- "an opponent" means
+     * neither, the same policy Pacifism above already applies. Player 2
+     * (the bot's own teammate) has Dignity in play; player 3 (the only
+     * actual opponent) has no mood at all -- no valid target exists.
+     */
+    public function testChooseActionDoesNotCountATeammatesMoodAsAValidShockTarget(): void
+    {
+        $state = new BoardState(
+            $this->sampleCatalog(),
+            DefaultEffectRegistry::build(),
+            [1, 2, 3],
+            hands: [1 => [101], 2 => [8]],
+            teamIdByPlayer: [1 => 0, 2 => 0, 3 => 1],
+        );
+        $state->moveHandToInPlay(2, 8);
+
+        $action = $this->bot->chooseAction($state, [101], 1);
+
+        self::assertSame(101, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
+    /**
+     * Reported live: "Bots should avoid playing Shock without a target
+     * opponent mood for it - exception for when they just need 2 points
+     * to win a game." With no in-play moods at all (nothing for
+     * shockTargetMoodIds() to find), Shock (value 2) is deprioritized
+     * behind Courage (value 1) despite its own higher printed value --
+     * without the veto, Shock's own 2 would otherwise win the sort
+     * outright.
+     */
+    public function testChooseActionDemotesShockBehindALowerValueCardWhenNoTargetExists(): void
+    {
+        $state = $this->boardState(hands: [1 => [101, 7]]);
+
+        $action = $this->bot->chooseAction($state, [101, 7], 1);
+
+        self::assertSame(7, $action['card_id']);
+    }
+
+    /**
+     * The reported exception: the opponent's only mood, Confusion (id
+     * 31, value 4), is ABOVE SHOCK_MAX_TARGET_VALUE (3) -- not a legal
+     * Shock target at all, so shockTargetMoodIds() finds nothing. The
+     * bot's own Benevolence (id 2, value 2, already in play) keeps its
+     * own baseline BELOW the opponent's 4, but playing Shock for its own
+     * plain printed value (2) alone closes the gap exactly (2 + 2 = 4),
+     * taking the round's lead, AND $roundWinsNeededToWinGame says
+     * winning this round would win the whole game outright.
+     */
+    public function testShockHasAGoodReasonToPlayNowWhenItWouldWinTheGame(): void
+    {
+        $state = $this->boardState(hands: [1 => [101, 2], 2 => [31]]);
+        $state->moveHandToInPlay(1, 2);
+        $state->moveHandToInPlay(2, 31);
+
+        self::assertTrue($this->bot->hasGoodReasonToPlayNow($state, 101, 1, [101], roundWinsNeededToWinGame: 1));
+    }
+
+    /** Same board as above, but $roundWinsNeededToWinGame is 2 -- winning THIS round wouldn't be enough on its own, so the carve-out doesn't apply. */
+    public function testShockHasNoGoodReasonToPlayNowWhenGameWinIsNotClose(): void
+    {
+        $state = $this->boardState(hands: [1 => [101, 2], 2 => [31]]);
+        $state->moveHandToInPlay(1, 2);
+        $state->moveHandToInPlay(2, 31);
+
+        self::assertFalse($this->bot->hasGoodReasonToPlayNow($state, 101, 1, [101], roundWinsNeededToWinGame: 2));
+    }
+
+    /**
+     * $roundWinsNeededToWinGame is 1 again (winning this round WOULD win
+     * the game), but the opponent's own in-play total (Betrayal, id 56,
+     * value 6 -- also above SHOCK_MAX_TARGET_VALUE, so still no legal
+     * target) is too far ahead for Shock's own value (2) to close: 0 + 2
+     * = 2 is still short of 6. Being close to winning the game isn't
+     * enough by itself -- the round has to be winnable too.
+     */
+    public function testShockHasNoGoodReasonToPlayNowWhenItWouldNotTakeTheRoundLead(): void
+    {
+        $state = $this->boardState(hands: [1 => [101], 2 => [56]]);
+        $state->moveHandToInPlay(2, 56);
+
+        self::assertFalse($this->bot->hasGoodReasonToPlayNow($state, 101, 1, [101], roundWinsNeededToWinGame: 1));
+    }
+
+    /**
+     * Corruption's own live "awardsExtraWin" marker means winning the
+     * round in progress would award 2 round wins at once, so
+     * $roundWinsNeededToWinGame of 2 still counts as "winning this round
+     * wins the game." Bot's own baseline (Corruption itself, value 2) is
+     * behind the opponent's Confusion (id 31, value 4 -- above
+     * SHOCK_MAX_TARGET_VALUE, so still no legal target), but adding
+     * Shock's own value (2) reaches 4, taking the lead.
+     */
+    public function testChooseActionPlaysShockForPointsWithCorruptionsDoubleWinMarker(): void
+    {
+        $state = $this->boardState(hands: [1 => [101, 60], 2 => [31]]);
+        $state->moveHandToInPlay(2, 31);
+        $state->moveHandToInPlay(1, 60);
+        $state->setEffectState(60, 'awardsExtraWin', true);
+
+        self::assertTrue($this->bot->hasGoodReasonToPlayNow($state, 101, 1, [101], roundWinsNeededToWinGame: 2));
+    }
+
+    // -- Exhilaration (reported live: don't sacrifice Bliss to it) ---------
+
+    public function testChooseActionAvoidsSacrificingBlissWhenAnotherMoodIsAvailable(): void
+    {
+        $state = $this->boardState(hands: [1 => [89, 108, 38]]); // Exhilaration, Bliss, Fear (value 0)
+        $state->moveHandToInPlay(1, 108);
+        $state->moveHandToInPlay(1, 38);
+
+        $action = $this->bot->chooseAction($state, [89], 1);
+
+        self::assertSame(89, $action['card_id']);
+        self::assertSame(['discard_mood_id' => 38], $action['choices']);
+    }
+
+    /**
+     * Bliss (id 108, value 2) has a LOWER face value than Discipline
+     * (id 9, value 6) -- the generic "give up whatever's cheapest" policy
+     * would have picked Bliss precisely because of that. Exhilaration's
+     * own bespoke policy ignores face value entirely for Bliss, so
+     * Discipline is sacrificed instead despite being "more expensive."
+     */
+    public function testChooseActionAvoidsSacrificingBlissEvenWhenItsFaceValueIsLower(): void
+    {
+        $state = $this->boardState(hands: [1 => [89, 108, 9]]); // Exhilaration, Bliss, Discipline (value 6)
+        $state->moveHandToInPlay(1, 108);
+        $state->moveHandToInPlay(1, 9);
+
+        $action = $this->bot->chooseAction($state, [89], 1);
+
+        self::assertSame(89, $action['card_id']);
+        self::assertSame(['discard_mood_id' => 9], $action['choices']);
+    }
+
+    /**
+     * With Bliss as the bot's own ONLY mood in play, paying Exhilaration's
+     * cost means discarding Bliss regardless -- Exhilaration is
+     * deprioritized behind Spite (id 76, value 1, plain filler) rather
+     * than led with blindly, the same "other plays should be prioritized
+     * above it" treatment Pacifism/Denial above already get.
+     */
+    public function testChooseActionDeprioritizesExhilarationWhenBlissIsTheOnlyMoodInPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [89, 76, 108]]);
+        $state->moveHandToInPlay(1, 108);
+
+        $action = $this->bot->chooseAction($state, [89, 76], 1);
+
+        self::assertSame(76, $action['card_id']);
+    }
+
+    /**
+     * With nothing else playable, Exhilaration is still played --
+     * deprioritized WHEN, never skipped outright -- forced to sacrifice
+     * Bliss since it's the bot's only own mood in play.
+     */
+    public function testChooseActionStillPlaysExhilarationSacrificingBlissWhenNothingElseIsPlayable(): void
+    {
+        $state = $this->boardState(hands: [1 => [89, 108]]);
+        $state->moveHandToInPlay(1, 108);
+
+        $action = $this->bot->chooseAction($state, [89], 1);
+
+        self::assertSame(89, $action['card_id']);
+        self::assertSame(['discard_mood_id' => 108], $action['choices']);
+    }
+
     // -- Harmony (confirmed by the maintainer) -----------------------------
 
     /**
@@ -885,6 +1192,58 @@ final class BotPlayerServiceTest extends TestCase
         $action = $this->bot->chooseAction($state, [123], 1);
 
         self::assertSame(123, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
+    // -- Grief (confirmed by the maintainer) --------------------------------
+
+    /**
+     * Grief's own extra plays are restricted to cards FROM the discard
+     * pile, same as Harmony -- with the pile completely empty, that
+     * grant accomplishes nothing, so Grief (id 65, value 0) is
+     * deprioritized behind Apathy (id 55, value 4, plain filler).
+     */
+    public function testChooseActionDeprioritizesGriefWhenTheDiscardPileIsEmpty(): void
+    {
+        $state = $this->boardState(hands: [1 => [65, 55]]);
+
+        $action = $this->bot->chooseAction($state, [65, 55], 1);
+
+        self::assertSame(55, $action['card_id']);
+    }
+
+    /**
+     * The instant the discard pile has even one card in it, Grief
+     * reverts to its ordinary EARLY_PRIORITY_EFFECT_KEYS boosted
+     * treatment -- its own value (0) plus EARLY_PRIORITY_BONUS (10)
+     * comfortably outranks Apathy's plain value (4).
+     */
+    public function testChooseActionPrioritizesGriefWhenTheDiscardPileHasACard(): void
+    {
+        $state = new BoardState(
+            $this->sampleCatalog(),
+            DefaultEffectRegistry::build(),
+            [1, 2],
+            hands: [1 => [65, 55]],
+            discard: [8],
+        );
+
+        $action = $this->bot->chooseAction($state, [65, 55], 1);
+
+        self::assertSame(65, $action['card_id']);
+    }
+
+    /**
+     * With nothing else playable, Grief is still played -- deprioritized
+     * WHEN, never skipped outright.
+     */
+    public function testChooseActionStillPlaysGriefWhenNothingElseIsPlayable(): void
+    {
+        $state = $this->boardState(hands: [1 => [65]]);
+
+        $action = $this->bot->chooseAction($state, [65], 1);
+
+        self::assertSame(65, $action['card_id']);
         self::assertSame([], $action['choices']);
     }
 
@@ -1010,6 +1369,66 @@ final class BotPlayerServiceTest extends TestCase
         $action = $this->bot->chooseAction($state, [128], 1);
 
         self::assertSame(128, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
+    // -- Fear (confirmed by the maintainer) ----------------------------------
+
+    /**
+     * Fear (id 38, value 0) is always worth 0 points on its own, and the
+     * bot's hand holds no mood-counting or blue-caring synergy card to
+     * make its extra play worthwhile -- deprioritized behind Apathy (id
+     * 55, value 4, plain filler).
+     */
+    public function testChooseActionDeprioritizesFearWithNoSynergyCardInHand(): void
+    {
+        $state = $this->boardState(hands: [1 => [38, 55]]);
+
+        $action = $this->bot->chooseAction($state, [38, 55], 1);
+
+        self::assertSame(55, $action['card_id']);
+    }
+
+    /**
+     * With Euphoria (id 117, a MOOD_COUNTING_EFFECT_KEYS card) also in
+     * hand, Fear's extra play can put it into play the very same turn --
+     * Fear reverts to its ordinary EARLY_PRIORITY_EFFECT_KEYS boosted
+     * treatment (0 + 10 = 10), outranking Apathy's plain 4.
+     */
+    public function testChooseActionPrioritizesFearWithAMoodCountingSynergyCardInHand(): void
+    {
+        $state = $this->boardState(hands: [1 => [38, 117, 55]]);
+
+        $action = $this->bot->chooseAction($state, [38, 55], 1);
+
+        self::assertSame(38, $action['card_id']);
+    }
+
+    /**
+     * Same policy, Love (id 127, a BLUE_CARING_EFFECT_KEYS card whose own
+     * value depends on a blue mood being in play among others) -- Fear is
+     * itself blue, so playing it directly feeds Love's own condition.
+     */
+    public function testChooseActionPrioritizesFearWithABlueCaringSynergyCardInHand(): void
+    {
+        $state = $this->boardState(hands: [1 => [38, 127, 55]]);
+
+        $action = $this->bot->chooseAction($state, [38, 55], 1);
+
+        self::assertSame(38, $action['card_id']);
+    }
+
+    /**
+     * With nothing else playable, Fear is still played -- deprioritized
+     * WHEN, never skipped outright.
+     */
+    public function testChooseActionStillPlaysFearWhenNothingElseIsPlayable(): void
+    {
+        $state = $this->boardState(hands: [1 => [38]]);
+
+        $action = $this->bot->chooseAction($state, [38], 1);
+
+        self::assertSame(38, $action['card_id']);
         self::assertSame([], $action['choices']);
     }
 
@@ -1159,6 +1578,73 @@ final class BotPlayerServiceTest extends TestCase
 
         self::assertSame(34, $action['card_id']);
         self::assertSame(['target_mood_ids' => [3, 20]], $action['choices']);
+    }
+
+    /**
+     * With no target to bounce (nothing in play at all) and no scenario
+     * where Denial's own plain value (1) would win the round (both
+     * players tied at 0 already), Denial is deprioritized behind Apathy
+     * (id 55, value 4, plain filler) -- "avoid playing it unless there's
+     * a good target, or the point alone wins the round" per the
+     * maintainer.
+     */
+    public function testChooseActionDeprioritizesDenialWithNoGoodTargetAndNoRoundWinningValue(): void
+    {
+        $state = $this->boardState(hands: [1 => [34, 55]]);
+
+        $action = $this->bot->chooseAction($state, [34, 55], 1);
+
+        self::assertSame(55, $action['card_id']);
+    }
+
+    /**
+     * Player 2's own Apathy (id 55, value 4) and Complacency (id 5, value
+     * 4) pair is a "significant swing" (combined 8, clears
+     * DENIAL_SIGNIFICANT_SWING_THRESHOLD) but NOT a round-winning one --
+     * player 3's own Chaos (id 85, value 6) stays completely unaffected
+     * and still exceeds the bot's post-play total (1) either way, the
+     * same non-winning setup as
+     * testChooseActionDoesNotTargetALosingOpponentPairWhenPlayingDenial()
+     * above, just with a bigger (8, not 2) pair. That's still a genuinely
+     * meaningful cost to player 2 even without flipping the round's own
+     * outcome, so Denial is NOT deprioritized -- it beats Creativity (id
+     * 32, value 0, plain filler) -- and denialTargetMoodIds() itself
+     * chases that same pair (denialSignificantSwingTargetMoodIds(), its
+     * own priority 2, since priority 1's own winning check still fails).
+     */
+    public function testChooseActionTargetsASignificantNonWinningSwingWhenPlayingDenial(): void
+    {
+        $state = $this->boardState(hands: [1 => [34, 32], 2 => [55, 5], 3 => [85]]);
+        $state->moveHandToInPlay(2, 55);
+        $state->moveHandToInPlay(2, 5);
+        $state->moveHandToInPlay(3, 85);
+
+        $action = $this->bot->chooseAction($state, [34, 32], 1);
+
+        self::assertSame(34, $action['card_id']);
+        self::assertSame(['target_mood_ids' => [55, 5]], $action['choices']);
+    }
+
+    /**
+     * Player 2's own Charity (id 3, value 1) is the round's current best
+     * rival score, one point ahead of the bot's own total (0) -- with
+     * only a single opponent mood in play, no pair (winning, significant
+     * swing, or otherwise) is even possible, so Denial has no good target
+     * to bounce. But playing it for its own plain value alone (1, no
+     * target at all) brings the bot's own total up to meet player 2's --
+     * "the point from it will win the round" exception, worth playing
+     * even with no good target to bounce. Beats Creativity (id 32, value
+     * 0, plain filler).
+     */
+    public function testChooseActionPlaysDenialWithNoGoodTargetWhenItsOwnPlainValueWinsTheRound(): void
+    {
+        $state = $this->boardState(hands: [1 => [34, 32], 2 => [3]]);
+        $state->moveHandToInPlay(2, 3);
+
+        $action = $this->bot->chooseAction($state, [34, 32], 1);
+
+        self::assertSame(34, $action['card_id']);
+        self::assertSame([], $action['choices']);
     }
 
     // -- Envy (confirmed by the maintainer) ----------------------------------
@@ -2148,10 +2634,14 @@ final class BotPlayerServiceTest extends TestCase
     }
 
     /**
-     * Still played (and still commits to a mode) once it's the only
-     * legal candidate left, even with neither trigger active -- the
-     * demotion only ever changes ORDER, never whether Rationalization is
-     * worth playing at all.
+     * Still played once it's the only legal candidate left, even with
+     * neither trigger active -- the demotion only ever changes ORDER,
+     * never whether Rationalization is worth playing at all. Declines
+     * BOTH modes rather than defaulting to 'refresh' here (reported
+     * live: "playing it to refresh hands when they have a good hand") --
+     * Chivalry (id 4, value 3) keeps the remaining hand comfortably
+     * above RATIONALIZATION_LOW_VALUE_HAND_AVERAGE, so gambling it away
+     * on a random redraw would be a pure downside, not a free action.
      */
     public function testChooseActionStillPlaysRationalizationAloneEvenWithoutATrigger(): void
     {
@@ -2160,7 +2650,7 @@ final class BotPlayerServiceTest extends TestCase
         $action = $this->bot->chooseAction($state, [49], 1);
 
         self::assertSame(49, $action['card_id']);
-        self::assertSame(['mode' => 'refresh'], $action['choices']);
+        self::assertSame([], $action['choices']);
     }
 
     /**
@@ -2219,6 +2709,31 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame(['mode' => 'rotate', 'direction' => 'left'], $action['choices']);
     }
 
+    /**
+     * Reported live: with the bot at 2 cards (Rationalization plus
+     * Courage, id 7/value 1 -- a remaining-hand average of 1, well under
+     * RATIONALIZATION_LOW_VALUE_HAND_AVERAGE) and an opponent holding 6
+     * cards, the bot rotated to REFRESH its own single leftover card
+     * instead of stealing the opponent's much larger hand.
+     * rationalizationLowValueHand() and rationalizationStealDirection()
+     * both fire here -- 'rotate' must win: gaining several more cards
+     * outright is always better than gambling a random redraw of one
+     * card, so a live steal opportunity takes priority over a merely
+     * weak remaining hand.
+     */
+    public function testChooseActionPrefersStealingAnOverstuffedHandOverRefreshingAWeakOne(): void
+    {
+        $state = $this->boardState(hands: [
+            1 => [49, 7],
+            2 => [38, 39, 20, 3, 8, 9], // 6 cards -- well past the steal threshold
+        ]);
+
+        $action = $this->bot->chooseAction($state, [49], 1);
+
+        self::assertSame(49, $action['card_id']);
+        self::assertSame(['mode' => 'rotate', 'direction' => 'right'], $action['choices']);
+    }
+
     /** Exactly RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE (3) more cards is enough to qualify -- 2 more is not. */
     public function testChooseActionDoesNotRotateForAnUnderstuffedNeighbor(): void
     {
@@ -2230,6 +2745,111 @@ final class BotPlayerServiceTest extends TestCase
         $action = $this->bot->chooseAction($state, [49, 4], 1);
 
         self::assertSame(4, $action['card_id'], 'no trigger applies, so Rationalization should still be saved for last');
+    }
+
+    /**
+     * Reported live: "Rationalization should be saved... it should not
+     * be played for points to win a round unless it's going to win the
+     * entire game." Neither existing trigger applies here (Discipline id
+     * 9/value 6 and Courage id 7/value 1 keep the remaining-hand average
+     * above RATIONALIZATION_LOW_VALUE_HAND_AVERAGE, and no other player
+     * has an oversized hand to steal), so WITHOUT the game-win context
+     * Rationalization is still saved for last behind Courage -- this
+     * first test just re-confirms that baseline (passing no fourth
+     * argument at all, same as every test above).
+     */
+    public function testChooseActionSavesRationalizationForLastWithoutGameWinContext(): void
+    {
+        $state = $this->boardState(hands: [1 => [49, 9, 7], 2 => [78]]); // player 2's own Suspicion (value 3, no alt value/no while-in-play wrinkle)
+        $state->moveHandToInPlay(2, 78);
+
+        $action = $this->bot->chooseAction($state, [49, 7], 1);
+
+        self::assertSame(7, $action['card_id']);
+    }
+
+    /**
+     * Same board as above, but now told winning the round in progress
+     * would win the whole GAME ($roundWinsNeededToWinGame: 1) -- and
+     * playing Rationalization purely for its own value (3) is exactly
+     * enough to overtake player 2's own current total (3, all from their
+     * own in-play Suspicion) per wouldBecomeHighestScore(). Both
+     * conditions hold, so Rationalization is played for points instead
+     * of being saved -- declining both modes (the remaining hand isn't
+     * weak and there's no steal opportunity, so there's nothing to gain
+     * from refreshing or rotating; the game's about to be won on points
+     * alone), just for a different reason than either existing trigger.
+     */
+    public function testChooseActionPlaysRationalizationForPointsWhenItWouldWinTheGame(): void
+    {
+        $state = $this->boardState(hands: [1 => [49, 9, 7], 2 => [78]]);
+        $state->moveHandToInPlay(2, 78);
+
+        $action = $this->bot->chooseAction($state, [49, 7], 1, 1);
+
+        self::assertSame(49, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
+    /**
+     * Identical board/win-margin as the "wins the game" test above, but
+     * $roundWinsNeededToWinGame is 2 -- winning THIS round wouldn't be
+     * enough on its own, so the carve-out doesn't apply and
+     * Rationalization is saved for last as usual.
+     */
+    public function testChooseActionDoesNotPlayRationalizationForPointsWhenGameWinIsNotClose(): void
+    {
+        $state = $this->boardState(hands: [1 => [49, 9, 7], 2 => [78]]);
+        $state->moveHandToInPlay(2, 78);
+
+        $action = $this->bot->chooseAction($state, [49, 7], 1, 2);
+
+        self::assertSame(7, $action['card_id']);
+    }
+
+    /**
+     * $roundWinsNeededToWinGame is 1 again (winning this round WOULD win
+     * the game), but player 2's own in-play total (Discipline, id 9,
+     * value 6 -- moved into play instead of Suspicion) is too far ahead
+     * for Rationalization's own value (3) to close: 0 + 3 = 3 is still
+     * short of 6, so wouldBecomeHighestScore() says no. Being close to
+     * winning the game isn't enough by itself -- the round has to be
+     * winnable too.
+     */
+    public function testChooseActionDoesNotPlayRationalizationForPointsWhenItWouldNotTakeTheRoundLead(): void
+    {
+        // Confusion (31, value 4) is purely a remaining-hand filler here,
+        // keeping the average above RATIONALIZATION_LOW_VALUE_HAND_AVERAGE
+        // so the EXISTING low-value-hand trigger doesn't also fire and
+        // muddy what this test is actually checking.
+        $state = $this->boardState(hands: [1 => [49, 7, 31], 2 => [9]]);
+        $state->moveHandToInPlay(2, 9);
+
+        $action = $this->bot->chooseAction($state, [49, 7], 1, 1);
+
+        self::assertSame(7, $action['card_id']);
+    }
+
+    /**
+     * Corruption's own live "awardsExtraWin" marker (GameService::
+     * hasExtraWinMarker()'s own tag, duplicated here per
+     * rationalizationWouldClinchTheGame()'s own docblock) means the
+     * round's winner wins TWO rounds at once -- so $roundWinsNeededToWinGame
+     * of 2 (which the earlier "not close" test above shows is normally
+     * NOT enough) is enough here, since 2 round-wins is exactly what this
+     * round is worth with Corruption's marker active.
+     */
+    public function testChooseActionPlaysRationalizationForPointsWithCorruptionsDoubleWinMarker(): void
+    {
+        $state = $this->boardState(hands: [1 => [49, 9, 7, 60], 2 => [78]]);
+        $state->moveHandToInPlay(2, 78);
+        $state->moveHandToInPlay(1, 60);
+        $state->setEffectState(60, 'awardsExtraWin', true);
+
+        $action = $this->bot->chooseAction($state, [49, 7], 1, 2);
+
+        self::assertSame(49, $action['card_id']);
+        self::assertSame([], $action['choices']);
     }
 
     /**
@@ -2262,5 +2882,227 @@ final class BotPlayerServiceTest extends TestCase
         self::assertNotNull($action);
         self::assertArrayHasKey('target_player_id', $action['choices']);
         self::assertNotSame(3, $action['choices']['target_player_id'], 'Compulsion must target another player, never the acting player itself');
+    }
+
+    // -- Rejection ---------------------------------------------------------
+
+    /**
+     * Reported live: "Bots shouldn't play Rejection with no targets."
+     * Rejection (73, value 0) and Creativity (32, value 0, no target in
+     * play to copy) tie on printed value with neither having any real
+     * ability to show for it here -- without the veto they'd tie in
+     * sortPriorityValue() too, but Rejection's own hold-back demotes it
+     * to PHP_INT_MIN, so Creativity wins outright.
+     */
+    public function testChooseActionDemotesRejectionBehindATiedValueCardWhenNeitherTriggerApplies(): void
+    {
+        $state = $this->boardState(hands: [1 => [73, 32]]);
+
+        $action = $this->bot->chooseAction($state, [73, 32], 1);
+
+        self::assertSame(32, $action['card_id']);
+    }
+
+    /**
+     * Still played once it's the only legal candidate left, even with
+     * neither trigger active -- the demotion only ever changes ORDER,
+     * never whether Rejection is worth playing at all. Declines the
+     * target field entirely rather than forcing a pair, matching
+     * RejectionEffect's own `if ($targets === []) { return; }` no-op.
+     */
+    public function testChooseActionStillPlaysRejectionAloneWithNoTargetsWhenNothingQualifies(): void
+    {
+        $state = $this->boardState(hands: [1 => [73]]);
+
+        $action = $this->bot->chooseAction($state, [73], 1);
+
+        self::assertSame(73, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
+    /**
+     * Contempt (59, black, value 1) and Cruelty (61, black, value 3),
+     * both owned by the non-teammate opponent (player 2), share a color
+     * -- removing both drops the opponent's own total from 4 to 0,
+     * exactly matching the bot's own total (0, Rejection's printed value
+     * is always 0) -- a round-winning pair, so it's chosen over the
+     * merely-significant-swing tier even though the combined value (4)
+     * would also clear that bar on its own.
+     */
+    public function testChooseActionTargetsAWinningPairForRejection(): void
+    {
+        $state = $this->boardState(hands: [1 => [73], 2 => [59, 61]]);
+        $state->moveHandToInPlay(2, 59);
+        $state->moveHandToInPlay(2, 61);
+
+        $action = $this->bot->chooseAction($state, [73], 1);
+
+        self::assertSame(73, $action['card_id']);
+        self::assertSame(['target_mood_ids' => [59, 61]], $action['choices']);
+    }
+
+    /**
+     * Same qualifying pair as above (Contempt/Cruelty, combined 4,
+     * clearing REJECTION_SIGNIFICANT_SWING_THRESHOLD), but the opponent
+     * also holds Sneakiness (51, blue, value 5, sharing neither color nor
+     * value with the pair) -- removing just the pair leaves the opponent
+     * at 5, still ahead of the bot's own 0, so this ISN'T a round-winning
+     * removal. Targeted anyway for the genuine swing it costs the
+     * opponent.
+     */
+    public function testChooseActionTargetsASignificantSwingPairForRejectionWithoutWinningOutright(): void
+    {
+        $state = $this->boardState(hands: [1 => [73], 2 => [59, 61, 51]]);
+        $state->moveHandToInPlay(2, 59);
+        $state->moveHandToInPlay(2, 61);
+        $state->moveHandToInPlay(2, 51);
+
+        $action = $this->bot->chooseAction($state, [73], 1);
+
+        self::assertSame(73, $action['card_id']);
+        self::assertSame(['target_mood_ids' => [59, 61]], $action['choices']);
+    }
+
+    /**
+     * Reported live exception: "unless it being in play will pump
+     * another mood enough to win a round." Euphoria (117, "+1 per mood
+     * in play, any owner") counts EVERY mood in play regardless of
+     * owner, so with the bot's own Euphoria plus the opponent's
+     * Suspicion (78, value 3, no alt value/no while-in-play wrinkle)
+     * already in play (2 moods), Euphoria sits at value 2 -- behind the
+     * opponent's own total of 3. Playing Rejection (with no target at
+     * all; the opponent has only ONE mood, so no pair exists to remove
+     * anyway) raises the in-play count to 3, bumping Euphoria to value 3
+     * and tying the opponent's own total. hasGoodReasonToPlayNow() is
+     * asserted directly (rather than via chooseAction()'s own sort
+     * order) since Rejection's printed value is always 0 --
+     * sortPriorityValue() alone could never distinguish "vetoed" from
+     * "allowed but still worth 0" against any genuinely positive-value
+     * alternative.
+     */
+    public function testRejectionHasAGoodReasonToPlayNowWhenTheGuaranteedPumpWinsTheRound(): void
+    {
+        $state = $this->boardState(hands: [1 => [73, 117], 2 => [78]]);
+        $state->moveHandToInPlay(1, 117);
+        $state->moveHandToInPlay(2, 78);
+
+        self::assertTrue($this->bot->hasGoodReasonToPlayNow($state, 73, 1, [73]));
+    }
+
+    /**
+     * Same Euphoria pump as above, but the opponent's Bashfulness (30,
+     * value 6) is too far ahead for one extra point of Euphoria to close
+     * -- the pump happens, but doesn't flip the round, so there's still
+     * no good reason to play Rejection right now.
+     */
+    public function testRejectionHasNoGoodReasonToPlayNowWhenThePumpIsNotEnoughToWinTheRound(): void
+    {
+        $state = $this->boardState(hands: [1 => [73, 117], 2 => [30]]);
+        $state->moveHandToInPlay(1, 117);
+        $state->moveHandToInPlay(2, 30);
+
+        self::assertFalse($this->bot->hasGoodReasonToPlayNow($state, 73, 1, [73]));
+    }
+
+    // -- Guilt ---------------------------------------------------------------
+
+    /**
+     * Reported live: "bots should consider whether suppressing a single
+     * opponent mood would net them more of a point swing than choosing
+     * the 'all' mode." The bot's own Betrayal (56, black, value 6) sits
+     * in play alongside the opponent's Contempt (59, black, value 1) --
+     * 'all' mode would suppress BOTH (net swing +1 - 6 = -5), while
+     * 'single' can cherry-pick just the opponent's Contempt (+1), a
+     * strictly better outcome.
+     */
+    public function testGuiltChoosesSingleModeWhenItNetsABiggerSwingThanAll(): void
+    {
+        $state = $this->boardState(hands: [1 => [14, 56], 2 => [59]]);
+        $state->moveHandToInPlay(1, 56);
+        $state->moveHandToInPlay(2, 59);
+
+        $action = $this->bot->chooseAction($state, [14], 1);
+
+        self::assertSame(14, $action['card_id']);
+        self::assertSame(['mode' => 'single', 'target_mood_id' => 59], $action['choices']);
+    }
+
+    /**
+     * The opponent alone holds two qualifying moods (Contempt, 59, black,
+     * value 1; Cruelty, 61, black, value 3) and the bot has none in play
+     * -- 'all' costs the opponent both (+4 combined), strictly more than
+     * 'single' could ever manage by cherry-picking just the pricier one
+     * (+3).
+     */
+    public function testGuiltChoosesAllModeWhenItNetsABiggerSwingThanSingle(): void
+    {
+        $state = $this->boardState(hands: [1 => [14], 2 => [59, 61]]);
+        $state->moveHandToInPlay(2, 59);
+        $state->moveHandToInPlay(2, 61);
+
+        $action = $this->bot->chooseAction($state, [14], 1);
+
+        self::assertSame(14, $action['card_id']);
+        self::assertSame(['mode' => 'all'], $action['choices']);
+    }
+
+    /** No black/red mood in play at all -- 'all' is a harmless no-op (GuiltEffect::allQualifyingMoods() finds nothing), so it's used rather than leaving 'single' with no legal target to fill in. */
+    public function testGuiltChoosesAllModeAsANoOpWhenNothingQualifies(): void
+    {
+        $state = $this->boardState(hands: [1 => [14]]);
+
+        $action = $this->bot->chooseAction($state, [14], 1);
+
+        self::assertSame(14, $action['card_id']);
+        self::assertSame(['mode' => 'all'], $action['choices']);
+    }
+
+    // -- Scorn -----------------------------------------------------------
+
+    /**
+     * Reported live: a bot's mandatory Scorn suppression targeted the
+     * human's own mood when it should have targeted the other player's
+     * copy of the same card instead -- "not sure whether this is a bug
+     * (the targeting code couldn't distinguish between the two
+     * Determinations) or just a bad play." Both players hold their own
+     * separate physical Determination (112) -- distinct instance ids
+     * (1120/1121) mapped to the SAME catalog entry via $catalogCardIdFor,
+     * so they're genuinely identical in every printed respect, same as
+     * two copies of one card in a real game. With no bespoke targeting,
+     * the generic resolver's "highest value, any owner" policy could
+     * tie-break either way; the fix must always prefer the non-teammate
+     * opponent's own copy (1121) over the bot's own identical one
+     * (1120).
+     */
+    public function testChooseActionTargetsTheOpponentsCopyOverTheBotsOwnIdenticalMoodWhenPlayingScorn(): void
+    {
+        $state = $this->boardState(
+            hands: [1 => [24, 1120], 2 => [1121]],
+            catalogCardIdFor: [1120 => 112, 1121 => 112],
+        );
+        $state->moveHandToInPlay(1, 1120);
+        $state->moveHandToInPlay(2, 1121);
+
+        $action = $this->bot->chooseAction($state, [24], 1);
+
+        self::assertSame(24, $action['card_id']);
+        self::assertSame(['target_mood_id' => 1121], $action['choices']);
+    }
+
+    /**
+     * No non-teammate opponent mood in play at all -- Scorn's own
+     * required target_mood_id must still supply SOME legal target, so
+     * this falls back to the highest-value OTHER mood overall (Chivalry,
+     * 4, value 3), excluding Scorn itself.
+     */
+    public function testChooseActionFallsBackToItsOwnMoodForScornWhenNoOpponentMoodExists(): void
+    {
+        $state = $this->boardState(hands: [1 => [24, 4]]);
+        $state->moveHandToInPlay(1, 4);
+
+        $action = $this->bot->chooseAction($state, [24], 1);
+
+        self::assertSame(24, $action['card_id']);
+        self::assertSame(['target_mood_id' => 4], $action['choices']);
     }
 }

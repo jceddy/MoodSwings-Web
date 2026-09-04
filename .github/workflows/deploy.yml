@@ -2,10 +2,14 @@ name: Deploy to Bluehost (production)
 
 # See "Branching & environments" in the top-level README: this is the
 # production deploy, triggered only by main -- feature work merges into
-# `development` instead (deploy-dev.yml, an otherwise-identical workflow
+# `development` instead (deploy-dev.yml, a near-identical workflow
 # reading a separate set of DEV_-prefixed FTP/DB/APP_URL/SITE_URL
 # secrets/vars, but the same plain SMTP_* secrets below), and is promoted
-# to main only via a periodic `development` -> `main` PR.
+# to main only via a periodic `development` -> `main` PR. Discord
+# announcements (the "Announce deploy on Discord" step below) are
+# production-only -- deploy-dev.yml has no equivalent step, so a
+# feature PR merging into `development` stays quiet on Discord and only
+# an actual promotion to production gets announced.
 on:
   push:
     branches: [main]

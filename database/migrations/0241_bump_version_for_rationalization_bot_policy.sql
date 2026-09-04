@@ -1,0 +1,18 @@
+-- Bot policy fix (reported live: "bots should not play Rationalization
+-- without choosing a mode, I think we made a change around this before,
+-- but it seems like the tactical bots are ignoring it" + "Rationalization
+-- should be saved until it can be used to rotate hands and get the bot
+-- at least a 3 card increase in hand size, it should not be played for
+-- points to win a round unless it's going to win the entire game").
+--
+-- Two fixes: (1) BotPlayerService::hasGoodReasonToPlayNow() (extracted
+-- from sortPriorityValue()) is now also consulted by
+-- SearchBotPlayerService's own root-action search, closing a gap where
+-- the Tactical Bot ignored every sortPriorityValue()-vetoed card's
+-- "hold this for a good moment" policy entirely, Rationalization
+-- included. (2) rationalizationWouldClinchTheGame() adds the new
+-- "unless it's going to win the entire game" exception, threaded down
+-- from a new GameService::roundWinsStillNeededToWinGame() computation.
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.33.5' WHERE id = 1;

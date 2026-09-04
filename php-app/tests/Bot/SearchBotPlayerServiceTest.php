@@ -1,0 +1,293 @@
+<?php
+
+declare(strict_types=1);
+
+namespace MoodSwings\Tests\Bot;
+
+use MoodSwings\Bot\BotChoiceResolver;
+use MoodSwings\Bot\BotPlayerService;
+use MoodSwings\Bot\Determinizer;
+use MoodSwings\Bot\LegalChoiceEnumerator;
+use MoodSwings\Bot\SearchBotPlayerService;
+use MoodSwings\Rules\BoardState;
+use MoodSwings\Rules\DefaultEffectRegistry;
+use MoodSwings\Rules\MoodPlayService;
+use MoodSwings\Rules\RoundScorer;
+use MoodSwings\Tests\Rules\CatalogFixture;
+use PHPUnit\Framework\TestCase;
+
+final class SearchBotPlayerServiceTest extends TestCase
+{
+    use CatalogFixture;
+
+    private SearchBotPlayerService $search;
+
+    protected function setUp(): void
+    {
+        $heuristic = new BotPlayerService(new BotChoiceResolver());
+        $this->search = new SearchBotPlayerService(
+            new MoodPlayService(DefaultEffectRegistry::build()),
+            new RoundScorer(),
+            $heuristic,
+            SearchBotPlayerService::defaultEnumeratorFor($heuristic),
+        );
+    }
+
+    /**
+     * @param array<int, int[]> $hands
+     * @param array<int, int> $catalogCardIdFor instance id => catalog id,
+     *     for a test needing two DIFFERENT physical instances sharing the
+     *     SAME catalog entry -- see BotPlayerServiceTest's own identical
+     *     helper for why.
+     */
+    private function boardState(array $hands, array $catalogCardIdFor = []): BoardState
+    {
+        return new BoardState($this->sampleCatalog(), DefaultEffectRegistry::build(), [1, 2], $hands, catalogCardIdFor: $catalogCardIdFor);
+    }
+
+    public function testChooseActionPrefersTheHigherValueOfTwoInertCards(): void
+    {
+        // Apathy (id 55, value 4) and Creativity (id 32, value 0 in this
+        // fixture) both have hasToPlay/hasWhileInPlay/hasAfterPlaying all
+        // false -- neither has any cost, ability, or choice field at all
+        // (see BotPlayerServiceTest's own identical use of Apathy), so
+        // this is a clean, fully deterministic "which of two known point
+        // totals is actually better" comparison with zero interaction
+        // noise. Player 2 has no hand and no deck at all, so their own
+        // simulated turn always trivially passes -- the only thing that
+        // varies rollout to rollout is which of MY two cards search
+        // actually tries, never anything about the opponent.
+        $state = $this->boardState([1 => [55, 32], 2 => []]);
+        $state->startTurn(1);
+
+        $action = $this->search->chooseAction($state, [55, 32], 1, timeBudgetSeconds: 0.2);
+
+        self::assertNotNull($action);
+        self::assertSame(55, $action['card_id'], 'Apathy (value 4) strictly dominates Creativity (value 0) here -- search must find this with a nonzero budget');
+        self::assertSame([], $action['choices']);
+    }
+
+    public function testChooseActionReturnsALegalActionEvenWithAnEffectivelyZeroBudget(): void
+    {
+        $state = $this->boardState([1 => [55, 32], 2 => []]);
+        $state->startTurn(1);
+
+        $action = $this->search->chooseAction($state, [55, 32], 1, timeBudgetSeconds: 0.0);
+
+        self::assertNotNull($action);
+        self::assertContains($action['card_id'], [55, 32], 'even a near-zero budget must still return one of the actually-legal candidates, never nothing and never something illegal');
+    }
+
+    public function testChooseActionReturnsNullWhenNoCardsArePlayable(): void
+    {
+        $state = $this->boardState([1 => [], 2 => []]);
+        $state->startTurn(1);
+
+        self::assertNull($this->search->chooseAction($state, [], 1, timeBudgetSeconds: 0.1));
+    }
+
+    public function testChooseActionNeverMutatesTheRealBoardStatePassedIn(): void
+    {
+        // Every rollout must operate on a clone (via Determinizer, itself
+        // built on BoardState::__clone()) -- the real, live state driving
+        // an actual game must come back completely untouched regardless
+        // of how many hypothetical plays search tried against copies of
+        // it.
+        $state = $this->boardState([1 => [55, 32], 2 => []]);
+        $state->startTurn(1);
+
+        $this->search->chooseAction($state, [55, 32], 1, timeBudgetSeconds: 0.2);
+
+        self::assertSame([55, 32], $state->hand(1));
+        self::assertSame([], $state->hand(2));
+        self::assertSame([], $state->moodsInPlay());
+    }
+
+    /**
+     * Reported live: "bots should not play Rationalization without
+     * choosing a mode, I think we made a change around this before, but
+     * it seems like the tactical bots are ignoring it." Rationalization
+     * (49, value 3) has neither existing "worth playing now" trigger
+     * available here (Discipline, id 9/value 6, keeps the remaining-hand
+     * average comfortably above RATIONALIZATION_LOW_VALUE_HAND_AVERAGE,
+     * and player 2 has no oversized hand to steal), so
+     * BotPlayerService::hasGoodReasonToPlayNow() says no -- but its own
+     * plain printed value (3) alone would still score BETTER in a single-
+     * round rollout than Courage's (7, value 1), so without
+     * SearchBotPlayerService's own veto-respecting fix, the search would
+     * incorrectly prefer it purely on that raw reward. Courage is chosen
+     * instead, matching exactly what the plain heuristic bot itself
+     * would do with this same hand (see BotPlayerServiceTest's own
+     * `testChooseActionSavesRationalizationForLastWhenNeitherTriggerApplies`
+     * for the non-search equivalent of this exact scenario).
+     */
+    public function testChooseActionExcludesRationalizationWhenNoTriggerAppliesAndABetterCardExists(): void
+    {
+        $state = $this->boardState([1 => [49, 9, 7], 2 => []]);
+        $state->startTurn(1);
+
+        $action = $this->search->chooseAction($state, [49, 7], 1, timeBudgetSeconds: 0.2);
+
+        self::assertNotNull($action);
+        self::assertSame(7, $action['card_id']);
+    }
+
+    /**
+     * With Rationalization as the ONLY playable card, there's no "better
+     * candidate" for withoutPrematurelyPlayedCards() to prefer instead --
+     * it's still offered as a root action (mirroring
+     * BotPlayerService::chooseAction()'s own "deprioritized WHEN, never
+     * skipped outright" semantics). Discipline (id 9, value 6) keeps the
+     * remaining hand well above RATIONALIZATION_LOW_VALUE_HAND_AVERAGE,
+     * so it declines both modes rather than gambling a good hand away on
+     * a random refresh (reported live: "playing it to refresh hands when
+     * they have a good hand").
+     */
+    public function testChooseActionStillPlaysRationalizationAloneEvenWithoutATrigger(): void
+    {
+        $state = $this->boardState([1 => [49, 9], 2 => []]);
+        $state->startTurn(1);
+
+        $action = $this->search->chooseAction($state, [49], 1, timeBudgetSeconds: 0.2);
+
+        self::assertNotNull($action);
+        self::assertSame(49, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
+    /**
+     * $roundWinsNeededToWinGame threaded all the way through from
+     * chooseAction() into BotPlayerService::hasGoodReasonToPlayNow() --
+     * with it saying winning the round in progress would win the whole
+     * game, and Rationalization's own plain value (3) enough to overtake
+     * player 2's own current total (Suspicion, id 78, value 3, in play),
+     * Rationalization now DOES have a good reason to play, so the search
+     * correctly includes and picks it over Courage instead of excluding
+     * it.
+     */
+    public function testChooseActionPlaysRationalizationForPointsWhenItWouldWinTheGame(): void
+    {
+        $state = $this->boardState([1 => [49, 9, 7], 2 => [78]]);
+        $state->startTurn(1);
+        $state->moveHandToInPlay(2, 78);
+
+        $action = $this->search->chooseAction($state, [49, 7], 1, timeBudgetSeconds: 0.2, roundWinsNeededToWinGame: 1);
+
+        self::assertNotNull($action);
+        self::assertSame(49, $action['card_id']);
+    }
+
+    /**
+     * Reported live: "when a bot plays ambition, it should discard a
+     * card for another play if it has 3+ cards in hand and it has
+     * another play that will net it points." Ambition (id 53) has no
+     * required schema field for LegalChoiceEnumerator to vary targeting
+     * over, so the Tactical Bot's own only candidate action for it is
+     * whatever BotPlayerService::buildChoicesForCard()'s own default
+     * builds -- the same shouldAttemptAmbitionDiscard() fix that makes
+     * the plain heuristic bot volunteer for the optional
+     * discard_card_id field here (see BotPlayerServiceTest's own
+     * `testChooseActionDiscardsForAmbitionsExtraPlayWithEnoughHandAndAScoringFollowUp`)
+     * therefore fixes the Tactical Bot too, with no separate search-side
+     * change needed.
+     */
+    public function testChooseActionDiscardsForAmbitionsExtraPlayWithEnoughHandAndAScoringFollowUp(): void
+    {
+        $state = $this->boardState([1 => [53, 7, 55], 2 => []]);
+        $state->startTurn(1);
+
+        $action = $this->search->chooseAction($state, [53], 1, timeBudgetSeconds: 0.2);
+
+        self::assertNotNull($action);
+        self::assertSame(53, $action['card_id']);
+        self::assertSame(['discard_card_id' => 7], $action['choices']);
+    }
+
+    /**
+     * Reported live: with the bot at 2 cards (Rationalization plus
+     * Courage, id 7/value 1 -- a remaining-hand average well under
+     * RATIONALIZATION_LOW_VALUE_HAND_AVERAGE) and an opponent holding 6
+     * cards, the bot refreshed its own single leftover card instead of
+     * stealing the opponent's much larger hand. Rationalization is
+     * bespoke (BotPlayerService::usesBespokeChoiceBuilding()), so
+     * LegalChoiceEnumerator never varies its own targeting -- the
+     * Tactical Bot's only candidate action for it is whatever
+     * buildChoicesForCard()'s own default builds, so the same
+     * rationalizationChoices() reordering fix that makes the plain
+     * heuristic bot prefer 'rotate' over 'refresh' here (see
+     * BotPlayerServiceTest's own
+     * `testChooseActionPrefersStealingAnOverstuffedHandOverRefreshingAWeakOne`)
+     * fixes the Tactical Bot too, with no separate search-side change
+     * needed.
+     */
+    public function testChooseActionPrefersStealingAnOverstuffedHandOverRefreshingAWeakOne(): void
+    {
+        $state = $this->boardState([1 => [49, 7], 2 => [38, 39, 20, 3, 8, 9]]);
+        $state->startTurn(1);
+
+        $action = $this->search->chooseAction($state, [49], 1, timeBudgetSeconds: 0.2);
+
+        self::assertNotNull($action);
+        self::assertSame(49, $action['card_id']);
+        self::assertSame(['mode' => 'rotate', 'direction' => 'left'], $action['choices']);
+    }
+
+    /**
+     * Reported live: a bot's mandatory Scorn suppression targeted the
+     * human's own mood when it should have targeted the other player's
+     * copy of the same card instead. Both players hold their own
+     * separate physical Determination (112) -- distinct instance ids
+     * (1120/1121) mapped to the SAME catalog entry, genuinely identical
+     * in every printed respect. Scorn's own required target_mood_id is a
+     * scope-'any' mood field LegalChoiceEnumerator would otherwise vary
+     * across every legal candidate (both copies included), but Scorn is
+     * now bespoke (BotPlayerService::usesBespokeChoiceBuilding()), so
+     * the Tactical Bot's only candidate action for it is
+     * scornTargetMoodId()'s own opponent-preferring default -- the same
+     * fix that corrects the plain heuristic bot (see
+     * BotPlayerServiceTest's own
+     * `testChooseActionTargetsTheOpponentsCopyOverTheBotsOwnIdenticalMoodWhenPlayingScorn`)
+     * fixes the Tactical Bot too, with no separate search-side change
+     * needed.
+     */
+    public function testChooseActionTargetsTheOpponentsCopyOverTheBotsOwnIdenticalMoodWhenPlayingScorn(): void
+    {
+        $state = $this->boardState(
+            [1 => [24, 1120], 2 => [1121]],
+            catalogCardIdFor: [1120 => 112, 1121 => 112],
+        );
+        $state->startTurn(1);
+        $state->moveHandToInPlay(1, 1120);
+        $state->moveHandToInPlay(2, 1121);
+
+        $action = $this->search->chooseAction($state, [24], 1, timeBudgetSeconds: 0.2);
+
+        self::assertNotNull($action);
+        self::assertSame(24, $action['card_id']);
+        self::assertSame(['target_mood_id' => 1121], $action['choices']);
+    }
+
+    /**
+     * Reported live: "Bots should avoid playing Shock without a target
+     * opponent mood for it - exception for when they just need 2 points
+     * to win a game." With no opponent mood in play at all for
+     * shockTargetMoodIds() to find, and no game-win context making
+     * Shock's own plain value worth it either, the Tactical Bot excludes
+     * it (withoutPrematurelyPlayedCards()) in favor of Courage -- the
+     * same hasGoodReasonToPlayNow() veto that fixes the plain heuristic
+     * bot (see BotPlayerServiceTest's own
+     * `testChooseActionDemotesShockBehindALowerValueCardWhenNoTargetExists`)
+     * reaches the Tactical Bot's own search too, since both consult the
+     * exact same method.
+     */
+    public function testChooseActionExcludesShockWhenNoTargetExistsAndABetterCardIsAvailable(): void
+    {
+        $state = $this->boardState([1 => [101, 7], 2 => []]);
+        $state->startTurn(1);
+
+        $action = $this->search->chooseAction($state, [101, 7], 1, timeBudgetSeconds: 0.2);
+
+        self::assertNotNull($action);
+        self::assertSame(7, $action['card_id']);
+    }
+}
