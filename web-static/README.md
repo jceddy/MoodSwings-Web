@@ -1519,6 +1519,27 @@ deck's `cards`.
     the per-player icons below); a row is never highlighted purely because
     it's some OTHER player's turn or they're the one being waited on.
 
+    `--color-your-turn-bg`/`--color-awaiting-response-bg` were originally
+    defined only in the base (light) `:root`, the `prefers-color-scheme:
+    dark` media query, and `:root[data-theme="dark"]` -- so a user whose
+    OS/browser itself was in light mode but who explicitly picked one of
+    the OTHER named dark themes (Jade, High Contrast Dark, or one of the
+    three dark skins) still got the plain light palette's pale mint/cream
+    boxes, since a named theme's own `color-scheme: dark` doesn't make
+    `prefers-color-scheme: dark` match -- that media feature only tracks
+    the OS/browser's own setting, never a page's explicit theme choice
+    (reported live: looked fine on a mobile device in OS dark mode, wrong
+    on a desktop browser in OS light mode, despite the same theme being
+    selected on both). Fixed by giving every named dark theme its own
+    explicit pair of these two variables, tuned to read as part of that
+    theme's own palette rather than reusing the plain dark theme's colors
+    verbatim (see `css/style.css`'s own comment on Jade's block for the
+    full explanation, and each subsequent theme's block for its own color
+    choice) -- Jade, High Contrast Dark, Steampunk, Futuristic, and Neon
+    each get a palette-tinted pair, while Noir -- whose background is a
+    neutral near-black rather than hue-tinted -- just reuses the plain
+    dark theme's own green/amber since there's no clashing hue to avoid.
+
     Rather than the old "(your turn)"/"(waiting on &lt;username&gt;)" text
     tags (which could only ever name the viewer, even when a pending
     decision was actually paused on a different player), each opponent's

@@ -153,6 +153,29 @@
     --color-muted: #7fa98a;
     --color-border: #1a9c1a;
     --color-border-subtle: #0f5c0f;
+    /* --color-your-turn-bg/--color-awaiting-response-bg (issue #363
+       follow-up, reported live: a named dark theme's own lobby row
+       highlights showed the plain LIGHT palette's pale mint/cream boxes
+       instead of a dark-appropriate tint) -- every named theme below
+       this point needs its own explicit values for the same reason: these
+       two variables only ever had a light `:root` default plus a
+       `prefers-color-scheme: dark`/`[data-theme="dark"]` variant, neither
+       of which a *named* theme's own `color-scheme: dark` triggers on its
+       own -- that property is a rendering hint for browser UI (scrollbars,
+       form controls), not a `prefers-color-scheme` match, which only
+       tracks the OS/browser-level preference. A user on a light-mode
+       system who explicitly picks a dark named theme got the light
+       fallback regardless of that theme's own actual (dark) background.
+       Distinct from the four "doesn't touch" status colors above/below --
+       those double as running TEXT color against this theme's own
+       background (still legible, if not perfectly tuned), where these two
+       are a solid background BOX that a light value renders as a glaring,
+       undithered rectangle. Kept a slightly darker shade of jade's own
+       green than the header/border accent (which is too saturated as a
+       big filled area) rather than the plain dark theme's own green, so
+       the highlight still reads as "part of this palette." */
+    --color-your-turn-bg: #0a4d0a;
+    --color-awaiting-response-bg: #4d3d00;
 }
 
 /* Red Marble (issue #363) -- a light palette from the maintainer's own
@@ -234,6 +257,12 @@
     --color-success: #00e676;
     --color-pending: #ffd54f;
     --color-info: #40c4ff;
+    /* See jade's own comment above for why every named dark theme needs
+       these explicitly -- pushed toward fully saturated against pure
+       black, matching this theme's own already-boosted status colors
+       above. */
+    --color-your-turn-bg: #003d1a;
+    --color-awaiting-response-bg: #3d3200;
 }
 
 /* Steampunk (issue #363, card-skin theme) -- a dark brass/espresso
@@ -254,6 +283,12 @@
     --color-muted: #a88b62;
     --color-border: #8b5e2f;
     --color-border-subtle: #5c3f20;
+    /* See jade's own comment above for why every named dark theme needs
+       these explicitly -- a muted olive-green/warm-amber pair that reads
+       as "part of this brass/espresso palette" rather than the plain dark
+       theme's own colder green/amber. */
+    --color-your-turn-bg: #2b3a1c;
+    --color-awaiting-response-bg: #4a3418;
 }
 
 /* Futuristic (issue #363, card-skin theme) -- a near-black deep-blue
@@ -270,6 +305,11 @@
     --color-muted: #6f8bab;
     --color-border: #29b6f6;
     --color-border-subtle: #1a4a66;
+    /* See jade's own comment above for why every named dark theme needs
+       these explicitly -- a cyan-leaning dark teal/amber pair that reads
+       as "part of this near-black blue palette." */
+    --color-your-turn-bg: #123324;
+    --color-awaiting-response-bg: #332413;
 }
 
 /* Neon (issue #363, card-skin theme) -- a near-black deep-purple palette
@@ -287,6 +327,12 @@
     --color-muted: #9a6fc2;
     --color-border: #ff2fd6;
     --color-border-subtle: #6a1a5c;
+    /* See jade's own comment above for why every named dark theme needs
+       these explicitly -- a teal-leaning dark green/amber pair that reads
+       as "part of this near-black purple palette" rather than clashing
+       with its own magenta accent. */
+    --color-your-turn-bg: #123326;
+    --color-awaiting-response-bg: #3a2313;
 }
 
 /* Opts out of mobile Chrome's "font boosting" text autosizer, which
@@ -435,6 +481,13 @@ select:disabled {
     --color-muted: #9a9184;
     --color-border: #c9a55c;
     --color-border-subtle: #6b5a3a;
+    /* See jade's own comment above for why every named dark theme needs
+       these explicitly -- noir's own background is a neutral near-black
+       rather than hue-tinted like steampunk/futuristic/neon, so it doesn't
+       clash with the plain dark theme's own green/amber and can just reuse
+       them. */
+    --color-your-turn-bg: #1f3d2a;
+    --color-awaiting-response-bg: #3d2f10;
 }
 
 /* Fixed backdrop pseudo-element (reported live: "when I scroll, the
