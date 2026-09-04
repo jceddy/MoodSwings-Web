@@ -167,6 +167,13 @@ wired in separately -- it takes an optional third `fallbackSrc` argument
 (unused by its only other caller) so a themed preview that 404s swaps
 back to the default print instead of showing a broken-image icon.
 
+Steampunk's coverage grew further with four more Chaos Draft token
+moods (`cards.is_token = 1`, same `cardArtUrl()` path as any other
+card): Unconcern (`img/cards/MSW/steampunk/135-unconcern.webp`),
+Passivity (`img/cards/MSW/steampunk/136-passivity.webp`), Tedium
+(`img/cards/MSW/steampunk/137-tedium.webp`), and Idleness
+(`img/cards/MSW/steampunk/138-idleness.webp`).
+
 Futuristic's first three pieces of real card-skin art followed the same
 pattern, plus its own Hurt Feelings art:
 `img/cards/MSW/futuristic/32-creativity.webp`,
