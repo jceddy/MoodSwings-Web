@@ -7499,11 +7499,9 @@ kept its identity as the "standard" tier but moved from the original
 `BOT_SEARCH_TIME_BUDGET_SECONDS = 150` down to `60`; `BotSageQuick` (`30`)
 and `BotSageDeep` (`90`) joined it -- 150s turned out, in live testing, to
 be too long to comfortably iterate against. The New Game dialog's own bot
-picker (`web-static/js/game.js`) badges each one green/gold/red by this
-value (`tacticalBotTierClass()`), reusing the existing
-`--color-success`/`--color-pending`/`--color-error` theme variables rather
-than introducing new theme colors just for this -- see "New game dialog"
-in `web-static/README.md`. `GameService::launchTacticalBotSearchJob()`
+picker draws no visual distinction between the three (or between them and
+the plain heuristic roster) -- each account's own name already says
+enough about its relative speed. `GameService::launchTacticalBotSearchJob()`
 looks this value up per-seat (`tacticalBotTimeBudgetSeconds()`) rather
 than using the constructor's own `botSearchTimeBudgetSeconds`, which is
 now `null` by default and reserved purely for a test wanting to force

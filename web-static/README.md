@@ -1707,16 +1707,15 @@ deck's `cards`.
     feature.
 
     The bot picker's own checkbox list is every `is_bot = 1` user
-    (`GET /games/bots`) -- picking one needs no dialog changes of its own,
-    since it's seated exactly like any other bot. The three opt-in
-    "Tactical Bot" accounts (`BotSage`/`BotSageQuick`/`BotSageDeep`,
-    `users.uses_tactical_ai` -- see "Tactical Bot" in
-    `php-app/README.md`) each get a small colored `Tactical · up to Ns`
-    badge next to their name (`tacticalBotTierClass()`, green/gold/red for
-    30/60/90 seconds respectively) so a maintainer testing against a range
-    of speeds can tell them apart at a glance; the plain heuristic bots
-    get no badge. A Tactical Bot's own turn can take noticeably longer
-    than the instant heuristic bots (up to its own budget, run in a
+    (`GET /games/bots`) with no distinction drawn between the plain
+    heuristic roster and the three opt-in "Tactical Bot" accounts
+    (`BotSage`/`BotSageQuick`/`BotSageDeep`, `users.uses_tactical_ai` --
+    see "Tactical Bot" in `php-app/README.md`) -- picking one needs no
+    dialog changes of its own, since it's seated exactly like any other
+    bot. Each Tactical Bot's own name already says enough about its
+    relative speed (Quick/plain/Deep) that the picker draws no further
+    visual distinction. A Tactical Bot's own turn can take noticeably
+    longer than the instant heuristic bots (up to its own budget, run in a
     background job rather than blocking the request) -- see "Bot is
     thinking indicator" below for the one place that shows up in this UI.
 
