@@ -1556,27 +1556,37 @@ final class BotPlayerService
      * CardChoiceSchema loop above, since its two fields are
      * interdependent ('direction' only means anything once 'mode' is
      * 'rotate') and the choice between them needs real board state, not
-     * just "first legal option". "You may choose one" is never left
-     * unchosen here -- doing nothing at all (BotChoiceResolver's own
-     * default for an unforced optional field) is strictly worse than
-     * either real option, so this always commits to one:
+     * just "first legal option":
      * - 'refresh' (bottom the whole hand, then redraw that many) once
      *   the bot's own remaining hand is weak enough to gamble on a
-     *   fresh draw (rationalizationLowValueHand()) -- checked first,
-     *   since it's always safe (nothing is ever given away to an
-     *   opponent) regardless of what any neighbor's hand size looks
-     *   like.
+     *   fresh draw (rationalizationLowValueHand()) -- checked first, and
+     *   the ONLY case 'refresh' is chosen at all.
      * - Otherwise 'rotate' toward whichever neighbor
      *   rationalizationStealDirection() finds currently overstuffed
      *   enough to be worth taking their hand at the cost of the bot's
      *   own.
-     * - Otherwise, still 'refresh' -- the strictly safer default of the
-     *   two whenever neither trigger applies (sortPriorityValue() is
-     *   what keeps the bot from reaching for this card at all in that
-     *   case, not this method; once it IS being played, refresh never
-     *   costs the bot anything an unwarranted rotate could).
+     * - Otherwise, decline both modes entirely (an empty choice set --
+     *   RationalizationEffect::afterPlaying()'s own `if ($mode === null)
+     *   return;` treats this exactly like Guile-style genuine
+     *   optionality, no different from any other unforced field
+     *   BotChoiceResolver leaves unfilled). This branch is ONLY reached
+     *   when the bot is playing Rationalization anyway despite neither
+     *   trigger applying -- forced as the last playable card, or (see
+     *   rationalizationWouldClinchTheGame()) purely for its own printed
+     *   value to close out the game -- and in that situation the bot's
+     *   own remaining hand is, by construction, NOT weak
+     *   (rationalizationLowValueHand() already said so, or it would have
+     *   taken the 'refresh' branch above instead). Reported live: bots
+     *   were "playing it to refresh hands when they have a good hand" --
+     *   this used to unconditionally fall back to 'refresh' here on the
+     *   theory that refresh is "always safe," but that's only true
+     *   because HAND SIZE never changes, not hand QUALITY: bottoming a
+     *   hand that's already above average and redrawing randomly is a
+     *   pure gamble with negative expected value, not a free action, so
+     *   there is no safe default to fall back to here at all once both
+     *   real triggers have already said no.
      *
-     * @return array{mode: string}|array{mode: string, direction: string}
+     * @return array{mode: string}|array{mode: string, direction: string}|array{}
      */
     private function rationalizationChoices(BoardState $state, int $cardId, int $botGamePlayerId): array
     {
@@ -1589,7 +1599,7 @@ final class BotPlayerService
             return ['mode' => 'rotate', 'direction' => $direction];
         }
 
-        return ['mode' => 'refresh'];
+        return [];
     }
 
     /** @see RATIONALIZATION_LOW_VALUE_HAND_AVERAGE */
