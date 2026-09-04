@@ -186,7 +186,10 @@ Chaos Draft token moods Steampunk's own coverage grew with above:
 `img/cards/MSW/futuristic/135-unconcern.webp`,
 `img/cards/MSW/futuristic/136-passivity.webp`,
 `img/cards/MSW/futuristic/137-tedium.webp`, and
-`img/cards/MSW/futuristic/138-idleness.webp`. Neon's own matching set followed
+`img/cards/MSW/futuristic/138-idleness.webp`, plus Steampunk's own
+Rationalization/Recklessness pair:
+`img/cards/MSW/futuristic/49-rationalization.webp` and
+`img/cards/MSW/futuristic/100-recklessness.webp`. Neon's own matching set followed
 the same pattern: `img/cards/MSW/neon/32-creativity.webp`,
 `img/cards/MSW/neon/67-intimidation.webp`,
 `img/cards/MSW/neon/134-smugness.webp`, and
