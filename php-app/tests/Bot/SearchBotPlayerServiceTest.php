@@ -170,4 +170,30 @@ final class SearchBotPlayerServiceTest extends TestCase
         self::assertNotNull($action);
         self::assertSame(49, $action['card_id']);
     }
+
+    /**
+     * Reported live: "when a bot plays ambition, it should discard a
+     * card for another play if it has 3+ cards in hand and it has
+     * another play that will net it points." Ambition (id 53) has no
+     * required schema field for LegalChoiceEnumerator to vary targeting
+     * over, so the Tactical Bot's own only candidate action for it is
+     * whatever BotPlayerService::buildChoicesForCard()'s own default
+     * builds -- the same shouldAttemptAmbitionDiscard() fix that makes
+     * the plain heuristic bot volunteer for the optional
+     * discard_card_id field here (see BotPlayerServiceTest's own
+     * `testChooseActionDiscardsForAmbitionsExtraPlayWithEnoughHandAndAScoringFollowUp`)
+     * therefore fixes the Tactical Bot too, with no separate search-side
+     * change needed.
+     */
+    public function testChooseActionDiscardsForAmbitionsExtraPlayWithEnoughHandAndAScoringFollowUp(): void
+    {
+        $state = $this->boardState([1 => [53, 7, 55], 2 => []]);
+        $state->startTurn(1);
+
+        $action = $this->search->chooseAction($state, [53], 1, timeBudgetSeconds: 0.2);
+
+        self::assertNotNull($action);
+        self::assertSame(53, $action['card_id']);
+        self::assertSame(['discard_card_id' => 7], $action['choices']);
+    }
 }

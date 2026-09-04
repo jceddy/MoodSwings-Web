@@ -6619,6 +6619,34 @@ since it already holds that dependency):
   card) has nothing to cycle, so it stays unfilled -- "if it has one to
   cycle" per the maintainer.
 
+  **Ambition** (reported live: "when a bot plays ambition, it should
+  discard a card for another play if it has 3+ cards in hand and it has
+  another play that will net it points -- this is especially important
+  in the last round of the game when it can make the difference between
+  winning and losing the game") gets the same `shouldAttemptZealCycle()`-
+  shaped treatment (`shouldAttemptAmbitionDiscard()`), for "you may
+  discard a card from your hand; if you do, you may play an additional
+  mood this turn" rather than a bottom-and-redraw -- worth attempting
+  once `AMBITION_MIN_HAND_SIZE_TO_DISCARD` (3, Ambition itself included,
+  still sitting in hand at this point the same way `ZEAL_LOW_VALUE_HAND_CARD_THRESHOLD`'s
+  own check works) is met AND, after setting aside the cheapest OTHER
+  hand card as the discard cost, at least one hand card still remains
+  with a positive base value -- a genuine scoring play worth unlocking
+  the extra play for, not just "some card to burn it on." Once forced,
+  `BotChoiceResolver`'s own generic `'hand_card'` field policy already
+  picks the LOWEST-value legal candidate as the discard on its own, so
+  `shouldAttemptAmbitionDiscard()` only ever decides WHETHER to bother,
+  never WHICH card, the same division of labor as `shouldAttemptZealCycle()`.
+  This same rule already covers "make the difference between winning and
+  losing the game" in the last round without any separate last-round-
+  specific logic: a positive-value card the bot couldn't otherwise fit
+  into this turn is exactly the kind of play that can flip a round's
+  (and so the game's) outcome, every round this condition holds, last
+  round included. `LegalChoiceEnumerator` has no required schema field
+  to vary Ambition's own targeting over, so the Tactical Bot's only
+  candidate action for it is this same default choice set -- this fix
+  therefore covers both bots with no search-side change needed.
+
   **Rationalization** (confirmed by the maintainer) gets its own
   bespoke, two-part policy, since "you may choose one: refresh your own
   hand, or rotate hands with the table" (`CardChoiceSchema`'s own
