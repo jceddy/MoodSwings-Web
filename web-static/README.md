@@ -193,7 +193,12 @@ Rationalization/Recklessness pair:
 the same pattern: `img/cards/MSW/neon/32-creativity.webp`,
 `img/cards/MSW/neon/67-intimidation.webp`,
 `img/cards/MSW/neon/134-smugness.webp`, and
-`img/hurt-feelings-neon.webp`. Any future skin (or these three, for any
+`img/hurt-feelings-neon.webp` -- joined by the same four Chaos Draft
+token moods as the other two skins:
+`img/cards/MSW/neon/135-unconcern.webp`,
+`img/cards/MSW/neon/136-passivity.webp`,
+`img/cards/MSW/neon/137-tedium.webp`, and
+`img/cards/MSW/neon/138-idleness.webp`. Any future skin (or these three, for any
 card not yet covered) without its own themed file for a given card still
 404s and falls back to the plain print through the exact same mechanism.
 
