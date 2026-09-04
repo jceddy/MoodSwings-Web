@@ -2556,35 +2556,6 @@ dialog#deck-builder-dialog[open] {
     margin-bottom: 0.25rem;
 }
 
-/* Tactical Bot speed tiers (issue #419 follow-up) -- reuses the exact same
-   --color-success/--color-pending/--color-error theme variables the
-   lobby's own .lobby-status-- classes already use for green/gold/red,
-   rather than introducing new theme colors just for this. These three are
-   deliberately untouched by every named palette (see style.css's own
-   comment on the four status colors), so this badge reads correctly in
-   every theme with no per-theme overrides needed here either. */
-.bot-tactical-badge {
-    display: inline-block;
-    margin-left: 0.4em;
-    padding: 0.05em 0.5em;
-    border-radius: 999px;
-    font-size: 0.75em;
-    font-weight: bold;
-    border: 1px solid currentColor;
-}
-
-.bot-tactical-badge--quick {
-    color: var(--color-success);
-}
-
-.bot-tactical-badge--standard {
-    color: var(--color-pending);
-}
-
-.bot-tactical-badge--deep {
-    color: var(--color-error);
-}
-
 #new-game-mode-fields label {
     display: block;
     margin-bottom: 0.25rem;

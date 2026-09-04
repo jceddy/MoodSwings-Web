@@ -3242,21 +3242,6 @@
         }
     }
 
-    // Tactical Bot speed tiers (issue #419 follow-up): which color a given
-    // bot's own tactical_ai_time_budget_seconds should badge as in the New
-    // Game dialog's own bot picker -- an unrecognized value (a future
-    // maintainer-tuned budget migration 0237 didn't anticipate) still
-    // falls somewhere reasonable rather than rendering colorless.
-    function tacticalBotTierClass(timeBudgetSeconds) {
-        if (timeBudgetSeconds <= 30) {
-            return 'bot-tactical-badge--quick';
-        }
-        if (timeBudgetSeconds <= 60) {
-            return 'bot-tactical-badge--standard';
-        }
-        return 'bot-tactical-badge--deep';
-    }
-
     // Opens #new-game-dialog, freshly reset -- the exact same setup
     // whether opened via the plain "New game" button (prefill === null)
     // or Rematch (issue #398, prefill from buildRematchPrefill() above).
@@ -3334,21 +3319,6 @@
                 checkbox.addEventListener('change', updateBotGoesFirstFieldVisibility);
                 label.appendChild(checkbox);
                 label.append(' ' + bot.username + ' (practice bot)');
-                if (bot.uses_tactical_ai) {
-                    // Tactical Bot speed tiers (issue #419 follow-up): a
-                    // maintainer testing against a range of search budgets
-                    // wants to tell them apart at a glance here, so this
-                    // colors each one green/gold/red by its own
-                    // tactical_ai_time_budget_seconds -- reusing the exact
-                    // same --color-success/--color-pending/--color-error
-                    // theme variables the lobby's own status colors already
-                    // use, rather than introducing new theme colors just
-                    // for this.
-                    const badge = document.createElement('span');
-                    badge.className = 'bot-tactical-badge ' + tacticalBotTierClass(bot.tactical_ai_time_budget_seconds);
-                    badge.textContent = 'Tactical · up to ' + bot.tactical_ai_time_budget_seconds + 's';
-                    label.appendChild(badge);
-                }
                 opponentCheckboxes.appendChild(label);
             }
         }

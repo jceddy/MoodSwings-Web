@@ -1444,27 +1444,18 @@ final class GameService
      * The full practice-bot (issue #140) roster -- every users.is_bot
      * row, ordered by id (i.e. migration 0090's own seeding order,
      * BotAlice/BotBen/BotCleo, then migrations 0236/0237's own Tactical
-     * Bot tiers), for the New Game dialog's own bot picker. Includes each
-     * Tactical Bot's own uses_tactical_ai/tactical_ai_time_budget_seconds
-     * (migration 0237) purely so that picker can color-code the three
-     * speed tiers -- a plain heuristic bot's own budget is always null,
-     * since the column is meaningless (never read) for one.
+     * Bot tiers -- BotSage/BotSageQuick/BotSageDeep, whose own names
+     * already say enough about relative speed that the picker draws no
+     * further distinction), for the New Game dialog's own bot picker.
      *
-     * @return array<int, array{user_id: int, username: string, uses_tactical_ai: bool, tactical_ai_time_budget_seconds: ?int}>
+     * @return array<int, array{user_id: int, username: string}>
      */
     public function listPracticeBots(): array
     {
-        $stmt = Connection::get()->query(
-            'SELECT id, username, uses_tactical_ai, tactical_ai_time_budget_seconds FROM users WHERE is_bot = 1 ORDER BY id ASC'
-        );
+        $stmt = Connection::get()->query('SELECT id, username FROM users WHERE is_bot = 1 ORDER BY id ASC');
 
         return array_map(
-            static fn (array $row) => [
-                'user_id' => (int) $row['id'],
-                'username' => $row['username'],
-                'uses_tactical_ai' => (bool) $row['uses_tactical_ai'],
-                'tactical_ai_time_budget_seconds' => $row['uses_tactical_ai'] ? (int) $row['tactical_ai_time_budget_seconds'] : null,
-            ],
+            static fn (array $row) => ['user_id' => (int) $row['id'], 'username' => $row['username']],
             $stmt->fetchAll(),
         );
     }
