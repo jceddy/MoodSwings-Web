@@ -460,11 +460,15 @@
 
                 <button id="pass-button" type="button">Pass</button>
 
-                <h3>Recent plays</h3>
-                <button id="view-log-button" type="button">View log</button>
-                <button id="view-shared-deck-button" type="button" hidden>View decklist</button>
-                <ul id="recent-events-list"></ul>
-                <p id="recent-events-empty" hidden>Nothing has happened yet.</p>
+                <div id="recent-plays-actions">
+                    <button id="view-log-button" type="button">View log</button>
+                    <button id="view-shared-deck-button" type="button" hidden>View decklist</button>
+                </div>
+                <details id="recent-events-details" open>
+                    <summary>Recent plays</summary>
+                    <ul id="recent-events-list"></ul>
+                    <p id="recent-events-empty" hidden>Nothing has happened yet.</p>
+                </details>
             </div>
 
             <!-- Outside #in-progress-area so it stays reachable while a

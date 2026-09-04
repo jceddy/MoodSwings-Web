@@ -3246,6 +3246,18 @@ deck's `cards`.
     of a card's zone). A round-scored line names every player's own final
     score and who won, not just that scoring happened.
 
+    The list itself is wrapped in a plain `<details id="recent-events-details"
+    open>` (its own `<summary>` doubling as both the "Recent plays" label
+    and the collapse/expand toggle, the same unstyled-`<details>`
+    convention "Plays left" already uses above) -- defaults open so
+    nothing about the existing layout changes for someone who's never
+    touched it, but a player who finds it too tall (a long game) can
+    collapse it out of the way without losing anything, since it's pure
+    `<details>` state, not tied to any poll. The "View log"/"View
+    decklist" buttons sit in their own `#recent-plays-actions` wrapper
+    directly above it, with a small margin-bottom so they don't sit flush
+    against the list's own `<summary>`.
+
     Drawing a card gets its own segment too -- "Alice drew a card" -- but
     deliberately never names *which* card, unlike every other zone move
     described above: a card drawn into a hand was never previously public,
@@ -3282,10 +3294,10 @@ deck's `cards`.
 
     **Game log (issue #98).** The "Recent plays" list above is capped at
     15 entries and shows only the current game's board -- a "View log"
-    button next to its own `<h3>Recent plays</h3>` heading, and a second
-    one under every lobby row's own Play/View button (so a *completed*
-    game's log is reachable without reopening its board at all), each
-    open the same `#game-log-dialog` (`openGameLog()`), fetching the
+    button above it, and a second one under every lobby row's own
+    Play/View button (so a *completed* game's log is reachable without
+    reopening its board at all), each open the same `#game-log-dialog`
+    (`openGameLog()`), fetching the
     game's ENTIRE history via `GET /games/log`
     (`GameService::fullEventLog()`, chronological oldest-first, no cap --
     see `php-app/README.md`). Reusing recentEvents' own `describeEvent()`
