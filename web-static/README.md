@@ -167,16 +167,41 @@ wired in separately -- it takes an optional third `fallbackSrc` argument
 (unused by its only other caller) so a themed preview that 404s swaps
 back to the default print instead of showing a broken-image icon.
 
+Steampunk's coverage grew further with four more Chaos Draft token
+moods (`cards.is_token = 1`, same `cardArtUrl()` path as any other
+card): Unconcern (`img/cards/MSW/steampunk/135-unconcern.webp`),
+Passivity (`img/cards/MSW/steampunk/136-passivity.webp`), Tedium
+(`img/cards/MSW/steampunk/137-tedium.webp`), and Idleness
+(`img/cards/MSW/steampunk/138-idleness.webp`), plus two ordinary base-set
+moods: Rationalization (`img/cards/MSW/steampunk/49-rationalization.webp`)
+and Recklessness (`img/cards/MSW/steampunk/100-recklessness.webp`).
+
 Futuristic's first three pieces of real card-skin art followed the same
 pattern, plus its own Hurt Feelings art:
 `img/cards/MSW/futuristic/32-creativity.webp`,
 `img/cards/MSW/futuristic/67-intimidation.webp`,
 `img/cards/MSW/futuristic/134-smugness.webp`, and
-`img/hurt-feelings-futuristic.webp`. Neon's own matching set followed
+`img/hurt-feelings-futuristic.webp` -- since joined by the same four
+Chaos Draft token moods Steampunk's own coverage grew with above:
+`img/cards/MSW/futuristic/135-unconcern.webp`,
+`img/cards/MSW/futuristic/136-passivity.webp`,
+`img/cards/MSW/futuristic/137-tedium.webp`, and
+`img/cards/MSW/futuristic/138-idleness.webp`, plus Steampunk's own
+Rationalization/Recklessness pair:
+`img/cards/MSW/futuristic/49-rationalization.webp` and
+`img/cards/MSW/futuristic/100-recklessness.webp`. Neon's own matching set followed
 the same pattern: `img/cards/MSW/neon/32-creativity.webp`,
 `img/cards/MSW/neon/67-intimidation.webp`,
 `img/cards/MSW/neon/134-smugness.webp`, and
-`img/hurt-feelings-neon.webp`. Any future skin (or these three, for any
+`img/hurt-feelings-neon.webp` -- joined by the same four Chaos Draft
+token moods as the other two skins:
+`img/cards/MSW/neon/135-unconcern.webp`,
+`img/cards/MSW/neon/136-passivity.webp`,
+`img/cards/MSW/neon/137-tedium.webp`, and
+`img/cards/MSW/neon/138-idleness.webp`, plus the same
+Rationalization/Recklessness pair as the other two skins:
+`img/cards/MSW/neon/49-rationalization.webp` and
+`img/cards/MSW/neon/100-recklessness.webp`. Any future skin (or these three, for any
 card not yet covered) without its own themed file for a given card still
 404s and falls back to the plain print through the exact same mechanism.
 
