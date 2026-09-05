@@ -6497,7 +6497,8 @@ since it already holds that dependency):
   be legally filled (rare -- would mean `isPlayable()` said yes but some
   required field still came up empty, e.g. Regret's exact-2-own-moods
   cost with nothing at all in play) or `isWorthPlaying()` vetoes it
-  outright (currently just Fury -- see below), the next-highest is
+  outright (Fury, Avoidance, Sneakiness, and Pacifism today -- see
+  below), the next-highest is
   tried instead, all the way down to `null` (pass) if truly nothing
   works -- a card is never left half-chosen.
   `isWorthPlaying(BoardState $state, string $effectKey, int
@@ -6894,6 +6895,33 @@ since it already holds that dependency):
   exists it reverts to plain `baseValue()`, no boost, just no longer
   vetoed.
 
+  **Pacifism** gets `pacifismTargetMoodIds()`: up to two moods, at most
+  one per non-teammate opponent (`CardChoiceSchema`'s own
+  `'distinct_owners'` constraint), each opponent's own highest-value
+  qualifying mood, preferring two different opponents over a single
+  opponent's own two moods. `sortPriorityValue()` deprioritizes Pacifism
+  (the same `PHP_INT_MIN` treatment most other targeted-but-optional
+  cards in this section get) whenever no non-teammate opponent has any
+  mood in play at all to target.
+
+  Reported live, follow-up: "I still have bots occasionally playing
+  Pacifism with no target in the first turn of the game - there is no
+  reason to do that, it would be better to pass and wait for a target."
+  Unlike that shared `PHP_INT_MIN` treatment's own usual "deprioritized
+  WHEN, never skipped outright" behavior (still played as an eventual
+  last resort once nothing else is legal -- see Denial/Rejection/Shock
+  elsewhere in this section), Pacifism instead gets `isWorthPlaying()`'s
+  stronger outright skip (the same treatment Fury/Avoidance/Sneakiness
+  already get), so `chooseAction()` now passes rather than falling back
+  to playing it with an empty target list. The distinction: scoring only
+  happens at round end, so passing and playing Pacifism on some LATER
+  turn instead (once a real target actually exists) banks the exact same
+  printed value with no penalty for the delay, while playing it now with
+  nothing to target permanently forfeits this instance's own "put an
+  opponent's mood back in their hand" ability for the rest of the round,
+  for no compensating benefit -- there's no reason for the "still played
+  eventually" fallback the other cards rely on to apply here at all.
+
   **Shock** (reported live: "bots should choose an opponent's mood to
   target with shock when playing it") gets its own targeting exception
   too, via `shockTargetMoodIds()`: `buildChoicesForCard()` special-cases
@@ -6957,7 +6985,7 @@ since it already holds that dependency):
   Exhilaration's own field has no legal alternative). That one remaining
   case is covered by `exhilarationHasAGoodReasonToPlayNow()`'s own
   `sortPriorityValue()` veto (`PHP_INT_MIN`, the same "deprioritized
-  WHEN, never skipped outright" treatment Pacifism/Denial above get) --
+  WHEN, never skipped outright" treatment Denial/Rejection above get) --
   provably never worth it rather than merely a heuristic guess: with
   Bliss gone and nothing else of the bot's own left in play, Exhilaration's
   own "score your moods an extra time" bonus doubles a board worth
@@ -7108,7 +7136,7 @@ since it already holds that dependency):
 
   Anger also gets a `sortPriorityValue()` veto (confirmed by the
   maintainer, the same `PHP_INT_MIN` "deprioritized WHEN, never skipped
-  outright" treatment Pacifism gets above): whenever `angerTargetMoodIds()`
+  outright" treatment Denial gets below): whenever `angerTargetMoodIds()`
   itself comes back completely empty -- no opponent mood worth
   discarding AND `angerShouldAlsoTargetItself()` also says no -- Anger is
   deprioritized behind everything else, rather than led with purely as a
@@ -7215,7 +7243,7 @@ since it already holds that dependency):
   when NONE of the three priorities finds a qualifying pair.
   `denialHasAGoodReasonToPlayNow()` (confirmed by the maintainer, new)
   then deprioritizes Denial itself via `sortPriorityValue()` (the same
-  `PHP_INT_MIN` treatment Harmony/Nostalgia/Pacifism above get) in that
+  `PHP_INT_MIN` treatment Harmony/Nostalgia above get) in that
   case -- "avoid playing Denial unless there's a good target to bounce"
   -- UNLESS playing it for its own plain printed value alone (no target
   at all) would be the deciding difference between the bot's own group
@@ -7317,7 +7345,7 @@ since it already holds that dependency):
 - **Envy's own "don't feed it for free" veto** (confirmed by the
   maintainer), via `envyDiscouragesPlayingThisCard()`/
   `sortPriorityValue()`: deprioritizes (the same `PHP_INT_MIN` treatment
-  as Rationalization/Cynicism/Intimidation/Paranoia/Pacifism above) any
+  as Rationalization/Cynicism/Intimidation/Paranoia above) any
   card worth `ENVY_AVOIDANCE_MAX_VALUE` (1) or less whenever a
   non-teammate opponent currently has Envy in play. `EnvyEffect::
   computeValue()` scales Envy's own value +2 for each mood the
