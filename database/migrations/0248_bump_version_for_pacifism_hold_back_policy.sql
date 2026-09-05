@@ -1,0 +1,18 @@
+-- Bot policy fix (reported live: "I still have bots occasionally
+-- playing Pacifism with no target in the first turn of the game -
+-- there is no reason to do that, it would be better to pass and wait
+-- for a target").
+--
+-- Pacifism previously only got sortPriorityValue()'s own PHP_INT_MIN
+-- "deprioritized WHEN, never skipped outright" treatment when no
+-- opponent mood existed to target -- still played as a last resort
+-- once nothing else was legal, wasting its own discard-into-hand
+-- ability for the round. Now added to isWorthPlaying() (the same
+-- outright-skip treatment Fury/Avoidance/Sneakiness already get):
+-- with no legal target, chooseAction() now passes instead, since
+-- round-end-only scoring means waiting for a real target on a later
+-- turn costs nothing.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.33.12' WHERE id = 1;

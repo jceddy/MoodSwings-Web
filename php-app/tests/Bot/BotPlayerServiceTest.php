@@ -862,18 +862,26 @@ final class BotPlayerServiceTest extends TestCase
     }
 
     /**
-     * With nothing else playable, Pacifism is still played --
-     * deprioritized WHEN, never skipped outright. No opponent has a
-     * mood in play, so its own optional field stays unfilled.
+     * Reported live: "I still have bots occasionally playing Pacifism
+     * with no target in the first turn of the game - there is no reason
+     * to do that, it would be better to pass and wait for a target."
+     * Unlike every other PHP_INT_MIN-deprioritized card in this class
+     * (still played as an eventual last resort, "deprioritized WHEN,
+     * never skipped outright"), Pacifism gets isWorthPlaying()'s
+     * stronger outright skip: with no opponent mood in play at all --
+     * even as the bot's own ONLY playable card -- chooseAction() now
+     * passes instead of playing Pacifism unfilled, since round-end-only
+     * scoring means waiting for a real target on some later turn costs
+     * nothing, while playing it now would permanently waste its own
+     * discard-into-hand ability for the round.
      */
-    public function testChooseActionStillPlaysPacifismUnfilledWhenNothingElseIsPlayable(): void
+    public function testChooseActionPassesInsteadOfPlayingPacifismUnfilledWhenNothingElseIsPlayable(): void
     {
         $state = $this->boardState(hands: [1 => [20]]);
 
         $action = $this->bot->chooseAction($state, [20], 1);
 
-        self::assertSame(20, $action['card_id']);
-        self::assertSame([], $action['choices']);
+        self::assertNull($action);
     }
 
     /**

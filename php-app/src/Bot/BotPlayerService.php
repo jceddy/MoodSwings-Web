@@ -67,7 +67,19 @@ use MoodSwings\Rules\RoundScorer;
  * distinct_owners constraint forbids anyway) when playing Pacifism, and
  * deprioritizes it (the same PHP_INT_MIN treatment) whenever no
  * non-teammate opponent currently has any mood in play -- see that
- * method's own docblock; and disillusionmentSafeColor()/
+ * method's own docblock; isWorthPlaying() once more for Pacifism
+ * (reported live: "I still have bots occasionally playing Pacifism with
+ * no target in the first turn of the game - there is no reason to do
+ * that, it would be better to pass and wait for a target"), which skips
+ * it OUTRIGHT under that same no-target condition (the same treatment
+ * Fury/Avoidance/Sneakiness already get) rather than merely
+ * deprioritizing it -- unlike a PHP_INT_MIN demotion (still played as
+ * an eventual last resort), a genuinely wasted Pacifism has nothing to
+ * gain from that fallback and a real cost to it: scoring only happens
+ * at round end, so passing costs nothing (the same printed value gets
+ * banked whenever it's eventually played instead) while playing it now
+ * permanently forfeits this instance's own ability for the round; see
+ * isWorthPlaying()'s own docblock; and disillusionmentSafeColor()/
  * chooseDecisionAnswer() (confirmed by the maintainer), which picks the
  * first color that matches none of the responding bot's own (or a
  * teammate's) moods currently in play when answering Disillusionment's
@@ -439,9 +451,25 @@ final class BotPlayerService
      * how that one gets chosen), but "is this worth playing AT ALL"
      * depends on every seated player's own moods, not just which
      * direction ends up picked, so it needs the same whole-board view
-     * Fury's veto does. Keyed by effect key; everything not listed here
-     * is always worth playing (the default, unconditional "yes" every
-     * other effect already got before this method existed).
+     * Fury's veto does; and for Pacifism (reported live: "I still have
+     * bots occasionally playing Pacifism with no target in the first
+     * turn of the game - there is no reason to do that, it would be
+     * better to pass and wait for a target"), which gets this method's
+     * stronger "skip it entirely, fall through to the next candidate or
+     * an outright pass" treatment -- unlike sortPriorityValue()'s own
+     * PHP_INT_MIN `hasGoodReasonToPlayNow()` veto elsewhere in this class
+     * (Rationalization/Denial/Rejection/Shock and others -- "deprioritized
+     * WHEN, never skipped outright," still played as an eventual last
+     * resort), a genuinely wasted Pacifism has nothing to gain from that
+     * fallback and a real cost to it: scoring only happens at round end,
+     * so passing and simply playing Pacifism on a LATER turn instead
+     * banks the exact same printed value with no penalty for the delay,
+     * while playing it now with no target PERMANENTLY forfeits this
+     * instance's own "put an opponent's mood back in their hand" ability
+     * for the rest of the round, for no compensating benefit. Keyed by
+     * effect key; everything not listed here is always
+     * worth playing (the default, unconditional "yes" every other
+     * effect already got before this method existed).
      */
     private function isWorthPlaying(BoardState $state, string $effectKey, int $botGamePlayerId): bool
     {
@@ -449,6 +477,7 @@ final class BotPlayerService
             'fury' => $this->furyIsWorthPlaying($state, $botGamePlayerId),
             'avoidance' => $this->avoidanceHasAGoodReasonToPlay($state, $botGamePlayerId),
             'sneakiness' => $this->sneakinessTargetPlayerId($state, $botGamePlayerId) !== null,
+            'pacifism' => $this->pacifismTargetMoodIds($state, $botGamePlayerId) !== [],
             default => true,
         };
     }
