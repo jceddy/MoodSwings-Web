@@ -1328,9 +1328,23 @@ final class BotGameplayIntegrationTest extends TestCase
      * validation mismatch even though BotPlayerServiceTest's own
      * isolated checks pass, the same class of bug
      * testBotDiscardsToDelightWithFourOrMoreSpareCards() above already
-     * caught once for a different card. Hate/Fickleness (both base value
-     * 0) make the bot's own remaining hand unambiguously "low value", so
-     * 'refresh' is the only legal outcome here.
+     * caught once for a different card. Guile (40, base value 0) needs to
+     * discard TWO other hand cards just to be playable at all -- with
+     * only Rationalization alongside it, that cost can never be paid, so
+     * Guile is the "remaining hand" for RATIONALIZATION_LOW_VALUE_HAND_AVERAGE's
+     * own averaging (making 'refresh' the only legal outcome once
+     * Rationalization is played) without ALSO being a competing candidate
+     * `chooseAction()` could ever pick instead -- Rationalization is the
+     * only PLAYABLE card here, so it gets played regardless of
+     * sortPriorityValue()'s own demotion (BotPlayerServiceTest's own
+     * testChooseActionStillPlaysRationalizationAloneEvenWithoutATrigger),
+     * the same way a genuinely low-value BUT UNPLAYABLE remaining hand
+     * doesn't create a competing alternative to prefer over it (reported
+     * live, twice now, that a merely WEAK -- but playable -- remaining
+     * hand alone should no longer be enough on its own; see
+     * BotPlayerServiceTest's own
+     * testChooseActionNoLongerVoluntarilyPrefersRationalizationForAMerelyWeakHand
+     * for that policy in isolation).
      */
     public function testBotRefreshesItsHandWithRationalizationWhenItsRemainingHandIsWeak(): void
     {
@@ -1341,26 +1355,19 @@ final class BotGameplayIntegrationTest extends TestCase
         $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
 
         $this->insertGameCard($gameId, 49, 'hand', $botPlayerId); // Rationalization, base value 3
-        // Hate/Fickleness (not Fear -- see EARLY_PRIORITY_EFFECT_KEYS,
-        // which would otherwise outrank Rationalization here regardless
-        // of its own weak-hand trigger, defeating the point of this test)
-        $this->insertGameCard($gameId, 66, 'hand', $botPlayerId); // Hate, value 0
-        $this->insertGameCard($gameId, 39, 'hand', $botPlayerId); // Fickleness, value 0
-        // A real shared deck to actually draw the refreshed cards from --
+        $this->insertGameCard($gameId, 40, 'hand', $botPlayerId); // Guile, value 0 -- unplayable here, needs 2 other cards to discard
+        // A real shared deck to actually draw the refreshed card(s) from --
         // refreshHand() bottoms the old hand then draws that many, so
-        // without at least 2 cards here the draw would come up short.
+        // without at least 1 card here the draw would come up short.
         $this->insertGameCard($gameId, 5, 'deck', deckPosition: 0);
-        $this->insertGameCard($gameId, 6, 'deck', deckPosition: 1);
         $this->insertGameCard($gameId, 8, 'hand', $p1); // human needs a non-empty hand too
         $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
 
         self::assertNotNull($this->games->advanceAutomatedTurns($gameId));
 
         self::assertTrue($this->cardIsInPlay($gameId, 49));
-        self::assertFalse($this->cardIsInHand($gameId, 66, $botUserId), 'Hate should have been bottomed, not kept');
-        self::assertFalse($this->cardIsInHand($gameId, 39, $botUserId), 'Fickleness should have been bottomed, not kept');
+        self::assertFalse($this->cardIsInHand($gameId, 40, $botUserId), 'Guile should have been bottomed, not kept');
         self::assertTrue($this->cardIsInHand($gameId, 5, $botUserId), 'the bot should have drawn a fresh card off the deck');
-        self::assertTrue($this->cardIsInHand($gameId, 6, $botUserId), 'the bot should have drawn a fresh card off the deck');
     }
 
     /**

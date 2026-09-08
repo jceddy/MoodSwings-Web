@@ -5172,7 +5172,7 @@ final class GameService
                     $this->candidatePlayCardIds($state, $currentTurnGamePlayerId),
                     fn (int $cardId) => $this->plays->isPlayable($state, $currentTurnGamePlayerId, $cardId),
                 ));
-                $action = $this->bots->chooseAction($state, $playableCardIds, $currentTurnGamePlayerId, $this->roundWinsStillNeededToWinGame($gameId, $currentTurnGamePlayerId));
+                $action = $this->bots->chooseAction($state, $playableCardIds, $currentTurnGamePlayerId, $this->roundWinsStillNeededToWinGame($gameId, $currentTurnGamePlayerId), $this->roundWinsNeededToWinGameForActivePlayers($gameId, $state));
                 try {
                     $lastResult = $action !== null
                         ? $this->playMood($gameId, $currentTurnGamePlayerId, $action['card_id'], $action['choices'])
@@ -6256,7 +6256,7 @@ final class GameService
             $this->candidatePlayCardIds($state, $gamePlayerId),
             fn (int $cardId) => $this->plays->isPlayable($state, $gamePlayerId, $cardId),
         ));
-        $action = $this->bots->chooseAction($state, $playableCardIds, $gamePlayerId, $this->roundWinsStillNeededToWinGame($gameId, $gamePlayerId));
+        $action = $this->bots->chooseAction($state, $playableCardIds, $gamePlayerId, $this->roundWinsStillNeededToWinGame($gameId, $gamePlayerId), $this->roundWinsNeededToWinGameForActivePlayers($gameId, $state));
 
         return $action !== null
             ? $this->playMood($gameId, $gamePlayerId, $action['card_id'], $action['choices'])
@@ -6354,7 +6354,7 @@ final class GameService
                 $this->candidatePlayCardIds($state, $job['game_player_id']),
                 fn (int $cardId) => $this->plays->isPlayable($state, $job['game_player_id'], $cardId),
             ));
-            $action = $this->tacticalBots->chooseAction($state, $playableCardIds, $job['game_player_id'], (float) $job['time_budget_seconds'], $this->roundWinsStillNeededToWinGame($job['game_id'], $job['game_player_id']));
+            $action = $this->tacticalBots->chooseAction($state, $playableCardIds, $job['game_player_id'], (float) $job['time_budget_seconds'], $this->roundWinsStillNeededToWinGame($job['game_id'], $job['game_player_id']), $this->roundWinsNeededToWinGameForActivePlayers($job['game_id'], $state));
 
             if ($action !== null) {
                 $this->playMood($job['game_id'], $job['game_player_id'], $action['card_id'], $action['choices']);
@@ -9978,6 +9978,30 @@ final class GameService
         }
 
         return $winsNeeded - $totalWins;
+    }
+
+    /**
+     * roundWinsStillNeededToWinGame() above, but for EVERY currently
+     * active game_player_id in the round rather than just one specific
+     * player -- BotPlayerService::rationalizationWouldPreventLosingTheGame()'s
+     * own defensive "would playing this deny a RIVAL the game outright"
+     * check (reported live: "strengthen the imperative to hold onto
+     * [Rationalization] until it is useful to rotate hands, or absolutely
+     * necessary not to lose a game") needs every rival's own value, not
+     * just the acting bot's -- unlike the offensive clinch checks
+     * (Rationalization's/Shock's own), which only ever cared about the
+     * acting bot's own side.
+     *
+     * @return array<int, int> game_player_id => round wins still needed
+     */
+    private function roundWinsNeededToWinGameForActivePlayers(int $gameId, BoardState $state): array
+    {
+        $result = [];
+        foreach ($state->activePlayerOrder() as $gamePlayerId) {
+            $result[$gamePlayerId] = $this->roundWinsStillNeededToWinGame($gameId, $gamePlayerId);
+        }
+
+        return $result;
     }
 
     /**

@@ -2667,6 +2667,31 @@ final class BotPlayerServiceTest extends TestCase
     }
 
     /**
+     * Reported live (twice now): bots still "playing rationalization
+     * badly," reworded as "strengthen the imperative to hold onto it
+     * until it is useful to rotate hands, or absolutely necessary not to
+     * lose a game" -- taken literally as the only two acceptable reasons
+     * to play it, a merely WEAK remaining hand is no longer one of them.
+     * Chivalry (4) and Fear (38, value 0) together bring the remaining
+     * hand's average down to 1.5 -- at/under RATIONALIZATION_LOW_VALUE_HAND_AVERAGE
+     * (2), which used to be enough on its own to give Rationalization a
+     * "good reason to play now" and win its tie with Chivalry (both value
+     * 3) via stable-sort original-order tie-breaking. With that trigger
+     * gone, nothing elevates Rationalization here (no steal opportunity,
+     * no game-win context at all), so sortPriorityValue()'s own
+     * PHP_INT_MIN demotion sends it to the bottom and Chivalry wins the
+     * tie instead.
+     */
+    public function testChooseActionNoLongerVoluntarilyPrefersRationalizationForAMerelyWeakHand(): void
+    {
+        $state = $this->boardState(hands: [1 => [49, 4, 38]]);
+
+        $action = $this->bot->chooseAction($state, [49, 4], 1);
+
+        self::assertSame(4, $action['card_id'], 'a merely weak remaining hand should no longer, by itself, make the bot prefer to lead with Rationalization');
+    }
+
+    /**
      * Still played once it's the only legal candidate left, even with
      * neither trigger active -- the demotion only ever changes ORDER,
      * never whether Rationalization is worth playing at all. Declines
@@ -2883,6 +2908,68 @@ final class BotPlayerServiceTest extends TestCase
 
         self::assertSame(49, $action['card_id']);
         self::assertSame([], $action['choices']);
+    }
+
+    /**
+     * The new defensive half, reported live: "...or absolutely necessary
+     * not to lose a game" -- the mirror image of the game-win carve-out
+     * above. Player 2's own Suspicion (78, value 3, in play) already
+     * matches the bot's own remaining game-win margin (1, via the new
+     * fifth $roundWinsNeededToWinGameByPlayerId argument) -- one more
+     * round win finishes the whole game for THEM, and they currently
+     * outscore the bot 3-0 this round. Playing Rationalization purely for
+     * its own value (3) exactly ties that total, denying player 2 the
+     * sole highest score (and, with it, the round -- and game -- win).
+     * The bot's OWN $roundWinsNeededToWinGame (4th arg) is left null so
+     * this test isolates the new defensive trigger from the existing
+     * offensive one.
+     */
+    public function testChooseActionPlaysRationalizationToPreventARivalFromClinchingTheGame(): void
+    {
+        $state = $this->boardState(hands: [1 => [49, 9, 7], 2 => [78]]);
+        $state->moveHandToInPlay(2, 78);
+
+        $action = $this->bot->chooseAction($state, [49, 7], 1, null, [2 => 1]);
+
+        self::assertSame(49, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
+    /**
+     * Same rival-clinch setup as above, but player 2's own in-play total
+     * is Discipline (9, value 6) instead of Suspicion -- too far ahead for
+     * Rationalization's own value (3) to close (0 + 3 = 3, still short of
+     * 6). Being one win from ending the game isn't enough by itself if
+     * the bot couldn't actually deny them the round anyway.
+     */
+    public function testChooseActionDoesNotPreventLosingWhenItWouldNotDenyTheRivalTheRoundLead(): void
+    {
+        // Confusion (31, value 4) keeps the remaining hand's own average
+        // above RATIONALIZATION_LOW_VALUE_HAND_AVERAGE, same isolation
+        // reasoning as the offensive version of this test above.
+        $state = $this->boardState(hands: [1 => [49, 7, 31], 2 => [9]]);
+        $state->moveHandToInPlay(2, 9);
+
+        $action = $this->bot->chooseAction($state, [49, 7], 1, null, [2 => 1]);
+
+        self::assertSame(7, $action['card_id']);
+    }
+
+    /**
+     * Same rival-clinch setup as the positive test above, but player 2's
+     * own $roundWinsNeededToWinGame is 2 instead of 1 -- winning THIS
+     * round wouldn't be enough to finish the game for them, so they're
+     * not actually a "necessary to prevent" threat yet even though
+     * they're currently ahead this round.
+     */
+    public function testChooseActionDoesNotPreventLosingWhenNoRivalIsCloseToWinningTheGame(): void
+    {
+        $state = $this->boardState(hands: [1 => [49, 9, 7], 2 => [78]]);
+        $state->moveHandToInPlay(2, 78);
+
+        $action = $this->bot->chooseAction($state, [49, 7], 1, null, [2 => 2]);
+
+        self::assertSame(7, $action['card_id']);
     }
 
     /**

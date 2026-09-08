@@ -6712,16 +6712,32 @@ since it already holds that dependency):
   (see the latter's own docblock -- extracted from `sortPriorityValue()`
   for the reason given there): rather than leading with it purely
   because of its own unremarkable printed value (3), it's demoted to
-  `PHP_INT_MIN` -- guaranteed last -- UNLESS `rationalizationLowValueHand()`,
-  `rationalizationStealDirection()`, or (reported live, follow-up)
-  `rationalizationWouldClinchTheGame()` already says it's worth playing
-  right now (the first two are the same checks `rationalizationChoices()`
-  itself makes, just used here to decide WHETHER/WHEN rather than HOW)
-  -- "save it to play last" per the maintainer, so a mediocre
-  Rationalization never displaces a genuinely useful play, but it's
-  still never skipped outright: once it's the only legal candidate left
-  (or a trigger fires), it's played the same as anything else, always
-  committing to a real mode.
+  `PHP_INT_MIN` -- guaranteed last -- UNLESS `rationalizationStealDirection()`,
+  `rationalizationWouldClinchTheGame()`, or (new below)
+  `rationalizationWouldPreventLosingTheGame()` already says it's worth
+  playing right now -- "save it to play last" per the maintainer, so a
+  mediocre Rationalization never displaces a genuinely useful play, but
+  it's still never skipped outright: once it's the only legal candidate
+  left (or a trigger fires), it's played the same as anything else,
+  always committing to a real mode.
+
+  **`rationalizationLowValueHand()` is no longer one of the three checks
+  above** (reported live, twice now: first the steal/clinch triggers
+  documented below; then, bots STILL "playing rationalization badly,"
+  reworded as "strengthen the imperative to hold onto it until it is
+  useful to rotate hands, or absolutely necessary not to lose a game" --
+  taken literally as an exhaustive list of the only two acceptable
+  reasons to play it at all). A merely mediocre remaining hand is no
+  longer, by itself, a green light to voluntarily lead with playing
+  Rationalization over some other candidate -- exactly what "played
+  badly" looked like: cashing it in early for a marginal hand-quality
+  gamble instead of holding it for the steal, or for the new defensive
+  case below. `rationalizationLowValueHand()` itself is untouched and
+  still consulted -- just no longer HERE: `rationalizationChoices()`
+  above still uses it (unchanged) to pick the MODE once the bot is going
+  to play Rationalization anyway for some other reason (or is simply
+  forced to, as the last legal card), where a free hand-quality upgrade
+  costs nothing extra either way.
 
   **`rationalizationWouldClinchTheGame()`** (reported live: "Rationalization
   should be saved until it can be used to rotate hands and get the bot
@@ -6746,6 +6762,32 @@ since it already holds that dependency):
   win away from winning the game but not actually in contention to win
   THIS particular round gains nothing from cashing Rationalization in
   early, since it wouldn't have won the round anyway.
+
+  **`rationalizationWouldPreventLosingTheGame()`** (new, reported live:
+  "...or absolutely necessary not to lose a game") -- the defensive
+  mirror of the carve-out above: true only when SOME non-teammate rival
+  group is BOTH (a) one round win (accounting for Corruption's own
+  double-win marker, identically to the offensive check) away from
+  winning the whole GAME outright, AND (b) currently on track to take
+  SOLE highest score this round unless the bot intervenes -- playing
+  Rationalization purely for its own plain value would deny that
+  SPECIFIC rival the round lead it would otherwise have. Checked per
+  RIVAL GROUP rather than reusing `wouldBecomeHighestScore()`'s own
+  single "best rival" figure the offensive check gets away with -- with
+  3+ players, that figure can be driven by a DIFFERENT, non-clinching
+  rival, which would wrongly read "someone merely has more points" as
+  "I'm about to lose the whole game" even when the actually-clinching
+  rival isn't the round's real threat. Needs each active player's own
+  `roundWinsStillNeededToWinGame()` value, not just the acting bot's --
+  `GameService::roundWinsNeededToWinGameForActivePlayers()` computes the
+  full `array<int, int>` (game_player_id => wins still needed) once per
+  bot decision and threads it into `chooseAction()` as a new
+  `$roundWinsNeededToWinGameByPlayerId` parameter, mirrored the same way
+  through `BotPlayerService`'s own `sortPriorityValue()`/`hasGoodReasonToPlayNow()`
+  and `SearchBotPlayerService`'s own `chooseAction()`/`withoutPrematurelyPlayedCards()`
+  as `$roundWinsNeededToWinGame` itself already was. Empty (the default)
+  behaves exactly as it always did before this parameter existed, the
+  same contract that value's own `null` default already established.
 
   **The Tactical Bot (issue #419) was silently exempt from ALL of the
   above until this same fix** (reported live: "I think we made a change

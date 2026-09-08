@@ -31,9 +31,10 @@ use MoodSwings\Rules\RoundScorer;
  * maintainer), which both decide WHICH of Rationalization's two optional
  * modes to commit to (never leaving it unchosen -- a no-op play the way
  * every other unforced-optional-field card here would default to) and
- * deprioritize playing it at all except when doing so pays off (a weak
- * remaining hand, or an overstuffed seat neighbor worth taking cards
- * from), rather than leading with it purely by printed value;
+ * deprioritize playing it at all except when doing so pays off (an
+ * overstuffed seat neighbor worth taking cards from, or playing it for
+ * its own plain value would clinch the whole game or stop a rival from
+ * clinching it), rather than leading with it purely by printed value;
  * cynicismChoices()/sortPriorityValue() again (confirmed by the
  * maintainer), which similarly deprioritize Cynicism unless a cheap
  * discard-pile card is available to boost it for free, the round's own
@@ -413,13 +414,26 @@ final class BotPlayerService
      *     shockHasAGoodReasonToPlayNow()'s own docblock for the other
      *     place it's since been reused (reported live: Shock "except for
      *     when they just need 2 points to win a game").
+     * @param array<int, int> $roundWinsNeededToWinGameByPlayerId the exact
+     *     same "MORE round wins needed to win the whole game" value
+     *     $roundWinsNeededToWinGame above carries for the ACTING bot
+     *     alone, but for every currently active game_player_id in the
+     *     round (teammates share their team's own value, same as
+     *     roundWinsStillNeededToWinGame() itself already returns per
+     *     player) -- see rationalizationWouldPreventLosingTheGame()'s own
+     *     docblock for why Rationalization's defensive "would playing
+     *     this deny a RIVAL the game outright" check needs every rival's
+     *     own value, not just the acting bot's. Empty (the default) means
+     *     "unknown/not applicable," same as $roundWinsNeededToWinGame's
+     *     own null default -- a caller that hasn't been updated to
+     *     compute this simply never triggers that defensive check.
      * @return ?array{card_id: int, choices: array<string, mixed>} null means pass.
      */
-    public function chooseAction(BoardState $state, array $playableCardIds, int $botGamePlayerId, ?int $roundWinsNeededToWinGame = null): ?array
+    public function chooseAction(BoardState $state, array $playableCardIds, int $botGamePlayerId, ?int $roundWinsNeededToWinGame = null, array $roundWinsNeededToWinGameByPlayerId = []): ?array
     {
         usort(
             $playableCardIds,
-            fn (int $a, int $b) => $this->sortPriorityValue($state, $b, $botGamePlayerId, $playableCardIds, $roundWinsNeededToWinGame) <=> $this->sortPriorityValue($state, $a, $botGamePlayerId, $playableCardIds, $roundWinsNeededToWinGame),
+            fn (int $a, int $b) => $this->sortPriorityValue($state, $b, $botGamePlayerId, $playableCardIds, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId) <=> $this->sortPriorityValue($state, $a, $botGamePlayerId, $playableCardIds, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId),
         );
 
         foreach ($playableCardIds as $cardId) {
@@ -779,9 +793,11 @@ final class BotPlayerService
      * rationalizationHasAGoodReasonToPlayNow() says otherwise -- "save it
      * to play last" per the maintainer, so it only actually gets chosen
      * ahead of something else once nothing higher-value is left to play,
-     * UNLESS refreshing a weak hand or stealing an overstuffed neighbor's
-     * hand is worth doing right away. Never a reason to skip playing it
-     * outright, only to deprioritize WHEN -- buildChoicesForCard()'s own
+     * UNLESS stealing an overstuffed neighbor's hand is worth doing right
+     * away, or playing it now for its own plain printed value would
+     * either clinch the whole game or stop a rival from clinching it.
+     * Never a reason to skip playing it outright, only to deprioritize
+     * WHEN -- buildChoicesForCard()'s own
      * rationalizationChoices() always commits to a mode regardless of
      * this ordering.
      *
@@ -927,9 +943,9 @@ final class BotPlayerService
      * otherwise too marginal to lead with blind, unlike most cards'
      * plain-baseValue() default.
      */
-    private function sortPriorityValue(BoardState $state, int $cardId, int $botGamePlayerId, array $playableCardIds, ?int $roundWinsNeededToWinGame = null): int
+    private function sortPriorityValue(BoardState $state, int $cardId, int $botGamePlayerId, array $playableCardIds, ?int $roundWinsNeededToWinGame = null, array $roundWinsNeededToWinGameByPlayerId = []): int
     {
-        if (!$this->hasGoodReasonToPlayNow($state, $cardId, $botGamePlayerId, $playableCardIds, $roundWinsNeededToWinGame)) {
+        if (!$this->hasGoodReasonToPlayNow($state, $cardId, $botGamePlayerId, $playableCardIds, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId)) {
             return PHP_INT_MIN;
         }
 
@@ -960,12 +976,13 @@ final class BotPlayerService
      * card listed here too.
      *
      * @param int[] $playableCardIds
-     * @see chooseAction()'s own docblock for $roundWinsNeededToWinGame.
+     * @see chooseAction()'s own docblock for $roundWinsNeededToWinGame/
+     *     $roundWinsNeededToWinGameByPlayerId.
      */
-    public function hasGoodReasonToPlayNow(BoardState $state, int $cardId, int $botGamePlayerId, array $playableCardIds, ?int $roundWinsNeededToWinGame = null): bool
+    public function hasGoodReasonToPlayNow(BoardState $state, int $cardId, int $botGamePlayerId, array $playableCardIds, ?int $roundWinsNeededToWinGame = null, array $roundWinsNeededToWinGameByPlayerId = []): bool
     {
         $effectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
-        if ($effectKey === 'rationalization' && !$this->rationalizationHasAGoodReasonToPlayNow($state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame)) {
+        if ($effectKey === 'rationalization' && !$this->rationalizationHasAGoodReasonToPlayNow($state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId)) {
             return false;
         }
         if ($effectKey === 'cynicism' && !$this->cynicismHasAGoodReasonToPlayNow($state, $cardId, $botGamePlayerId, $playableCardIds)) {
@@ -1682,27 +1699,35 @@ final class BotPlayerService
      *   wins over a merely-weak hand once both apply at once.
      * - Otherwise 'refresh' (bottom the whole hand, then redraw that
      *   many) once the bot's own remaining hand is weak enough to gamble
-     *   on a fresh draw (rationalizationLowValueHand()).
+     *   on a fresh draw (rationalizationLowValueHand()). Note that a weak
+     *   remaining hand is no longer, by itself, a reason to CHOOSE to
+     *   play Rationalization at all (see rationalizationHasAGoodReasonToPlayNow()'s
+     *   own docblock) -- it only ever decides which MODE to use once the
+     *   bot is playing the card anyway for some other reason (a live
+     *   steal opportunity, a clinch/prevent-losing play for its own
+     *   printed value, or being forced as the last legal card), where a
+     *   free hand-quality upgrade costs nothing extra either way.
      * - Otherwise, decline both modes entirely (an empty choice set --
      *   RationalizationEffect::afterPlaying()'s own `if ($mode === null)
      *   return;` treats this exactly like Guile-style genuine
      *   optionality, no different from any other unforced field
      *   BotChoiceResolver leaves unfilled). This branch is ONLY reached
      *   when the bot is playing Rationalization anyway despite neither
-     *   trigger applying -- forced as the last playable card, or (see
-     *   rationalizationWouldClinchTheGame()) purely for its own printed
-     *   value to close out the game -- and in that situation the bot's
-     *   own remaining hand is, by construction, NOT weak
-     *   (rationalizationLowValueHand() already said so, or it would have
-     *   taken the 'refresh' branch above instead). Reported live: bots
-     *   were "playing it to refresh hands when they have a good hand" --
-     *   this used to unconditionally fall back to 'refresh' here on the
-     *   theory that refresh is "always safe," but that's only true
-     *   because HAND SIZE never changes, not hand QUALITY: bottoming a
-     *   hand that's already above average and redrawing randomly is a
+     *   the steal trigger nor a weak hand applying -- forced as the last
+     *   playable card, or (see rationalizationWouldClinchTheGame()/
+     *   rationalizationWouldPreventLosingTheGame()) purely for its own
+     *   printed value to close out (or avoid losing) the game -- and in
+     *   that situation the bot's own remaining hand is, by construction,
+     *   NOT weak (rationalizationLowValueHand() already said so, or it
+     *   would have taken the 'refresh' branch above instead). Reported
+     *   live: bots were "playing it to refresh hands when they have a
+     *   good hand" -- this used to unconditionally fall back to 'refresh'
+     *   here on the theory that refresh is "always safe," but that's only
+     *   true because HAND SIZE never changes, not hand QUALITY: bottoming
+     *   a hand that's already above average and redrawing randomly is a
      *   pure gamble with negative expected value, not a free action, so
-     *   there is no safe default to fall back to here at all once both
-     *   real triggers have already said no.
+     *   there is no safe default to fall back to here at all once
+     *   nothing above has already said yes.
      *
      * @return array{mode: string}|array{mode: string, direction: string}|array{}
      */
@@ -1775,19 +1800,37 @@ final class BotPlayerService
 
     /**
      * @see hasGoodReasonToPlayNow()'s own docblock for how this is used.
-     * Reported live: "Rationalization should be saved until it can be
-     * used to rotate hands and get the bot at least a 3 card increase in
-     * hand size, it should not be played for points to win a round
-     * unless it's going to win the entire game" -- the first two clauses
-     * are exactly rationalizationLowValueHand()/rationalizationStealDirection()
-     * above (already existing, unchanged); rationalizationWouldClinchTheGame()
-     * below is the third, new clause.
+     * Reported live, twice now: first "Rationalization should be saved
+     * until it can be used to rotate hands and get the bot at least a 3
+     * card increase in hand size, it should not be played for points to
+     * win a round unless it's going to win the entire game" (the steal
+     * clause below, and rationalizationWouldClinchTheGame()); then,
+     * bots still "playing rationalization badly," reworded as
+     * "strengthen the imperative to hold onto it until it is useful to
+     * rotate hands, or absolutely necessary not to lose a game" -- taken
+     * literally as an exhaustive list of the only two acceptable reasons
+     * to play it at all, this DROPS rationalizationLowValueHand() from
+     * this OR-chain entirely: a merely mediocre remaining hand is no
+     * longer, by itself, a green light to voluntarily lead with playing
+     * Rationalization over some other candidate (that's exactly what
+     * "played badly" looked like -- cashing it in early for a marginal
+     * hand-quality gamble instead of holding it for the steal, or for the
+     * new defensive case below). rationalizationLowValueHand() itself is
+     * untouched and still consulted -- just no longer HERE: see
+     * rationalizationChoices()'s own docblock for why it's still exactly
+     * the right signal for MODE selection once the bot is going to play
+     * Rationalization anyway for some other reason (or is simply forced
+     * to, as the last legal card), where a free hand-quality upgrade
+     * costs nothing extra either way.
+     *
+     * @param array<int, int> $roundWinsNeededToWinGameByPlayerId see
+     *     rationalizationWouldPreventLosingTheGame()'s own docblock.
      */
-    private function rationalizationHasAGoodReasonToPlayNow(BoardState $state, int $cardId, int $botGamePlayerId, ?int $roundWinsNeededToWinGame = null): bool
+    private function rationalizationHasAGoodReasonToPlayNow(BoardState $state, int $cardId, int $botGamePlayerId, ?int $roundWinsNeededToWinGame = null, array $roundWinsNeededToWinGameByPlayerId = []): bool
     {
-        return $this->rationalizationLowValueHand($state, $cardId, $botGamePlayerId)
-            || $this->rationalizationStealDirection($state, $botGamePlayerId) !== null
-            || $this->rationalizationWouldClinchTheGame($state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame);
+        return $this->rationalizationStealDirection($state, $botGamePlayerId) !== null
+            || $this->rationalizationWouldClinchTheGame($state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame)
+            || $this->rationalizationWouldPreventLosingTheGame($state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGameByPlayerId);
     }
 
     /**
@@ -1828,6 +1871,93 @@ final class BotPlayerService
         }
 
         return $this->wouldBecomeHighestScore($state, $botGamePlayerId, 0, $this->baseValue($state, $cardId));
+    }
+
+    /**
+     * "Absolutely necessary not to lose a game" -- the defensive mirror
+     * of rationalizationWouldClinchTheGame() above: true only when SOME
+     * non-teammate rival group is BOTH (a) one round win (accounting for
+     * Corruption's own double-win marker, identically to the offensive
+     * check above) away from winning the whole GAME outright, AND (b)
+     * currently on track to take sole highest score THIS round unless the
+     * bot intervenes -- i.e. playing Rationalization purely for its own
+     * plain printed value (no mode, same reasoning as the offensive
+     * check: refresh's hand-swap doesn't change what counts toward this
+     * round's score either way) would deny that SPECIFIC rival the round
+     * lead it would otherwise have. Every other rival group is irrelevant
+     * here even if some of them are also individually ahead of the
+     * bot's own total -- only a rival who is BOTH the round's actual
+     * threat AND one win from ending the whole game creates the "lose
+     * the game THIS round" risk this exists to prevent; the bot's own
+     * intervention against a rival who isn't actually in contention for
+     * the round win gains nothing.
+     *
+     * Deliberately checked PER RIVAL GROUP rather than reusing
+     * wouldBecomeHighestScore()'s own single "best rival" figure the
+     * offensive check above gets away with -- that figure can be driven
+     * by a DIFFERENT, non-clinching rival in a 3+ player game, which
+     * would wrongly treat "some other player merely has more points" as
+     * "I'm about to lose the whole game" even when the actually-clinching
+     * rival isn't the round's real threat at all.
+     *
+     * @param array<int, int> $roundWinsNeededToWinGameByPlayerId
+     *     roundWinsStillNeededToWinGame()'s own per-player value, for
+     *     every currently active game_player_id in the round (not just
+     *     the acting bot's own -- see chooseAction()'s own docblock).
+     *     Empty means "unknown/not applicable," e.g. a caller that
+     *     hasn't been updated to compute every active player's own
+     *     value -- this check simply never fires then, the same
+     *     "behaves exactly as it always did before this parameter
+     *     existed" contract $roundWinsNeededToWinGame's own null default
+     *     already established for the offensive check.
+     */
+    private function rationalizationWouldPreventLosingTheGame(BoardState $state, int $cardId, int $botGamePlayerId, array $roundWinsNeededToWinGameByPlayerId): bool
+    {
+        if ($roundWinsNeededToWinGameByPlayerId === []) {
+            return false;
+        }
+
+        $predictedRoundWinsAwarded = 1;
+        foreach ($state->moodsInPlay() as $mood) {
+            if ($state->effectState($mood->cardId, 'awardsExtraWin')) {
+                $predictedRoundWinsAwarded = 2;
+                break;
+            }
+        }
+
+        $scores = (new RoundScorer())->score($state);
+        $activeIds = $state->activePlayerOrder();
+        $myGroupIds = array_values(array_filter(
+            $activeIds,
+            fn (int $id): bool => $id === $botGamePlayerId || $state->isTeammate($botGamePlayerId, $id),
+        ));
+        $myTotal = array_sum(array_map(fn (int $id) => $scores[$id] ?? 0, $myGroupIds));
+        $myBoostedTotal = $myTotal + $this->baseValue($state, $cardId);
+
+        $groupedRivalIds = [];
+        foreach ($activeIds as $id) {
+            if (in_array($id, $myGroupIds, true) || in_array($id, $groupedRivalIds, true)) {
+                continue;
+            }
+
+            $group = array_values(array_filter(
+                $activeIds,
+                fn (int $other): bool => $other === $id || $state->isTeammate($id, $other),
+            ));
+            $groupedRivalIds = array_merge($groupedRivalIds, $group);
+
+            $groupWinsNeeded = $roundWinsNeededToWinGameByPlayerId[$id] ?? null;
+            if ($groupWinsNeeded === null || $groupWinsNeeded > $predictedRoundWinsAwarded) {
+                continue; // this rival isn't one round win from finishing the whole game
+            }
+
+            $groupTotal = array_sum(array_map(fn (int $gid) => $scores[$gid] ?? 0, $group));
+            if ($myTotal < $groupTotal && $myBoostedTotal >= $groupTotal) {
+                return true; // this specific clinching rival would otherwise take the round (and the game) outright
+            }
+        }
+
+        return false;
     }
 
     /**
