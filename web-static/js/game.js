@@ -6803,18 +6803,38 @@
                 .join(', ');
             el.textContent = 'Single-game match -- ' + scores;
         } else {
-            const opponent = state.players.find((p) => p.game_player_id !== state.you.game_player_id);
-            const opponentUsername = opponent ? opponent.username : 'opponent';
+            // Team/Closed Team (reported live): this match's own
+            // your_wins/opponent_wins are already aggregated per TEAM
+            // (see GameService::gameMatchSummaryFor()), but naming the
+            // opposing side here used to just grab the first seated
+            // player whose game_player_id differed from the viewer's own
+            // -- with no team_id check at all, that could even be the
+            // viewer's OWN teammate, and even when it happened to land on
+            // a genuine opponent, it named only one of the two, as if the
+            // other didn't exist. There's no single "the opponent" for a
+            // team match, so this now says "opponents" (plural, no name)
+            // instead of picking one teammate to stand in for their whole
+            // side -- "you" already carries the same "this whole side",
+            // no-specific-teammate meaning for the viewer's own side.
+            // state.you itself carries no team_id of its own -- looked up
+            // from state.players (which does) the same way renderBoard()'s
+            // own viewerTeamId does, by matching game_player_id.
+            const you = state.players.find((p) => p.game_player_id === state.you.game_player_id);
+            const isTeamFormat = you && you.team_id !== null;
+            const opponentLabel = isTeamFormat
+                ? 'opponents'
+                : (state.players.find((p) => p.game_player_id !== state.you.game_player_id)?.username || 'opponent');
 
             // "<leader> n-m" convention: tied reads as "tied n-n" (no leader
             // to name); otherwise whichever side is ahead is named first --
-            // "you" or the opponent's own username -- with their own win
-            // count first, e.g. "you 2-1"/"Dr Potato 2-1", never "1-2".
+            // "you"/"opponents" (team formats) or the opponent's own
+            // username (every other format) -- with their own win count
+            // first, e.g. "you 2-1"/"Dr Potato 2-1", never "1-2".
             const scoreText = matchState.your_wins === matchState.opponent_wins
                 ? 'tied ' + matchState.your_wins + '-' + matchState.opponent_wins
                 : matchState.your_wins > matchState.opponent_wins
                     ? 'you ' + matchState.your_wins + '-' + matchState.opponent_wins
-                    : opponentUsername + ' ' + matchState.opponent_wins + '-' + matchState.your_wins;
+                    : opponentLabel + ' ' + matchState.opponent_wins + '-' + matchState.your_wins;
 
             el.textContent = 'Best of ' + (matchState.games_to_win * 2 - 1) + ' match, game ' +
                 (state.game.match_game_number || 1) + ', ' + scoreText;

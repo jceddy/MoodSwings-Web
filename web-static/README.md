@@ -2475,7 +2475,19 @@ deck's `cards`.
     exists, regardless of whether the game itself is `waiting`/
     `in_progress`/`completed` -- "Best of 3 match, game N, you lead X-Y"
     (or "tied X-X"/"<opponent> leads Y-X", whichever side is actually
-    ahead). A 3-4 player Quick Draft/Winston Draft/Grid Draft/Rotisserie
+    ahead). For a Team/Closed Team best-of-three (reported live: this
+    line was naming a specific *opponent teammate* when their side led,
+    even though `your_wins`/`opponent_wins` are already aggregated per
+    TEAM, not per player -- worse, since it just grabbed the first
+    `state.players` entry whose `game_player_id` didn't match the
+    viewer's own with no `team_id` check at all, it could even land on
+    the viewer's OWN teammate), the trailing side is named "opponents"
+    (plural, no specific name) instead of one teammate standing in for
+    the whole side -- "you" already carries that same whole-side, no-
+    specific-teammate meaning for the viewer's own side, so this just
+    makes the wording symmetric. Every other format (`duel`/2-player
+    `standard`, where `player.team_id` is `null`) is unaffected and still
+    names the genuine lone opponent by username. A 3-4 player Quick Draft/Winston Draft/Grid Draft/Rotisserie
     Draft match (issue #189, always single-game -- `games_to_win` is 1)
     has more than one rival to show a score for, so it branches on
     `draftState.players.length > 2` instead and builds its text from
