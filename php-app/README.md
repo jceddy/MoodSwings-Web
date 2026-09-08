@@ -90,7 +90,8 @@ HTML maintenance page) — see "Maintenance mode" below.
 | GET    | `/games/export` | query param `game_id`                                             | Requires auth; `403` if you're not seated in that game -- deliberately narrower than `/games/log` above (no spectator path), since this is a personal offline archive rather than a shareable view. A raw, complete dump of every row related to this game (issue #99), across every table with any FK relationship to `games.id` -- not the curated, human-readable view `/games/log` already provides. Returns `{"export": {...}}`; see `GameService::exportGameData()` and "Download complete game data" below for the full shape. |
 | POST   | `/games/start`  | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. Deals hands and begins round 1. `409` if the game isn't `waiting` or has fewer than 2 seated players. |
 | POST   | `/games/play`   | `{"game_id", "card_id", "choices"?}`                              | Requires auth; `403` if you're not seated in that game. `choices` is an opaque object passed straight through to the rules engine — its shape (a target player id, a discard, a mode string, etc.) is entirely card-specific; see `src/Rules/PlayerChoices.php` and `CardChoiceSchema` below. `400` on an invalid/missing choice for that card, `409` if it's not your turn, a decision is already pending, this round's own Chaos Draft offer is still unresolved for ANY seated player (see "Chaos Draft" below), or the play is otherwise illegal. Returns `{"round_scored", "game_completed", "winner_game_player_id"?}`, or `{"pending_decision": true}` if the play now needs another player's own answer before it can finish — see `RequiresOpponentDecision` below. |
-| POST   | `/games/pass`   | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. `409` if it's not your turn, a decision is pending, or this round's own Chaos Draft offer is still unresolved for ANY seated player (see "Chaos Draft" below). Same return shape as `/games/play`. |
+| POST   | `/games/pass`   | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. `409` if it's not your turn, a decision is pending, this round's own Chaos Draft offer is still unresolved for ANY seated player (see "Chaos Draft" below), or your own turn is still gated behind "Pause at the start of your turn" below. Same return shape as `/games/play`. |
+| POST   | `/games/advance-turn` | `{"game_id"}`                                               | Requires auth; `403` if you're not seated in that game. `409` if it's not your turn. Clears `round.turn_pending_acknowledgment` for your own current turn (a no-op if it's already clear) -- the only way to unlock `/games/play`/`/games/pass` once "Pause at the start of your turn" has gated them. Same return shape as `/games/pass`. See "Pause at the start of your turn" below. |
 | POST   | `/games/respond` | `{"game_id", "choices"}`                                        | Requires auth; `403` if you're not seated in that game. Answers the one outstanding pending decision targeting you (see `round.pending_decision` in `/games/state`). `409` if you have no decision pending in that game. `400` on an invalid answer. Returns `{"pending_decision": true}` if the batch has other targets still waiting (or a Duplicity repeat of the same card also needs an answer), otherwise the same `{"round_scored", "game_completed", ...}` shape as `/games/play`. |
 | POST   | `/games/resign` | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. `409` if the game isn't `in_progress` (unless it's a `quick_draft`/`winston_draft`/`grid_draft` match still `'waiting'` through drafting/deck-building -- see "Resigning from a draft match" below), you've already resigned, or a decision is pending. Gives up instead of playing the game/draft out -- see "Resigning" below. Returns `{"round_scored": false, "game_completed", "winner_game_player_id"?}`. |
 | GET    | `/games/notes`  | query param `game_id`                                             | Requires auth; `403` if you're not seated in that game. Returns `{"note_text"}` -- your own private note for that seat (issue #258), `""` if you've never saved one. Always readable, regardless of the game's status. See "In-game notepad" below. |
@@ -108,6 +109,7 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/user/default-selections-mode-preference` | `{"default_selections_mode_preference": bool}`          | Requires auth. Sets your own personal default for the New Game dialog's default-selections-mode checkbox (Settings dialog's "Game defaults" section) -- write-only, since the current value already rides on `GET /me`'s own user object. Distinct from `default_selections_mode` itself, the actual per-game setting `POST /games` accepts -- this only controls that checkbox's initial state, and has no effect on any already-created game. `400` if `default_selections_mode_preference` is missing. See "Default selections mode" below. |
 | POST   | `/user/auto-pass-on-empty-hand-preference` | `{"auto_pass_on_empty_hand": bool}`                     | Requires auth. Opts you in/out of automatically passing whenever it's your turn and your hand is empty (Settings dialog's "Game defaults" section, defaults `true`) -- write-only, since the current value already rides on `GET /me`'s own user object. `400` if `auto_pass_on_empty_hand` is missing. See "Auto-pass on empty hand" below. |
 | POST   | `/user/auto-apply-scoring-bonuses-preference` | `{"auto_apply_scoring_bonuses": bool}`               | Requires auth. Opts you in/out of automatically applying Enthusiasm's/Passion's own obviously-correct per-round scoring bonus (Settings dialog's "Game defaults" section, defaults `true`) -- write-only, since the current value already rides on `GET /me`'s own user object. `400` if `auto_apply_scoring_bonuses` is missing. See "Auto-apply scoring bonuses" below. |
+| POST   | `/user/pause-before-own-turn-preference` | `{"pause_before_own_turn": bool}`                         | Requires auth. Opts you in/out of gating every one of your own turns behind an explicit "Advance Turn" click (Settings dialog's "Game defaults" section, defaults `false` -- an explicit opt-IN, unlike the two auto-* preferences above) -- write-only, since the current value already rides on `GET /me`'s own user object. `400` if `pause_before_own_turn` is missing. See "Pause at the start of your turn" below. |
 | POST   | `/user/board-layout-preference` | `{"board_layout_preference": "above_play_area"\|"below_hand"}` | Requires auth. Chooses where the board's Round/Score/Players section renders (Settings dialog's own "Display" section, defaults `"above_play_area"`) -- write-only, since the current value already rides on `GET /me`'s own user object. `400` if `board_layout_preference` is missing or isn't one of those two exact strings. See "Board layout preference" below. |
 | POST   | `/user/allow-custom-content-preference` | `{"allow_custom_content": bool}`                | Requires auth. Opts you in/out of seeing/joining `chaos_draft` games (Settings dialog's "Game defaults" section, defaults `false` -- an explicit opt-IN, unlike the two auto-* preferences above) -- write-only, since the current value already rides on `GET /me`'s own user object. `400` if `allow_custom_content` is missing. See "Custom card/effect formats preference" below. |
 | POST   | `/user/matchmaking-discoverable-preference` | `{"matchmaking_discoverable": bool}`        | Requires auth. Opts you in/out of having your own open game listings (issue #116) shown to strangers browsing the open lobby (Settings dialog's "Game defaults" section, defaults `false` -- an explicit opt-IN) -- write-only, same reasoning as `allow-custom-content-preference` above. `400` if `matchmaking_discoverable` is missing. See "Open lobby matchmaking" below. |
@@ -8653,6 +8655,118 @@ other per-card exception in this codebase (Fury's veto, Harmony's
 empty-discard-pile deprioritization, Anger's own targeting policy) is
 hardcoded to that specific card rather than built out for a need that
 doesn't exist yet.
+
+### Pause at the start of your turn
+
+Reported live: "add a user setting to pause at the end of turn - if the
+user has this setting enabled, then a game should not advance to that
+user's turn, until they click an 'advance turn' button - this is to
+allow users to more clearly see what happened during a previous turn
+before/after scoring effects happen - sometimes even with the log text
+available it is difficult to figure out for many users."
+
+A personal preference (`users.pause_before_own_turn`, migration `0263`,
+defaults to `0`/off -- unlike auto-pass-on-empty-hand's/auto-apply-
+scoring-bonuses' own default-on "pure convenience," this deliberately
+ADDS a click before every one of this player's own turns, so it's an
+explicit opt-in). Surfaced in the Settings dialog's own "Game defaults"
+section (`#settings-pause-before-turn-checkbox`, alongside the two
+auto-* preferences above) and written via `POST
+/user/pause-before-own-turn-preference` (see the API table above), the
+same write-only, no-separate-GET pattern every other personal preference
+here already uses.
+
+**The gate applies to EVERY turn handoff, not just a round-to-round
+one** -- the report's own "before/after scoring effects happen" example
+is the highest-value case (a new round's own opening board state is the
+easiest to lose track of how it got there), but a plain mid-round
+pass-the-turn from one player to the next gets the exact same treatment.
+Both funnel through the one place that already knew, and already acted
+on, the instant a turn genuinely starts: `GameService::
+notifyItsYourTurn()` -- previously only the source of the "your turn"
+push/Discord notification (see "Browser push notifications"/"Discord"
+above), reached from exactly two shapes of call site, both meaning "a
+NEW player just became the current turn holder, for real":
+
+- `updateRoundTurnState()`'s own `$previousPlayerId !== $playerId` gate
+  -- an ordinary same-round turn advance (`advanceTurn()`) or a Team
+  Play turn unfreezing (`unfreezeRoundForTeamPlayer()`).
+- A brand new round's own `current_turn_game_player_id`, set directly at
+  `INSERT` time by `finishScoringAndAdvance()` (and its Team Play/Awe-
+  skip-scoring counterparts) once a round's just been scored, or by
+  `startGame()` for round 1 of a fresh game -- these don't go through
+  `updateRoundTurnState()` at all (there's no existing row to `UPDATE`
+  yet), so each already called `notifyItsYourTurn()` directly for the
+  exact same "well, SOMEONE'S turn just started" reason.
+
+`notifyItsYourTurn()` now also checks the new turn holder's own
+`pause_before_own_turn`, and if it's on, sets a new
+`game_rounds.turn_pending_acknowledgment` flag (public -- visible to
+spectators/other players too via `round.turn_pending_acknowledgment`,
+the same as `current_turn_game_player_id` itself already is) alongside
+sending the push/Discord notification, completely independently of it
+(the notification still fires regardless of this preference, and this
+flag gets set regardless of whether push notifications are even
+configured).
+
+**Enforced server-side, not just hidden client-side** -- a new
+`assertTurnAcknowledged()` check (mirroring `assertNoPendingDecision()`'s
+own shape) runs in both `GameService::playMood()` and `pass()`, right
+alongside that existing pending-decision gate, and throws a
+`GameStateException` if `turn_pending_acknowledgment` is still set. A
+well-behaved client never actually reaches this (see below), but the
+block is real regardless of what the client shows. The only way to
+clear it is the new `GameService::acknowledgeTurnStart($gameId,
+$gamePlayerId)` (`POST /games/advance-turn`) -- deliberately NOT named
+`advanceTurn()`, the existing PRIVATE method that ROTATES the round to
+the NEXT player once someone's finished acting; this method never
+changes whose turn it is, only whether the CURRENT turn holder's own
+client may act on it yet. Rejects anyone who isn't actually the round's
+current turn holder, the same `GameStateException` `playMood()`/`pass()`
+themselves throw for the same reason; idempotent otherwise (a no-op,
+not an error, if the flag's already clear -- a double-clicked button or
+a stale poll racing a second request).
+
+**`advanceAutomatedTurns()` respects the same gate** -- a new check,
+`if ($round['turn_pending_acknowledgment']) { break; }`, sits right
+alongside the existing Chaos Draft round-offer gate, stopping the
+automated-turn loop cold the instant it reaches a pending turn, before
+even checking whether that seat belongs to a bot (it never will --
+see below) or an opted-in auto-pass player. This is what makes
+**pausing take priority over auto-pass-on-empty-hand** even for the
+SAME player who opted into both: reported live and confirmed by design,
+someone with an empty hand who's paused still gets a chance to see what
+just happened before they're auto-passed out of a turn they never had a
+real decision in anyway -- the auto-pass only actually fires on the
+NEXT `advanceAutomatedTurns()` call, once `acknowledgeTurnStart()` has
+cleared the flag. A bot's own `users` row can never actually have
+`pause_before_own_turn` set (no UI a bot could ever use to turn it on),
+so this check never fires for a bot seat in practice -- it only ever
+holds up a real, opted-in human's own turn.
+
+**Frontend**: `GET /games/state`'s own `round.turn_pending_acknowledgment`
+(public) and `you.turn_pending_acknowledgment` (only ever `true` for the
+actual current turn holder, deliberately kept separate from
+`is_your_turn` itself -- see `GameService::buildGameState()`'s own
+comment -- so `is_your_turn` keeps meaning exactly what it always has,
+and every existing consumer of it keeps working unchanged) drive a new
+`#turn-pending-acknowledgment-banner` ("It's your turn. Review what just
+happened, then continue when you're ready." plus an `#advance-turn-button`),
+shown only while `you.turn_pending_acknowledgment` is `true`. Clicking it
+calls `POST /games/advance-turn` then re-polls, same "let `renderBoard()`
+recompute visibility" pattern the Pass button's own click handler uses.
+`passButtonCanAct()` (gating both the Pass button and every hand card's
+own clickability -- see "Practice bots" above for `canAct`'s reach) and
+the play-grants-remaining indicator both additionally require
+`!turn_pending_acknowledgment`, so nothing in the ordinary turn UI is
+actually usable until the gate clears -- the player can still see
+everything on the board (their own hand, in-play moods, the discard
+pile, scoring effects/log) while paused, exactly the point; only the
+ACTIONABLE affordances are held back. A spectator/other player sees
+`" — <name>'s turn (reviewing)"` in the round status line instead of a
+separate banner of their own, using the public `round.
+turn_pending_acknowledgment` field -- see `web-static/README.md` for the
+exact rendering.
 
 ### Board layout preference (issue #417)
 

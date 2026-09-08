@@ -4899,6 +4899,7 @@ final class GameService
             $round = $this->currentRound($gameId);
             $roundId = (int) $round['id'];
             $this->assertNoPendingDecision($roundId);
+            $this->assertTurnAcknowledged($round);
             $this->assertChaosDraftOfferResolved($gameId, $this->fetchGame($gameId), $round);
 
             $state = $this->boardStates->load($gameId);
@@ -4955,6 +4956,7 @@ final class GameService
         $result = $this->withGameLock($gameId, function () use ($gameId, $gamePlayerId, $automated): array {
             $round = $this->currentRound($gameId);
             $this->assertNoPendingDecision((int) $round['id']);
+            $this->assertTurnAcknowledged($round);
             $this->assertChaosDraftOfferResolved($gameId, $this->fetchGame($gameId), $round);
 
             if ((int) $round['current_turn_game_player_id'] !== $gamePlayerId) {
@@ -4970,6 +4972,49 @@ final class GameService
         $this->clearQueuedNotificationForGamePlayer($gameId, $gamePlayerId);
 
         return $result;
+    }
+
+    /**
+     * "Pause at the start of your turn" (users.pause_before_own_turn,
+     * reported live: "add a user setting to pause at the end of turn -
+     * if the user has this setting enabled, then a game should not
+     * advance to that user's turn, until they click an 'advance turn'
+     * button - this is to allow users to more clearly see what happened
+     * during a previous turn before/after scoring effects happen"). The
+     * only way to clear $gameId's own current round's
+     * turn_pending_acknowledgment flag (set by notifyItsYourTurn() the
+     * moment it became $gamePlayerId's turn) -- assertTurnAcknowledged()
+     * is what actually enforces the block on playMood()/pass() until
+     * this runs. Deliberately NOT named advanceTurn() -- the existing
+     * PRIVATE method by that name rotates the round to the NEXT player
+     * once the current one has finished acting; this method never
+     * changes whose turn it is, only whether the CURRENT turn holder's
+     * own client may act on it yet.
+     *
+     * Idempotent (a no-op if the flag is already clear, e.g. a
+     * double-clicked button or a stale poll racing a second request) and
+     * rejects anyone who isn't actually the round's current turn holder,
+     * the same as playMood()/pass() themselves.
+     *
+     * @return array{round_scored: bool, game_completed: bool}
+     */
+    public function acknowledgeTurnStart(int $gameId, int $gamePlayerId): array
+    {
+        return $this->withGameLock($gameId, function () use ($gameId, $gamePlayerId): array {
+            $round = $this->currentRound($gameId);
+
+            if ((int) $round['current_turn_game_player_id'] !== $gamePlayerId) {
+                throw new GameStateException("It is not player {$gamePlayerId}'s turn");
+            }
+
+            if ((bool) $round['turn_pending_acknowledgment']) {
+                Connection::get()
+                    ->prepare('UPDATE game_rounds SET turn_pending_acknowledgment = 0 WHERE id = :round_id')
+                    ->execute(['round_id' => (int) $round['id']]);
+            }
+
+            return ['round_scored' => false, 'game_completed' => false];
+        });
     }
 
     /**
@@ -5279,6 +5324,23 @@ final class GameService
             // escape uncaught, so this is treated the same as any other
             // "waiting on a real player" case already in this loop.
             if ($this->chaosDraftRoundOffersBlockPlay($gameId, $this->fetchGame($gameId), $round)) {
+                break;
+            }
+
+            // "Pause at the start of your turn" (reported live): a real
+            // player who opted into users.pause_before_own_turn has this
+            // set the instant notifyItsYourTurn() hands them the turn --
+            // assertTurnAcknowledged() blocks playMood()/pass() until
+            // they click "Advance Turn" (POST /games/advance-turn ->
+            // acknowledgeTurnStart()), so nothing automated may act for
+            // them either in the meantime. A bot's own users row can
+            // never have this preference on (see notifyItsYourTurn()'s
+            // own docblock), so this never actually fires for
+            // $tacticalBotGamePlayerIds/$botGamePlayerIds below -- it
+            // only ever stops a real, opted-in human's own turn from
+            // being silently auto-passed (see $autoPassGamePlayerIds
+            // further down) before they've had a chance to see it.
+            if ((bool) $round['turn_pending_acknowledgment']) {
                 break;
             }
 
@@ -14152,6 +14214,14 @@ final class GameService
                 'round_number' => (int) $roundRow['round_number'],
                 'status' => $roundRow['status'],
                 'current_turn_game_player_id' => $currentTurnGamePlayerId,
+                // "Pause at the start of your turn" (reported live) --
+                // public (visible to spectators/other players too, same
+                // as current_turn_game_player_id above): whether
+                // $currentTurnGamePlayerId's own turn is currently gated
+                // behind their own "Advance Turn" click. See
+                // notifyItsYourTurn()/assertTurnAcknowledged()/
+                // acknowledgeTurnStart().
+                'turn_pending_acknowledgment' => (bool) $roundRow['turn_pending_acknowledgment'],
                 'plays_remaining' => (int) $roundRow['plays_remaining'],
                 'play_grants' => array_map(
                     fn (?array $restriction) => $this->describePlayGrant($restriction, $names),
@@ -14177,7 +14247,19 @@ final class GameService
                 'board_effects' => $this->boardEffectEntries($state, $names, $playerNames),
             ];
             if ($viewerGamePlayerId !== null) {
-                $response['you']['is_your_turn'] = $currentTurnGamePlayerId === $viewerGamePlayerId;
+                $isYourTurn = $currentTurnGamePlayerId === $viewerGamePlayerId;
+                $response['you']['is_your_turn'] = $isYourTurn;
+                // Deliberately kept separate from is_your_turn above
+                // (which still means exactly what it always has -- it
+                // genuinely IS this player's turn) rather than folding
+                // this gate into it, so every existing is_your_turn
+                // consumer keeps working unchanged; the client instead
+                // checks this ALONGSIDE is_your_turn to decide whether to
+                // show the ordinary play/pass UI or the "Advance Turn"
+                // prompt first. Only ever true for the actual current
+                // turn holder -- see 'turn_pending_acknowledgment' above
+                // for the same flag visible to every other viewer.
+                $response['you']['turn_pending_acknowledgment'] = $isYourTurn && (bool) $roundRow['turn_pending_acknowledgment'];
             }
         }
 
@@ -16468,21 +16550,46 @@ final class GameService
         }
     }
 
+    /**
+     * The single existing "it just became $gamePlayerId's turn" hook --
+     * every one of this class's own call sites reaches here exactly once
+     * per genuine turn handoff (an ordinary mid-round pass-the-turn via
+     * updateRoundTurnState()'s own $previousPlayerId !== $playerId gate,
+     * or a brand new round's own current_turn_game_player_id set fresh
+     * at INSERT time), never for a same-player re-save. That makes this
+     * the correct, single place to also drive "pause at the start of
+     * your turn" (reported live: "a game should not advance to that
+     * user's turn, until they click an 'advance turn' button... to
+     * allow users to more clearly see what happened during a previous
+     * turn before/after scoring effects happen") -- see
+     * assertTurnAcknowledged()/acknowledgeTurnStart() for the other half
+     * of this feature. A bot's own users row can never actually have
+     * pause_before_own_turn set (no UI a bot could use to turn it on),
+     * so this never needs to special-case a bot seat the way the
+     * automated-turn-advancing loop elsewhere in this class does.
+     */
     private function notifyItsYourTurn(int $roundId, int $gamePlayerId): void
     {
-        if ($this->notifications === null) {
-            return;
-        }
-
         $stmt = Connection::get()->prepare(
-            'SELECT gr.game_id, gp.user_id
+            'SELECT gr.game_id, gp.user_id, u.pause_before_own_turn
              FROM game_rounds gr
              JOIN game_players gp ON gp.id = :game_player_id
+             JOIN users u ON u.id = gp.user_id
              WHERE gr.id = :round_id'
         );
         $stmt->execute(['game_player_id' => $gamePlayerId, 'round_id' => $roundId]);
         $row = $stmt->fetch();
         if ($row === false) {
+            return;
+        }
+
+        if ((bool) $row['pause_before_own_turn']) {
+            Connection::get()
+                ->prepare('UPDATE game_rounds SET turn_pending_acknowledgment = 1 WHERE id = :round_id')
+                ->execute(['round_id' => $roundId]);
+        }
+
+        if ($this->notifications === null) {
             return;
         }
 
@@ -16523,6 +16630,24 @@ final class GameService
 
         if ($stmt->fetchColumn() !== false) {
             throw new GameStateException("Round {$roundId} has a decision still pending -- no one can play or pass until it's answered");
+        }
+    }
+
+    /**
+     * "Pause at the start of your turn" (reported live) -- $round's own
+     * turn_pending_acknowledgment (set by notifyItsYourTurn() the moment
+     * it became the current turn holder's turn, for anyone who opted
+     * into users.pause_before_own_turn) blocks playMood()/pass() the
+     * same way assertNoPendingDecision() above blocks them for an
+     * unrelated reason, until acknowledgeTurnStart() clears it. A
+     * well-behaved client never actually reaches this: it only ever
+     * shows the play/pass UI once GET /games/state's own
+     * you.turn_pending_acknowledgment says the gate is already open.
+     */
+    private function assertTurnAcknowledged(array $round): void
+    {
+        if ((bool) $round['turn_pending_acknowledgment']) {
+            throw new GameStateException("Player {$round['current_turn_game_player_id']} must acknowledge their turn (POST /games/advance-turn) before playing or passing");
         }
     }
 

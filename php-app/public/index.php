@@ -884,6 +884,27 @@ if ($path === '/user/auto-apply-scoring-bonuses-preference' && $method === 'POST
     respond(200, ['status' => 'ok']);
 }
 
+// "Pause at the start of your turn" as a personal preference (Settings
+// dialog's "Game defaults" section) -- see GameService::notifyItsYourTurn()/
+// assertTurnAcknowledged() for the server-side behavior this drives.
+// Current value is already carried on GET /me's own user object, so this
+// route is write-only, same pattern as /user/auto-apply-scoring-bonuses-preference
+// above.
+if ($path === '/user/pause-before-own-turn-preference' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $input = requestBody();
+
+    if (!array_key_exists('pause_before_own_turn', $input)) {
+        respond(400, ['status' => 'error', 'message' => 'pause_before_own_turn is required.']);
+    }
+
+    (new UserRepository())->setPauseBeforeOwnTurn(
+        (int) $currentUser['id'],
+        (bool) $input['pause_before_own_turn']
+    );
+    respond(200, ['status' => 'ok']);
+}
+
 // "Board layout" (issue #417) as a personal preference (Settings dialog's
 // "Display" section) -- 'above_play_area' (default) leaves the
 // Round/Score/Players section exactly where it's always rendered;
@@ -1637,6 +1658,37 @@ if ($path === '/games/pass' && $method === 'POST') {
         }
         respond(200, ['status' => 'ok', ...$result]);
     } catch (GameStateException | IllegalPlayException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+// "Pause at the start of your turn" (reported live): the opted-in
+// player's own way of clearing GameService::notifyItsYourTurn()'s own
+// game_rounds.turn_pending_acknowledgment flag, unlocking the play/pass
+// UI (and the server's own assertTurnAcknowledged() check) for a turn
+// that's already theirs but that they haven't reviewed yet. A no-op if
+// they're not the current turn holder, or if the flag isn't even set
+// (nothing to acknowledge) -- see GameService::acknowledgeTurnStart().
+if ($path === '/games/advance-turn' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $gameId = (int) ($body['game_id'] ?? 0);
+
+    $gamePlayerId = requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    try {
+        $result = $games->acknowledgeTurnStart($gameId, $gamePlayerId);
+        // Practice bots (issue #140)/auto-pass on empty hand -- see the
+        // identical comment on POST /games/play above. Matters here in
+        // particular for an opted-in player whose hand is ALSO empty:
+        // acknowledging is what finally lets their own auto-pass fire,
+        // since assertTurnAcknowledged() blocked it until now.
+        $autoResult = $games->advanceAutomatedTurns($gameId);
+        if ($autoResult !== null) {
+            $result = $autoResult;
+        }
+        respond(200, ['status' => 'ok', ...$result]);
+    } catch (GameStateException $e) {
         respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
     }
 }

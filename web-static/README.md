@@ -1045,6 +1045,66 @@ from a non-opted-in invitee surfaces through the New Game dialog's own
 ordinary `#new-game-error` element, the same as any other creation
 failure.
 
+### Pause at the start of your turn
+
+Reported live: "add a user setting to pause at the end of turn ... so a
+game should not advance to that user's turn, until they click an
+'advance turn' button." `#settings-pause-before-turn-checkbox`, in the
+Settings dialog's "Game defaults" section, right below the
+matchmaking-discoverable checkbox -- unlike auto-pass/auto-apply above,
+this one starts **unchecked** (`users.pause_before_own_turn`, migration
+`0263`, defaults `false`): it deliberately ADDS a click before every one
+of this player's own turns rather than saving one, so it's an explicit
+opt-in. Same "sync on open, save on change" wiring as every other
+Settings checkbox (`POST /user/pause-before-own-turn-preference`,
+`user.pause_before_own_turn`, `savePauseBeforeOwnTurnPreference()`) --
+but unlike auto-pass/auto-apply (which have no client-side effect of
+their own at all, see the Settings dialog bullet above), this preference
+DOES have a real one: see "Pause at the start of your turn" in
+`php-app/README.md` for the full server-side mechanism
+(`GameService::notifyItsYourTurn()`'s own `turn_pending_acknowledgment`
+flag, `assertTurnAcknowledged()`, `acknowledgeTurnStart()`).
+
+**`#turn-pending-acknowledgment-banner`** ("It's your turn. Review what
+just happened, then continue when you're ready." plus an
+`#advance-turn-button`) is a new fixed-at-the-top banner, sitting just
+before `#pending-decision-banner` in `board-view` (deliberately BEFORE
+it, not after -- `applyBoardLayoutPreference()`'s own
+`pendingDecisionBanner.insertAdjacentElement('afterend', boardStatusGroup)`
+call anchors `#board-status-group` to `#pending-decision-banner`
+specifically, so a banner placed between them would get relocated along
+with that group instead of staying put with the others). `renderBoard()`
+shows it exactly when `state.you.turn_pending_acknowledgment` is `true`
+(only ever true for the actual current turn holder -- everyone else
+always sees `false`). Its own click handler calls `POST
+/games/advance-turn` (`advanceTurn()` in `js/app.js`) then
+`refreshBoard()`, the identical "disable immediately, re-enable only on
+failure, let the next render recompute visibility" pattern the Pass
+button's own click handler already uses right above it.
+
+**Every other turn-UI gate now also checks it**: `passButtonCanAct()`
+(gating the Pass button AND every hand card's own clickability) requires
+`!currentState.you.turn_pending_acknowledgment` alongside its existing
+`is_your_turn` check, and the play-grants-remaining indicator
+(`#play-grants-details`) requires the same before showing itself. Both
+deliberately compute a shared `yourTurnReady`/equivalent check rather
+than only gating on `is_your_turn` -- that field is left meaning exactly
+what it always has (see `GameService::buildGameState()`'s own comment on
+why the two are kept separate), so nothing about visibility -- the
+player's own hand, in-play moods, the discard pile, scoring effects,
+the log -- changes while paused; only the ACTIONABLE affordances are
+held back, which is the entire point (they can still see everything
+that just happened, just can't act on it yet).
+
+**Onlookers get a text hint, not a banner of their own**: a
+spectator's/other player's own `#board-round-status` line reads
+`"Round N — <name>'s turn (reviewing)"` instead of the plain `"...'s
+turn"` whenever `state.round.turn_pending_acknowledgment` (public, sent
+to every viewer the same way `current_turn_game_player_id` itself
+already is) is `true` -- so the game doesn't just look stalled to
+someone else at the table while the current turn holder reviews what
+happened.
+
 ### Open lobby matchmaking (issue #116)
 
 An alternative to naming specific friend opponents: the New Game

@@ -335,6 +335,20 @@
             saveAutoApplyScoringBonusesPreference(autoApplyScoringBonusesCheckbox.checked);
         });
 
+        // "Pause at the start of your turn" (reported live) -- same
+        // wiring pattern as the two checkboxes above, another purely
+        // server-side behavior (GameService::notifyItsYourTurn()'s own
+        // turn_pending_acknowledgment gate). Starts UNCHECKED (off) by
+        // default, matching users.pause_before_own_turn's own DEFAULT 0
+        // -- unlike auto-pass/auto-apply above, this adds a click rather
+        // than saving one, so it's an explicit opt-in.
+        const pauseBeforeTurnCheckbox = document.getElementById('settings-pause-before-turn-checkbox');
+        pauseBeforeTurnCheckbox.checked = user.pause_before_own_turn;
+        pauseBeforeTurnCheckbox.addEventListener('change', () => {
+            user.pause_before_own_turn = pauseBeforeTurnCheckbox.checked;
+            savePauseBeforeOwnTurnPreference(pauseBeforeTurnCheckbox.checked);
+        });
+
         // "Custom card/effect formats" (issue #405 follow-up) -- same
         // wiring pattern as the checkboxes above, except this one starts
         // UNCHECKED (off) by default, matching users.allow_custom_content's
@@ -5880,8 +5894,16 @@
                     (p) => p.game_player_id === state.round.current_turn_game_player_id
                 );
                 turnSuffix = currentTurnPlayer ? " — " + currentTurnPlayer.username + "'s turn" : '';
+                // "Pause at the start of your turn" (reported live) --
+                // state.round.turn_pending_acknowledgment is public (see
+                // GameService::buildGameState()), so an onlooker can tell
+                // why nothing is happening yet instead of it just looking
+                // stalled.
+                if (currentTurnPlayer && state.round.turn_pending_acknowledgment) {
+                    turnSuffix += ' (reviewing)';
+                }
             } else if (state.you.is_your_turn) {
-                turnSuffix = ' — your turn';
+                turnSuffix = state.you.turn_pending_acknowledgment ? ' — your turn (click Advance Turn to continue)' : ' — your turn';
             }
             // Issue #419's own Tactical Bot tier: while its background
             // search job is still running, state.bot_thinking (see
@@ -5908,6 +5930,13 @@
                 boardRoundStatusEl.textContent = 'Round ' + state.round.round_number + turnSuffix;
             }
         }
+
+        // "Pause at the start of your turn" (reported live) -- only ever
+        // true for the actual current turn holder (see GameService::
+        // buildGameState()'s own you.turn_pending_acknowledgment), so
+        // this never shows for a spectator or for someone else's turn.
+        document.getElementById('turn-pending-acknowledgment-banner').hidden =
+            state.game.status !== 'in_progress' || !state.you.turn_pending_acknowledgment;
 
         const pendingDecision = state.round && state.round.pending_decision;
         renderPendingDecision(pendingDecision);
@@ -6024,9 +6053,14 @@
         // the viewer specifically -- showing it while it's someone else's
         // turn would read as "you have a play left" when you don't, so the
         // whole indicator stays hidden until it's actually your turn.
+        // Also stays hidden while turn_pending_acknowledgment gates it
+        // (see "Pause at the start of your turn") -- nothing here can
+        // actually be spent yet, so surfacing it early would be
+        // misleading, not just premature.
+        const yourTurnReady = state.you.is_your_turn && !state.you.turn_pending_acknowledgment;
         const playGrantsDetails = document.getElementById('play-grants-details');
-        playGrantsDetails.hidden = !state.you.is_your_turn;
-        const playGrants = (state.you.is_your_turn && state.round && state.round.play_grants) || [];
+        playGrantsDetails.hidden = !yourTurnReady;
+        const playGrants = (yourTurnReady && state.round && state.round.play_grants) || [];
         document.getElementById('plays-remaining-count').textContent = playGrants.length;
         renderList(
             document.getElementById('play-grants-list'),
@@ -6318,7 +6352,12 @@
             return false;
         }
         const pendingDecision = Boolean(currentState.round && currentState.round.pending_decision);
-        return !isReadOnlyView() && currentState.game.status === 'in_progress' && currentState.you.is_your_turn && !pendingDecision && !chaosDraftOfferOpenForViewer && chaosDraftRoundReady;
+        // "Pause at the start of your turn" (reported live): turn_pending_
+        // acknowledgment gates play/pass the same way a pending decision
+        // does, until the viewer clicks "Advance Turn" (see
+        // #turn-pending-acknowledgment-banner) -- GameService::
+        // assertTurnAcknowledged() enforces this same block server-side.
+        return !isReadOnlyView() && currentState.game.status === 'in_progress' && currentState.you.is_your_turn && !currentState.you.turn_pending_acknowledgment && !pendingDecision && !chaosDraftOfferOpenForViewer && chaosDraftRoundReady;
     }
 
     // Applies passButtonCanAct() to the DOM immediately -- called both
@@ -8102,6 +8141,29 @@
         choicesPanel.hidden = true;
         announceOutcome(body);
         await refreshBoard();
+    });
+
+    // "Pause at the start of your turn" (reported live) -- clears
+    // turn_pending_acknowledgment for the viewer, the only thing this
+    // button ever does; #turn-pending-acknowledgment-banner itself hides
+    // again once refreshBoard() below picks up the change, the same
+    // "let renderBoard() recompute visibility" pattern the pass button's
+    // own click handler above uses.
+    document.getElementById('advance-turn-button').addEventListener('click', async () => {
+        boardError.hidden = true;
+        boardMessage.hidden = true;
+        const advanceTurnButton = document.getElementById('advance-turn-button');
+        advanceTurnButton.disabled = true;
+        const { ok, body } = await advanceTurn(currentGameId);
+        if (!ok) {
+            boardError.textContent = body.message || 'Could not advance turn.';
+            boardError.hidden = false;
+            advanceTurnButton.disabled = false;
+            return;
+        }
+        announceOutcome(body);
+        await refreshBoard();
+        advanceTurnButton.disabled = false;
     });
 
     document.getElementById('resign-button').addEventListener('click', async () => {

@@ -340,6 +340,22 @@ function saveAutoApplyScoringBonusesPreference(autoApplyScoringBonuses) {
     });
 }
 
+// "Pause at the start of your turn" as a personal preference (Settings
+// dialog's "Game defaults" section) -- write-only, same reasoning as
+// saveAutoApplyScoringBonusesPreference() above: the current value
+// already rides on getCurrentUser()'s own user.pause_before_own_turn
+// field. Drives GameService::notifyItsYourTurn()'s own server-side
+// behavior entirely -- there's no client-side effect to apply beyond
+// persisting it (the "Advance Turn" banner itself reacts to
+// state.you.turn_pending_acknowledgment on the next poll, not to this
+// preference directly).
+function savePauseBeforeOwnTurnPreference(pauseBeforeOwnTurn) {
+    return apiRequest('/user/pause-before-own-turn-preference', {
+        method: 'POST',
+        body: JSON.stringify({ pause_before_own_turn: pauseBeforeOwnTurn }),
+    });
+}
+
 // Board layout (issue #417) as a personal preference (Settings dialog's
 // "Display" section) -- write-only, same reasoning as
 // saveAutoApplyScoringBonusesPreference() above: the current value
@@ -669,6 +685,16 @@ function playCard(gameId, cardId, choices) {
 
 function passTurn(gameId) {
     return apiRequest('/games/pass', {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId }),
+    });
+}
+
+// "Pause at the start of your turn" (reported live) -- clears the
+// current round's own turn_pending_acknowledgment flag for the caller,
+// unlocking their play/pass UI. See GameService::acknowledgeTurnStart().
+function advanceTurn(gameId) {
+    return apiRequest('/games/advance-turn', {
         method: 'POST',
         body: JSON.stringify({ game_id: gameId }),
     });
