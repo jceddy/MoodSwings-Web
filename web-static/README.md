@@ -3763,6 +3763,20 @@ deck's `cards`.
     completed/abandoned game's read-only chat can't be worked around by
     clicking GG instead of typing it.
 
+    **Narrower emoji buttons on mobile** (reported live: one of the seven
+    quick-chat buttons was still wrapping to a second row on a narrow
+    phone). The five single-emoji buttons (everything but GL;HF/GG) carry
+    a `.quick-chat-emoji` class; under the existing `@media (max-width:
+    600px)` breakpoint in `style.css`, that class gets tighter side
+    padding (0.15rem, down from the row's own 0.5rem/0.4rem tiers) and
+    `#game-chat-quick-buttons` itself gets a tighter gap (0.25rem, down
+    from 0.4rem) -- GL;HF/GG keep their own wider padding (already close
+    to their text's own width) since only the emoji buttons had padding
+    to spare. Verified against a real 375px-wide layout (all 7 buttons
+    fit on one row after, versus 2 rows -- the last button wrapping --
+    before); desktop widths are unaffected, this only applies inside the
+    existing mobile breakpoint.
+
     **Duplicate-message guard.** Users reported seeing the same chat
     message sent twice -- traced to a rapid double-click on Send (or
     double-Enter in the input, or a quick-chat button clicked while Send
