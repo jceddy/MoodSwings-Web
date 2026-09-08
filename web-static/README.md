@@ -2155,13 +2155,15 @@ deck's `cards`.
     `getState()` never populates `teammate_hand` for that format at all
     (hands stay private between teammates -- see "Closed Team Play" in
     `php-app/README.md`). Its own static position in `index.html` sits
-    right after `#choices-panel` below (reported live: "in open team
-    games, can we move teammate's hand under the card to play div that
-    opens when you click a playable card?") -- moved there from its
-    original spot right after `#your-hand-section`/`#spectator-final-hands-section`,
-    a pure DOM reorder with no changes to `renderTeammateHand()` itself,
-    which only ever looks the section up by id regardless of where it
-    sits on the page. A `#team-decision-panel` (`renderTeamDecision()`, reading
+    right after `#pending-decision-panel` below (reported live: "in open
+    team games, can we move teammate's hand under the card to play div
+    that opens when you click a playable card?", then "let's move the
+    pending decisions panel above the teammate's hand panel, as well") --
+    moved there in two steps from its original spot right after
+    `#your-hand-section`/`#spectator-final-hands-section`, each a pure DOM
+    reorder with no changes to `renderTeammateHand()` itself, which only
+    ever looks the section up by id regardless of where it sits on the
+    page. A `#team-decision-panel` (`renderTeamDecision()`, reading
     `state.team_decision`, `null` unless a `game_team_decisions` row is
     open) shows either a row of candidate buttons (`can_propose`, calling
     `proposeTeamDecision()`) or an Approve/Reject pair (`can_confirm`,
