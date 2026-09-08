@@ -1439,9 +1439,14 @@ final class BotPlayerServiceTest extends TestCase
 
     /**
      * With more than one card in the discard pile and nothing in play
-     * that depends on it, Nostalgia targets the HIGHEST-baseValue()
-     * discard card (Chaos, id 85, value 6) over the lower-value one
-     * (Apathy, id 55, value 4) -- confirmed by the maintainer.
+     * that depends on it, Nostalgia targets the highest-ranked discard
+     * card by draftPriorityRank() -- Chaos (id 85) and Apathy (id 55)
+     * both sit at the catalog's own default tier-1 draft_priority_score,
+     * so this is actually a baseValue() tiebreak within that shared
+     * tier (Chaos, value 6, over Apathy, value 4), not proof that draft
+     * priority itself is driving the choice -- see
+     * testChooseActionTargetsTheHighestDraftPriorityDiscardCardOverAHigherPrintedValueOne
+     * below for that.
      */
     public function testChooseActionTargetsTheHighestValueDiscardCardWhenPlayingNostalgia(): void
     {
@@ -1457,6 +1462,35 @@ final class BotPlayerServiceTest extends TestCase
 
         self::assertSame(128, $action['card_id']);
         self::assertSame(['discard_card_id' => 85], $action['choices']);
+    }
+
+    /**
+     * Reported live: "bots should always choose cards to get back with
+     * Nostalgia in draft pick order." nostalgiaDiscardCardId() previously
+     * ranked candidates by plain printed baseValue() alone, so
+     * Intimidation (id 67, printed value 1, but a top-tier
+     * draft_priority_score of 40) lost outright to Apathy (id 55,
+     * printed value 4, the catalog's own default tier-1
+     * draft_priority_score) -- exactly backwards, since Intimidation is
+     * the far stronger card to actually get back. draftPriorityRank()
+     * now ranks Intimidation's own draft_priority_score of 40 (40000+1)
+     * well above Apathy's tier-1 default (1000+4), so it's the one
+     * picked up instead.
+     */
+    public function testChooseActionTargetsTheHighestDraftPriorityDiscardCardOverAHigherPrintedValueOne(): void
+    {
+        $state = new BoardState(
+            $this->sampleCatalog(),
+            DefaultEffectRegistry::build(),
+            [1, 2],
+            hands: [1 => [128]],
+            discard: [55, 67],
+        );
+
+        $action = $this->bot->chooseAction($state, [128], 1);
+
+        self::assertSame(128, $action['card_id']);
+        self::assertSame(['discard_card_id' => 67], $action['choices']);
     }
 
     /**

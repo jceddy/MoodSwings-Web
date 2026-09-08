@@ -7662,14 +7662,24 @@ since it already holds that dependency):
   REQUIRED (unlike Contempt/Hate's own optional one), so it must still
   supply SOME legal target even then, the same reasoning
   `convictionTargetMoodId()` already documents.
-- **Nostalgia's own discard-pickup targeting** (confirmed by the
-  maintainer), via `nostalgiaDiscardCardId()`: always takes the
-  highest-`baseValue()` card currently in the discard pile when playing
+- **Nostalgia's own discard-pickup targeting** (reported live: "bots
+  should always choose cards to get back with Nostalgia in draft pick
+  order"), via `nostalgiaDiscardCardId()`: always takes the
+  highest-ranked card currently in the discard pile when playing
   Nostalgia, filling its own optional `discard_card_id` field -- unlike
   every other optional field this class leaves unfilled by default (see
   `BotChoiceResolver`'s own docblock), Nostalgia's pickup is a pure
   benefit with no cost, so there's no reason not to take the best
-  available card. The one exception: if the bot already has a Sadness-
+  available card. "Best" is now ranked by `draftPriorityRank()`, a new
+  helper combining `cards.draft_priority_score` (the primary key, same
+  curated ranking `draftCardScore()` uses for drafting, and the same
+  metric `BotChoiceResolver::ownResourceCandidateValue()` already uses
+  for the mirror-image "give up your worst card" decisions) with
+  `baseValue()` as a tiebreaker -- previously it ranked by plain printed
+  `baseValue()` alone, so a low-tier filler card with a merely higher
+  printed value could outrank a genuinely strong recursion target like
+  Intimidation (printed value 1, but a top-tier `draft_priority_score`)
+  for the pickup. The one exception: if the bot already has a Sadness-
   or Wonder-family mood (`DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS` --
   `SadnessEffect` scales its own value +2 per card in the discard pile
   unconditionally, `WonderEffect` scales +2 per in-play mood AND per

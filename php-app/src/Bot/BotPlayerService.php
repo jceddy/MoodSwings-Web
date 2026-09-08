@@ -2675,24 +2675,36 @@ final class BotPlayerService
     }
 
     /**
-     * Nostalgia's own "what to pick up" policy (confirmed by the
-     * maintainer): always take the highest-baseValue() card currently in
-     * the discard pile, UNLESS the bot itself already has a
-     * DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS mood (Sadness, Wonder) in
-     * play right now, in which case null is returned instead -- shrinking
-     * the discard pile it depends on would undo part of the value that
-     * mood is already contributing, so the pickup is skipped entirely
-     * and the discard pile is left alone (Nostalgia's own separate
-     * extra-play grant is unaffected either way -- see
-     * NostalgiaEffect::afterPlaying()). This is purely a TARGETING
-     * policy, distinct from sortPriorityValue()'s own "deprioritize
-     * Nostalgia when the discard pile is completely empty" check above
-     * -- that decides WHETHER/WHEN to lead with playing Nostalgia at
-     * all; this decides what to do with the optional discard_card_id
-     * field once it's actually being played. A Sadness/Wonder-holding
-     * bot can still legally play Nostalgia (e.g. purely for the extra
-     * play), it just never volunteers to empty the discard pile while
-     * doing so.
+     * Nostalgia's own "what to pick up" policy (reported live: "bots
+     * should always choose cards to get back with Nostalgia in draft
+     * pick order"): always take the highest cards.draft_priority_score
+     * card currently in the discard pile -- the same curated ranking
+     * draftCardScore() uses for drafting, and the same metric
+     * BotChoiceResolver::ownResourceCandidateValue() already uses for
+     * the mirror-image "give up your worst card" decisions (Guile/Bliss/
+     * Ambition/Zeal/Dignity-family discards, migration 0259) -- rather
+     * than plain printed baseValue(), which previously let a low-tier
+     * filler card with a merely higher printed value (almost anything)
+     * outrank a genuinely strong recursion target like Intimidation
+     * (printed value 1, but a top-tier draft_priority_score) for the
+     * pickup. Ties within the same draft_priority_score still fall back
+     * to baseValue(), via the shared draftPriorityRank() helper.
+     *
+     * UNLESS the bot itself already has a DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS
+     * mood (Sadness, Wonder) in play right now, in which case null is
+     * returned instead -- shrinking the discard pile it depends on would
+     * undo part of the value that mood is already contributing, so the
+     * pickup is skipped entirely and the discard pile is left alone
+     * (Nostalgia's own separate extra-play grant is unaffected either
+     * way -- see NostalgiaEffect::afterPlaying()). This is purely a
+     * TARGETING policy, distinct from sortPriorityValue()'s own
+     * "deprioritize Nostalgia when the discard pile is completely empty"
+     * check above -- that decides WHETHER/WHEN to lead with playing
+     * Nostalgia at all; this decides what to do with the optional
+     * discard_card_id field once it's actually being played. A
+     * Sadness/Wonder-holding bot can still legally play Nostalgia (e.g.
+     * purely for the extra play), it just never volunteers to empty the
+     * discard pile while doing so.
      *
      * Returns null both when there's a Sadness/Wonder-family mood in
      * play (don't pick up at all) and when the discard pile is simply
@@ -2711,12 +2723,29 @@ final class BotPlayerService
 
         $bestCardId = null;
         foreach ($state->discardPile() as $discardCardId) {
-            if ($bestCardId === null || $this->baseValue($state, $discardCardId) > $this->baseValue($state, $bestCardId)) {
+            if ($bestCardId === null || $this->draftPriorityRank($state, $discardCardId) > $this->draftPriorityRank($state, $bestCardId)) {
                 $bestCardId = $discardCardId;
             }
         }
 
         return $bestCardId;
+    }
+
+    /**
+     * A single sortable rank combining cards.draft_priority_score (the
+     * primary key) with baseValue() (a tiebreaker among cards the
+     * curated draft ranking treats as equally replaceable) -- the same
+     * shape as BotChoiceResolver::ownResourceCandidateValue(), which
+     * ranks candidates the bot is giving UP (lowest wins). This is used
+     * for the mirror-image case, ranking candidates the bot is taking
+     * BACK (highest wins) -- currently just nostalgiaDiscardCardId()
+     * above.
+     */
+    private function draftPriorityRank(BoardState $state, int $cardId): int
+    {
+        $catalogRow = $state->catalogRow($state->effectiveCardId($cardId));
+
+        return $catalogRow['draftPriorityScore'] * 1000 + $catalogRow['baseValue'];
     }
 
     /**
