@@ -17361,6 +17361,265 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertNull($completedState['game_match']['next_game_id'], 'a completed match has no next game to route to');
     }
 
+    // Issue #90 follow-up (reported live: "in non-draft best of 3 formats,
+    // the loser should choose who plays first in the next game") --
+    // extends the draft-family's own setPlayFirstNextMatchGame() fairness
+    // rule to the game_matches wrapper. The following tests mirror
+    // buildQuickDraftMatchAtGameTwoStart()'s own shape and the
+    // testLoserOfPreviousGameCanOptToPlayFirstInNextGame()-style tests
+    // built on it, but for Duel/Traditional (an individual, 2-seat
+    // rematch, driven to completion via resignGame() same as every other
+    // non-draft best-of-three test above) and Team/Closed Team (a
+    // TEAM-scoped rematch -- either losing teammate may answer).
+
+    /** @return array{gameId: int, u1: int, u2: int, nextGameId: int, winnerUserId: int, loserUserId: int} */
+    private function buildDuelBestOfThreeMatchAtGameTwoStart(): array
+    {
+        $u1 = $this->insertUser('bo3-duel-fp-' . uniqid());
+        $u2 = $this->insertUser('bo3-duel-fp-' . uniqid());
+        $gameId = $this->games->createGame($u1, [$u1, $u2], format: 'duel', deckType: 'structure', bestOfThree: true);
+        $this->games->startGame($gameId);
+
+        $gameMatchId = (int) $this->fetchGame($gameId)['game_match_id'];
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $u1)); // u1 resigns -- u2 wins game 1
+
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE game_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $gameMatchId]);
+        $nextGameId = (int) $nextGameStmt->fetchColumn();
+        $this->games->startGame($nextGameId);
+
+        return ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2, 'nextGameId' => $nextGameId, 'winnerUserId' => $u2, 'loserUserId' => $u1];
+    }
+
+    public function testLoserOfNonDraftDuelMatchCanOptToPlayFirstInNextGame(): void
+    {
+        [
+            'nextGameId' => $nextGameId,
+            'winnerUserId' => $winnerUserId, 'loserUserId' => $loserUserId,
+        ] = $this->buildDuelBestOfThreeMatchAtGameTwoStart();
+
+        $frozenRound = $this->fetchRound($nextGameId);
+        self::assertNull($frozenRound['current_turn_game_player_id'], 'round 1 must stay frozen until the loser decides');
+
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $loserUserId, true);
+
+        $round = $this->fetchRound($nextGameId);
+        $firstPlayerUserId = (int) $this->pdo->query(
+            'SELECT user_id FROM game_players WHERE id = ' . (int) $round['first_game_player_id']
+        )->fetchColumn();
+        self::assertSame($loserUserId, $firstPlayerUserId);
+        self::assertNotSame($winnerUserId, $firstPlayerUserId);
+        self::assertSame($round['first_game_player_id'], $round['current_turn_game_player_id'], 'the round unfreezes once decided');
+    }
+
+    public function testLoserOfNonDraftDuelMatchCanLetPreviousWinnerGoFirstAgain(): void
+    {
+        [
+            'nextGameId' => $nextGameId,
+            'winnerUserId' => $winnerUserId, 'loserUserId' => $loserUserId,
+        ] = $this->buildDuelBestOfThreeMatchAtGameTwoStart();
+
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $loserUserId, false);
+
+        $round = $this->fetchRound($nextGameId);
+        $firstPlayerUserId = (int) $this->pdo->query(
+            'SELECT user_id FROM game_players WHERE id = ' . (int) $round['first_game_player_id']
+        )->fetchColumn();
+        self::assertSame($winnerUserId, $firstPlayerUserId);
+        self::assertSame($round['first_game_player_id'], $round['current_turn_game_player_id'], 'the round unfreezes once decided');
+    }
+
+    public function testOnlyTheLoserOfThePreviousNonDraftGameCanSetWhoGoesFirst(): void
+    {
+        ['nextGameId' => $nextGameId, 'winnerUserId' => $winnerUserId] = $this->buildDuelBestOfThreeMatchAtGameTwoStart();
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('Only the loser');
+
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $winnerUserId, true);
+    }
+
+    public function testGetStateExposesFirstPlayerDecisionForNonDraftBestOfThree(): void
+    {
+        [
+            'nextGameId' => $nextGameId,
+            'winnerUserId' => $winnerUserId, 'loserUserId' => $loserUserId,
+        ] = $this->buildDuelBestOfThreeMatchAtGameTwoStart();
+
+        $loserDecision = $this->games->getState($nextGameId, $loserUserId)['first_player_decision'];
+        self::assertTrue($loserDecision['you_are_previous_loser']);
+        self::assertSame($winnerUserId, $loserDecision['default_user_id']);
+
+        $winnerDecision = $this->games->getState($nextGameId, $winnerUserId)['first_player_decision'];
+        self::assertFalse($winnerDecision['you_are_previous_loser']);
+        self::assertSame($winnerUserId, $winnerDecision['default_user_id']);
+
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $loserUserId, true);
+
+        self::assertNull($this->games->getState($nextGameId, $loserUserId)['first_player_decision'], 'no longer frozen, so there is nothing left to decide');
+    }
+
+    /** @return array{gameId: int, winningTeamUserIds: int[], losingTeamUserIds: int[], nextGameId: int} */
+    private function buildTeamBestOfThreeMatchAtGameTwoStart(string $format): array
+    {
+        $userIds = $this->insertUsers('bo3-team-fp-' . uniqid() . '-', 4);
+        [$a1, $a2, $b1, $b2] = $userIds;
+        $gameId = $this->games->createGame($a1, $userIds, format: $format, deckType: 'structure', partnerUserId: $a2, bestOfThree: true);
+        $this->games->startGame($gameId);
+
+        $gameMatchId = (int) $this->fetchGame($gameId)['game_match_id'];
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $a1)); // team A resigns -- team B wins game 1
+
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE game_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $gameMatchId]);
+        $nextGameId = (int) $nextGameStmt->fetchColumn();
+        $this->games->startGame($nextGameId);
+
+        return ['gameId' => $gameId, 'winningTeamUserIds' => [$b1, $b2], 'losingTeamUserIds' => [$a1, $a2], 'nextGameId' => $nextGameId];
+    }
+
+    /**
+     * Team-scoped rematch: EITHER member of the losing team may answer
+     * for their shared side (no propose/confirm negotiation needed, since
+     * "should our team go first" is a plain team-wide binary, unlike
+     * turn_order's own "which ONE of us" choice) -- deliberately answered
+     * here by $losingTeamUserIds[1], not [0], to prove it's not secretly
+     * restricted to whichever teammate has the lower seat_order.
+     */
+    public function testEitherLosingTeamMemberCanOptTheirTeamToPlayFirstInNextGame(): void
+    {
+        [
+            'nextGameId' => $nextGameId,
+            'winningTeamUserIds' => $winningTeamUserIds, 'losingTeamUserIds' => $losingTeamUserIds,
+        ] = $this->buildTeamBestOfThreeMatchAtGameTwoStart('team');
+
+        $frozenRound = $this->fetchRound($nextGameId);
+        self::assertNull($frozenRound['current_turn_game_player_id'], 'round 1 must stay frozen until the losing team decides');
+        self::assertNull($this->games->getState($nextGameId, $winningTeamUserIds[0])['team_decision'], 'the turn_order decision is deferred until the first-player choice resolves');
+
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $losingTeamUserIds[1], true);
+
+        $round = $this->fetchRound($nextGameId);
+        self::assertNull($round['current_turn_game_player_id'], 'still frozen -- the chosen team\'s own turn_order decision must resolve first');
+        $firstPlayerTeamId = $this->teamIdByGamePlayer($nextGameId)[(int) $round['first_game_player_id']];
+        $losingTeamId = $this->teamIdByGamePlayer($nextGameId)[$this->games->gamePlayerIdFor($nextGameId, $losingTeamUserIds[0])];
+        self::assertSame($losingTeamId, $firstPlayerTeamId, 'the losing team opted to go first themselves');
+    }
+
+    /** @return array<int,int> game_player_id => team_id */
+    private function teamIdByGamePlayer(int $gameId): array
+    {
+        $stmt = $this->pdo->prepare('SELECT id, team_id FROM game_players WHERE game_id = :game_id');
+        $stmt->execute(['game_id' => $gameId]);
+        $map = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $map[(int) $row['id']] = (int) $row['team_id'];
+        }
+
+        return $map;
+    }
+
+    public function testChoosingToPlayFirstCreatesTheTurnOrderDecisionForTheChosenTeam(): void
+    {
+        [
+            'nextGameId' => $nextGameId,
+            'losingTeamUserIds' => $losingTeamUserIds,
+        ] = $this->buildTeamBestOfThreeMatchAtGameTwoStart('team');
+
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $losingTeamUserIds[0], true);
+
+        $decision = $this->games->getState($nextGameId, $losingTeamUserIds[0])['team_decision'];
+        self::assertNotNull($decision, 'the losing team\'s own turn_order decision must exist now that they opted to go first');
+        self::assertSame('turn_order', $decision['decision_type']);
+        $candidateUserIds = array_map(
+            fn (int $gamePlayerId) => $this->pdo->query('SELECT user_id FROM game_players WHERE id = ' . $gamePlayerId)->fetchColumn(),
+            $decision['candidate_game_player_ids'],
+        );
+        sort($candidateUserIds);
+        $expected = $losingTeamUserIds;
+        sort($expected);
+        self::assertSame($expected, array_map(intval(...), $candidateUserIds));
+    }
+
+    public function testDecliningKeepsTheTurnOrderDecisionOnThePreviousWinningTeam(): void
+    {
+        [
+            'nextGameId' => $nextGameId,
+            'winningTeamUserIds' => $winningTeamUserIds, 'losingTeamUserIds' => $losingTeamUserIds,
+        ] = $this->buildTeamBestOfThreeMatchAtGameTwoStart('team');
+
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $losingTeamUserIds[0], false);
+
+        $decision = $this->games->getState($nextGameId, $winningTeamUserIds[0])['team_decision'];
+        self::assertNotNull($decision);
+        $candidateUserIds = array_map(
+            fn (int $gamePlayerId) => (int) $this->pdo->query('SELECT user_id FROM game_players WHERE id = ' . $gamePlayerId)->fetchColumn(),
+            $decision['candidate_game_player_ids'],
+        );
+        sort($candidateUserIds);
+        $expected = $winningTeamUserIds;
+        sort($expected);
+        self::assertSame($expected, $candidateUserIds, 'declining leaves the previous winning team first, same as never answering at all');
+    }
+
+    public function testWinningTeamMemberCannotSetWhoGoesFirstInTeamMatch(): void
+    {
+        [
+            'nextGameId' => $nextGameId,
+            'winningTeamUserIds' => $winningTeamUserIds,
+        ] = $this->buildTeamBestOfThreeMatchAtGameTwoStart('team');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('Only the loser');
+
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $winningTeamUserIds[0], true);
+    }
+
+    public function testClosedTeamBestOfThreeRoundStaysFrozenUntilLosingTeamDecides(): void
+    {
+        ['nextGameId' => $nextGameId] = $this->buildTeamBestOfThreeMatchAtGameTwoStart('closed_team');
+
+        $round = $this->fetchRound($nextGameId);
+        self::assertNull($round['current_turn_game_player_id'], 'round 1 must stay frozen until the losing team decides, even before the pregame card pass');
+    }
+
+    /**
+     * Choosing to go first for Closed Team Play (unlike 'team', which
+     * still needs its own turn_order decision afterward) directly names
+     * the real first-turn player -- the pregame blind card pass, deferred
+     * from startGame() until this resolves, is what finally unfreezes the
+     * round to $chosenGamePlayerId once every seat has passed.
+     */
+    public function testClosedTeamFirstPlayerChoiceThenPregameCardPassUnfreezesToTheChosenPlayer(): void
+    {
+        [
+            'nextGameId' => $nextGameId,
+            'losingTeamUserIds' => $losingTeamUserIds,
+        ] = $this->buildTeamBestOfThreeMatchAtGameTwoStart('closed_team');
+
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $losingTeamUserIds[1], true);
+
+        $chosenGamePlayerId = $this->games->gamePlayerIdFor($nextGameId, $losingTeamUserIds[1]);
+        $round = $this->fetchRound($nextGameId);
+        self::assertSame($chosenGamePlayerId, (int) $round['first_game_player_id']);
+        self::assertNull($round['current_turn_game_player_id'], 'still frozen -- the pregame card pass has to complete first');
+
+        $seatIds = array_map(intval(...), $this->pdo->query("SELECT id FROM game_players WHERE game_id = {$nextGameId}")->fetchAll(PDO::FETCH_COLUMN));
+        foreach ($seatIds as $gamePlayerId) {
+            $hand = array_map(intval(...), $this->pdo->query(
+                "SELECT id FROM game_cards WHERE game_id = {$nextGameId} AND zone = 'hand' AND owner_game_player_id = {$gamePlayerId} LIMIT 2"
+            )->fetchAll(PDO::FETCH_COLUMN));
+            $this->games->submitInitialCardPass($nextGameId, $gamePlayerId, $hand);
+        }
+
+        $unfrozenRound = $this->fetchRound($nextGameId);
+        self::assertSame($chosenGamePlayerId, (int) $unfrozenRound['current_turn_game_player_id'], 'the chosen player takes the real first turn once the pregame pass completes');
+    }
+
     public function testBestOfThreeCustomDuelResetsTheDecklistForTheNextGame(): void
     {
         $alice = $this->insertUser('bo3-customduel-alice');

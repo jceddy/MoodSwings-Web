@@ -2274,22 +2274,30 @@ player) can play or pass, until the loser explicitly decides.
 is only callable once that game has actually started; `$playFirst`
 true sends the loser out first themselves, false leaves the
 placeholder (the previous winner) going first again -- either answer
-is a real, round-unfreezing decision (`computeFreshGrants()` +
-`updateRoundTurnState()`, the same pair `submitInitialCardPass()` uses
-to unfreeze `closed_team`'s own round 1), not a "did nothing" default,
-and it's permanent -- calling it again once decided throws. `games.
-first_player_choice_user_id` still just records whoever ends up going
-first, for parity with the old field. `getState()`'s own top-level
-`first_player_decision` field is non-null only while round 1 is still
-frozen waiting on this (`null` for game 1, and null again once
-resolved): `you_are_previous_loser` and `default_user_id` let the
-frontend show the loser two buttons ("I'll go first" / "let so-and-so
-go first again") and show the winner a waiting status, both reading
-from the same field. The decision also gets its own `describeEvent()`
-case (`'draft_match_first_player_decided'` -- "{loser} will go first
-this game"), the same way `team_turn_order_decided`/
+is a real decision (`computeFreshGrants()` + `updateRoundTurnState()`,
+the same pair `submitInitialCardPass()` uses to unfreeze `closed_team`'s
+own round 1, for an individual 2-seat match; see "Best of three" below
+for `team`/`closed_team`'s own next step instead), not a "did nothing"
+default, and it's permanent -- calling it again once decided throws
+(`games.first_player_choice_user_id`, not `current_turn_game_player_id`,
+is the authoritative "already decided" signal checked for this, since
+`team`/`closed_team` can leave the latter NULL well past the moment
+this actually resolves -- see "Best of three" below). `getState()`'s
+own top-level `first_player_decision` field is non-null only while
+round 1 is still frozen waiting on this (`null` for game 1, and null
+again once resolved): `you_are_previous_loser` and `default_user_id`
+let the frontend show the loser two buttons ("I'll go first" / "let
+so-and-so go first again") and show the winner a waiting status, both
+reading from the same field. The decision also gets its own
+`describeEvent()` case (`'match_first_player_decided'` -- "{loser} will
+go first this game"), the same way `team_turn_order_decided`/
 `team_draw_recipient_decided` get their own phrasing rather than
 falling through to the generic "{actor} played {card}" default.
+
+This originally only ever applied to the draft-family's own
+`draft_match_id` -- see "Best of three" below for how it also covers
+the non-draft `game_matches` wrapper (Duel/Traditional/Team/Closed Team,
+migration 0223), including what changes for a TEAM-scoped "loser."
 
 **Bot goes first** (`games.bot_goes_first`, migration `0171`, issue
 `#417`) -- a per-game toggle, same shape as `default_selections_mode`
@@ -2297,8 +2305,9 @@ falling through to the generic "{actor} played {card}" default.
 lifetime), that lets the creator have a seated practice bot go first
 instead of leaving `resolveFirstPlayerId()`'s own game-1 coin flip to
 chance. Deliberately narrow: only consulted for that SAME game-1 coin
-flip above (`$game['draft_match_id'] === null || $matchGameNumber ===
-null || $matchGameNumber <= 1`) and only when `format` is neither
+flip above (i.e. NOT a best-of-three rematch -- `match_game_number`
+null or `<= 1`, or neither `draft_match_id` nor `game_match_id` set)
+and only when `format` is neither
 `'team'` nor `'closed_team'` -- Open/Closed Team Play's own "who
 actually takes the opening turn" is the separate, later `team_turn_1/2`
 decision described elsewhere in this doc, never decided at game
@@ -3782,12 +3791,74 @@ decklist (a distinct pool to swap from) is left to a future issue, same
 as the draft-family's own sideboarding was itself once a separate,
 later addition.
 
-**Who goes first in game 2/3** is decided by the ordinary uniform-random
-`resolveFirstPlayerId()` path, not the draft-family's own
-`setPlayFirstNextMatchGame()` (the previous game's loser choosing) --
-that mechanic is gated specifically on `draft_match_id !== null`, so it
-never applies here. A future issue could extend it if this format ever
-wants the same "loser decides" fairness rule.
+**Who goes first in game 2/3** (reported live: "in non-draft best of 3
+formats, the loser should choose who plays first in the next game") is
+the same "loser decides" fairness rule the draft-family's own
+`setPlayFirstNextMatchGame()` already had -- that mechanic (previously
+gated specifically on `draft_match_id !== null`) now also covers
+`game_match_id`. `resolveFirstPlayerId()`/`previousMatchGameWinnerUserId()`
+are keyed off whichever of `draft_match_id`/`game_match_id` a game
+actually carries, and `startGame()` freezes game 2/3's own round 1 the
+same way for both -- current_turn_game_player_id stays NULL until
+resolved, with `first_game_player_id` set to the previous winner (or, for
+a team format, a member of the winning TEAM) as a placeholder in the
+meantime.
+
+For Team/Closed Team, "the loser" is a whole LOSING TEAM, not a single
+player -- `previousMatchGameLoserUserIds()` returns BOTH of the losing
+team's members (`game_players.team_id` carries forward unchanged from
+game to game, same as every other seat field `advanceGameMatch()`
+copies), and `setPlayFirstNextMatchGame()` lets EITHER of them answer for
+their shared side; whichever one calls it first settles it, with no
+second teammate confirmation step required (unlike Open Team Play's own
+`turn_order`/`draw_recipient` propose/confirm decisions) -- "should our
+team go first" is a plain team-wide binary with no "which ONE of us"
+sub-choice to negotiate, so there's nothing for a second teammate to
+usefully confirm or reject. What differs by format once the choice
+itself is made:
+
+- **Duel/Traditional** unfreezes the round immediately to the
+  chosen/placeholder seat, exactly like the draft-family flow.
+- **Team** creates that format's own `turn_order` game_team_decision for
+  whichever team ends up assigned -- deferred from `startGame()`'s own
+  'team' branch (which still handles it immediately for game 1, and any
+  non-best-of-three Open Team Play game) to `setPlayFirstNextMatchGame()`
+  itself, since which team is even eligible to go first isn't settled
+  until this resolves. The round stays frozen either way, now for that
+  team's own live choice of who ACTUALLY takes the first turn, same as
+  ever.
+- **Closed Team** sends the pregame blind card-pass "it's your turn"
+  notification (again, deferred from `startGame()`'s own 'closed_team'
+  branch) -- the round stays frozen for `submitInitialCardPass()` to
+  eventually unfreeze, straight to the chosen player, exactly as it
+  already would for game 1.
+
+`games.first_player_choice_user_id` (not `current_turn_game_player_id`)
+is the authoritative "has this already been decided" signal used
+throughout (`isAwaitingFirstPlayerChoiceFrom()`, the repeat-call guard in
+`setPlayFirstNextMatchGame()` itself, `advanceBotFirstPlayerDecision()`,
+and `getState()`'s own `first_player_decision` gating) -- for
+Team/Closed Team, current_turn stays NULL well past the moment this is
+actually decided (pending that format's own next pregame step above), so
+checking it alone can't distinguish "still awaiting an answer" from
+"already answered, now waiting on something else instead." Getting this
+wrong doesn't just misreport lobby/UI state: `advanceAutomatedTurns()`'s
+own frozen-round dispatch would otherwise call
+`advanceBotFirstPlayerDecision()` a second time once a bot-seated Closed
+Team match's card-pass step was already under way, which would in turn
+call `setPlayFirstNextMatchGame()` again for an already-decided game and
+throw uncaught -- caught by
+`testBotDoesNotAutoDecideFirstPlayerChoiceForALosingTeamWithAHumanMember()`/
+`testBotAutoDecidesFirstPlayerChoiceWhenBothLosingTeamMembersAreBots()`'s
+own sibling coverage of `advanceBotFirstPlayerDecision()`'s existing
+draft-only bot test.
+
+`advanceBotFirstPlayerDecision()`'s own bot policy (never opts to go
+first itself) is unchanged, just widened the same way: for a team
+format it only ever auto-declines once EVERY member of the losing team
+is a bot -- a human teammate must always get their own say first,
+exactly like any other team decision (`proposeTeamDecision()`'s own
+"either candidate may act" precedent).
 
 **Open lobby matchmaking** -- `best_of_three` is threaded through
 `create_game_params` (`openGameCreateParamsFromRequestBody()`,
@@ -5051,13 +5122,19 @@ for three event types --
     teammate is notified at once, since either may propose (see
     `createTeamDecision()`).
   - `closed_team`'s pregame blind card pass -- all 4 seated players are
-    notified the moment the game starts, since every one of them owes a
-    pass before round 1 can unfreeze (see `startGame()`'s own
-    `closed_team` branch).
-  - A best-of-three draft match's game 2/3 starting frozen on
-    `setPlayFirstNextMatchGame()` -- only the previous game's loser is
-    notified, since they're the only one who can actually act (see
-    `startGame()`'s own `match_game_number > 1` branch and
+    notified the moment the game starts (for game 1 of a match, or any
+    non-best-of-three game -- see `startGame()`'s own `closed_team`
+    branch), since every one of them owes a pass before round 1 can
+    unfreeze. For a best-of-three rematch this is instead deferred to
+    `setPlayFirstNextMatchGame()` itself, once it's settled who's even
+    eligible to go first (see the next bullet).
+  - A best-of-three match's game 2/3 starting frozen on
+    `setPlayFirstNextMatchGame()` (the draft-family's own `draft_match_id`,
+    or the non-draft `game_matches` wrapper for Duel/Traditional/Team/
+    Closed Team -- see "Best of three" below) -- only the previous game's
+    losing side is notified (both members, for a losing Team/Closed Team
+    side), since they're the only ones who can actually act (see
+    `startGame()`'s own best-of-three rematch branch and
     `isAwaitingFirstPlayerChoiceFrom()`).
   - A Quick Draft/Winston Draft/Grid Draft match's own "waiting on you"
     states during `drafting`/`deck_building` -- the same states

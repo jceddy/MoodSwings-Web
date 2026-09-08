@@ -9089,15 +9089,18 @@
     }
 
     // Post-start "who goes first" decision for game 2/3 of a best-of-three
-    // draft match -- per a rules clarification, the previous game's loser
-    // doesn't have to choose until they can see their own opening hand, so
-    // this is decided after the game (and round 1) has already started
-    // rather than during deck-building -- see GameService::
-    // setPlayFirstNextMatchGame()/firstPlayerDecisionStateFor(). Round 1
-    // stays frozen (see canAct in renderBoard()) for both players until
-    // this resolves one way or the other; state.first_player_decision is
-    // null once it has (or for game 1, which has no previous game to base
-    // a choice on), at which point this panel just stays hidden.
+    // match -- the draft-family's own draft_match_id, or the non-draft
+    // game_matches wrapper for Duel/Traditional/Team/Closed Team
+    // (migration 0223, issue #90 follow-up) -- per a rules clarification,
+    // the previous game's loser (or, for Team/Closed Team, either member
+    // of the losing team) doesn't have to choose until they can see their
+    // own opening hand, so this is decided after the game (and round 1)
+    // has already started rather than during deck-building -- see
+    // GameService::setPlayFirstNextMatchGame()/firstPlayerDecisionStateFor().
+    // Round 1 stays frozen (see canAct in renderBoard()) for both sides
+    // until this resolves one way or the other; state.first_player_decision
+    // is null once it has (or for game 1, which has no previous game to
+    // base a choice on), at which point this panel just stays hidden.
     function renderFirstPlayerDecision(state, decision) {
         const panel = document.getElementById('first-player-decision-panel');
         const statusEl = document.getElementById('first-player-decision-status');

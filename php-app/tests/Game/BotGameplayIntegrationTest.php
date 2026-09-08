@@ -2169,6 +2169,142 @@ final class BotGameplayIntegrationTest extends TestCase
         self::assertSame($humanGame2PlayerId, (int) $round['current_turn_game_player_id'], 'the previous winner (human) should go first again -- the bot never opts to go first itself');
     }
 
+    /**
+     * Same deadlock, non-draft counterpart (reported live: "in non-draft
+     * best of 3 formats, the loser should choose who plays first in the
+     * next game") -- game_matches (migration 0223) now gets the exact
+     * same setPlayFirstNextMatchGame() freeze/bot-handling the draft
+     * family already had, so this mirrors
+     * testBotAutomaticallyDecidesWhoGoesFirstWhenItLostThePreviousGame()
+     * exactly, just keyed off games.game_match_id/game_matches instead of
+     * draft_match_id/draft_matches.
+     */
+    public function testBotAutomaticallyDecidesWhoGoesFirstInNonDraftMatchWhenItLostThePreviousGame(): void
+    {
+        $humanUserId = $this->insertUser('human7');
+        $botUserId = $this->insertBotUser('bot6');
+
+        $gameMatchStmt = $this->pdo->prepare(
+            "INSERT INTO game_matches (format, created_by_user_id, status) VALUES ('duel', :creator, 'in_progress')"
+        );
+        $gameMatchStmt->execute(['creator' => $humanUserId]);
+        $gameMatchId = (int) $this->pdo->lastInsertId();
+
+        // Game 1: already completed -- the bot lost.
+        $game1Id = $this->insertGame('duel', 'structure', $humanUserId);
+        $this->pdo->prepare("UPDATE games SET game_match_id = :match_id, match_game_number = 1, status = 'completed' WHERE id = :game_id")
+            ->execute(['match_id' => $gameMatchId, 'game_id' => $game1Id]);
+        $humanGame1PlayerId = $this->insertGamePlayer($game1Id, $humanUserId, 0);
+        $this->insertGamePlayer($game1Id, $botUserId, 1);
+        $this->pdo->prepare('UPDATE games SET winner_game_player_id = :winner WHERE id = :game_id')
+            ->execute(['winner' => $humanGame1PlayerId, 'game_id' => $game1Id]);
+
+        // Game 2: in progress, round 1 frozen awaiting the loser's (the
+        // bot's) decision -- same shape startGame() itself leaves it in.
+        $game2Id = $this->insertGame('duel', 'structure', $humanUserId);
+        $this->pdo->prepare("UPDATE games SET game_match_id = :match_id, match_game_number = 2, status = 'in_progress' WHERE id = :game_id")
+            ->execute(['match_id' => $gameMatchId, 'game_id' => $game2Id]);
+        $humanGame2PlayerId = $this->insertGamePlayer($game2Id, $humanUserId, 0);
+        $botGame2PlayerId = $this->insertGamePlayer($game2Id, $botUserId, 1);
+        $this->pdo->prepare(
+            "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, status)
+             VALUES (:game_id, 1, :first_player, NULL, 1, 'in_progress')"
+        )->execute(['game_id' => $game2Id, 'first_player' => $humanGame2PlayerId]);
+        $this->insertGameCard($game2Id, 8, 'hand', $humanGame2PlayerId);
+        $this->insertGameCard($game2Id, 3, 'hand', $botGame2PlayerId);
+
+        $result = $this->games->advanceAutomatedTurns($game2Id);
+
+        self::assertNotNull($result, 'the bot should have automatically resolved the frozen "who goes first" decision instead of deadlocking');
+        $round = $this->fetchRound($game2Id);
+        self::assertNotNull($round['current_turn_game_player_id'], 'the round should have unfrozen');
+        self::assertSame($humanGame2PlayerId, (int) $round['current_turn_game_player_id'], 'the previous winner (human) should go first again -- the bot never opts to go first itself');
+    }
+
+    /**
+     * Team format's own losing side is TWO seats, not one -- a bot only
+     * ever auto-declines once EVERY member of the losing team is a bot
+     * (see advanceBotFirstPlayerDecision()'s own docblock); a human
+     * teammate must always get their own say first, exactly like any
+     * other team decision.
+     */
+    public function testBotDoesNotAutoDecideFirstPlayerChoiceForALosingTeamWithAHumanMember(): void
+    {
+        [$game2Id, $humanLoserGamePlayerId] = $this->buildTeamGameMatchAtGameTwoRematchFreeze(
+            losingTeamIsAllBots: false,
+        );
+
+        $result = $this->games->advanceAutomatedTurns($game2Id);
+
+        self::assertNull($result, 'a human teammate on the losing side must get their own say -- the bot must not preempt it');
+        $round = $this->fetchRound($game2Id);
+        self::assertNull($round['current_turn_game_player_id'], 'still frozen, waiting on the human');
+    }
+
+    /** The mirror case: once BOTH of the losing team's members are bots, either one may resolve the choice automatically. */
+    public function testBotAutoDecidesFirstPlayerChoiceWhenBothLosingTeamMembersAreBots(): void
+    {
+        [$game2Id] = $this->buildTeamGameMatchAtGameTwoRematchFreeze(losingTeamIsAllBots: true);
+
+        $result = $this->games->advanceAutomatedTurns($game2Id);
+
+        self::assertNotNull($result, 'both members of the losing team are bots -- the freeze must resolve automatically');
+        $round = $this->fetchRound($game2Id);
+        self::assertNull($round['current_turn_game_player_id'], 'still frozen -- declining leaves the winning team\'s own turn_order decision still to resolve');
+        $decision = $this->pdo->query("SELECT * FROM game_team_decisions WHERE game_id = {$game2Id} AND resolved_at IS NULL")->fetch();
+        self::assertNotFalse($decision, 'the previous winning team\'s own turn_order decision must have been created');
+    }
+
+    /**
+     * Raw-SQL team-format fixture (same rationale as
+     * testBotAutomaticallyDecidesWhoGoesFirstWhenItLostThePreviousGame()'s
+     * own docblock -- advanceBotFirstPlayerDecision() only ever reads
+     * games/game_players/game_rounds) for a 4-seat game_matches rematch
+     * whose round 1 is frozen awaiting the losing team's first-player
+     * choice. Team A (seats 0/1) lost game 1; team B (seats 2/3) won.
+     *
+     * @return array{0: int, 1: int} [game2Id, one of team A's own game_player_ids]
+     */
+    private function buildTeamGameMatchAtGameTwoRematchFreeze(bool $losingTeamIsAllBots): array
+    {
+        $winnerUserId = $this->insertUser('bo3-team-bot-winner-' . uniqid());
+        $loserUserId1 = $losingTeamIsAllBots ? $this->insertBotUser('bo3-team-bot-loser1-' . uniqid()) : $this->insertUser('bo3-team-bot-loser1-' . uniqid());
+        $loserUserId2 = $this->insertBotUser('bo3-team-bot-loser2-' . uniqid());
+        $winnerTeammateUserId = $this->insertUser('bo3-team-bot-winnermate-' . uniqid());
+
+        $gameMatchStmt = $this->pdo->prepare(
+            "INSERT INTO game_matches (format, created_by_user_id, status) VALUES ('team', :creator, 'in_progress')"
+        );
+        $gameMatchStmt->execute(['creator' => $winnerUserId]);
+        $gameMatchId = (int) $this->pdo->lastInsertId();
+
+        // Game 1: already completed -- team A (the losers) lost.
+        $game1Id = $this->insertGame('team', 'structure', $winnerUserId);
+        $this->pdo->prepare("UPDATE games SET game_match_id = :match_id, match_game_number = 1, status = 'completed' WHERE id = :game_id")
+            ->execute(['match_id' => $gameMatchId, 'game_id' => $game1Id]);
+        $this->insertGamePlayer($game1Id, $loserUserId1, 0, teamId: 0);
+        $this->insertGamePlayer($game1Id, $loserUserId2, 1, teamId: 0);
+        $winnerGame1PlayerId = $this->insertGamePlayer($game1Id, $winnerUserId, 2, teamId: 1);
+        $this->insertGamePlayer($game1Id, $winnerTeammateUserId, 3, teamId: 1);
+        $this->pdo->prepare('UPDATE games SET winner_game_player_id = :winner, winner_team_id = 1 WHERE id = :game_id')
+            ->execute(['winner' => $winnerGame1PlayerId, 'game_id' => $game1Id]);
+
+        // Game 2: in progress, round 1 frozen awaiting team A's own choice.
+        $game2Id = $this->insertGame('team', 'structure', $winnerUserId);
+        $this->pdo->prepare("UPDATE games SET game_match_id = :match_id, match_game_number = 2, status = 'in_progress' WHERE id = :game_id")
+            ->execute(['match_id' => $gameMatchId, 'game_id' => $game2Id]);
+        $loserGame2PlayerId1 = $this->insertGamePlayer($game2Id, $loserUserId1, 0, teamId: 0);
+        $this->insertGamePlayer($game2Id, $loserUserId2, 1, teamId: 0);
+        $winnerGame2PlayerId = $this->insertGamePlayer($game2Id, $winnerUserId, 2, teamId: 1);
+        $this->insertGamePlayer($game2Id, $winnerTeammateUserId, 3, teamId: 1);
+        $this->pdo->prepare(
+            "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, status)
+             VALUES (:game_id, 1, :first_player, NULL, 0, 'in_progress')"
+        )->execute(['game_id' => $game2Id, 'first_player' => $winnerGame2PlayerId]);
+
+        return [$game2Id, $loserGame2PlayerId1];
+    }
+
     // -- helpers ------------------------------------------------------
 
     private function cardIsInPlay(int $gameId, int $catalogCardId): bool

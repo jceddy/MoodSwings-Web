@@ -1896,12 +1896,17 @@ if ($path === '/games/draft/deck' && $method === 'POST') {
     }
 }
 
-// Lets the loser of a best-of-three draft match's game N opt to go first
-// themselves in game N+1 -- see GameService::setPlayFirstNextMatchGame().
-// Only callable once game N+1 has actually started (per the game's own
-// rules, the loser doesn't have to decide until they can see their
-// opening hand) -- round 1 stays frozen (nobody may play) until this
-// resolves, one answer either way.
+// Lets the loser (or, for Team/Closed Team, either member of the losing
+// team) of a best-of-three match's game N opt to go first themselves in
+// game N+1 -- covers both the draft-family's own draft_match_id and the
+// non-draft game_matches wrapper (Duel/Traditional/Team/Closed Team,
+// migration 0223, issue #90 follow-up) -- see GameService::
+// setPlayFirstNextMatchGame(). Only callable once game N+1 has actually
+// started (per the game's own rules, the loser doesn't have to decide
+// until they can see their opening hand) -- round 1 stays frozen (nobody
+// may play) until this resolves, one answer either way. Kept at this
+// same path (despite the name) rather than renamed, since it's still the
+// exact same request shape the draft-family flow already used.
 if ($path === '/games/draft/first-player-choice' && $method === 'POST') {
     $currentUser = requireAuth($auth);
     $body = requestBody();

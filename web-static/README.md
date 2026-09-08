@@ -1251,6 +1251,25 @@ serialized `power_duel_sideboard_pool`) for pre-selection. The picker
 hides again once `deck_submitted` is true, the same as the rest of that
 form.
 
+**Who goes first in game 2/3** (reported live: "in non-draft best of 3
+formats, the loser should choose who plays first in the next game") --
+the draft-family's own `#first-player-decision-panel`/
+`renderFirstPlayerDecision()` (see "Who goes first" in `php-app/README.md`)
+now also renders for a `game_matches`-based rematch, with zero JS changes
+of its own needed: `state.first_player_decision` and
+`setPlayFirstNextMatchGame()` were already generic (a plain `gameId`/
+`playFirst`, no draft-specific fields), so once `GameService` started
+populating/accepting them for `game_match_id` too, this panel just
+started showing up for the right games automatically. For Team/Closed
+Team specifically, `you_are_previous_loser` is `true` for BOTH members
+of the losing team at once (either may click "I'll go first" -- whichever
+one does settles it for their whole side, no second teammate confirmation
+step the way `#team-decision-panel`'s own `turn_order`/`draw_recipient`
+choices need); round 1 stays frozen afterward either way -- for `team`,
+`#team-decision-panel` takes over next (that format's own live choice of
+which teammate actually goes), and for `closed_team`, the pregame card
+pass panel does.
+
 **Deck builder** -- the card-by-card Deck Builder (issue #93, see
 "Saved decklists" above) gained its own sideboard panel
 (`#deck-builder-sideboard-section`), shown only for the Free-form/Power
