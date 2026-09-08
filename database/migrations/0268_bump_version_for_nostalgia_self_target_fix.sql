@@ -1,0 +1,24 @@
+-- Bug fix (reported live: a bot appeared stuck repeatedly failing to
+-- play Harmony whenever Nostalgia was the only card in the discard
+-- pile).
+--
+-- BotPlayerService::nostalgiaDiscardCardId() never excluded the
+-- specific Nostalgia instance being played from its own candidate
+-- pool. A bot can legally play Nostalgia FROM the discard pile itself
+-- (via Harmony/Grief/Angst/Grace's own discard-sourced extra play, or
+-- Melancholy's "treat the whole discard pile as hand" grant), and this
+-- choice is computed against the board as it stood *before* that play
+-- -- i.e. while Nostalgia's own card was still sitting in the pile it
+-- was about to leave. With no other card in the pile, it was the only
+-- ("best") candidate and picked itself; MoodPlayService::playMood()
+-- always moves a card into play *before* resolving its afterPlaying()
+-- effect, so by the time NostalgiaEffect validated the choice, the
+-- pile it just left no longer contained it, throwing
+-- InvalidChoiceException on every such attempt.
+--
+-- nostalgiaDiscardCardId() now always excludes the card being played
+-- from its own candidate pool.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.36.4' WHERE id = 1;

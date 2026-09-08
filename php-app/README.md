@@ -7693,7 +7693,25 @@ since it already holds that dependency):
   lead with playing Nostalgia at all; this decides what to do with the
   optional field once it's actually being played, and returns `null`
   (leaving the field unfilled) both when the pile is empty and when a
-  Sadness/Wonder-family mood is guarding it.
+  Sadness/Wonder-family mood is guarding it. `$cardId` (the specific
+  Nostalgia instance being played) is also always excluded from its
+  own candidate pool -- a real bug caught live: a bot appeared stuck
+  repeatedly failing to play Harmony whenever Nostalgia was the only
+  card in the discard pile. Nostalgia can legally be played FROM the
+  discard pile itself (via Harmony/Grief/Angst/Grace's own discard-
+  sourced extra play, or Melancholy's "treat the whole discard pile as
+  hand" grant), and this choice is computed against the board as it
+  stood *before* that play -- i.e. while Nostalgia's own card was still
+  physically sitting in the pile it was about to leave. With no other
+  card in the pile, it was the only ("best") candidate and picked
+  itself; `MoodPlayService::playMood()` always moves a card into play
+  *before* resolving its `afterPlaying()` effect (see that class's own
+  docblock), so by the time `NostalgiaEffect` validated the choice, the
+  pile it just left no longer contained it, throwing
+  `InvalidChoiceException` on every such attempt. Excluding `$cardId`
+  is correct regardless of how Nostalgia got played -- it's simply
+  never present among the other candidates when played from hand, the
+  ordinary case.
 - **Envy's own "don't feed it for free" veto** (confirmed by the
   maintainer), via `envyDiscouragesPlayingThisCard()`/
   `sortPriorityValue()`: deprioritizes (the same `PHP_INT_MIN` treatment
