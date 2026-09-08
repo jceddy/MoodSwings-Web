@@ -1,0 +1,20 @@
+-- Bot policy fix (reported live: a bot with an opponent's 11-point
+-- Euphoria in play, and a Pacifism sitting in the discard pile playable
+-- via Melancholy, played some other far weaker card instead, missing a
+-- win).
+--
+-- BotPlayerService::sortPriorityValue() previously fell back to plain
+-- baseValue() for Pacifism once its own "any target at all" veto
+-- cleared -- Pacifism's own printed value is 1, so a low-value filler
+-- with a higher printed value (almost anything) always outranked it,
+-- regardless of how much value it would actually deny an opponent. New
+-- pacifismSwing() sums the value of whatever pacifismTargetMoodIds()
+-- would suppress right now, added on top of baseValue() for Pacifism
+-- specifically -- a genuine value comparison on the same scale as every
+-- other card's own baseValue(), not a flat category bonus. Works
+-- identically whether Pacifism is sourced from hand or, via Melancholy,
+-- the discard pile.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.36.1' WHERE id = 1;

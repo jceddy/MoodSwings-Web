@@ -407,17 +407,22 @@ final class BotPlayerServiceTest extends TestCase
      * its own plain printed value (3, unboosted) would be the deciding
      * difference between the bot's own score and the rival's (Cruelty,
      * id 61, value 3, in play for player 2 puts their total at 3 against
-     * the bot's own 0), and nothing ELSE playable (Pacifism, id 20,
-     * value 1, no EARLY_PRIORITY_EFFECT_KEYS bonus of its own) offers as
-     * big a swing on its own -- "fine to play Cynicism for no extra
-     * value" per the maintainer.
+     * the bot's own 0), and nothing ELSE playable (Courage, id 7, value
+     * 1, no EARLY_PRIORITY_EFFECT_KEYS bonus of its own, and unable to
+     * target Cruelty -- Courage only discards a value-5-or-more mood)
+     * offers as big a swing on its own -- "fine to play Cynicism for no
+     * extra value" per the maintainer. Deliberately NOT Pacifism (id 20)
+     * here -- since pacifismSwing() (reported live) was added, Pacifism
+     * would itself have a comparable swing against this same Cruelty
+     * (suppressing it outright), which would no longer test what this
+     * case is actually about.
      */
     public function testChooseActionPlaysCynicismUnboostedWhenItDecidesTheRound(): void
     {
-        $state = $this->boardState(hands: [1 => [62, 20], 2 => [61]]);
+        $state = $this->boardState(hands: [1 => [62, 7], 2 => [61]]);
         $state->moveHandToInPlay(2, 61);
 
-        $action = $this->bot->chooseAction($state, [62, 20], 1);
+        $action = $this->bot->chooseAction($state, [62, 7], 1);
 
         self::assertSame(62, $action['card_id']);
         self::assertSame([], $action['choices']);
@@ -947,6 +952,65 @@ final class BotPlayerServiceTest extends TestCase
         $action = $this->bot->chooseAction($state, [20, 76], 1);
 
         self::assertSame(76, $action['card_id']);
+    }
+
+    /**
+     * Reported live: a bot with an 11-point Euphoria opponent and a
+     * Pacifism it could have played instead played some other, far
+     * weaker card, missing a win -- Pacifism's own printed value (1) is
+     * a poor stand-in for what it's actually worth once a big mood is
+     * available to suppress. Here Apathy (id 55, value 4) would win on
+     * plain baseValue() alone against Pacifism's own 1, but Discipline
+     * (id 9, value 6) is available to suppress, so pacifismSwing() (6)
+     * pushes Pacifism's own total priority (1 + 6 = 7) above Apathy's.
+     */
+    public function testChooseActionPrioritizesPacifismOverAHigherPrintedValueCardWhenTheSwingIsBig(): void
+    {
+        $state = $this->boardState(hands: [1 => [20, 55], 2 => [9]]);
+        $state->moveHandToInPlay(2, 9);
+
+        $action = $this->bot->chooseAction($state, [20, 55], 1);
+
+        self::assertSame(20, $action['card_id']);
+        self::assertSame(['target_mood_ids' => [9]], $action['choices']);
+    }
+
+    /**
+     * The swing bonus above is a genuine value comparison, not a blanket
+     * "always prioritize Pacifism" boost -- with only Courage (id 7,
+     * value 1) available to suppress, Pacifism's own total priority
+     * (1 + 1 = 2) still fairly loses to Apathy's own plain 4.
+     */
+    public function testChooseActionStillPrefersAHigherValueCardWhenPacifismsSwingIsSmall(): void
+    {
+        $state = $this->boardState(hands: [1 => [20, 55], 2 => [7]]);
+        $state->moveHandToInPlay(2, 7);
+
+        $action = $this->bot->chooseAction($state, [20, 55], 1);
+
+        self::assertSame(55, $action['card_id']);
+    }
+
+    /**
+     * The exact scenario reported live: Melancholy (id 69) in play lets
+     * its owner play a discard-pile card "as though it were in their
+     * hand" (BoardState::grantAllows()'s own Melancholy carve-out) --
+     * here Pacifism (id 20) sits in the discard pile rather than hand,
+     * still correctly prioritized over Apathy (id 55, in hand) once
+     * Discipline (id 9, value 6) is available to suppress. Proves the
+     * swing-based priority fix isn't accidentally hand-only.
+     */
+    public function testChooseActionPlaysPacifismFromTheDiscardPileWhenMelancholyIsInPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [69, 20, 55], 2 => [9]]);
+        $state->moveHandToInPlay(1, 69); // Melancholy
+        $state->moveHandToDiscard(1, 20); // Pacifism now sits in the discard pile
+        $state->moveHandToInPlay(2, 9);
+
+        $action = $this->bot->chooseAction($state, [55, 20], 1);
+
+        self::assertSame(20, $action['card_id']);
+        self::assertSame(['target_mood_ids' => [9]], $action['choices']);
     }
 
     // -- Shock (reported live: bots should target an opponent's mood) ------

@@ -7167,6 +7167,35 @@ since it already holds that dependency):
   for no compensating benefit -- there's no reason for the "still played
   eventually" fallback the other cards rely on to apply here at all.
 
+  **Pacifism's own swing, not just its printed value, drives its
+  priority** (reported live: a bot with an opponent's 11-point Euphoria
+  in play, and a Pacifism sitting in the discard pile playable via
+  Melancholy, played some other far weaker card instead, missing a win).
+  Pacifism's own printed value is 1 -- once it clears the `PHP_INT_MIN`
+  veto above, `sortPriorityValue()` used to fall back to that plain
+  value like most other cards, so a low-value filler with a higher
+  printed value than 1 (which is almost anything) always outranked it
+  regardless of how much it would actually deny an opponent. New
+  `pacifismSwing()` sums the value of whatever `pacifismTargetMoodIds()`
+  would suppress right now -- the exact same targets `buildChoicesForCard()`
+  would pick if Pacifism is chosen -- and `sortPriorityValue()` adds it
+  on top of `baseValue()` for Pacifism specifically. Unlike
+  `EARLY_PRIORITY_EFFECT_KEYS`' own flat bonus (which always outranks an
+  unboosted card regardless of magnitude), this is a genuine value
+  comparison living on the same scale as every other card's own
+  `baseValue()`: a Pacifism that would only deny a couple of points still
+  fairly loses to a healthier plain card, while one that would deny an
+  Euphoria-sized mood now correctly outranks nearly everything. Works
+  identically whether Pacifism is sourced from hand or, via Melancholy,
+  the discard pile -- the swing computation itself has no notion of
+  which zone the card came from, only what it would suppress once
+  played. `angerSwingMaximizingTargets()`/Disillusionment's own swing
+  veto above are the two existing precedents for this same "a card's
+  conditional value can dwarf its printed one" shape; Anger itself
+  doesn't yet get an analogous priority BOOST the way Pacifism now does
+  (only its own targeting is swing-aware), a similar latent gap flagged
+  but not fixed here since it wasn't what was reported.
+
   **Shock** (reported live: "bots should choose an opponent's mood to
   target with shock when playing it") gets its own targeting exception
   too, via `shockTargetMoodIds()`: `buildChoicesForCard()` special-cases

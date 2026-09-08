@@ -929,9 +929,23 @@ final class BotPlayerService
      * opponent has any mood in play at all right now, so playing it
      * would suppress nothing. Also absent from EARLY_PRIORITY_EFFECT_KEYS
      * -- it denies an opponent's mood rather than stealing a card,
-     * forcing a discard, or granting the acting player an extra play --
-     * so it too reverts to plain baseValue() once at least one valid
-     * target exists.
+     * forcing a discard, or granting the acting player an extra play.
+     *
+     * Unlike every other card here, though, Pacifism's own printed value
+     * (1) is a poor stand-in for what it's actually worth: reported live
+     * (bots losing a game they could have won by suppressing an 11-point
+     * Euphoria with a Pacifism sitting right there in the discard pile,
+     * playable via Melancholy) -- with only plain baseValue() to sort by,
+     * a wasted low-value filler card always outranked Pacifism regardless
+     * of how much it would have denied an opponent, since 1 loses to
+     * almost anything. pacifismSwing() below adds the total value of
+     * whatever pacifismTargetMoodIds() would actually suppress right now
+     * on TOP of baseValue() -- unlike EARLY_PRIORITY_EFFECT_KEYS' own flat
+     * bonus (which always outranks an unboosted card regardless of
+     * magnitude), this is a genuine value comparison: a Pacifism that
+     * would only deny a couple of points still fairly loses to a
+     * healthier plain card, but one that would deny an Euphoria-sized
+     * mood now correctly outranks nearly everything.
      *
      * Harmony (confirmed by the maintainer) gets the same PHP_INT_MIN
      * treatment whenever the discard pile is completely empty --
@@ -1023,6 +1037,9 @@ final class BotPlayerService
         $priority = $this->baseValue($state, $cardId);
         if (in_array($effectKey, self::EARLY_PRIORITY_EFFECT_KEYS, true)) {
             $priority += self::EARLY_PRIORITY_BONUS;
+        }
+        if ($effectKey === 'pacifism') {
+            $priority += $this->pacifismSwing($state, $botGamePlayerId);
         }
 
         return $priority;
@@ -2944,6 +2961,29 @@ final class BotPlayerService
         usort($bestMoodIdByOpponent, fn (int $a, int $b) => $state->valueOf($b) <=> $state->valueOf($a));
 
         return array_slice($bestMoodIdByOpponent, 0, 2);
+    }
+
+    /**
+     * Reported live: a bot with an 11-point Euphoria opponent and a
+     * Pacifism sitting in the discard pile (playable via Melancholy)
+     * played some other, far weaker card instead, missing a win --
+     * sortPriorityValue()'s own plain baseValue() (1) gave Pacifism no
+     * credit at all for the value it would actually deny. This is the
+     * total value of whatever pacifismTargetMoodIds() would suppress
+     * right now -- the exact same targets the bot's own eventual
+     * buildChoicesForCard() call would pick if this card is chosen --
+     * added on top of baseValue() there. 0 whenever pacifismTargetMoodIds()
+     * is empty, but hasGoodReasonToPlayNow()'s own PHP_INT_MIN veto
+     * already keeps this method from ever being asked in that case.
+     */
+    private function pacifismSwing(BoardState $state, int $botGamePlayerId): int
+    {
+        $swing = 0;
+        foreach ($this->pacifismTargetMoodIds($state, $botGamePlayerId) as $moodId) {
+            $swing += $state->valueOf($moodId);
+        }
+
+        return $swing;
     }
 
     /**
