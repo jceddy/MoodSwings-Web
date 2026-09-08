@@ -2243,7 +2243,7 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame(['given_card_id' => 8], $answer);
     }
 
-    // -- Disillusionment (confirmed by the maintainer) --------------------
+    // -- Disillusionment (reported live) -----------------------------------
 
     private function disillusionmentColorField(int $playerId): array
     {
@@ -2255,15 +2255,24 @@ final class BotPlayerServiceTest extends TestCase
         ];
     }
 
-    public function testChooseDecisionAnswerPicksTheFirstSafeColorForDisillusionment(): void
+    /**
+     * Reported live: "bots should pick a color for disillusionment that
+     * will result in the largest point swing in their favor - if no
+     * color is advantageous to them they should not pick a color."
+     * White hits only the bot's own Dignity (a 3-point self-inflicted
+     * loss); every other color hits nothing at all (swing 0, not a real
+     * gain) -- no color is actually advantageous, so the bot must
+     * decline rather than picking an arbitrary "safe" one that
+     * accomplishes nothing.
+     */
+    public function testChooseDecisionAnswerDeclinesDisillusionmentWhenNoColorHasAPositiveSwing(): void
     {
         $state = $this->boardState(hands: [1 => [8]]); // Dignity, white
         $state->moveHandToInPlay(1, 8);
 
         $answer = $this->bot->chooseDecisionAnswer($state, $this->disillusionmentColorField(1), 1, 'disillusionment_choose_color');
 
-        // white is unsafe (the bot's own mood) -- blue is next in options order
-        self::assertSame(['chosen_color_1' => 'blue'], $answer);
+        self::assertSame([], $answer);
     }
 
     public function testChooseDecisionAnswerIgnoresAnOpponentsColorForDisillusionment(): void
@@ -2274,9 +2283,28 @@ final class BotPlayerServiceTest extends TestCase
 
         $answer = $this->bot->chooseDecisionAnswer($state, $this->disillusionmentColorField(1), 1, 'disillusionment_choose_color');
 
-        // the opponent's blue mood is no reason to avoid blue -- only the
-        // bot's own white mood is unsafe here
+        // blue is a genuine +6 gain (the opponent's Ambivalence, for
+        // free); white would be a -3 self-inflicted loss
         self::assertSame(['chosen_color_1' => 'blue'], $answer);
+    }
+
+    /**
+     * Two different opponents each offer a profitable color -- Awe
+     * (green, value 4) outweighs Anxiety (blue, value 2) -- so the bot
+     * must pick whichever nets the LARGEST swing, not just the first
+     * profitable one in $field['options']' own fixed order (blue sorts
+     * BEFORE green there, so picking green here proves this is a real
+     * swing comparison, not "first profitable color wins").
+     */
+    public function testChooseDecisionAnswerPicksTheColorWithTheLargestPositiveSwing(): void
+    {
+        $state = $this->boardState(hands: [2 => [28], 3 => [107]]); // opponents: Anxiety (blue, 2), Awe (green, 4)
+        $state->moveHandToInPlay(2, 28);
+        $state->moveHandToInPlay(3, 107);
+
+        $answer = $this->bot->chooseDecisionAnswer($state, $this->disillusionmentColorField(1), 1, 'disillusionment_choose_color');
+
+        self::assertSame(['chosen_color_1' => 'green'], $answer);
     }
 
     public function testChooseDecisionAnswerAvoidsATeammatesColorForDisillusionment(): void
@@ -2292,9 +2320,10 @@ final class BotPlayerServiceTest extends TestCase
 
         $answer = $this->bot->chooseDecisionAnswer($state, $this->disillusionmentColorField(1), 1, 'disillusionment_choose_color');
 
-        // white is unsafe (a teammate's mood, even though the bot itself
-        // has none) -- blue is next in options order
-        self::assertSame(['chosen_color_1' => 'blue'], $answer);
+        // white would cost the team 3 points (a teammate's own mood,
+        // even though the bot itself has none); no other color does
+        // anything at all -- nothing here is worth choosing
+        self::assertSame([], $answer);
     }
 
     public function testChooseDecisionAnswerDeclinesDisillusionmentWhenEveryColorIsUnsafe(): void
@@ -2307,6 +2336,84 @@ final class BotPlayerServiceTest extends TestCase
         $answer = $this->bot->chooseDecisionAnswer($state, $this->disillusionmentColorField(1), 1, 'disillusionment_choose_color');
 
         self::assertSame([], $answer);
+    }
+
+    /**
+     * The Disillusionment mood itself is passed as $sourceCardId and must
+     * never count toward its own color's swing -- DisillusionmentEffect::
+     * resolveDecisions() never discards the card that triggered it,
+     * regardless of which color(s) get chosen, so crediting it as a
+     * "free" opponent kill would overstate white's own swing here (it
+     * would otherwise look like a further +2 on top of Ambivalence).
+     */
+    public function testChooseDecisionAnswerExcludesTheSourceCardFromItsOwnColorsSwing(): void
+    {
+        $disillusionmentInstanceId = 500;
+        $state = $this->boardState(
+            hands: [2 => [27], 3 => [$disillusionmentInstanceId]], // opponents: Ambivalence (blue), a second copy of Disillusionment (white)
+            catalogCardIdFor: [$disillusionmentInstanceId => 10], // id 10 = Disillusionment, white
+        );
+        $state->moveHandToInPlay(2, 27);
+        $state->moveHandToInPlay(3, $disillusionmentInstanceId);
+
+        $answer = $this->bot->chooseDecisionAnswer(
+            $state,
+            $this->disillusionmentColorField(1),
+            1,
+            'disillusionment_choose_color',
+            $disillusionmentInstanceId,
+        );
+
+        // white would only ever destroy the excluded source card itself
+        // (swing 0, since it can never actually be discarded) -- blue
+        // (Ambivalence) is the only real gain
+        self::assertSame(['chosen_color_1' => 'blue'], $answer);
+    }
+
+    /**
+     * Reported live: "should not play disillusionment, unless the total
+     * point swing in their favor ... is [positive]." Disillusionment
+     * (id 10, value 2) isn't in EARLY_PRIORITY_EFFECT_KEYS (it discards
+     * moods rather than granting an extra play), so it only ever
+     * competes on its own printed value once hasGoodReasonToPlayNow()
+     * lets it through -- with no moods in play anywhere, every color's
+     * swing is 0 (not positive), so it's vetoed to PHP_INT_MIN and loses
+     * to Panic (id 48, value 1) despite Panic's own lower printed value.
+     */
+    public function testChooseActionDeprioritizesDisillusionmentWhenNoColorWouldBeAdvantageous(): void
+    {
+        $state = $this->boardState(hands: [1 => [10, 48]]);
+
+        $action = $this->bot->chooseAction($state, [10, 48], 1);
+
+        self::assertSame(48, $action['card_id']);
+    }
+
+    /**
+     * With an opponent's Ambivalence (blue, value 6) in play, choosing
+     * blue nets a genuine +6 swing -- the veto lifts, and Disillusionment
+     * reverts to competing at its own plain printed value (2), now
+     * outranking Panic's 1.
+     */
+    public function testChooseActionPrioritizesDisillusionmentWhenAColorWouldBeAdvantageous(): void
+    {
+        $state = $this->boardState(hands: [1 => [10, 48], 2 => [27]]);
+        $state->moveHandToInPlay(2, 27);
+
+        $action = $this->bot->chooseAction($state, [10, 48], 1);
+
+        self::assertSame(10, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
+    /** With nothing else playable, Disillusionment is still played -- deprioritized WHEN, never skipped outright. */
+    public function testChooseActionStillPlaysDisillusionmentWhenNothingElseIsPlayable(): void
+    {
+        $state = $this->boardState(hands: [1 => [10]]);
+
+        $action = $this->bot->chooseAction($state, [10], 1);
+
+        self::assertSame(10, $action['card_id']);
     }
 
     // -- Creativity (confirmed by the maintainer) --------------------------

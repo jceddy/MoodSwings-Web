@@ -2961,11 +2961,11 @@ decisions today). Only chaos_010 needed anything: its own field is
 OPTIONAL (`required: false`, mirroring Disillusionment's own "may choose a
 color"), and `BotChoiceResolver` never fills an optional field at all (see
 its own docblock) -- so `BotPlayerService::chooseDecisionAnswer()`'s
-existing `disillusionment_choose_color` special case (a "safe color"
-policy: never pick a color matching the responding bot's own board, since
-every mood of a chosen color gets discarded regardless of owner) now also
-covers `chaos_010_choose_color`, since chaos_010 is Disillusionment's own
-chaos analog with an identical field shape.
+existing `disillusionment_choose_color` special case (a swing-maximizing
+policy -- see "Practice bots" below -- since every mood of a chosen
+color gets discarded regardless of owner) now also covers
+`chaos_010_choose_color`, since chaos_010 is Disillusionment's own chaos
+analog with an identical field shape.
 
 Six `ChaosCardChoiceSchema` labels (chaos_067/068/078/082/086/096's own
 SYNCHRONOUS "who to target" fields, unchanged in shape, still read
@@ -7606,22 +7606,56 @@ since it already holds that dependency):
   decision type ignores it and falls through to the generic
   resolver-driven behavior above, same as before this parameter existed.
 
-  **Disillusionment** (confirmed by the maintainer) is the one exception
-  to "optional pending-decision field -- declined": every seated player
-  gets asked this once, not just whoever played it
-  (`DisillusionmentEffect::pendingDecisionsFor()`'s own `queueOrder()`),
-  so `$botGamePlayerId` here is whichever bot is currently being asked to
-  answer, not necessarily the one who played the mood.
-  `disillusionmentSafeColor()` picks the first color in `$field['options']`'s
-  own order that matches none of the RESPONDING bot's own moods currently
-  in play, nor a teammate's -- `DisillusionmentEffect::resolveDecisions()`
-  moves EVERY other mood of a chosen color to the discard pile regardless
-  of owner, so an unsafe pick would gladly thin out opponents' boards
-  while blowing up the bot's own (or its teammate's) at the same time.
-  `null` (decline, the same default every other optional field still
-  gets) whenever every color matches something the bot or a teammate
-  owns -- there's no way to participate here without also hurting
-  yourself/your team.
+  **Disillusionment** (reported live: "bots should pick a color for
+  disillusionment that will result in the largest point swing in their
+  favor - if no color is advantageous to them they should not pick a
+  color") is the one exception to "optional pending-decision field --
+  declined": every seated player gets asked this once, not just whoever
+  played it (`DisillusionmentEffect::pendingDecisionsFor()`'s own
+  `queueOrder()`), so `$botGamePlayerId` here is whichever bot is
+  currently being asked to answer, not necessarily the one who played
+  the mood. `disillusionmentBestColor()` computes each candidate color's
+  own signed swing (`disillusionmentColorSwing()`) the same way
+  `guiltSwingContribution()` already does for Guilt's own 'all' mode --
+  `DisillusionmentEffect::resolveDecisions()` moves EVERY other mood of
+  the union of every player's own chosen color(s) to the discard pile
+  regardless of owner, so a color is `+value` per non-teammate opponent
+  mood of that color (a genuine gain) and `-value` per the bot's own or
+  a teammate's (an unavoidable self-inflicted loss once chosen) -- then
+  picks whichever color's total is highest, `null` (decline) unless that
+  best total is actually positive. A merely-safe-but-zero-value color
+  (today's old policy would happily pick one) is no longer treated as
+  worth choosing at all -- there has to be a real gain, not just an
+  absence of self-harm. `$sourceCardId` (`GameService`'s own
+  `game_pending_decision_batches.played_card_id`, threaded through as
+  `chooseDecisionAnswer()`'s new optional 5th parameter -- every other
+  caller/decision type ignores it) excludes the currently-resolving
+  Disillusionment/`chaos_010` mood itself from every color's total,
+  since `resolveDecisions()`'s own `$mood->cardId === $cardId` skip
+  means it can never actually be discarded by its own resolution
+  regardless of which color(s) end up chosen.
+
+  **Whether to play Disillusionment at all** (`hasGoodReasonToPlayNow()`,
+  same reported-live request: "should not play disillusionment, unless
+  the total point swing in their favor ... regardless of which color(s)
+  are chosen by opponents [is positive]") reuses
+  `disillusionmentColorSwing()` from the ACTING bot's own perspective,
+  evaluated against the board as it stands before the card is even
+  played (nothing else's color/value changes just because it's about to
+  be played, so this is exactly the swing `disillusionmentBestColor()`
+  would compute once it actually resolves) -- vetoed to
+  `sortPriorityValue()`'s own `PHP_INT_MIN` treatment unless at least one
+  color is genuinely profitable this way. "Regardless of which color(s)
+  are chosen by opponents" means this deliberately never banks on some
+  OTHER seated player also choosing a color that happens to help the bot
+  too -- only the swing the bot's OWN eventual pick guarantees counts,
+  not a hoped-for assist from someone else's independent "may" choice.
+  Disillusionment isn't in `EARLY_PRIORITY_EFFECT_KEYS` (it discards
+  moods rather than granting an extra play), so clearing this veto just
+  means it competes at its own plain printed value (2) like any other
+  ordinary card -- "deprioritized WHEN, never skipped outright" still
+  applies: with nothing else playable, it's played anyway even with no
+  profitable color to pick.
 
 **Driving a bot's turn: `GameService::advanceAutomatedTurns(int
 $gameId): ?array`.** Called immediately after a human's own

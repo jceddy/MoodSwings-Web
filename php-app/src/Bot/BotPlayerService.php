@@ -377,6 +377,9 @@ final class BotPlayerService
      */
     private const DENIAL_SIGNIFICANT_SWING_THRESHOLD = 4;
 
+    /** @see disillusionmentBestColor()'s own docblock -- mirrors DisillusionmentEffect::COLORS. */
+    private const DISILLUSIONMENT_COLORS = ['white', 'blue', 'black', 'red', 'green'];
+
     public function __construct(
         private readonly BotChoiceResolver $resolver,
     ) {
@@ -650,18 +653,31 @@ final class BotPlayerService
         return $this->lowestMoodValueOwnedBy($state, $giverId);
     }
 
-    /** @return array<string, mixed> */
-    public function chooseDecisionAnswer(BoardState $state, array $field, int $botGamePlayerId, string $decisionType = ''): array
+    /**
+     * @param ?int $sourceCardId the mood whose effect is asking this --
+     *     for Disillusionment/chaos_010 specifically, excluded from its
+     *     own color's swing total, since DisillusionmentEffect::resolveDecisions()
+     *     never discards the card that triggered it regardless of which
+     *     color(s) get chosen (see disillusionmentBestColor()'s own
+     *     docblock). Every other caller (the generic resolver branch
+     *     below) ignores this entirely -- optional purely because most
+     *     existing callers (tests, and any decision type that never
+     *     needs it) have no reason to plumb a source card id through at
+     *     all.
+     * @return array<string, mixed>
+     */
+    public function chooseDecisionAnswer(BoardState $state, array $field, int $botGamePlayerId, string $decisionType = '', ?int $sourceCardId = null): array
     {
         // chaos_010 (issue #405 follow-up) is Disillusionment's own chaos
         // analog -- identical printed text, identical field shape (an
         // optional 'mode' color pick) -- so it reuses the exact same
-        // safe-color policy rather than falling through to the generic
-        // resolver, which would never fill an optional field at all (see
-        // BotChoiceResolver's own docblock) and so never participate,
-        // safe but strictly worse than picking a color that can't backfire.
+        // swing-maximizing policy rather than falling through to the
+        // generic resolver, which would never fill an optional field at
+        // all (see BotChoiceResolver's own docblock) and so never
+        // participate, safe but strictly worse than picking a color that
+        // actually profits.
         if ($decisionType === 'disillusionment_choose_color' || $decisionType === 'chaos_010_choose_color') {
-            $color = $this->disillusionmentSafeColor($state, $field, $botGamePlayerId);
+            $color = $this->disillusionmentBestColor($state, $field, $botGamePlayerId, $sourceCardId);
 
             return $color === null ? [] : [$field['key'] => $color];
         }
@@ -672,46 +688,100 @@ final class BotPlayerService
     }
 
     /**
-     * Disillusionment's own "which color, if any" policy (confirmed by
-     * the maintainer) -- every seated player, not just whoever played
-     * Disillusionment, gets asked this once it resolves (see
-     * DisillusionmentEffect::pendingDecisionsFor()'s own queueOrder()), so
-     * $botGamePlayerId here is whichever bot is currently being asked, not
-     * necessarily the one who played the mood. A "safe" color is one that
-     * matches none of the responding bot's own moods currently in play,
-     * nor any teammate's -- DisillusionmentEffect::resolveDecisions()
-     * moves EVERY other mood of a chosen color to the discard pile
-     * regardless of owner, so picking an unsafe color would gladly thin
-     * out opponents' boards while blowing up the bot's own (or its
-     * teammate's) at the same time. The first such safe color in
-     * $field['options']' own order wins ties -- this class has no finer
-     * basis to prefer one safe color over another over the others (unlike
-     * avoidanceBestDirection()'s own value-driven tiebreak, nothing here
-     * distinguishes an opponent's mood from another's), matching
-     * BotChoiceResolver's own "first option" default for every other
-     * non-strategic mode field. Null (decline, this field's own pre-
-     * existing default before this policy existed) whenever every color
-     * matches something the bot or a teammate owns -- there's no way to
-     * participate here without also hurting yourself/your team, so this
-     * falls back to never volunteering for it at all, the same as any
-     * other optional field with a real cost attached.
+     * Disillusionment's own "which color, if any" policy (reported live:
+     * "bots should pick a color for disillusionment that will result in
+     * the largest point swing in their favor - if no color is
+     * advantageous to them they should not pick a color") -- every
+     * seated player, not just whoever played Disillusionment, gets asked
+     * this once it resolves (see DisillusionmentEffect::pendingDecisionsFor()'s
+     * own queueOrder()), so $botGamePlayerId here is whichever bot is
+     * currently being asked, not necessarily the one who played the
+     * mood. DisillusionmentEffect::resolveDecisions() moves EVERY other
+     * mood of the union of every player's own chosen color(s) to the
+     * discard pile regardless of owner, so this mirrors
+     * guiltSwingContribution()'s own signed-swing shape (Guilt's 'all'
+     * mode has the exact same "hits every owner, not just opponents"
+     * property) rather than Anger's/Pacifism's own opponent-only
+     * targeting: for each candidate color, sum +value for every
+     * non-teammate opponent's mood of that color (a genuine gain) and
+     * -value for every one of the bot's own or a teammate's (a
+     * self-inflicted loss this "may" choice can't avoid once made), then
+     * pick whichever color's total is the highest -- but only if that
+     * total is actually positive; a merely-zero-or-negative best color
+     * would mean the same as declining, plus at least one color would
+     * still need to gladly hurt the bot's own side or accomplish
+     * literally nothing, so this only ever returns a color that's
+     * genuinely worth choosing at all. $sourceCardId (the currently-
+     * resolving Disillusionment/chaos_010 mood itself) is excluded from
+     * every color's total, since it's the one mood its own effect can
+     * never discard (`resolveDecisions()`'s own `$mood->cardId ===
+     * $cardId` skip) regardless of which color(s) end up chosen -- left
+     * uncounted rather than mistakenly read as a free opponent kill (or
+     * self-inflicted loss) that will never actually happen.
      */
-    private function disillusionmentSafeColor(BoardState $state, array $field, int $botGamePlayerId): ?string
+    private function disillusionmentBestColor(BoardState $state, array $field, int $botGamePlayerId, ?int $sourceCardId): ?string
     {
-        $unsafeColors = [];
-        foreach ($state->moodsInPlay() as $mood) {
-            if ($mood->ownerId === $botGamePlayerId || $state->isTeammate($botGamePlayerId, $mood->ownerId)) {
-                $unsafeColors[] = $state->colorOf($mood->cardId);
-            }
-        }
-
+        $bestColor = null;
+        $bestSwing = 0;
         foreach ($field['options'] ?? [] as $color) {
-            if (!in_array($color, $unsafeColors, true)) {
-                return $color;
+            $swing = $this->disillusionmentColorSwing($state, $botGamePlayerId, $color, $sourceCardId);
+            if ($swing > $bestSwing) {
+                $bestSwing = $swing;
+                $bestColor = $color;
             }
         }
 
-        return null;
+        return $bestColor;
+    }
+
+    /** @see disillusionmentBestColor()'s own docblock for the swing computation itself. */
+    private function disillusionmentColorSwing(BoardState $state, int $botGamePlayerId, string $color, ?int $sourceCardId): int
+    {
+        $swing = 0;
+        foreach ($state->moodsInPlay() as $mood) {
+            if ($mood->cardId === $sourceCardId || $state->colorOf($mood->cardId) !== $color) {
+                continue;
+            }
+            $value = $state->valueOf($mood->cardId);
+            $swing += ($mood->ownerId === $botGamePlayerId || $state->isTeammate($botGamePlayerId, $mood->ownerId)) ? -$value : $value;
+        }
+
+        return $swing;
+    }
+
+    /**
+     * Disillusionment's own "should this even be played" veto (reported
+     * live, same message as disillusionmentBestColor()'s own docblock:
+     * "should not play disillusionment, unless the total point swing in
+     * their favor ... regardless of which color(s) are chosen by
+     * opponents [is positive]") -- reuses the EXACT same per-color swing
+     * this bot's own eventual chooseDecisionAnswer() call will use to
+     * pick a color, evaluated from $botGamePlayerId's own perspective
+     * against the board as it stands right now (Disillusionment itself
+     * hasn't been played yet at this point, so there's no source card id
+     * to exclude -- nothing else on the board changes color/value just
+     * because it's about to be played, so this is exactly the same
+     * calculation `disillusionmentBestColor()` will make once it
+     * actually resolves). "Regardless of which color(s) are chosen by
+     * opponents" means this deliberately does NOT bank on some OTHER
+     * player also choosing a color that happens to help the bot too --
+     * only a color the bot itself could profitably choose counts, the
+     * same guaranteed-in-the-bot's-own-hands swing
+     * disillusionmentBestColor() would actually deliver regardless of
+     * what anyone else at the table decides. No color being genuinely
+     * profitable this way means playing Disillusionment right now would
+     * be a wasted "may" choice for every seated player -- not worth
+     * leading with over some other candidate.
+     */
+    private function disillusionmentHasAGoodReasonToPlayNow(BoardState $state, int $botGamePlayerId): bool
+    {
+        foreach (self::DISILLUSIONMENT_COLORS as $color) {
+            if ($this->disillusionmentColorSwing($state, $botGamePlayerId, $color, null) > 0) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -1010,6 +1080,9 @@ final class BotPlayerService
             return false;
         }
         if ($effectKey === 'harmony' && $state->discardPile() === []) {
+            return false;
+        }
+        if ($effectKey === 'disillusionment' && !$this->disillusionmentHasAGoodReasonToPlayNow($state, $botGamePlayerId)) {
             return false;
         }
         // Reported live: "bots shouldn't play Thrill as an opener." Its

@@ -430,7 +430,7 @@ final class SearchBotPlayerService
 
             $answers = [];
             foreach ($result->pendingDecisions as $decision) {
-                $answer = $this->heuristic->chooseDecisionAnswer($sim, $decision->field, $decision->targetPlayerId, $decision->decisionType);
+                $answer = $this->heuristic->chooseDecisionAnswer($sim, $decision->field, $decision->targetPlayerId, $decision->decisionType, $result->playedCardId);
                 $answers[$decision->key] = new PlayerChoices($answer);
             }
 

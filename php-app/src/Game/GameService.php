@@ -5208,7 +5208,7 @@ final class GameService
 
                 if ($targetGamePlayerId !== null && in_array($targetGamePlayerId, $botGamePlayerIds, true)) {
                     $field = json_decode((string) $decision['field'], true);
-                    $answer = $this->bots->chooseDecisionAnswer($this->boardStates->load($gameId), $field, $targetGamePlayerId, (string) $decision['decision_type']);
+                    $answer = $this->bots->chooseDecisionAnswer($this->boardStates->load($gameId), $field, $targetGamePlayerId, (string) $decision['decision_type'], (int) $batch['played_card_id']);
                     $lastResult = $this->respondToDecision($gameId, $targetGamePlayerId, $answer);
                     continue;
                 }
