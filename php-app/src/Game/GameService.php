@@ -10991,6 +10991,82 @@ final class GameService
     }
 
     /**
+     * bin/advance_automated_turns.php's own cron entry point (reported
+     * live: "add a way for a bot finishing its turn to advance to the
+     * next turn without requiring a physical browser refresh somewhere -
+     * mostly this is so notifications can be generated when it is the
+     * human player's turn"). Every OTHER call site for
+     * advanceAutomatedTurns() (see that method's own docblock, and "Driving
+     * a bot's turn" in this file's own top-of-file docblock) only ever
+     * runs as a side effect of some client's own HTTP request against
+     * that specific game -- a human's own play/pass/etc., or (for the
+     * all-bot-team-decision deadlock case) that game's own `GET
+     * /games/state` poll timer, which only ticks while a browser has that
+     * game's board open. A bot's turn (or an all-bot team decision, or an
+     * auto-pass/auto-apply-scoring-bonus opt-in) landing in a game NOBODY
+     * is currently looking at -- every human seat's own tab closed, no
+     * spectator polling it either -- has no such request left to ride
+     * along on, so it simply sits there, unresolved, until someone
+     * eventually reopens it; and since `NotificationService::notifyYourTurn()`
+     * only ever fires from INSIDE that resolution (see
+     * notifyGamePlayersItsYourTurn()), the human waiting on that bot never
+     * gets told their turn arrived until they just so happen to check back
+     * on their own.
+     *
+     * Run every active (non-terminal) game through advanceAutomatedTurns()
+     * directly, independent of any request -- a periodic sweep rather than
+     * a targeted one, since there's no cheap way to know in advance which
+     * games currently have something automated pending without loading
+     * each one anyway, and advanceAutomatedTurns() itself already early-outs
+     * fast (two lookups) for the common case of a game with nothing
+     * automated to do at all. `'waiting'` is included alongside
+     * `'in_progress'` for the exact same reason `GET /games/state`'s own
+     * call site is unconditional (see advanceBotDraftTurn()'s own
+     * docblock) -- a still-drafting/deck-building bot-seated game needs
+     * this too, before a round (or even `game_rounds`) exists at all.
+     * `'completed'`/`'abandoned'` games are skipped outright -- nothing
+     * left to advance.
+     *
+     * Each call is independently wrapped in the exact same
+     * `try`/`catch (GameStateException)` "best-effort, discard on failure"
+     * pattern every other advanceAutomatedTurns() call site already uses
+     * (most plausibly `withGameLock()`'s own "busy" timeout, e.g. this
+     * sweep racing a real player's own concurrent request against the
+     * same game) -- one game's own transient failure must never abort the
+     * sweep for every other game queued up behind it. Safe to run
+     * concurrently with any live request, or with a slower-than-expected
+     * previous run of this same script, purely because
+     * advanceAutomatedTurns() itself already drives every actual mutation
+     * through playMood()/pass()/etc., each independently serialized by its
+     * own per-game withGameLock() -- nothing here adds, or needs, any
+     * locking of its own.
+     *
+     * @return int how many games this sweep actually found something
+     *   automated to advance in (advanceAutomatedTurns() returned
+     *   non-null) -- purely informational, for the cron script's own
+     *   one-line log summary; not a count of every game examined.
+     */
+    public function advanceAutomatedTurnsForAllActiveGames(): int
+    {
+        $idsStmt = Connection::get()->query("SELECT id FROM games WHERE status IN ('waiting', 'in_progress')");
+        $gameIds = array_map(intval(...), $idsStmt->fetchAll(PDO::FETCH_COLUMN));
+
+        $advancedCount = 0;
+        foreach ($gameIds as $gameId) {
+            try {
+                if ($this->advanceAutomatedTurns($gameId) !== null) {
+                    $advancedCount++;
+                }
+            } catch (GameStateException) {
+                // Best-effort, same as every other advanceAutomatedTurns()
+                // call site -- see this method's own docblock.
+            }
+        }
+
+        return $advancedCount;
+    }
+
+    /**
      * Spectator mode (issue #128): every currently-'in_progress' game any
      * of $friendUserIds is seated in, that $viewerUserId is NOT seated in
      * -- the lobby's own games (listGamesForUser() above) never appear

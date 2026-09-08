@@ -7748,6 +7748,77 @@ so the game simply sits `waiting` (bot's deck already submitted, human's
 still pending) until the human does. See "New game dialog" in
 `web-static/README.md` for the picker/decklist fields this adds.
 
+**Advancing bot turns with nobody watching (reported live): "add a way
+for a bot finishing its turn to advance to the next turn without
+requiring a physical browser refresh somewhere - mostly this is so
+notifications can be generated when it is the human player's turn."**
+Every call site for `advanceAutomatedTurns()` documented above --
+including `GET /games/state`'s own unconditional call, the fix for the
+all-bot team-decision deadlock -- only ever runs as a side effect of some
+client's own HTTP request against that specific game. `GET /games/state`
+covers the common case (any seated human's own board open, polling every
+4 seconds via the board's own `pollTimer` -- see `web-static/README.md`),
+but a bot's turn (or an all-bot team decision, or an auto-pass/
+auto-apply-scoring-bonus opt-in) landing in a game where EVERY human seat
+has since closed their tab, with no spectator polling it either, has no
+request left to ever reach `advanceAutomatedTurns()` again -- it just
+sits there, unresolved, until someone eventually reopens the game. Since
+`NotificationService::notifyYourTurn()` (see "Browser push notifications"/
+"Discord" above) only ever fires from INSIDE that same resolution
+(`notifyGamePlayersItsYourTurn()`, called once the turn/decision actually
+lands on a human), the human waiting on that bot never gets told their
+turn arrived until they happen to check back on their own -- exactly
+backwards from the whole point of a notification.
+
+`GameService::advanceAutomatedTurnsForAllActiveGames(): int` is the fix:
+a periodic sweep, independent of any request, that runs EVERY
+`'waiting'`/`'in_progress'` game (`'completed'`/`'abandoned'` games are
+skipped outright -- nothing left to advance; `'waiting'` is included for
+the same reason `advanceBotDraftTurn()` is always tried first inside
+`advanceAutomatedTurns()` itself -- a still-drafting/deck-building
+bot-seated game needs this too, before a round exists at all) through
+`advanceAutomatedTurns()` directly. There's no cheap way to know in
+advance which games currently have something automated pending short of
+loading each one anyway, so this doesn't try to pre-filter by bot
+presence -- `advanceAutomatedTurns()`'s own early-out (two lookups; see
+its own docblock) already makes the common "nothing to do here" case
+cheap. Each call is wrapped in the same `try`/`catch (GameStateException)`
+"best-effort, discard on failure" pattern every other call site already
+uses (most plausibly `withGameLock()`'s own "busy" timeout -- this sweep
+racing a real player's own concurrent request against the same game), so
+one game's transient failure can't abort the sweep for every other game
+queued up behind it. Needs no locking of its own beyond that: every
+actual mutation still goes through `playMood()`/`pass()`/etc., each
+independently serialized by its own per-game `withGameLock()` cycle --
+running this sweep concurrently with live traffic, or with a
+slower-than-expected previous run of itself, is already safe by
+construction. Returns how many games it found something to advance in,
+purely for the cron script's own one-line log summary.
+
+`bin/advance_automated_turns.php` is the cron entry point (meant to run
+every minute or so -- see its own crontab example), mirroring
+`bin/expire_and_delete_stale_games.php`'s standalone-script bootstrap
+pattern, but constructing `GameService` WITH a real `NotificationService`
+(wired up exactly like `public/index.php`'s own request-serving
+construction) -- unlike that cleanup script, this one's whole point is
+letting a bot's turn actually reach the notification call already sitting
+inside `GameService`'s own turn-advance code, not just mutate game state
+with nobody told.
+
+**The same gap already existed in `bin/run_bot_search.php` -- found live
+in the process, fixed alongside it.** The Tactical Bot's own detached
+search job (`runTacticalBotSearchJob()`, see "Tactical Bot" below) calls
+`playMood()`/`pass()` directly once its search finishes -- exactly where
+the "it's your turn" notification fires for whoever it hands the turn to
+next. But `run_bot_search.php` constructed its own `GameService` without
+`notifications:` at all (the constructor's own default is `null`), the
+same way `expire_and_delete_stale_games.php`'s `GameService` deliberately
+does since that script genuinely never needs to notify anyone -- so every
+completed Tactical Bot search silently skipped that notification too.
+Fixed the same way: `run_bot_search.php` now wires up a real
+`NotificationService` the same way `advance_automated_turns.php` (and
+`public/index.php`) do.
+
 ### Tactical Bot (issue #419)
 
 A second, opt-in bot tier that actually searches for a good play on its
