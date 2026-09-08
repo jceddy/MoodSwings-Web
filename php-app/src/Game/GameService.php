@@ -952,15 +952,20 @@ final class GameService
         }
         if (self::isDuelShapedFormat($format)) {
             // Quick Draft, Grid Draft, Winston Draft, Rotisserie Draft,
-            // Tiered Rotisserie Draft, and Sealed Deck all support 3-4
-            // players now (issue #189) -- 'duel' itself stays locked to
-            // exactly 2.
-            if ($format === 'draft' && in_array($deckType, ['quick_draft', 'grid_draft', 'winston_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck'], true)) {
-                if (count($userIds) < 2 || count($userIds) > 4) {
-                    throw new GameStateException("A {$deckType} game must have 2-4 players");
-                }
-            } elseif (count($userIds) !== 2) {
-                throw new GameStateException("A {$format} game must have exactly 2 players");
+            // Tiered Rotisserie Draft, Chaos Draft, and Sealed Deck all
+            // support 3-4 players (issue #189); the constructed 'duel'
+            // deck types (custom_duel/power/structure/jceddys_75) now do
+            // too (issue #505) -- format 'draft' and 'duel' each carry
+            // only their own deck_type family (see isDuelShapedFormat()'s
+            // own docblock), so every deck_type reaching here already
+            // supports separate per-player decks for any of 2-4 players
+            // regardless of which of the two formats it's under, and a
+            // single range check covers both. Best-of-three/Power Duel
+            // sideboarding stay 2-player-only for constructed 'duel'
+            // deck types specifically -- see $bestOfThree's own
+            // $createGameMatch condition further down.
+            if (count($userIds) < 2 || count($userIds) > 4) {
+                throw new GameStateException("A {$deckType} game must have 2-4 players");
             }
         }
         if ($deckType === 'rotisserie_draft' && ($rotisserieDraftCutoffCount < self::ROTISSERIE_DRAFT_MIN_CUTOFF || $rotisserieDraftCutoffCount > self::ROTISSERIE_DRAFT_MAX_CUTOFF)) {
@@ -1027,6 +1032,13 @@ final class GameService
         }
         if ($botUserId !== null && $deckType === 'custom_duel' && $botDecklistText === null && $botSavedDecklistId === null) {
             throw new GameStateException('A decklist for the practice bot is required for a custom_duel game');
+        }
+        // Issue #505: constructed Duel now supports 3-4 players, so a
+        // custom_duel game could otherwise seat 2+ bots -- see
+        // botUserCountAmong()'s own docblock for why only one bot's own
+        // decklist can actually be supplied.
+        if ($deckType === 'custom_duel' && $this->botUserCountAmong($userIds) > 1) {
+            throw new GameStateException('A custom_duel game can only seat one practice bot -- there\'s no way to supply a decklist for more than one');
         }
 
         $customDeckName = null;
@@ -1178,9 +1190,17 @@ final class GameService
         // exactly 2 players (issue #90 follow-up, migration 0225) -- with
         // 3-4, "first to 2 game wins" no longer names a single opponent,
         // the same reason draftGamesToWin() itself falls back to a single
-        // game once more than 2 players share a draft match.
+        // game once more than 2 players share a draft match. 'duel' gets
+        // the identical count(...) === 2 restriction now too (issue #505,
+        // constructed Duel deck types supporting 3-4 players) -- for the
+        // exact same reason: gameMatchSummaryFor()'s own your_wins/
+        // opponent_wins is a two-SIDED comparison (aggregated per team for
+        // 'team'/'closed_team', which stays unrestricted here since a
+        // "side" there is always exactly 2 of the 4 seats regardless of
+        // format-level player count), with no single well-defined
+        // "opponent" once 'duel' itself seats 3-4 unpaired individuals.
         $createGameMatch = $bestOfThree && !in_array($deckType, self::DRAFT_DECK_TYPES, true)
-            && ($format === 'duel' || self::isTeamFormat($format) || ($format === 'standard' && count($userIds) === 2));
+            && (($format === 'duel' && count($userIds) === 2) || self::isTeamFormat($format) || ($format === 'standard' && count($userIds) === 2));
 
         // Power Duel sideboarding (see $allowSideboarding's own docblock
         // above) only ever actually applies to a 'duel'/'custom_duel'
@@ -1519,6 +1539,37 @@ final class GameService
         $id = $stmt->fetchColumn();
 
         return $id !== false ? (int) $id : null;
+    }
+
+    /**
+     * How many of $userIds are practice bots -- unlike botUserIdAmong()
+     * above ("which ONE," via its own LIMIT 1), this counts every one of
+     * them. Used only to reject seating 2+ bots in a 'custom_duel' game
+     * (issue #505, constructed Duel deck types now supporting 3-4
+     * players): $botDecklistText/$botSavedDecklistId only ever supply a
+     * SINGLE bot's own decklist, and #new-game-bot-decklist-fields is a
+     * single shared field in the New Game dialog for the same reason --
+     * neither has anywhere to put a second bot's own decklist, so a
+     * second (or third) bot seated alongside the first would otherwise
+     * silently sit deckless forever, leaving the game stuck 'waiting' on
+     * a decklist submission its own creator has no way to make on that
+     * bot's behalf. Every other constructed Duel deck_type (Structure/
+     * Power/jceddy's 75) needs no such per-seat decklist supply at all
+     * (deckCardIdsFor() builds each seat's own deck automatically), so
+     * this restriction is scoped to 'custom_duel' alone, not constructed
+     * Duel in general.
+     */
+    private function botUserCountAmong(array $userIds): int
+    {
+        if ($userIds === []) {
+            return 0;
+        }
+
+        $placeholders = implode(',', array_fill(0, count($userIds), '?'));
+        $stmt = Connection::get()->prepare("SELECT COUNT(*) FROM users WHERE id IN ({$placeholders}) AND is_bot = 1");
+        $stmt->execute(array_values($userIds));
+
+        return (int) $stmt->fetchColumn();
     }
 
     /**

@@ -1147,14 +1147,29 @@ final class GameServiceIntegrationTest extends TestCase
         return ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2, 'u1' => $u1, 'u2' => $u2];
     }
 
-    public function testCreateGameRejectsADuelWithMoreThanTwoPlayers(): void
+    /**
+     * Constructed Duel (custom_duel/power/structure/jceddys_75) now
+     * supports 3-4 players (issue #505), the same 2-4 gate every 'draft'
+     * deck_type already got in issue #189 -- only 5+ players (which trips
+     * the game-wide MAX_PLAYERS check before ever reaching this one) or
+     * fewer than 2 are rejected now.
+     */
+    public function testCreateGameAcceptsADuelWithThreeOrFourPlayers(): void
     {
-        $u1 = $this->insertUser('dueltoomany1');
-        $u2 = $this->insertUser('dueltoomany2');
-        $u3 = $this->insertUser('dueltoomany3');
+        foreach ([3, 4] as $playerCount) {
+            $userIds = $this->insertUsers('duelmulti-' . uniqid() . '-', $playerCount);
+            $gameId = $this->games->createGame($userIds[0], $userIds, format: 'duel');
+            self::assertIsInt($gameId, "{$playerCount} players should be accepted");
+        }
+    }
+
+    public function testCreateGameRejectsADuelWithMoreThanFourPlayers(): void
+    {
+        $userIds = $this->insertUsers('dueltoomany-' . uniqid() . '-', 5);
 
         $this->expectException(GameStateException::class);
-        $this->games->createGame($u1, [$u1, $u2, $u3], format: 'duel');
+        $this->expectExceptionMessage('cannot have more than 4 players');
+        $this->games->createGame($userIds[0], $userIds, format: 'duel');
     }
 
     public function testCreateGameRejectsADuelWithFewerThanTwoPlayers(): void
@@ -1173,6 +1188,134 @@ final class GameServiceIntegrationTest extends TestCase
         $gameId = $this->games->createGame($u1, [$u1, $u2], format: 'duel');
 
         self::assertSame('duel', $this->fetchGame($gameId)['format']);
+    }
+
+    /**
+     * Every constructed Duel player gets their own independently-built
+     * deck the same way 'one_of_each' already does for 2 players (see
+     * testStartGameGivesEachDuelPlayerTheirOwnIndependentOneOfEachDeck()
+     * below) -- BoardState's own per-player deck keying (hasSeparateDecks)
+     * already generalizes past 2 seats (it's the same mechanism 'draft'
+     * has used for 3-4 players since issue #189), so this just confirms
+     * startGame() itself doesn't choke on a 3rd/4th constructed Duel seat.
+     */
+    public function testStartGameGivesEachThreePlayerDuelTheirOwnIndependentOneOfEachDeck(): void
+    {
+        $userIds = $this->insertUsers('duel3p-' . uniqid() . '-', 3);
+        $gameId = $this->games->createGame($userIds[0], $userIds, format: 'duel', deckType: 'one_of_each');
+
+        $this->games->startGame($gameId);
+
+        $gamePlayerIds = array_map(fn (int $userId) => $this->games->gamePlayerIdFor($gameId, $userId), $userIds);
+
+        $nullOwnerStmt = $this->pdo->prepare(
+            "SELECT COUNT(*) FROM game_cards WHERE game_id = :game_id AND zone = 'deck' AND owner_game_player_id IS NULL"
+        );
+        $nullOwnerStmt->execute(['game_id' => $gameId]);
+        self::assertSame(0, (int) $nullOwnerStmt->fetchColumn()); // no shared/ownerless deck rows in a duel
+
+        $deckStmt = $this->pdo->prepare(
+            "SELECT owner_game_player_id, COUNT(*) AS n FROM game_cards WHERE game_id = :game_id AND zone = 'deck' GROUP BY owner_game_player_id"
+        );
+        $deckStmt->execute(['game_id' => $gameId]);
+        $counts = array_column($deckStmt->fetchAll(), 'n', 'owner_game_player_id');
+
+        // Each of the 3 players gets their OWN complete deck (133 total,
+        // 5 dealt to hand), not a shared pool split three ways.
+        foreach ($gamePlayerIds as $gamePlayerId) {
+            self::assertSame(133 - 5, (int) $counts[$gamePlayerId]);
+        }
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
+    }
+
+    /**
+     * Best-of-three (issue #90) stays 2-player-only for constructed Duel
+     * even now that 3-4p is supported (issue #505's own suggested scope)
+     * -- gameMatchSummaryFor()'s own your_wins/opponent_wins is a two-
+     * SIDED comparison with no well-defined "opponent" once 'duel' seats
+     * 3-4 unpaired individuals, the same reason Traditional's own
+     * best-of-three is 2-player-only (see
+     * testCreateGameBestOfThreeForStandardWithThreePlayersIsIgnored()).
+     * $bestOfThree is silently ignored (not thrown), the same "the New
+     * Game dialog's own checkbox is hidden for this combination" harmless
+     * no-op convention every other creation-time opt-in here follows.
+     */
+    public function testCreateGameBestOfThreeForDuelWithThreePlayersIsIgnored(): void
+    {
+        $userIds = $this->insertUsers('bo3-duel-3p-' . uniqid(), 3);
+
+        $gameId = $this->games->createGame($userIds[0], $userIds, format: 'duel', deckType: 'structure', bestOfThree: true);
+
+        $game = $this->fetchGame($gameId);
+        self::assertNull($game['game_match_id']);
+        self::assertNull($game['match_game_number']);
+    }
+
+    /**
+     * The mirror-image 2-player case still creates a real match, proving
+     * the fix above didn't accidentally disable best-of-three for Duel
+     * altogether.
+     */
+    public function testCreateGameBestOfThreeForDuelWithTwoPlayersCreatesAGameMatch(): void
+    {
+        $alice = $this->insertUser('bo3-duel-2p-alice');
+        $bob = $this->insertUser('bo3-duel-2p-bob');
+
+        $gameId = $this->games->createGame($alice, [$alice, $bob], format: 'duel', deckType: 'structure', bestOfThree: true);
+
+        $game = $this->fetchGame($gameId);
+        self::assertNotNull($game['game_match_id']);
+        self::assertSame(1, (int) $game['match_game_number']);
+    }
+
+    /**
+     * custom_duel's own $botDecklistText/$botSavedDecklistId (and the New
+     * Game dialog's own single #new-game-bot-decklist-fields) only ever
+     * supply ONE bot's own decklist -- reported as a design gap while
+     * implementing issue #505 (3-4p constructed Duel could otherwise seat
+     * 2+ bots with no way to submit a decklist for more than one of
+     * them). Rejected outright rather than silently leaving a second bot
+     * deckless and the game stuck 'waiting' forever.
+     */
+    public function testCreateGameRejectsACustomDuelGameWithTwoBots(): void
+    {
+        $human = $this->insertUser('duel-2bots-human');
+        $bot1 = $this->insertBotUser('duel-2bots-bot1');
+        $bot2 = $this->insertBotUser('duel-2bots-bot2');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('can only seat one practice bot');
+        $this->games->createGame(
+            $human,
+            [$human, $bot1, $bot2],
+            format: 'duel',
+            deckType: 'custom_duel',
+            botDecklistText: "1 Charity\n1 Chivalry\n1 Complacency\n1 Benevolence\n1 Conviction\n1 Encouragement\n1 Faith",
+        );
+    }
+
+    /**
+     * The mirror-image case -- exactly one bot alongside 2 humans (3
+     * players total) -- still works, proving the rejection above is
+     * scoped to 2+ bots specifically, not constructed Duel with a bot at
+     * all.
+     */
+    public function testCreateGameAcceptsACustomDuelGameWithOneBotAndThreePlayers(): void
+    {
+        $human1 = $this->insertUser('duel-1bot-human1');
+        $human2 = $this->insertUser('duel-1bot-human2');
+        $bot = $this->insertBotUser('duel-1bot-bot');
+
+        $gameId = $this->games->createGame(
+            $human1,
+            [$human1, $human2, $bot],
+            format: 'duel',
+            deckType: 'custom_duel',
+            duelDeckRules: ['preset' => 'user_defined', 'min_cards' => 7],
+            botDecklistText: "1 Charity\n1 Chivalry\n1 Complacency\n1 Benevolence\n1 Conviction\n1 Encouragement\n1 Faith",
+        );
+
+        self::assertIsInt($gameId);
     }
 
     public function testStartGameGivesEachDuelPlayerTheirOwnIndependentOneOfEachDeck(): void

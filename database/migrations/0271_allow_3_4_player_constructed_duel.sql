@@ -1,0 +1,27 @@
+-- Issue #505: "Allow constructed Duel formats (Custom Duel, Power,
+-- Structure, jceddy's 75) to seat 3-4 players."
+--
+-- format 'duel' was hard-locked to exactly 2 players for every
+-- constructed deck_type (GameService::createGame()'s own
+-- isDuelShapedFormat() gate). Issue #189 already relaxed this same
+-- limit for the DRAFT side of format 'duel'/'draft' (2-4 players);
+-- everything below that gate (BoardState's own hasSeparateDecks deck
+-- keying, deckCardIdsFor()'s per-player deck building, ordinary turn
+-- advancement) already generalizes to N players unchanged, since
+-- 'draft' and 'duel' share the exact same rules engine -- so the fix
+-- is a single unified 2-4 player range check covering both formats,
+-- with no changes needed anywhere else in the core engine.
+--
+-- Two narrower restrictions come along with it, both scoped to
+-- constructed Duel specifically:
+--   - Best-of-three (issue #90) and Power Duel sideboarding stay
+--     2-player-only -- gameMatchSummaryFor()'s own your_wins/
+--     opponent_wins is a two-SIDED comparison with no well-defined
+--     "opponent" once 'duel' seats 3-4 unpaired individuals.
+--   - A custom_duel game can only ever seat one practice bot --
+--     $botDecklistText/$botSavedDecklistId only ever supply a SINGLE
+--     bot's own decklist, with nowhere to put a second one.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.37.0' WHERE id = 1;
