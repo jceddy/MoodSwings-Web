@@ -2411,9 +2411,10 @@ just the individual game) is `'completed'`.
 
 **Multiplayer (issue #189)** -- Quick Draft, Winston Draft, and Grid
 Draft all support 2-4 players (`createGame()`'s `isDuelShapedFormat()`
-gate widens specifically for `format: 'draft'` + `deck_type` in
-`['quick_draft', 'winston_draft', 'grid_draft']`; `'duel'` itself stays
-locked to exactly 2). Everything above still holds for a 2-player match;
+gate is a single `count($userIds)` range check covering every deck_type
+under both `format: 'draft'` and `format: 'duel'` alike -- see "Duel:
+separate per-player decks" above for constructed Duel's own 2-4 player
+support, issue #505). Everything above still holds for a 2-player match;
 this section covers what changes for 3-4 (Winston Draft's own and Grid
 Draft's own multiplayer mechanics -- turn rotation, pool sizing, and
 each format's own take on the sub-12-card shortfall -- are covered in
@@ -3734,17 +3735,18 @@ migration 0225) Traditional -- via a separate, purpose-built
 API/New Game dialog). It's ignored (not an error) for any draft-based
 `deck_type`, which already gets its own match regardless.
 
-**Traditional (`format: 'standard'`) only qualifies at exactly 2
-players** -- unlike Duel (always 2) and the team formats (always 4, and
-so always exactly 2 SIDES of 2), Traditional supports 2-4 individual
-players with no inherent pairing between them. "First to 2 game wins"
+**Traditional (`format: 'standard'`) and Duel both only qualify at
+exactly 2 players** -- unlike the team formats (always 4, and so always
+exactly 2 SIDES of 2), Traditional and Duel each support 2-4 individual
+players (Duel as of issue #505, see "Duel: separate per-player decks"
+above) with no inherent pairing between them. "First to 2 game wins"
 only names a single, unambiguous opponent when there are exactly 2
 players to begin with; with 3-4, whoever wins game 1 might lose game 2 to
 a DIFFERENT player, so the whole "best of three" premise stops making
 sense. This mirrors `draftGamesToWin()`'s own identical rule for a draft
 match (best-of-three at 2 players, single-game at 3-4) -- `createGame()`
 checks `count($userIds) === 2` before creating a `game_matches` row for
-`'standard'`, silently skipping it (not an error) otherwise, same as the
+either format, silently skipping it (not an error) otherwise, same as the
 New Game dialog's own checkbox staying hidden whenever more than 1
 opponent is checked (or, in open-lobby mode, whenever the target player
 count isn't 2).
@@ -8087,7 +8089,7 @@ only the two aggregate stats updates are skipped.
 
 **Practice bots in Duel with a custom decklist.** `custom_duel` is
 otherwise excluded from bot support (see "Scope" above) because each of
-Duel's 2 players normally submits their own decklist separately, after
+Duel's players normally submits their own decklist separately, after
 the game already exists, via `POST /games/decklist`
 (`GameService::submitCustomDuelDeck()`) -- something a bot can never do
 on its own. Instead, the bot's creator supplies the bot's own decklist
@@ -8099,7 +8101,11 @@ saved decklists -- issue #92 -- loaded the same way `saved_decklist_id`
 already is elsewhere). Exactly one is required whenever a bot is seated
 in a `format: 'duel'`, `deck_type: 'custom_duel'` game; `createGame()`
 rejects (`GameStateException`) an attempt to seat one with neither
-supplied.
+supplied. Both params are singular, though -- only ONE bot's own
+decklist can ever be supplied this way, so `createGame()` also rejects
+seating 2+ bots in a `custom_duel` game outright (issue #505, since
+constructed Duel started supporting 3-4 players -- see "Duel: separate
+per-player decks" above for the full reasoning and `botUserCountAmong()`).
 
 Rather than duplicating `submitCustomDuelDeck()`'s validation (against
 the game's own `duel_deck_rules`) and write logic, `createGame()` calls
@@ -9185,23 +9191,67 @@ starting point, not a silent one-click recreate.
 `format: 'duel'` and `format: 'draft'` (see "Draft format" below) are the
 only physical rules difference `format` actually makes (every other format
 value is cosmetic, just echoed back and displayed as a label) -- both are
-"duel-shaped": each of the game's exactly-2 players draws from -- and
-bottoms cards onto -- their *own* deck rather than a single shared one.
+"duel-shaped": each of the game's 2-4 players draws from -- and bottoms
+cards onto -- their *own* deck rather than a single shared one.
 `GameService::isDuelShapedFormat(string $format): bool` (`$format === 'duel'
-|| $format === 'draft'`) is the exactly-2-players check `createGame()`
-consults (`GameStateException` "A {format} game must have exactly 2
-players") -- 'closed_team' drafting (issue #362) deliberately does NOT
-go through this helper, since its own player count is governed by
-`isTeamFormat()`'s separate "always exactly 4" rule instead, not this
-one. `startGame()`'s own per-player-deck-dealing branch, and
-`BoardStateRepository::load()`'s own `$hasSeparateDecks` check one level
-down, both use a WIDER condition instead --
-`isDuelShapedFormat($format) || in_array($deckType, ['quick_draft',
-'winston_draft', 'grid_draft'])` -- since separate-decks-or-not is a
-`deck_type` question as much as a `format` one once a drafted deck_type
-can be seated under 'closed_team' too (a drafted deck is genuinely
-different content per player, not the one shared/identical pool every
-OTHER deck_type those two team formats support gives everyone).
+|| $format === 'draft'`) is the 2-4-players check `createGame()` consults
+(`GameStateException` "A {deckType} game must have 2-4 players") --
+'closed_team' drafting (issue #362) deliberately does NOT go through this
+helper, since its own player count is governed by `isTeamFormat()`'s
+separate "always exactly 4" rule instead, not this one. `startGame()`'s
+own per-player-deck-dealing branch, and `BoardStateRepository::load()`'s
+own `$hasSeparateDecks` check one level down, both use a WIDER condition
+instead -- `isDuelShapedFormat($format) || in_array($deckType,
+['quick_draft', 'winston_draft', 'grid_draft'])` -- since separate-decks-
+or-not is a `deck_type` question as much as a `format` one once a drafted
+deck_type can be seated under 'closed_team' too (a drafted deck is
+genuinely different content per player, not the one shared/identical pool
+every OTHER deck_type those two team formats support gives everyone).
+
+**3-4 player constructed Duel** (issue #505: *"Allow constructed Duel
+formats (Custom Duel, Power, Structure, jceddy's 75) to seat 3-4
+players"*). Issue #189 already relaxed `'draft'`'s own player count to
+2-4; `'duel'` itself stayed locked to exactly 2 until now, even though
+every mechanism below this point (`BoardState`'s own `hasSeparateDecks`
+deck keying, `deckCardIdsFor()`'s per-player deck building, ordinary turn
+advancement) already generalizes to N players unchanged -- `'draft'` and
+`'duel'` share the exact same rules engine (see this section's own
+opening paragraph), so 3-4p `'draft'` had already proven every one of
+those pieces out. The single `count($userIds) < 2 || count($userIds) > 4`
+range check above now covers both formats identically; nothing else in
+`startGame()`/`BoardState` needed to change at all. Two narrower
+restrictions come along with it, both scoped to constructed Duel
+specifically rather than duel-shaped formats in general:
+
+- **Best-of-three (issue #90) and Power Duel sideboarding stay
+  2-player-only.** `createGame()`'s own `$createGameMatch` condition
+  requires `count($userIds) === 2` for `format === 'duel'` now, the same
+  restriction Traditional's own best-of-three already had (issue #90
+  follow-up) -- `gameMatchSummaryFor()`'s `your_wins`/`opponent_wins` is a
+  two-SIDED comparison with no well-defined "opponent" once `'duel'`
+  itself seats 3-4 unpaired individuals (unlike `'team'`/`'closed_team'`,
+  where a "side" is always exactly 2 of the 4 seats regardless). Silently
+  ignored rather than thrown, the same "the New Game dialog's own
+  checkbox is hidden for this combination" convention every other
+  creation-time opt-in follows -- `web-static/js/game.js`'s
+  `isBestOfThreeAvailable()`/`opponentSelectionMax()` mirror this
+  restriction client-side (see web-static/README.md).
+- **`custom_duel` can only ever seat one practice bot.** Every OTHER
+  constructed Duel deck_type needs no per-seat setup at all
+  (`deckCardIdsFor()` builds each seat's own deck automatically, bot or
+  not), but `custom_duel` needs a per-player decklist submitted --
+  `createGame()`'s own `$botDecklistText`/`$botSavedDecklistId` supply
+  the bot's on the human creator's behalf, but both are singular
+  parameters (matching `#new-game-bot-decklist-fields`' own single
+  shared field in the New Game dialog), with nowhere to put a second
+  bot's own decklist. A 3-4p `custom_duel` game could otherwise seat 2+
+  bots with no way to submit a decklist for the extra one(s), leaving the
+  game stuck `'waiting'` forever with no recovery path. New
+  `botUserCountAmong()` (distinct from the pre-existing `botUserIdAmong()`,
+  which only ever asks "which ONE" via its own `LIMIT 1`) counts every
+  bot among `$userIds` and `createGame()` rejects outright once it finds
+  2+ for `'custom_duel'` -- caught at design time while implementing this
+  issue, not reported live.
 
 - `BoardState` generalizes its single flat deck into `array<int, int[]>
   $decks` keyed by a "deck key": either `BoardState::SHARED_DECK_KEY` (the
@@ -9236,10 +9286,10 @@ OTHER deck_type those two team formats support gives everyone).
   exact same one a single-player game uses, called once per player rather
   than once for the whole table -- with each player's starting hand dealt
   from their own pool, not a shared one. This means the *same* catalog card
-  can legitimately end up in both players' pools at once (certain for
-  `'one_of_each'`, likely for `'structure'`/`'power'`) -- see "Card
+  can legitimately end up in two or more players' pools at once (certain
+  for `'one_of_each'`, likely for `'structure'`/`'power'`) -- see "Card
   identity: catalog id vs. per-game instance id" below for how the engine
-  tells two such cards apart.
+  tells duplicate cards apart.
 - Persistence reuses `game_cards.owner_game_player_id` (already nullable,
   already present) for both zones: `null` for a shared deck/discard row,
   the owning player's `game_player_id` for a duel deck row or any

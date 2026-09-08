@@ -1203,16 +1203,18 @@ hidden by `updateBestOfThreeFieldVisibility()` (`isBestOfThreeAvailable()`,
 wired to the same format/deck-type `change` events
 `updateDeckTypeAvailability()` already listens to, plus the opponent
 checkboxes/open-lobby player-count select/mode radios, and run once when
-the dialog opens): visible for `duel`/`team`/`closed_team` with a
-non-draft deck type unconditionally, or for `standard` only once the
-dialog's current selections add up to exactly 2 total players
-(`currentNewGamePlayerCount()`) -- with 3+ players there's no single
-"the opponent" for a best-of-three race to be between, the same reason
-`isDeckTypeAvailableForFormat()`'s own draft deck types already fall back
-to a single game past 2 players. Every draft-based deck type already gets
-its own best-of-three match regardless (`draft_match_id`), so the
-checkbox stays hidden there too rather than offering a second,
-meaningless toggle. Checking it sends `best_of_three: true`
+the dialog opens): visible for `team`/`closed_team` with a non-draft deck
+type unconditionally, or for `duel`/`standard` only once the dialog's
+current selections add up to exactly 2 total players
+(`currentNewGamePlayerCount()`, which as of issue #505 no longer
+hardcodes `duel` to a fixed 2 either -- it falls through to the same
+checked-opponent-count formula `draft`/`standard` already used) -- with
+3+ players there's no single "the opponent" for a best-of-three race to
+be between, the same reason `isDeckTypeAvailableForFormat()`'s own draft
+deck types already fall back to a single game past 2 players. Every
+draft-based deck type already gets its own best-of-three match regardless
+(`draft_match_id`), so the checkbox stays hidden there too rather than
+offering a second, meaningless toggle. Checking it sends `best_of_three: true`
 (`createGame()`'s new last parameter, both here and in app.js's own
 wrapper) to `POST /games`, or -- issue #90 follow-up, this was missing
 entirely at first, so checking the box while posting to the open lobby
@@ -1919,6 +1921,23 @@ deck's `cards`.
     param) alongside the rest of the request -- both omitted whenever no
     bot is checked or `deckType` isn't `custom_duel`.
 
+    **At most one bot for `custom_duel`** (issue #505, a design gap
+    caught while adding 3-4p constructed Duel support, not reported
+    live): the fields above only ever supply a SINGLE bot's own
+    decklist, with nowhere to put a second one, so a 3-4p `custom_duel`
+    game could otherwise seat 2+ bots and leave the extra one(s)
+    deckless forever (`GameService::createGame()` now rejects this
+    outright -- see "Duel: separate per-player decks" in
+    `php-app/README.md`). New `updateBotSelectionLimit()` mirrors
+    `updateOpponentSelectionLimit()`'s own "uncheck/disable past the cap"
+    shape, scoped to just the bot checkboxes: caps checked bots at 1
+    once `deckType` is `custom_duel` (unlimited for every other
+    deck_type, which needs no per-seat bot setup at all), unchecking any
+    extras and disabling the rest. Called from `updateBotCheckboxAvailability()`
+    (so it re-runs on every format/deck-type change) and every bot
+    checkbox's own `change` listener, the same trigger set
+    `updateOpponentSelectionLimit()` already uses.
+
     Checking a bot in a non-team format reveals a third field,
     `#new-game-bot-goes-first-label` (issue #417, migration `0171`) -- a
     plain checkbox, "Let the bot go first", that sends `bot_goes_first`
@@ -1961,15 +1980,17 @@ deck's `cards`.
     own personal preference -- `user.default_selections_mode_preference`
     -- rather than always starting unchecked; see "Settings dialog"
     above and "Personal preference for the New Game dialog's default" in
-    `php-app/README.md`. `updateOpponentSelectionLimit()` caps how many friends
-    can be checked at once to match the format's actual player count --
-    3 normally, but only 1 for Duel or Draft, since both are exactly 2
-    players and the server rejects anything else (see "Duel: separate
-    per-player decks" in `php-app/README.md`). It runs on every checkbox's
-    own `change` as well as the format `<select>`'s: switching to Duel or
-    Draft with 2 friends already checked auto-unchecks the second one and
-    disables the rest, and switching back to Traditional re-enables them,
-    so you can't submit a request the server will just reject with a 400.
+    `php-app/README.md`. `updateOpponentSelectionLimit()` caps how many
+    friends can be checked at once at 3 (4 players total) for every
+    format now (`opponentSelectionMax()`, see its own writeup further
+    below) -- Duel used to cap at just 1 (2 players total, the server's
+    own hard limit before issue #505), and Draft's own analogous cap was
+    already lifted by issue #189, so this is no longer a per-format
+    distinction at all. It runs on every checkbox's own `change` as well
+    as the format `<select>`'s: switching to a format/deck_type
+    combination that supports fewer players than are already checked
+    auto-unchecks the extras and disables the rest, so you can't submit a
+    request the server will just reject with a 400.
     Selecting Open Team Play or Closed Team Play reveals
     `#new-game-team-fields` (`updateTeamFields()`, wired to the same
     checkbox/format `change` events): a partner `<select>` populated from
@@ -2193,16 +2214,17 @@ deck's `cards`.
     uses -- but restricted to deck types that build a deck through some
     kind of live drafting process; Quick Draft was the first, Winston
     Draft joined it next, Grid Draft joined after that -- see "Draft
-    format" in `php-app/README.md`). `updateOpponentSelectionLimit()`
-    caps opponent selection at 1 (2 players total) for Duel, and at 3 (up
-    to 4 players total) for Draft (`opponentSelectionMax()`, format-only
-    now that Quick Draft, Winston Draft, and Grid Draft all three support
-    2-4 players -- the function used to also need the selected
-    `deck_type` back when Winston Draft was still locked to 2, but that
-    branching became dead code once it joined the other two, so it was
-    removed rather than left half-refactored); switching away from Draft
-    entirely re-caps the selection at 1 and un-checks any extras, keeping the
-    first one checked. Polls `GET /games` every 4 seconds while the lobby is
+    format" in `php-app/README.md`). `updateOpponentSelectionLimit()` caps
+    opponent selection at 3 (up to 4 players total) for every format now
+    (`opponentSelectionMax()`, no longer even taking a `format` parameter
+    -- Duel's own cap of 1 was removed once constructed Duel deck types
+    started supporting 2-4 players too, issue #505, the same way the
+    function's earlier `deck_type` parameter was already removed once
+    Quick Draft, Winston Draft, and Grid Draft all three ended up
+    supporting 2-4 players and that branching became dead code); a
+    format/deck-type change that leaves fewer players supported than are
+    currently checked still un-checks the extras, keeping the earliest
+    ones checked. Polls `GET /games` every 4 seconds while the lobby is
     open (mirroring the board's own poll below, and mutually exclusive
     with it via the same `pollTimer` variable, since only one of the two
     views is ever visible at once) — so a game another player just

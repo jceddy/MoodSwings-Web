@@ -2253,15 +2253,17 @@
         if (isDraftDeckType) {
             return false;
         }
-        if (format === 'duel' || format === 'team' || format === 'closed_team') {
+        if (format === 'team' || format === 'closed_team') {
             return true;
         }
-        // Traditional (issue #90 follow-up) only qualifies at exactly 2
-        // players -- with 3-4, "first to 2 game wins" no longer names a
-        // single opponent, the same reason a draft match itself falls
-        // back to a single game past 2 players (see createGame()'s own
-        // docblock in php-app/README.md's "Best of three" section).
-        if (format === 'standard') {
+        // Duel/Traditional (issue #505/issue #90 follow-up) only qualify
+        // at exactly 2 players -- with 3-4, "first to 2 game wins" no
+        // longer names a single opponent, the same reason a draft match
+        // itself falls back to a single game past 2 players (see
+        // createGame()'s own docblock in php-app/README.md's "Best of
+        // three" section). The team formats above stay unrestricted --
+        // a "side" there is always exactly 2 of the 4 seats regardless.
+        if (format === 'duel' || format === 'standard') {
             return currentNewGamePlayerCount() === 2;
         }
 
@@ -2269,14 +2271,15 @@
     }
 
     // How many total players (including the creator) the New Game
-    // dialog's current selections add up to -- Duel/the team formats
-    // already have a fixed count of their own, so this only matters for
-    // isBestOfThreeAvailable()'s own Traditional check above.
+    // dialog's current selections add up to -- the team formats already
+    // have a fixed count of their own, so this only matters for
+    // isBestOfThreeAvailable()'s own Duel/Traditional check above. 'duel'
+    // no longer has a fixed count either (issue #505: constructed Duel
+    // deck types now support 2-4 players, same as 'draft'), so it falls
+    // through to the same checked-opponent-count formula 'draft'/
+    // 'standard' already use below.
     function currentNewGamePlayerCount() {
         const format = effectiveNewGameFormat();
-        if (format === 'duel') {
-            return 2;
-        }
         if (format === 'team' || format === 'closed_team') {
             return 4;
         }
@@ -2866,18 +2869,20 @@
     const newGameError = document.getElementById('new-game-error');
     const opponentCheckboxes = document.getElementById('opponent-checkboxes');
 
-    // 'duel' games require exactly 2 players total (enforced server-side
-    // by GameService::isDuelShapedFormat()'s own check in createGame()),
-    // so at most 1 opponent may be chosen for that -- every 'draft'
-    // deck_type (quick_draft/grid_draft/winston_draft/rotisserie_draft)
-    // now supports 2-4 players (issue #189), so up to 3 opponents; every
-    // other format allows up to 3 as well. Re-run on every checkbox change and every
-    // format/deck-type-dropdown change, so switching to a 2-player-only
-    // combination with 2+ opponents already checked un-checks the extras
-    // (keeping the first one) rather than leaving a selection the server
+    // Every format supports up to 3 opponents (2-4 players total) now:
+    // every 'draft' deck_type (quick_draft/grid_draft/winston_draft/
+    // rotisserie_draft/tiered_rotisserie_draft/chaos_draft/sealed_deck)
+    // has since issue #189, and every constructed 'duel' deck_type
+    // (custom_duel/power/structure/jceddys_75) does too as of issue #505
+    // (enforced server-side by GameService::isDuelShapedFormat()'s own
+    // check in createGame()) -- 'duel' no longer needs its own lower cap
+    // here. Re-run on every checkbox change and every format/deck-type-
+    // dropdown change, so switching to a combination that supports fewer
+    // players with more already checked un-checks the extras (keeping
+    // the earliest ones) rather than leaving a selection the server
     // would just reject.
-    function opponentSelectionMax(format) {
-        return format === 'duel' ? 1 : 3;
+    function opponentSelectionMax() {
+        return 3;
     }
 
     // Practice bots (issue #140) -- mirrors GameService::botsSupportedFor()
@@ -3034,14 +3039,48 @@
         }
 
         updateOpponentSelectionLimit();
+        updateBotSelectionLimit();
         updateBotDecklistFieldsVisibility();
         updateBotGoesFirstFieldVisibility();
         updateDiagnosticModeFieldVisibility();
     }
 
+    // A custom_duel game can only ever seat one practice bot (issue #505,
+    // constructed Duel now supporting 3-4 players) -- $botDecklistText/
+    // $botSavedDecklistId and #new-game-bot-decklist-fields (below) only
+    // ever supply a SINGLE bot's own decklist, with nowhere to put a
+    // second one, so GameService::createGame() itself now rejects 2+
+    // (see botUserCountAmong()'s own docblock). Mirrors
+    // updateOpponentSelectionLimit()'s own "uncheck/disable past the cap"
+    // shape so a player can't even reach that server error: unchecking
+    // every bot box past the first already-checked one, then disabling
+    // every unchecked one once the cap is hit. Every other deck_type
+    // needs no such cap (deckCardIdsFor() builds each bot's own seat
+    // automatically), so this only ever restricts anything for
+    // 'custom_duel'.
+    function updateBotSelectionLimit() {
+        const deckType = document.getElementById('new-game-deck-type').value;
+        const maxBots = deckType === 'custom_duel' ? 1 : Infinity;
+        const boxes = opponentCheckboxes.querySelectorAll('input[data-is-bot]');
+
+        let checkedCount = 0;
+        for (const box of boxes) {
+            if (box.checked) {
+                checkedCount += 1;
+                if (checkedCount > maxBots) {
+                    box.checked = false;
+                    checkedCount -= 1;
+                }
+            }
+        }
+
+        for (const box of boxes) {
+            box.disabled = checkedCount >= maxBots && !box.checked;
+        }
+    }
+
     function updateOpponentSelectionLimit() {
-        const format = document.getElementById('new-game-format').value;
-        const maxOpponents = opponentSelectionMax(format);
+        const maxOpponents = opponentSelectionMax();
         const boxes = opponentCheckboxes.querySelectorAll('input');
 
         let checkedCount = 0;
@@ -3354,6 +3393,7 @@
                 }
                 checkbox.checked = !!prefill && prefill.opponentUserIds.includes(bot.user_id);
                 checkbox.addEventListener('change', updateOpponentSelectionLimit);
+                checkbox.addEventListener('change', updateBotSelectionLimit);
                 checkbox.addEventListener('change', updateTeamFields);
                 checkbox.addEventListener('change', updateBotDecklistFieldsVisibility);
                 checkbox.addEventListener('change', updateBotGoesFirstFieldVisibility);
@@ -7967,7 +8007,7 @@
 
         renderList(
             document.getElementById('duel-deck-submission-status'),
-            { hidden: true }, // always exactly 2 players in a duel
+            { hidden: true }, // state.players is never empty
             state.players,
             (player) => {
                 const li = document.createElement('li');
