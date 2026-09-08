@@ -2121,32 +2121,54 @@ final class BotPlayerService
     }
 
     /**
-     * How cheap a hand card needs to be before Zeal is worth spending it
-     * on ("After playing this mood, you may put a card from your hand on
-     * the bottom of the deck. If you do, draw a card.") -- a genuinely
-     * low-value card is worth gambling on a random replacement for; a
-     * merely mediocre one isn't worth the guaranteed loss of a known
-     * quantity for an unknown one. Same threshold, same reasoning, as
-     * RATIONALIZATION_LOW_VALUE_HAND_AVERAGE/AVOIDANCE_LOW_VALUE_MOOD_THRESHOLD/
-     * CYNICISM_LOW_VALUE_DISCARD_THRESHOLD above.
+     * How weak a hand card needs to be, by the SAME curated
+     * cards.draft_priority_score ranking BotChoiceResolver::
+     * resolveOwnResourceField() already uses to pick WHICH card Zeal
+     * actually gives up (see that method's own docblock), before Zeal is
+     * worth spending it on ("After playing this mood, you may put a card
+     * from your hand on the bottom of the deck. If you do, draw a
+     * card.") -- a genuinely replaceable card is worth gambling on a
+     * random one instead; a card the curated ranking treats as
+     * genuinely strong isn't worth the guaranteed loss of a known
+     * quantity for an unknown one, no matter how low its own printed
+     * value happens to be. Tier 2 covers both the catalog's own default
+     * "most cards" tier (1) and the next tier up (Ambition/Bravado/
+     * Determination/Joy/Pacifism/Shock) -- the same "genuinely low,
+     * not merely mediocre" cutoff ZEAL_LOW_VALUE_HAND_CARD_THRESHOLD
+     * (baseValue 2) used to draw, just on this method's own scale
+     * instead now.
      */
-    private const ZEAL_LOW_VALUE_HAND_CARD_THRESHOLD = 2;
+    private const ZEAL_LOW_DRAFT_PRIORITY_THRESHOLD = 2;
 
     /**
      * Zeal's own "should this optional field be attempted" policy
-     * (confirmed by the maintainer) -- feeds buildChoicesForCard()'s own
-     * `$forced` the same way shouldAttemptValueBoostDiscard() does,
-     * rather than a bespoke buildChoicesForCard() special case: once
-     * forced, BotChoiceResolver's own generic 'hand_card' field policy
-     * already picks the LOWEST-value legal candidate on its own (the
-     * same "minimize what's given up" bias resolveOwnResourceField()
+     * (reported live: "bots should always choose their worst card in
+     * draft pick order to discard to Zeal") -- feeds
+     * buildChoicesForCard()'s own `$forced` the same way
+     * shouldAttemptValueBoostDiscard() does, rather than a bespoke
+     * buildChoicesForCard() special case: once forced,
+     * BotChoiceResolver's own generic 'hand_card' field policy already
+     * picks the WORST legal candidate by draft_priority_score on its own
+     * (the same "give up the worst card" policy resolveOwnResourceField()
      * documents), so there's no need to separately pick WHICH card here
-     * -- only WHETHER to bother at all. True only if the bot's own
-     * cheapest OTHER hand card (excluding $cardId, Zeal itself) is
-     * cheap enough (ZEAL_LOW_VALUE_HAND_CARD_THRESHOLD) to be worth
-     * cycling for a random replacement; an empty remaining hand (Zeal
-     * was the bot's only card) has nothing to cycle at all, so it stays
-     * false -- "if it has one to cycle" per the maintainer.
+     * -- only WHETHER to bother at all.
+     *
+     * This method used to judge that by plain printed baseValue instead
+     * -- a real mismatch with the field policy above once that switched
+     * to draft_priority_score (migration 0259): a card like Intimidation
+     * (printed value 1, but a top-tier draft_priority_score of 40) would
+     * trigger this gate purely on its own low printed value, risking a
+     * genuinely strong card for a random replacement it never deserved
+     * to lose, while a card like Dignity (printed value 3, but the
+     * catalog's own default tier-1 draft_priority_score) would NOT
+     * trigger it despite being exactly the kind of replaceable filler
+     * this policy exists to cycle away. Now judged by the SAME metric
+     * the field policy actually acts on: true only if the bot's own
+     * WORST OTHER hand card (excluding $cardId, Zeal itself), by
+     * draft_priority_score, is weak enough (ZEAL_LOW_DRAFT_PRIORITY_THRESHOLD)
+     * to be worth cycling for a random replacement; an empty remaining
+     * hand (Zeal was the bot's only card) has nothing to cycle at all,
+     * so it stays false -- "if it has one to cycle" per the maintainer.
      */
     private function shouldAttemptZealCycle(BoardState $state, string $effectKey, string $fieldKey, int $cardId, int $botGamePlayerId): bool
     {
@@ -2154,14 +2176,17 @@ final class BotPlayerService
             return false;
         }
 
-        $cheapestOtherHandCardValue = PHP_INT_MAX;
+        $worstOtherHandCardDraftPriorityScore = PHP_INT_MAX;
         foreach ($state->hand($botGamePlayerId) as $handCardId) {
             if ($handCardId !== $cardId) {
-                $cheapestOtherHandCardValue = min($cheapestOtherHandCardValue, $this->baseValue($state, $handCardId));
+                $worstOtherHandCardDraftPriorityScore = min(
+                    $worstOtherHandCardDraftPriorityScore,
+                    $state->catalogRow($state->effectiveCardId($handCardId))['draftPriorityScore'],
+                );
             }
         }
 
-        return $cheapestOtherHandCardValue <= self::ZEAL_LOW_VALUE_HAND_CARD_THRESHOLD;
+        return $worstOtherHandCardDraftPriorityScore <= self::ZEAL_LOW_DRAFT_PRIORITY_THRESHOLD;
     }
 
     /**

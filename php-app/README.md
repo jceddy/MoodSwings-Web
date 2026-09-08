@@ -6781,13 +6781,7 @@ since it already holds that dependency):
   (`shouldAttemptZealCycle()`, feeding `buildChoicesForCard()`'s own
   `$forced` the exact same way), but for "you may put a card from your
   hand on the bottom of the deck; if you do, draw a card" rather than a
-  value boost -- worth attempting whenever the bot's own cheapest OTHER
-  hand card (excluding Zeal itself) is cheap enough
-  (`ZEAL_LOW_VALUE_HAND_CARD_THRESHOLD`, the same threshold/reasoning as
-  `RATIONALIZATION_LOW_VALUE_HAND_AVERAGE`/
-  `AVOIDANCE_LOW_VALUE_MOOD_THRESHOLD`/`CYNICISM_LOW_VALUE_DISCARD_THRESHOLD`
-  elsewhere in this section) to be worth gambling on a random
-  replacement for. Once forced, `BotChoiceResolver`'s own generic
+  value boost. Once forced, `BotChoiceResolver`'s own generic
   `'hand_card'` field policy already picks the WORST legal candidate
   (by `draft_priority_score`, see "Giving up your own hand card" below)
   on its own, so `shouldAttemptZealCycle()` only ever decides WHETHER to
@@ -6796,6 +6790,24 @@ since it already holds that dependency):
   An empty remaining hand (Zeal was the bot's only
   card) has nothing to cycle, so it stays unfilled -- "if it has one to
   cycle" per the maintainer.
+
+  **The "worth attempting" gate itself is judged by draft priority too**
+  (reported live: "bots should always choose their worst card in draft
+  pick order to discard to Zeal") -- worth attempting whenever the
+  bot's own WORST other hand card (excluding Zeal itself), by
+  `cards.draft_priority_score` -- the exact same metric the field
+  policy above will actually act on -- is weak enough
+  (`ZEAL_LOW_DRAFT_PRIORITY_THRESHOLD`) to be worth gambling on a random
+  replacement for. Previously judged by plain printed `baseValue`
+  instead (`ZEAL_LOW_VALUE_HAND_CARD_THRESHOLD`) -- a real mismatch with
+  the field policy's own `draft_priority_score` basis: Intimidation
+  (printed value 1, but a top-tier `draft_priority_score` of 40) used to
+  trigger this gate purely on its own low printed value, risking a
+  genuinely strong card for a random replacement it never deserved to
+  lose, while Dignity (printed value 3, but the catalog's own default
+  tier-1 `draft_priority_score`) used to NOT trigger it despite being
+  exactly the kind of replaceable filler this policy exists to cycle
+  away.
 
   **Ambition** (reported live: "when a bot plays ambition, it should
   discard a card for another play if it has 3+ cards in hand and it has
@@ -6806,7 +6818,7 @@ since it already holds that dependency):
   discard a card from your hand; if you do, you may play an additional
   mood this turn" rather than a bottom-and-redraw -- worth attempting
   once `AMBITION_MIN_HAND_SIZE_TO_DISCARD` (3, Ambition itself included,
-  still sitting in hand at this point the same way `ZEAL_LOW_VALUE_HAND_CARD_THRESHOLD`'s
+  still sitting in hand at this point the same way `shouldAttemptZealCycle()`'s
   own check works) is met AND, after setting aside the cheapest OTHER
   hand card as the discard cost, at least one hand card still remains
   with a positive base value -- a genuine scoring play worth unlocking

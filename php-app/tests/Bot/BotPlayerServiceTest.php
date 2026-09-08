@@ -503,13 +503,14 @@ final class BotPlayerServiceTest extends TestCase
 
     /**
      * Zeal's own "should I cycle" policy (confirmed by the maintainer):
-     * with a genuinely low-value card sitting in hand (Charity, id 3,
-     * value 1, well under ZEAL_LOW_VALUE_HAND_CARD_THRESHOLD), the bot
-     * volunteers for its own optional bottom-and-redraw field, unlike
-     * every other unforced-optional-field card, which would leave it
-     * unfilled by default.
+     * with a genuinely low-draft-priority card sitting in hand (Charity,
+     * id 3, the catalog's own default tier-1 draft_priority_score, well
+     * under ZEAL_LOW_DRAFT_PRIORITY_THRESHOLD), the bot volunteers for
+     * its own optional bottom-and-redraw field, unlike every other
+     * unforced-optional-field card, which would leave it unfilled by
+     * default.
      */
-    public function testChooseActionCyclesZealWithALowValueHandCard(): void
+    public function testChooseActionCyclesZealWithALowDraftPriorityHandCard(): void
     {
         $state = $this->boardState(hands: [1 => [106, 3]]);
 
@@ -535,18 +536,39 @@ final class BotPlayerServiceTest extends TestCase
     }
 
     /**
-     * Dignity (id 8, value 3) is too valuable to gamble on a random
-     * replacement for -- above ZEAL_LOW_VALUE_HAND_CARD_THRESHOLD -- so
-     * Zeal's own optional field stays unfilled here too.
+     * Reported live: "bots should always choose their worst card in
+     * draft pick order to discard to Zeal." Intimidation (id 67) has a
+     * low printed value (1) but a top-tier draft_priority_score (40) --
+     * far too valuable to gamble away on a random replacement, even
+     * though the OLD baseValue-based gate would have triggered on its
+     * low printed value alone. Zeal's own optional field stays unfilled.
      */
-    public function testChooseActionDoesNotCycleZealWithOnlyAMediumValueHandCard(): void
+    public function testChooseActionDoesNotCycleZealWithOnlyAHighDraftPriorityHandCard(): void
+    {
+        $state = $this->boardState(hands: [1 => [106, 67]]);
+
+        $action = $this->bot->chooseAction($state, [106], 1);
+
+        self::assertSame(106, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
+    /**
+     * The flip side of the fix above: Dignity (id 8) has a decent
+     * printed value (3) but the catalog's own default tier-1
+     * draft_priority_score -- exactly the kind of replaceable filler
+     * this policy exists to cycle away, even though the OLD
+     * baseValue-based gate would NOT have triggered on its own
+     * (baseValue 3 sat above the old threshold).
+     */
+    public function testChooseActionCyclesZealWithALowDraftPriorityHandCardDespiteADecentPrintedValue(): void
     {
         $state = $this->boardState(hands: [1 => [106, 8]]);
 
         $action = $this->bot->chooseAction($state, [106], 1);
 
         self::assertSame(106, $action['card_id']);
-        self::assertSame([], $action['choices']);
+        self::assertSame(['hand_card_id' => 8], $action['choices']);
     }
 
     /**
