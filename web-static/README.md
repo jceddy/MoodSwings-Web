@@ -962,6 +962,59 @@ the text on its own next poll -- and applies identically for a spectator
 player, so nobody watching a Tactical Bot's own game is left staring at
 "waiting on another player" with no idea why it's taking a while.
 
+### Diagnostic mode
+
+Reported live: "add a 'diagnostic mode' checkbox when creating a game
+including one or more tactical bot(s) -- if diagnostic mode is enabled, a
+button should be available to allow a human player to view the bot(s)
+hand(s), as well as ... a button to show the 'reasoning' behind every
+play the bot has made since the human player's previous play." See
+"Diagnostic mode" in `php-app/README.md` for the full backend design
+(`games.diagnostic_mode`, `diagnostic_bot_hands`,
+`tactical_bot_reasoning` events).
+
+**New Game dialog.** `#new-game-diagnostic-mode-label` (unchecked by
+default, same as every other conditionally-shown checkbox here) is only
+ever shown once a CHECKED bot opponent is specifically a Tactical Bot --
+`anyTacticalBotChecked()` (an `anyBotChecked()` analogue scoped to
+`data-uses-tactical-ai`, set on a bot checkbox only when
+`GET /games/bots`' own `uses_tactical_ai` field is true) drives
+`updateDiagnosticModeFieldVisibility()`, run from the same bot-checkbox
+`change` listeners and `updateBotCheckboxAvailability()` every other
+bot-gated field already hooks into. Its value is sent as `diagnostic_mode`
+alongside `best_of_three`/`allow_sideboarding` in the `POST /games` body;
+never sent by `postOpenGame()`, since an open lobby listing can never
+seat a bot at all (strangers fill the other seats once the roster fills).
+
+**Board buttons.** `#view-bot-hands-button`/`#view-bot-reasoning-button`
+(next to "View log"/"View decklist") are shown only once
+`state.diagnostic_bot_hands` is non-null -- which doubles as "diagnostic
+mode is on for this viewer" -- computed in `renderBoard()` alongside the
+existing `view-shared-deck-button` visibility check.
+
+- **"View bot hand(s)"** (`openBotHandsView()`) reads
+  `currentState.diagnostic_bot_hands` directly rather than its own
+  request -- it already rides along live in every ordinary `getState()`
+  poll -- and renders each bot's hand with the same `buildCardThumb()`/
+  `openCardDetail()` pattern "Teammate's hand" already uses.
+- **"View bot reasoning"** (`openBotReasoningView()`) calls
+  `GET /games/bot-reasoning?game_id=` on demand (not polled -- a
+  diagnostic-mode game's own decision history doesn't change fast enough
+  to need it), which already scopes its response to plays since THIS
+  viewer's own last play (see `tacticalBotReasoningSince()`'s own
+  docblock in `php-app/README.md`), so this just renders whatever comes
+  back in order. Each candidate/excluded card is a bare `card_id` (the
+  server doesn't re-serialize a full card for every candidate of every
+  turn), so `ensureDeckBuilderCatalogLoaded()` is called first to
+  guarantee `deckBuilderCatalogById` is populated even if the deck
+  builder itself was never opened this session -- catalog cards are
+  already shaped to exactly what `buildCardThumb()`/`openCardDetail()`
+  read (see `CardCatalog::serialize()`'s own docblock), so they need no
+  translation. Candidates are shown sorted highest-`average_reward`
+  first, the card the bot actually chose outlined, with
+  heuristically-excluded cards (never even reached by the search) listed
+  separately underneath.
+
 ### Custom card/effect formats preference (issue #405 follow-up)
 
 `#settings-allow-custom-content-checkbox`, in the Settings dialog's
@@ -991,6 +1044,86 @@ formats preference" in `php-app/README.md`. A `createGame()` rejection
 from a non-opted-in invitee surfaces through the New Game dialog's own
 ordinary `#new-game-error` element, the same as any other creation
 failure.
+
+### Pause at the start of your turn
+
+Reported live: "add a user setting to pause at the end of turn ... so a
+game should not advance to that user's turn, until they click an
+'advance turn' button." `#settings-pause-before-turn-checkbox`, in the
+Settings dialog's "Game defaults" section, right below the
+matchmaking-discoverable checkbox -- unlike auto-pass/auto-apply above,
+this one starts **unchecked** (`users.pause_before_own_turn`, migration
+`0263`, defaults `false`): it deliberately ADDS a click before every one
+of this player's own turns rather than saving one, so it's an explicit
+opt-in. Same "sync on open, save on change" wiring as every other
+Settings checkbox (`POST /user/pause-before-own-turn-preference`,
+`user.pause_before_own_turn`, `savePauseBeforeOwnTurnPreference()`) --
+but unlike auto-pass/auto-apply (which have no client-side effect of
+their own at all, see the Settings dialog bullet above), this preference
+DOES have a real one: see "Pause at the start of your turn" in
+`php-app/README.md` for the full server-side mechanism
+(`GameService::notifyItsYourTurn()`'s own `turn_pending_acknowledgment`
+flag, `assertTurnAcknowledged()`, `acknowledgeTurnStart()`).
+
+**`#turn-pending-acknowledgment-banner`** ("It's your turn. Review what
+just happened, then continue when you're ready." plus an
+`#advance-turn-button`) is a new fixed-at-the-top banner, sitting just
+before `#pending-decision-banner` in `board-view` (deliberately BEFORE
+it, not after -- `applyBoardLayoutPreference()`'s own
+`pendingDecisionBanner.insertAdjacentElement('afterend', boardStatusGroup)`
+call anchors `#board-status-group` to `#pending-decision-banner`
+specifically, so a banner placed between them would get relocated along
+with that group instead of staying put with the others). `renderBoard()`
+shows it exactly when `state.you.turn_pending_acknowledgment` is `true`
+(only ever true for the actual current turn holder -- everyone else
+always sees `false`). Its own click handler calls `POST
+/games/advance-turn` (`advanceTurn()` in `js/app.js`) then
+`refreshBoard()`, the identical "disable immediately, re-enable only on
+failure, let the next render recompute visibility" pattern the Pass
+button's own click handler already uses right above it.
+
+**Every other turn-UI gate now also checks it**: `passButtonCanAct()`
+(gating the Pass button AND every hand card's own clickability) requires
+`!currentState.you.turn_pending_acknowledgment` alongside its existing
+`is_your_turn` check, and the play-grants-remaining indicator
+(`#play-grants-details`) requires the same before showing itself. Both
+deliberately compute a shared `yourTurnReady`/equivalent check rather
+than only gating on `is_your_turn` -- that field is left meaning exactly
+what it always has (see `GameService::buildGameState()`'s own comment on
+why the two are kept separate), so nothing about visibility -- the
+player's own hand, in-play moods, the discard pile, scoring effects,
+the log -- changes while paused; only the ACTIONABLE affordances are
+held back, which is the entire point (they can still see everything
+that just happened, just can't act on it yet).
+
+**Onlookers get a text hint, not a banner of their own**: a
+spectator's/other player's own `#board-round-status` line reads
+`"Round N — <name>'s turn (reviewing)"` instead of the plain `"...'s
+turn"` whenever `state.round.turn_pending_acknowledgment` (public, sent
+to every viewer the same way `current_turn_game_player_id` itself
+already is) is `true` -- so the game doesn't just look stalled to
+someone else at the table while the current turn holder reviews what
+happened.
+
+### Change password
+
+`#change-password-form`, in the User info page's own `#user-account-section`
+(`user/index.html`, right below `#user-privacy-section`) -- three
+password fields (current, new, confirm new; `type="password"`, the new-
+password pair sharing `reset-password.html`'s own `minlength="8"
+maxlength="72"`) rather than a checkbox, so it's wired up in `js/user.js`
+as a form submit handler instead of a `change` listener. The confirm
+field is checked against the new-password field CLIENT-SIDE only
+(`newPassword !== newPasswordConfirm`) before the request is even sent
+-- identical to `reset-password.js`'s own confirm check -- so the server
+(`POST /user/change-password`, `changePassword()` in `js/app.js`) only
+ever receives `current_password`/`new_password`, no confirmation value
+of its own. On success the form clears (`form.reset()`) and
+`#change-password-success` shows the server's own message (which notes
+every other session was logged out -- see "Change password" in
+`../php-app/README.md`); on failure `#change-password-error` shows
+either the client-side mismatch message or whatever the server said
+(wrong current password, or the new one failing length validation).
 
 ### Open lobby matchmaking (issue #116)
 
@@ -1197,6 +1330,25 @@ field (`GameService::getState()`, bare card ids alongside the already-
 serialized `power_duel_sideboard_pool`) for pre-selection. The picker
 hides again once `deck_submitted` is true, the same as the rest of that
 form.
+
+**Who goes first in game 2/3** (reported live: "in non-draft best of 3
+formats, the loser should choose who plays first in the next game") --
+the draft-family's own `#first-player-decision-panel`/
+`renderFirstPlayerDecision()` (see "Who goes first" in `php-app/README.md`)
+now also renders for a `game_matches`-based rematch, with zero JS changes
+of its own needed: `state.first_player_decision` and
+`setPlayFirstNextMatchGame()` were already generic (a plain `gameId`/
+`playFirst`, no draft-specific fields), so once `GameService` started
+populating/accepting them for `game_match_id` too, this panel just
+started showing up for the right games automatically. For Team/Closed
+Team specifically, `you_are_previous_loser` is `true` for BOTH members
+of the losing team at once (either may click "I'll go first" -- whichever
+one does settles it for their whole side, no second teammate confirmation
+step the way `#team-decision-panel`'s own `turn_order`/`draw_recipient`
+choices need); round 1 stays frozen afterward either way -- for `team`,
+`#team-decision-panel` takes over next (that format's own live choice of
+which teammate actually goes), and for `closed_team`, the pregame card
+pass panel does.
 
 **Deck builder** -- the card-by-card Deck Builder (issue #93, see
 "Saved decklists" above) gained its own sideboard panel
@@ -2154,7 +2306,16 @@ deck's `cards`.
     This section simply never renders anything for `closed_team`, since
     `getState()` never populates `teammate_hand` for that format at all
     (hands stay private between teammates -- see "Closed Team Play" in
-    `php-app/README.md`). A `#team-decision-panel` (`renderTeamDecision()`, reading
+    `php-app/README.md`). Its own static position in `index.html` sits
+    right after `#pending-decision-panel` below (reported live: "in open
+    team games, can we move teammate's hand under the card to play div
+    that opens when you click a playable card?", then "let's move the
+    pending decisions panel above the teammate's hand panel, as well") --
+    moved there in two steps from its original spot right after
+    `#your-hand-section`/`#spectator-final-hands-section`, each a pure DOM
+    reorder with no changes to `renderTeammateHand()` itself, which only
+    ever looks the section up by id regardless of where it sits on the
+    page. A `#team-decision-panel` (`renderTeamDecision()`, reading
     `state.team_decision`, `null` unless a `game_team_decisions` row is
     open) shows either a row of candidate buttons (`can_propose`, calling
     `proposeTeamDecision()`) or an Approve/Reject pair (`can_confirm`,
@@ -4195,8 +4356,8 @@ using the same-origin `session_token` cookie for auth — see
   back with its own "Back to your games" button (`#user-back-to-lobby-button`,
   a real `<button>` matching the rest of the app's buttons rather than an
   anchor, with a click handler that navigates to `/game/`). Redirects to
-  `/` if there's no active session, same as `game/index.html`. Currently
-  just one section, `#user-lifetime-stats-section` -- a "Games" row
+  `/` if there's no active session, same as `game/index.html`. Its first
+  section, `#user-lifetime-stats-section` -- a "Games" row
   (lifetime wins-losses, every format) and a "Matches" row (lifetime
   wins-losses, `quick_draft`/`winston_draft`/`grid_draft` best-of-three
   results only, with a small note under the table saying so, since
@@ -4210,7 +4371,12 @@ using the same-origin `session_token` cookie for auth — see
   (tournament standings once issue #91's tournament system exists,
   per-format breakdowns, etc.), and each addition is meant to be its own
   `<section>` alongside this one rather than one flat list -- see
-  "Lifetime stats" in `../php-app/README.md`. Shares the same footer
+  "Lifetime stats" in `../php-app/README.md`. `#user-privacy-section`
+  (issue #110) holds the online/offline `#share-presence-checkbox` -- see
+  "Online/presence indicator" in `../php-app/README.md`.
+  `#user-account-section` holds the "Change password" form
+  (`#change-password-form`) -- see "Change password" below. Shares the
+  same footer
   (version indicator, Resources link/dialog, theme select) every other
   page already has.
 - `spectate/index.html` (`/spectate/`, issue #128) — Reached via the

@@ -1,0 +1,22 @@
+-- Feature parity fix (reported live: "in non-draft best of 3 formats,
+-- the loser should choose who plays first in the next game").
+--
+-- The draft-family's own best-of-three "loser opts to go first" fairness
+-- rule (setPlayFirstNextMatchGame(), games.draft_match_id) now also
+-- applies to the non-draft game_matches wrapper for Duel/Traditional/
+-- Team/Closed Team (migration 0223) -- previously, who went first in
+-- game 2/3 of one of these matches was an ordinary uniform coin flip,
+-- with zero awareness of who won/lost the previous game. For Team/Closed
+-- Team, either member of the losing team may answer for their shared
+-- side (no propose/confirm negotiation needed, since it's a plain
+-- team-wide binary choice, not a "which specific teammate" one); a
+-- team's own turn_order decision (or Closed Team Play's own pregame
+-- card-pass notification) is now created once this choice resolves,
+-- rather than at game-start time, since which side is even eligible to
+-- go first isn't settled until then.
+--
+-- No schema change (fully reuses games.game_match_id/draft_match_id,
+-- games.first_player_choice_user_id, and game_team_decisions, already in
+-- place), just the version bump MaintenanceGate needs to see this
+-- deploy as caught up with the code.
+UPDATE schema_version SET version = '1.34.2' WHERE id = 1;

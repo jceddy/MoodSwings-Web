@@ -454,6 +454,36 @@ if ($path === '/reset-password' && $method === 'POST') {
     }
 }
 
+// Change password (User info page's "Account" section) -- unlike
+// /reset-password above (a mailed token for someone who can't log in at
+// all), this is for an already-authenticated user who knows their
+// current password and just wants a new one. $token is read straight
+// from the cookie here (not via requireAuth(), which only returns the
+// user) so AuthService::changePassword() knows which session to leave
+// logged in while every other one is signed out.
+if ($path === '/user/change-password' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $token = $_COOKIE[AuthService::COOKIE_NAME] ?? '';
+
+    try {
+        $auth->changePassword(
+            (int) $currentUser['id'],
+            (string) ($body['current_password'] ?? ''),
+            (string) ($body['new_password'] ?? ''),
+            hash('sha256', $token)
+        );
+        respond(200, [
+            'status' => 'ok',
+            'message' => 'Your password has been changed. Every other session has been logged out.',
+        ]);
+    } catch (InvalidCredentialsException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
 if ($path === '/login' && $method === 'POST') {
     $body = requestBody();
 
@@ -884,6 +914,27 @@ if ($path === '/user/auto-apply-scoring-bonuses-preference' && $method === 'POST
     respond(200, ['status' => 'ok']);
 }
 
+// "Pause at the start of your turn" as a personal preference (Settings
+// dialog's "Game defaults" section) -- see GameService::notifyItsYourTurn()/
+// assertTurnAcknowledged() for the server-side behavior this drives.
+// Current value is already carried on GET /me's own user object, so this
+// route is write-only, same pattern as /user/auto-apply-scoring-bonuses-preference
+// above.
+if ($path === '/user/pause-before-own-turn-preference' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $input = requestBody();
+
+    if (!array_key_exists('pause_before_own_turn', $input)) {
+        respond(400, ['status' => 'error', 'message' => 'pause_before_own_turn is required.']);
+    }
+
+    (new UserRepository())->setPauseBeforeOwnTurn(
+        (int) $currentUser['id'],
+        (bool) $input['pause_before_own_turn']
+    );
+    respond(200, ['status' => 'ok']);
+}
+
 // "Board layout" (issue #417) as a personal preference (Settings dialog's
 // "Display" section) -- 'above_play_area' (default) leaves the
 // Round/Score/Players section exactly where it's always rendered;
@@ -1041,6 +1092,9 @@ if ($path === '/games' && $method === 'POST') {
     // 'custom_duel' built under the "Power Duel" preset (issue #90
     // follow-up, migration 0228) -- see createGame()'s own docblock.
     $allowSideboarding = (bool) ($body['allow_sideboarding'] ?? false);
+    // Only meaningful once $userIds seats at least one Tactical Bot --
+    // see createGame()'s own $diagnosticMode docblock.
+    $diagnosticMode = (bool) ($body['diagnostic_mode'] ?? false);
     // Only meaningful for deck_type 'rotisserie_draft' -- see createGame()'s own docblock.
     $rotisserieDraftPoolSource = isset($body['rotisserie_draft_pool_source']) ? (string) $body['rotisserie_draft_pool_source'] : null;
     $rotisserieDraftCustomPoolText = isset($body['rotisserie_draft_custom_pool_text']) ? (string) $body['rotisserie_draft_custom_pool_text'] : null;
@@ -1099,6 +1153,7 @@ if ($path === '/games' && $method === 'POST') {
             $botGoesFirst,
             $bestOfThree,
             $allowSideboarding,
+            $diagnosticMode,
         );
         respond(201, ['status' => 'ok', 'game_id' => $gameId]);
     } catch (GameStateException $e) {
@@ -1162,6 +1217,9 @@ function openGameCreateParamsFromRequestBody(array $body): array
         // deck_type 'custom_duel' built under the "Power Duel" preset --
         // see createGame()'s own $allowSideboarding docblock.
         'allow_sideboarding' => (bool) ($body['allow_sideboarding'] ?? false),
+        // Only meaningful once the roster ends up seating at least one
+        // Tactical Bot -- see createGame()'s own $diagnosticMode docblock.
+        'diagnostic_mode' => (bool) ($body['diagnostic_mode'] ?? false),
     ];
 }
 
@@ -1356,6 +1414,26 @@ if ($path === '/games/state' && $method === 'GET') {
         // Best-effort only -- see above. The next poll simply tries again.
     }
     respond(200, ['status' => 'ok', ...$games->getState($gameId, (int) $currentUser['id'])]);
+}
+
+// Diagnostic mode's own "show the reasoning behind every play the bot
+// has made since the human player's previous play" button -- fetched on
+// demand, unlike getState()'s own live diagnostic_bot_hands field, since
+// the "since" boundary only moves once per turn. requireGamePlayer()
+// alone isn't enough here (a seated human in a NON-diagnostic game must
+// still be rejected) -- GameService::tacticalBotReasoningSince() itself
+// throws GameStateException for that case, same as it does for an
+// unseated caller.
+if ($path === '/games/bot-reasoning' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $gameId = (int) ($_GET['game_id'] ?? 0);
+
+    requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+    try {
+        respond(200, ['status' => 'ok', 'reasoning' => $games->tacticalBotReasoningSince($gameId, (int) $currentUser['id'])]);
+    } catch (GameStateException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
 }
 
 // Spectator mode (issue #128): every currently-in_progress game any of
@@ -1610,6 +1688,37 @@ if ($path === '/games/pass' && $method === 'POST') {
         }
         respond(200, ['status' => 'ok', ...$result]);
     } catch (GameStateException | IllegalPlayException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+// "Pause at the start of your turn" (reported live): the opted-in
+// player's own way of clearing GameService::notifyItsYourTurn()'s own
+// game_rounds.turn_pending_acknowledgment flag, unlocking the play/pass
+// UI (and the server's own assertTurnAcknowledged() check) for a turn
+// that's already theirs but that they haven't reviewed yet. A no-op if
+// they're not the current turn holder, or if the flag isn't even set
+// (nothing to acknowledge) -- see GameService::acknowledgeTurnStart().
+if ($path === '/games/advance-turn' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $gameId = (int) ($body['game_id'] ?? 0);
+
+    $gamePlayerId = requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    try {
+        $result = $games->acknowledgeTurnStart($gameId, $gamePlayerId);
+        // Practice bots (issue #140)/auto-pass on empty hand -- see the
+        // identical comment on POST /games/play above. Matters here in
+        // particular for an opted-in player whose hand is ALSO empty:
+        // acknowledging is what finally lets their own auto-pass fire,
+        // since assertTurnAcknowledged() blocked it until now.
+        $autoResult = $games->advanceAutomatedTurns($gameId);
+        if ($autoResult !== null) {
+            $result = $autoResult;
+        }
+        respond(200, ['status' => 'ok', ...$result]);
+    } catch (GameStateException $e) {
         respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
     }
 }
@@ -1869,12 +1978,17 @@ if ($path === '/games/draft/deck' && $method === 'POST') {
     }
 }
 
-// Lets the loser of a best-of-three draft match's game N opt to go first
-// themselves in game N+1 -- see GameService::setPlayFirstNextMatchGame().
-// Only callable once game N+1 has actually started (per the game's own
-// rules, the loser doesn't have to decide until they can see their
-// opening hand) -- round 1 stays frozen (nobody may play) until this
-// resolves, one answer either way.
+// Lets the loser (or, for Team/Closed Team, either member of the losing
+// team) of a best-of-three match's game N opt to go first themselves in
+// game N+1 -- covers both the draft-family's own draft_match_id and the
+// non-draft game_matches wrapper (Duel/Traditional/Team/Closed Team,
+// migration 0223, issue #90 follow-up) -- see GameService::
+// setPlayFirstNextMatchGame(). Only callable once game N+1 has actually
+// started (per the game's own rules, the loser doesn't have to decide
+// until they can see their opening hand) -- round 1 stays frozen (nobody
+// may play) until this resolves, one answer either way. Kept at this
+// same path (despite the name) rather than renamed, since it's still the
+// exact same request shape the draft-family flow already used.
 if ($path === '/games/draft/first-player-choice' && $method === 'POST') {
     $currentUser = requireAuth($auth);
     $body = requestBody();

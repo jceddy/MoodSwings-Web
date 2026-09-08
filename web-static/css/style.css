@@ -1175,10 +1175,38 @@ body.game-page {
 .deck-builder-card-grid,
 .spectator-final-hand ul,
 .draft-pool-cards,
-.team-drafted-cards-list {
+.team-drafted-cards-list,
+#bot-hands-sections > div,
+.bot-reasoning-candidates,
+.bot-reasoning-excluded {
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
+}
+
+/* Diagnostic mode (games.diagnostic_mode) -- see #bot-reasoning-dialog and
+   buildBotReasoningTurn() in game.js. Each candidate pairs a card thumb
+   with its own visits/average_reward, the chosen one highlighted; excluded
+   cards get their own row underneath since they never reached the search. */
+.bot-reasoning-turn {
+    margin-bottom: 1rem;
+}
+
+.bot-reasoning-candidate {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.bot-reasoning-candidate--chosen {
+    outline: 2px solid var(--color-info);
+    border-radius: 4px;
+}
+
+.bot-reasoning-candidate__stats {
+    font-size: 0.8em;
+    text-align: center;
 }
 
 #hand-list li,

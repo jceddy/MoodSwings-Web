@@ -56,13 +56,23 @@ final class BotChoiceResolver
      * bonus/cost" bias (see this class's own docblock), reserved for the
      * rare card whose optional target has NO real cost to the acting
      * player at all: Curiosity's "you may choose a player" (a free
-     * reveal -- at best a value boost, nothing given up if it whiffs) and
+     * reveal -- at best a value boost, nothing given up if it whiffs),
      * Suspicion's "choose any number of players" (forces a discard from
      * each -- again nothing the acting player gives up, and choosing more
-     * targets is strictly better than choosing fewer). Contrast Malice's
-     * own similarly-shaped optional `target_player_id` (deliberately NOT
-     * here): it grants the target extra plays too, a real cost-benefit
-     * trade-off this class still leaves for a human to judge.
+     * targets is strictly better than choosing fewer), and Cruelty's/
+     * Indecisiveness's own identically-shaped "choose any number of
+     * opponents [with 2+ moods]" (reported live: "bots should avoid
+     * playing Cruelty with no targets," then again for Indecisiveness --
+     * IndecisivenessEffect's own docblock: "same shape as Cruelty, but
+     * returning the mood to its owner's hand instead of discarding it" --
+     * forces a RANDOM one of each chosen opponent's own moods OUT of
+     * play either way, a pure loss for them with no cost or downside
+     * risk to the acting player, so -- same reasoning as Suspicion --
+     * targeting every eligible opponent is always at least as good as
+     * targeting fewer). Contrast Malice's own similarly-shaped optional
+     * `target_player_id` (deliberately NOT here): it grants the target
+     * extra plays too, a real cost-benefit trade-off this class still
+     * leaves for a human to judge.
      *
      * Two behaviors both flow from being in this list, applied by
      * resolve()/resolvePlayerField()/pickIdCandidates() below:
@@ -71,16 +81,21 @@ final class BotChoiceResolver
      *   though the field's own `scope` is `'any'` (which would otherwise
      *   allow self-targeting) -- targeting yourself is never the intent
      *   here, just something the schema permits for a human who might
-     *   have an obscure reason to.
+     *   have an obscure reason to. Cruelty's/Indecisiveness's own schemas
+     *   already set `scope: 'other'`/`excludes_teammate: true` directly,
+     *   so this is a no-op for them specifically -- only the two
+     *   behaviors below actually matter for these two cards.
      * - For a MULTI field specifically, every legal candidate is taken
-     *   rather than just `count.min` -- Suspicion's whole point is
-     *   "choose any number," and taking fewer than every legal opponent
-     *   would leave free value on the table the same way never filling
-     *   the field at all would.
+     *   rather than just `count.min` -- Suspicion's/Cruelty's/
+     *   Indecisiveness's whole point is "choose any number," and taking
+     *   fewer than every legal opponent would leave free value on the
+     *   table the same way never filling the field at all would.
      */
     private const ALWAYS_FILLED_OPTIONAL_FIELDS = [
         'curiosity' => ['target_player_id'],
         'suspicion' => ['player_ids'],
+        'cruelty' => ['opponent_player_ids'],
+        'indecisiveness' => ['opponent_player_ids'],
     ];
 
     /**
@@ -142,7 +157,7 @@ final class BotChoiceResolver
             'value' => $field['min'] ?? null,
             'mood' => $this->resolveMoodField($state, $field, $actingPlayerId, $ownCardId),
             'player' => $this->resolvePlayerField($state, $field, $actingPlayerId, $forced),
-            'hand_card' => $this->resolveOwnResourceField($state, $field, $state->hand($actingPlayerId), $ownCardId),
+            'hand_card' => $this->resolveOwnResourceField($state, $field, $this->ambitionSafeHandCardIds($state, $effectKey, $state->hand($actingPlayerId)), $ownCardId),
             'discard_card' => $this->resolveOwnResourceField($state, $field, $state->discardPile(), $ownCardId),
             'card_order' => array_map(static fn (array $card) => $card['card_id'], $field['cards'] ?? []),
             default => null,
@@ -282,11 +297,67 @@ final class BotChoiceResolver
     }
 
     /**
+     * Reported live: "bots should not discard Hope to Ambition." Hope's
+     * printed `cards.draft_priority_score` (16, a solidly-above-average
+     * tier -- see migration 0143) reflects its DRAFT desirability, not
+     * its value once it's actually sitting in hand ready to be played:
+     * "while in play, you may play an additional mood during each of
+     * your turns" (HopeEffect's own docblock) is an ongoing, stacking,
+     * every-single-turn grant for as long as it stays in play, worth far
+     * more than a flat 0 `baseValue`/tier-16 score conveys next to
+     * another card that merely ties or beats it on paper (any of the
+     * seven other tier-16 mythics -- Bliss/Duplicity/Euphoria/
+     * Exhilaration/Regret/Thrill/Validation -- would otherwise win the
+     * "worse card" tiebreak against Hope purely because Hope's own
+     * baseValue, 0, is the lowest possible; any tier-20/24/40 card --
+     * Paranoia/Rationalization/Recklessness/Creativity/Intimidation --
+     * would outrank it outright). So Hope is carved out of Ambition's
+     * own OPTIONAL "discard a card to unlock an extra play" cost
+     * specifically: never worth giving up Hope's own future turns for a
+     * single one-time extra play this turn, regardless of what the
+     * generic worst-card metric below would otherwise pick. Scoped to
+     * Ambition alone (not every hand-disruption discard site sharing
+     * resolveOwnResourceField() below) since that's what was reported;
+     * a bot is never actually FORCED to give up Hope here either (this
+     * is `hand_card`'s only optional call site -- see CardChoiceSchema's
+     * own `ambition` entry), so excluding it here never turns a legal
+     * play into an illegal one, at worst leaving no OTHER card to
+     * discard and the field simply unfilled (see this class's own
+     * "no legal candidate" convention for an optional field).
+     *
+     * @param int[] $handCardIds
+     * @return int[]
+     */
+    private function ambitionSafeHandCardIds(BoardState $state, string $effectKey, array $handCardIds): array
+    {
+        if ($effectKey !== 'ambition') {
+            return $handCardIds;
+        }
+
+        return array_values(array_filter(
+            $handCardIds,
+            fn (int $cardId) => $state->catalogRow($state->effectiveCardId($cardId))['effectKey'] !== 'hope',
+        ));
+    }
+
+    /**
      * A required 'hand_card'/'discard_card' field is always implicitly
      * "one of your own" (guile's/bliss's discard cost are the only
-     * required examples today) -- so this always prefers the LOWEST-value
+     * required examples today) -- so this always prefers the WORST
      * candidates, the same "minimize the cost" policy resolveMoodField()
-     * applies for scope 'own'.
+     * applies for scope 'own'. "Worst" for a hand/discard-pile card
+     * (reported live: "when bots choose cards to give up for hand
+     * disruption moods, they should give them up the worst card they
+     * have, using the same metrics they use to evaluate cards for
+     * drafting order") means the lowest cards.draft_priority_score --
+     * see ownResourceCandidateValue()'s own docblock -- covering
+     * Confusion/Compulsion/Suspicion/Intimidation's own pending
+     * hand_card decisions (and every chaos-effect analog) alongside the
+     * pre-existing Guile/Bliss/Ambition/Zeal/Dignity-family discard
+     * costs this same shared path already handled. (Ambition's own
+     * candidate pool has Hope pre-filtered out by ambitionSafeHandCardIds()
+     * above before it ever reaches here -- see that method's own
+     * docblock for why.)
      *
      * @param int[] $candidateCardIds
      * @return int|int[]|null
@@ -309,9 +380,34 @@ final class BotChoiceResolver
             $field,
             fn (int $cardId) => $cardId === $ownCardId
                 ? $state->catalogRow($state->effectiveCardId($cardId))['baseValue']
-                : ($state->isInPlay($cardId) ? $state->valueOf($cardId) : $state->catalogRow($state->effectiveCardId($cardId))['baseValue']),
+                : ($state->isInPlay($cardId) ? $state->valueOf($cardId) : $this->ownResourceCandidateValue($state, $cardId)),
             $lowestFirst,
         );
+    }
+
+    /**
+     * A hand/discard-pile card is never "in play" (pickCandidates()'s
+     * own isInPlay() branch only ever reaches this for exactly those two
+     * field types -- a 'mood' field's own candidates are always
+     * currently in play, so they never take this path), so this is
+     * always the actual "which of my own cards is worst" metric: the
+     * same cards.draft_priority_score BotPlayerService::draftCardScore()
+     * uses to rank draft picks (higher = better), scaled up so it always
+     * dominates baseValue -- draft_priority_score is a deliberately
+     * coarse 1-40 tier (most cards default to 1), so baseValue only ever
+     * breaks a tie between two cards the curated ranking treats as
+     * equally replaceable, rather than overriding it. The fuller
+     * draftCardScore() itself (synergy-partner/deck-win-rate bonuses) is
+     * deliberately NOT reused here -- both need draft-session-specific
+     * data (already-drafted picks, aggregate deck stats) this BoardState-
+     * scoped policy has no access to and no natural mid-game meaning
+     * for.
+     */
+    private function ownResourceCandidateValue(BoardState $state, int $cardId): int
+    {
+        $catalogRow = $state->catalogRow($state->effectiveCardId($cardId));
+
+        return $catalogRow['draftPriorityScore'] * 1000 + $catalogRow['baseValue'];
     }
 
     /**

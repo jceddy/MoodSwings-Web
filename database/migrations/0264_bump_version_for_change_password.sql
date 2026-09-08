@@ -1,0 +1,18 @@
+-- Adds the ability for an already-logged-in user to change their own
+-- password, given their current one (User info page's new "Account"
+-- section) -- distinct from the existing /forgot-password -> /reset-password
+-- flow, which is for someone who can't log in at all and goes through a
+-- mailed token instead.
+--
+-- AuthService::changePassword() re-checks the current password
+-- (password_verify(), same as login()), validates the new one with the
+-- same 8-72 character rule registration/reset already use, and updates
+-- users.password_hash -- no new column needed there. Every OTHER session
+-- is logged out (SessionRepository::deleteAllForUserExcept(), new), but
+-- the caller's own current session is deliberately left alone, unlike
+-- resetPassword()'s blanket "log out everywhere" (which has no current
+-- session of its own to spare).
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.36.0' WHERE id = 1;

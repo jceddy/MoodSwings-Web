@@ -1,0 +1,34 @@
+-- Bot policy fix (reported live: "bots should pick a color for
+-- disillusionment that will result in the largest point swing in their
+-- favor - if no color is advantageous to them they should not pick a
+-- color - and also should not play disillusionment, unless the total
+-- point swing in their favor including the points from disillusionment
+-- regardless of which color(s) are chosen by opponents").
+--
+-- Two changes to BotPlayerService:
+--
+-- 1. disillusionmentBestColor() (renamed from disillusionmentSafeColor())
+--    now picks whichever color nets the LARGEST signed point swing
+--    (+value per non-teammate opponent mood of that color, -value per
+--    the bot's own/a teammate's -- mirroring guiltSwingContribution()'s
+--    own shape, since DisillusionmentEffect::resolveDecisions() hits
+--    every owner, not just opponents), declining unless the best color's
+--    own total is genuinely positive -- previously it just picked the
+--    first color matching none of the bot's/a teammate's own moods,
+--    happily "choosing" a color that accomplished nothing at all.
+--
+-- 2. hasGoodReasonToPlayNow() now vetoes Disillusionment itself down to
+--    sortPriorityValue()'s own PHP_INT_MIN treatment unless the acting
+--    bot's own best-color swing (evaluated the same way, from its own
+--    perspective, before the card is even played) is positive -- there
+--    was previously no play-time gate for this card at all.
+--
+-- chooseDecisionAnswer()'s own new optional 5th parameter ($sourceCardId,
+-- threaded from GameService's own game_pending_decision_batches.played_card_id)
+-- excludes the currently-resolving Disillusionment/chaos_010 mood itself
+-- from its own color's swing, since it can never actually discard
+-- itself regardless of which color(s) end up chosen.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.34.3' WHERE id = 1;

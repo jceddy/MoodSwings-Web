@@ -120,6 +120,22 @@ final class UserRepository
     }
 
     /**
+     * "Pause at the start of your turn" as a personal preference
+     * (Settings dialog's "Game defaults" section) -- see GameService::
+     * notifyItsYourTurn()/assertTurnAcknowledged() for the server-side
+     * behavior this drives. Defaults to false (off) -- unlike
+     * auto_pass_on_empty_hand/auto_apply_scoring_bonuses above, this
+     * deliberately adds a click before every one of this player's own
+     * turns rather than saving one, so it's an explicit opt-in; see
+     * migration 0263.
+     */
+    public function setPauseBeforeOwnTurn(int $id, bool $pauseBeforeOwnTurn): void
+    {
+        $stmt = Connection::get()->prepare('UPDATE users SET pause_before_own_turn = :pause_before_own_turn WHERE id = :id');
+        $stmt->execute(['pause_before_own_turn' => $pauseBeforeOwnTurn ? 1 : 0, 'id' => $id]);
+    }
+
+    /**
      * "Board layout" (issue #417) as a personal preference (Settings
      * dialog's "Display" section) -- 'above_play_area' (default) or
      * 'below_hand', see applyBoardLayoutPreference() in game.js for what

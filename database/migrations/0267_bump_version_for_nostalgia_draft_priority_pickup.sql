@@ -1,0 +1,20 @@
+-- Bot policy fix (reported live: "bots should always choose cards to
+-- get back with Nostalgia in draft pick order").
+--
+-- BotPlayerService::nostalgiaDiscardCardId() previously picked which
+-- discard-pile card to return to hand by plain printed base_value
+-- alone, so a low-tier filler card with a merely higher printed value
+-- could outrank a genuinely strong recursion target like Intimidation
+-- (printed value 1, but a top-tier draft_priority_score of 40) for the
+-- pickup.
+--
+-- It now ranks candidates by a new draftPriorityRank() helper --
+-- cards.draft_priority_score first (the same curated ranking
+-- draftCardScore() already uses for drafting, and the same metric
+-- BotChoiceResolver::ownResourceCandidateValue() already uses for the
+-- mirror-image "give up your worst card" decisions, migration 0259),
+-- falling back to base_value only to break a tie within the same tier.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.36.3' WHERE id = 1;

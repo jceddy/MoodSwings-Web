@@ -1,0 +1,19 @@
+-- Bot policy fix, extending the previous Cruelty fix (migration 0260) to
+-- its identically-shaped twin: Indecisiveness ("same shape as Cruelty,
+-- but returning the mood to its owner's hand instead of discarding it"
+-- -- IndecisivenessEffect's own docblock).
+--
+-- Indecisiveness's own "choose any number of opponents [who each have
+-- 2+ moods]" field is now also in
+-- BotChoiceResolver::ALWAYS_FILLED_OPTIONAL_FIELDS, so bots actually
+-- target every eligible opponent instead of always leaving the field
+-- empty, the same fix Cruelty already got.
+--
+-- BotPlayerService's previous crueltyTargetPlayerIds() helper is
+-- renamed to twoOrMoreMoodOpponentIds() and shared by both effect keys
+-- in hasGoodReasonToPlayNow(): either card is deprioritized to
+-- PHP_INT_MIN whenever no non-teammate opponent has 2+ moods in play.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.34.6' WHERE id = 1;

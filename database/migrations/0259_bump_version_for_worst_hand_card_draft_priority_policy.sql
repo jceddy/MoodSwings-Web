@@ -1,0 +1,26 @@
+-- Bot policy fix (reported live: "when bots choose cards to give up for
+-- hand disruption moods, they should give them up the worst card they
+-- have, using the same metrics they use to evaluate cards for drafting
+-- order").
+--
+-- BotChoiceResolver::resolveOwnResourceField() (the single shared path
+-- behind every "choose one of your own hand/discard-pile cards to give
+-- up" decision -- Confusion/Compulsion/Suspicion/Intimidation's own
+-- required pending hand_card decisions, their 11 chaos-effect analogs,
+-- and Guile's/Bliss's/Ambition's/Zeal's/Dignity-family's own discard
+-- costs) previously ranked candidates by nothing but their plain printed
+-- baseValue -- a low-value-but-genuinely-strong card (e.g. Intimidation,
+-- printed value 1 but a top-tier draft_priority_score of 40) could get
+-- handed away for a single point saved over a much weaker one. It now
+-- ranks by cards.draft_priority_score first -- the same curated ranking
+-- BotPlayerService::draftCardScore() already uses for drafting -- falling
+-- back to baseValue only to break a tie between cards the curated ranking
+-- treats as equally replaceable.
+--
+-- BoardState::catalogRow() (via BoardStateRepository::mapCatalogRow())
+-- now also exposes draft_priority_score, previously only read by
+-- CardCatalog::load()'s own separate, draft-only catalog path.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.34.4' WHERE id = 1;

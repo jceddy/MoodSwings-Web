@@ -1,0 +1,16 @@
+-- Bot policy fix (reported live: "bots shouldn't play Thrill as an
+-- opener").
+--
+-- Thrill's own "if you do" extra-play grant can only ever put moods the
+-- bot already has ON THE BOARD back into hand, so playing it first, with
+-- nothing else of the bot's own in play yet, is just a 1-value mythic
+-- with no effect that turn. hasGoodReasonToPlayNow() now vetoes Thrill's
+-- EARLY_PRIORITY_EFFECT_KEYS boost (down to sortPriorityValue()'s own
+-- PHP_INT_MIN treatment) whenever the acting bot has no other mood
+-- already in play, the same "deprioritized WHEN, never skipped outright"
+-- treatment Harmony/Grief/Nostalgia/Fear already get for their own
+-- similarly conditional grants.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.34.1' WHERE id = 1;

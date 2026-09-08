@@ -51,6 +51,7 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/resend-verification` | `{"email"}`                                                | Issues a fresh verification link, revoking any prior one, and emails it. Always returns the same generic `200` message regardless of whether the email exists, is already verified, or was rate-limited, so it can't be used to discover which addresses are registered. Limited to once per 60 seconds per account; `400` on invalid email format, `502` if sending fails. |
 | POST   | `/forgot-password` | `{"email"}`                                                   | Issues a password reset link (valid for 1 hour), revoking any prior one, and emails it -- regardless of the account's verification status. Always returns the same generic `200` message whether or not the email is registered, for the same enumeration-resistance reason as `/resend-verification`; also rate-limited to once per 60 seconds per account. `400` on invalid email format, `502` if sending fails. Unlike `/verify-email`, the emailed link points at the static `reset-password.html` page rather than a GET route here -- see "Password reset" below for why. |
 | POST   | `/reset-password` | `{"token", "password"}`                                        | Consumes a password reset token (single-use, same replay-proofing as Discord's OAuth state) and sets the new password (8-72 chars, same rule as registration). Also deletes every one of the account's sessions, logging it out everywhere -- a reset is treated as a signal any existing session may be compromised. `400` if the token is invalid/expired/already used or the password fails validation. See "Password reset" below. |
+| POST   | `/user/change-password` | `{"current_password", "new_password"}`                    | Requires auth. Sets a new password (8-72 chars) given the correct current one. `400` if `current_password` is wrong or `new_password` fails validation -- not `401`, since the caller is already authenticated; this is just an invalid value for the action. Deletes every OTHER session (not the one making this request), unlike `/reset-password` above, which has no current session to spare. See "Change password" below. |
 | POST   | `/login`        | `{"username", "password"}`                                       | `401` on bad credentials, `403` if the email isn't verified yet. |
 | POST   | `/logout`       | —                                                                 | Invalidates the current session only (other logged-in devices/sessions are unaffected). |
 | GET    | `/me`           | —                                                                 | Returns the current user if authenticated, `401` otherwise. Now includes `share_presence` (issue #110) -- your own current opt-in/out of sharing your online/offline status with others; see "Online/presence indicator" below. Also includes `default_selections_mode_preference` -- your own personal default for the New Game dialog's default-selections-mode checkbox (Settings dialog's "Game defaults" section, distinct from `default_selections_mode` itself -- see "Default selections mode" below). Also includes `auto_pass_on_empty_hand` (defaults `true`) -- see "Auto-pass on empty hand" below. Also includes `auto_apply_scoring_bonuses` (defaults `true`) -- see "Auto-apply scoring bonuses" below. Also includes `board_layout_preference` (one of `'above_play_area'`/`'below_hand'`, defaults `'above_play_area'`) -- see "Board layout preference" below. Also includes `allow_custom_content` (defaults `false`) -- see "Custom card/effect formats preference" below. |
@@ -90,7 +91,8 @@ HTML maintenance page) — see "Maintenance mode" below.
 | GET    | `/games/export` | query param `game_id`                                             | Requires auth; `403` if you're not seated in that game -- deliberately narrower than `/games/log` above (no spectator path), since this is a personal offline archive rather than a shareable view. A raw, complete dump of every row related to this game (issue #99), across every table with any FK relationship to `games.id` -- not the curated, human-readable view `/games/log` already provides. Returns `{"export": {...}}`; see `GameService::exportGameData()` and "Download complete game data" below for the full shape. |
 | POST   | `/games/start`  | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. Deals hands and begins round 1. `409` if the game isn't `waiting` or has fewer than 2 seated players. |
 | POST   | `/games/play`   | `{"game_id", "card_id", "choices"?}`                              | Requires auth; `403` if you're not seated in that game. `choices` is an opaque object passed straight through to the rules engine — its shape (a target player id, a discard, a mode string, etc.) is entirely card-specific; see `src/Rules/PlayerChoices.php` and `CardChoiceSchema` below. `400` on an invalid/missing choice for that card, `409` if it's not your turn, a decision is already pending, this round's own Chaos Draft offer is still unresolved for ANY seated player (see "Chaos Draft" below), or the play is otherwise illegal. Returns `{"round_scored", "game_completed", "winner_game_player_id"?}`, or `{"pending_decision": true}` if the play now needs another player's own answer before it can finish — see `RequiresOpponentDecision` below. |
-| POST   | `/games/pass`   | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. `409` if it's not your turn, a decision is pending, or this round's own Chaos Draft offer is still unresolved for ANY seated player (see "Chaos Draft" below). Same return shape as `/games/play`. |
+| POST   | `/games/pass`   | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. `409` if it's not your turn, a decision is pending, this round's own Chaos Draft offer is still unresolved for ANY seated player (see "Chaos Draft" below), or your own turn is still gated behind "Pause at the start of your turn" below. Same return shape as `/games/play`. |
+| POST   | `/games/advance-turn` | `{"game_id"}`                                               | Requires auth; `403` if you're not seated in that game. `409` if it's not your turn. Clears `round.turn_pending_acknowledgment` for your own current turn (a no-op if it's already clear) -- the only way to unlock `/games/play`/`/games/pass` once "Pause at the start of your turn" has gated them. Same return shape as `/games/pass`. See "Pause at the start of your turn" below. |
 | POST   | `/games/respond` | `{"game_id", "choices"}`                                        | Requires auth; `403` if you're not seated in that game. Answers the one outstanding pending decision targeting you (see `round.pending_decision` in `/games/state`). `409` if you have no decision pending in that game. `400` on an invalid answer. Returns `{"pending_decision": true}` if the batch has other targets still waiting (or a Duplicity repeat of the same card also needs an answer), otherwise the same `{"round_scored", "game_completed", ...}` shape as `/games/play`. |
 | POST   | `/games/resign` | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. `409` if the game isn't `in_progress` (unless it's a `quick_draft`/`winston_draft`/`grid_draft` match still `'waiting'` through drafting/deck-building -- see "Resigning from a draft match" below), you've already resigned, or a decision is pending. Gives up instead of playing the game/draft out -- see "Resigning" below. Returns `{"round_scored": false, "game_completed", "winner_game_player_id"?}`. |
 | GET    | `/games/notes`  | query param `game_id`                                             | Requires auth; `403` if you're not seated in that game. Returns `{"note_text"}` -- your own private note for that seat (issue #258), `""` if you've never saved one. Always readable, regardless of the game's status. See "In-game notepad" below. |
@@ -108,6 +110,7 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/user/default-selections-mode-preference` | `{"default_selections_mode_preference": bool}`          | Requires auth. Sets your own personal default for the New Game dialog's default-selections-mode checkbox (Settings dialog's "Game defaults" section) -- write-only, since the current value already rides on `GET /me`'s own user object. Distinct from `default_selections_mode` itself, the actual per-game setting `POST /games` accepts -- this only controls that checkbox's initial state, and has no effect on any already-created game. `400` if `default_selections_mode_preference` is missing. See "Default selections mode" below. |
 | POST   | `/user/auto-pass-on-empty-hand-preference` | `{"auto_pass_on_empty_hand": bool}`                     | Requires auth. Opts you in/out of automatically passing whenever it's your turn and your hand is empty (Settings dialog's "Game defaults" section, defaults `true`) -- write-only, since the current value already rides on `GET /me`'s own user object. `400` if `auto_pass_on_empty_hand` is missing. See "Auto-pass on empty hand" below. |
 | POST   | `/user/auto-apply-scoring-bonuses-preference` | `{"auto_apply_scoring_bonuses": bool}`               | Requires auth. Opts you in/out of automatically applying Enthusiasm's/Passion's own obviously-correct per-round scoring bonus (Settings dialog's "Game defaults" section, defaults `true`) -- write-only, since the current value already rides on `GET /me`'s own user object. `400` if `auto_apply_scoring_bonuses` is missing. See "Auto-apply scoring bonuses" below. |
+| POST   | `/user/pause-before-own-turn-preference` | `{"pause_before_own_turn": bool}`                         | Requires auth. Opts you in/out of gating every one of your own turns behind an explicit "Advance Turn" click (Settings dialog's "Game defaults" section, defaults `false` -- an explicit opt-IN, unlike the two auto-* preferences above) -- write-only, since the current value already rides on `GET /me`'s own user object. `400` if `pause_before_own_turn` is missing. See "Pause at the start of your turn" below. |
 | POST   | `/user/board-layout-preference` | `{"board_layout_preference": "above_play_area"\|"below_hand"}` | Requires auth. Chooses where the board's Round/Score/Players section renders (Settings dialog's own "Display" section, defaults `"above_play_area"`) -- write-only, since the current value already rides on `GET /me`'s own user object. `400` if `board_layout_preference` is missing or isn't one of those two exact strings. See "Board layout preference" below. |
 | POST   | `/user/allow-custom-content-preference` | `{"allow_custom_content": bool}`                | Requires auth. Opts you in/out of seeing/joining `chaos_draft` games (Settings dialog's "Game defaults" section, defaults `false` -- an explicit opt-IN, unlike the two auto-* preferences above) -- write-only, since the current value already rides on `GET /me`'s own user object. `400` if `allow_custom_content` is missing. See "Custom card/effect formats preference" below. |
 | POST   | `/user/matchmaking-discoverable-preference` | `{"matchmaking_discoverable": bool}`        | Requires auth. Opts you in/out of having your own open game listings (issue #116) shown to strangers browsing the open lobby (Settings dialog's "Game defaults" section, defaults `false` -- an explicit opt-IN) -- write-only, same reasoning as `allow-custom-content-preference` above. `400` if `matchmaking_discoverable` is missing. See "Open lobby matchmaking" below. |
@@ -236,6 +239,46 @@ user's sessions on success (`SessionRepository::deleteAllForUser()`), so
 a password reset also logs the account out everywhere, treating the
 reset request itself as a signal any existing session may be
 compromised.
+
+## Change password
+
+`POST /user/change-password` (User info page's own "Account" section)
+lets an already-logged-in user set a new password directly, given their
+current one — the counterpart to "Password reset" above for someone who
+already has a valid session and isn't locked out, so there's no mailed
+token step at all: `AuthService::changePassword(int $userId, string
+$currentPassword, string $newPassword, string $currentSessionTokenHash)`
+re-checks `$currentPassword` against the stored hash the same way
+`login()` itself does (`password_verify()`, throwing the same
+`InvalidCredentialsException` on a mismatch — reused rather than adding a
+near-identical exception type just for this), then validates
+`$newPassword` with the identical 8-72 character rule registration/reset
+both already enforce.
+
+The one deliberate difference from `resetPassword()`'s own blanket
+"log out everywhere": `SessionRepository::deleteAllForUserExcept(int
+$userId, string $exceptTokenHash)` leaves the CALLER's own current
+session alone, logging out only every OTHER one. A password reset has no
+current session to preserve (the whole point is recovering access
+without one), but a change-password request comes from an
+already-authenticated session that has every right to keep working — the
+security motivation (a stale/compromised session shouldn't survive a
+password change) only applies to sessions other than the one making the
+change. The route handler reads the raw session cookie itself (rather
+than only calling `requireAuth()`, which returns just the user) so it can
+hash it and pass it through as `$currentSessionTokenHash` — the one
+piece `changePassword()` needs to know which session to spare.
+
+`current_password`/`new_password` are both required in the request body;
+`400` covers both an incorrect current password and a `new_password`
+that fails the length check, without distinguishing which in the HTTP
+status itself (the message does) — a wrong current password isn't a
+`401` here, since the caller IS already authenticated; it's simply an
+invalid value for this specific action, the same way an invalid choice
+for a card play is a `400`/`409` rather than re-litigating auth. No
+separate confirmation field is sent to the server — matching
+`reset-password.html`'s own form, the two new-password fields are
+compared client-side only, before the request is even made.
 
 ## Rules engine
 
@@ -2274,22 +2317,30 @@ player) can play or pass, until the loser explicitly decides.
 is only callable once that game has actually started; `$playFirst`
 true sends the loser out first themselves, false leaves the
 placeholder (the previous winner) going first again -- either answer
-is a real, round-unfreezing decision (`computeFreshGrants()` +
-`updateRoundTurnState()`, the same pair `submitInitialCardPass()` uses
-to unfreeze `closed_team`'s own round 1), not a "did nothing" default,
-and it's permanent -- calling it again once decided throws. `games.
-first_player_choice_user_id` still just records whoever ends up going
-first, for parity with the old field. `getState()`'s own top-level
-`first_player_decision` field is non-null only while round 1 is still
-frozen waiting on this (`null` for game 1, and null again once
-resolved): `you_are_previous_loser` and `default_user_id` let the
-frontend show the loser two buttons ("I'll go first" / "let so-and-so
-go first again") and show the winner a waiting status, both reading
-from the same field. The decision also gets its own `describeEvent()`
-case (`'draft_match_first_player_decided'` -- "{loser} will go first
-this game"), the same way `team_turn_order_decided`/
+is a real decision (`computeFreshGrants()` + `updateRoundTurnState()`,
+the same pair `submitInitialCardPass()` uses to unfreeze `closed_team`'s
+own round 1, for an individual 2-seat match; see "Best of three" below
+for `team`/`closed_team`'s own next step instead), not a "did nothing"
+default, and it's permanent -- calling it again once decided throws
+(`games.first_player_choice_user_id`, not `current_turn_game_player_id`,
+is the authoritative "already decided" signal checked for this, since
+`team`/`closed_team` can leave the latter NULL well past the moment
+this actually resolves -- see "Best of three" below). `getState()`'s
+own top-level `first_player_decision` field is non-null only while
+round 1 is still frozen waiting on this (`null` for game 1, and null
+again once resolved): `you_are_previous_loser` and `default_user_id`
+let the frontend show the loser two buttons ("I'll go first" / "let
+so-and-so go first again") and show the winner a waiting status, both
+reading from the same field. The decision also gets its own
+`describeEvent()` case (`'match_first_player_decided'` -- "{loser} will
+go first this game"), the same way `team_turn_order_decided`/
 `team_draw_recipient_decided` get their own phrasing rather than
 falling through to the generic "{actor} played {card}" default.
+
+This originally only ever applied to the draft-family's own
+`draft_match_id` -- see "Best of three" below for how it also covers
+the non-draft `game_matches` wrapper (Duel/Traditional/Team/Closed Team,
+migration 0223), including what changes for a TEAM-scoped "loser."
 
 **Bot goes first** (`games.bot_goes_first`, migration `0171`, issue
 `#417`) -- a per-game toggle, same shape as `default_selections_mode`
@@ -2297,8 +2348,9 @@ falling through to the generic "{actor} played {card}" default.
 lifetime), that lets the creator have a seated practice bot go first
 instead of leaving `resolveFirstPlayerId()`'s own game-1 coin flip to
 chance. Deliberately narrow: only consulted for that SAME game-1 coin
-flip above (`$game['draft_match_id'] === null || $matchGameNumber ===
-null || $matchGameNumber <= 1`) and only when `format` is neither
+flip above (i.e. NOT a best-of-three rematch -- `match_game_number`
+null or `<= 1`, or neither `draft_match_id` nor `game_match_id` set)
+and only when `format` is neither
 `'team'` nor `'closed_team'` -- Open/Closed Team Play's own "who
 actually takes the opening turn" is the separate, later `team_turn_1/2`
 decision described elsewhere in this doc, never decided at game
@@ -2952,11 +3004,11 @@ decisions today). Only chaos_010 needed anything: its own field is
 OPTIONAL (`required: false`, mirroring Disillusionment's own "may choose a
 color"), and `BotChoiceResolver` never fills an optional field at all (see
 its own docblock) -- so `BotPlayerService::chooseDecisionAnswer()`'s
-existing `disillusionment_choose_color` special case (a "safe color"
-policy: never pick a color matching the responding bot's own board, since
-every mood of a chosen color gets discarded regardless of owner) now also
-covers `chaos_010_choose_color`, since chaos_010 is Disillusionment's own
-chaos analog with an identical field shape.
+existing `disillusionment_choose_color` special case (a swing-maximizing
+policy -- see "Practice bots" below -- since every mood of a chosen
+color gets discarded regardless of owner) now also covers
+`chaos_010_choose_color`, since chaos_010 is Disillusionment's own chaos
+analog with an identical field shape.
 
 Six `ChaosCardChoiceSchema` labels (chaos_067/068/078/082/086/096's own
 SYNCHRONOUS "who to target" fields, unchanged in shape, still read
@@ -3782,12 +3834,74 @@ decklist (a distinct pool to swap from) is left to a future issue, same
 as the draft-family's own sideboarding was itself once a separate,
 later addition.
 
-**Who goes first in game 2/3** is decided by the ordinary uniform-random
-`resolveFirstPlayerId()` path, not the draft-family's own
-`setPlayFirstNextMatchGame()` (the previous game's loser choosing) --
-that mechanic is gated specifically on `draft_match_id !== null`, so it
-never applies here. A future issue could extend it if this format ever
-wants the same "loser decides" fairness rule.
+**Who goes first in game 2/3** (reported live: "in non-draft best of 3
+formats, the loser should choose who plays first in the next game") is
+the same "loser decides" fairness rule the draft-family's own
+`setPlayFirstNextMatchGame()` already had -- that mechanic (previously
+gated specifically on `draft_match_id !== null`) now also covers
+`game_match_id`. `resolveFirstPlayerId()`/`previousMatchGameWinnerUserId()`
+are keyed off whichever of `draft_match_id`/`game_match_id` a game
+actually carries, and `startGame()` freezes game 2/3's own round 1 the
+same way for both -- current_turn_game_player_id stays NULL until
+resolved, with `first_game_player_id` set to the previous winner (or, for
+a team format, a member of the winning TEAM) as a placeholder in the
+meantime.
+
+For Team/Closed Team, "the loser" is a whole LOSING TEAM, not a single
+player -- `previousMatchGameLoserUserIds()` returns BOTH of the losing
+team's members (`game_players.team_id` carries forward unchanged from
+game to game, same as every other seat field `advanceGameMatch()`
+copies), and `setPlayFirstNextMatchGame()` lets EITHER of them answer for
+their shared side; whichever one calls it first settles it, with no
+second teammate confirmation step required (unlike Open Team Play's own
+`turn_order`/`draw_recipient` propose/confirm decisions) -- "should our
+team go first" is a plain team-wide binary with no "which ONE of us"
+sub-choice to negotiate, so there's nothing for a second teammate to
+usefully confirm or reject. What differs by format once the choice
+itself is made:
+
+- **Duel/Traditional** unfreezes the round immediately to the
+  chosen/placeholder seat, exactly like the draft-family flow.
+- **Team** creates that format's own `turn_order` game_team_decision for
+  whichever team ends up assigned -- deferred from `startGame()`'s own
+  'team' branch (which still handles it immediately for game 1, and any
+  non-best-of-three Open Team Play game) to `setPlayFirstNextMatchGame()`
+  itself, since which team is even eligible to go first isn't settled
+  until this resolves. The round stays frozen either way, now for that
+  team's own live choice of who ACTUALLY takes the first turn, same as
+  ever.
+- **Closed Team** sends the pregame blind card-pass "it's your turn"
+  notification (again, deferred from `startGame()`'s own 'closed_team'
+  branch) -- the round stays frozen for `submitInitialCardPass()` to
+  eventually unfreeze, straight to the chosen player, exactly as it
+  already would for game 1.
+
+`games.first_player_choice_user_id` (not `current_turn_game_player_id`)
+is the authoritative "has this already been decided" signal used
+throughout (`isAwaitingFirstPlayerChoiceFrom()`, the repeat-call guard in
+`setPlayFirstNextMatchGame()` itself, `advanceBotFirstPlayerDecision()`,
+and `getState()`'s own `first_player_decision` gating) -- for
+Team/Closed Team, current_turn stays NULL well past the moment this is
+actually decided (pending that format's own next pregame step above), so
+checking it alone can't distinguish "still awaiting an answer" from
+"already answered, now waiting on something else instead." Getting this
+wrong doesn't just misreport lobby/UI state: `advanceAutomatedTurns()`'s
+own frozen-round dispatch would otherwise call
+`advanceBotFirstPlayerDecision()` a second time once a bot-seated Closed
+Team match's card-pass step was already under way, which would in turn
+call `setPlayFirstNextMatchGame()` again for an already-decided game and
+throw uncaught -- caught by
+`testBotDoesNotAutoDecideFirstPlayerChoiceForALosingTeamWithAHumanMember()`/
+`testBotAutoDecidesFirstPlayerChoiceWhenBothLosingTeamMembersAreBots()`'s
+own sibling coverage of `advanceBotFirstPlayerDecision()`'s existing
+draft-only bot test.
+
+`advanceBotFirstPlayerDecision()`'s own bot policy (never opts to go
+first itself) is unchanged, just widened the same way: for a team
+format it only ever auto-declines once EVERY member of the losing team
+is a bot -- a human teammate must always get their own say first,
+exactly like any other team decision (`proposeTeamDecision()`'s own
+"either candidate may act" precedent).
 
 **Open lobby matchmaking** -- `best_of_three` is threaded through
 `create_game_params` (`openGameCreateParamsFromRequestBody()`,
@@ -5051,13 +5165,19 @@ for three event types --
     teammate is notified at once, since either may propose (see
     `createTeamDecision()`).
   - `closed_team`'s pregame blind card pass -- all 4 seated players are
-    notified the moment the game starts, since every one of them owes a
-    pass before round 1 can unfreeze (see `startGame()`'s own
-    `closed_team` branch).
-  - A best-of-three draft match's game 2/3 starting frozen on
-    `setPlayFirstNextMatchGame()` -- only the previous game's loser is
-    notified, since they're the only one who can actually act (see
-    `startGame()`'s own `match_game_number > 1` branch and
+    notified the moment the game starts (for game 1 of a match, or any
+    non-best-of-three game -- see `startGame()`'s own `closed_team`
+    branch), since every one of them owes a pass before round 1 can
+    unfreeze. For a best-of-three rematch this is instead deferred to
+    `setPlayFirstNextMatchGame()` itself, once it's settled who's even
+    eligible to go first (see the next bullet).
+  - A best-of-three match's game 2/3 starting frozen on
+    `setPlayFirstNextMatchGame()` (the draft-family's own `draft_match_id`,
+    or the non-draft `game_matches` wrapper for Duel/Traditional/Team/
+    Closed Team -- see "Best of three" below) -- only the previous game's
+    losing side is notified (both members, for a losing Team/Closed Team
+    side), since they're the only ones who can actually act (see
+    `startGame()`'s own best-of-three rematch branch and
     `isAwaitingFirstPlayerChoiceFrom()`).
   - A Quick Draft/Winston Draft/Grid Draft match's own "waiting on you"
     states during `drafting`/`deck_building` -- the same states
@@ -6206,10 +6326,17 @@ support entirely -- unlike every deck_type above, drafting needs each
 player to make a genuine SEQUENCE of their own decisions (which card(s)
 to keep/take/pick, then how to trim the result into a deck), not
 something a human creator can just supply once up front the way
-`custom_duel`'s own bot decklist works. Two new pieces make this work,
-kept deliberately separate from `BotChoiceResolver`'s own
-`BoardState`-driven policy immediately below, since drafting happens
-entirely BEFORE any `BoardState`/round exists for a game:
+`custom_duel`'s own bot decklist works. Two new pieces make this work.
+The full `draftCardScore()` (synergy-partner/deck-win-rate bonuses,
+below) stays draft-only, since both need draft-session-specific data
+(already-drafted picks, aggregate deck stats) `BotChoiceResolver`'s own
+`BoardState`-driven policy has no access to and no natural mid-game
+meaning for -- but the underlying `draft_priority_score` itself is
+NOT draft-only (reported live: "when bots choose cards to give up for
+hand disruption moods, they should give them up the worst card they
+have, using the same metrics they use to evaluate cards for drafting
+order") -- see "Giving up your own hand card" below for where it's
+also consulted mid-game:
 
 - **Data.** `cards.draft_priority_score` (migration `0143`) is an
   externally-curated general draft-strength ranking across all 133
@@ -6424,13 +6551,23 @@ per-card special case:
   `ALWAYS_FILLED_OPTIONAL_FIELDS`, a small hand-picked list of optional
   fields with NO real cost to the acting player at all -- Curiosity's
   "you may choose a player" (a free reveal, at best a value boost,
-  nothing given up) and Suspicion's "choose any number of players"
+  nothing given up), Suspicion's "choose any number of players"
   (forces a discard from each, again nothing the acting player gives
-  up) -- which get filled in anyway. Both also exclude the acting
-  player from their own candidate pool even though their schema's own
-  `scope` is `'any'` (which would otherwise permit self-targeting,
-  since a human might have an obscure reason to); Suspicion's own multi
-  field additionally takes *every* legal candidate rather than just
+  up), and Cruelty's/Indecisiveness's own identically-shaped "choose any
+  number of opponents [with 2+ moods]" (reported live: "bots should
+  avoid playing Cruelty with no targets," then again for Indecisiveness
+  -- `IndecisivenessEffect`'s own docblock: "same shape as Cruelty, but
+  returning the mood to its owner's hand instead of discarding it" --
+  forces a random one of each chosen opponent's own moods OUT of play
+  either way, same "pure loss for them, nothing given up by the acting
+  player" shape as Suspicion) -- which get filled in anyway. All four
+  also exclude the acting player from their own candidate pool even
+  though their schema's own `scope` is `'any'` (which would otherwise
+  permit self-targeting, since a human might have an obscure reason to;
+  Cruelty's/Indecisiveness's own schemas already set `scope: 'other'`/
+  `excludes_teammate: true` directly, so this part is a no-op for them
+  specifically); Suspicion's, Cruelty's, and Indecisiveness's own multi
+  fields additionally take *every* legal candidate rather than just
   `count.min`, since "choose any number" has no downside to choosing
   more. Contrast Malice's similarly-shaped optional `target_player_id`
   (deliberately NOT on this list): it grants the target extra plays
@@ -6465,12 +6602,15 @@ per-card special case:
 - A required `'value'` field takes its own minimum -- always in range by
   construction, and no required `'value'` field today has any
   board-state constraint narrower than min/max to respect.
-- A required `'mood'`/`'player'` field with `scope: 'own'` (or a
-  `'hand_card'`/`'discard_card'` field, always implicitly "your own" --
-  Guile's/Bliss's own required discard costs are the only examples
-  today) picks the *lowest*-value legal candidate(s) -- `count.min`
-  many, or 1 for a non-`multi` field -- minimizing whatever's being
-  given up as a cost or a voluntary sacrifice.
+- A required `'mood'`/`'player'` field with `scope: 'own'` picks the
+  *lowest*-value legal candidate(s) -- `count.min` many, or 1 for a
+  non-`multi` field -- minimizing whatever's being given up as a cost
+  or a voluntary sacrifice. A `'hand_card'`/`'discard_card'` field
+  (always implicitly "your own" -- Guile's/Bliss's own required discard
+  costs, and Confusion's/Compulsion's/Suspicion's/Intimidation's own
+  pending `hand_card` decisions, see "Giving up your own hand card"
+  below) picks the *worst* legal candidate(s) by the SAME metric,
+  instead -- `cards.draft_priority_score`, not printed value.
 - A required `'mood'`/`'player'` field with `scope: 'other'`/`'any'`
   picks the *highest*-value legal candidate(s) for `'mood'` (a mildly
   "better than nothing" choice of target, no real strategy behind it),
@@ -6483,6 +6623,42 @@ per-card special case:
   exists in the schema today, `'grant_choice'` is documented as never
   actually required even when offered) resolves to `null`, since nothing
   in the schema currently needs a bot to fill one in.
+
+**Giving up your own hand card** (reported live: "when bots choose
+cards to give up for hand disruption moods, they should give them up
+the worst card they have, using the same metrics they use to evaluate
+cards for drafting order") -- `resolveOwnResourceField()`'s own value
+function (`ownResourceCandidateValue()`) used to rank a `'hand_card'`/
+`'discard_card'` candidate by nothing but its plain `baseValue`, so a
+low-printed-value-but-genuinely-strong card (Intimidation, printed
+value 1 but a top-tier `draft_priority_score` of 40) could get handed
+away for a single point saved over a much weaker one. It now ranks by
+`cards.draft_priority_score` first (the SAME curated ranking
+`draftCardScore()` already uses for drafting -- see "Practice bots in
+draft formats" above), falling back to `baseValue` only to break a tie
+between two cards the curated ranking treats as equally replaceable
+(most cards default to a `draft_priority_score` of 1, so most
+same-tier match-ups still resolve exactly the way they always did).
+This single shared method covers every "give up one of your own hand
+cards" decision in the game at once: Confusion's/Compulsion's/
+Suspicion's/Intimidation's own required pending `hand_card` decisions
+(each player -- giver, target, or every chosen player, depending on the
+card -- answers this the moment `pendingDecisionsFor()` asks), the 11
+chaos-effect analogs (`chaos_008/012/025/036/053/058/087/106/110/111/118`,
+see "Chaos Draft" below), and every pre-existing required/optional
+schema-driven discard this same path already handled (Guile's/Bliss's
+own required discard cost, Ambition's/Zeal's/Dignity-family's own
+optional ones once `shouldAttemptAmbitionDiscard()`/`shouldAttemptZealCycle()`/
+`shouldAttemptValueBoostDiscard()` decide it's worth attempting at
+all). The fuller `draftCardScore()` itself (synergy-partner/deck-win-
+rate bonuses) is deliberately NOT reused here -- see "Practice bots in
+draft formats" above for why neither has a natural mid-game meaning.
+`BoardState::catalogRow()`'s own return shape gained `draftPriorityScore`
+(read straight off `cards.draft_priority_score` by
+`BoardStateRepository::mapCatalogRow()`, alongside every other catalog
+field it already carries) purely to make this possible -- previously
+only `CardCatalog::load()`'s own separate, draft-only catalog path
+exposed it at all.
 
 Two consumers apply this policy at the whole-card/whole-decision level
 (`MoodSwings\Bot\BotPlayerService`, itself taking no `MoodPlayService`
@@ -6605,20 +6781,33 @@ since it already holds that dependency):
   (`shouldAttemptZealCycle()`, feeding `buildChoicesForCard()`'s own
   `$forced` the exact same way), but for "you may put a card from your
   hand on the bottom of the deck; if you do, draw a card" rather than a
-  value boost -- worth attempting whenever the bot's own cheapest OTHER
-  hand card (excluding Zeal itself) is cheap enough
-  (`ZEAL_LOW_VALUE_HAND_CARD_THRESHOLD`, the same threshold/reasoning as
-  `RATIONALIZATION_LOW_VALUE_HAND_AVERAGE`/
-  `AVOIDANCE_LOW_VALUE_MOOD_THRESHOLD`/`CYNICISM_LOW_VALUE_DISCARD_THRESHOLD`
-  elsewhere in this section) to be worth gambling on a random
-  replacement for. Once forced, `BotChoiceResolver`'s own generic
-  `'hand_card'` field policy already picks the LOWEST-value legal
-  candidate on its own, so `shouldAttemptZealCycle()` only ever decides
-  WHETHER to bother, never WHICH card -- no bespoke choice-building
-  method needed here the way Rationalization/Avoidance/Cynicism each
-  need their own. An empty remaining hand (Zeal was the bot's only
+  value boost. Once forced, `BotChoiceResolver`'s own generic
+  `'hand_card'` field policy already picks the WORST legal candidate
+  (by `draft_priority_score`, see "Giving up your own hand card" below)
+  on its own, so `shouldAttemptZealCycle()` only ever decides WHETHER to
+  bother, never WHICH card -- no bespoke choice-building method needed
+  here the way Rationalization/Avoidance/Cynicism each need their own.
+  An empty remaining hand (Zeal was the bot's only
   card) has nothing to cycle, so it stays unfilled -- "if it has one to
   cycle" per the maintainer.
+
+  **The "worth attempting" gate itself is judged by draft priority too**
+  (reported live: "bots should always choose their worst card in draft
+  pick order to discard to Zeal") -- worth attempting whenever the
+  bot's own WORST other hand card (excluding Zeal itself), by
+  `cards.draft_priority_score` -- the exact same metric the field
+  policy above will actually act on -- is weak enough
+  (`ZEAL_LOW_DRAFT_PRIORITY_THRESHOLD`) to be worth gambling on a random
+  replacement for. Previously judged by plain printed `baseValue`
+  instead (`ZEAL_LOW_VALUE_HAND_CARD_THRESHOLD`) -- a real mismatch with
+  the field policy's own `draft_priority_score` basis: Intimidation
+  (printed value 1, but a top-tier `draft_priority_score` of 40) used to
+  trigger this gate purely on its own low printed value, risking a
+  genuinely strong card for a random replacement it never deserved to
+  lose, while Dignity (printed value 3, but the catalog's own default
+  tier-1 `draft_priority_score`) used to NOT trigger it despite being
+  exactly the kind of replaceable filler this policy exists to cycle
+  away.
 
   **Ambition** (reported live: "when a bot plays ambition, it should
   discard a card for another play if it has 3+ cards in hand and it has
@@ -6629,15 +6818,16 @@ since it already holds that dependency):
   discard a card from your hand; if you do, you may play an additional
   mood this turn" rather than a bottom-and-redraw -- worth attempting
   once `AMBITION_MIN_HAND_SIZE_TO_DISCARD` (3, Ambition itself included,
-  still sitting in hand at this point the same way `ZEAL_LOW_VALUE_HAND_CARD_THRESHOLD`'s
+  still sitting in hand at this point the same way `shouldAttemptZealCycle()`'s
   own check works) is met AND, after setting aside the cheapest OTHER
   hand card as the discard cost, at least one hand card still remains
   with a positive base value -- a genuine scoring play worth unlocking
   the extra play for, not just "some card to burn it on." Once forced,
   `BotChoiceResolver`'s own generic `'hand_card'` field policy already
-  picks the LOWEST-value legal candidate as the discard on its own, so
-  `shouldAttemptAmbitionDiscard()` only ever decides WHETHER to bother,
-  never WHICH card, the same division of labor as `shouldAttemptZealCycle()`.
+  picks the WORST legal candidate (by `draft_priority_score`) as the
+  discard on its own, so `shouldAttemptAmbitionDiscard()` only ever
+  decides WHETHER to bother, never WHICH card, the same division of
+  labor as `shouldAttemptZealCycle()`.
   This same rule already covers "make the difference between winning and
   losing the game" in the last round without any separate last-round-
   specific logic: a positive-value card the bot couldn't otherwise fit
@@ -6647,6 +6837,31 @@ since it already holds that dependency):
   to vary Ambition's own targeting over, so the Tactical Bot's only
   candidate action for it is this same default choice set -- this fix
   therefore covers both bots with no search-side change needed.
+
+  **Ambition never discards Hope** (reported live: "bots should not
+  discard Hope to Ambition"). Hope's own `draft_priority_score` (16, per
+  migration 0143) reflects its DRAFT desirability, not its value once
+  it's actually sitting in hand ready to be played: "while in play, you
+  may play an additional mood during each of your turns" (`HopeEffect`'s
+  own docblock) is an ongoing, stacking, every-turn grant for as long as
+  it stays in play -- worth far more than a flat, one-time comparison
+  against another card ever conveys, whether that's a tier-16 mythic
+  tying it outright (Hope's own `baseValue`, 0, the lowest any card can
+  have, always loses that tie) or a tier-20+ card beating it on
+  `draft_priority_score` alone (Paranoia/Rationalization/Recklessness/
+  Creativity/Intimidation). `BotChoiceResolver::ambitionSafeHandCardIds()`
+  filters Hope out of Ambition's own `discard_card_id` candidate pool
+  entirely before `resolveOwnResourceField()` ever sees it, and
+  `shouldAttemptAmbitionDiscard()` mirrors that same exclusion in its own
+  "is this worth attempting" prediction -- without it, Hope's 0
+  `baseValue` would make that method assume Hope itself is the (cheap)
+  card about to be sacrificed, when the resolver would actually reach
+  past it and sacrifice some OTHER, possibly the only remaining good,
+  card instead. Scoped to Ambition specifically, not a blanket
+  never-discard-Hope rule -- every other hand-disruption discard site
+  sharing `resolveOwnResourceField()` (Confusion/Compulsion/Suspicion/
+  Intimidation and their chaos-effect analogs, Guile/Bliss/Zeal/
+  Dignity-family) is untouched.
 
   **Rationalization** (confirmed by the maintainer) gets its own
   bespoke, two-part policy, since "you may choose one: refresh your own
@@ -6712,16 +6927,32 @@ since it already holds that dependency):
   (see the latter's own docblock -- extracted from `sortPriorityValue()`
   for the reason given there): rather than leading with it purely
   because of its own unremarkable printed value (3), it's demoted to
-  `PHP_INT_MIN` -- guaranteed last -- UNLESS `rationalizationLowValueHand()`,
-  `rationalizationStealDirection()`, or (reported live, follow-up)
-  `rationalizationWouldClinchTheGame()` already says it's worth playing
-  right now (the first two are the same checks `rationalizationChoices()`
-  itself makes, just used here to decide WHETHER/WHEN rather than HOW)
-  -- "save it to play last" per the maintainer, so a mediocre
-  Rationalization never displaces a genuinely useful play, but it's
-  still never skipped outright: once it's the only legal candidate left
-  (or a trigger fires), it's played the same as anything else, always
-  committing to a real mode.
+  `PHP_INT_MIN` -- guaranteed last -- UNLESS `rationalizationStealDirection()`,
+  `rationalizationWouldClinchTheGame()`, or (new below)
+  `rationalizationWouldPreventLosingTheGame()` already says it's worth
+  playing right now -- "save it to play last" per the maintainer, so a
+  mediocre Rationalization never displaces a genuinely useful play, but
+  it's still never skipped outright: once it's the only legal candidate
+  left (or a trigger fires), it's played the same as anything else,
+  always committing to a real mode.
+
+  **`rationalizationLowValueHand()` is no longer one of the three checks
+  above** (reported live, twice now: first the steal/clinch triggers
+  documented below; then, bots STILL "playing rationalization badly,"
+  reworded as "strengthen the imperative to hold onto it until it is
+  useful to rotate hands, or absolutely necessary not to lose a game" --
+  taken literally as an exhaustive list of the only two acceptable
+  reasons to play it at all). A merely mediocre remaining hand is no
+  longer, by itself, a green light to voluntarily lead with playing
+  Rationalization over some other candidate -- exactly what "played
+  badly" looked like: cashing it in early for a marginal hand-quality
+  gamble instead of holding it for the steal, or for the new defensive
+  case below. `rationalizationLowValueHand()` itself is untouched and
+  still consulted -- just no longer HERE: `rationalizationChoices()`
+  above still uses it (unchanged) to pick the MODE once the bot is going
+  to play Rationalization anyway for some other reason (or is simply
+  forced to, as the last legal card), where a free hand-quality upgrade
+  costs nothing extra either way.
 
   **`rationalizationWouldClinchTheGame()`** (reported live: "Rationalization
   should be saved until it can be used to rotate hands and get the bot
@@ -6746,6 +6977,32 @@ since it already holds that dependency):
   win away from winning the game but not actually in contention to win
   THIS particular round gains nothing from cashing Rationalization in
   early, since it wouldn't have won the round anyway.
+
+  **`rationalizationWouldPreventLosingTheGame()`** (new, reported live:
+  "...or absolutely necessary not to lose a game") -- the defensive
+  mirror of the carve-out above: true only when SOME non-teammate rival
+  group is BOTH (a) one round win (accounting for Corruption's own
+  double-win marker, identically to the offensive check) away from
+  winning the whole GAME outright, AND (b) currently on track to take
+  SOLE highest score this round unless the bot intervenes -- playing
+  Rationalization purely for its own plain value would deny that
+  SPECIFIC rival the round lead it would otherwise have. Checked per
+  RIVAL GROUP rather than reusing `wouldBecomeHighestScore()`'s own
+  single "best rival" figure the offensive check gets away with -- with
+  3+ players, that figure can be driven by a DIFFERENT, non-clinching
+  rival, which would wrongly read "someone merely has more points" as
+  "I'm about to lose the whole game" even when the actually-clinching
+  rival isn't the round's real threat. Needs each active player's own
+  `roundWinsStillNeededToWinGame()` value, not just the acting bot's --
+  `GameService::roundWinsNeededToWinGameForActivePlayers()` computes the
+  full `array<int, int>` (game_player_id => wins still needed) once per
+  bot decision and threads it into `chooseAction()` as a new
+  `$roundWinsNeededToWinGameByPlayerId` parameter, mirrored the same way
+  through `BotPlayerService`'s own `sortPriorityValue()`/`hasGoodReasonToPlayNow()`
+  and `SearchBotPlayerService`'s own `chooseAction()`/`withoutPrematurelyPlayedCards()`
+  as `$roundWinsNeededToWinGame` itself already was. Empty (the default)
+  behaves exactly as it always did before this parameter existed, the
+  same contract that value's own `null` default already established.
 
   **The Tactical Bot (issue #419) was silently exempt from ALL of the
   above until this same fix** (reported live: "I think we made a change
@@ -6922,6 +7179,35 @@ since it already holds that dependency):
   for no compensating benefit -- there's no reason for the "still played
   eventually" fallback the other cards rely on to apply here at all.
 
+  **Pacifism's own swing, not just its printed value, drives its
+  priority** (reported live: a bot with an opponent's 11-point Euphoria
+  in play, and a Pacifism sitting in the discard pile playable via
+  Melancholy, played some other far weaker card instead, missing a win).
+  Pacifism's own printed value is 1 -- once it clears the `PHP_INT_MIN`
+  veto above, `sortPriorityValue()` used to fall back to that plain
+  value like most other cards, so a low-value filler with a higher
+  printed value than 1 (which is almost anything) always outranked it
+  regardless of how much it would actually deny an opponent. New
+  `pacifismSwing()` sums the value of whatever `pacifismTargetMoodIds()`
+  would suppress right now -- the exact same targets `buildChoicesForCard()`
+  would pick if Pacifism is chosen -- and `sortPriorityValue()` adds it
+  on top of `baseValue()` for Pacifism specifically. Unlike
+  `EARLY_PRIORITY_EFFECT_KEYS`' own flat bonus (which always outranks an
+  unboosted card regardless of magnitude), this is a genuine value
+  comparison living on the same scale as every other card's own
+  `baseValue()`: a Pacifism that would only deny a couple of points still
+  fairly loses to a healthier plain card, while one that would deny an
+  Euphoria-sized mood now correctly outranks nearly everything. Works
+  identically whether Pacifism is sourced from hand or, via Melancholy,
+  the discard pile -- the swing computation itself has no notion of
+  which zone the card came from, only what it would suppress once
+  played. `angerSwingMaximizingTargets()`/Disillusionment's own swing
+  veto above are the two existing precedents for this same "a card's
+  conditional value can dwarf its printed one" shape; Anger itself
+  doesn't yet get an analogous priority BOOST the way Pacifism now does
+  (only its own targeting is swing-aware), a similar latent gap flagged
+  but not fixed here since it wasn't what was reported.
+
   **Shock** (reported live: "bots should choose an opponent's mood to
   target with shock when playing it") gets its own targeting exception
   too, via `shockTargetMoodIds()`: `buildChoicesForCard()` special-cases
@@ -7088,6 +7374,25 @@ since it already holds that dependency):
   is holding). The instant either kind of synergy card sits in hand, Fear
   reverts to its ordinary `EARLY_PRIORITY_EFFECT_KEYS` boosted treatment.
 
+  **Thrill** (reported live: "bots shouldn't play Thrill as an opener")
+  gets the same `hasGoodReasonToPlayNow()` veto treatment as Harmony/
+  Grief/Nostalgia above, via `$state->moodsOwnedBy($botGamePlayerId) === []`.
+  Unlike Fear, Thrill's own extra-play grant IS conditional --
+  `ThrillEffect`'s "you may put any number of your OTHER moods [already
+  in play] into your hand; if you do, you may play that many additional
+  moods this turn" can only ever return moods the bot already has ON THE
+  BOARD, so playing Thrill first, with nothing else of the bot's own in
+  play yet, is just a 1-value mythic with no effect that turn -- the same
+  "opener" complaint the maintainer raised about Fear, but for a
+  genuinely dead ability rather than a merely-worse-odds one. The instant
+  the bot has even one other mood in play, Thrill reverts to its ordinary
+  `EARLY_PRIORITY_EFFECT_KEYS` boosted treatment (it's already listed
+  there). Ambition/Bravado pay a superficially similar "if you do" cost
+  (a hand card / a mood in play, respectively) for the same shape of
+  grant, but are left alone here: Ambition's cost is a hand card, which a
+  bot with anything left to play always has, and Bravado's own identical
+  "needs a mood already in play" gap wasn't part of what was reported.
+
   **Anger** (confirmed by the maintainer) gets its own targeting
   exception too, via `angerTargetMoodIds()` -- `buildChoicesForCard()`
   special-cases `effectKey === 'anger'` the same way it does
@@ -7161,6 +7466,25 @@ since it already holds that dependency):
   worthless 0-point opening play with nothing to actually discard. The
   instant a legal target exists (either kind), Anger reverts to plain
   `baseValue()` ordering (0) like any other unboosted card.
+
+  **Cruelty and Indecisiveness** (reported live: "bots should avoid
+  playing Cruelty with no targets," then again for Indecisiveness once
+  the identical gap was noticed -- `IndecisivenessEffect`'s own
+  docblock: "same shape as Cruelty, but returning the mood to its
+  owner's hand instead of discarding it") need no `buildChoicesForCard()`
+  targeting exception the way Anger/Pacifism/Denial above do -- their own
+  `opponent_player_ids` field is already handled by
+  `ALWAYS_FILLED_OPTIONAL_FIELDS` (see above), since targeting every
+  eligible opponent is always correct with no cost/tradeoff to weigh.
+  They only needed a shared `hasGoodReasonToPlayNow()` veto:
+  `twoOrMoreMoodOpponentIds()` returns every non-teammate opponent with 2
+  or more moods currently in play (`CrueltyEffect::MINIMUM_MOODS`/
+  `IndecisivenessEffect::MINIMUM_MOODS`/`CardChoiceSchema`'s own
+  `cruelty`/`indecisiveness` filters, which are identical), and either
+  card is deprioritized to `PHP_INT_MIN` -- deprioritized WHEN, never
+  skipped outright, the same as Anger above -- whenever that list comes
+  back empty, rather than played as a dead 3-point mood with nobody to
+  target.
 
   **Sneakiness** gets a targeting exception of its own, via
   `sneakinessTargetPlayerId()`, used by both `isWorthPlaying()` (a veto)
@@ -7338,14 +7662,24 @@ since it already holds that dependency):
   REQUIRED (unlike Contempt/Hate's own optional one), so it must still
   supply SOME legal target even then, the same reasoning
   `convictionTargetMoodId()` already documents.
-- **Nostalgia's own discard-pickup targeting** (confirmed by the
-  maintainer), via `nostalgiaDiscardCardId()`: always takes the
-  highest-`baseValue()` card currently in the discard pile when playing
+- **Nostalgia's own discard-pickup targeting** (reported live: "bots
+  should always choose cards to get back with Nostalgia in draft pick
+  order"), via `nostalgiaDiscardCardId()`: always takes the
+  highest-ranked card currently in the discard pile when playing
   Nostalgia, filling its own optional `discard_card_id` field -- unlike
   every other optional field this class leaves unfilled by default (see
   `BotChoiceResolver`'s own docblock), Nostalgia's pickup is a pure
   benefit with no cost, so there's no reason not to take the best
-  available card. The one exception: if the bot already has a Sadness-
+  available card. "Best" is now ranked by `draftPriorityRank()`, a new
+  helper combining `cards.draft_priority_score` (the primary key, same
+  curated ranking `draftCardScore()` uses for drafting, and the same
+  metric `BotChoiceResolver::ownResourceCandidateValue()` already uses
+  for the mirror-image "give up your worst card" decisions) with
+  `baseValue()` as a tiebreaker -- previously it ranked by plain printed
+  `baseValue()` alone, so a low-tier filler card with a merely higher
+  printed value could outrank a genuinely strong recursion target like
+  Intimidation (printed value 1, but a top-tier `draft_priority_score`)
+  for the pickup. The one exception: if the bot already has a Sadness-
   or Wonder-family mood (`DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS` --
   `SadnessEffect` scales its own value +2 per card in the discard pile
   unconditionally, `WonderEffect` scales +2 per in-play mood AND per
@@ -7468,22 +7802,56 @@ since it already holds that dependency):
   decision type ignores it and falls through to the generic
   resolver-driven behavior above, same as before this parameter existed.
 
-  **Disillusionment** (confirmed by the maintainer) is the one exception
-  to "optional pending-decision field -- declined": every seated player
-  gets asked this once, not just whoever played it
-  (`DisillusionmentEffect::pendingDecisionsFor()`'s own `queueOrder()`),
-  so `$botGamePlayerId` here is whichever bot is currently being asked to
-  answer, not necessarily the one who played the mood.
-  `disillusionmentSafeColor()` picks the first color in `$field['options']`'s
-  own order that matches none of the RESPONDING bot's own moods currently
-  in play, nor a teammate's -- `DisillusionmentEffect::resolveDecisions()`
-  moves EVERY other mood of a chosen color to the discard pile regardless
-  of owner, so an unsafe pick would gladly thin out opponents' boards
-  while blowing up the bot's own (or its teammate's) at the same time.
-  `null` (decline, the same default every other optional field still
-  gets) whenever every color matches something the bot or a teammate
-  owns -- there's no way to participate here without also hurting
-  yourself/your team.
+  **Disillusionment** (reported live: "bots should pick a color for
+  disillusionment that will result in the largest point swing in their
+  favor - if no color is advantageous to them they should not pick a
+  color") is the one exception to "optional pending-decision field --
+  declined": every seated player gets asked this once, not just whoever
+  played it (`DisillusionmentEffect::pendingDecisionsFor()`'s own
+  `queueOrder()`), so `$botGamePlayerId` here is whichever bot is
+  currently being asked to answer, not necessarily the one who played
+  the mood. `disillusionmentBestColor()` computes each candidate color's
+  own signed swing (`disillusionmentColorSwing()`) the same way
+  `guiltSwingContribution()` already does for Guilt's own 'all' mode --
+  `DisillusionmentEffect::resolveDecisions()` moves EVERY other mood of
+  the union of every player's own chosen color(s) to the discard pile
+  regardless of owner, so a color is `+value` per non-teammate opponent
+  mood of that color (a genuine gain) and `-value` per the bot's own or
+  a teammate's (an unavoidable self-inflicted loss once chosen) -- then
+  picks whichever color's total is highest, `null` (decline) unless that
+  best total is actually positive. A merely-safe-but-zero-value color
+  (today's old policy would happily pick one) is no longer treated as
+  worth choosing at all -- there has to be a real gain, not just an
+  absence of self-harm. `$sourceCardId` (`GameService`'s own
+  `game_pending_decision_batches.played_card_id`, threaded through as
+  `chooseDecisionAnswer()`'s new optional 5th parameter -- every other
+  caller/decision type ignores it) excludes the currently-resolving
+  Disillusionment/`chaos_010` mood itself from every color's total,
+  since `resolveDecisions()`'s own `$mood->cardId === $cardId` skip
+  means it can never actually be discarded by its own resolution
+  regardless of which color(s) end up chosen.
+
+  **Whether to play Disillusionment at all** (`hasGoodReasonToPlayNow()`,
+  same reported-live request: "should not play disillusionment, unless
+  the total point swing in their favor ... regardless of which color(s)
+  are chosen by opponents [is positive]") reuses
+  `disillusionmentColorSwing()` from the ACTING bot's own perspective,
+  evaluated against the board as it stands before the card is even
+  played (nothing else's color/value changes just because it's about to
+  be played, so this is exactly the swing `disillusionmentBestColor()`
+  would compute once it actually resolves) -- vetoed to
+  `sortPriorityValue()`'s own `PHP_INT_MIN` treatment unless at least one
+  color is genuinely profitable this way. "Regardless of which color(s)
+  are chosen by opponents" means this deliberately never banks on some
+  OTHER seated player also choosing a color that happens to help the bot
+  too -- only the swing the bot's OWN eventual pick guarantees counts,
+  not a hoped-for assist from someone else's independent "may" choice.
+  Disillusionment isn't in `EARLY_PRIORITY_EFFECT_KEYS` (it discards
+  moods rather than granting an extra play), so clearing this veto just
+  means it competes at its own plain printed value (2) like any other
+  ordinary card -- "deprioritized WHEN, never skipped outright" still
+  applies: with nothing else playable, it's played anyway even with no
+  profitable color to pick.
 
 **Driving a bot's turn: `GameService::advanceAutomatedTurns(int
 $gameId): ?array`.** Called immediately after a human's own
@@ -8124,6 +8492,83 @@ inherit the test's own environment (including its test-database
 connection) and race the test's own assertions against the very same
 `bot_search_jobs` row.
 
+### Diagnostic mode
+
+An opt-in, creation-time flag (`games.diagnostic_mode`, migration `0255`)
+that lets a seated human watch a Tactical Bot's own decision-making --
+requested live: "a button should be available to allow a human player to
+view the bot(s) hand(s), as well as ... a button to show the 'reasoning'
+behind every play the bot has made since the human player's previous
+play -- the heuristics involved, the play options considered, and the
+relative scoring assigned to those considered options."
+
+**Creation-time gating.** `createGame()`'s own `$diagnosticMode` parameter
+only actually takes effect when at least one seated user is a Tactical
+Bot (`includesATacticalBot()`, an "at least one" analogue of the existing
+`botUserIdAmong()`) -- otherwise it's silently ignored (not an error),
+the same "harmless no-op outside its own narrow scope" convention every
+other creation-time opt-in here already follows (`bestOfThree`/
+`allowSideboarding` etc.). The New Game dialog's own checkbox is only
+ever shown once a CHECKED bot opponent is specifically a Tactical Bot
+(`uses_tactical_ai`, now included in `listPracticeBots()`'s own return
+shape) -- see "Diagnostic mode" in `web-static/README.md`.
+
+**Bot hand visibility.** Rather than a separate endpoint/poll, a
+diagnostic game's Tactical Bot(s)' own live hand(s) ride along in the
+ordinary `GET /games/state` response as a new `diagnostic_bot_hands`
+field -- `null` for every non-diagnostic game (or a spectator/unseated
+viewer), else `array<{game_player_id, username, hand: [...serialized
+cards]}>` for every `is_bot` seat, computed in `buildGameState()` right
+alongside the existing per-player `total_score`/`deck_count`/`hand`
+(reveal-all-hands) computation. Each card is serialized with the BOT's
+own `game_player_id` as the reacting viewer (`serializeCard()`'s own
+`$reactingViewerId`), so `is_playable` reflects what the bot itself could
+legally play -- not the human viewer.
+
+**Reasoning log.** Rather than a new table, a Tactical Bot's own search
+result is logged as an ordinary `game_events` row
+(`event_type = 'tactical_bot_reasoning'`) -- `game_events.details` is
+plain JSON with no `event_type` ENUM to extend, and the existing
+append-only/ordered-by-id shape is exactly what "since the viewer's own
+last play" needs. `SearchBotPlayerService::chooseAction()` is now a thin
+wrapper around `chooseActionWithReasoning()`, which returns the chosen
+action AND a `{excluded_by_heuristic: int[], candidates: [{card_id,
+choices, visits, average_reward}]}` payload built from the SAME
+`$rootActions`/`$visits`/`$totals` arrays the UCB1 search already
+computes (previously discarded the moment `chooseAction()` picked a
+winner) -- no extra rollouts, no extra cost. `runTacticalBotSearchJob()`
+only calls this reasoning-returning variant, and only logs the result,
+when the job's own game has `diagnostic_mode` on; a non-diagnostic game's
+Tactical Bot still calls the plain `chooseAction()` wrapper, so search
+cost is identical either way. `logTacticalBotReasoning()` deliberately
+logs with `$state = null` (its default) -- passing the real `BoardState`
+would drain its pending card-move/reveal history queues that the REAL
+`mood_played`/`turn_passed` event (logged moments later, once the chosen
+action is actually applied) still needs.
+
+Candidates carry a bare `card_id`, not a fully serialized card -- the
+frontend already has the whole catalog loaded (`GET /cards/catalog`, the
+deck builder's own source), so there's no need to re-serialize a card on
+every candidate of every logged turn.
+
+`GameService::tacticalBotReasoningSince(int $gameId, int $viewerUserId)`
+(`GET /games/bot-reasoning?game_id=`) scopes the returned list PER
+VIEWER, not per game or per round: it finds the CALLER's own most recent
+`game_events` row (any event type, `acting_game_player_id` matching their
+own seat -- but excluding `round_grants_computed`, the same bookkeeping
+event `gameEventHistory()`/`humanReadableEventHistory()` already filter
+out of the general event log, since it logs one row per player at every
+round's start regardless of whose turn it actually was, which would
+otherwise push this boundary past reasoning genuinely new to the viewer)
+to establish a boundary id, then returns every `tactical_bot_reasoning`
+event after it. This means two humans watching the same Team Play game
+each see exactly the Tactical Bot turns THEY personally haven't caught up
+on yet, not a shared whole-round log -- and a viewer who hasn't acted at
+all yet this game sees the entire history. Throws `GameStateException`
+for an unseated viewer or a non-diagnostic game (mirrored client-side:
+the "View bot reasoning" button is only ever shown once
+`diagnostic_bot_hands` is non-null, which already implies both).
+
 ### Auto-pass on empty hand
 
 A personal preference (`users.auto_pass_on_empty_hand`, migration
@@ -8302,6 +8747,118 @@ other per-card exception in this codebase (Fury's veto, Harmony's
 empty-discard-pile deprioritization, Anger's own targeting policy) is
 hardcoded to that specific card rather than built out for a need that
 doesn't exist yet.
+
+### Pause at the start of your turn
+
+Reported live: "add a user setting to pause at the end of turn - if the
+user has this setting enabled, then a game should not advance to that
+user's turn, until they click an 'advance turn' button - this is to
+allow users to more clearly see what happened during a previous turn
+before/after scoring effects happen - sometimes even with the log text
+available it is difficult to figure out for many users."
+
+A personal preference (`users.pause_before_own_turn`, migration `0263`,
+defaults to `0`/off -- unlike auto-pass-on-empty-hand's/auto-apply-
+scoring-bonuses' own default-on "pure convenience," this deliberately
+ADDS a click before every one of this player's own turns, so it's an
+explicit opt-in). Surfaced in the Settings dialog's own "Game defaults"
+section (`#settings-pause-before-turn-checkbox`, alongside the two
+auto-* preferences above) and written via `POST
+/user/pause-before-own-turn-preference` (see the API table above), the
+same write-only, no-separate-GET pattern every other personal preference
+here already uses.
+
+**The gate applies to EVERY turn handoff, not just a round-to-round
+one** -- the report's own "before/after scoring effects happen" example
+is the highest-value case (a new round's own opening board state is the
+easiest to lose track of how it got there), but a plain mid-round
+pass-the-turn from one player to the next gets the exact same treatment.
+Both funnel through the one place that already knew, and already acted
+on, the instant a turn genuinely starts: `GameService::
+notifyItsYourTurn()` -- previously only the source of the "your turn"
+push/Discord notification (see "Browser push notifications"/"Discord"
+above), reached from exactly two shapes of call site, both meaning "a
+NEW player just became the current turn holder, for real":
+
+- `updateRoundTurnState()`'s own `$previousPlayerId !== $playerId` gate
+  -- an ordinary same-round turn advance (`advanceTurn()`) or a Team
+  Play turn unfreezing (`unfreezeRoundForTeamPlayer()`).
+- A brand new round's own `current_turn_game_player_id`, set directly at
+  `INSERT` time by `finishScoringAndAdvance()` (and its Team Play/Awe-
+  skip-scoring counterparts) once a round's just been scored, or by
+  `startGame()` for round 1 of a fresh game -- these don't go through
+  `updateRoundTurnState()` at all (there's no existing row to `UPDATE`
+  yet), so each already called `notifyItsYourTurn()` directly for the
+  exact same "well, SOMEONE'S turn just started" reason.
+
+`notifyItsYourTurn()` now also checks the new turn holder's own
+`pause_before_own_turn`, and if it's on, sets a new
+`game_rounds.turn_pending_acknowledgment` flag (public -- visible to
+spectators/other players too via `round.turn_pending_acknowledgment`,
+the same as `current_turn_game_player_id` itself already is) alongside
+sending the push/Discord notification, completely independently of it
+(the notification still fires regardless of this preference, and this
+flag gets set regardless of whether push notifications are even
+configured).
+
+**Enforced server-side, not just hidden client-side** -- a new
+`assertTurnAcknowledged()` check (mirroring `assertNoPendingDecision()`'s
+own shape) runs in both `GameService::playMood()` and `pass()`, right
+alongside that existing pending-decision gate, and throws a
+`GameStateException` if `turn_pending_acknowledgment` is still set. A
+well-behaved client never actually reaches this (see below), but the
+block is real regardless of what the client shows. The only way to
+clear it is the new `GameService::acknowledgeTurnStart($gameId,
+$gamePlayerId)` (`POST /games/advance-turn`) -- deliberately NOT named
+`advanceTurn()`, the existing PRIVATE method that ROTATES the round to
+the NEXT player once someone's finished acting; this method never
+changes whose turn it is, only whether the CURRENT turn holder's own
+client may act on it yet. Rejects anyone who isn't actually the round's
+current turn holder, the same `GameStateException` `playMood()`/`pass()`
+themselves throw for the same reason; idempotent otherwise (a no-op,
+not an error, if the flag's already clear -- a double-clicked button or
+a stale poll racing a second request).
+
+**`advanceAutomatedTurns()` respects the same gate** -- a new check,
+`if ($round['turn_pending_acknowledgment']) { break; }`, sits right
+alongside the existing Chaos Draft round-offer gate, stopping the
+automated-turn loop cold the instant it reaches a pending turn, before
+even checking whether that seat belongs to a bot (it never will --
+see below) or an opted-in auto-pass player. This is what makes
+**pausing take priority over auto-pass-on-empty-hand** even for the
+SAME player who opted into both: reported live and confirmed by design,
+someone with an empty hand who's paused still gets a chance to see what
+just happened before they're auto-passed out of a turn they never had a
+real decision in anyway -- the auto-pass only actually fires on the
+NEXT `advanceAutomatedTurns()` call, once `acknowledgeTurnStart()` has
+cleared the flag. A bot's own `users` row can never actually have
+`pause_before_own_turn` set (no UI a bot could ever use to turn it on),
+so this check never fires for a bot seat in practice -- it only ever
+holds up a real, opted-in human's own turn.
+
+**Frontend**: `GET /games/state`'s own `round.turn_pending_acknowledgment`
+(public) and `you.turn_pending_acknowledgment` (only ever `true` for the
+actual current turn holder, deliberately kept separate from
+`is_your_turn` itself -- see `GameService::buildGameState()`'s own
+comment -- so `is_your_turn` keeps meaning exactly what it always has,
+and every existing consumer of it keeps working unchanged) drive a new
+`#turn-pending-acknowledgment-banner` ("It's your turn. Review what just
+happened, then continue when you're ready." plus an `#advance-turn-button`),
+shown only while `you.turn_pending_acknowledgment` is `true`. Clicking it
+calls `POST /games/advance-turn` then re-polls, same "let `renderBoard()`
+recompute visibility" pattern the Pass button's own click handler uses.
+`passButtonCanAct()` (gating both the Pass button and every hand card's
+own clickability -- see "Practice bots" above for `canAct`'s reach) and
+the play-grants-remaining indicator both additionally require
+`!turn_pending_acknowledgment`, so nothing in the ordinary turn UI is
+actually usable until the gate clears -- the player can still see
+everything on the board (their own hand, in-play moods, the discard
+pile, scoring effects/log) while paused, exactly the point; only the
+ACTIONABLE affordances are held back. A spectator/other player sees
+`" — <name>'s turn (reviewing)"` in the round status line instead of a
+separate banner of their own, using the public `round.
+turn_pending_acknowledgment` field -- see `web-static/README.md` for the
+exact rendering.
 
 ### Board layout preference (issue #417)
 

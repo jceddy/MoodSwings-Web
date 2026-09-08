@@ -79,6 +79,16 @@ function resetPassword(token, password) {
     return apiRequest('/reset-password', { method: 'POST', body: JSON.stringify({ token, password }) });
 }
 
+// Change password (User info page's "Account" section) -- for an
+// already-authenticated user, unlike resetPassword() above (a mailed
+// token for someone who can't log in at all).
+function changePassword(currentPassword, newPassword) {
+    return apiRequest('/user/change-password', {
+        method: 'POST',
+        body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+    });
+}
+
 function listFriends() {
     return apiRequest('/friends');
 }
@@ -129,7 +139,7 @@ function getCardStats() {
     return apiRequest('/stats/cards');
 }
 
-function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId, defaultSelectionsMode, botDecklistText, botSavedDecklistId, randomTeams, rotisserieDraftPoolSource, rotisserieDraftCustomPoolText, rotisserieDraftCutoffCount, tieredRotisserieDraftMode, tieredRotisserieDraftTiers, botGoesFirst, bestOfThree, allowSideboarding) {
+function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId, defaultSelectionsMode, botDecklistText, botSavedDecklistId, randomTeams, rotisserieDraftPoolSource, rotisserieDraftCustomPoolText, rotisserieDraftCutoffCount, tieredRotisserieDraftMode, tieredRotisserieDraftTiers, botGoesFirst, bestOfThree, allowSideboarding, diagnosticMode) {
     return apiRequest('/games', {
         method: 'POST',
         body: JSON.stringify({
@@ -202,6 +212,10 @@ function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText,
             // duel_deck_rules preset (issue #90 follow-up) -- see "Best of
             // three" in web-static/README.md.
             allow_sideboarding: allowSideboarding,
+            // Only meaningful with a practice Tactical Bot seated (see
+            // uses_tactical_ai) -- see "Diagnostic mode" in
+            // web-static/README.md.
+            diagnostic_mode: diagnosticMode,
         }),
     });
 }
@@ -333,6 +347,22 @@ function saveAutoApplyScoringBonusesPreference(autoApplyScoringBonuses) {
     return apiRequest('/user/auto-apply-scoring-bonuses-preference', {
         method: 'POST',
         body: JSON.stringify({ auto_apply_scoring_bonuses: autoApplyScoringBonuses }),
+    });
+}
+
+// "Pause at the start of your turn" as a personal preference (Settings
+// dialog's "Game defaults" section) -- write-only, same reasoning as
+// saveAutoApplyScoringBonusesPreference() above: the current value
+// already rides on getCurrentUser()'s own user.pause_before_own_turn
+// field. Drives GameService::notifyItsYourTurn()'s own server-side
+// behavior entirely -- there's no client-side effect to apply beyond
+// persisting it (the "Advance Turn" banner itself reacts to
+// state.you.turn_pending_acknowledgment on the next poll, not to this
+// preference directly).
+function savePauseBeforeOwnTurnPreference(pauseBeforeOwnTurn) {
+    return apiRequest('/user/pause-before-own-turn-preference', {
+        method: 'POST',
+        body: JSON.stringify({ pause_before_own_turn: pauseBeforeOwnTurn }),
     });
 }
 
@@ -596,6 +626,14 @@ function getSharedDeck(gameId, code) {
     return apiRequest(path);
 }
 
+// Diagnostic mode (games.diagnostic_mode) -- every Tactical Bot play
+// logged since the caller's own last play. See
+// GameService::tacticalBotReasoningSince() and #view-bot-reasoning-button
+// in game.js.
+function getTacticalBotReasoning(gameId) {
+    return apiRequest('/games/bot-reasoning?game_id=' + encodeURIComponent(gameId));
+}
+
 // A completed Quick/Winston/Grid Draft match's full shared pool, sectioned
 // by who drafted each card plus whatever nobody kept (issue #314) -- see
 // GameService::draftMatchPoolView(). code is only ever passed while
@@ -657,6 +695,16 @@ function playCard(gameId, cardId, choices) {
 
 function passTurn(gameId) {
     return apiRequest('/games/pass', {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId }),
+    });
+}
+
+// "Pause at the start of your turn" (reported live) -- clears the
+// current round's own turn_pending_acknowledgment flag for the caller,
+// unlocking their play/pass UI. See GameService::acknowledgeTurnStart().
+function advanceTurn(gameId) {
+    return apiRequest('/games/advance-turn', {
         method: 'POST',
         body: JSON.stringify({ game_id: gameId }),
     });

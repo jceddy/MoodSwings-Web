@@ -1,0 +1,29 @@
+-- Bot policy fix, reported live (twice now): "I still seeing bots play
+-- rationalization badly, I wonder whether we can make strengthen the
+-- imperative to hold onto it until it is useful to rotate hands, or
+-- absolutely necessary not to lose a game."
+--
+-- rationalizationHasAGoodReasonToPlayNow() previously also fired
+-- whenever rationalizationLowValueHand() said the bot's own remaining
+-- hand was merely mediocre -- letting a weak-but-not-empty hand alone
+-- make the bot voluntarily lead with playing Rationalization over some
+-- other candidate. Taken literally as an exhaustive list of the only
+-- two acceptable reasons to play it, that trigger is now dropped from
+-- this decision entirely (it's still used, unchanged, for MODE
+-- selection once the bot is playing Rationalization anyway for some
+-- other reason). New rationalizationWouldPreventLosingTheGame() adds
+-- the defensive mirror of the existing rationalizationWouldClinchTheGame()
+-- carve-out: playing Rationalization for its own plain value is also
+-- "necessary" when doing so denies a specific rival group -- one round
+-- win from ending the whole game, and otherwise on track to take this
+-- round's sole highest score -- the win they'd otherwise get.
+--
+-- New GameService::roundWinsNeededToWinGameForActivePlayers() computes
+-- every active player's own remaining-wins-needed value (not just the
+-- acting bot's) and threads it through both BotPlayerService's and
+-- SearchBotPlayerService's own chooseAction() as a new
+-- $roundWinsNeededToWinGameByPlayerId parameter.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.33.18' WHERE id = 1;

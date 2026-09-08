@@ -66,7 +66,7 @@ trait CatalogFixture
             50 => $this->row('blue', 'rare', 4, null, 'regret', true, false, true),
             51 => $this->row('blue', 'mythic', 5, null, 'sneakiness', false, false, true),
             52 => $this->row('blue', 'uncommon', 3, null, 'worry', false, false, true),
-            53 => $this->row('black', 'common', 2, null, 'ambition', false, false, true),
+            53 => $this->row('black', 'common', 2, null, 'ambition', false, false, true, draftPriorityScore: 2),
             54 => $this->row('black', 'uncommon', 3, null, 'angst', false, false, true),
             55 => $this->row('black', 'common', 4, null, 'apathy', false, false, false),
             56 => $this->row('black', 'uncommon', 6, null, 'betrayal', false, false, true),
@@ -79,7 +79,7 @@ trait CatalogFixture
             64 => $this->row('black', 'rare', 0, null, 'envy', true, true, false),
             65 => $this->row('black', 'rare', 0, null, 'grief', false, false, true),
             66 => $this->row('black', 'common', 0, null, 'hate', false, false, true),
-            67 => $this->row('black', 'rare', 1, null, 'intimidation', false, false, true),
+            67 => $this->row('black', 'rare', 1, null, 'intimidation', false, false, true, draftPriorityScore: 40),
             68 => $this->row('black', 'mythic', 0, null, 'malice', false, false, true),
             69 => $this->row('black', 'rare', 3, null, 'melancholy', false, true, false),
             70 => $this->row('black', 'uncommon', 2, 8, 'misery', false, true, false),
@@ -88,7 +88,7 @@ trait CatalogFixture
             74 => $this->row('black', 'mythic', 0, null, 'sadness', false, true, false),
             75 => $this->row('black', 'common', 6, null, 'self_loathing', true, false, false),
             76 => $this->row('black', 'common', 1, null, 'spite', false, false, true),
-            78 => $this->row('black', 'common', 3, null, 'suspicion', false, false, true),
+            78 => $this->row('black', 'common', 3, null, 'suspicion', false, false, true, draftPriorityScore: 4),
             79 => $this->row('black', 'mythic', 0, null, 'vanity', false, true, false),
             77 => $this->row('black', 'common', 3, 7, 'superiority', false, true, false),
             80 => $this->row('red', 'uncommon', 0, null, 'anger', false, false, true),
@@ -96,7 +96,7 @@ trait CatalogFixture
             82 => $this->row('red', 'uncommon', 2, null, 'arrogance', false, false, true),
             84 => $this->row('red', 'common', 3, null, 'bravado', false, false, true),
             85 => $this->row('red', 'mythic', 6, null, 'chaos', false, false, true),
-            86 => $this->row('red', 'common', 3, null, 'compulsion', false, false, true),
+            86 => $this->row('red', 'common', 3, null, 'compulsion', false, false, true, draftPriorityScore: 10),
             87 => $this->row('red', 'common', 3, 5, 'embarrassment', false, false, true),
             89 => $this->row('red', 'mythic', 0, null, 'exhilaration', true, true, false),
             91 => $this->row('red', 'uncommon', 4, null, 'fury', false, false, true),
@@ -142,7 +142,17 @@ trait CatalogFixture
         ];
     }
 
-    /** @return array{color:string,rarity:string,baseValue:int,altValue:?int,effectKey:string,hasToPlay:bool,hasWhileInPlay:bool,hasAfterPlaying:bool,rulesText:string} */
+    /**
+     * $draftPriorityScore defaults to 1, matching migration 0143's own
+     * default for the vast majority of cards -- only overridden for the
+     * handful of rows a test actually needs a real, distinguishing score
+     * for (see BotChoiceResolverTest's own Disillusionment/Confusion/
+     * Intimidation-style "worst card" tests); every other row's own
+     * value is trusted to never matter beyond "ties with everything else
+     * at the default."
+     *
+     * @return array{color:string,rarity:string,baseValue:int,altValue:?int,effectKey:string,hasToPlay:bool,hasWhileInPlay:bool,hasAfterPlaying:bool,rulesText:string,draftPriorityScore:int}
+     */
     private function row(
         string $color,
         string $rarity,
@@ -152,6 +162,7 @@ trait CatalogFixture
         bool $hasToPlay,
         bool $hasWhileInPlay,
         bool $hasAfterPlaying,
+        int $draftPriorityScore = 1,
     ): array {
         return [
             'color' => $color,
@@ -163,6 +174,7 @@ trait CatalogFixture
             'hasWhileInPlay' => $hasWhileInPlay,
             'hasAfterPlaying' => $hasAfterPlaying,
             'rulesText' => '',
+            'draftPriorityScore' => $draftPriorityScore,
         ];
     }
 }

@@ -128,18 +128,66 @@ final class SearchBotPlayerService
      *     hasGoodReasonToPlayNow() veto (reported live: a Tactical Bot
      *     was ignoring that same policy entirely -- see
      *     withoutPrematurelyPlayedCards()'s own docblock for why).
+     * @param array<int, int> $roundWinsNeededToWinGameByPlayerId see
+     *     BotPlayerService::chooseAction()'s own docblock -- forwarded
+     *     the same way as $roundWinsNeededToWinGame above.
      * @return ?array{card_id: int, choices: array<string, mixed>}
      */
-    public function chooseAction(BoardState $state, array $playableCardIds, int $botGamePlayerId, float $timeBudgetSeconds, ?int $roundWinsNeededToWinGame = null): ?array
+    public function chooseAction(BoardState $state, array $playableCardIds, int $botGamePlayerId, float $timeBudgetSeconds, ?int $roundWinsNeededToWinGame = null, array $roundWinsNeededToWinGameByPlayerId = []): ?array
+    {
+        return $this->chooseActionWithReasoning($state, $playableCardIds, $botGamePlayerId, $timeBudgetSeconds, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId)['action'];
+    }
+
+    /**
+     * chooseAction()'s own exact decision, PLUS a "why" payload -- added
+     * for "diagnostic mode" (reported live: "a button to show the
+     * 'reasoning' behind every play the bot has made... the heuristics
+     * involved, the play options considered, and the relative scoring
+     * assigned to those considered options"). Never called by
+     * chooseAction() -- see that method's own one-line body -- only by
+     * GameService::runTacticalBotSearchJob() when the game's own
+     * diagnostic_mode is on, so an ordinary (non-diagnostic) game pays
+     * nothing extra: the reasoning payload is built from the exact same
+     * $rootActions/$visits/$totals this search already computes either
+     * way, never an extra rollout or simulation.
+     *
+     * @param int[] $playableCardIds
+     * @param array<int, int> $roundWinsNeededToWinGameByPlayerId
+     * @return array{
+     *     action: ?array{card_id: int, choices: array<string, mixed>},
+     *     reasoning: array{
+     *         excluded_by_heuristic: int[],
+     *         candidates: array<int, array{card_id: ?int, choices: ?array<string, mixed>, visits: int, average_reward: float}>,
+     *     },
+     * }
+     */
+    public function chooseActionWithReasoning(BoardState $state, array $playableCardIds, int $botGamePlayerId, float $timeBudgetSeconds, ?int $roundWinsNeededToWinGame = null, array $roundWinsNeededToWinGameByPlayerId = []): array
     {
         $deadline = microtime(true) + max(0.0, $timeBudgetSeconds);
 
-        $rootActions = $this->enumerator->enumerate($state, $playableCardIds, $botGamePlayerId);
-        $rootActions = $this->withoutPrematurelyPlayedCards($state, $rootActions, $botGamePlayerId, $playableCardIds, $roundWinsNeededToWinGame);
+        $enumeratedActions = $this->enumerator->enumerate($state, $playableCardIds, $botGamePlayerId);
+        $rootActions = $this->withoutPrematurelyPlayedCards($state, $enumeratedActions, $botGamePlayerId, $playableCardIds, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
+        // Every card the heuristic policy's own "hold this back" veto
+        // (BotPlayerService::hasGoodReasonToPlayNow()) excluded before the
+        // search ever got to weigh it against anything -- see
+        // withoutPrematurelyPlayedCards()'s own docblock for exactly when
+        // that happens (never when EVERY candidate is vetoed at once, only
+        // when at least one genuinely good option remains).
+        $excludedByHeuristicCardIds = array_values(array_diff(
+            array_map(static fn (array $action): int => $action['card_id'], $enumeratedActions),
+            array_map(static fn (array $action): int => $action['card_id'], $rootActions),
+        ));
         $rootActions[] = null; // "pass" is always itself a candidate
 
         if (count($rootActions) <= 1) {
-            return $rootActions[0] ?? null;
+            $chosen = $rootActions[0] ?? null;
+
+            return [
+                'action' => $chosen,
+                // Nothing to compare against, so no real candidate list --
+                // $chosen (or a bare pass) was the only legal option here.
+                'reasoning' => ['excluded_by_heuristic' => $excludedByHeuristicCardIds, 'candidates' => []],
+            ];
         }
 
         $visits = array_fill(0, count($rootActions), 0);
@@ -154,7 +202,20 @@ final class SearchBotPlayerService
             $iteration++;
         } while ($iteration % self::DEADLINE_CHECK_INTERVAL !== 0 || microtime(true) < $deadline);
 
-        return $rootActions[$this->bestArmByAverage($visits, $totals)];
+        $candidates = [];
+        foreach ($rootActions as $i => $rootAction) {
+            $candidates[] = [
+                'card_id' => $rootAction['card_id'] ?? null,
+                'choices' => $rootAction['choices'] ?? null,
+                'visits' => $visits[$i],
+                'average_reward' => $visits[$i] > 0 ? $totals[$i] / $visits[$i] : 0.0,
+            ];
+        }
+
+        return [
+            'action' => $rootActions[$this->bestArmByAverage($visits, $totals)],
+            'reasoning' => ['excluded_by_heuristic' => $excludedByHeuristicCardIds, 'candidates' => $candidates],
+        ];
     }
 
     /**
@@ -188,13 +249,15 @@ final class SearchBotPlayerService
      *
      * @param array<int, array{card_id: int, choices: array<string, mixed>}> $rootActions
      * @param int[] $playableCardIds
+     * @param array<int, int> $roundWinsNeededToWinGameByPlayerId see
+     *     BotPlayerService::chooseAction()'s own docblock.
      * @return array<int, array{card_id: int, choices: array<string, mixed>}>
      */
-    private function withoutPrematurelyPlayedCards(BoardState $state, array $rootActions, int $botGamePlayerId, array $playableCardIds, ?int $roundWinsNeededToWinGame): array
+    private function withoutPrematurelyPlayedCards(BoardState $state, array $rootActions, int $botGamePlayerId, array $playableCardIds, ?int $roundWinsNeededToWinGame, array $roundWinsNeededToWinGameByPlayerId = []): array
     {
         $anyCardHasGoodReason = false;
         foreach ($playableCardIds as $candidateCardId) {
-            if ($this->heuristic->hasGoodReasonToPlayNow($state, $candidateCardId, $botGamePlayerId, $playableCardIds, $roundWinsNeededToWinGame)) {
+            if ($this->heuristic->hasGoodReasonToPlayNow($state, $candidateCardId, $botGamePlayerId, $playableCardIds, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId)) {
                 $anyCardHasGoodReason = true;
                 break;
             }
@@ -205,7 +268,7 @@ final class SearchBotPlayerService
 
         return array_values(array_filter(
             $rootActions,
-            fn (array $action) => $this->heuristic->hasGoodReasonToPlayNow($state, $action['card_id'], $botGamePlayerId, $playableCardIds, $roundWinsNeededToWinGame),
+            fn (array $action) => $this->heuristic->hasGoodReasonToPlayNow($state, $action['card_id'], $botGamePlayerId, $playableCardIds, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId),
         ));
     }
 
@@ -367,7 +430,7 @@ final class SearchBotPlayerService
 
             $answers = [];
             foreach ($result->pendingDecisions as $decision) {
-                $answer = $this->heuristic->chooseDecisionAnswer($sim, $decision->field, $decision->targetPlayerId, $decision->decisionType);
+                $answer = $this->heuristic->chooseDecisionAnswer($sim, $decision->field, $decision->targetPlayerId, $decision->decisionType, $result->playedCardId);
                 $answers[$decision->key] = new PlayerChoices($answer);
             }
 

@@ -265,6 +265,7 @@ final class MatchmakingService
                     false,
                     (bool) ($params['best_of_three'] ?? false),
                     (bool) ($params['allow_sideboarding'] ?? false),
+                    (bool) ($params['diagnostic_mode'] ?? false),
                 );
             } catch (GameStateException $e) {
                 // The creator's own choices turned out not to be valid
