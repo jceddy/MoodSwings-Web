@@ -103,6 +103,7 @@ final class GameServiceIntegrationTest extends TestCase
             new RoundScorer(),
             $userDecklists,
             new ReplayStateBuilder($registry),
+            spawnAutomatedTurnRecheckProcesses: false,
         );
     }
 
@@ -264,6 +265,7 @@ final class GameServiceIntegrationTest extends TestCase
                 new NotificationCooldownRepository(),
                 [new PushNotificationChannel(new PushSubscriptionRepository())],
             ),
+            spawnAutomatedTurnRecheckProcesses: false,
         );
     }
 

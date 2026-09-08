@@ -862,18 +862,26 @@ final class BotPlayerServiceTest extends TestCase
     }
 
     /**
-     * With nothing else playable, Pacifism is still played --
-     * deprioritized WHEN, never skipped outright. No opponent has a
-     * mood in play, so its own optional field stays unfilled.
+     * Reported live: "I still have bots occasionally playing Pacifism
+     * with no target in the first turn of the game - there is no reason
+     * to do that, it would be better to pass and wait for a target."
+     * Unlike every other PHP_INT_MIN-deprioritized card in this class
+     * (still played as an eventual last resort, "deprioritized WHEN,
+     * never skipped outright"), Pacifism gets isWorthPlaying()'s
+     * stronger outright skip: with no opponent mood in play at all --
+     * even as the bot's own ONLY playable card -- chooseAction() now
+     * passes instead of playing Pacifism unfilled, since round-end-only
+     * scoring means waiting for a real target on some later turn costs
+     * nothing, while playing it now would permanently waste its own
+     * discard-into-hand ability for the round.
      */
-    public function testChooseActionStillPlaysPacifismUnfilledWhenNothingElseIsPlayable(): void
+    public function testChooseActionPassesInsteadOfPlayingPacifismUnfilledWhenNothingElseIsPlayable(): void
     {
         $state = $this->boardState(hands: [1 => [20]]);
 
         $action = $this->bot->chooseAction($state, [20], 1);
 
-        self::assertSame(20, $action['card_id']);
-        self::assertSame([], $action['choices']);
+        self::assertNull($action);
     }
 
     /**
@@ -2115,6 +2123,31 @@ final class BotPlayerServiceTest extends TestCase
 
         self::assertSame(80, $action['card_id']);
         self::assertSame(['target_mood_ids' => []], $action['choices']);
+    }
+
+    /**
+     * Reported live: "by default when a bot plays Anger, it should target
+     * as many opponent cards as possible, or at least consider that
+     * option first - for example, it is almost always the right play to
+     * target an opponent's Hope when playing Anger, and as a 0 point
+     * card, hope can *always* be targeted." Player 2 has Hope (id 124,
+     * value 0) and Apathy (id 55, value 4) in play -- before this fix,
+     * angerSwingMaximizingTargets()'s own knapsack skipped Hope outright
+     * (a 0-value candidate can never improve a "maximize total value"
+     * search), so only Apathy would be targeted; now Hope is always
+     * included on top of it, since a free target never competes against
+     * Anger's own 5-point combined-value budget.
+     */
+    public function testChooseActionAlwaysTargetsAZeroValueOpponentMoodWithAnger(): void
+    {
+        $state = $this->boardState(hands: [1 => [80], 2 => [124, 55]]);
+        $state->moveHandToInPlay(2, 124); // Hope, value 0
+        $state->moveHandToInPlay(2, 55); // Apathy, value 4
+
+        $action = $this->bot->chooseAction($state, [80], 1);
+
+        self::assertSame(80, $action['card_id']);
+        self::assertEqualsCanonicalizing([124, 55], $action['choices']['target_mood_ids']);
     }
 
     /**

@@ -6497,7 +6497,8 @@ since it already holds that dependency):
   be legally filled (rare -- would mean `isPlayable()` said yes but some
   required field still came up empty, e.g. Regret's exact-2-own-moods
   cost with nothing at all in play) or `isWorthPlaying()` vetoes it
-  outright (currently just Fury -- see below), the next-highest is
+  outright (Fury, Avoidance, Sneakiness, and Pacifism today -- see
+  below), the next-highest is
   tried instead, all the way down to `null` (pass) if truly nothing
   works -- a card is never left half-chosen.
   `isWorthPlaying(BoardState $state, string $effectKey, int
@@ -6894,6 +6895,33 @@ since it already holds that dependency):
   exists it reverts to plain `baseValue()`, no boost, just no longer
   vetoed.
 
+  **Pacifism** gets `pacifismTargetMoodIds()`: up to two moods, at most
+  one per non-teammate opponent (`CardChoiceSchema`'s own
+  `'distinct_owners'` constraint), each opponent's own highest-value
+  qualifying mood, preferring two different opponents over a single
+  opponent's own two moods. `sortPriorityValue()` deprioritizes Pacifism
+  (the same `PHP_INT_MIN` treatment most other targeted-but-optional
+  cards in this section get) whenever no non-teammate opponent has any
+  mood in play at all to target.
+
+  Reported live, follow-up: "I still have bots occasionally playing
+  Pacifism with no target in the first turn of the game - there is no
+  reason to do that, it would be better to pass and wait for a target."
+  Unlike that shared `PHP_INT_MIN` treatment's own usual "deprioritized
+  WHEN, never skipped outright" behavior (still played as an eventual
+  last resort once nothing else is legal -- see Denial/Rejection/Shock
+  elsewhere in this section), Pacifism instead gets `isWorthPlaying()`'s
+  stronger outright skip (the same treatment Fury/Avoidance/Sneakiness
+  already get), so `chooseAction()` now passes rather than falling back
+  to playing it with an empty target list. The distinction: scoring only
+  happens at round end, so passing and playing Pacifism on some LATER
+  turn instead (once a real target actually exists) banks the exact same
+  printed value with no penalty for the delay, while playing it now with
+  nothing to target permanently forfeits this instance's own "put an
+  opponent's mood back in their hand" ability for the rest of the round,
+  for no compensating benefit -- there's no reason for the "still played
+  eventually" fallback the other cards rely on to apply here at all.
+
   **Shock** (reported live: "bots should choose an opponent's mood to
   target with shock when playing it") gets its own targeting exception
   too, via `shockTargetMoodIds()`: `buildChoicesForCard()` special-cases
@@ -6957,7 +6985,7 @@ since it already holds that dependency):
   Exhilaration's own field has no legal alternative). That one remaining
   case is covered by `exhilarationHasAGoodReasonToPlayNow()`'s own
   `sortPriorityValue()` veto (`PHP_INT_MIN`, the same "deprioritized
-  WHEN, never skipped outright" treatment Pacifism/Denial above get) --
+  WHEN, never skipped outright" treatment Denial/Rejection above get) --
   provably never worth it rather than merely a heuristic guess: with
   Bliss gone and nothing else of the bot's own left in play, Exhilaration's
   own "score your moods an extra time" bonus doubles a board worth
@@ -7069,16 +7097,34 @@ since it already holds that dependency):
   "put any number of moods with total value 5 or less into the discard
   pile" ability. Two independent policies, always additive rather than a
   trade-off against each other:
-  - `angerSwingMaximizingTargets()` -- the highest-total-value subset of
-    every non-teammate opponent's own in-play moods (the acting player's
-    own moods, and any teammate's, are deliberately excluded, the same
-    "an opponent means neither" policy Intimidation/Paranoia/Pacifism
-    above already apply -- discarding either could only ever REDUCE the
-    swing) that still fits Anger's own 5-point combined-value ceiling,
-    found via `maxValueSubsetWithinBudget()`, a small 0/1 knapsack (value
-    doubling as weight) rather than a naive "take the single
-    highest-value mood" greedy pick, which can leave value on the table
-    -- two moods worth 3 and 2 together outweigh one worth 4 alone.
+  - `angerSwingMaximizingTargets()` -- every non-teammate opponent's own
+    in-play mood is a candidate (the acting player's own moods, and any
+    teammate's, are deliberately excluded, the same "an opponent means
+    neither" policy Intimidation/Paranoia/Pacifism above already apply --
+    discarding either could only ever REDUCE the swing), split into two
+    groups (reported live: "by default when a bot plays Anger, it should
+    target as many opponent cards as possible, or at least consider that
+    option first - for example, it is almost always the right play to
+    target an opponent's Hope when playing Anger, and as a 0 point card,
+    hope can *always* be targeted"):
+    - Every ZERO-value candidate (e.g. Hope) is targeted outright,
+      unconditionally -- it costs nothing against Anger's own 5-point
+      combined-value ceiling, so there's never a budget trade-off to
+      weigh, and it still denies the opponent whatever non-scoring
+      ability made the mood worth playing. A NEGATIVE-value candidate (a
+      dynamic value can dip below 0, e.g. a Chaos Draft custom effect) is
+      the opposite case -- it's already hurting its own owner, so
+      discarding it would only help them -- and is excluded entirely,
+      same as before this fix.
+    - Every remaining STRICTLY-POSITIVE-value candidate competes for
+      the highest-total-value subset that still fits that same ceiling,
+      found via `maxValueSubsetWithinBudget()`, a small 0/1 knapsack
+      (value doubling as weight) rather than a naive "take the single
+      highest-value mood" greedy pick, which can leave value on the
+      table -- two moods worth 3 and 2 together outweigh one worth 4
+      alone.
+    The zero-value targets are always additive on top of the
+    knapsack's own result, never counted against its budget.
   - `angerShouldAlsoTargetItself()` -- Anger's own just-played card id is
     ALSO targeted (on top of, never instead of, the swing-maximizing
     targets above) whenever `BoardState::hasSeparateDecks()` (a 'duel'
@@ -7108,7 +7154,7 @@ since it already holds that dependency):
 
   Anger also gets a `sortPriorityValue()` veto (confirmed by the
   maintainer, the same `PHP_INT_MIN` "deprioritized WHEN, never skipped
-  outright" treatment Pacifism gets above): whenever `angerTargetMoodIds()`
+  outright" treatment Denial gets below): whenever `angerTargetMoodIds()`
   itself comes back completely empty -- no opponent mood worth
   discarding AND `angerShouldAlsoTargetItself()` also says no -- Anger is
   deprioritized behind everything else, rather than led with purely as a
@@ -7215,7 +7261,7 @@ since it already holds that dependency):
   when NONE of the three priorities finds a qualifying pair.
   `denialHasAGoodReasonToPlayNow()` (confirmed by the maintainer, new)
   then deprioritizes Denial itself via `sortPriorityValue()` (the same
-  `PHP_INT_MIN` treatment Harmony/Nostalgia/Pacifism above get) in that
+  `PHP_INT_MIN` treatment Harmony/Nostalgia above get) in that
   case -- "avoid playing Denial unless there's a good target to bounce"
   -- UNLESS playing it for its own plain printed value alone (no target
   at all) would be the deciding difference between the bot's own group
@@ -7317,7 +7363,7 @@ since it already holds that dependency):
 - **Envy's own "don't feed it for free" veto** (confirmed by the
   maintainer), via `envyDiscouragesPlayingThisCard()`/
   `sortPriorityValue()`: deprioritizes (the same `PHP_INT_MIN` treatment
-  as Rationalization/Cynicism/Intimidation/Paranoia/Pacifism above) any
+  as Rationalization/Cynicism/Intimidation/Paranoia above) any
   card worth `ENVY_AVOIDANCE_MAX_VALUE` (1) or less whenever a
   non-teammate opponent currently has Envy in play. `EnvyEffect::
   computeValue()` scales Envy's own value +2 for each mood the
@@ -7701,6 +7747,158 @@ after creation, via `POST /games/decklist`; `startGame()`'s existing
 so the game simply sits `waiting` (bot's deck already submitted, human's
 still pending) until the human does. See "New game dialog" in
 `web-static/README.md` for the picker/decklist fields this adds.
+
+**Advancing bot turns with nobody watching (reported live): "add a way
+for a bot finishing its turn to advance to the next turn without
+requiring a physical browser refresh somewhere - mostly this is so
+notifications can be generated when it is the human player's turn."**
+Every call site for `advanceAutomatedTurns()` documented above --
+including `GET /games/state`'s own unconditional call, the fix for the
+all-bot team-decision deadlock -- only ever runs as a side effect of some
+client's own HTTP request against that specific game. `GET /games/state`
+covers the common case (any seated human's own board open, polling every
+4 seconds via the board's own `pollTimer` -- see `web-static/README.md`),
+but a bot's turn (or an all-bot team decision, or an auto-pass/
+auto-apply-scoring-bonus opt-in) landing in a game where EVERY human seat
+has since closed their tab, with no spectator polling it either, has no
+request left to ever reach `advanceAutomatedTurns()` again -- it just
+sits there, unresolved, until someone eventually reopens the game. Since
+`NotificationService::notifyYourTurn()` (see "Browser push notifications"/
+"Discord" above) only ever fires from INSIDE that same resolution
+(`notifyGamePlayersItsYourTurn()`, called once the turn/decision actually
+lands on a human), the human waiting on that bot never gets told their
+turn arrived until they happen to check back on their own -- exactly
+backwards from the whole point of a notification.
+
+`GameService::advanceAutomatedTurnsForAllActiveGames(): int` is the fix:
+a periodic sweep, independent of any request, that runs EVERY
+`'waiting'`/`'in_progress'` game (`'completed'`/`'abandoned'` games are
+skipped outright -- nothing left to advance; `'waiting'` is included for
+the same reason `advanceBotDraftTurn()` is always tried first inside
+`advanceAutomatedTurns()` itself -- a still-drafting/deck-building
+bot-seated game needs this too, before a round exists at all) through
+`advanceAutomatedTurns()` directly. There's no cheap way to know in
+advance which games currently have something automated pending short of
+loading each one anyway, so this doesn't try to pre-filter by bot
+presence -- `advanceAutomatedTurns()`'s own early-out (two lookups; see
+its own docblock) already makes the common "nothing to do here" case
+cheap. Each call is wrapped in the same `try`/`catch (GameStateException)`
+"best-effort, discard on failure" pattern every other call site already
+uses (most plausibly `withGameLock()`'s own "busy" timeout -- this sweep
+racing a real player's own concurrent request against the same game), so
+one game's transient failure can't abort the sweep for every other game
+queued up behind it. Needs no locking of its own beyond that: every
+actual mutation still goes through `playMood()`/`pass()`/etc., each
+independently serialized by its own per-game `withGameLock()` cycle --
+running this sweep concurrently with live traffic, or with a
+slower-than-expected previous run of itself, is already safe by
+construction. Returns how many games it found something to advance in,
+purely for the cron script's own one-line log summary.
+
+`bin/advance_automated_turns.php` is the cron entry point (meant to run
+every minute or so -- see its own crontab example), mirroring
+`bin/expire_and_delete_stale_games.php`'s standalone-script bootstrap
+pattern, but constructing `GameService` WITH a real `NotificationService`
+(wired up exactly like `public/index.php`'s own request-serving
+construction) -- unlike that cleanup script, this one's whole point is
+letting a bot's turn actually reach the notification call already sitting
+inside `GameService`'s own turn-advance code, not just mutate game state
+with nobody told.
+
+**The same gap already existed in `bin/run_bot_search.php` -- found live
+in the process, fixed alongside it.** The Tactical Bot's own detached
+search job (`runTacticalBotSearchJob()`, see "Tactical Bot" below) calls
+`playMood()`/`pass()` directly once its search finishes -- exactly where
+the "it's your turn" notification fires for whoever it hands the turn to
+next. But `run_bot_search.php` constructed its own `GameService` without
+`notifications:` at all (the constructor's own default is `null`), the
+same way `expire_and_delete_stale_games.php`'s `GameService` deliberately
+does since that script genuinely never needs to notify anyone -- so every
+completed Tactical Bot search silently skipped that notification too.
+Fixed the same way: `run_bot_search.php` now wires up a real
+`NotificationService` the same way `advance_automated_turns.php` (and
+`public/index.php`) do.
+
+**Self-triggering instead of cron, follow-up reported live: "is there a
+way to implement this without requiring a cron job? can whatever is in
+the CRON script just run when the bot gets to the end of its turn?"**
+`bin/advance_automated_turns.php`'s own periodic sweep works, but it
+needs an actual crontab entry configured on the server -- something
+outside the application's own reach, and a real (if small) ongoing ops
+dependency. `GameService::scheduleAutomatedTurnRecheck(int $gameId, int
+$recheckChainDepth): void` replaces that external scheduler with a
+self-perpetuating chain the application drives entirely on its own: it
+spawns ONE detached `bin/recheck_automated_turn.php <game_id> <depth>`
+process -- the exact same `exec(...) &` fire-and-forget pattern
+`launchTacticalBotSearchJob()` already uses for the Tactical Bot's own
+search -- that sleeps `AUTOMATED_TURN_RECHECK_DELAY_SECONDS` (2) and then
+calls `advanceAutomatedTurns($gameId, $recheckChainDepth + 1)` again on a
+fresh process/connection. `advanceAutomatedTurns()` itself calls
+`scheduleAutomatedTurnRecheck()` unconditionally, right before returning,
+whenever it actually drove anything (`$lastResult !== null`) -- which
+means the recheck it just spawned will, on ITS OWN eventual call, only
+schedule ANOTHER link the same way if IT ALSO found something to drive.
+The chain therefore needs no bookkeeping of its own to know when to
+stop: it self-terminates the instant the game reaches a real player's
+own turn (nothing left to advance) or completes, exactly mirroring how
+the in-process loop inside `advanceAutomatedTurns()` already stops
+itself -- just spread across however many separate detached processes it
+took to get there instead of one single request's own loop.
+
+Scheduled unconditionally whenever anything was driven, not just when
+the triggering caller "might not keep polling" -- there's no reliable
+way to tell that from inside `advanceAutomatedTurns()` itself. The
+common case where a browser IS still actively polling this exact game
+just means the scheduled recheck's own eventual `advanceAutomatedTurns()`
+call finds nothing new (the poll already got there first) and quietly
+doesn't reschedule itself -- a harmless, cheap no-op, the same "cheap
+even when nothing's actually stuck" reasoning `GET /games/state`'s own
+unconditional call already relies on. Multiple overlapping chains for
+the same game (a human's own request and an in-flight recheck landing
+around the same time, say) are similarly harmless: every actual mutation
+still goes through `playMood()`/`pass()`/etc., each independently
+serialized by its own per-game `withGameLock()` cycle, so redundant
+concurrent chains just do repeated no-op work rather than racing unsafely.
+
+`$recheckChainDepth` (an optional second param on `advanceAutomatedTurns()`,
+left at its default `0` by every ordinary caller -- an HTTP route, the
+cron sweep -- and only ever incremented by `bin/recheck_automated_turn.php`'s
+own re-invocation) exists purely as a hard ceiling
+(`MAX_AUTOMATED_TURN_RECHECK_CHAIN_DEPTH`, 30 links, about 2.5 minutes at
+the 2-second delay) against a hypothetical future engine bug where
+`advanceAutomatedTurns()` keeps reporting genuine progress forever
+without the game ever actually settling -- without it, such a bug would
+spawn a new detached OS process roughly every 2 seconds forever, rather
+than giving up after a generous-but-bounded window the same
+`MAX_AUTOMATED_ACTIONS_PER_REQUEST` reasoning already established for
+the in-process loop. `AUTOMATED_TURN_RECHECK_DELAY_SECONDS` is `public`
+(unlike almost every other constant on this class) specifically so
+`bin/recheck_automated_turn.php` -- a genuinely separate PHP process with
+no `GameService` instance of its own to call through -- has one real
+source of truth to sleep by, rather than a second hardcoded literal that
+could silently drift out of sync.
+
+`$spawnAutomatedTurnRecheckProcesses` (constructor param, default
+`true`) mirrors `$spawnBotSearchProcesses` exactly, as its own
+independent flag rather than reusing that one -- a test exercising one
+background-spawning feature has no reason to also silence the other.
+Every integration test constructing its own `GameService` now passes
+`spawnAutomatedTurnRecheckProcesses: false` for the same reason
+`BotSearchIntegrationTest` already passes `spawnBotSearchProcesses:
+false`: a real spawned subprocess would inherit that test's own
+environment (including its test-DB connection details) and race its
+foreground assertions against the same rows a moment later, exactly the
+nondeterminism `spawnBotSearchProcesses` was invented to prevent for the
+Tactical Bot. Tests instead call `advanceAutomatedTurns()` directly
+whenever they want to exercise its effect, the same way they already do
+for the Tactical Bot's own `runTacticalBotSearchJob()`.
+
+`bin/advance_automated_turns.php`'s own cron sweep is no longer required
+for any of this to work, but is left in place as an optional extra
+safety net for anyone who wants one regardless (e.g. as a backstop
+against `exec()` being unexpectedly disabled or failing silently on a
+given host, which would otherwise quietly break every chain at its very
+first link with nothing else left to notice).
 
 ### Tactical Bot (issue #419)
 

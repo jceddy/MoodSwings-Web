@@ -67,7 +67,19 @@ use MoodSwings\Rules\RoundScorer;
  * distinct_owners constraint forbids anyway) when playing Pacifism, and
  * deprioritizes it (the same PHP_INT_MIN treatment) whenever no
  * non-teammate opponent currently has any mood in play -- see that
- * method's own docblock; and disillusionmentSafeColor()/
+ * method's own docblock; isWorthPlaying() once more for Pacifism
+ * (reported live: "I still have bots occasionally playing Pacifism with
+ * no target in the first turn of the game - there is no reason to do
+ * that, it would be better to pass and wait for a target"), which skips
+ * it OUTRIGHT under that same no-target condition (the same treatment
+ * Fury/Avoidance/Sneakiness already get) rather than merely
+ * deprioritizing it -- unlike a PHP_INT_MIN demotion (still played as
+ * an eventual last resort), a genuinely wasted Pacifism has nothing to
+ * gain from that fallback and a real cost to it: scoring only happens
+ * at round end, so passing costs nothing (the same printed value gets
+ * banked whenever it's eventually played instead) while playing it now
+ * permanently forfeits this instance's own ability for the round; see
+ * isWorthPlaying()'s own docblock; and disillusionmentSafeColor()/
  * chooseDecisionAnswer() (confirmed by the maintainer), which picks the
  * first color that matches none of the responding bot's own (or a
  * teammate's) moods currently in play when answering Disillusionment's
@@ -83,11 +95,14 @@ use MoodSwings\Rules\RoundScorer;
  * whenever the discard pile is completely empty -- its own extra-play
  * grant is restricted to a card FROM the discard pile, so with nothing
  * there to take advantage of, playing it accomplishes nothing; and
- * angerTargetMoodIds() (confirmed by the maintainer), which targets the
- * highest-total-value subset of non-teammate opponents' own in-play
- * moods that still fits Anger's own 5-point combined-value ceiling
- * (angerSwingMaximizingTargets()/maxValueSubsetWithinBudget()), PLUS
- * Anger's own just-played card id whenever the bot's own deck has more
+ * angerTargetMoodIds() (confirmed by the maintainer), which targets
+ * EVERY zero-value non-teammate opponent mood outright (e.g. Hope --
+ * reported live: "as a 0 point card, hope can *always* be targeted",
+ * since it costs nothing against Anger's own 5-point combined-value
+ * ceiling) PLUS the highest-total-value subset of the REMAINING
+ * (strictly positive-value) non-teammate opponent moods that still fits
+ * that same ceiling (angerSwingMaximizingTargets()/maxValueSubsetWithinBudget()),
+ * PLUS Anger's own just-played card id whenever the bot's own deck has more
  * discard-recursion capacity than every active non-teammate opponent's
  * own deck AND none of them currently has Grace in play
  * (angerShouldAlsoTargetItself()/recursionCardCount()) -- since Anger's
@@ -439,9 +454,25 @@ final class BotPlayerService
      * how that one gets chosen), but "is this worth playing AT ALL"
      * depends on every seated player's own moods, not just which
      * direction ends up picked, so it needs the same whole-board view
-     * Fury's veto does. Keyed by effect key; everything not listed here
-     * is always worth playing (the default, unconditional "yes" every
-     * other effect already got before this method existed).
+     * Fury's veto does; and for Pacifism (reported live: "I still have
+     * bots occasionally playing Pacifism with no target in the first
+     * turn of the game - there is no reason to do that, it would be
+     * better to pass and wait for a target"), which gets this method's
+     * stronger "skip it entirely, fall through to the next candidate or
+     * an outright pass" treatment -- unlike sortPriorityValue()'s own
+     * PHP_INT_MIN `hasGoodReasonToPlayNow()` veto elsewhere in this class
+     * (Rationalization/Denial/Rejection/Shock and others -- "deprioritized
+     * WHEN, never skipped outright," still played as an eventual last
+     * resort), a genuinely wasted Pacifism has nothing to gain from that
+     * fallback and a real cost to it: scoring only happens at round end,
+     * so passing and simply playing Pacifism on a LATER turn instead
+     * banks the exact same printed value with no penalty for the delay,
+     * while playing it now with no target PERMANENTLY forfeits this
+     * instance's own "put an opponent's mood back in their hand" ability
+     * for the rest of the round, for no compensating benefit. Keyed by
+     * effect key; everything not listed here is always
+     * worth playing (the default, unconditional "yes" every other
+     * effect already got before this method existed).
      */
     private function isWorthPlaying(BoardState $state, string $effectKey, int $botGamePlayerId): bool
     {
@@ -449,6 +480,7 @@ final class BotPlayerService
             'fury' => $this->furyIsWorthPlaying($state, $botGamePlayerId),
             'avoidance' => $this->avoidanceHasAGoodReasonToPlay($state, $botGamePlayerId),
             'sneakiness' => $this->sneakinessTargetPlayerId($state, $botGamePlayerId) !== null,
+            'pacifism' => $this->pacifismTargetMoodIds($state, $botGamePlayerId) !== [],
             default => true,
         };
     }
@@ -3663,9 +3695,22 @@ final class BotPlayerService
      * in-play mood is a candidate (the acting player's own moods, and any
      * teammate's, are deliberately excluded -- discarding either would
      * only ever REDUCE the swing, the same "an opponent means neither"
-     * policy pacifismTargetMoodIds() already applies), scored by
-     * maxValueSubsetWithinBudget() to find the highest-total-value subset
-     * that still fits Anger's own 5-point combined-value ceiling.
+     * policy pacifismTargetMoodIds() already applies).
+     *
+     * A ZERO-value opponent mood (e.g. Hope) is always included outright
+     * (reported live: "as a 0 point card, hope can *always* be
+     * targeted") -- it costs nothing against Anger's own 5-point combined
+     * value ceiling (AngerEffect::MAX_TOTAL_VALUE), so there's never a
+     * budget trade-off to weigh, and discarding it still denies the
+     * opponent whatever non-scoring ability made it worth playing in the
+     * first place. A NEGATIVE-value candidate (a dynamic value can dip
+     * below 0, e.g. a Chaos Draft custom effect) is the opposite case --
+     * it's already actively hurting its own owner, so discarding it would
+     * only help them -- and stays excluded entirely, same as before.
+     * Every strictly-positive-value candidate still competes for the
+     * budget via maxValueSubsetWithinBudget(), maximizing total value
+     * discarded among them; zero-value targets are additive on top of
+     * that result, never counted against it.
      *
      * Each candidate's value is computed via
      * BoardState::valueOfAsIfAlsoInPlay() rather than plain valueOf() --
@@ -3683,16 +3728,22 @@ final class BotPlayerService
      */
     private function angerSwingMaximizingTargets(BoardState $state, int $cardId, int $botGamePlayerId): array
     {
-        $opponentMoodValues = [];
+        $freeTargets = [];
+        $paidOpponentMoodValues = [];
         foreach ($state->moodsInPlay() as $mood) {
             if ($mood->ownerId === $botGamePlayerId || $state->isTeammate($botGamePlayerId, $mood->ownerId)) {
                 continue;
             }
 
-            $opponentMoodValues[$mood->cardId] = $state->valueOfAsIfAlsoInPlay($mood->cardId, $cardId, $botGamePlayerId);
+            $value = $state->valueOfAsIfAlsoInPlay($mood->cardId, $cardId, $botGamePlayerId);
+            if ($value === 0) {
+                $freeTargets[] = $mood->cardId;
+            } else {
+                $paidOpponentMoodValues[$mood->cardId] = $value;
+            }
         }
 
-        return $this->maxValueSubsetWithinBudget($opponentMoodValues, self::ANGER_DISCARD_BUDGET);
+        return [...$freeTargets, ...$this->maxValueSubsetWithinBudget($paidOpponentMoodValues, self::ANGER_DISCARD_BUDGET)];
     }
 
     /**

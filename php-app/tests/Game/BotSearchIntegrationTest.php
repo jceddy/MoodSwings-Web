@@ -107,6 +107,7 @@ final class BotSearchIntegrationTest extends TestCase
             new ReplayStateBuilder($registry),
             botSearchTimeBudgetSeconds: 0,
             spawnBotSearchProcesses: false,
+            spawnAutomatedTurnRecheckProcesses: false,
         );
     }
 
@@ -133,6 +134,7 @@ final class BotSearchIntegrationTest extends TestCase
             new ReplayStateBuilder($registry),
             botSearchTimeBudgetSeconds: $seconds,
             spawnBotSearchProcesses: false,
+            spawnAutomatedTurnRecheckProcesses: false,
         );
     }
 

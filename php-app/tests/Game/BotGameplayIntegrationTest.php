@@ -90,6 +90,7 @@ final class BotGameplayIntegrationTest extends TestCase
             new RoundScorer(),
             $userDecklists,
             new ReplayStateBuilder($registry),
+            spawnAutomatedTurnRecheckProcesses: false,
         );
     }
 
@@ -638,6 +639,55 @@ final class BotGameplayIntegrationTest extends TestCase
     }
 
     /**
+     * scheduleAutomatedTurnRecheck()'s own MAX_AUTOMATED_TURN_RECHECK_CHAIN_DEPTH
+     * ceiling (reported live: "is there a way to implement this without
+     * requiring a cron job? can whatever is in the CRON script just run
+     * when the bot gets to the end of its turn?" -- advanceAutomatedTurns()
+     * now schedules a detached bin/recheck_automated_turn.php follow-up
+     * of itself whenever it drives something, see that method's own
+     * docblock) -- a real spawn would call exec() and fork a genuine OS
+     * process, which this test (like every other one in this file) must
+     * never do, so $recheckChainDepth is passed already AT the ceiling
+     * here specifically to prove the ceiling's own early-return (logging
+     * and skipping the exec() call entirely) doesn't otherwise change
+     * advanceAutomatedTurns()'s own ordinary return value/game-state
+     * effect -- a caller passing an already-maxed-out depth (only ever
+     * bin/recheck_automated_turn.php itself, in the pathological case
+     * this ceiling exists to guard against) still gets the bot's own
+     * move applied correctly, it just doesn't schedule yet another link.
+     */
+    public function testAdvanceAutomatedTurnsStillWorksNormallyAtTheRecheckChainDepthCeiling(): void
+    {
+        $u1 = $this->insertUser('depth-ceiling-human1');
+        $botUserId = $this->insertBotUser('depth-ceiling-bot1');
+        $gameId = $this->insertGame('standard', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+
+        $this->insertGameCard($gameId, 55, 'hand', $botPlayerId); // Apathy, value 4
+        $this->insertGameCard($gameId, 8, 'hand', $p1);
+        $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
+
+        // Deliberately NOT $this->games (spawnAutomatedTurnRecheckProcesses:
+        // false there) -- this one leaves it at its real default (true) to
+        // prove the ceiling itself, not just the disabled-spawn flag, is
+        // what prevents a real exec() call at/above the max depth.
+        $registry = DefaultEffectRegistry::build();
+        $games = new GameService(
+            new BoardStateRepository($registry),
+            new MoodPlayService($registry),
+            new RoundScorer(),
+            new UserDecklistService(new UserDecklistRepository(), new FriendshipService(new UserRepository(), new FriendshipRepository())),
+            new ReplayStateBuilder($registry),
+        );
+
+        $result = $games->advanceAutomatedTurns($gameId, recheckChainDepth: 30);
+
+        self::assertNotNull($result);
+        self::assertTrue($this->cardIsInPlay($gameId, 55));
+    }
+
+    /**
      * EARLY_PRIORITY_EFFECT_KEYS' own flat priority bonus (see
      * BotPlayerServiceTest for the policy itself in isolation), proven
      * end to end through the FULL advanceAutomatedTurns() ->
@@ -825,6 +875,83 @@ final class BotGameplayIntegrationTest extends TestCase
         // Its only hand card is now the human's (moved over as Compulsion's
         // own effect), and nothing is left pending.
         self::assertTrue($this->cardIsInHand($gameId, 8, ownerUserId: $u1));
+    }
+
+    // -- advanceAutomatedTurnsForAllActiveGames() --------------------------
+
+    /**
+     * Reported live: "add a way for a bot finishing its turn to advance
+     * to the next turn without requiring a physical browser refresh
+     * somewhere - mostly this is so notifications can be generated when
+     * it is the human player's turn." advanceAutomatedTurnsForAllActiveGames()
+     * is bin/advance_automated_turns.php's own cron entry point -- a
+     * periodic sweep of every 'waiting'/'in_progress' game, calling
+     * advanceAutomatedTurns() on each independent of any request. Mirrors
+     * testBotPlaysItsHighestValuePlayableCardOnItsOwnTurn() above, but
+     * through the sweep instead of a single targeted advanceAutomatedTurns()
+     * call, across TWO separate games at once to prove it doesn't stop
+     * after the first.
+     */
+    public function testAdvanceAutomatedTurnsForAllActiveGamesDrivesEveryGamesBotTurn(): void
+    {
+        $u1 = $this->insertUser('sweep-human1');
+        $bot1 = $this->insertBotUser('sweep-bot1');
+        $gameId1 = $this->insertGame('standard', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId1, $u1, 0);
+        $botPlayerId1 = $this->insertGamePlayer($gameId1, $bot1, 1);
+        $this->insertGameCard($gameId1, 55, 'hand', $botPlayerId1); // Apathy, value 4
+        $this->insertGameCard($gameId1, 8, 'hand', $p1);
+        $this->insertGameRound($gameId1, 1, $botPlayerId1, $botPlayerId1, 1);
+
+        $u2 = $this->insertUser('sweep-human2');
+        $bot2 = $this->insertBotUser('sweep-bot2');
+        $gameId2 = $this->insertGame('standard', 'structure', $u2);
+        $p2 = $this->insertGamePlayer($gameId2, $u2, 0);
+        $botPlayerId2 = $this->insertGamePlayer($gameId2, $bot2, 1);
+        $this->insertGameCard($gameId2, 55, 'hand', $botPlayerId2);
+        $this->insertGameCard($gameId2, 8, 'hand', $p2);
+        $this->insertGameRound($gameId2, 1, $botPlayerId2, $botPlayerId2, 1);
+
+        $advancedCount = $this->games->advanceAutomatedTurnsForAllActiveGames();
+
+        self::assertSame(2, $advancedCount);
+        self::assertTrue($this->cardIsInPlay($gameId1, 55));
+        self::assertTrue($this->cardIsInPlay($gameId2, 55));
+        self::assertSame($p1, (int) $this->fetchRound($gameId1)['current_turn_game_player_id']);
+        self::assertSame($p2, (int) $this->fetchRound($gameId2)['current_turn_game_player_id']);
+    }
+
+    /**
+     * A game with nothing automated pending (no bots, no auto-pass/
+     * auto-scoring-bonus opt-in -- mirrors testAdvanceBotTurnsReturnsNullWhenNoBotsAreSeated())
+     * isn't counted, and a 'completed' game is never even examined in the
+     * first place (excluded from the sweep's own status filter) -- proven
+     * here by giving the completed game an otherwise-eligible bot turn
+     * (Apathy, still in hand) that would have been played had the status
+     * filter not excluded it.
+     */
+    public function testAdvanceAutomatedTurnsForAllActiveGamesSkipsGamesWithNothingToAdvance(): void
+    {
+        $u1 = $this->insertUser('sweep-idle-human1');
+        $u2 = $this->insertUser('sweep-idle-human2');
+        $idleGameId = $this->insertGame('standard', 'structure', $u1);
+        $idleP1 = $this->insertGamePlayer($idleGameId, $u1, 0);
+        $this->insertGamePlayer($idleGameId, $u2, 1);
+        $this->insertGameCard($idleGameId, 8, 'hand', $idleP1);
+        $this->insertGameRound($idleGameId, 1, $idleP1, $idleP1, 1);
+
+        $u3 = $this->insertUser('sweep-completed-human');
+        $bot3 = $this->insertBotUser('sweep-completed-bot');
+        $completedGameId = $this->insertGame('standard', 'structure', $u3);
+        $completedP1 = $this->insertGamePlayer($completedGameId, $u3, 0);
+        $completedBotPlayerId = $this->insertGamePlayer($completedGameId, $bot3, 1);
+        $this->insertGameCard($completedGameId, 55, 'hand', $completedBotPlayerId);
+        $this->insertGameCard($completedGameId, 8, 'hand', $completedP1);
+        $this->insertGameRound($completedGameId, 1, $completedBotPlayerId, $completedBotPlayerId, 1);
+        $this->pdo->prepare("UPDATE games SET status = 'completed' WHERE id = :id")->execute(['id' => $completedGameId]);
+
+        self::assertSame(0, $this->games->advanceAutomatedTurnsForAllActiveGames());
+        self::assertTrue($this->cardIsInHand($completedGameId, 55), 'a completed game must never be swept, even with an otherwise-eligible bot turn');
     }
 
     // -- Team Play (issue #360) --------------------------------------------

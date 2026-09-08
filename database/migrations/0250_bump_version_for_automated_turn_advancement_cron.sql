@@ -1,0 +1,27 @@
+-- Reported live: "add a way for a bot finishing its turn to advance to
+-- the next turn without requiring a physical browser refresh somewhere -
+-- mostly this is so notifications can be generated when it is the human
+-- player's turn."
+--
+-- Every existing GameService::advanceAutomatedTurns() call site only
+-- ever ran as a side effect of some client's own HTTP request against
+-- that specific game (a human's own play/pass/etc., or GET /games/state's
+-- own poll timer, which only ticks while a browser has that game's board
+-- open) -- a bot's turn (or an all-bot team decision) landing in a game
+-- nobody currently has open just sat there unresolved, and the human
+-- waiting on it never got an "it's your turn" push/Discord notification
+-- until they happened to check back on their own.
+--
+-- New GameService::advanceAutomatedTurnsForAllActiveGames() sweeps every
+-- 'waiting'/'in_progress' game and drives each one through the existing
+-- advanceAutomatedTurns() independent of any request. New
+-- bin/advance_automated_turns.php is its cron entry point (meant to run
+-- every minute or so). Also fixed the same "constructed without a real
+-- NotificationService" gap in bin/run_bot_search.php, found live in the
+-- process -- the Tactical Bot's own detached search job calls
+-- playMood()/pass() directly, which is exactly where the "it's your
+-- turn" notification fires for whoever it hands the turn to next.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.33.14' WHERE id = 1;

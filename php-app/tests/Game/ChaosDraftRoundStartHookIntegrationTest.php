@@ -86,6 +86,7 @@ final class ChaosDraftRoundStartHookIntegrationTest extends TestCase
             $userDecklists,
             new ReplayStateBuilder($registry),
             chaosRegistry: $chaosRegistry,
+            spawnAutomatedTurnRecheckProcesses: false,
         );
     }
 

@@ -737,6 +737,20 @@ final class GameService
          * whenever they want the job to actually resolve.
          */
         private readonly bool $spawnBotSearchProcesses = true,
+        /**
+         * Mirrors $spawnBotSearchProcesses above, for
+         * scheduleAutomatedTurnRecheck()'s own detached background
+         * process instead of the Tactical Bot's -- kept as a SEPARATE
+         * flag (rather than reusing that one) since a test exercising one
+         * background-spawning feature has no reason to also silence the
+         * other. False for the exact same reason: a spawned
+         * bin/recheck_automated_turn.php subprocess would inherit a
+         * test's own environment and race its foreground assertions
+         * against the same DB rows. Tests instead call
+         * advanceAutomatedTurns() explicitly whenever they want a
+         * recheck's own effect.
+         */
+        private readonly bool $spawnAutomatedTurnRecheckProcesses = true,
     ) {
         $this->tacticalBots = $tacticalBots ?? new SearchBotPlayerService(
             $this->plays,
@@ -4794,6 +4808,33 @@ final class GameService
     private const MAX_AUTOMATED_ACTIONS_PER_REQUEST = 200;
 
     /**
+     * scheduleAutomatedTurnRecheck()'s own hard ceiling on how many
+     * detached bin/recheck_automated_turn.php links may chain together
+     * for one game (see that method's own docblock) -- a safety net
+     * against a hypothetical future bug where advanceAutomatedTurns()
+     * keeps reporting genuine progress every single link without the
+     * game ever actually reaching a human's turn or completing, which
+     * would otherwise spawn a new detached OS process roughly every
+     * RECHECK_DELAY_SECONDS forever. 30 links at that delay is about 2.5
+     * minutes of self-driven rechecking -- generous relative to how long
+     * a real, healthy chain of automated turns should ever take, same
+     * "generous but bounded" reasoning as MAX_AUTOMATED_ACTIONS_PER_REQUEST
+     * above.
+     */
+    private const MAX_AUTOMATED_TURN_RECHECK_CHAIN_DEPTH = 30;
+
+    /**
+     * How long bin/recheck_automated_turn.php sleeps before its own
+     * advanceAutomatedTurns() call -- see scheduleAutomatedTurnRecheck()'s
+     * own docblock. Public (unlike every other constant on this class)
+     * purely so that standalone script, running as its own separate PHP
+     * process with no GameService instance of its own to call through,
+     * has one real source of truth to read the delay from instead of a
+     * second hardcoded literal that could silently drift out of sync.
+     */
+    public const AUTOMATED_TURN_RECHECK_DELAY_SECONDS = 2;
+
+    /**
      * Issue #419's own Tactical Bot tier -- fallback default for how long
      * a single background search (SearchBotPlayerService::chooseAction())
      * is allowed to run, used only as a defensive fallback in
@@ -4865,6 +4906,32 @@ final class GameService
      * before offering its discard decision), so there's no "auto-pass
      * out of a decision" case to cover.
      *
+     * Reported live: "add a way for a bot finishing its turn to advance
+     * to the next turn without requiring a physical browser refresh
+     * somewhere - mostly this is so notifications can be generated when
+     * it is the human player's turn." Every call site below only ever
+     * runs as a side effect of some client's own HTTP request against
+     * this game -- with nobody's browser left polling (see `GET
+     * /games/state` below), nothing would otherwise ever call this again
+     * for a game that still has more automated turns/decisions pending
+     * after this call returns (either because it hit its own
+     * MAX_AUTOMATED_ACTIONS_PER_REQUEST cap, or -- the historical
+     * all-bot-team-decision bug this method's own docblock already
+     * describes fixing -- some other reason a single pass through this
+     * loop doesn't fully settle everything). Whenever this call actually
+     * drove SOMETHING ($lastResult !== null below), it schedules ONE
+     * follow-up recheck of itself via scheduleAutomatedTurnRecheck() --
+     * see that method's own docblock for how the resulting chain
+     * self-perpetuates for as long as there's genuinely more to advance,
+     * and stops the instant there isn't (a human's own turn, or the game
+     * completing), with no cron/external scheduler needed at all.
+     *
+     * @param int $recheckChainDepth ONLY ever passed by
+     *     bin/recheck_automated_turn.php's own re-invocation of this same
+     *     method -- see scheduleAutomatedTurnRecheck()'s own docblock for
+     *     why this needs a hard ceiling (MAX_AUTOMATED_TURN_RECHECK_CHAIN_DEPTH).
+     *     Every ordinary caller (an HTTP route, the cron sweep) leaves
+     *     this at its default, starting a fresh chain of its own.
      * @return array<string, mixed>|null the LAST automated action's own
      *     result (the same shape playMood()/pass()/respondToDecision()
      *     return), which the caller should use IN PLACE of the human's
@@ -4876,7 +4943,7 @@ final class GameService
      *     their turn), in which case the caller keeps the human's own
      *     original result.
      */
-    public function advanceAutomatedTurns(int $gameId): ?array
+    public function advanceAutomatedTurns(int $gameId, int $recheckChainDepth = 0): ?array
     {
         $botGamePlayerIds = $this->botGamePlayerIds($gameId);
         $tacticalBotGamePlayerIds = $this->tacticalBotGamePlayerIds($gameId);
@@ -5151,7 +5218,86 @@ final class GameService
             break; // waiting on a real player who actually has a legal play
         }
 
+        if ($lastResult !== null) {
+            $this->scheduleAutomatedTurnRecheck($gameId, $recheckChainDepth);
+        }
+
         return $lastResult;
+    }
+
+    /**
+     * advanceAutomatedTurns()'s own self-perpetuating, cron-free
+     * follow-up (reported live: "add a way for a bot finishing its turn
+     * to advance to the next turn without requiring a physical browser
+     * refresh somewhere - mostly this is so notifications can be
+     * generated when it is the human player's turn" -- and a direct
+     * follow-up asking for exactly this instead of a crontab entry).
+     * Spawns a detached `bin/recheck_automated_turn.php` process (via
+     * `exec(...)  &`, the exact same fire-and-forget pattern
+     * launchTacticalBotSearchJob() already uses for the Tactical Bot's
+     * own search) that sleeps AUTOMATED_TURN_RECHECK_DELAY_SECONDS, then
+     * calls advanceAutomatedTurns($gameId, $recheckChainDepth + 1) again
+     * on a fresh process/connection, independent of whatever HTTP
+     * request originally triggered the call this is scheduled from.
+     *
+     * The chain is entirely self-terminating with no bookkeeping of its
+     * own needed: that recheck's own advanceAutomatedTurns() call only
+     * schedules ANOTHER one if IT ALSO found something to drive
+     * ($lastResult !== null there too) -- so the chain naturally stops
+     * the instant the game reaches a real player's own turn (nothing
+     * left to advance) or completes, exactly mirroring how the
+     * in-process loop above already stops itself. $recheckChainDepth
+     * exists purely as a hard ceiling (MAX_AUTOMATED_TURN_RECHECK_CHAIN_DEPTH)
+     * against a hypothetical future bug where advanceAutomatedTurns()
+     * keeps reporting genuine progress forever without the game ever
+     * actually settling, which would otherwise spawn a new OS process
+     * roughly every AUTOMATED_TURN_RECHECK_DELAY_SECONDS with nothing to
+     * stop it.
+     *
+     * Deliberately scheduled unconditionally whenever this call drove
+     * anything at all, not just when the caller "might not be polling
+     * again" (there's no reliable way to tell from in here) -- the
+     * common case where a browser IS still actively polling this exact
+     * game just means this recheck's own eventual advanceAutomatedTurns()
+     * call finds nothing new (the poll already got there first) and
+     * quietly doesn't reschedule itself; a harmless, cheap no-op, the
+     * same "cheap even when nothing's actually stuck" reasoning `GET
+     * /games/state`'s own unconditional call already relies on. Multiple
+     * overlapping chains for the same game (e.g. a human's own request
+     * and an in-flight recheck both landing around the same time) are
+     * similarly harmless, not just cheap -- every actual mutation still
+     * goes through playMood()/pass()/etc., each independently serialized
+     * by its own per-game withGameLock() cycle, so redundant concurrent
+     * chains just do repeated no-op work rather than racing each other
+     * unsafely.
+     *
+     * `bin/advance_automated_turns.php` (a periodic cron sweep of every
+     * active game, unrelated to any specific triggering event) remains
+     * available as an optional extra safety net for anyone who wants
+     * one, but is no longer required for this feature to work at all --
+     * this method is what makes it work without any external scheduler.
+     * $spawnAutomatedTurnRecheckProcesses (default true, same shape as
+     * $spawnBotSearchProcesses) lets tests suppress the real subprocess
+     * spawn, since a real one would inherit the test's own environment
+     * and race its foreground assertions against the same DB rows.
+     */
+    private function scheduleAutomatedTurnRecheck(int $gameId, int $recheckChainDepth): void
+    {
+        if ($recheckChainDepth >= self::MAX_AUTOMATED_TURN_RECHECK_CHAIN_DEPTH) {
+            error_log("scheduleAutomatedTurnRecheck({$gameId}): hit MAX_AUTOMATED_TURN_RECHECK_CHAIN_DEPTH, giving up on this chain -- possible engine bug never reaching a settled state");
+
+            return;
+        }
+
+        if (!$this->spawnAutomatedTurnRecheckProcesses) {
+            return;
+        }
+
+        $script = escapeshellarg(dirname(__DIR__, 2) . '/bin/recheck_automated_turn.php');
+        $phpBinary = escapeshellarg(PHP_BINARY);
+        $gameIdArg = escapeshellarg((string) $gameId);
+        $depthArg = escapeshellarg((string) ($recheckChainDepth + 1));
+        exec("{$phpBinary} {$script} {$gameIdArg} {$depthArg} > /dev/null 2>&1 &");
     }
 
     /**
@@ -10988,6 +11134,82 @@ final class GameService
         }
 
         return $expiredCount;
+    }
+
+    /**
+     * bin/advance_automated_turns.php's own cron entry point (reported
+     * live: "add a way for a bot finishing its turn to advance to the
+     * next turn without requiring a physical browser refresh somewhere -
+     * mostly this is so notifications can be generated when it is the
+     * human player's turn"). Every OTHER call site for
+     * advanceAutomatedTurns() (see that method's own docblock, and "Driving
+     * a bot's turn" in this file's own top-of-file docblock) only ever
+     * runs as a side effect of some client's own HTTP request against
+     * that specific game -- a human's own play/pass/etc., or (for the
+     * all-bot-team-decision deadlock case) that game's own `GET
+     * /games/state` poll timer, which only ticks while a browser has that
+     * game's board open. A bot's turn (or an all-bot team decision, or an
+     * auto-pass/auto-apply-scoring-bonus opt-in) landing in a game NOBODY
+     * is currently looking at -- every human seat's own tab closed, no
+     * spectator polling it either -- has no such request left to ride
+     * along on, so it simply sits there, unresolved, until someone
+     * eventually reopens it; and since `NotificationService::notifyYourTurn()`
+     * only ever fires from INSIDE that resolution (see
+     * notifyGamePlayersItsYourTurn()), the human waiting on that bot never
+     * gets told their turn arrived until they just so happen to check back
+     * on their own.
+     *
+     * Run every active (non-terminal) game through advanceAutomatedTurns()
+     * directly, independent of any request -- a periodic sweep rather than
+     * a targeted one, since there's no cheap way to know in advance which
+     * games currently have something automated pending without loading
+     * each one anyway, and advanceAutomatedTurns() itself already early-outs
+     * fast (two lookups) for the common case of a game with nothing
+     * automated to do at all. `'waiting'` is included alongside
+     * `'in_progress'` for the exact same reason `GET /games/state`'s own
+     * call site is unconditional (see advanceBotDraftTurn()'s own
+     * docblock) -- a still-drafting/deck-building bot-seated game needs
+     * this too, before a round (or even `game_rounds`) exists at all.
+     * `'completed'`/`'abandoned'` games are skipped outright -- nothing
+     * left to advance.
+     *
+     * Each call is independently wrapped in the exact same
+     * `try`/`catch (GameStateException)` "best-effort, discard on failure"
+     * pattern every other advanceAutomatedTurns() call site already uses
+     * (most plausibly `withGameLock()`'s own "busy" timeout, e.g. this
+     * sweep racing a real player's own concurrent request against the
+     * same game) -- one game's own transient failure must never abort the
+     * sweep for every other game queued up behind it. Safe to run
+     * concurrently with any live request, or with a slower-than-expected
+     * previous run of this same script, purely because
+     * advanceAutomatedTurns() itself already drives every actual mutation
+     * through playMood()/pass()/etc., each independently serialized by its
+     * own per-game withGameLock() -- nothing here adds, or needs, any
+     * locking of its own.
+     *
+     * @return int how many games this sweep actually found something
+     *   automated to advance in (advanceAutomatedTurns() returned
+     *   non-null) -- purely informational, for the cron script's own
+     *   one-line log summary; not a count of every game examined.
+     */
+    public function advanceAutomatedTurnsForAllActiveGames(): int
+    {
+        $idsStmt = Connection::get()->query("SELECT id FROM games WHERE status IN ('waiting', 'in_progress')");
+        $gameIds = array_map(intval(...), $idsStmt->fetchAll(PDO::FETCH_COLUMN));
+
+        $advancedCount = 0;
+        foreach ($gameIds as $gameId) {
+            try {
+                if ($this->advanceAutomatedTurns($gameId) !== null) {
+                    $advancedCount++;
+                }
+            } catch (GameStateException) {
+                // Best-effort, same as every other advanceAutomatedTurns()
+                // call site -- see this method's own docblock.
+            }
+        }
+
+        return $advancedCount;
     }
 
     /**
