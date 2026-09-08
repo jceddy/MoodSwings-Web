@@ -8166,6 +8166,83 @@ inherit the test's own environment (including its test-database
 connection) and race the test's own assertions against the very same
 `bot_search_jobs` row.
 
+### Diagnostic mode
+
+An opt-in, creation-time flag (`games.diagnostic_mode`, migration `0255`)
+that lets a seated human watch a Tactical Bot's own decision-making --
+requested live: "a button should be available to allow a human player to
+view the bot(s) hand(s), as well as ... a button to show the 'reasoning'
+behind every play the bot has made since the human player's previous
+play -- the heuristics involved, the play options considered, and the
+relative scoring assigned to those considered options."
+
+**Creation-time gating.** `createGame()`'s own `$diagnosticMode` parameter
+only actually takes effect when at least one seated user is a Tactical
+Bot (`includesATacticalBot()`, an "at least one" analogue of the existing
+`botUserIdAmong()`) -- otherwise it's silently ignored (not an error),
+the same "harmless no-op outside its own narrow scope" convention every
+other creation-time opt-in here already follows (`bestOfThree`/
+`allowSideboarding` etc.). The New Game dialog's own checkbox is only
+ever shown once a CHECKED bot opponent is specifically a Tactical Bot
+(`uses_tactical_ai`, now included in `listPracticeBots()`'s own return
+shape) -- see "Diagnostic mode" in `web-static/README.md`.
+
+**Bot hand visibility.** Rather than a separate endpoint/poll, a
+diagnostic game's Tactical Bot(s)' own live hand(s) ride along in the
+ordinary `GET /games/state` response as a new `diagnostic_bot_hands`
+field -- `null` for every non-diagnostic game (or a spectator/unseated
+viewer), else `array<{game_player_id, username, hand: [...serialized
+cards]}>` for every `is_bot` seat, computed in `buildGameState()` right
+alongside the existing per-player `total_score`/`deck_count`/`hand`
+(reveal-all-hands) computation. Each card is serialized with the BOT's
+own `game_player_id` as the reacting viewer (`serializeCard()`'s own
+`$reactingViewerId`), so `is_playable` reflects what the bot itself could
+legally play -- not the human viewer.
+
+**Reasoning log.** Rather than a new table, a Tactical Bot's own search
+result is logged as an ordinary `game_events` row
+(`event_type = 'tactical_bot_reasoning'`) -- `game_events.details` is
+plain JSON with no `event_type` ENUM to extend, and the existing
+append-only/ordered-by-id shape is exactly what "since the viewer's own
+last play" needs. `SearchBotPlayerService::chooseAction()` is now a thin
+wrapper around `chooseActionWithReasoning()`, which returns the chosen
+action AND a `{excluded_by_heuristic: int[], candidates: [{card_id,
+choices, visits, average_reward}]}` payload built from the SAME
+`$rootActions`/`$visits`/`$totals` arrays the UCB1 search already
+computes (previously discarded the moment `chooseAction()` picked a
+winner) -- no extra rollouts, no extra cost. `runTacticalBotSearchJob()`
+only calls this reasoning-returning variant, and only logs the result,
+when the job's own game has `diagnostic_mode` on; a non-diagnostic game's
+Tactical Bot still calls the plain `chooseAction()` wrapper, so search
+cost is identical either way. `logTacticalBotReasoning()` deliberately
+logs with `$state = null` (its default) -- passing the real `BoardState`
+would drain its pending card-move/reveal history queues that the REAL
+`mood_played`/`turn_passed` event (logged moments later, once the chosen
+action is actually applied) still needs.
+
+Candidates carry a bare `card_id`, not a fully serialized card -- the
+frontend already has the whole catalog loaded (`GET /cards/catalog`, the
+deck builder's own source), so there's no need to re-serialize a card on
+every candidate of every logged turn.
+
+`GameService::tacticalBotReasoningSince(int $gameId, int $viewerUserId)`
+(`GET /games/bot-reasoning?game_id=`) scopes the returned list PER
+VIEWER, not per game or per round: it finds the CALLER's own most recent
+`game_events` row (any event type, `acting_game_player_id` matching their
+own seat -- but excluding `round_grants_computed`, the same bookkeeping
+event `gameEventHistory()`/`humanReadableEventHistory()` already filter
+out of the general event log, since it logs one row per player at every
+round's start regardless of whose turn it actually was, which would
+otherwise push this boundary past reasoning genuinely new to the viewer)
+to establish a boundary id, then returns every `tactical_bot_reasoning`
+event after it. This means two humans watching the same Team Play game
+each see exactly the Tactical Bot turns THEY personally haven't caught up
+on yet, not a shared whole-round log -- and a viewer who hasn't acted at
+all yet this game sees the entire history. Throws `GameStateException`
+for an unseated viewer or a non-diagnostic game (mirrored client-side:
+the "View bot reasoning" button is only ever shown once
+`diagnostic_bot_hands` is non-null, which already implies both).
+
 ### Auto-pass on empty hand
 
 A personal preference (`users.auto_pass_on_empty_hand`, migration

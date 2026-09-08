@@ -1041,6 +1041,9 @@ if ($path === '/games' && $method === 'POST') {
     // 'custom_duel' built under the "Power Duel" preset (issue #90
     // follow-up, migration 0228) -- see createGame()'s own docblock.
     $allowSideboarding = (bool) ($body['allow_sideboarding'] ?? false);
+    // Only meaningful once $userIds seats at least one Tactical Bot --
+    // see createGame()'s own $diagnosticMode docblock.
+    $diagnosticMode = (bool) ($body['diagnostic_mode'] ?? false);
     // Only meaningful for deck_type 'rotisserie_draft' -- see createGame()'s own docblock.
     $rotisserieDraftPoolSource = isset($body['rotisserie_draft_pool_source']) ? (string) $body['rotisserie_draft_pool_source'] : null;
     $rotisserieDraftCustomPoolText = isset($body['rotisserie_draft_custom_pool_text']) ? (string) $body['rotisserie_draft_custom_pool_text'] : null;
@@ -1099,6 +1102,7 @@ if ($path === '/games' && $method === 'POST') {
             $botGoesFirst,
             $bestOfThree,
             $allowSideboarding,
+            $diagnosticMode,
         );
         respond(201, ['status' => 'ok', 'game_id' => $gameId]);
     } catch (GameStateException $e) {
@@ -1162,6 +1166,9 @@ function openGameCreateParamsFromRequestBody(array $body): array
         // deck_type 'custom_duel' built under the "Power Duel" preset --
         // see createGame()'s own $allowSideboarding docblock.
         'allow_sideboarding' => (bool) ($body['allow_sideboarding'] ?? false),
+        // Only meaningful once the roster ends up seating at least one
+        // Tactical Bot -- see createGame()'s own $diagnosticMode docblock.
+        'diagnostic_mode' => (bool) ($body['diagnostic_mode'] ?? false),
     ];
 }
 
@@ -1356,6 +1363,26 @@ if ($path === '/games/state' && $method === 'GET') {
         // Best-effort only -- see above. The next poll simply tries again.
     }
     respond(200, ['status' => 'ok', ...$games->getState($gameId, (int) $currentUser['id'])]);
+}
+
+// Diagnostic mode's own "show the reasoning behind every play the bot
+// has made since the human player's previous play" button -- fetched on
+// demand, unlike getState()'s own live diagnostic_bot_hands field, since
+// the "since" boundary only moves once per turn. requireGamePlayer()
+// alone isn't enough here (a seated human in a NON-diagnostic game must
+// still be rejected) -- GameService::tacticalBotReasoningSince() itself
+// throws GameStateException for that case, same as it does for an
+// unseated caller.
+if ($path === '/games/bot-reasoning' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $gameId = (int) ($_GET['game_id'] ?? 0);
+
+    requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+    try {
+        respond(200, ['status' => 'ok', 'reasoning' => $games->tacticalBotReasoningSince($gameId, (int) $currentUser['id'])]);
+    } catch (GameStateException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
 }
 
 // Spectator mode (issue #128): every currently-in_progress game any of

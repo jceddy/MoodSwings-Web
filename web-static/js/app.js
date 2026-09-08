@@ -129,7 +129,7 @@ function getCardStats() {
     return apiRequest('/stats/cards');
 }
 
-function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId, defaultSelectionsMode, botDecklistText, botSavedDecklistId, randomTeams, rotisserieDraftPoolSource, rotisserieDraftCustomPoolText, rotisserieDraftCutoffCount, tieredRotisserieDraftMode, tieredRotisserieDraftTiers, botGoesFirst, bestOfThree, allowSideboarding) {
+function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId, defaultSelectionsMode, botDecklistText, botSavedDecklistId, randomTeams, rotisserieDraftPoolSource, rotisserieDraftCustomPoolText, rotisserieDraftCutoffCount, tieredRotisserieDraftMode, tieredRotisserieDraftTiers, botGoesFirst, bestOfThree, allowSideboarding, diagnosticMode) {
     return apiRequest('/games', {
         method: 'POST',
         body: JSON.stringify({
@@ -202,6 +202,10 @@ function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText,
             // duel_deck_rules preset (issue #90 follow-up) -- see "Best of
             // three" in web-static/README.md.
             allow_sideboarding: allowSideboarding,
+            // Only meaningful with a practice Tactical Bot seated (see
+            // uses_tactical_ai) -- see "Diagnostic mode" in
+            // web-static/README.md.
+            diagnostic_mode: diagnosticMode,
         }),
     });
 }
@@ -594,6 +598,14 @@ function getSharedDeck(gameId, code) {
         path += '&code=' + encodeURIComponent(code);
     }
     return apiRequest(path);
+}
+
+// Diagnostic mode (games.diagnostic_mode) -- every Tactical Bot play
+// logged since the caller's own last play. See
+// GameService::tacticalBotReasoningSince() and #view-bot-reasoning-button
+// in game.js.
+function getTacticalBotReasoning(gameId) {
+    return apiRequest('/games/bot-reasoning?game_id=' + encodeURIComponent(gameId));
 }
 
 // A completed Quick/Winston/Grid Draft match's full shared pool, sectioned

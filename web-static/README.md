@@ -962,6 +962,59 @@ the text on its own next poll -- and applies identically for a spectator
 player, so nobody watching a Tactical Bot's own game is left staring at
 "waiting on another player" with no idea why it's taking a while.
 
+### Diagnostic mode
+
+Reported live: "add a 'diagnostic mode' checkbox when creating a game
+including one or more tactical bot(s) -- if diagnostic mode is enabled, a
+button should be available to allow a human player to view the bot(s)
+hand(s), as well as ... a button to show the 'reasoning' behind every
+play the bot has made since the human player's previous play." See
+"Diagnostic mode" in `php-app/README.md` for the full backend design
+(`games.diagnostic_mode`, `diagnostic_bot_hands`,
+`tactical_bot_reasoning` events).
+
+**New Game dialog.** `#new-game-diagnostic-mode-label` (unchecked by
+default, same as every other conditionally-shown checkbox here) is only
+ever shown once a CHECKED bot opponent is specifically a Tactical Bot --
+`anyTacticalBotChecked()` (an `anyBotChecked()` analogue scoped to
+`data-uses-tactical-ai`, set on a bot checkbox only when
+`GET /games/bots`' own `uses_tactical_ai` field is true) drives
+`updateDiagnosticModeFieldVisibility()`, run from the same bot-checkbox
+`change` listeners and `updateBotCheckboxAvailability()` every other
+bot-gated field already hooks into. Its value is sent as `diagnostic_mode`
+alongside `best_of_three`/`allow_sideboarding` in the `POST /games` body;
+never sent by `postOpenGame()`, since an open lobby listing can never
+seat a bot at all (strangers fill the other seats once the roster fills).
+
+**Board buttons.** `#view-bot-hands-button`/`#view-bot-reasoning-button`
+(next to "View log"/"View decklist") are shown only once
+`state.diagnostic_bot_hands` is non-null -- which doubles as "diagnostic
+mode is on for this viewer" -- computed in `renderBoard()` alongside the
+existing `view-shared-deck-button` visibility check.
+
+- **"View bot hand(s)"** (`openBotHandsView()`) reads
+  `currentState.diagnostic_bot_hands` directly rather than its own
+  request -- it already rides along live in every ordinary `getState()`
+  poll -- and renders each bot's hand with the same `buildCardThumb()`/
+  `openCardDetail()` pattern "Teammate's hand" already uses.
+- **"View bot reasoning"** (`openBotReasoningView()`) calls
+  `GET /games/bot-reasoning?game_id=` on demand (not polled -- a
+  diagnostic-mode game's own decision history doesn't change fast enough
+  to need it), which already scopes its response to plays since THIS
+  viewer's own last play (see `tacticalBotReasoningSince()`'s own
+  docblock in `php-app/README.md`), so this just renders whatever comes
+  back in order. Each candidate/excluded card is a bare `card_id` (the
+  server doesn't re-serialize a full card for every candidate of every
+  turn), so `ensureDeckBuilderCatalogLoaded()` is called first to
+  guarantee `deckBuilderCatalogById` is populated even if the deck
+  builder itself was never opened this session -- catalog cards are
+  already shaped to exactly what `buildCardThumb()`/`openCardDetail()`
+  read (see `CardCatalog::serialize()`'s own docblock), so they need no
+  translation. Candidates are shown sorted highest-`average_reward`
+  first, the card the bot actually chose outlined, with
+  heuristically-excluded cards (never even reached by the search) listed
+  separately underneath.
+
 ### Custom card/effect formats preference (issue #405 follow-up)
 
 `#settings-allow-custom-content-checkbox`, in the Settings dialog's

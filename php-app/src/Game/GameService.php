@@ -932,6 +932,20 @@ final class GameService
         // sideboarding rule, replacing this preset's own default "deck is
         // locked, carried forward unchanged" behavior for the match.
         bool $allowSideboarding = false,
+        // Diagnostic mode (reported live: "add a 'diagnostic mode'
+        // checkbox when creating a game including one or more tactical
+        // bot(s)... a button... to view the bot(s) hand(s)... a button to
+        // show the 'reasoning' behind every play the bot has made"):
+        // silently ignored (not an error) unless $userIds includes at
+        // least one Tactical Bot (users.uses_tactical_ai, resolved just
+        // below) -- the same "harmless no-op outside its own narrow
+        // scope" convention every other creation-time opt-in here already
+        // follows. See getState()'s own $diagnosticBotHands and
+        // tacticalBotReasoningSince() for what this actually unlocks once
+        // a game has it: every seated bot's own live hand, and a
+        // game_events-backed log of each Tactical Bot decision's own
+        // considered candidates/heuristic exclusions.
+        bool $diagnosticMode = false,
     ): int {
         if (count($userIds) > self::MAX_PLAYERS) {
             throw new GameStateException('A game cannot have more than ' . self::MAX_PLAYERS . ' players');
@@ -1178,6 +1192,11 @@ final class GameService
             && $format === 'duel' && $deckType === 'custom_duel'
             && isset($duelRulesPreset) && $duelRulesPreset === 'power';
 
+        // Diagnostic mode (see $diagnosticMode's own docblock above) --
+        // only ever actually applies once $userIds seats at least one
+        // Tactical Bot; a harmless no-op otherwise.
+        $diagnosticModeForGame = $diagnosticMode && $this->includesATacticalBot($userIds);
+
         $pdo = Connection::get();
         $pdo->beginTransaction();
 
@@ -1214,12 +1233,12 @@ final class GameService
                     format, deck_type, custom_deck_name, custom_deck_card_ids,
                     custom_duel_rules_preset, custom_duel_min_cards, custom_duel_rarity_limits, custom_duel_duplicate_limits,
                     custom_duel_even_color_distribution_rarities, draft_match_id, game_match_id, match_game_number,
-                    status, created_by_user_id, wins_needed, default_selections_mode, bot_goes_first
+                    status, created_by_user_id, wins_needed, default_selections_mode, bot_goes_first, diagnostic_mode
                  ) VALUES (
                     :format, :deck_type, :custom_deck_name, :custom_deck_card_ids,
                     :duel_rules_preset, :duel_min_cards, :duel_rarity_limits, :duel_duplicate_limits,
                     :duel_even_color_distribution_rarities, :draft_match_id, :game_match_id, :match_game_number,
-                    'waiting', :created_by, :wins_needed, :default_selections_mode, :bot_goes_first
+                    'waiting', :created_by, :wins_needed, :default_selections_mode, :bot_goes_first, :diagnostic_mode
                  )"
             );
             $insertGame->execute([
@@ -1239,6 +1258,7 @@ final class GameService
                 'wins_needed' => $winsNeeded,
                 'default_selections_mode' => $defaultSelectionsMode ? 1 : 0,
                 'bot_goes_first' => $botGoesFirst ? 1 : 0,
+                'diagnostic_mode' => $diagnosticModeForGame ? 1 : 0,
             ]);
             $gameId = (int) $pdo->lastInsertId();
 
@@ -1462,14 +1482,18 @@ final class GameService
      * already say enough about relative speed that the picker draws no
      * further distinction), for the New Game dialog's own bot picker.
      *
-     * @return array<int, array{user_id: int, username: string}>
+     * @return array<int, array{user_id: int, username: string, uses_tactical_ai: bool}>
      */
     public function listPracticeBots(): array
     {
-        $stmt = Connection::get()->query('SELECT id, username FROM users WHERE is_bot = 1 ORDER BY id ASC');
+        $stmt = Connection::get()->query('SELECT id, username, uses_tactical_ai FROM users WHERE is_bot = 1 ORDER BY id ASC');
 
         return array_map(
-            static fn (array $row) => ['user_id' => (int) $row['id'], 'username' => $row['username']],
+            static fn (array $row) => [
+                'user_id' => (int) $row['id'],
+                'username' => $row['username'],
+                'uses_tactical_ai' => (bool) $row['uses_tactical_ai'],
+            ],
             $stmt->fetchAll(),
         );
     }
@@ -1495,6 +1519,28 @@ final class GameService
         $id = $stmt->fetchColumn();
 
         return $id !== false ? (int) $id : null;
+    }
+
+    /**
+     * $diagnosticMode's own gate (see createGame()'s own docblock) --
+     * unlike botUserIdAmong() above, this asks "at least one," not "which
+     * one," since a Team Play/Traditional game can seat several bots at
+     * once and any single Tactical one among them is enough to make
+     * diagnostic mode meaningful.
+     *
+     * @param int[] $userIds
+     */
+    private function includesATacticalBot(array $userIds): bool
+    {
+        if ($userIds === []) {
+            return false;
+        }
+
+        $placeholders = implode(',', array_fill(0, count($userIds), '?'));
+        $stmt = Connection::get()->prepare("SELECT 1 FROM users WHERE id IN ({$placeholders}) AND is_bot = 1 AND uses_tactical_ai = 1 LIMIT 1");
+        $stmt->execute(array_values($userIds));
+
+        return $stmt->fetchColumn() !== false;
     }
 
     /**
@@ -6354,7 +6400,21 @@ final class GameService
                 $this->candidatePlayCardIds($state, $job['game_player_id']),
                 fn (int $cardId) => $this->plays->isPlayable($state, $job['game_player_id'], $cardId),
             ));
-            $action = $this->tacticalBots->chooseAction($state, $playableCardIds, $job['game_player_id'], (float) $job['time_budget_seconds'], $this->roundWinsStillNeededToWinGame($job['game_id'], $job['game_player_id']), $this->roundWinsNeededToWinGameForActivePlayers($job['game_id'], $state));
+            $roundWinsNeeded = $this->roundWinsStillNeededToWinGame($job['game_id'], $job['game_player_id']);
+            $roundWinsNeededByPlayer = $this->roundWinsNeededToWinGameForActivePlayers($job['game_id'], $state);
+
+            // Diagnostic mode (reported live: "a button to show the
+            // 'reasoning' behind every play the bot has made") -- only
+            // ever pays for the extra reasoning bookkeeping (never an
+            // extra rollout/simulation, see chooseActionWithReasoning()'s
+            // own docblock) when this specific game opted in.
+            if ((bool) $this->fetchGame($job['game_id'])['diagnostic_mode']) {
+                $result = $this->tacticalBots->chooseActionWithReasoning($state, $playableCardIds, $job['game_player_id'], (float) $job['time_budget_seconds'], $roundWinsNeeded, $roundWinsNeededByPlayer);
+                $action = $result['action'];
+                $this->logTacticalBotReasoning($job['game_id'], $job['game_player_id'], $action, $result['reasoning']);
+            } else {
+                $action = $this->tacticalBots->chooseAction($state, $playableCardIds, $job['game_player_id'], (float) $job['time_budget_seconds'], $roundWinsNeeded, $roundWinsNeededByPlayer);
+            }
 
             if ($action !== null) {
                 $this->playMood($job['game_id'], $job['game_player_id'], $action['card_id'], $action['choices']);
@@ -6379,6 +6439,118 @@ final class GameService
                 error_log("runTacticalBotSearchJob({$jobId}): heuristic fallback ALSO failed -- " . $fallbackError);
             }
         }
+    }
+
+    /**
+     * Diagnostic mode's own "reasoning behind every play" (see
+     * createGame()'s own $diagnosticMode docblock) -- logged as an
+     * ordinary game_events row (event_type 'tactical_bot_reasoning')
+     * rather than a bespoke table, the same append-only JSON-details
+     * history every other action already goes through. Deliberately
+     * calls the private logEvent() helper with $state left at its default
+     * null: logEvent()'s own $state param exists purely to drain
+     * BoardState's pending card-history queues (consumeCardMoves() and
+     * friends) into the event's own details, which only makes sense for
+     * an event that actually MOVED/REVEALED something -- a reasoning
+     * snapshot is logged BEFORE playMood()/pass() ever runs, so passing
+     * the live $state here would risk draining history the REAL
+     * mood_played/turn_passed event (logged moments later, inside
+     * playMood()/pass() itself) still needs to capture.
+     *
+     * `$action`'s own card_id (null for a chosen pass) is stored on the
+     * event row's own `card_id` column, the same convention every other
+     * card-specific event already uses, purely so a future "recent
+     * events" style query could filter/join on it the same way; nothing
+     * currently reads it back that way.
+     *
+     * @param ?array{card_id: int, choices: array<string, mixed>} $action
+     * @param array{excluded_by_heuristic: int[], candidates: array<int, array{card_id: ?int, choices: ?array<string, mixed>, visits: int, average_reward: float}>} $reasoning
+     */
+    private function logTacticalBotReasoning(int $gameId, int $botGamePlayerId, ?array $action, array $reasoning): void
+    {
+        $this->logEvent($gameId, null, $botGamePlayerId, 'tactical_bot_reasoning', $action['card_id'] ?? null, [
+            'chosen_choices' => $action['choices'] ?? null,
+            'excluded_by_heuristic' => $reasoning['excluded_by_heuristic'],
+            'candidates' => $reasoning['candidates'],
+        ]);
+    }
+
+    /**
+     * Diagnostic mode's own "a button to show the 'reasoning' behind
+     * every play the bot has made since the human player's previous
+     * play" -- fetched on demand (unlike getState()'s own live
+     * diagnostic_bot_hands) since a full candidate-list-per-decision log
+     * can grow sizable and $viewerUserId's own "since" boundary only
+     * changes once per turn anyway, not every 4-second poll.
+     *
+     * "Since the human player's previous play" is scoped PER VIEWER, not
+     * per game or per round: $viewerUserId's own most recent game_events
+     * row (of ANY type -- a play, a pass, a decision response) marks the
+     * boundary, so two humans watching the same Team Play game who've
+     * been away for different lengths of time each see exactly the bot
+     * turns THEY personally haven't caught up on yet, not a shared
+     * whole-round log. A viewer who hasn't acted at all yet this game
+     * (no own event exists) sees every logged decision from the start.
+     *
+     * @return array<int, array{
+     *     game_player_id: int,
+     *     username: string,
+     *     card_id: ?int,
+     *     choices: ?array<string, mixed>,
+     *     excluded_by_heuristic: int[],
+     *     candidates: array<int, array{card_id: ?int, choices: ?array<string, mixed>, visits: int, average_reward: float}>,
+     *     created_at: string,
+     * }>
+     */
+    public function tacticalBotReasoningSince(int $gameId, int $viewerUserId): array
+    {
+        $viewerGamePlayerId = $this->gamePlayerIdFor($gameId, $viewerUserId);
+        if ($viewerGamePlayerId === null) {
+            throw new GameStateException("User {$viewerUserId} is not seated in game {$gameId}");
+        }
+
+        $game = $this->fetchGame($gameId);
+        if (!(bool) $game['diagnostic_mode']) {
+            throw new GameStateException("Game {$gameId} does not have diagnostic mode enabled");
+        }
+
+        $pdo = Connection::get();
+        // round_grants_computed is excluded the same way the general event
+        // history already does (see gameEventHistory()/humanReadableEventHistory())
+        // -- it logs one bookkeeping row per player at round end regardless
+        // of whose turn it was, so it isn't really "the viewer's own play"
+        // and would otherwise push this boundary past reasoning that's
+        // genuinely new to them.
+        $lastOwnEventStmt = $pdo->prepare(
+            "SELECT id FROM game_events WHERE game_id = :game_id AND acting_game_player_id = :player_id AND event_type != 'round_grants_computed' ORDER BY id DESC LIMIT 1"
+        );
+        $lastOwnEventStmt->execute(['game_id' => $gameId, 'player_id' => $viewerGamePlayerId]);
+        $sinceEventId = $lastOwnEventStmt->fetchColumn();
+        $sinceEventId = $sinceEventId !== false ? (int) $sinceEventId : 0;
+
+        $reasoningStmt = $pdo->prepare(
+            "SELECT ge.acting_game_player_id, u.username, ge.card_id, ge.details, ge.created_at
+             FROM game_events ge
+             JOIN game_players gp ON gp.id = ge.acting_game_player_id
+             JOIN users u ON u.id = gp.user_id
+             WHERE ge.game_id = :game_id AND ge.event_type = 'tactical_bot_reasoning' AND ge.id > :since_id
+             ORDER BY ge.id ASC"
+        );
+        $reasoningStmt->execute(['game_id' => $gameId, 'since_id' => $sinceEventId]);
+
+        return array_map(static function (array $row): array {
+            $details = json_decode((string) $row['details'], true) ?? [];
+
+            return [
+                'game_player_id' => (int) $row['acting_game_player_id'],
+                'username' => $row['username'],
+                'card_id' => $row['card_id'] !== null ? (int) $row['card_id'] : null,
+                'choices' => $details['chosen_choices'] ?? null,
+                'excluded_by_heuristic' => $details['excluded_by_heuristic'] ?? [],
+                'candidates' => $details['candidates'] ?? [],
+                'created_at' => $row['created_at'],
+            ];
+        }, $reasoningStmt->fetchAll());
     }
 
     /**
@@ -13777,6 +13949,34 @@ final class GameService
             }
         }
         unset($player);
+
+        // Diagnostic mode's own "view the bot(s) hand(s)" (see
+        // createGame()'s own $diagnosticMode docblock) -- live (rides
+        // along in this same getState() response, no separate on-demand
+        // fetch), so it stays current with the board's own 4-second poll
+        // like everything else here. Viewer-only ($viewerGamePlayerId !== null,
+        // the same "a legitimate seated human, not a spectator" gate every
+        // other viewer-specific field above already uses) and only when
+        // this game itself opted in -- every other game gets `null` here,
+        // the same "harmless, cheap no-op" shape power_duel_sideboard_pool
+        // above already establishes. reactingViewerId is each bot's OWN
+        // game_player_id (not the human viewer's) so is_playable reflects
+        // what that bot could legally play right now, not what the human
+        // could.
+        $response['diagnostic_bot_hands'] = null;
+        if ($viewerGamePlayerId !== null && (bool) $game['diagnostic_mode']) {
+            $response['diagnostic_bot_hands'] = array_values(array_map(
+                fn (array $botPlayer): array => [
+                    'game_player_id' => $botPlayer['game_player_id'],
+                    'username' => $botPlayer['username'],
+                    'hand' => array_map(
+                        fn (int $cardId): array => $this->serializeCard($state, $cardId, $names, $botPlayer['game_player_id']),
+                        $state->hand($botPlayer['game_player_id']),
+                    ),
+                ],
+                array_values(array_filter($response['players'], static fn (array $player): bool => $player['is_bot'])),
+            ));
+        }
 
         if ($roundRow !== false) {
             $currentTurnGamePlayerId = $roundRow['current_turn_game_player_id'] !== null ? (int) $roundRow['current_turn_game_player_id'] : null;

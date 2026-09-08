@@ -2905,6 +2905,15 @@
         return Array.from(opponentCheckboxes.querySelectorAll('input[data-is-bot]')).some((box) => box.checked);
     }
 
+    // Diagnostic mode (issue reported live: "add a 'diagnostic mode'
+    // checkbox when creating a game including one or more tactical
+    // bot(s)") only ever does anything once a checked bot is specifically
+    // a Tactical Bot -- see GameService::createGame()'s own
+    // $diagnosticMode docblock, which silently ignores it otherwise.
+    function anyTacticalBotChecked() {
+        return Array.from(opponentCheckboxes.querySelectorAll('input[data-is-bot][data-uses-tactical-ai]')).some((box) => box.checked);
+    }
+
     // #new-game-bot-decklist-fields (the bot's own decklist, since it can
     // never submit one itself the way its human opponent does after the
     // game is created) only makes sense once BOTH a bot is actually
@@ -2937,6 +2946,19 @@
         document.getElementById('new-game-bot-goes-first-label').hidden = !show;
         if (!show) {
             document.getElementById('new-game-bot-goes-first').checked = false;
+        }
+    }
+
+    // Diagnostic mode's own checkbox -- shown whenever a checked bot is a
+    // Tactical Bot, regardless of format/deck_type (createGame() applies
+    // the same gating server-side no matter what else is chosen).
+    // Unchecked (not just hidden) whenever it goes out of view, same as
+    // every other conditionally-shown New Game field.
+    function updateDiagnosticModeFieldVisibility() {
+        const show = anyTacticalBotChecked();
+        document.getElementById('new-game-diagnostic-mode-label').hidden = !show;
+        if (!show) {
+            document.getElementById('new-game-diagnostic-mode').checked = false;
         }
     }
 
@@ -3000,6 +3022,7 @@
         updateOpponentSelectionLimit();
         updateBotDecklistFieldsVisibility();
         updateBotGoesFirstFieldVisibility();
+        updateDiagnosticModeFieldVisibility();
     }
 
     function updateOpponentSelectionLimit() {
@@ -3312,11 +3335,15 @@
                 checkbox.type = 'checkbox';
                 checkbox.value = bot.user_id;
                 checkbox.dataset.isBot = 'true';
+                if (bot.uses_tactical_ai) {
+                    checkbox.dataset.usesTacticalAi = 'true';
+                }
                 checkbox.checked = !!prefill && prefill.opponentUserIds.includes(bot.user_id);
                 checkbox.addEventListener('change', updateOpponentSelectionLimit);
                 checkbox.addEventListener('change', updateTeamFields);
                 checkbox.addEventListener('change', updateBotDecklistFieldsVisibility);
                 checkbox.addEventListener('change', updateBotGoesFirstFieldVisibility);
+                checkbox.addEventListener('change', updateDiagnosticModeFieldVisibility);
                 label.appendChild(checkbox);
                 label.append(' ' + bot.username + ' (practice bot)');
                 opponentCheckboxes.appendChild(label);
@@ -3683,6 +3710,11 @@
         // unchecked whenever hidden, so reading .checked unconditionally
         // here already reflects that.
         const allowSideboarding = document.getElementById('new-game-allow-sideboarding').checked;
+        // Diagnostic mode -- see updateDiagnosticModeFieldVisibility() for
+        // when this field is actually shown; #new-game-diagnostic-mode is
+        // itself unchecked whenever hidden, so reading .checked
+        // unconditionally here already reflects that.
+        const diagnosticMode = document.getElementById('new-game-diagnostic-mode').checked;
 
         // Issue #116: post to the open lobby instead of creating the game
         // directly -- mirrors createGame()'s own params (see above) minus
@@ -3761,6 +3793,7 @@
             botGoesFirst,
             bestOfThree,
             allowSideboarding,
+            diagnosticMode,
         );
 
         if (!ok) {
@@ -4721,6 +4754,151 @@
 
     document.getElementById('shared-deck-close-button').addEventListener('click', () => {
         document.getElementById('shared-deck-dialog').close();
+    });
+
+    // Diagnostic mode's own "View bot hand(s)" (issue reported live: "a
+    // button should be available to allow a human player to view the
+    // bot(s) hand(s)") -- reads currentState.diagnostic_bot_hands
+    // directly rather than issuing its own request, since it already
+    // rides along live in every ordinary getState() poll (see
+    // GameService::buildGameState()'s own docblock) and #view-bot-hands-button
+    // itself is only ever shown once that field is non-null (renderBoard()).
+    function openBotHandsView() {
+        const sectionsEl = document.getElementById('bot-hands-sections');
+        sectionsEl.innerHTML = '';
+
+        for (const bot of currentState.diagnostic_bot_hands || []) {
+            const heading = document.createElement('h3');
+            heading.textContent = bot.username + "'s hand (" + bot.hand.length + ' card(s))';
+            sectionsEl.appendChild(heading);
+
+            const cardsDiv = document.createElement('div');
+            for (const card of bot.hand) {
+                cardsDiv.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+            }
+            sectionsEl.appendChild(cardsDiv);
+        }
+
+        document.getElementById('bot-hands-dialog').showModal();
+    }
+
+    document.getElementById('view-bot-hands-button').addEventListener('click', openBotHandsView);
+
+    document.getElementById('bot-hands-close-button').addEventListener('click', () => {
+        document.getElementById('bot-hands-dialog').close();
+    });
+
+    // Diagnostic mode's own "View bot reasoning" (issue reported live: "a
+    // button to show the 'reasoning' behind every play the bot has made
+    // since the human player's previous play -- the heuristics involved,
+    // the play options considered, and the relative scoring assigned to
+    // those considered options"). GET /games/bot-reasoning (
+    // GameService::tacticalBotReasoningSince()) already scopes the
+    // returned list to plays since THIS viewer's own last play, so this
+    // just renders whatever it returns in order -- oldest first, matching
+    // "Recent plays"' own convention.
+    //
+    // Each candidate/excluded card is only ever a bare card_id (see that
+    // method's own docblock: the frontend's already-loaded card catalog
+    // covers name/art, so the server doesn't re-serialize a full card for
+    // every candidate on every turn) -- ensureDeckBuilderCatalogLoaded()
+    // is called first so deckBuilderCatalogById is guaranteed populated
+    // even if the deck builder itself was never opened this session.
+    async function openBotReasoningView(gameId) {
+        const metaEl = document.getElementById('bot-reasoning-meta');
+        const turnsEl = document.getElementById('bot-reasoning-turns');
+        const emptyEl = document.getElementById('bot-reasoning-empty');
+        metaEl.textContent = 'Loading...';
+        turnsEl.innerHTML = '';
+        emptyEl.hidden = true;
+        document.getElementById('bot-reasoning-dialog').showModal();
+
+        await ensureDeckBuilderCatalogLoaded();
+        const { ok, body } = await getTacticalBotReasoning(gameId);
+        if (!ok) {
+            metaEl.textContent = body.message || 'Could not load bot reasoning for this game.';
+            return;
+        }
+
+        metaEl.textContent = '';
+        emptyEl.hidden = body.reasoning.length > 0;
+
+        for (const turn of body.reasoning) {
+            turnsEl.appendChild(buildBotReasoningTurn(turn));
+        }
+    }
+
+    // A single tactical_bot_reasoning event -- see
+    // GameService::logTacticalBotReasoning()/tacticalBotReasoningSince()'s
+    // own docblocks for exactly what each field means. Candidates are
+    // shown sorted highest-average_reward first (the search's own
+    // preference order), with the card the bot actually chose marked, and
+    // heuristically-excluded cards listed separately underneath -- those
+    // never even reached the search, so they never got a visits/
+    // average_reward of their own to sort by.
+    function buildBotReasoningTurn(turn) {
+        const wrapper = document.createElement('details');
+        wrapper.open = true;
+        wrapper.className = 'bot-reasoning-turn';
+
+        const summary = document.createElement('summary');
+        const chosenCard = turn.card_id !== null ? cardFromCatalog(turn.card_id) : null;
+        summary.textContent = turn.username + ' ' + (chosenCard ? 'played ' + chosenCard.name : 'passed')
+            + ' — ' + new Date(turn.created_at).toLocaleString();
+        wrapper.appendChild(summary);
+
+        const candidatesDiv = document.createElement('div');
+        candidatesDiv.className = 'bot-reasoning-candidates';
+        const sortedCandidates = [...turn.candidates].sort((a, b) => b.average_reward - a.average_reward);
+        for (const candidate of sortedCandidates) {
+            const card = candidate.card_id !== null ? cardFromCatalog(candidate.card_id) : null;
+            const isChosen = candidate.card_id === turn.card_id
+                && JSON.stringify(candidate.choices || null) === JSON.stringify(turn.choices || null);
+
+            const row = document.createElement('div');
+            row.className = 'bot-reasoning-candidate' + (isChosen ? ' bot-reasoning-candidate--chosen' : '');
+            if (card) {
+                row.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+            } else {
+                const passLabel = document.createElement('span');
+                passLabel.textContent = 'Pass';
+                row.appendChild(passLabel);
+            }
+            const stats = document.createElement('span');
+            stats.className = 'bot-reasoning-candidate__stats';
+            stats.textContent = (isChosen ? 'Chosen — ' : '') + candidate.visits + ' visit(s), avg reward '
+                + candidate.average_reward.toFixed(2);
+            row.appendChild(stats);
+            candidatesDiv.appendChild(row);
+        }
+        wrapper.appendChild(candidatesDiv);
+
+        if (turn.excluded_by_heuristic.length > 0) {
+            const excludedDiv = document.createElement('div');
+            excludedDiv.className = 'bot-reasoning-excluded';
+            const label = document.createElement('p');
+            label.textContent = 'Excluded by heuristic before search (never considered):';
+            excludedDiv.appendChild(label);
+            for (const cardId of turn.excluded_by_heuristic) {
+                const card = cardFromCatalog(cardId);
+                if (card) {
+                    excludedDiv.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+                }
+            }
+            wrapper.appendChild(excludedDiv);
+        }
+
+        return wrapper;
+    }
+
+    function cardFromCatalog(cardId) {
+        return deckBuilderCatalogById ? deckBuilderCatalogById.get(cardId) || null : null;
+    }
+
+    document.getElementById('view-bot-reasoning-button').addEventListener('click', () => openBotReasoningView(currentGameId));
+
+    document.getElementById('bot-reasoning-close-button').addEventListener('click', () => {
+        document.getElementById('bot-reasoning-dialog').close();
     });
 
     // Same WUBRG-style color wheel and print-frequency rarity order
@@ -5829,6 +6007,18 @@
         // the game has actually started and its deck has been dealt (see
         // the 'waiting' branch above, which hides this whole area).
         document.getElementById('view-shared-deck-button').hidden = !isSharedDeckType(state.game.deck_type);
+
+        // Diagnostic mode (issue reported live: "a button should be
+        // available to allow a human player to view the bot(s) hand(s),
+        // as well as ... a button to show the 'reasoning' behind every
+        // play the bot has made"). state.diagnostic_bot_hands rides along
+        // live in this same getState() poll response -- see
+        // GameService::buildGameState()'s own docblock -- non-null only
+        // for a seated human viewer once the game itself opted in, which
+        // doubles here as "diagnostic mode is on" for both buttons.
+        const diagnosticModeOn = state.diagnostic_bot_hands !== null;
+        document.getElementById('view-bot-hands-button').hidden = !diagnosticModeOn;
+        document.getElementById('view-bot-reasoning-button').hidden = !diagnosticModeOn;
 
         // round.play_grants describes whoever's turn it currently is, not
         // the viewer specifically -- showing it while it's someone else's

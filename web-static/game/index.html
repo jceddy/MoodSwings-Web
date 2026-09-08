@@ -476,6 +476,8 @@
                 <div id="recent-plays-actions">
                     <button id="view-log-button" type="button">View log</button>
                     <button id="view-shared-deck-button" type="button" hidden>View decklist</button>
+                    <button id="view-bot-hands-button" type="button" hidden>View bot hand(s)</button>
+                    <button id="view-bot-reasoning-button" type="button" hidden>View bot reasoning</button>
                 </div>
                 <details id="recent-events-details" open>
                     <summary>Recent plays</summary>
@@ -552,6 +554,7 @@
                 </select>
             </label>
             <label class="new-game-field" id="new-game-bot-goes-first-label" hidden><input type="checkbox" id="new-game-bot-goes-first"> Let the bot go first</label>
+            <label class="new-game-field" id="new-game-diagnostic-mode-label" hidden><input type="checkbox" id="new-game-diagnostic-mode"> Diagnostic mode (view the tactical bot's hand and its reasoning behind each play)</label>
 
             <label class="new-game-field">Format
                 <select id="new-game-format">
@@ -1046,6 +1049,31 @@
         <p id="shared-deck-meta"></p>
         <div id="shared-deck-cards"></div>
         <button id="shared-deck-close-button" type="button">Close</button>
+    </dialog>
+
+    <!-- Diagnostic mode (games.diagnostic_mode) -- a Tactical Bot's own
+         live hand, read straight off state.diagnostic_bot_hands (already
+         part of the ordinary getState() poll, see
+         GameService::buildGameState()'s own docblock) rather than a
+         separate request. See #view-bot-hands-button above and
+         openBotHandsView() in game.js. -->
+    <dialog id="bot-hands-dialog">
+        <h2>Bot hand(s)</h2>
+        <div id="bot-hands-sections"></div>
+        <button id="bot-hands-close-button" type="button">Close</button>
+    </dialog>
+
+    <!-- Diagnostic mode (games.diagnostic_mode) -- every Tactical Bot
+         play logged (as a 'tactical_bot_reasoning' game_events row) since
+         this viewer's own last play, fetched on demand from
+         GET /games/bot-reasoning -- see #view-bot-reasoning-button above
+         and openBotReasoningView() in game.js. -->
+    <dialog id="bot-reasoning-dialog">
+        <h2>Bot reasoning</h2>
+        <p id="bot-reasoning-meta"></p>
+        <div id="bot-reasoning-turns"></div>
+        <p id="bot-reasoning-empty" hidden>No tactical bot plays since your own last play.</p>
+        <button id="bot-reasoning-close-button" type="button">Close</button>
     </dialog>
 
     <!-- A completed Quick/Winston/Grid Draft match's full shared pool

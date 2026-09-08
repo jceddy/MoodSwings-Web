@@ -174,11 +174,11 @@ final class BotSearchIntegrationTest extends TestCase
      *
      * @return array{human: int, bot: int, gameId: int}
      */
-    private function createTacticalBotGame(): array
+    private function createTacticalBotGame(bool $diagnosticMode = false): array
     {
         $human = $this->insertUser('bs-human-' . uniqid());
         $bot = $this->insertTacticalBotUser('bs-bot-' . uniqid());
-        $gameId = $this->games->createGame($human, [$human, $bot], format: 'duel', deckType: 'structure');
+        $gameId = $this->games->createGame($human, [$human, $bot], format: 'duel', deckType: 'structure', diagnosticMode: $diagnosticMode);
         $this->games->startGame($gameId);
 
         $humanPlayerId = $this->games->gamePlayerIdFor($gameId, $human);
@@ -447,5 +447,196 @@ final class BotSearchIntegrationTest extends TestCase
         );
         $eventStmt->execute(['last_id' => $lastEventIdBefore, 'bot_id' => $botPlayerId]);
         self::assertGreaterThan(0, (int) $eventStmt->fetchColumn(), 'the bot\'s own turn must have actually been taken, not left untouched');
+    }
+
+    // -- Diagnostic mode ----------------------------------------------------
+
+    /**
+     * Reported live: "add a 'diagnostic mode' checkbox when creating a
+     * game including one or more tactical bot(s)." createGame()'s own
+     * $diagnosticMode only actually takes effect once $userIds includes
+     * at least one Tactical Bot.
+     */
+    public function testCreateGameStoresDiagnosticModeWhenATacticalBotIsSeated(): void
+    {
+        $human = $this->insertUser('diag-human1');
+        $bot = $this->insertTacticalBotUser('diag-bot1');
+
+        $gameId = $this->games->createGame($human, [$human, $bot], format: 'duel', deckType: 'structure', diagnosticMode: true);
+
+        $stmt = $this->pdo->prepare('SELECT diagnostic_mode FROM games WHERE id = :id');
+        $stmt->execute(['id' => $gameId]);
+        self::assertSame(1, (int) $stmt->fetchColumn());
+    }
+
+    /** Silently ignored (not an error), the same "harmless no-op outside its own narrow scope" convention every other creation-time opt-in here already follows. */
+    public function testCreateGameIgnoresDiagnosticModeWithoutATacticalBotSeated(): void
+    {
+        $human = $this->insertUser('diag-human2');
+        $ordinaryBot = $this->insertUser('diag-bot2'); // is_bot defaults to 0 here -- a plain human-shaped row is fine, this test never seats it as a bot
+
+        $gameId = $this->games->createGame($human, [$human, $ordinaryBot], format: 'duel', deckType: 'structure', diagnosticMode: true);
+
+        $stmt = $this->pdo->prepare('SELECT diagnostic_mode FROM games WHERE id = :id');
+        $stmt->execute(['id' => $gameId]);
+        self::assertSame(0, (int) $stmt->fetchColumn());
+    }
+
+    /**
+     * Reported live: "a button to show the 'reasoning' behind every play
+     * the bot has made... the heuristics involved, the play options
+     * considered, and the relative scoring assigned to those considered
+     * options." runTacticalBotSearchJob() logs a 'tactical_bot_reasoning'
+     * game_events row carrying exactly that, but only for a game that
+     * opted into diagnostic mode.
+     */
+    public function testRunTacticalBotSearchJobLogsReasoningWhenDiagnosticModeIsOn(): void
+    {
+        ['bot' => $bot, 'gameId' => $gameId] = $this->createTacticalBotGame(diagnosticMode: true);
+        $botPlayerId = $this->games->gamePlayerIdFor($gameId, $bot);
+
+        $jobStmt = $this->pdo->prepare('SELECT id FROM bot_search_jobs WHERE game_player_id = :id ORDER BY id DESC LIMIT 1');
+        $jobStmt->execute(['id' => $botPlayerId]);
+        $jobId = (int) $jobStmt->fetchColumn();
+
+        $this->games->runTacticalBotSearchJob($jobId);
+
+        $eventStmt = $this->pdo->prepare(
+            "SELECT details FROM game_events WHERE game_id = :game_id AND event_type = 'tactical_bot_reasoning' AND acting_game_player_id = :bot_id"
+        );
+        $eventStmt->execute(['game_id' => $gameId, 'bot_id' => $botPlayerId]);
+        $details = $eventStmt->fetchColumn();
+        self::assertNotFalse($details, 'diagnostic mode must log a reasoning event for the bot\'s own turn');
+
+        $decoded = json_decode((string) $details, true);
+        self::assertArrayHasKey('candidates', $decoded);
+        self::assertArrayHasKey('excluded_by_heuristic', $decoded);
+        self::assertNotEmpty($decoded['candidates'], 'at least one candidate (even just "pass") must always be recorded');
+        foreach ($decoded['candidates'] as $candidate) {
+            self::assertArrayHasKey('visits', $candidate);
+            self::assertArrayHasKey('average_reward', $candidate);
+        }
+    }
+
+    /** The exact same turn, but without diagnostic mode -- no reasoning event should exist at all. */
+    public function testRunTacticalBotSearchJobDoesNotLogReasoningWhenDiagnosticModeIsOff(): void
+    {
+        ['bot' => $bot, 'gameId' => $gameId] = $this->createTacticalBotGame(diagnosticMode: false);
+        $botPlayerId = $this->games->gamePlayerIdFor($gameId, $bot);
+
+        $jobStmt = $this->pdo->prepare('SELECT id FROM bot_search_jobs WHERE game_player_id = :id ORDER BY id DESC LIMIT 1');
+        $jobStmt->execute(['id' => $botPlayerId]);
+        $jobId = (int) $jobStmt->fetchColumn();
+
+        $this->games->runTacticalBotSearchJob($jobId);
+
+        $countStmt = $this->pdo->prepare("SELECT COUNT(*) FROM game_events WHERE game_id = :game_id AND event_type = 'tactical_bot_reasoning'");
+        $countStmt->execute(['game_id' => $gameId]);
+        self::assertSame(0, (int) $countStmt->fetchColumn());
+    }
+
+    /**
+     * Reported live: "a button should be available to allow a human
+     * player to view the bot(s) hand(s)." getState()'s own
+     * diagnostic_bot_hands rides along live in the ordinary poll response
+     * for a seated human, once the game has opted in.
+     */
+    public function testGetStateExposesTheBotsLiveHandWhenDiagnosticModeIsOn(): void
+    {
+        ['human' => $human, 'bot' => $bot, 'gameId' => $gameId] = $this->createTacticalBotGame(diagnosticMode: true);
+        $botPlayerId = $this->games->gamePlayerIdFor($gameId, $bot);
+
+        $state = $this->games->getState($gameId, $human);
+
+        self::assertNotNull($state['diagnostic_bot_hands']);
+        self::assertCount(1, $state['diagnostic_bot_hands']);
+        self::assertSame($botPlayerId, $state['diagnostic_bot_hands'][0]['game_player_id']);
+        self::assertSame(
+            (int) $this->pdo->query("SELECT COUNT(*) FROM game_cards WHERE zone = 'hand' AND owner_game_player_id = {$botPlayerId}")->fetchColumn(),
+            count($state['diagnostic_bot_hands'][0]['hand']),
+        );
+    }
+
+    /** The exact same game, but never opted into diagnostic mode -- null, not an empty list. */
+    public function testGetStateDoesNotExposeTheBotsHandWhenDiagnosticModeIsOff(): void
+    {
+        ['human' => $human, 'gameId' => $gameId] = $this->createTacticalBotGame(diagnosticMode: false);
+
+        $state = $this->games->getState($gameId, $human);
+
+        self::assertNull($state['diagnostic_bot_hands']);
+    }
+
+    /**
+     * Reported live: "a button to show the 'reasoning' behind every play
+     * the bot has made SINCE THE HUMAN PLAYER'S PREVIOUS PLAY." Scoped
+     * per viewer: the human's own most recent game_events row marks the
+     * boundary. Here the human passes once (their own "previous play"),
+     * the bot then takes TWO turns (two reasoning events logged), and
+     * tacticalBotReasoningSince() returns only those two, not anything
+     * logged before the human's own pass.
+     */
+    /**
+     * Exercises the boundary computation itself with directly-seeded
+     * game_events rows rather than driving two full real turns through
+     * createTacticalBotGame() -- a real turn can legitimately span
+     * several plays (see testRunTacticalBotSearchJobAppliesItsActionAndMarksTheJobDone()'s
+     * own docblock) or auto-pass with no job at all when the bot has no
+     * legal play (see advanceAutomatedTurns()'s own tactical-bot branch),
+     * neither of which this test cares about -- only that
+     * tacticalBotReasoningSince() itself correctly excludes a
+     * 'tactical_bot_reasoning' row at or before the viewer's own last
+     * event and includes one after it.
+     */
+    public function testTacticalBotReasoningSinceOnlyReturnsEntriesAfterTheViewersOwnLastPlay(): void
+    {
+        ['human' => $human, 'bot' => $bot, 'gameId' => $gameId] = $this->createTacticalBotGame(diagnosticMode: true);
+        $botPlayerId = $this->games->gamePlayerIdFor($gameId, $bot);
+        $humanPlayerId = $this->games->gamePlayerIdFor($gameId, $human);
+
+        $this->insertReasoningEvent($gameId, $botPlayerId, 'old reasoning, before the boundary');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO game_events (game_id, acting_game_player_id, event_type, details) VALUES (:game_id, :player_id, 'turn_passed', '{}')"
+        );
+        $stmt->execute(['game_id' => $gameId, 'player_id' => $humanPlayerId]);
+
+        $this->insertReasoningEvent($gameId, $botPlayerId, 'new reasoning, after the boundary');
+
+        $reasoning = $this->games->tacticalBotReasoningSince($gameId, $human);
+
+        self::assertCount(1, $reasoning, 'only the reasoning logged AFTER the human\'s own last play should come back');
+        self::assertSame($botPlayerId, $reasoning[0]['game_player_id']);
+        self::assertSame('new reasoning, after the boundary', $reasoning[0]['candidates'][0]['note']);
+    }
+
+    private function insertReasoningEvent(int $gameId, int $botPlayerId, string $note): void
+    {
+        $details = json_encode([
+            'chosen_choices' => null,
+            'excluded_by_heuristic' => [],
+            'candidates' => [['note' => $note]],
+        ]);
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO game_events (game_id, acting_game_player_id, event_type, details) VALUES (:game_id, :player_id, 'tactical_bot_reasoning', :details)"
+        );
+        $stmt->execute(['game_id' => $gameId, 'player_id' => $botPlayerId, 'details' => $details]);
+    }
+
+    public function testTacticalBotReasoningSinceThrowsForANonDiagnosticGame(): void
+    {
+        ['human' => $human, 'gameId' => $gameId] = $this->createTacticalBotGame(diagnosticMode: false);
+
+        $this->expectException(\MoodSwings\Game\Exceptions\GameStateException::class);
+        $this->games->tacticalBotReasoningSince($gameId, $human);
+    }
+
+    public function testTacticalBotReasoningSinceThrowsForAnUnseatedUser(): void
+    {
+        ['gameId' => $gameId] = $this->createTacticalBotGame(diagnosticMode: true);
+        $outsider = $this->insertUser('diag-outsider');
+
+        $this->expectException(\MoodSwings\Game\Exceptions\GameStateException::class);
+        $this->games->tacticalBotReasoningSince($gameId, $outsider);
     }
 }
