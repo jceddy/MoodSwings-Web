@@ -90,6 +90,7 @@ final class ReplayStateBuilderTest extends TestCase
                 new FriendshipService(new UserRepository(), new FriendshipRepository()),
             ),
             $this->replay,
+            spawnAutomatedTurnRecheckProcesses: false,
         );
     }
 

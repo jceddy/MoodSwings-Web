@@ -90,6 +90,7 @@ final class BotGameplayIntegrationTest extends TestCase
             new RoundScorer(),
             $userDecklists,
             new ReplayStateBuilder($registry),
+            spawnAutomatedTurnRecheckProcesses: false,
         );
     }
 
@@ -635,6 +636,55 @@ final class BotGameplayIntegrationTest extends TestCase
         // Its one play spent, the turn should now be back with the human.
         $round = $this->fetchRound($gameId);
         self::assertSame($p1, (int) $round['current_turn_game_player_id']);
+    }
+
+    /**
+     * scheduleAutomatedTurnRecheck()'s own MAX_AUTOMATED_TURN_RECHECK_CHAIN_DEPTH
+     * ceiling (reported live: "is there a way to implement this without
+     * requiring a cron job? can whatever is in the CRON script just run
+     * when the bot gets to the end of its turn?" -- advanceAutomatedTurns()
+     * now schedules a detached bin/recheck_automated_turn.php follow-up
+     * of itself whenever it drives something, see that method's own
+     * docblock) -- a real spawn would call exec() and fork a genuine OS
+     * process, which this test (like every other one in this file) must
+     * never do, so $recheckChainDepth is passed already AT the ceiling
+     * here specifically to prove the ceiling's own early-return (logging
+     * and skipping the exec() call entirely) doesn't otherwise change
+     * advanceAutomatedTurns()'s own ordinary return value/game-state
+     * effect -- a caller passing an already-maxed-out depth (only ever
+     * bin/recheck_automated_turn.php itself, in the pathological case
+     * this ceiling exists to guard against) still gets the bot's own
+     * move applied correctly, it just doesn't schedule yet another link.
+     */
+    public function testAdvanceAutomatedTurnsStillWorksNormallyAtTheRecheckChainDepthCeiling(): void
+    {
+        $u1 = $this->insertUser('depth-ceiling-human1');
+        $botUserId = $this->insertBotUser('depth-ceiling-bot1');
+        $gameId = $this->insertGame('standard', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+
+        $this->insertGameCard($gameId, 55, 'hand', $botPlayerId); // Apathy, value 4
+        $this->insertGameCard($gameId, 8, 'hand', $p1);
+        $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
+
+        // Deliberately NOT $this->games (spawnAutomatedTurnRecheckProcesses:
+        // false there) -- this one leaves it at its real default (true) to
+        // prove the ceiling itself, not just the disabled-spawn flag, is
+        // what prevents a real exec() call at/above the max depth.
+        $registry = DefaultEffectRegistry::build();
+        $games = new GameService(
+            new BoardStateRepository($registry),
+            new MoodPlayService($registry),
+            new RoundScorer(),
+            new UserDecklistService(new UserDecklistRepository(), new FriendshipService(new UserRepository(), new FriendshipRepository())),
+            new ReplayStateBuilder($registry),
+        );
+
+        $result = $games->advanceAutomatedTurns($gameId, recheckChainDepth: 30);
+
+        self::assertNotNull($result);
+        self::assertTrue($this->cardIsInPlay($gameId, 55));
     }
 
     /**

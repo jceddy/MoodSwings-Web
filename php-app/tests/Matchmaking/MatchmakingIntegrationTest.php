@@ -90,6 +90,7 @@ final class MatchmakingIntegrationTest extends TestCase
             new RoundScorer(),
             $userDecklists,
             new ReplayStateBuilder($registry),
+            spawnAutomatedTurnRecheckProcesses: false,
         );
 
         $this->users = new UserRepository();

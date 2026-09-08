@@ -7819,6 +7819,87 @@ Fixed the same way: `run_bot_search.php` now wires up a real
 `NotificationService` the same way `advance_automated_turns.php` (and
 `public/index.php`) do.
 
+**Self-triggering instead of cron, follow-up reported live: "is there a
+way to implement this without requiring a cron job? can whatever is in
+the CRON script just run when the bot gets to the end of its turn?"**
+`bin/advance_automated_turns.php`'s own periodic sweep works, but it
+needs an actual crontab entry configured on the server -- something
+outside the application's own reach, and a real (if small) ongoing ops
+dependency. `GameService::scheduleAutomatedTurnRecheck(int $gameId, int
+$recheckChainDepth): void` replaces that external scheduler with a
+self-perpetuating chain the application drives entirely on its own: it
+spawns ONE detached `bin/recheck_automated_turn.php <game_id> <depth>`
+process -- the exact same `exec(...) &` fire-and-forget pattern
+`launchTacticalBotSearchJob()` already uses for the Tactical Bot's own
+search -- that sleeps `AUTOMATED_TURN_RECHECK_DELAY_SECONDS` (2) and then
+calls `advanceAutomatedTurns($gameId, $recheckChainDepth + 1)` again on a
+fresh process/connection. `advanceAutomatedTurns()` itself calls
+`scheduleAutomatedTurnRecheck()` unconditionally, right before returning,
+whenever it actually drove anything (`$lastResult !== null`) -- which
+means the recheck it just spawned will, on ITS OWN eventual call, only
+schedule ANOTHER link the same way if IT ALSO found something to drive.
+The chain therefore needs no bookkeeping of its own to know when to
+stop: it self-terminates the instant the game reaches a real player's
+own turn (nothing left to advance) or completes, exactly mirroring how
+the in-process loop inside `advanceAutomatedTurns()` already stops
+itself -- just spread across however many separate detached processes it
+took to get there instead of one single request's own loop.
+
+Scheduled unconditionally whenever anything was driven, not just when
+the triggering caller "might not keep polling" -- there's no reliable
+way to tell that from inside `advanceAutomatedTurns()` itself. The
+common case where a browser IS still actively polling this exact game
+just means the scheduled recheck's own eventual `advanceAutomatedTurns()`
+call finds nothing new (the poll already got there first) and quietly
+doesn't reschedule itself -- a harmless, cheap no-op, the same "cheap
+even when nothing's actually stuck" reasoning `GET /games/state`'s own
+unconditional call already relies on. Multiple overlapping chains for
+the same game (a human's own request and an in-flight recheck landing
+around the same time, say) are similarly harmless: every actual mutation
+still goes through `playMood()`/`pass()`/etc., each independently
+serialized by its own per-game `withGameLock()` cycle, so redundant
+concurrent chains just do repeated no-op work rather than racing unsafely.
+
+`$recheckChainDepth` (an optional second param on `advanceAutomatedTurns()`,
+left at its default `0` by every ordinary caller -- an HTTP route, the
+cron sweep -- and only ever incremented by `bin/recheck_automated_turn.php`'s
+own re-invocation) exists purely as a hard ceiling
+(`MAX_AUTOMATED_TURN_RECHECK_CHAIN_DEPTH`, 30 links, about 2.5 minutes at
+the 2-second delay) against a hypothetical future engine bug where
+`advanceAutomatedTurns()` keeps reporting genuine progress forever
+without the game ever actually settling -- without it, such a bug would
+spawn a new detached OS process roughly every 2 seconds forever, rather
+than giving up after a generous-but-bounded window the same
+`MAX_AUTOMATED_ACTIONS_PER_REQUEST` reasoning already established for
+the in-process loop. `AUTOMATED_TURN_RECHECK_DELAY_SECONDS` is `public`
+(unlike almost every other constant on this class) specifically so
+`bin/recheck_automated_turn.php` -- a genuinely separate PHP process with
+no `GameService` instance of its own to call through -- has one real
+source of truth to sleep by, rather than a second hardcoded literal that
+could silently drift out of sync.
+
+`$spawnAutomatedTurnRecheckProcesses` (constructor param, default
+`true`) mirrors `$spawnBotSearchProcesses` exactly, as its own
+independent flag rather than reusing that one -- a test exercising one
+background-spawning feature has no reason to also silence the other.
+Every integration test constructing its own `GameService` now passes
+`spawnAutomatedTurnRecheckProcesses: false` for the same reason
+`BotSearchIntegrationTest` already passes `spawnBotSearchProcesses:
+false`: a real spawned subprocess would inherit that test's own
+environment (including its test-DB connection details) and race its
+foreground assertions against the same rows a moment later, exactly the
+nondeterminism `spawnBotSearchProcesses` was invented to prevent for the
+Tactical Bot. Tests instead call `advanceAutomatedTurns()` directly
+whenever they want to exercise its effect, the same way they already do
+for the Tactical Bot's own `runTacticalBotSearchJob()`.
+
+`bin/advance_automated_turns.php`'s own cron sweep is no longer required
+for any of this to work, but is left in place as an optional extra
+safety net for anyone who wants one regardless (e.g. as a backstop
+against `exec()` being unexpectedly disabled or failing silently on a
+given host, which would otherwise quietly break every chain at its very
+first link with nothing else left to notice).
+
 ### Tactical Bot (issue #419)
 
 A second, opt-in bot tier that actually searches for a good play on its
