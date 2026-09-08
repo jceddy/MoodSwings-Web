@@ -1012,6 +1012,15 @@ final class BotPlayerService
         if ($effectKey === 'harmony' && $state->discardPile() === []) {
             return false;
         }
+        // Reported live: "bots shouldn't play Thrill as an opener." Its
+        // own "if you do" clause (put any number of other moods already
+        // IN PLAY into hand, granting one extra play per mood returned)
+        // can only ever trigger once the bot already has another mood of
+        // its own on the board -- playing it first, with nothing else in
+        // play yet, is just a 1-value mythic with no effect that turn.
+        if ($effectKey === 'thrill' && $state->moodsOwnedBy($botGamePlayerId) === []) {
+            return false;
+        }
         if ($effectKey === 'grief' && $state->discardPile() === []) {
             return false;
         }
@@ -1055,8 +1064,8 @@ final class BotPlayerService
      * player. Every extra-play grant here is listed regardless of
      * whether it's unconditional (Charity, Duplicity, Idealism,
      * Validation, Ambition, Bravado, Fear, Nostalgia, Gluttony,
-     * Insecurity, Angst, Harmony, Grief, Thrill, Joy) or conditional on
-     * the NEXT play meeting some restriction (Benevolence, Eagerness,
+     * Insecurity, Angst, Harmony, Grief, Joy) or conditional on the NEXT
+     * play meeting some restriction (Benevolence, Eagerness,
      * Friendliness, Kindness, Pride, Intimidation's own restriction to
      * the one card just taken) or an ongoing while-in-play grant instead
      * of a one-time one (Hope, Grace, Stubbornness) -- "legal, not
@@ -1064,6 +1073,11 @@ final class BotPlayerService
      * will actually be used. Generosity deliberately excluded: it grants
      * its own extra play to a chosen OPPONENT, not the acting player, so
      * leading with it would help whoever's targeted, not the bot itself.
+     * Thrill is the one exception actually vetoed above
+     * (hasGoodReasonToPlayNow()) rather than just left to this blanket
+     * boost -- unlike Fear/Ambition, Thrill's own "if you do" grant needs
+     * another of the bot's own moods ALREADY in play to put back, so it's
+     * dead on an opening play with nothing else on the board yet.
      *
      * @var string[]
      */

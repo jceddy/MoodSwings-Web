@@ -7130,6 +7130,25 @@ since it already holds that dependency):
   is holding). The instant either kind of synergy card sits in hand, Fear
   reverts to its ordinary `EARLY_PRIORITY_EFFECT_KEYS` boosted treatment.
 
+  **Thrill** (reported live: "bots shouldn't play Thrill as an opener")
+  gets the same `hasGoodReasonToPlayNow()` veto treatment as Harmony/
+  Grief/Nostalgia above, via `$state->moodsOwnedBy($botGamePlayerId) === []`.
+  Unlike Fear, Thrill's own extra-play grant IS conditional --
+  `ThrillEffect`'s "you may put any number of your OTHER moods [already
+  in play] into your hand; if you do, you may play that many additional
+  moods this turn" can only ever return moods the bot already has ON THE
+  BOARD, so playing Thrill first, with nothing else of the bot's own in
+  play yet, is just a 1-value mythic with no effect that turn -- the same
+  "opener" complaint the maintainer raised about Fear, but for a
+  genuinely dead ability rather than a merely-worse-odds one. The instant
+  the bot has even one other mood in play, Thrill reverts to its ordinary
+  `EARLY_PRIORITY_EFFECT_KEYS` boosted treatment (it's already listed
+  there). Ambition/Bravado pay a superficially similar "if you do" cost
+  (a hand card / a mood in play, respectively) for the same shape of
+  grant, but are left alone here: Ambition's cost is a hand card, which a
+  bot with anything left to play always has, and Bravado's own identical
+  "needs a mood already in play" gap wasn't part of what was reported.
+
   **Anger** (confirmed by the maintainer) gets its own targeting
   exception too, via `angerTargetMoodIds()` -- `buildChoicesForCard()`
   special-cases `effectKey === 'anger'` the same way it does

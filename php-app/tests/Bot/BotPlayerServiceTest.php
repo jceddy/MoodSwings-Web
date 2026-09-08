@@ -1440,6 +1440,53 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame([], $action['choices']);
     }
 
+    // -- Thrill (reported live: "bots shouldn't play Thrill as an opener") --
+
+    /**
+     * Thrill (id 103, value 1) can only put its own moods ALREADY IN PLAY
+     * back into hand -- with nothing else of the bot's own on the board
+     * yet, its "if you do" extra-play grant can never trigger, so it's
+     * deprioritized behind Apathy (id 55, value 4, plain filler) rather
+     * than getting EARLY_PRIORITY_EFFECT_KEYS' own boost.
+     */
+    public function testChooseActionDeprioritizesThrillAsAnOpener(): void
+    {
+        $state = $this->boardState(hands: [1 => [103, 55]]);
+
+        $action = $this->bot->chooseAction($state, [103, 55], 1);
+
+        self::assertSame(55, $action['card_id']);
+    }
+
+    /**
+     * With another of the bot's own moods (Dignity, id 8) already in play
+     * to put back, Thrill's grant is live again -- it reverts to its
+     * ordinary EARLY_PRIORITY_EFFECT_KEYS boosted treatment (1 + 10 = 11),
+     * outranking Apathy's plain 4.
+     */
+    public function testChooseActionPrioritizesThrillWithAnotherMoodAlreadyInPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [103, 55, 8]]);
+        $state->moveHandToInPlay(1, 8);
+
+        $action = $this->bot->chooseAction($state, [103, 55], 1);
+
+        self::assertSame(103, $action['card_id']);
+    }
+
+    /**
+     * With nothing else playable, Thrill is still played -- deprioritized
+     * WHEN, never skipped outright.
+     */
+    public function testChooseActionStillPlaysThrillWhenNothingElseIsPlayable(): void
+    {
+        $state = $this->boardState(hands: [1 => [103]]);
+
+        $action = $this->bot->chooseAction($state, [103], 1);
+
+        self::assertSame(103, $action['card_id']);
+    }
+
     // -- Denial (confirmed by the maintainer) -------------------------------
 
     /**
