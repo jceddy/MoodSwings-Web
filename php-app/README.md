@@ -7097,16 +7097,34 @@ since it already holds that dependency):
   "put any number of moods with total value 5 or less into the discard
   pile" ability. Two independent policies, always additive rather than a
   trade-off against each other:
-  - `angerSwingMaximizingTargets()` -- the highest-total-value subset of
-    every non-teammate opponent's own in-play moods (the acting player's
-    own moods, and any teammate's, are deliberately excluded, the same
-    "an opponent means neither" policy Intimidation/Paranoia/Pacifism
-    above already apply -- discarding either could only ever REDUCE the
-    swing) that still fits Anger's own 5-point combined-value ceiling,
-    found via `maxValueSubsetWithinBudget()`, a small 0/1 knapsack (value
-    doubling as weight) rather than a naive "take the single
-    highest-value mood" greedy pick, which can leave value on the table
-    -- two moods worth 3 and 2 together outweigh one worth 4 alone.
+  - `angerSwingMaximizingTargets()` -- every non-teammate opponent's own
+    in-play mood is a candidate (the acting player's own moods, and any
+    teammate's, are deliberately excluded, the same "an opponent means
+    neither" policy Intimidation/Paranoia/Pacifism above already apply --
+    discarding either could only ever REDUCE the swing), split into two
+    groups (reported live: "by default when a bot plays Anger, it should
+    target as many opponent cards as possible, or at least consider that
+    option first - for example, it is almost always the right play to
+    target an opponent's Hope when playing Anger, and as a 0 point card,
+    hope can *always* be targeted"):
+    - Every ZERO-value candidate (e.g. Hope) is targeted outright,
+      unconditionally -- it costs nothing against Anger's own 5-point
+      combined-value ceiling, so there's never a budget trade-off to
+      weigh, and it still denies the opponent whatever non-scoring
+      ability made the mood worth playing. A NEGATIVE-value candidate (a
+      dynamic value can dip below 0, e.g. a Chaos Draft custom effect) is
+      the opposite case -- it's already hurting its own owner, so
+      discarding it would only help them -- and is excluded entirely,
+      same as before this fix.
+    - Every remaining STRICTLY-POSITIVE-value candidate competes for
+      the highest-total-value subset that still fits that same ceiling,
+      found via `maxValueSubsetWithinBudget()`, a small 0/1 knapsack
+      (value doubling as weight) rather than a naive "take the single
+      highest-value mood" greedy pick, which can leave value on the
+      table -- two moods worth 3 and 2 together outweigh one worth 4
+      alone.
+    The zero-value targets are always additive on top of the
+    knapsack's own result, never counted against its budget.
   - `angerShouldAlsoTargetItself()` -- Anger's own just-played card id is
     ALSO targeted (on top of, never instead of, the swing-maximizing
     targets above) whenever `BoardState::hasSeparateDecks()` (a 'duel'

@@ -95,11 +95,14 @@ use MoodSwings\Rules\RoundScorer;
  * whenever the discard pile is completely empty -- its own extra-play
  * grant is restricted to a card FROM the discard pile, so with nothing
  * there to take advantage of, playing it accomplishes nothing; and
- * angerTargetMoodIds() (confirmed by the maintainer), which targets the
- * highest-total-value subset of non-teammate opponents' own in-play
- * moods that still fits Anger's own 5-point combined-value ceiling
- * (angerSwingMaximizingTargets()/maxValueSubsetWithinBudget()), PLUS
- * Anger's own just-played card id whenever the bot's own deck has more
+ * angerTargetMoodIds() (confirmed by the maintainer), which targets
+ * EVERY zero-value non-teammate opponent mood outright (e.g. Hope --
+ * reported live: "as a 0 point card, hope can *always* be targeted",
+ * since it costs nothing against Anger's own 5-point combined-value
+ * ceiling) PLUS the highest-total-value subset of the REMAINING
+ * (strictly positive-value) non-teammate opponent moods that still fits
+ * that same ceiling (angerSwingMaximizingTargets()/maxValueSubsetWithinBudget()),
+ * PLUS Anger's own just-played card id whenever the bot's own deck has more
  * discard-recursion capacity than every active non-teammate opponent's
  * own deck AND none of them currently has Grace in play
  * (angerShouldAlsoTargetItself()/recursionCardCount()) -- since Anger's
@@ -3692,9 +3695,22 @@ final class BotPlayerService
      * in-play mood is a candidate (the acting player's own moods, and any
      * teammate's, are deliberately excluded -- discarding either would
      * only ever REDUCE the swing, the same "an opponent means neither"
-     * policy pacifismTargetMoodIds() already applies), scored by
-     * maxValueSubsetWithinBudget() to find the highest-total-value subset
-     * that still fits Anger's own 5-point combined-value ceiling.
+     * policy pacifismTargetMoodIds() already applies).
+     *
+     * A ZERO-value opponent mood (e.g. Hope) is always included outright
+     * (reported live: "as a 0 point card, hope can *always* be
+     * targeted") -- it costs nothing against Anger's own 5-point combined
+     * value ceiling (AngerEffect::MAX_TOTAL_VALUE), so there's never a
+     * budget trade-off to weigh, and discarding it still denies the
+     * opponent whatever non-scoring ability made it worth playing in the
+     * first place. A NEGATIVE-value candidate (a dynamic value can dip
+     * below 0, e.g. a Chaos Draft custom effect) is the opposite case --
+     * it's already actively hurting its own owner, so discarding it would
+     * only help them -- and stays excluded entirely, same as before.
+     * Every strictly-positive-value candidate still competes for the
+     * budget via maxValueSubsetWithinBudget(), maximizing total value
+     * discarded among them; zero-value targets are additive on top of
+     * that result, never counted against it.
      *
      * Each candidate's value is computed via
      * BoardState::valueOfAsIfAlsoInPlay() rather than plain valueOf() --
@@ -3712,16 +3728,22 @@ final class BotPlayerService
      */
     private function angerSwingMaximizingTargets(BoardState $state, int $cardId, int $botGamePlayerId): array
     {
-        $opponentMoodValues = [];
+        $freeTargets = [];
+        $paidOpponentMoodValues = [];
         foreach ($state->moodsInPlay() as $mood) {
             if ($mood->ownerId === $botGamePlayerId || $state->isTeammate($botGamePlayerId, $mood->ownerId)) {
                 continue;
             }
 
-            $opponentMoodValues[$mood->cardId] = $state->valueOfAsIfAlsoInPlay($mood->cardId, $cardId, $botGamePlayerId);
+            $value = $state->valueOfAsIfAlsoInPlay($mood->cardId, $cardId, $botGamePlayerId);
+            if ($value === 0) {
+                $freeTargets[] = $mood->cardId;
+            } else {
+                $paidOpponentMoodValues[$mood->cardId] = $value;
+            }
         }
 
-        return $this->maxValueSubsetWithinBudget($opponentMoodValues, self::ANGER_DISCARD_BUDGET);
+        return [...$freeTargets, ...$this->maxValueSubsetWithinBudget($paidOpponentMoodValues, self::ANGER_DISCARD_BUDGET)];
     }
 
     /**

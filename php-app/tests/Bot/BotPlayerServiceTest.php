@@ -2126,6 +2126,31 @@ final class BotPlayerServiceTest extends TestCase
     }
 
     /**
+     * Reported live: "by default when a bot plays Anger, it should target
+     * as many opponent cards as possible, or at least consider that
+     * option first - for example, it is almost always the right play to
+     * target an opponent's Hope when playing Anger, and as a 0 point
+     * card, hope can *always* be targeted." Player 2 has Hope (id 124,
+     * value 0) and Apathy (id 55, value 4) in play -- before this fix,
+     * angerSwingMaximizingTargets()'s own knapsack skipped Hope outright
+     * (a 0-value candidate can never improve a "maximize total value"
+     * search), so only Apathy would be targeted; now Hope is always
+     * included on top of it, since a free target never competes against
+     * Anger's own 5-point combined-value budget.
+     */
+    public function testChooseActionAlwaysTargetsAZeroValueOpponentMoodWithAnger(): void
+    {
+        $state = $this->boardState(hands: [1 => [80], 2 => [124, 55]]);
+        $state->moveHandToInPlay(2, 124); // Hope, value 0
+        $state->moveHandToInPlay(2, 55); // Apathy, value 4
+
+        $action = $this->bot->chooseAction($state, [80], 1);
+
+        self::assertSame(80, $action['card_id']);
+        self::assertEqualsCanonicalizing([124, 55], $action['choices']['target_mood_ids']);
+    }
+
+    /**
      * Regression test (confirmed by the maintainer): SuperiorityEffect's
      * own "7 if you have more moods than each other player" value depends
      * on a mood-count comparison that playing Anger itself can tip. Here
