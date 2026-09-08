@@ -877,6 +877,46 @@ final class BotGameplayIntegrationTest extends TestCase
         self::assertTrue($this->cardIsInHand($gameId, 8, ownerUserId: $u1));
     }
 
+    /**
+     * Reported live: "when bots choose cards to give up for hand
+     * disruption moods, they should give them up the worst card they
+     * have, using the same metrics they use to evaluate cards for
+     * drafting order." Confusion (id 31, base value 4, but only a
+     * mediocre draft_priority_score) and Intimidation (id 67, base value
+     * 1, but a top-tier draft_priority_score, per migration 0143) give
+     * opposite answers depending on which metric is used -- the OLD
+     * baseValue-only policy would give up the far stronger Intimidation
+     * for saving a single point, purely because its printed value
+     * happens to be lower. Confirms the fix end to end, through the real
+     * pending-decision/advanceAutomatedTurns() plumbing, not just
+     * BotChoiceResolver in isolation.
+     */
+    public function testBotGivesUpItsWorstCardByDraftPriorityNotJustLowestValue(): void
+    {
+        $u1 = $this->insertUser('human-worst-card');
+        $botUserId = $this->insertBotUser('bot-worst-card');
+        $gameId = $this->insertGame('standard', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+
+        $compulsionId = $this->insertGameCard($gameId, 86, 'hand', $p1);
+        $this->insertGameCard($gameId, 31, 'hand', $botPlayerId); // Confusion
+        $this->insertGameCard($gameId, 67, 'hand', $botPlayerId); // Intimidation
+        // 2 plays remaining for the human's own turn -- Compulsion is only
+        // the first of them, so the round doesn't hand the turn onward to
+        // the bot (and thus play its own remaining hand card) within this
+        // same advanceAutomatedTurns() call, which would otherwise move
+        // Intimidation out of the bot's hand for an unrelated reason and
+        // make this assertion moot.
+        $this->insertGameRound($gameId, 1, $p1, $p1, 2);
+
+        $this->games->playMood($gameId, $p1, $compulsionId, ['target_player_id' => $botPlayerId]);
+        $this->games->advanceAutomatedTurns($gameId);
+
+        self::assertTrue($this->cardIsInHand($gameId, 67, ownerUserId: $botUserId), 'Intimidation is the stronger draft pick -- the bot must keep it');
+        self::assertTrue($this->cardIsInHand($gameId, 31, ownerUserId: $u1), 'Confusion is the worse card by draft priority -- it should be the one given up');
+    }
+
     // -- advanceAutomatedTurnsForAllActiveGames() --------------------------
 
     /**

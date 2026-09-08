@@ -370,7 +370,7 @@ final class BoardStateRepository
         );
     }
 
-    /** @return array{color:string,rarity:string,baseValue:int,altValue:?int,effectKey:string,hasToPlay:bool,hasWhileInPlay:bool,hasAfterPlaying:bool,rulesText:string} */
+    /** @return array{color:string,rarity:string,baseValue:int,altValue:?int,effectKey:string,hasToPlay:bool,hasWhileInPlay:bool,hasAfterPlaying:bool,rulesText:string,draftPriorityScore:int} */
     private function mapCatalogRow(array $row): array
     {
         return [
@@ -383,6 +383,13 @@ final class BoardStateRepository
             'hasWhileInPlay' => (bool) $row['has_while_in_play_ability'],
             'hasAfterPlaying' => (bool) $row['has_after_playing_ability'],
             'rulesText' => $row['rules_text'],
+            // Migration 0143 -- the same curated draft-worthiness ranking
+            // CardCatalog::load() already exposes for draft picking (see
+            // BotPlayerService::draftCardScore()), now also available
+            // mid-game via BoardState::catalogRow() for BotChoiceResolver's
+            // own "which of my own cards is worst" policy (see
+            // resolveOwnResourceField()'s own docblock).
+            'draftPriorityScore' => (int) $row['draft_priority_score'],
         ];
     }
 

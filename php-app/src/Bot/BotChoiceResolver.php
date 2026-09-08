@@ -284,9 +284,18 @@ final class BotChoiceResolver
     /**
      * A required 'hand_card'/'discard_card' field is always implicitly
      * "one of your own" (guile's/bliss's discard cost are the only
-     * required examples today) -- so this always prefers the LOWEST-value
+     * required examples today) -- so this always prefers the WORST
      * candidates, the same "minimize the cost" policy resolveMoodField()
-     * applies for scope 'own'.
+     * applies for scope 'own'. "Worst" for a hand/discard-pile card
+     * (reported live: "when bots choose cards to give up for hand
+     * disruption moods, they should give them up the worst card they
+     * have, using the same metrics they use to evaluate cards for
+     * drafting order") means the lowest cards.draft_priority_score --
+     * see ownResourceCandidateValue()'s own docblock -- covering
+     * Confusion/Compulsion/Suspicion/Intimidation's own pending
+     * hand_card decisions (and every chaos-effect analog) alongside the
+     * pre-existing Guile/Bliss/Ambition/Zeal/Dignity-family discard
+     * costs this same shared path already handled.
      *
      * @param int[] $candidateCardIds
      * @return int|int[]|null
@@ -309,9 +318,34 @@ final class BotChoiceResolver
             $field,
             fn (int $cardId) => $cardId === $ownCardId
                 ? $state->catalogRow($state->effectiveCardId($cardId))['baseValue']
-                : ($state->isInPlay($cardId) ? $state->valueOf($cardId) : $state->catalogRow($state->effectiveCardId($cardId))['baseValue']),
+                : ($state->isInPlay($cardId) ? $state->valueOf($cardId) : $this->ownResourceCandidateValue($state, $cardId)),
             $lowestFirst,
         );
+    }
+
+    /**
+     * A hand/discard-pile card is never "in play" (pickCandidates()'s
+     * own isInPlay() branch only ever reaches this for exactly those two
+     * field types -- a 'mood' field's own candidates are always
+     * currently in play, so they never take this path), so this is
+     * always the actual "which of my own cards is worst" metric: the
+     * same cards.draft_priority_score BotPlayerService::draftCardScore()
+     * uses to rank draft picks (higher = better), scaled up so it always
+     * dominates baseValue -- draft_priority_score is a deliberately
+     * coarse 1-40 tier (most cards default to 1), so baseValue only ever
+     * breaks a tie between two cards the curated ranking treats as
+     * equally replaceable, rather than overriding it. The fuller
+     * draftCardScore() itself (synergy-partner/deck-win-rate bonuses) is
+     * deliberately NOT reused here -- both need draft-session-specific
+     * data (already-drafted picks, aggregate deck stats) this BoardState-
+     * scoped policy has no access to and no natural mid-game meaning
+     * for.
+     */
+    private function ownResourceCandidateValue(BoardState $state, int $cardId): int
+    {
+        $catalogRow = $state->catalogRow($state->effectiveCardId($cardId));
+
+        return $catalogRow['draftPriorityScore'] * 1000 + $catalogRow['baseValue'];
     }
 
     /**

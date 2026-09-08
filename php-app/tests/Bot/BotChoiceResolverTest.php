@@ -108,12 +108,39 @@ final class BotChoiceResolverTest extends TestCase
         self::assertNull($this->resolver->resolve($state, $field, 1, 0, 'regret'));
     }
 
-    public function testHandCardFieldPicksTheLowestValueCandidate(): void
+    /**
+     * Dignity and Apathy both default to the same draft_priority_score
+     * (1, migration 0143's own default for most cards -- neither is
+     * overridden in CatalogFixture), so this falls through to the
+     * baseValue tiebreak: Dignity (3) over Apathy (4).
+     */
+    public function testHandCardFieldPicksTheLowestValueCandidateWhenDraftPriorityScoresTie(): void
     {
         $state = $this->boardState(hands: [1 => [8, 55]]); // Dignity 3, Apathy 4, both still in hand
         $field = ['key' => 'discard_card_id', 'type' => 'hand_card', 'required' => true];
 
         self::assertSame(8, $this->resolver->resolve($state, $field, 1, 0, 'bliss'));
+    }
+
+    /**
+     * Reported live: "when bots choose cards to give up for hand
+     * disruption moods, they should give them up the worst card they
+     * have, using the same metrics they use to evaluate cards for
+     * drafting order." Confusion (base value 4, but a mediocre
+     * draft_priority_score of 1) and Intimidation (base value 1, but a
+     * top-tier draft_priority_score of 40, per migration 0143) disagree
+     * with each other on which is "worse" -- the OLD baseValue-only
+     * policy would give up the far stronger Intimidation for a measly 1
+     * point saved, purely because its printed value happens to be lower.
+     * The bot must give up Confusion instead, matching the same curated
+     * ranking drafting itself already trusts.
+     */
+    public function testHandCardFieldPrefersDraftPriorityScoreOverBaseValue(): void
+    {
+        $state = $this->boardState(hands: [1 => [31, 67]]); // Confusion (base 4, score 1), Intimidation (base 1, score 40)
+        $field = ['key' => 'given_card_id', 'type' => 'hand_card', 'required' => true];
+
+        self::assertSame(31, $this->resolver->resolve($state, $field, 1, 0, 'confusion'));
     }
 
     public function testPlayerFieldPicksTheFirstLegalCandidateRespectingScopeOther(): void

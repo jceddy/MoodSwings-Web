@@ -6283,10 +6283,17 @@ support entirely -- unlike every deck_type above, drafting needs each
 player to make a genuine SEQUENCE of their own decisions (which card(s)
 to keep/take/pick, then how to trim the result into a deck), not
 something a human creator can just supply once up front the way
-`custom_duel`'s own bot decklist works. Two new pieces make this work,
-kept deliberately separate from `BotChoiceResolver`'s own
-`BoardState`-driven policy immediately below, since drafting happens
-entirely BEFORE any `BoardState`/round exists for a game:
+`custom_duel`'s own bot decklist works. Two new pieces make this work.
+The full `draftCardScore()` (synergy-partner/deck-win-rate bonuses,
+below) stays draft-only, since both need draft-session-specific data
+(already-drafted picks, aggregate deck stats) `BotChoiceResolver`'s own
+`BoardState`-driven policy has no access to and no natural mid-game
+meaning for -- but the underlying `draft_priority_score` itself is
+NOT draft-only (reported live: "when bots choose cards to give up for
+hand disruption moods, they should give them up the worst card they
+have, using the same metrics they use to evaluate cards for drafting
+order") -- see "Giving up your own hand card" below for where it's
+also consulted mid-game:
 
 - **Data.** `cards.draft_priority_score` (migration `0143`) is an
   externally-curated general draft-strength ranking across all 133
@@ -6542,12 +6549,15 @@ per-card special case:
 - A required `'value'` field takes its own minimum -- always in range by
   construction, and no required `'value'` field today has any
   board-state constraint narrower than min/max to respect.
-- A required `'mood'`/`'player'` field with `scope: 'own'` (or a
-  `'hand_card'`/`'discard_card'` field, always implicitly "your own" --
-  Guile's/Bliss's own required discard costs are the only examples
-  today) picks the *lowest*-value legal candidate(s) -- `count.min`
-  many, or 1 for a non-`multi` field -- minimizing whatever's being
-  given up as a cost or a voluntary sacrifice.
+- A required `'mood'`/`'player'` field with `scope: 'own'` picks the
+  *lowest*-value legal candidate(s) -- `count.min` many, or 1 for a
+  non-`multi` field -- minimizing whatever's being given up as a cost
+  or a voluntary sacrifice. A `'hand_card'`/`'discard_card'` field
+  (always implicitly "your own" -- Guile's/Bliss's own required discard
+  costs, and Confusion's/Compulsion's/Suspicion's/Intimidation's own
+  pending `hand_card` decisions, see "Giving up your own hand card"
+  below) picks the *worst* legal candidate(s) by the SAME metric,
+  instead -- `cards.draft_priority_score`, not printed value.
 - A required `'mood'`/`'player'` field with `scope: 'other'`/`'any'`
   picks the *highest*-value legal candidate(s) for `'mood'` (a mildly
   "better than nothing" choice of target, no real strategy behind it),
@@ -6560,6 +6570,42 @@ per-card special case:
   exists in the schema today, `'grant_choice'` is documented as never
   actually required even when offered) resolves to `null`, since nothing
   in the schema currently needs a bot to fill one in.
+
+**Giving up your own hand card** (reported live: "when bots choose
+cards to give up for hand disruption moods, they should give them up
+the worst card they have, using the same metrics they use to evaluate
+cards for drafting order") -- `resolveOwnResourceField()`'s own value
+function (`ownResourceCandidateValue()`) used to rank a `'hand_card'`/
+`'discard_card'` candidate by nothing but its plain `baseValue`, so a
+low-printed-value-but-genuinely-strong card (Intimidation, printed
+value 1 but a top-tier `draft_priority_score` of 40) could get handed
+away for a single point saved over a much weaker one. It now ranks by
+`cards.draft_priority_score` first (the SAME curated ranking
+`draftCardScore()` already uses for drafting -- see "Practice bots in
+draft formats" above), falling back to `baseValue` only to break a tie
+between two cards the curated ranking treats as equally replaceable
+(most cards default to a `draft_priority_score` of 1, so most
+same-tier match-ups still resolve exactly the way they always did).
+This single shared method covers every "give up one of your own hand
+cards" decision in the game at once: Confusion's/Compulsion's/
+Suspicion's/Intimidation's own required pending `hand_card` decisions
+(each player -- giver, target, or every chosen player, depending on the
+card -- answers this the moment `pendingDecisionsFor()` asks), the 11
+chaos-effect analogs (`chaos_008/012/025/036/053/058/087/106/110/111/118`,
+see "Chaos Draft" below), and every pre-existing required/optional
+schema-driven discard this same path already handled (Guile's/Bliss's
+own required discard cost, Ambition's/Zeal's/Dignity-family's own
+optional ones once `shouldAttemptAmbitionDiscard()`/`shouldAttemptZealCycle()`/
+`shouldAttemptValueBoostDiscard()` decide it's worth attempting at
+all). The fuller `draftCardScore()` itself (synergy-partner/deck-win-
+rate bonuses) is deliberately NOT reused here -- see "Practice bots in
+draft formats" above for why neither has a natural mid-game meaning.
+`BoardState::catalogRow()`'s own return shape gained `draftPriorityScore`
+(read straight off `cards.draft_priority_score` by
+`BoardStateRepository::mapCatalogRow()`, alongside every other catalog
+field it already carries) purely to make this possible -- previously
+only `CardCatalog::load()`'s own separate, draft-only catalog path
+exposed it at all.
 
 Two consumers apply this policy at the whole-card/whole-decision level
 (`MoodSwings\Bot\BotPlayerService`, itself taking no `MoodPlayService`
@@ -6689,11 +6735,12 @@ since it already holds that dependency):
   `AVOIDANCE_LOW_VALUE_MOOD_THRESHOLD`/`CYNICISM_LOW_VALUE_DISCARD_THRESHOLD`
   elsewhere in this section) to be worth gambling on a random
   replacement for. Once forced, `BotChoiceResolver`'s own generic
-  `'hand_card'` field policy already picks the LOWEST-value legal
-  candidate on its own, so `shouldAttemptZealCycle()` only ever decides
-  WHETHER to bother, never WHICH card -- no bespoke choice-building
-  method needed here the way Rationalization/Avoidance/Cynicism each
-  need their own. An empty remaining hand (Zeal was the bot's only
+  `'hand_card'` field policy already picks the WORST legal candidate
+  (by `draft_priority_score`, see "Giving up your own hand card" below)
+  on its own, so `shouldAttemptZealCycle()` only ever decides WHETHER to
+  bother, never WHICH card -- no bespoke choice-building method needed
+  here the way Rationalization/Avoidance/Cynicism each need their own.
+  An empty remaining hand (Zeal was the bot's only
   card) has nothing to cycle, so it stays unfilled -- "if it has one to
   cycle" per the maintainer.
 
@@ -6712,9 +6759,10 @@ since it already holds that dependency):
   with a positive base value -- a genuine scoring play worth unlocking
   the extra play for, not just "some card to burn it on." Once forced,
   `BotChoiceResolver`'s own generic `'hand_card'` field policy already
-  picks the LOWEST-value legal candidate as the discard on its own, so
-  `shouldAttemptAmbitionDiscard()` only ever decides WHETHER to bother,
-  never WHICH card, the same division of labor as `shouldAttemptZealCycle()`.
+  picks the WORST legal candidate (by `draft_priority_score`) as the
+  discard on its own, so `shouldAttemptAmbitionDiscard()` only ever
+  decides WHETHER to bother, never WHICH card, the same division of
+  labor as `shouldAttemptZealCycle()`.
   This same rule already covers "make the difference between winning and
   losing the game" in the last round without any separate last-round-
   specific logic: a positive-value card the bot couldn't otherwise fit
