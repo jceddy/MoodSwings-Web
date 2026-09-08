@@ -1605,6 +1605,33 @@ body.game-page {
     #draft-pool-sections .card-thumb__art {
         width: calc(3.75rem * var(--card-scale, 1));
     }
+
+    /* Quick chat's emoji-only buttons (reported live: one of the seven
+       #game-chat-quick-buttons buttons -- GL;HF/GG plus five single-emoji
+       ones -- was still wrapping to a second row on a narrow phone).
+       #game-chat-quick-buttons button's own 0.5rem side padding above is
+       sized for GL;HF/GG's multi-character labels; a single emoji glyph
+       needs far less breathing room on each side, so .quick-chat-emoji
+       (see game/index.html) tightens just those five buttons rather than
+       shrinking GL;HF/GG's own padding too, which is already close to
+       their text's own width. Measured against a real 375px-wide phone
+       (dialog padding leaves 287.5px for this row): all 7 buttons'
+       combined width plus #game-chat-quick-buttons' own 0.4rem gaps
+       (6 of them) totaled ~305px before this, 18px over -- enough to
+       force the 7th button onto its own row. 0.15rem side padding here
+       (down from 0.3rem) plus a tighter 0.25rem gap between every
+       button (both text and emoji -- narrower gaps cost GL;HF/GG
+       nothing readability-wise) together claw back over 30px, comfortably
+       fitting all 7 on one row with room to spare on an even narrower
+       320px phone. */
+    #game-chat-quick-buttons {
+        gap: 0.25rem;
+    }
+
+    #game-chat-quick-buttons button.quick-chat-emoji {
+        padding-left: 0.15rem;
+        padding-right: 0.15rem;
+    }
 }
 
 /* -- Card art thumbnails (hand/in-play/discard) --------------------- */

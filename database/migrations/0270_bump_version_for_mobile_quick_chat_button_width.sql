@@ -1,0 +1,18 @@
+-- UI fix (reported live: "can we make the chat buttons for the emoji?
+-- just a little bit narrower on my mobile device. there's still one
+-- wrapping to the next line and I think there's some padding that we
+-- can reduce").
+--
+-- #game-chat-quick-buttons' seven buttons (GL;HF, GG, and five single-
+-- emoji ones) still overflowed a narrow phone's own row width by about
+-- 18px, wrapping the last button onto its own line. The five emoji-only
+-- buttons now carry a .quick-chat-emoji class (web-static/game/index.html)
+-- that gets tighter side padding under the existing
+-- @media (max-width: 600px) breakpoint in style.css, and the row's own
+-- gap is tightened too -- GL;HF/GG are untouched, since their own
+-- padding was already close to their text's own width. Verified against
+-- a real 375px-wide layout: all 7 buttons now fit on one row.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.36.6' WHERE id = 1;

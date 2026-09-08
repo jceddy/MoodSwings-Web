@@ -2475,7 +2475,19 @@ deck's `cards`.
     exists, regardless of whether the game itself is `waiting`/
     `in_progress`/`completed` -- "Best of 3 match, game N, you lead X-Y"
     (or "tied X-X"/"<opponent> leads Y-X", whichever side is actually
-    ahead). A 3-4 player Quick Draft/Winston Draft/Grid Draft/Rotisserie
+    ahead). For a Team/Closed Team best-of-three (reported live: this
+    line was naming a specific *opponent teammate* when their side led,
+    even though `your_wins`/`opponent_wins` are already aggregated per
+    TEAM, not per player -- worse, since it just grabbed the first
+    `state.players` entry whose `game_player_id` didn't match the
+    viewer's own with no `team_id` check at all, it could even land on
+    the viewer's OWN teammate), the trailing side is named "opponents"
+    (plural, no specific name) instead of one teammate standing in for
+    the whole side -- "you" already carries that same whole-side, no-
+    specific-teammate meaning for the viewer's own side, so this just
+    makes the wording symmetric. Every other format (`duel`/2-player
+    `standard`, where `player.team_id` is `null`) is unaffected and still
+    names the genuine lone opponent by username. A 3-4 player Quick Draft/Winston Draft/Grid Draft/Rotisserie
     Draft match (issue #189, always single-game -- `games_to_win` is 1)
     has more than one rival to show a score for, so it branches on
     `draftState.players.length > 2` instead and builds its text from
@@ -3750,6 +3762,20 @@ deck's `cards`.
     Send button whenever the dialog opens (`isChatReadOnly()`), so a
     completed/abandoned game's read-only chat can't be worked around by
     clicking GG instead of typing it.
+
+    **Narrower emoji buttons on mobile** (reported live: one of the seven
+    quick-chat buttons was still wrapping to a second row on a narrow
+    phone). The five single-emoji buttons (everything but GL;HF/GG) carry
+    a `.quick-chat-emoji` class; under the existing `@media (max-width:
+    600px)` breakpoint in `style.css`, that class gets tighter side
+    padding (0.15rem, down from the row's own 0.5rem/0.4rem tiers) and
+    `#game-chat-quick-buttons` itself gets a tighter gap (0.25rem, down
+    from 0.4rem) -- GL;HF/GG keep their own wider padding (already close
+    to their text's own width) since only the emoji buttons had padding
+    to spare. Verified against a real 375px-wide layout (all 7 buttons
+    fit on one row after, versus 2 rows -- the last button wrapping --
+    before); desktop widths are unaffected, this only applies inside the
+    existing mobile breakpoint.
 
     **Duplicate-message guard.** Users reported seeing the same chat
     message sent twice -- traced to a rapid double-click on Send (or
