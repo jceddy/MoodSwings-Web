@@ -1678,7 +1678,7 @@ final class BotPlayerService
         }
 
         if ($effectKey === 'nostalgia') {
-            $discardCardId = $this->nostalgiaDiscardCardId($state, $botGamePlayerId);
+            $discardCardId = $this->nostalgiaDiscardCardId($state, $cardId, $botGamePlayerId);
 
             return $discardCardId !== null ? ['discard_card_id' => $discardCardId] : [];
         }
@@ -2711,8 +2711,32 @@ final class BotPlayerService
      * empty (nothing legal to pick up) -- buildChoicesForCard() treats
      * either the same way, an empty choices array rather than a filled
      * discard_card_id.
+     *
+     * $cardId (this specific Nostalgia instance being played) is always
+     * excluded from its own candidate pool -- a real bug caught live: a
+     * bot playing Harmony/Grief/Angst/Grace's own discard-sourced extra
+     * play (or benefiting from Melancholy's "treat the whole discard
+     * pile as hand" grant) can play Nostalgia FROM the discard pile
+     * itself, and buildBaseChoicesForCard() computes this choice against
+     * the board as it stood *before* that play -- i.e. while Nostalgia's
+     * own card is still physically sitting in the discard pile it's
+     * about to leave. With no other card in the pile, Nostalgia was the
+     * only ("best") candidate and picked itself; by the time
+     * NostalgiaEffect::afterPlaying() actually validates the choice,
+     * MoodPlayService::playMood() has already moved it into play (see
+     * that class's own docblock on why the move always happens before
+     * afterPlaying()), so the pile it just left no longer contains it,
+     * and the self-targeted choice was rejected as
+     * InvalidChoiceException("Card {$discardCardId} is not in the
+     * discard pile") -- reported live as the bot appearing stuck
+     * repeatedly failing to play Harmony whenever Nostalgia was the only
+     * card in the discard pile. A card can never legally end up
+     * targeting the very instance of itself that's resolving this
+     * effect, so excluding $cardId here is correct regardless of how
+     * Nostalgia got played -- it's simply never present in the OTHER
+     * candidates when played from hand, the ordinary case.
      */
-    private function nostalgiaDiscardCardId(BoardState $state, int $botGamePlayerId): ?int
+    private function nostalgiaDiscardCardId(BoardState $state, int $cardId, int $botGamePlayerId): ?int
     {
         foreach ($state->moodsOwnedBy($botGamePlayerId) as $mood) {
             $effectKey = $state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'];
@@ -2723,6 +2747,9 @@ final class BotPlayerService
 
         $bestCardId = null;
         foreach ($state->discardPile() as $discardCardId) {
+            if ($discardCardId === $cardId) {
+                continue;
+            }
             if ($bestCardId === null || $this->draftPriorityRank($state, $discardCardId) > $this->draftPriorityRank($state, $bestCardId)) {
                 $bestCardId = $discardCardId;
             }

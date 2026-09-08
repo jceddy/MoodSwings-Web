@@ -1494,6 +1494,40 @@ final class BotPlayerServiceTest extends TestCase
     }
 
     /**
+     * Reported live: a bot appeared stuck repeatedly failing to play
+     * Harmony whenever Nostalgia was the only card in the discard pile.
+     * Root cause: nostalgiaDiscardCardId() never excluded the specific
+     * Nostalgia instance being played from its own candidate pool. A
+     * bot can legally play Nostalgia FROM the discard pile itself (via
+     * Harmony/Grief/Angst/Grace's own discard-sourced extra play, or
+     * Melancholy's "treat the whole discard pile as hand" grant), and
+     * buildBaseChoicesForCard() computes this choice against the board
+     * as it stood *before* that play -- i.e. while Nostalgia's own card
+     * is still sitting in the discard pile it's about to leave. With no
+     * other card in the pile, Nostalgia was the only ("best") candidate
+     * and picked itself; MoodPlayService::playMood() always moves a
+     * card into play *before* resolving its afterPlaying() effect (see
+     * that class's own docblock), so by the time NostalgiaEffect
+     * validated the choice, the pile it just left no longer contained
+     * it, throwing InvalidChoiceException on every such attempt.
+     * discard_card_id is now correctly left unfilled instead.
+     */
+    public function testChooseActionDoesNotTargetItselfWhenPlayingNostalgiaFromTheDiscardPile(): void
+    {
+        $state = new BoardState(
+            $this->sampleCatalog(),
+            DefaultEffectRegistry::build(),
+            [1, 2],
+            discard: [128],
+        );
+
+        $action = $this->bot->chooseAction($state, [128], 1);
+
+        self::assertSame(128, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
+    /**
      * Sadness (id 74) already in play for the acting bot depends on the
      * discard pile staying full for its own whileInPlay value -- taking
      * a card out of it would undo part of that, so Nostalgia's own
