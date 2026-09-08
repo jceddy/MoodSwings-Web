@@ -1080,13 +1080,15 @@ final class BotPlayerService
             return false;
         }
         // Reported live: "bots should avoid playing Cruelty with no
-        // targets." Cruelty's own "choose any number of opponents [with
-        // 2+ moods]" field is one of the ALWAYS_FILLED_OPTIONAL_FIELDS
+        // targets" (and, by the same reasoning, Indecisiveness -- an
+        // identically-shaped card, see twoOrMoreMoodOpponentIds()'s own
+        // docblock). Both cards' own "choose any number of opponents
+        // [with 2+ moods]" field is one of the ALWAYS_FILLED_OPTIONAL_FIELDS
         // BotChoiceResolver forces a bot to fill despite being optional
         // (see that class's own docblock) -- but forcing the FIELD only
         // matters once there's at least one opponent who legally
         // qualifies (2+ moods in play) to put into it.
-        if ($effectKey === 'cruelty' && $this->crueltyTargetPlayerIds($state, $botGamePlayerId) === []) {
+        if (($effectKey === 'cruelty' || $effectKey === 'indecisiveness') && $this->twoOrMoreMoodOpponentIds($state, $botGamePlayerId) === []) {
             return false;
         }
         if ($effectKey === 'harmony' && $state->discardPile() === []) {
@@ -3885,23 +3887,28 @@ final class BotPlayerService
     }
 
     /**
-     * Every non-teammate opponent who legally qualifies as a Cruelty
-     * target (CrueltyEffect::MINIMUM_MOODS / CardChoiceSchema's own
-     * `cruelty` filter: 2 or more moods currently in play), mirroring
-     * Suspicion's own "target every eligible opponent" policy in
-     * BotChoiceResolver::ALWAYS_FILLED_OPTIONAL_FIELDS -- Cruelty forces
-     * a random one of EACH chosen opponent's own moods into the discard
-     * pile with no cost or downside to the acting player, so there's
-     * never a reason to target fewer than every eligible opponent.
+     * Every non-teammate opponent who legally qualifies as a target for
+     * Cruelty OR Indecisiveness (CrueltyEffect::MINIMUM_MOODS /
+     * IndecisivenessEffect::MINIMUM_MOODS -- both share the identical
+     * `CardChoiceSchema` filter: 2 or more moods currently in play; see
+     * IndecisivenessEffect's own docblock, "same shape as Cruelty, but
+     * returning the mood to its owner's hand instead of discarding it"),
+     * mirroring Suspicion's own "target every eligible opponent" policy
+     * in BotChoiceResolver::ALWAYS_FILLED_OPTIONAL_FIELDS -- both cards
+     * force a random one of EACH chosen opponent's own moods OUT of play
+     * (to the discard pile for Cruelty, back to hand for Indecisiveness)
+     * with no cost or downside to the acting player either way, so
+     * there's never a reason to target fewer than every eligible
+     * opponent.
      *
-     * Also used by hasGoodReasonToPlayNow() above: an empty return means
-     * no opponent qualifies, so Cruelty is deprioritized (the same
-     * PHP_INT_MIN treatment Anger/Pacifism get) rather than played for
-     * nothing.
+     * Also used by hasGoodReasonToPlayNow() above for both effect keys:
+     * an empty return means no opponent qualifies, so the card is
+     * deprioritized (the same PHP_INT_MIN treatment Anger/Pacifism get)
+     * rather than played for nothing.
      *
      * @return int[]
      */
-    private function crueltyTargetPlayerIds(BoardState $state, int $botGamePlayerId): array
+    private function twoOrMoreMoodOpponentIds(BoardState $state, int $botGamePlayerId): array
     {
         $targets = [];
         foreach ($state->activePlayerOrder() as $playerId) {

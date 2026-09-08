@@ -2429,7 +2429,7 @@ final class BotPlayerServiceTest extends TestCase
 
     /**
      * Player 2 has two moods in play (Dignity, Apathy) -- a legal Cruelty
-     * target, so crueltyTargetPlayerIds() is no longer empty and the veto
+     * target, so twoOrMoreMoodOpponentIds() is no longer empty and the veto
      * doesn't apply; Cruelty (value 3) outranks Panic (value 1) and every
      * qualifying opponent is targeted, mirroring Suspicion's own
      * "target every eligible opponent" policy.
@@ -2457,6 +2457,51 @@ final class BotPlayerServiceTest extends TestCase
         $action = $this->bot->chooseAction($state, [61], 1);
 
         self::assertSame(61, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
+    // -- Indecisiveness (same shape as Cruelty, reported live once Cruelty was fixed) --
+
+    public function testChooseActionDeprioritizesIndecisivenessWithNoQualifyingOpponents(): void
+    {
+        $state = $this->boardState(hands: [1 => [43, 48]]); // Indecisiveness (value 3), Panic (value 1)
+
+        $action = $this->bot->chooseAction($state, [43, 48], 1);
+
+        self::assertSame(48, $action['card_id']);
+    }
+
+    /**
+     * Player 2 has two moods in play (Dignity, Apathy) -- a legal
+     * Indecisiveness target, so twoOrMoreMoodOpponentIds() is no longer
+     * empty and the veto doesn't apply; Indecisiveness (value 3) outranks
+     * Panic (value 1) and every qualifying opponent is targeted, the same
+     * "target every eligible opponent" policy Cruelty/Suspicion get.
+     */
+    public function testChooseActionPlaysIndecisivenessAndTargetsAQualifyingOpponent(): void
+    {
+        $state = $this->boardState(hands: [1 => [43, 48], 2 => [8, 55]]);
+        $state->moveHandToInPlay(2, 8); // Dignity
+        $state->moveHandToInPlay(2, 55); // Apathy
+
+        $action = $this->bot->chooseAction($state, [43, 48], 1);
+
+        self::assertSame(43, $action['card_id']);
+        self::assertSame(['opponent_player_ids' => [2]], $action['choices']);
+    }
+
+    /**
+     * With nothing else playable, Indecisiveness is still played --
+     * deprioritized WHEN, never skipped outright, even though no opponent
+     * qualifies.
+     */
+    public function testChooseActionStillPlaysIndecisivenessWhenNothingElseIsPlayable(): void
+    {
+        $state = $this->boardState(hands: [1 => [43]]);
+
+        $action = $this->bot->chooseAction($state, [43], 1);
+
+        self::assertSame(43, $action['card_id']);
         self::assertSame([], $action['choices']);
     }
 
