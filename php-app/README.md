@@ -6783,6 +6783,31 @@ since it already holds that dependency):
   candidate action for it is this same default choice set -- this fix
   therefore covers both bots with no search-side change needed.
 
+  **Ambition never discards Hope** (reported live: "bots should not
+  discard Hope to Ambition"). Hope's own `draft_priority_score` (16, per
+  migration 0143) reflects its DRAFT desirability, not its value once
+  it's actually sitting in hand ready to be played: "while in play, you
+  may play an additional mood during each of your turns" (`HopeEffect`'s
+  own docblock) is an ongoing, stacking, every-turn grant for as long as
+  it stays in play -- worth far more than a flat, one-time comparison
+  against another card ever conveys, whether that's a tier-16 mythic
+  tying it outright (Hope's own `baseValue`, 0, the lowest any card can
+  have, always loses that tie) or a tier-20+ card beating it on
+  `draft_priority_score` alone (Paranoia/Rationalization/Recklessness/
+  Creativity/Intimidation). `BotChoiceResolver::ambitionSafeHandCardIds()`
+  filters Hope out of Ambition's own `discard_card_id` candidate pool
+  entirely before `resolveOwnResourceField()` ever sees it, and
+  `shouldAttemptAmbitionDiscard()` mirrors that same exclusion in its own
+  "is this worth attempting" prediction -- without it, Hope's 0
+  `baseValue` would make that method assume Hope itself is the (cheap)
+  card about to be sacrificed, when the resolver would actually reach
+  past it and sacrifice some OTHER, possibly the only remaining good,
+  card instead. Scoped to Ambition specifically, not a blanket
+  never-discard-Hope rule -- every other hand-disruption discard site
+  sharing `resolveOwnResourceField()` (Confusion/Compulsion/Suspicion/
+  Intimidation and their chaos-effect analogs, Guile/Bliss/Zeal/
+  Dignity-family) is untouched.
+
   **Rationalization** (confirmed by the maintainer) gets its own
   bespoke, two-part policy, since "you may choose one: refresh your own
   hand, or rotate hands with the table" (`CardChoiceSchema`'s own

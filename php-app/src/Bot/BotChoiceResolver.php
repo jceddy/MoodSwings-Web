@@ -157,7 +157,7 @@ final class BotChoiceResolver
             'value' => $field['min'] ?? null,
             'mood' => $this->resolveMoodField($state, $field, $actingPlayerId, $ownCardId),
             'player' => $this->resolvePlayerField($state, $field, $actingPlayerId, $forced),
-            'hand_card' => $this->resolveOwnResourceField($state, $field, $state->hand($actingPlayerId), $ownCardId),
+            'hand_card' => $this->resolveOwnResourceField($state, $field, $this->ambitionSafeHandCardIds($state, $effectKey, $state->hand($actingPlayerId)), $ownCardId),
             'discard_card' => $this->resolveOwnResourceField($state, $field, $state->discardPile(), $ownCardId),
             'card_order' => array_map(static fn (array $card) => $card['card_id'], $field['cards'] ?? []),
             default => null,
@@ -297,6 +297,50 @@ final class BotChoiceResolver
     }
 
     /**
+     * Reported live: "bots should not discard Hope to Ambition." Hope's
+     * printed `cards.draft_priority_score` (16, a solidly-above-average
+     * tier -- see migration 0143) reflects its DRAFT desirability, not
+     * its value once it's actually sitting in hand ready to be played:
+     * "while in play, you may play an additional mood during each of
+     * your turns" (HopeEffect's own docblock) is an ongoing, stacking,
+     * every-single-turn grant for as long as it stays in play, worth far
+     * more than a flat 0 `baseValue`/tier-16 score conveys next to
+     * another card that merely ties or beats it on paper (any of the
+     * seven other tier-16 mythics -- Bliss/Duplicity/Euphoria/
+     * Exhilaration/Regret/Thrill/Validation -- would otherwise win the
+     * "worse card" tiebreak against Hope purely because Hope's own
+     * baseValue, 0, is the lowest possible; any tier-20/24/40 card --
+     * Paranoia/Rationalization/Recklessness/Creativity/Intimidation --
+     * would outrank it outright). So Hope is carved out of Ambition's
+     * own OPTIONAL "discard a card to unlock an extra play" cost
+     * specifically: never worth giving up Hope's own future turns for a
+     * single one-time extra play this turn, regardless of what the
+     * generic worst-card metric below would otherwise pick. Scoped to
+     * Ambition alone (not every hand-disruption discard site sharing
+     * resolveOwnResourceField() below) since that's what was reported;
+     * a bot is never actually FORCED to give up Hope here either (this
+     * is `hand_card`'s only optional call site -- see CardChoiceSchema's
+     * own `ambition` entry), so excluding it here never turns a legal
+     * play into an illegal one, at worst leaving no OTHER card to
+     * discard and the field simply unfilled (see this class's own
+     * "no legal candidate" convention for an optional field).
+     *
+     * @param int[] $handCardIds
+     * @return int[]
+     */
+    private function ambitionSafeHandCardIds(BoardState $state, string $effectKey, array $handCardIds): array
+    {
+        if ($effectKey !== 'ambition') {
+            return $handCardIds;
+        }
+
+        return array_values(array_filter(
+            $handCardIds,
+            fn (int $cardId) => $state->catalogRow($state->effectiveCardId($cardId))['effectKey'] !== 'hope',
+        ));
+    }
+
+    /**
      * A required 'hand_card'/'discard_card' field is always implicitly
      * "one of your own" (guile's/bliss's discard cost are the only
      * required examples today) -- so this always prefers the WORST
@@ -310,7 +354,10 @@ final class BotChoiceResolver
      * Confusion/Compulsion/Suspicion/Intimidation's own pending
      * hand_card decisions (and every chaos-effect analog) alongside the
      * pre-existing Guile/Bliss/Ambition/Zeal/Dignity-family discard
-     * costs this same shared path already handled.
+     * costs this same shared path already handled. (Ambition's own
+     * candidate pool has Hope pre-filtered out by ambitionSafeHandCardIds()
+     * above before it ever reaches here -- see that method's own
+     * docblock for why.)
      *
      * @param int[] $candidateCardIds
      * @return int|int[]|null

@@ -1,0 +1,25 @@
+-- Bot policy fix (reported live: "bots should not discard Hope to
+-- Ambition").
+--
+-- Hope's own cards.draft_priority_score (16, per migration 0143)
+-- reflects its DRAFT desirability, not its value once actually sitting
+-- in hand: an ongoing, every-turn extra-play grant for as long as it
+-- stays in play is worth far more than a flat one-time comparison
+-- against another card conveys, whether that's a same-tier mythic tying
+-- it outright (Hope's own base_value, 0, always loses that tie) or a
+-- higher-tier card beating it on draft_priority_score alone.
+--
+-- BotChoiceResolver::ambitionSafeHandCardIds() now filters Hope out of
+-- Ambition's own discard_card_id candidate pool entirely before the
+-- generic "worst hand card" policy (resolveOwnResourceField()) ever
+-- sees it. BotPlayerService::shouldAttemptAmbitionDiscard() mirrors that
+-- same exclusion in its own "is this worth attempting" prediction, so
+-- it no longer assumes Hope's own 0 base_value makes it the cheap card
+-- about to be sacrificed when the resolver would actually reach past it
+-- and sacrifice some other card instead. Scoped to Ambition
+-- specifically -- every other hand-disruption discard site sharing
+-- resolveOwnResourceField() is untouched.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.34.7' WHERE id = 1;

@@ -2167,23 +2167,42 @@ final class BotPlayerService
      * points -- this is especially important in the last round of the
      * game when it can make the difference between winning and losing
      * the game"). Feeds resolveSchemaFields()'s own $forced the same way
-     * shouldAttemptZealCycle() does: once forced, BotChoiceResolver's
-     * own generic 'hand_card' field policy already picks the LOWEST-
-     * value legal candidate to discard on its own (the same "minimize
-     * what's given up" bias resolveOwnResourceField() documents), so
-     * there's no need to separately pick WHICH card here -- only WHETHER
-     * to bother at all.
+     * shouldAttemptZealCycle() does: once forced, BotChoiceResolver's own
+     * generic 'hand_card' field policy picks the worst legal candidate to
+     * discard on its own (`ownResourceCandidateValue()`'s own
+     * `cards.draft_priority_score`-based metric, not this method's own
+     * plain `baseValue` -- see that method's own docblock), so there's no
+     * need to separately pick WHICH card here -- only WHETHER to bother
+     * at all.
      *
-     * True only once AMBITION_MIN_HAND_SIZE_TO_DISCARD is met AND, after
-     * setting aside the cheapest OTHER hand card as the discard cost, at
-     * least one hand card still remains with a positive base value -- a
-     * genuine scoring play worth unlocking the extra play for, not just
-     * "some card to burn it on." This same rule already covers "make the
-     * difference between winning and losing the game" in the last round
-     * without any separate last-round-specific logic: a positive-value
-     * card the bot couldn't otherwise fit into this turn is exactly the
-     * kind of play that can flip a round's (and so the game's) outcome,
-     * every round this condition holds, last round included.
+     * The one card excluded from consideration ENTIRELY here, on both
+     * sides of that "should I bother" question: Hope. Reported live:
+     * "bots should not discard Hope to Ambition" -- see
+     * BotChoiceResolver::ambitionSafeHandCardIds()'s own docblock for why
+     * it's never actually offered as a candidate to the resolver above.
+     * This method has to know that too, not just assume it: Hope's own
+     * `baseValue` is always 0, the lowest any card can have, so without
+     * this exclusion it would always look like "the cheapest card to
+     * sacrifice" here -- right up until the resolver above, which
+     * actually decides what gets discarded, refuses to ever pick it,
+     * silently sacrificing some OTHER (possibly the only good remaining)
+     * card instead. Excluding it here keeps this method's own prediction
+     * of "what will actually get discarded" in sync with the resolver's
+     * own real behavior.
+     *
+     * True only once AMBITION_MIN_HAND_SIZE_TO_DISCARD is met (Hope
+     * counts toward the hand for this part -- it's still a real card
+     * sitting there, just not an eligible sacrifice) AND, after setting
+     * aside the cheapest OTHER *non-Hope* hand card as the discard cost,
+     * at least one hand card still remains with a positive base value --
+     * a genuine scoring play worth unlocking the extra play for, not
+     * just "some card to burn it on." This same rule already covers
+     * "make the difference between winning and losing the game" in the
+     * last round without any separate last-round-specific logic: a
+     * positive-value card the bot couldn't otherwise fit into this turn
+     * is exactly the kind of play that can flip a round's (and so the
+     * game's) outcome, every round this condition holds, last round
+     * included.
      */
     private function shouldAttemptAmbitionDiscard(BoardState $state, string $effectKey, string $fieldKey, int $cardId, int $botGamePlayerId): bool
     {
@@ -2191,21 +2210,26 @@ final class BotPlayerService
             return false;
         }
 
-        $otherCardValues = [];
+        $otherCardCount = 0;
+        $safeOtherCardValues = [];
         foreach ($state->hand($botGamePlayerId) as $handCardId) {
-            if ($handCardId !== $cardId) {
-                $otherCardValues[] = $this->baseValue($state, $handCardId);
+            if ($handCardId === $cardId) {
+                continue;
+            }
+            $otherCardCount++;
+            if ($state->catalogRow($state->effectiveCardId($handCardId))['effectKey'] !== 'hope') {
+                $safeOtherCardValues[] = $this->baseValue($state, $handCardId);
             }
         }
 
-        if (count($otherCardValues) + 1 < self::AMBITION_MIN_HAND_SIZE_TO_DISCARD) {
+        if ($otherCardCount + 1 < self::AMBITION_MIN_HAND_SIZE_TO_DISCARD) {
             return false;
         }
 
-        sort($otherCardValues);
-        array_shift($otherCardValues);
+        sort($safeOtherCardValues);
+        array_shift($safeOtherCardValues);
 
-        return $otherCardValues !== [] && max($otherCardValues) > 0;
+        return $safeOtherCardValues !== [] && max($safeOtherCardValues) > 0;
     }
 
     /**

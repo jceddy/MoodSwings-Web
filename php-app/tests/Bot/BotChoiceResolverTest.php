@@ -143,6 +143,39 @@ final class BotChoiceResolverTest extends TestCase
         self::assertSame(31, $this->resolver->resolve($state, $field, 1, 0, 'confusion'));
     }
 
+    /**
+     * Reported live: "bots should not discard Hope to Ambition." Hope
+     * (id 124, base value 0 -- the lowest any card can have) would
+     * otherwise always win the "worst card" comparison against Apathy
+     * (id 55, base value 4) once both tie on draft_priority_score (both
+     * default to this fixture's own tier-1 score) -- but Ambition's own
+     * candidate pool has Hope pre-filtered out entirely
+     * (BotChoiceResolver::ambitionSafeHandCardIds()), leaving Apathy as
+     * the only legal candidate.
+     */
+    public function testAmbitionNeverOffersHopeAsADiscardCandidate(): void
+    {
+        $state = $this->boardState(hands: [1 => [124, 55]]); // Hope (base 0), Apathy (base 4)
+        $field = ['key' => 'discard_card_id', 'type' => 'hand_card', 'required' => true];
+
+        self::assertSame(55, $this->resolver->resolve($state, $field, 1, 0, 'ambition'));
+    }
+
+    /**
+     * The Hope exclusion above is scoped to Ambition specifically, not a
+     * blanket "never give up Hope" rule -- every other hand-disruption
+     * effect (Confusion here) still applies the ordinary worst-card
+     * policy, which still picks Hope over Apathy on the same base-value
+     * tiebreak.
+     */
+    public function testHopeCanStillBeGivenUpForOtherHandDisruptionMoods(): void
+    {
+        $state = $this->boardState(hands: [1 => [124, 55]]); // Hope (base 0), Apathy (base 4)
+        $field = ['key' => 'given_card_id', 'type' => 'hand_card', 'required' => true];
+
+        self::assertSame(124, $this->resolver->resolve($state, $field, 1, 0, 'confusion'));
+    }
+
     public function testPlayerFieldPicksTheFirstLegalCandidateRespectingScopeOther(): void
     {
         $state = $this->boardState(); // players [1, 2, 3]

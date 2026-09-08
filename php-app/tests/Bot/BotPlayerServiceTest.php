@@ -603,6 +603,45 @@ final class BotPlayerServiceTest extends TestCase
     }
 
     /**
+     * Reported live: "bots should not discard Hope to Ambition." Hope
+     * (id 124, base value 0 -- the lowest any card can have) would
+     * otherwise look like the cheapest possible discard among Ambition's
+     * hand, ahead of Courage (id 7, value 1) and Apathy (id 55, value 4)
+     * -- but Hope is carved out of Ambition's own candidate pool entirely
+     * (BotChoiceResolver::ambitionSafeHandCardIds()), so Courage is
+     * discarded instead, exactly as it would be if Hope weren't in hand
+     * at all (see testChooseActionDiscardsForAmbitionsExtraPlayWithEnoughHandAndAScoringFollowUp()
+     * above).
+     */
+    public function testChooseActionNeverDiscardsHopeForAmbitionsExtraPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [53, 124, 7, 55]]);
+
+        $action = $this->bot->chooseAction($state, [53], 1);
+
+        self::assertSame(53, $action['card_id']);
+        self::assertSame(['discard_card_id' => 7], $action['choices']);
+    }
+
+    /**
+     * Only Hope and one positive-value card (Apathy) sit alongside
+     * Ambition -- sacrificing Hope is never an option (see above), and
+     * sacrificing the ONLY other, non-Hope card (Apathy) would leave
+     * nothing worth spending the unlocked extra play on, so Ambition's
+     * own optional field stays unfilled rather than trading away its one
+     * good remaining card just to satisfy the hand-size count check.
+     */
+    public function testChooseActionDoesNotDiscardForAmbitionWhenTheOnlyOtherCardIsHope(): void
+    {
+        $state = $this->boardState(hands: [1 => [53, 124, 55]]);
+
+        $action = $this->bot->chooseAction($state, [53], 1);
+
+        self::assertSame(53, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
+    /**
      * Intimidation's own "always target an opponent" policy (confirmed
      * by the maintainer): player 2 has a card in hand, so it's the only
      * legal, non-teammate target -- the bot volunteers for its own
