@@ -2416,6 +2416,50 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame(10, $action['card_id']);
     }
 
+    // -- Cruelty (reported live: "bots should avoid playing Cruelty with no targets") --
+
+    public function testChooseActionDeprioritizesCrueltyWithNoQualifyingOpponents(): void
+    {
+        $state = $this->boardState(hands: [1 => [61, 48]]); // Cruelty (value 3), Panic (value 1)
+
+        $action = $this->bot->chooseAction($state, [61, 48], 1);
+
+        self::assertSame(48, $action['card_id']);
+    }
+
+    /**
+     * Player 2 has two moods in play (Dignity, Apathy) -- a legal Cruelty
+     * target, so crueltyTargetPlayerIds() is no longer empty and the veto
+     * doesn't apply; Cruelty (value 3) outranks Panic (value 1) and every
+     * qualifying opponent is targeted, mirroring Suspicion's own
+     * "target every eligible opponent" policy.
+     */
+    public function testChooseActionPlaysCrueltyAndTargetsAQualifyingOpponent(): void
+    {
+        $state = $this->boardState(hands: [1 => [61, 48], 2 => [8, 55]]);
+        $state->moveHandToInPlay(2, 8); // Dignity
+        $state->moveHandToInPlay(2, 55); // Apathy
+
+        $action = $this->bot->chooseAction($state, [61, 48], 1);
+
+        self::assertSame(61, $action['card_id']);
+        self::assertSame(['opponent_player_ids' => [2]], $action['choices']);
+    }
+
+    /**
+     * With nothing else playable, Cruelty is still played -- deprioritized
+     * WHEN, never skipped outright, even though no opponent qualifies.
+     */
+    public function testChooseActionStillPlaysCrueltyWhenNothingElseIsPlayable(): void
+    {
+        $state = $this->boardState(hands: [1 => [61]]);
+
+        $action = $this->bot->chooseAction($state, [61], 1);
+
+        self::assertSame(61, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
     // -- Creativity (confirmed by the maintainer) --------------------------
 
     public function testChooseActionCopiesTheHighestValueMoodInPlayWithCreativity(): void

@@ -6508,13 +6508,20 @@ per-card special case:
   `ALWAYS_FILLED_OPTIONAL_FIELDS`, a small hand-picked list of optional
   fields with NO real cost to the acting player at all -- Curiosity's
   "you may choose a player" (a free reveal, at best a value boost,
-  nothing given up) and Suspicion's "choose any number of players"
+  nothing given up), Suspicion's "choose any number of players"
   (forces a discard from each, again nothing the acting player gives
-  up) -- which get filled in anyway. Both also exclude the acting
-  player from their own candidate pool even though their schema's own
-  `scope` is `'any'` (which would otherwise permit self-targeting,
-  since a human might have an obscure reason to); Suspicion's own multi
-  field additionally takes *every* legal candidate rather than just
+  up), and Cruelty's "choose any number of opponents [with 2+ moods]"
+  (reported live: "bots should avoid playing Cruelty with no targets"
+  -- forces a random one of each chosen opponent's own moods into the
+  discard pile, same "pure loss for them, nothing given up by the
+  acting player" shape as Suspicion) -- which get filled in anyway.
+  All three also exclude the acting player from their own candidate
+  pool even though their schema's own `scope` is `'any'` (which would
+  otherwise permit self-targeting, since a human might have an obscure
+  reason to; Cruelty's own schema already sets `scope: 'other'`/
+  `excludes_teammate: true` directly, so this part is a no-op for it
+  specifically); Suspicion's and Cruelty's own multi fields
+  additionally take *every* legal candidate rather than just
   `count.min`, since "choose any number" has no downside to choosing
   more. Contrast Malice's similarly-shaped optional `target_player_id`
   (deliberately NOT on this list): it grants the target extra plays
@@ -7347,6 +7354,20 @@ since it already holds that dependency):
   worthless 0-point opening play with nothing to actually discard. The
   instant a legal target exists (either kind), Anger reverts to plain
   `baseValue()` ordering (0) like any other unboosted card.
+
+  **Cruelty** (reported live: "bots should avoid playing Cruelty with no
+  targets") needs no `buildChoicesForCard()` targeting exception the way
+  Anger/Pacifism/Denial above do -- its own `opponent_player_ids` field
+  is already handled by `ALWAYS_FILLED_OPTIONAL_FIELDS` (see above),
+  since targeting every eligible opponent is always correct with no
+  cost/tradeoff to weigh. It only needed a `hasGoodReasonToPlayNow()`
+  veto: `crueltyTargetPlayerIds()` returns every non-teammate opponent
+  with 2 or more moods currently in play (`CrueltyEffect::
+  MINIMUM_MOODS`/`CardChoiceSchema`'s own `cruelty` filter), and Cruelty
+  is deprioritized to `PHP_INT_MIN` -- deprioritized WHEN, never skipped
+  outright, the same as Anger above -- whenever that list comes back
+  empty, rather than played as a dead 3-point mood with nobody to
+  target.
 
   **Sneakiness** gets a targeting exception of its own, via
   `sneakinessTargetPlayerId()`, used by both `isWorthPlaying()` (a veto)

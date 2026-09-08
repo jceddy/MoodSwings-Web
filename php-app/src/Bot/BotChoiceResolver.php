@@ -56,13 +56,20 @@ final class BotChoiceResolver
      * bonus/cost" bias (see this class's own docblock), reserved for the
      * rare card whose optional target has NO real cost to the acting
      * player at all: Curiosity's "you may choose a player" (a free
-     * reveal -- at best a value boost, nothing given up if it whiffs) and
+     * reveal -- at best a value boost, nothing given up if it whiffs),
      * Suspicion's "choose any number of players" (forces a discard from
      * each -- again nothing the acting player gives up, and choosing more
-     * targets is strictly better than choosing fewer). Contrast Malice's
-     * own similarly-shaped optional `target_player_id` (deliberately NOT
-     * here): it grants the target extra plays too, a real cost-benefit
-     * trade-off this class still leaves for a human to judge.
+     * targets is strictly better than choosing fewer), and Cruelty's
+     * "choose any number of opponents [with 2+ moods]" (reported live:
+     * "bots should avoid playing Cruelty with no targets" -- forces a
+     * RANDOM one of each chosen opponent's own moods into the discard
+     * pile, a pure loss for them with no cost or downside risk to the
+     * acting player, so -- same reasoning as Suspicion -- targeting every
+     * eligible opponent is always at least as good as targeting fewer).
+     * Contrast Malice's own similarly-shaped optional `target_player_id`
+     * (deliberately NOT here): it grants the target extra plays too, a
+     * real cost-benefit trade-off this class still leaves for a human to
+     * judge.
      *
      * Two behaviors both flow from being in this list, applied by
      * resolve()/resolvePlayerField()/pickIdCandidates() below:
@@ -71,16 +78,20 @@ final class BotChoiceResolver
      *   though the field's own `scope` is `'any'` (which would otherwise
      *   allow self-targeting) -- targeting yourself is never the intent
      *   here, just something the schema permits for a human who might
-     *   have an obscure reason to.
+     *   have an obscure reason to. Cruelty's own schema already sets
+     *   `scope: 'other'`/`excludes_teammate: true` directly, so this is a
+     *   no-op for it specifically -- only the two behaviors below
+     *   actually matter for this card.
      * - For a MULTI field specifically, every legal candidate is taken
-     *   rather than just `count.min` -- Suspicion's whole point is
-     *   "choose any number," and taking fewer than every legal opponent
-     *   would leave free value on the table the same way never filling
-     *   the field at all would.
+     *   rather than just `count.min` -- Suspicion's/Cruelty's whole point
+     *   is "choose any number," and taking fewer than every legal
+     *   opponent would leave free value on the table the same way never
+     *   filling the field at all would.
      */
     private const ALWAYS_FILLED_OPTIONAL_FIELDS = [
         'curiosity' => ['target_player_id'],
         'suspicion' => ['player_ids'],
+        'cruelty' => ['opponent_player_ids'],
     ];
 
     /**
