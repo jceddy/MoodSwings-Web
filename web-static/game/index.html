@@ -403,11 +403,6 @@
                      GameService::buildGameState()'s own $revealAllHands. -->
                 <div id="spectator-final-hands-section" hidden></div>
 
-                <div id="teammate-hand-section" hidden>
-                    <h3 id="teammate-hand-title">Teammate's hand</h3>
-                    <ul id="teammate-hand-list"></ul>
-                </div>
-
                 <div id="team-decision-panel" hidden>
                     <h4 id="team-decision-title"></h4>
                     <p id="team-decision-status"></p>
@@ -445,6 +440,20 @@
 
                     <button id="play-card-button" type="button">Play card</button>
                     <button id="cancel-choice-button" type="button">Close</button>
+                </div>
+
+                <!-- Open Team Play (issue #360): moved to sit right after
+                     #choices-panel (reported live: "in open team games,
+                     can we move teammate's hand under the card to play
+                     div that opens when you click a playable card?") --
+                     previously came before every other pending-
+                     decision-style panel, ahead of the card-to-play panel
+                     it now follows. renderTeammateHand() (game.js) only
+                     ever looks this up by id, so moving it here needed no
+                     JS changes of its own. -->
+                <div id="teammate-hand-section" hidden>
+                    <h3 id="teammate-hand-title">Teammate's hand</h3>
+                    <ul id="teammate-hand-list"></ul>
                 </div>
 
                 <div id="pending-decision-panel" hidden>
