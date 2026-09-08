@@ -395,4 +395,62 @@ final class AuthIntegrationTest extends TestCase
 
         self::assertNull($this->auth->currentUser($login['token']));
     }
+
+    /**
+     * Change password (User info page's "Account" section) -- unlike
+     * resetPassword() above (a mailed token for someone who can't log in
+     * at all), this is for an already-authenticated user who supplies
+     * their own current password instead. Updates the hash and lets the
+     * user log in with the new password.
+     */
+    public function testChangePasswordUpdatesHash(): void
+    {
+        $result = $this->registerAndVerify('sam');
+        $userId = (int) $result['user']['id'];
+
+        $this->auth->changePassword($userId, 'correcthorsebattery', 'brandnewpassword', hash('sha256', bin2hex(random_bytes(32))));
+
+        $login = $this->auth->login('sam', 'brandnewpassword', null, null);
+        self::assertSame('sam', $login['user']['username']);
+    }
+
+    public function testChangePasswordRejectsWrongCurrentPassword(): void
+    {
+        $result = $this->registerAndVerify('tina');
+        $userId = (int) $result['user']['id'];
+
+        $this->expectException(InvalidCredentialsException::class);
+        $this->auth->changePassword($userId, 'wrongpassword', 'brandnewpassword', hash('sha256', bin2hex(random_bytes(32))));
+    }
+
+    public function testChangePasswordRejectsShortNewPassword(): void
+    {
+        $result = $this->registerAndVerify('uma');
+        $userId = (int) $result['user']['id'];
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->auth->changePassword($userId, 'correcthorsebattery', 'short', hash('sha256', bin2hex(random_bytes(32))));
+    }
+
+    /**
+     * The one behavior that distinguishes this from resetPassword()'s own
+     * blanket "log out everywhere": the CALLER'S OWN current session
+     * (identified by its token hash) survives, so a user changing their
+     * password from a live session isn't logged out of it -- only every
+     * OTHER session (a second device/browser, here) is.
+     */
+    public function testChangePasswordKeepsCurrentSessionButLogsOutOthers(): void
+    {
+        $result = $this->registerAndVerify('vince');
+        $userId = (int) $result['user']['id'];
+        $currentSession = $this->auth->login('vince', 'correcthorsebattery', null, null);
+        $otherSession = $this->auth->login('vince', 'correcthorsebattery', null, null);
+        self::assertNotNull($this->auth->currentUser($currentSession['token']));
+        self::assertNotNull($this->auth->currentUser($otherSession['token']));
+
+        $this->auth->changePassword($userId, 'correcthorsebattery', 'brandnewpassword', hash('sha256', $currentSession['token']));
+
+        self::assertNotNull($this->auth->currentUser($currentSession['token']));
+        self::assertNull($this->auth->currentUser($otherSession['token']));
+    }
 }

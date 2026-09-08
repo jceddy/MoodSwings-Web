@@ -79,6 +79,16 @@ function resetPassword(token, password) {
     return apiRequest('/reset-password', { method: 'POST', body: JSON.stringify({ token, password }) });
 }
 
+// Change password (User info page's "Account" section) -- for an
+// already-authenticated user, unlike resetPassword() above (a mailed
+// token for someone who can't log in at all).
+function changePassword(currentPassword, newPassword) {
+    return apiRequest('/user/change-password', {
+        method: 'POST',
+        body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+    });
+}
+
 function listFriends() {
     return apiRequest('/friends');
 }

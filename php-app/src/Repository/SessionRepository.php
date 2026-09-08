@@ -66,6 +66,21 @@ final class SessionRepository
     }
 
     /**
+     * Same "log out everywhere" as deleteAllForUser() above, except the
+     * one session named by $exceptTokenHash survives -- used by
+     * AuthService::changePassword() so a user changing their own
+     * password (already authenticated, unlike resetPassword()'s mailed-
+     * token flow) isn't logged out of the very session they just used to
+     * do it, while every OTHER session (possibly compromised, the whole
+     * reason to change the password in the first place) still is.
+     */
+    public function deleteAllForUserExcept(int $userId, string $exceptTokenHash): void
+    {
+        $stmt = Connection::get()->prepare('DELETE FROM sessions WHERE user_id = :user_id AND token_hash != :except_token_hash');
+        $stmt->execute(['user_id' => $userId, 'except_token_hash' => $exceptTokenHash]);
+    }
+
+    /**
      * Online/presence indicator (issue #110) -- the most recent
      * last_seen_at among each user's own currently-valid (non-expired)
      * sessions, keyed by user_id. A user can be logged in on more than

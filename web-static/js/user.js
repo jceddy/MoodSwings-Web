@@ -46,4 +46,40 @@
     sharePresenceCheckbox.addEventListener('change', () => {
         savePresencePreference(sharePresenceCheckbox.checked);
     });
+
+    // Change password -- same "trim the form, show one message, don't
+    // reveal which field was wrong beyond the server's own message" shape
+    // reset-password.js's own form submit handler uses; the mismatch
+    // check between the two new-password fields happens here, client-side
+    // only, the same as that form's own confirm field.
+    const changePasswordForm = document.getElementById('change-password-form');
+    const changePasswordError = document.getElementById('change-password-error');
+    const changePasswordSuccess = document.getElementById('change-password-success');
+    changePasswordForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        changePasswordError.hidden = true;
+        changePasswordSuccess.hidden = true;
+
+        const currentPassword = document.getElementById('change-password-current').value;
+        const newPassword = document.getElementById('change-password-new').value;
+        const newPasswordConfirm = document.getElementById('change-password-confirm').value;
+
+        if (newPassword !== newPasswordConfirm) {
+            changePasswordError.textContent = 'New passwords do not match.';
+            changePasswordError.hidden = false;
+            return;
+        }
+
+        const { ok, body } = await changePassword(currentPassword, newPassword);
+
+        if (ok) {
+            changePasswordForm.reset();
+            changePasswordSuccess.textContent = body.message || 'Your password has been changed.';
+            changePasswordSuccess.hidden = false;
+            return;
+        }
+
+        changePasswordError.textContent = body.message || 'Could not change your password.';
+        changePasswordError.hidden = false;
+    });
 })();

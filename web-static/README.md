@@ -1105,6 +1105,26 @@ already is) is `true` -- so the game doesn't just look stalled to
 someone else at the table while the current turn holder reviews what
 happened.
 
+### Change password
+
+`#change-password-form`, in the User info page's own `#user-account-section`
+(`user/index.html`, right below `#user-privacy-section`) -- three
+password fields (current, new, confirm new; `type="password"`, the new-
+password pair sharing `reset-password.html`'s own `minlength="8"
+maxlength="72"`) rather than a checkbox, so it's wired up in `js/user.js`
+as a form submit handler instead of a `change` listener. The confirm
+field is checked against the new-password field CLIENT-SIDE only
+(`newPassword !== newPasswordConfirm`) before the request is even sent
+-- identical to `reset-password.js`'s own confirm check -- so the server
+(`POST /user/change-password`, `changePassword()` in `js/app.js`) only
+ever receives `current_password`/`new_password`, no confirmation value
+of its own. On success the form clears (`form.reset()`) and
+`#change-password-success` shows the server's own message (which notes
+every other session was logged out -- see "Change password" in
+`../php-app/README.md`); on failure `#change-password-error` shows
+either the client-side mismatch message or whatever the server said
+(wrong current password, or the new one failing length validation).
+
 ### Open lobby matchmaking (issue #116)
 
 An alternative to naming specific friend opponents: the New Game
@@ -4336,8 +4356,8 @@ using the same-origin `session_token` cookie for auth — see
   back with its own "Back to your games" button (`#user-back-to-lobby-button`,
   a real `<button>` matching the rest of the app's buttons rather than an
   anchor, with a click handler that navigates to `/game/`). Redirects to
-  `/` if there's no active session, same as `game/index.html`. Currently
-  just one section, `#user-lifetime-stats-section` -- a "Games" row
+  `/` if there's no active session, same as `game/index.html`. Its first
+  section, `#user-lifetime-stats-section` -- a "Games" row
   (lifetime wins-losses, every format) and a "Matches" row (lifetime
   wins-losses, `quick_draft`/`winston_draft`/`grid_draft` best-of-three
   results only, with a small note under the table saying so, since
@@ -4351,7 +4371,12 @@ using the same-origin `session_token` cookie for auth — see
   (tournament standings once issue #91's tournament system exists,
   per-format breakdowns, etc.), and each addition is meant to be its own
   `<section>` alongside this one rather than one flat list -- see
-  "Lifetime stats" in `../php-app/README.md`. Shares the same footer
+  "Lifetime stats" in `../php-app/README.md`. `#user-privacy-section`
+  (issue #110) holds the online/offline `#share-presence-checkbox` -- see
+  "Online/presence indicator" in `../php-app/README.md`.
+  `#user-account-section` holds the "Change password" form
+  (`#change-password-form`) -- see "Change password" below. Shares the
+  same footer
   (version indicator, Resources link/dialog, theme select) every other
   page already has.
 - `spectate/index.html` (`/spectate/`, issue #128) — Reached via the

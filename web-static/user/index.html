@@ -70,6 +70,34 @@
                 Share my online/offline status with friends and opponents
             </label>
         </section>
+
+        <!-- Change password -- unlike the "Forgot password?" flow
+             (reset-password.html, reached via a mailed token for someone
+             who can't log in at all), this is for an already-logged-in
+             user who knows their current password and just wants a new
+             one. Same field shape (type=password, minlength/maxlength
+             matching AuthService::changePassword()'s own 8-72 char
+             check) as reset-password.html's own form. -->
+        <section id="user-account-section">
+            <h2>Account</h2>
+            <form id="change-password-form">
+                <div class="field">
+                    <label for="change-password-current">Current password</label>
+                    <input type="password" id="change-password-current" name="current_password" required autocomplete="current-password">
+                </div>
+                <div class="field">
+                    <label for="change-password-new">New password</label>
+                    <input type="password" id="change-password-new" name="new_password" required autocomplete="new-password" minlength="8" maxlength="72">
+                </div>
+                <div class="field">
+                    <label for="change-password-confirm">Confirm new password</label>
+                    <input type="password" id="change-password-confirm" name="new_password_confirm" required autocomplete="new-password" minlength="8" maxlength="72">
+                </div>
+                <button type="submit">Change password</button>
+                <p id="change-password-error" class="error" hidden></p>
+                <p id="change-password-success" class="success" hidden></p>
+            </form>
+        </section>
     </main>
 
     <dialog id="resources-dialog">

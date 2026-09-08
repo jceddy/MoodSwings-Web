@@ -196,6 +196,33 @@ final class AuthService
     }
 
     /**
+     * An already-authenticated user changing their own password (Settings/
+     * User info -- unlike resetPassword() above, reached via a mailed
+     * token instead for someone who can't log in at all, this requires
+     * $currentPassword to match first, the same check login() itself
+     * makes). Every OTHER session is logged out -- a changed password is
+     * as much a "this may have been compromised" signal as a reset is --
+     * except $currentSessionTokenHash's own, so the user isn't logged out
+     * of the very session they just used to make this change; see
+     * SessionRepository::deleteAllForUserExcept()'s own docblock.
+     */
+    public function changePassword(int $userId, string $currentPassword, string $newPassword, string $currentSessionTokenHash): void
+    {
+        $user = $this->users->findById($userId);
+
+        if ($user === null || !password_verify($currentPassword, $user['password_hash'])) {
+            throw new InvalidCredentialsException('Current password is incorrect.');
+        }
+
+        if (strlen($newPassword) < 8 || strlen($newPassword) > 72) {
+            throw new \InvalidArgumentException('Password must be between 8 and 72 characters.');
+        }
+
+        $this->users->updatePasswordHash($userId, password_hash($newPassword, PASSWORD_BCRYPT));
+        $this->sessions->deleteAllForUserExcept($userId, $currentSessionTokenHash);
+    }
+
+    /**
      * @return array{user: array, token: string, expiresAt: DateTimeImmutable}
      */
     public function login(string $username, string $password, ?string $ipAddress, ?string $userAgent): array

@@ -454,6 +454,36 @@ if ($path === '/reset-password' && $method === 'POST') {
     }
 }
 
+// Change password (User info page's "Account" section) -- unlike
+// /reset-password above (a mailed token for someone who can't log in at
+// all), this is for an already-authenticated user who knows their
+// current password and just wants a new one. $token is read straight
+// from the cookie here (not via requireAuth(), which only returns the
+// user) so AuthService::changePassword() knows which session to leave
+// logged in while every other one is signed out.
+if ($path === '/user/change-password' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $token = $_COOKIE[AuthService::COOKIE_NAME] ?? '';
+
+    try {
+        $auth->changePassword(
+            (int) $currentUser['id'],
+            (string) ($body['current_password'] ?? ''),
+            (string) ($body['new_password'] ?? ''),
+            hash('sha256', $token)
+        );
+        respond(200, [
+            'status' => 'ok',
+            'message' => 'Your password has been changed. Every other session has been logged out.',
+        ]);
+    } catch (InvalidCredentialsException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
 if ($path === '/login' && $method === 'POST') {
     $body = requestBody();
 

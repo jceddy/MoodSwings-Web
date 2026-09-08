@@ -51,6 +51,7 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/resend-verification` | `{"email"}`                                                | Issues a fresh verification link, revoking any prior one, and emails it. Always returns the same generic `200` message regardless of whether the email exists, is already verified, or was rate-limited, so it can't be used to discover which addresses are registered. Limited to once per 60 seconds per account; `400` on invalid email format, `502` if sending fails. |
 | POST   | `/forgot-password` | `{"email"}`                                                   | Issues a password reset link (valid for 1 hour), revoking any prior one, and emails it -- regardless of the account's verification status. Always returns the same generic `200` message whether or not the email is registered, for the same enumeration-resistance reason as `/resend-verification`; also rate-limited to once per 60 seconds per account. `400` on invalid email format, `502` if sending fails. Unlike `/verify-email`, the emailed link points at the static `reset-password.html` page rather than a GET route here -- see "Password reset" below for why. |
 | POST   | `/reset-password` | `{"token", "password"}`                                        | Consumes a password reset token (single-use, same replay-proofing as Discord's OAuth state) and sets the new password (8-72 chars, same rule as registration). Also deletes every one of the account's sessions, logging it out everywhere -- a reset is treated as a signal any existing session may be compromised. `400` if the token is invalid/expired/already used or the password fails validation. See "Password reset" below. |
+| POST   | `/user/change-password` | `{"current_password", "new_password"}`                    | Requires auth. Sets a new password (8-72 chars) given the correct current one. `400` if `current_password` is wrong or `new_password` fails validation -- not `401`, since the caller is already authenticated; this is just an invalid value for the action. Deletes every OTHER session (not the one making this request), unlike `/reset-password` above, which has no current session to spare. See "Change password" below. |
 | POST   | `/login`        | `{"username", "password"}`                                       | `401` on bad credentials, `403` if the email isn't verified yet. |
 | POST   | `/logout`       | —                                                                 | Invalidates the current session only (other logged-in devices/sessions are unaffected). |
 | GET    | `/me`           | —                                                                 | Returns the current user if authenticated, `401` otherwise. Now includes `share_presence` (issue #110) -- your own current opt-in/out of sharing your online/offline status with others; see "Online/presence indicator" below. Also includes `default_selections_mode_preference` -- your own personal default for the New Game dialog's default-selections-mode checkbox (Settings dialog's "Game defaults" section, distinct from `default_selections_mode` itself -- see "Default selections mode" below). Also includes `auto_pass_on_empty_hand` (defaults `true`) -- see "Auto-pass on empty hand" below. Also includes `auto_apply_scoring_bonuses` (defaults `true`) -- see "Auto-apply scoring bonuses" below. Also includes `board_layout_preference` (one of `'above_play_area'`/`'below_hand'`, defaults `'above_play_area'`) -- see "Board layout preference" below. Also includes `allow_custom_content` (defaults `false`) -- see "Custom card/effect formats preference" below. |
@@ -238,6 +239,46 @@ user's sessions on success (`SessionRepository::deleteAllForUser()`), so
 a password reset also logs the account out everywhere, treating the
 reset request itself as a signal any existing session may be
 compromised.
+
+## Change password
+
+`POST /user/change-password` (User info page's own "Account" section)
+lets an already-logged-in user set a new password directly, given their
+current one — the counterpart to "Password reset" above for someone who
+already has a valid session and isn't locked out, so there's no mailed
+token step at all: `AuthService::changePassword(int $userId, string
+$currentPassword, string $newPassword, string $currentSessionTokenHash)`
+re-checks `$currentPassword` against the stored hash the same way
+`login()` itself does (`password_verify()`, throwing the same
+`InvalidCredentialsException` on a mismatch — reused rather than adding a
+near-identical exception type just for this), then validates
+`$newPassword` with the identical 8-72 character rule registration/reset
+both already enforce.
+
+The one deliberate difference from `resetPassword()`'s own blanket
+"log out everywhere": `SessionRepository::deleteAllForUserExcept(int
+$userId, string $exceptTokenHash)` leaves the CALLER's own current
+session alone, logging out only every OTHER one. A password reset has no
+current session to preserve (the whole point is recovering access
+without one), but a change-password request comes from an
+already-authenticated session that has every right to keep working — the
+security motivation (a stale/compromised session shouldn't survive a
+password change) only applies to sessions other than the one making the
+change. The route handler reads the raw session cookie itself (rather
+than only calling `requireAuth()`, which returns just the user) so it can
+hash it and pass it through as `$currentSessionTokenHash` — the one
+piece `changePassword()` needs to know which session to spare.
+
+`current_password`/`new_password` are both required in the request body;
+`400` covers both an incorrect current password and a `new_password`
+that fails the length check, without distinguishing which in the HTTP
+status itself (the message does) — a wrong current password isn't a
+`401` here, since the caller IS already authenticated; it's simply an
+invalid value for this specific action, the same way an invalid choice
+for a card play is a `400`/`409` rather than re-litigating auth. No
+separate confirmation field is sent to the server — matching
+`reset-password.html`'s own form, the two new-password fields are
+compared client-side only, before the request is even made.
 
 ## Rules engine
 
