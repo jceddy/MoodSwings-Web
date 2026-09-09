@@ -58,14 +58,27 @@ final class ReplayStateBuilder
      * Lets the frontend treat "the beginning" as just another step in the
      * same replayEvents list/getReplayGameState() call, rather than a
      * special case of its own.
+     *
+     * $requireCompleted (default true, matching every existing caller --
+     * GameService::replayStateAsOf(), issue #240's own "watch replay"
+     * route) guards against replaying a game that's still actively being
+     * played, which would let a player peek at future/concurrent state
+     * through that PUBLIC route. GameService::buildGameState() passes
+     * false for its own "pause at the start of your turn" frozen-board
+     * use (migration 0275): reconstructing a moment from an ONGOING
+     * game's own recent history this way is exactly as safe as it is for
+     * a completed one -- the facts this replays are already fully
+     * determined the instant they're logged, and buildGameState() itself
+     * (never this class) is what decides which hands a given viewer
+     * actually gets to see.
      */
-    public function stateAsOf(int $gameId, int $eventId): BoardState
+    public function stateAsOf(int $gameId, int $eventId, bool $requireCompleted = true): BoardState
     {
         if ($eventId === 0) {
-            return $this->genesis($gameId);
+            return $this->genesis($gameId, $requireCompleted);
         }
 
-        $context = $this->loadContext($gameId);
+        $context = $this->loadContext($gameId, $requireCompleted);
         $events = $context['events'];
 
         $targetIndex = null;
@@ -103,19 +116,22 @@ final class ReplayStateBuilder
      * Its discard pile and in-play zone are always empty by construction
      * -- see deriveGenesis()'s own docblock.
      */
-    public function genesis(int $gameId): BoardState
+    public function genesis(int $gameId, bool $requireCompleted = true): BoardState
     {
-        $context = $this->loadContext($gameId);
+        $context = $this->loadContext($gameId, $requireCompleted);
         $genesis = $this->deriveGenesis($context['gameCards'], $context['events'], $context['hasSeparateDecks']);
 
         return $this->assembleBoardState($context, $genesis['hands'], $genesis['decks'], [], [], []);
     }
 
-    /** @return array{game: array<string, mixed>, events: array<int, array{id:int, event_type:string, acting_game_player_id:?int, card_id:?int, details: array<string, mixed>}>, catalog: array<int, array<string, mixed>>, gameCards: array<int, array<string, mixed>>, catalogCardIdFor: array<int,int>, playerIds: int[], teamIdByPlayer: array<int,int>, resignedPlayerIds: int[], hasSeparateDecks: bool} */
-    private function loadContext(int $gameId): array
+    /**
+     * @param bool $requireCompleted see stateAsOf()'s own docblock.
+     * @return array{game: array<string, mixed>, events: array<int, array{id:int, event_type:string, acting_game_player_id:?int, card_id:?int, details: array<string, mixed>}>, catalog: array<int, array<string, mixed>>, gameCards: array<int, array<string, mixed>>, catalogCardIdFor: array<int,int>, playerIds: int[], teamIdByPlayer: array<int,int>, resignedPlayerIds: int[], hasSeparateDecks: bool}
+     */
+    private function loadContext(int $gameId, bool $requireCompleted = true): array
     {
         $game = $this->fetchGame($gameId);
-        if ($game['status'] !== 'completed') {
+        if ($requireCompleted && $game['status'] !== 'completed') {
             throw new GameStateException("Game {$gameId} isn't completed yet -- replay is only available once a game is over");
         }
 

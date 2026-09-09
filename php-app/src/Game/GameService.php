@@ -10049,6 +10049,22 @@ final class GameService
         $roundId = (int) $round['id'];
         $pdo = Connection::get();
 
+        // "Pause at the start of your turn" (migration 0275, reported
+        // live) -- captured before ANYTHING below runs (even the
+        // after-scoring order decision's own logEvent() call just below,
+        // which never moves a card so the exact boundary doesn't matter
+        // either way), so it names the last event that existed while the
+        // round that just ended was still actually being played. Carried
+        // onto the new round's own row further down; see
+        // buildGameState()'s own use of it for why. null (not 0) when no
+        // event exists yet at all -- round 1 always has at least one
+        // (its own plays/passes are what triggered scoring in the first
+        // place), so this is purely a defensive fallback, never expected
+        // to actually happen; the new round's own pre_after_scoring_event_id
+        // simply stays NULL in that case, same as it would for any other
+        // reason frozen-board mode doesn't apply.
+        $preAfterScoringEventId = $this->latestEventId($gameId);
+
         $scores = $this->applyScoreSwaps($state, $this->applyChaosScoringBonuses($state, $this->scorer->score($state, $scoringDecisions)));
 
         // Repentance/Scorn's own 'end_of_round' suppression (as opposed to
@@ -10176,8 +10192,8 @@ final class GameService
         }
 
         $insertRound = $pdo->prepare(
-            "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, hurt_feelings_game_player_id, current_turn_game_player_id, plays_remaining, pending_play_grants, status)
-             VALUES (:game_id, :round_number, :first_player, :hurt_feelings, :first_player_turn, :plays_remaining, :pending_play_grants, 'in_progress')"
+            "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, hurt_feelings_game_player_id, current_turn_game_player_id, plays_remaining, pending_play_grants, status, pre_after_scoring_event_id)
+             VALUES (:game_id, :round_number, :first_player, :hurt_feelings, :first_player_turn, :plays_remaining, :pending_play_grants, 'in_progress', :pre_after_scoring_event_id)"
         );
         $insertRound->execute([
             'game_id' => $gameId,
@@ -10187,6 +10203,7 @@ final class GameService
             'first_player_turn' => $nextFirstPlayer,
             'plays_remaining' => count($nextRoundGrants),
             'pending_play_grants' => json_encode($nextRoundGrants),
+            'pre_after_scoring_event_id' => $preAfterScoringEventId,
         ]);
         $newRoundId = (int) $pdo->lastInsertId();
         $this->logFreshGrants($gameId, $newRoundId, $nextFirstPlayer, $nextRoundGrants);
@@ -14770,7 +14787,46 @@ final class GameService
             $response['first_player_decision'] = $this->firstPlayerDecisionStateFor($game, (int) $game['match_game_number'], $viewerUserId ?? 0);
         }
 
-        $state = $this->boardStates->load($gameId);
+        // "Pause at the start of your turn" (migration 0275, reported
+        // live) -- a viewer who is THIS round's own current turn holder,
+        // with turn_pending_acknowledgment still set (see
+        // notifyItsYourTurn()) and a recorded pre_after_scoring_event_id
+        // (NULL for Team Play's own separate round-transition path and
+        // for Awe's skip-scoring path, both left unsupported for now --
+        // see that column's own migration comment), sees the board
+        // exactly as it stood right after the PREVIOUS round finished
+        // scoring but before any after-scoring effect (Recklessness's own
+        // "give it back"/bottom-and-draw, etc.) touched it, via
+        // ReplayStateBuilder::stateAsOf() -- the same historical-
+        // reconstruction machinery issue #240's "watch replay" already
+        // uses, reused here to freeze one viewer's own read of an
+        // otherwise perfectly live, in-progress game. Every OTHER seated
+        // player (and any bot) still sees, and can immediately act on,
+        // the real, already-advanced board regardless -- this only ever
+        // changes what THIS one paused viewer's own GET /games/state
+        // returns, the same personal-gate scope
+        // turn_pending_acknowledgment itself already has.
+        // Also requires nobody has actually played a card in the NEW
+        // round yet (roundHasAnyPlayedCard()) -- notifyItsYourTurn() fires
+        // on every turn handoff, not just a round's own first one, and a
+        // LATER handoff within the same round, once its own first player
+        // has genuinely taken a turn, must never replay this same stale
+        // watermark: whatever that first player played is real progress
+        // after the round already started, not more "after-scoring
+        // effects from the round that just ended" to hide. A player who
+        // only PASSED (no card moved) doesn't disqualify a later
+        // handoff this same round -- the frozen board is still exactly
+        // accurate for them too.
+        $isViewerAwaitingTurnAcknowledgment = $viewerGamePlayerId !== null
+            && $roundRow['current_turn_game_player_id'] !== null
+            && (int) $roundRow['current_turn_game_player_id'] === $viewerGamePlayerId
+            && (bool) $roundRow['turn_pending_acknowledgment']
+            && $roundRow['pre_after_scoring_event_id'] !== null
+            && !$this->roundHasAnyPlayedCard((int) $roundRow['id']);
+
+        $state = $isViewerAwaitingTurnAcknowledgment
+            ? $this->replay->stateAsOf($gameId, (int) $roundRow['pre_after_scoring_event_id'], requireCompleted: false)
+            : $this->boardStates->load($gameId);
         $names = $this->cardNamesFor($gameId);
         $playerNames = array_column($players, 'username', 'game_player_id');
 
@@ -17914,5 +17970,53 @@ final class GameService
             'card_id' => $cardId,
             'details' => $details === [] ? null : json_encode($details),
         ]);
+    }
+
+    /**
+     * The id of the most recent game_events row logged for $gameId so
+     * far, or null if none exist yet -- used by finishScoringAndAdvance()
+     * (migration 0275, "pause at the start of your turn" reported live)
+     * as a replay watermark: ReplayStateBuilder::stateAsOf($gameId, ...)
+     * reconstructs the exact board as it stood right after this event,
+     * i.e. right before that round's own scoring/after-scoring
+     * mutations began. Deliberately not (int) with a 0 sentinel the way
+     * ReplayStateBuilder::stateAsOf()'s own $eventId argument overloads 0
+     * to mean "genesis" -- game_rounds.pre_after_scoring_event_id has a
+     * real foreign key to game_events.id, where 0 is never a valid row,
+     * so the caller needs a genuine null to know "don't populate this
+     * column" rather than a 0 it would otherwise have to remember to
+     * special-case itself.
+     */
+    private function latestEventId(int $gameId): ?int
+    {
+        $stmt = Connection::get()->prepare('SELECT MAX(id) FROM game_events WHERE game_id = :game_id');
+        $stmt->execute(['game_id' => $gameId]);
+        $id = $stmt->fetchColumn();
+
+        return $id !== null ? (int) $id : null;
+    }
+
+    /**
+     * Whether any card has actually been played yet during $roundId --
+     * buildGameState()'s own frozen-board check (migration 0275) uses
+     * this to know whether its round's pre_after_scoring_event_id
+     * watermark is still trustworthy for whichever player's turn it
+     * currently is: true the moment the round's own first player (or
+     * anyone else who's since acted) has played a single card, since
+     * that's real progress after the round already started, not more of
+     * whatever the PREVIOUS round's own after-scoring effects were.
+     * event_type 'mood_played' is the only event type that ever actually
+     * moves a card into play -- a plain 'turn_passed' doesn't disqualify
+     * anything, so a first player who only passed still leaves the
+     * frozen board accurate for whoever's turn comes next this round.
+     */
+    private function roundHasAnyPlayedCard(int $roundId): bool
+    {
+        $stmt = Connection::get()->prepare(
+            "SELECT 1 FROM game_events WHERE game_round_id = :round_id AND event_type = 'mood_played' LIMIT 1"
+        );
+        $stmt->execute(['round_id' => $roundId]);
+
+        return $stmt->fetchColumn() !== false;
     }
 }

@@ -9089,6 +9089,73 @@ separate banner of their own, using the public `round.
 turn_pending_acknowledgment` field -- see `web-static/README.md` for the
 exact rendering.
 
+**The board it shows was, until migration `0275`, always the AFTER-hooks
+one, not the "before" the original report also asked for.** Reported
+live again, a follow-up: "the advance turn button is not showing up
+where I wanted -- I want it to show up after scoring but before 'after
+scoring' effects happen -- for example, if an opponent plays
+recklessness and steals one of my boredom, I want to be able to see the
+board State with their recklessness in play and my boredom on their
+side before I move on to the next round." The pause above already fires
+at the right MOMENT (the instant the new round's own turn holder is
+decided), but by then `finishScoringAndAdvance()` has already run
+`applyAfterScoringHooks()` (Recklessness's own "give it back"/bottom-
+and-draw among others) and created the new round -- so the board it
+actually showed was always fully resolved, never the "just scored"
+moment the original report's own "before/after scoring effects happen"
+phrasing had already anticipated.
+
+**`game_rounds.pre_after_scoring_event_id`** (migration `0275`, FK to
+`game_events.id`, `ON DELETE SET NULL`) fixes this without touching
+`finishScoringAndAdvance()`'s own mutation order at all -- a genuine
+engine-timing change (delaying *when* after-scoring effects actually
+resolve, for every player at the table) was considered and rejected as
+unnecessarily risky for what's fundamentally a personal viewing
+preference, the same "gate the paused viewer's own client, not the rest
+of the table" scope `turn_pending_acknowledgment` itself already has.
+Instead, `GameService::latestEventId()` captures the id of the most
+recent `game_events` row for the game right at the top of
+`finishScoringAndAdvance()`, before `RoundScorer::score()`/
+`applyAfterScoringHooks()`/the loser's-draw loop ever run -- naming the
+last event that existed while the round that just ended was still
+actually being played. This id is carried onto the NEW round's own
+`INSERT` (Team Play/Closed Team Play's own separate round-transition
+path, and Awe's "skip scoring this round" path, both leave it `NULL` --
+see the column's own migration comment for why each is left as a known
+gap rather than force-fit here).
+
+**`GameService::buildGameState()` reconstructs that exact moment on
+demand** via `ReplayStateBuilder::stateAsOf()` -- the same historical-
+reconstruction machinery issue #240's own "watch replay" feature already
+uses (pure replay of already-recorded `game_events` facts, no re-executed
+effect code), now also usable for a game that ISN'T completed yet: its
+own `$requireCompleted` parameter (default `true`, preserving `GET
+/games/replay/state`'s existing guard against spoiling a still-in-
+progress game through that PUBLIC route) is passed `false` only from
+this one new internal call site. Nothing about hand secrecy changes by
+reusing it here -- `buildGameState()` itself (never `ReplayStateBuilder`)
+is what decides which hands a given viewer actually gets to see, exactly
+as it already does for a live-loaded `BoardState`.
+
+The frozen reconstruction only replaces `$state` when ALL of: the viewer
+is this round's own current turn holder, `turn_pending_acknowledgment` is
+set, the round carries a `pre_after_scoring_event_id`, AND -- this last
+check is what keeps a LATER handoff within the same round honest --
+`GameService::roundHasAnyPlayedCard()` finds no `mood_played` event yet
+for this round. Without that last guard, `notifyItsYourTurn()` firing
+again for a second player's own turn later in the same round (this
+round's own first player having since taken a real turn) would replay
+the exact same stale watermark, hiding real round-in-progress plays
+behind a snapshot from before the round even started; a first player who
+only PASSED (nothing entered play) doesn't trip this guard, since the
+frozen board is still exactly accurate for whoever's turn comes next
+either way. Once the viewer clicks Advance Turn (`acknowledgeTurnStart()`
+clearing `turn_pending_acknowledgment`), the very next `GET /games/state`
+call falls straight through to the live, already-advanced `BoardState`
+again -- nothing about the real game state was ever actually delayed for
+anyone, including the paused viewer's own eventual play/pass once they
+un-pause.
+
 ### Board layout preference (issue #417)
 
 "Move the whole Round / Score / Players section under my hand" -- rather
