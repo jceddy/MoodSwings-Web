@@ -1,0 +1,23 @@
+-- UI spacing/layout fix (reported live from a screenshot of the mobile
+-- Neon theme board): #pass-button sat flush against #recent-plays-actions
+-- (View log/View decklist) below it; #view-bot-hands-button/
+-- #view-bot-reasoning-button (diagnostic mode only) crowded onto that
+-- same row instead of getting their own; and #resign-button/
+-- #view-chat-button/#view-notes-button sat below the "Recent plays" list
+-- instead of above it.
+--
+-- #bot-insight-actions (new wrapper div) now holds the two
+-- diagnostic-mode buttons on their own line, hidden as a whole (not just
+-- its two children) whenever diagnostic mode is off so it doesn't leave a
+-- bare gap. #recent-events-details ("Recent plays") moved out of
+-- #in-progress-area to sit below #resign-button/#view-chat-button/
+-- #view-notes-button instead of above them -- those three deliberately
+-- live outside #in-progress-area already (issue #463, so they stay
+-- reachable during a draft match's own 'waiting' phase), so
+-- #recent-events-details now gets its own explicit .hidden toggle in
+-- renderBoard() (game.js) mirroring inProgressArea.hidden, rather than
+-- inheriting it for free by nesting.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.39.3' WHERE id = 1;

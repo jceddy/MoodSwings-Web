@@ -7310,8 +7310,30 @@ final class GameService
         // of whose turn it was, so it isn't really "the viewer's own play"
         // and would otherwise push this boundary past reasoning that's
         // genuinely new to them.
+        //
+        // pending_decision_created is excluded too (reported live: the
+        // reasoning dialog showed empty even right after a Tactical Bot's
+        // move was clearly visible in Recent plays) -- its own
+        // acting_game_player_id is NOT always "whoever just acted": a
+        // scoring-time (Enthusiasm/Passion) or after-scoring order
+        // decision logs it as whoever now OWNS that pending decision (see
+        // writeScoringDecisionBatch()/writeAfterScoringOrderDecisionBatch()'s
+        // own call sites, `$nextDecision['ownerId']`/
+        // `$nextOrderDecision['ownerId']`), which can easily be this same
+        // viewer purely because the ROUND the Tactical Bot's move was
+        // part of happened to end in a decision now awaiting them --
+        // nothing they themselves did. Counting that as "the viewer's own
+        // last play" pushed the boundary past the very
+        // tactical_bot_reasoning row that decision resulted from, hiding
+        // it. The genuine completed action is logged separately, once
+        // they actually answer, as pending_decision_resolved (still
+        // counted here) -- so excluding the "created" row costs nothing:
+        // either it's still unresolved (nothing else could have happened
+        // in the meantime anyway, see assertNoPendingDecision()) or it's
+        // already resolved, in which case that resolution's own row is
+        // both later and still counted.
         $lastOwnEventStmt = $pdo->prepare(
-            "SELECT id FROM game_events WHERE game_id = :game_id AND acting_game_player_id = :player_id AND event_type != 'round_grants_computed' ORDER BY id DESC LIMIT 1"
+            "SELECT id FROM game_events WHERE game_id = :game_id AND acting_game_player_id = :player_id AND event_type NOT IN ('round_grants_computed', 'pending_decision_created') ORDER BY id DESC LIMIT 1"
         );
         $lastOwnEventStmt->execute(['game_id' => $gameId, 'player_id' => $viewerGamePlayerId]);
         $sinceEventId = $lastOwnEventStmt->fetchColumn();
