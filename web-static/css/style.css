@@ -1068,20 +1068,40 @@ body.game-page {
 
 /* #resign-button sits outside #in-progress-area (see its own comment in
    game/index.html) so it stays reachable even while a draft match is
-   still 'waiting' -- what's directly above it varies (the recent-events
-   list, a drafting/deck-building panel, ...), so margin-top here is more
+   still 'waiting' -- what's directly above it varies (#bot-insight-actions,
+   a drafting/deck-building panel, ...), so margin-top here is more
    reliable than trying to add margin-bottom to whichever of those happens
    to be visible. */
 #resign-button {
     margin-top: 1rem;
 }
 
-/* Breathing room between the "View log"/"View decklist" buttons and the
-   collapsible recent-plays list right below them (#recent-events-details)
-   -- without this the list's own <summary> sat flush against the buttons
-   above it. */
+/* Breathing room above the "View log"/"View decklist" row -- without this
+   it sat flush against #pass-button right above it (reported live). */
 #recent-plays-actions {
+    margin-top: 0.75rem;
     margin-bottom: 0.75rem;
+}
+
+/* #bot-insight-actions (View bot hand(s)/View bot reasoning, diagnostic
+   mode only) sits on its own line below #recent-plays-actions -- reuses
+   that div's own margin-bottom above as its top gap, so it only needs a
+   bottom margin of its own here to keep #in-progress-area's own end (and
+   #resign-button beyond it, via that button's margin-top above) from
+   sitting flush against it too. */
+#bot-insight-actions {
+    margin-bottom: 0.75rem;
+}
+
+/* #recent-events-details moved outside #in-progress-area, below
+   #resign-button/#view-chat-button/#view-notes-button, so those buttons
+   read as sitting above the recent-plays list rather than below it
+   (reported live; see its own comment in game/index.html). Needs its own
+   gap the same way #resign-button above gets one from margin-top, since
+   it no longer shares #recent-plays-actions's old margin-bottom now that
+   they're not adjacent siblings any more. */
+#recent-events-details {
+    margin-top: 1rem;
 }
 
 #lobby-view li button {

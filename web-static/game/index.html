@@ -495,14 +495,17 @@
                 <div id="recent-plays-actions">
                     <button id="view-log-button" type="button">View log</button>
                     <button id="view-shared-deck-button" type="button" hidden>View decklist</button>
+                </div>
+                <!-- Split out from #recent-plays-actions above so diagnostic
+                     mode's two buttons get their own line rather than
+                     crowding onto View log/View decklist's -- both toggle
+                     together (see renderBoard()'s diagnosticModeOn in
+                     game.js, which also hides this whole div when neither
+                     applies so it doesn't leave a bare gap). -->
+                <div id="bot-insight-actions" hidden>
                     <button id="view-bot-hands-button" type="button" hidden>View bot hand(s)</button>
                     <button id="view-bot-reasoning-button" type="button" hidden>View bot reasoning</button>
                 </div>
-                <details id="recent-events-details" open>
-                    <summary>Recent plays</summary>
-                    <ul id="recent-events-list"></ul>
-                    <p id="recent-events-empty" hidden>Nothing has happened yet.</p>
-                </details>
             </div>
 
             <!-- Outside #in-progress-area so it stays reachable while a
@@ -527,6 +530,18 @@
                  regardless of its own .hidden). -->
             <button id="view-chat-button" type="button" hidden>Chat</button>
             <button id="view-notes-button" type="button" hidden>Notes</button>
+
+            <!-- Moved out here, below Resign/Chat/Notes, so those buttons
+                 sit above the recent-plays list rather than below it
+                 (reported live). Still needs its own explicit .hidden
+                 toggle in renderBoard() (mirroring inProgressArea.hidden)
+                 now that it's no longer a descendant of #in-progress-area
+                 to inherit that from. -->
+            <details id="recent-events-details" open>
+                <summary>Recent plays</summary>
+                <ul id="recent-events-list"></ul>
+                <p id="recent-events-empty" hidden>Nothing has happened yet.</p>
+            </details>
         </section>
     </main>
 

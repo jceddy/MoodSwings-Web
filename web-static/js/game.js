@@ -5999,6 +5999,12 @@
 
         if (state.game.status === 'waiting') {
             inProgressArea.hidden = true;
+            // #recent-events-details now lives outside #in-progress-area
+            // (moved below #resign-button/#view-chat-button/
+            // #view-notes-button so those sit above the recent-plays list,
+            // reported live) -- it no longer inherits inProgressArea's own
+            // .hidden by nesting, so this mirrors it explicitly.
+            document.getElementById('recent-events-details').hidden = true;
             // #pending-decision-banner and #scoring-preview both live
             // outside #in-progress-area (a pending decision/scoring
             // preview belongs to whichever game most recently showed one,
@@ -6069,6 +6075,7 @@
         document.getElementById('tiered-rotisserie-draft-panel').hidden = true;
         document.getElementById('draft-deck-building').hidden = true;
         inProgressArea.hidden = false;
+        document.getElementById('recent-events-details').hidden = false;
 
         // 'abandoned' (force-expired by the stale-game cron, or a draft
         // match resigned out of before any round ever started -- see
@@ -6244,6 +6251,7 @@
         // for a seated human viewer once the game itself opted in, which
         // doubles here as "diagnostic mode is on" for both buttons.
         const diagnosticModeOn = state.diagnostic_bot_hands !== null;
+        document.getElementById('bot-insight-actions').hidden = !diagnosticModeOn;
         document.getElementById('view-bot-hands-button').hidden = !diagnosticModeOn;
         document.getElementById('view-bot-reasoning-button').hidden = !diagnosticModeOn;
 
