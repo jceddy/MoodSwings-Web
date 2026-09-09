@@ -100,6 +100,7 @@
                 <h2>Your games</h2>
                 <button id="new-game-button" type="button">New game</button>
                 <button id="open-games-button" type="button">Open games</button>
+                <button id="weekly-sealed-pool-button" type="button">Weekly Sealed Pool</button>
                 <button id="past-games-button" type="button">Past games</button>
                 <ul id="games-list"></ul>
                 <p id="games-empty" hidden>No games yet &mdash; start one!</p>
@@ -985,6 +986,35 @@
         </section>
         <p id="open-games-error" class="error" hidden></p>
         <button id="open-games-close-button" type="button">Close</button>
+    </dialog>
+
+    <!-- Weekly Sealed Pool (issue #520): a FIFO auto-pairing queue, not
+         another open-lobby listing -- clicking "Join Queue" immediately
+         pairs you against the next eligible already-queued player (or
+         just waits, if none), rather than posting/browsing a listing the
+         way #open-games-dialog above does. Also hosts the event's own
+         persistent standings, toggleable between this week's still-live
+         numbers and last week's now-final ones -- see
+         GameService::weeklySealedPoolStandings()'s own docblock for why
+         only players who've completed at least one match are listed. -->
+    <dialog id="weekly-sealed-pool-dialog">
+        <h2>Weekly Sealed Pool</h2>
+        <section>
+            <p id="weekly-sealed-pool-queue-status"></p>
+            <button id="weekly-sealed-pool-join-button" type="button">Join Queue</button>
+            <button id="weekly-sealed-pool-leave-button" type="button" hidden>Leave Queue</button>
+            <p id="weekly-sealed-pool-queue-error" class="error" hidden></p>
+        </section>
+        <section>
+            <h3>Standings</h3>
+            <div>
+                <button id="weekly-sealed-pool-standings-current-button" type="button" aria-pressed="true">This week</button>
+                <button id="weekly-sealed-pool-standings-prior-button" type="button" aria-pressed="false">Last week</button>
+            </div>
+            <ol id="weekly-sealed-pool-standings-list"></ol>
+            <p id="weekly-sealed-pool-standings-empty" hidden>No standings yet -- be the first to finish a match this week!</p>
+        </section>
+        <button id="weekly-sealed-pool-close-button" type="button">Close</button>
     </dialog>
 
     <dialog id="card-detail-dialog">

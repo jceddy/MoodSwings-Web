@@ -142,6 +142,20 @@ final class GameService
     ];
 
     /**
+     * Maps each deck_type that draws from a shared periodic_sealed_pools
+     * row to the period_type getOrCreatePeriodicSealedPool() should use for
+     * it -- the single source of truth for "is this deck_type one of
+     * Sealed Pool of the Day/Weekly Sealed Pool" (createGame(),
+     * submitDraftDeck(), sealedDeckStateFor() all key off this rather than
+     * an inline in_array()/=== list of both deck_type strings, now that
+     * there are two of them to keep in sync).
+     */
+    private const PERIODIC_SEALED_POOL_DECK_TYPES = [
+        'sealed_pool_of_the_day' => 'daily',
+        'weekly_sealed_pool' => 'weekly',
+    ];
+
+    /**
      * The 'power' deck_type's own non-Mythic card count -- see
      * buildPowerDeckCardIds(), which pairs this many random non-Mythic
      * cards with exactly one random Mythic (15 total).
@@ -745,6 +759,260 @@ final class GameService
     }
 
     /**
+     * Weekly Sealed Pool's own asymmetric ranking score (issue #520,
+     * confirmed by the maintainer): a win is worth meaningfully more than
+     * a loss costs, so playing (and winning) more matches always helps
+     * your placement rather than a cautious 1-0 record outscoring a
+     * grindier 4-2 one. This score is never shown to a player directly --
+     * only used internally to rank weeklySealedPoolStandings()' own
+     * placement -- what a player actually sees is their plain win/loss
+     * record (weekly_sealed_pool_standings.wins/losses) and the
+     * percentage placement derived from this score, never the score
+     * itself.
+     */
+    private const WEEKLY_SEALED_POOL_RANKING_POINTS = ['win' => 3, 'loss' => -2];
+
+    /**
+     * Current week's shared pool id, exposed publicly (unlike
+     * getOrCreatePeriodicSealedPool() itself) so WeeklySealedPoolQueueService
+     * can resolve it without duplicating the daily-vs-weekly period-start
+     * logic -- the queue needs this same id both to check pairing history
+     * (haveWeeklySealedPoolOpponentsAlreadyPlayed()) and to hand to
+     * createGame() indirectly via deck_type 'weekly_sealed_pool' (which
+     * resolves its own copy of the identical row).
+     */
+    public function currentWeeklySealedPoolId(): int
+    {
+        return $this->getOrCreatePeriodicSealedPool('weekly')['id'];
+    }
+
+    /**
+     * The event page's own "prior week's now-final standings" toggle
+     * (issue #520) -- unlike currentWeeklySealedPoolId(), this deliberately
+     * does NOT get-or-create: if last week never had a single Weekly
+     * Sealed Pool match played (so getOrCreatePeriodicSealedPool('weekly')
+     * was never called for it), there's genuinely no prior event to show,
+     * and fabricating an empty pool row here would misrepresent that as
+     * "a week happened with zero participants" rather than "no event ran
+     * at all".
+     */
+    public function priorWeeklySealedPoolId(): ?int
+    {
+        $priorPeriodStart = (new \DateTimeImmutable(self::currentWeeklySealedPoolPeriodStart()))->modify('-7 days')->format('Y-m-d');
+
+        $stmt = Connection::get()->prepare(
+            "SELECT id FROM periodic_sealed_pools WHERE period_type = 'weekly' AND period_start = :period_start"
+        );
+        $stmt->execute(['period_start' => $priorPeriodStart]);
+        $id = $stmt->fetchColumn();
+
+        return $id !== false ? (int) $id : null;
+    }
+
+    /**
+     * Weekly Sealed Pool's own pairing rule (issue #520): "the earliest
+     * other still-queued player they have NOT already played during this
+     * week's event" -- queried directly against draft_matches/
+     * draft_match_players rather than a dedicated pairing-history table,
+     * since draft_matches.periodic_sealed_pool_id already scopes every
+     * Weekly Sealed Pool match to the week it was paired in, and this
+     * table is small enough (at most a handful of matches per player per
+     * week) that the join is cheap. Counts a still-in-progress match
+     * between the pair the same as a completed one -- two players
+     * mid-match should never be re-paired against each other again this
+     * same week just because neither has won yet.
+     */
+    public function haveWeeklySealedPoolOpponentsAlreadyPlayed(int $periodicSealedPoolId, int $userIdA, int $userIdB): bool
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT 1 FROM draft_matches dm
+             JOIN draft_match_players p1 ON p1.draft_match_id = dm.id AND p1.user_id = :user_a
+             JOIN draft_match_players p2 ON p2.draft_match_id = dm.id AND p2.user_id = :user_b
+             WHERE dm.periodic_sealed_pool_id = :pool_id
+             LIMIT 1'
+        );
+        $stmt->execute(['user_a' => $userIdA, 'user_b' => $userIdB, 'pool_id' => $periodicSealedPoolId]);
+
+        return $stmt->fetchColumn() !== false;
+    }
+
+    /**
+     * Weekly Sealed Pool's own concurrent-match cap (issue #520, the
+     * maintainer's own suggested number, enforced at join-queue time only
+     * -- see WeeklySealedPoolQueueService::joinQueue()) -- how many of
+     * this week's own Weekly Sealed Pool matches $userId is still
+     * mid-match on right now, so one player can't accumulate a long tail
+     * of simultaneous opponents while everyone else waits on them.
+     */
+    public function countInProgressWeeklySealedPoolMatchesForUser(int $periodicSealedPoolId, int $userId): int
+    {
+        $stmt = Connection::get()->prepare(
+            "SELECT COUNT(*) FROM draft_matches dm
+             JOIN draft_match_players dmp ON dmp.draft_match_id = dm.id
+             WHERE dm.periodic_sealed_pool_id = :pool_id AND dm.status != 'completed' AND dmp.user_id = :user_id"
+        );
+        $stmt->execute(['pool_id' => $periodicSealedPoolId, 'user_id' => $userId]);
+
+        return (int) $stmt->fetchColumn();
+    }
+
+    /**
+     * Updates Weekly Sealed Pool's own persistent standings (issue #520)
+     * once a match actually finishes -- called from
+     * recordMatchCompletionStats() alongside its own lifetime match_wins/
+     * match_losses bump, for the same reason: this is the one place every
+     * draft-family match completion path (advanceDraftMatch()'s ordinary
+     * finish, resignFromDraftMatch()'s auto-win, finalizeWinstonDraft()'s
+     * short-player auto-win) already funnels through with a
+     * $draftMatchId/$winnerUserId pair in hand. A no-op for every other
+     * deck_type (checked by the caller) and for a bot-containing match
+     * (recordMatchCompletionStats() itself already returns before ever
+     * reaching here in that case) -- Weekly Sealed Pool never seats a bot
+     * in the first place (see botsSupportedFor()), so that exclusion is
+     * purely defensive here, not a real case.
+     *
+     * upsert (not a fresh row) since the SAME (periodic_sealed_pool_id,
+     * user_id) pair accumulates across every match a player completes
+     * that week -- a player queues repeatedly throughout the week,
+     * building up one running record, not one row per match.
+     */
+    private function recordWeeklySealedPoolStandings(int $periodicSealedPoolId, int $winnerUserId, array $userIds): void
+    {
+        $winPoints = self::WEEKLY_SEALED_POOL_RANKING_POINTS['win'];
+        $lossPoints = self::WEEKLY_SEALED_POOL_RANKING_POINTS['loss'];
+
+        $upsert = Connection::get()->prepare(
+            'INSERT INTO weekly_sealed_pool_standings (periodic_sealed_pool_id, user_id, wins, losses, score)
+             VALUES (:pool_id, :user_id, :wins, :losses, :score)
+             ON DUPLICATE KEY UPDATE wins = wins + :wins, losses = losses + :losses, score = score + :score'
+        );
+
+        $upsert->execute([
+            'pool_id' => $periodicSealedPoolId,
+            'user_id' => $winnerUserId,
+            'wins' => 1,
+            'losses' => 0,
+            'score' => $winPoints,
+        ]);
+
+        foreach (array_diff($userIds, [$winnerUserId]) as $loserUserId) {
+            $upsert->execute([
+                'pool_id' => $periodicSealedPoolId,
+                'user_id' => $loserUserId,
+                'wins' => 0,
+                'losses' => 1,
+                'score' => $lossPoints,
+            ]);
+        }
+    }
+
+    /**
+     * The event page's own standings menu (issue #520): every player who
+     * has completed at least one Weekly Sealed Pool match during
+     * $periodicSealedPoolId's own week, ranked by the hidden internal
+     * score (WEEKLY_SEALED_POOL_RANKING_POINTS) -- never returned itself,
+     * only used to order/place -- highest first. A player who has only
+     * queued/is mid-match with nothing finished yet has no row at all
+     * (recordWeeklySealedPoolStandings() only ever inserts on a
+     * completion), so they're correctly absent here rather than cluttering
+     * the list with an untested 0-0 entry.
+     *
+     * @return list<array{user_id: int, username: string, wins: int, losses: int, rank: int, percentile: int}>
+     */
+    public function weeklySealedPoolStandings(int $periodicSealedPoolId): array
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT s.user_id, u.username, s.wins, s.losses
+             FROM weekly_sealed_pool_standings s
+             JOIN users u ON u.id = s.user_id
+             WHERE s.periodic_sealed_pool_id = :pool_id
+             ORDER BY s.score DESC, s.wins DESC, u.username ASC'
+        );
+        $stmt->execute(['pool_id' => $periodicSealedPoolId]);
+        $rows = $stmt->fetchAll();
+
+        return self::rankedStandingsRows($rows);
+    }
+
+    /**
+     * Turns a score-ordered list of standings rows into ranked, percentile-
+     * placed ones -- shared by weeklySealedPoolStandings() (current/prior
+     * week's own full list) and priorWeeklySealedPoolEventsFor() (one
+     * viewer's own placement within each past week they took part in).
+     * Percentile is "top N%" (rank / total, rounded UP so 1st of 20 reads
+     * "top 5%" and 20th of 20 reads "top 100%", never "top 0%") --
+     * deliberately not a raw rank number, so it stays comparable across
+     * weeks that draw very different numbers of players (the maintainer's
+     * own reasoning: "top 10%" means the same thing at 6 players or 600,
+     * "3rd place" does not).
+     *
+     * @param list<array{user_id: int, username: string, wins: int, losses: int}> $scoreOrderedRows
+     * @return list<array{user_id: int, username: string, wins: int, losses: int, rank: int, percentile: int}>
+     */
+    private static function rankedStandingsRows(array $scoreOrderedRows): array
+    {
+        $total = count($scoreOrderedRows);
+        $ranked = [];
+        foreach (array_values($scoreOrderedRows) as $index => $row) {
+            $rank = $index + 1;
+            $ranked[] = [
+                'user_id' => (int) $row['user_id'],
+                'username' => $row['username'],
+                'wins' => (int) $row['wins'],
+                'losses' => (int) $row['losses'],
+                'rank' => $rank,
+                'percentile' => (int) ceil(($rank / $total) * 100),
+            ];
+        }
+
+        return $ranked;
+    }
+
+    /**
+     * User info's own "prior events" list (issue #520): one row per past
+     * Weekly Sealed Pool week $userId actually completed a match in,
+     * newest first, each with their own win/loss record and percentage
+     * placement within that week -- deliberately excludes the CURRENT,
+     * still-live week (that's the event page's own "current standings"
+     * menu instead, via weeklySealedPoolStandings()) so a still-in-
+     * progress week's placement doesn't masquerade as final here.
+     *
+     * @return list<array{period_start: string, wins: int, losses: int, rank: int, percentile: int}>
+     */
+    public function priorWeeklySealedPoolEventsFor(int $userId): array
+    {
+        $currentPeriodStart = self::currentWeeklySealedPoolPeriodStart();
+
+        $poolIdsStmt = Connection::get()->prepare(
+            "SELECT DISTINCT psp.id, psp.period_start
+             FROM periodic_sealed_pools psp
+             JOIN weekly_sealed_pool_standings s ON s.periodic_sealed_pool_id = psp.id
+             WHERE psp.period_type = 'weekly' AND psp.period_start != :current_period_start AND s.user_id = :user_id
+             ORDER BY psp.period_start DESC"
+        );
+        $poolIdsStmt->execute(['current_period_start' => $currentPeriodStart, 'user_id' => $userId]);
+
+        $events = [];
+        foreach ($poolIdsStmt->fetchAll() as $pool) {
+            $standings = $this->weeklySealedPoolStandings((int) $pool['id']);
+            foreach ($standings as $row) {
+                if ($row['user_id'] === $userId) {
+                    $events[] = [
+                        'period_start' => $pool['period_start'],
+                        'wins' => $row['wins'],
+                        'losses' => $row['losses'],
+                        'rank' => $row['rank'],
+                        'percentile' => $row['percentile'],
+                    ];
+                    break;
+                }
+            }
+        }
+
+        return $events;
+    }
+
+    /**
      * Rotisserie Draft's own turn order (confirmed by the maintainer) --
      * $pickIndex is a 0-based global counter of picks made so far in this
      * match; returns which of $userIds (in seat order) picks next.
@@ -1249,7 +1517,7 @@ final class GameService
         $duelEvenColorDistributionRarities = null;
 
         if ($format === 'draft' && !in_array($deckType, self::DRAFT_DECK_TYPES, true)) {
-            throw new GameStateException('The "draft" format only supports the "quick_draft"/"winston_draft"/"grid_draft"/"rotisserie_draft"/"tiered_rotisserie_draft"/"sealed_deck"/"sealed_pool_of_the_day" deck types');
+            throw new GameStateException('The "draft" format only supports the "quick_draft"/"winston_draft"/"grid_draft"/"rotisserie_draft"/"tiered_rotisserie_draft"/"sealed_deck"/"sealed_pool_of_the_day"/"weekly_sealed_pool" deck types');
         }
         // Team Play/Closed Team Play (issue #362) may also draft: each of
         // the 4 players still drafts and builds their own deck
@@ -1342,8 +1610,8 @@ final class GameService
         // once per UTC+6 calendar day and persisted, not re-rolled here.
         // array_fill() rather than array_map() makes that "identical, not
         // independently random" intent explicit at the call site.
-        $periodicSealedPool = $deckType === 'sealed_pool_of_the_day'
-            ? $this->getOrCreatePeriodicSealedPool('daily')
+        $periodicSealedPool = array_key_exists($deckType, self::PERIODIC_SEALED_POOL_DECK_TYPES)
+            ? $this->getOrCreatePeriodicSealedPool(self::PERIODIC_SEALED_POOL_DECK_TYPES[$deckType])
             : null;
         $sealedDeckPlayerPools = match (true) {
             $deckType === 'sealed_deck' => array_map(fn (): array => $this->buildSealedDeckPlayerPool(), $userIds),
@@ -1374,7 +1642,7 @@ final class GameService
             // distinguishes it (draft_matches.periodic_sealed_pool_id is
             // the "was this dealt from a shared pool" signal, not
             // pool_source), so a new ENUM value here would add nothing.
-            'sealed_deck', 'sealed_pool_of_the_day' => 'structure',
+            'sealed_deck', 'sealed_pool_of_the_day', 'weekly_sealed_pool' => 'structure',
             default => null,
         };
         $draftPoolCardIds = match ($deckType) {
@@ -1396,7 +1664,7 @@ final class GameService
             // here (draftMatchPoolView()'s own undraftedCardIds still
             // lands on [] the same way, and nothing else reads this
             // column back for these two deck_types specifically).
-            'sealed_deck', 'sealed_pool_of_the_day' => array_merge(...$sealedDeckPlayerPools),
+            'sealed_deck', 'sealed_pool_of_the_day', 'weekly_sealed_pool' => array_merge(...$sealedDeckPlayerPools),
             default => null,
         };
 
@@ -1578,7 +1846,7 @@ final class GameService
                         // it all at once the way Quick Draft's own NULL
                         // start does either. Any pool may go to any seat
                         // (see $sealedDeckPlayerPools's own docblock).
-                        'drafted_card_ids' => in_array($deckType, ['sealed_deck', 'sealed_pool_of_the_day'], true) ? json_encode($sealedDeckPlayerPools[$seatIndex]) : $initialDraftedCardIds,
+                        'drafted_card_ids' => in_array($deckType, ['sealed_deck', 'sealed_pool_of_the_day', 'weekly_sealed_pool'], true) ? json_encode($sealedDeckPlayerPools[$seatIndex]) : $initialDraftedCardIds,
                     ]);
                 }
 
@@ -1592,7 +1860,7 @@ final class GameService
                     $this->initializeRotisserieDraft($gameId, $draftMatchId, $draftPoolCardIds, array_values($seatedUserIds), $rotisserieDraftCutoffCount);
                 } elseif ($deckType === 'tiered_rotisserie_draft') {
                     $this->initializeTieredRotisserieDraft($gameId, $draftMatchId, $tieredRotisserieDraftTierPools, array_values($seatedUserIds), (string) $tieredRotisserieDraftMode);
-                } elseif ($deckType === 'sealed_deck' || $deckType === 'sealed_pool_of_the_day') {
+                } elseif ($deckType === 'sealed_deck' || array_key_exists($deckType, self::PERIODIC_SEALED_POOL_DECK_TYPES)) {
                     $this->initializeSealedDeck($draftMatchId);
                 }
             }
@@ -1659,7 +1927,7 @@ final class GameService
      * they were finally consolidated onto this constant at the same time
      * rather than adding yet another string to maintain in ten places.
      */
-    private const DRAFT_DECK_TYPES = ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck', 'sealed_pool_of_the_day'];
+    private const DRAFT_DECK_TYPES = ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck', 'sealed_pool_of_the_day', 'weekly_sealed_pool'];
 
     /**
      * Whether a practice bot (issue #140) can be seated in a game with
@@ -1701,19 +1969,24 @@ final class GameService
         if ($format === 'duel' && $deckType === 'custom_duel') {
             return true;
         }
-        // Sealed Pool of the Day (issue #520) is the one DRAFT_DECK_TYPES
-        // member deliberately excluded here: BotPlayerService::
-        // chooseDraftDeck() (used by advanceBotDraftDeck() below to build
-        // a bot's own deck) has no awareness of
-        // PERIODIC_SEALED_POOL_RARITY_DECK_CAPS, so a bot could pick a
-        // deck submitDraftDeck() would then reject as over-cap -- an
-        // uncaught GameStateException there is exactly the "silent,
-        // permanent stall" class of bug advanceBotDraftDeck()'s own
-        // docblock warns about for a different historical case. Rejected
-        // outright here (createGame() throws before ever seating the bot)
-        // rather than risk that; may be revisited once chooseDraftDeck()
-        // itself learns to respect a rarity cap.
-        if ($deckType === 'sealed_pool_of_the_day') {
+        // Sealed Pool of the Day/Weekly Sealed Pool (issue #520) are the
+        // only DRAFT_DECK_TYPES members deliberately excluded here:
+        // BotPlayerService::chooseDraftDeck() (used by
+        // advanceBotDraftDeck() below to build a bot's own deck) has no
+        // awareness of PERIODIC_SEALED_POOL_RARITY_DECK_CAPS, so a bot
+        // could pick a deck submitDraftDeck() would then reject as
+        // over-cap -- an uncaught GameStateException there is exactly the
+        // "silent, permanent stall" class of bug advanceBotDraftDeck()'s
+        // own docblock warns about for a different historical case.
+        // Rejected outright here (createGame() throws before ever seating
+        // the bot) rather than risk that; may be revisited once
+        // chooseDraftDeck() itself learns to respect a rarity cap. Moot
+        // for Weekly Sealed Pool in practice (its own matches are only
+        // ever created by the queue's pairing of two real, already-queued
+        // players -- see WeeklySealedPoolService -- never with a bot
+        // seated), but kept here anyway for the same direct-createGame()-call
+        // safety net Sealed Pool of the Day itself has.
+        if (array_key_exists($deckType, self::PERIODIC_SEALED_POOL_DECK_TYPES)) {
             return false;
         }
         if (in_array($format, ['draft', 'team', 'closed_team'], true) && in_array($deckType, self::DRAFT_DECK_TYPES, true)) {
@@ -4069,11 +4342,11 @@ final class GameService
             // cutoffs are validated (createGame()) to sum to at least
             // this same floor already.
             'tiered_rotisserie_draft' => self::ROTISSERIE_DRAFT_MIN_DECK_SIZE,
-            // Sealed Pool of the Day (issue #520) shares Sealed Deck's own
-            // 12-card floor -- its own pool is bigger (50 vs. 45 cards)
-            // but there's no format-specific reason for the floor itself
-            // to differ.
-            'sealed_deck', 'sealed_pool_of_the_day' => self::SEALED_DECK_MIN_DECK_SIZE,
+            // Sealed Pool of the Day/Weekly Sealed Pool (issue #520) share
+            // Sealed Deck's own 12-card floor -- their own pool is bigger
+            // (50 vs. 45 cards) but there's no format-specific reason for
+            // the floor itself to differ.
+            'sealed_deck', 'sealed_pool_of_the_day', 'weekly_sealed_pool' => self::SEALED_DECK_MIN_DECK_SIZE,
         };
     }
 
@@ -4087,14 +4360,15 @@ final class GameService
         $minDeckSize = self::draftMinDeckSizeFor($game['deck_type']);
         $maxDeckSize = null;
         $teammateUserId = $this->openTeamPlayTeammateUserId($gameId, $game['format'], $userId);
-        // Sealed Pool of the Day (issue #520): the shared pool's own
-        // per-rarity deck caps (PERIODIC_SEALED_POOL_RARITY_DECK_CAPS) --
-        // checked below only for this one deck_type, via
-        // $game['deck_type'] rather than draft_matches.periodic_sealed_pool_id
-        // itself, since both are already available here with no extra
-        // query and always agree in practice (this deck_type is never
-        // seated without one -- see createGame()'s own $periodicSealedPool).
-        $enforceRarityCapsFor = $game['deck_type'] === 'sealed_pool_of_the_day' ? $game['deck_type'] : null;
+        // Sealed Pool of the Day/Weekly Sealed Pool (issue #520): the
+        // shared pool's own per-rarity deck caps
+        // (PERIODIC_SEALED_POOL_RARITY_DECK_CAPS) -- checked below only for
+        // these two deck_types, via $game['deck_type'] rather than
+        // draft_matches.periodic_sealed_pool_id itself, since both are
+        // already available here with no extra query and always agree in
+        // practice (neither deck_type is ever seated without one -- see
+        // createGame()'s own $periodicSealedPool).
+        $enforceRarityCapsFor = array_key_exists($game['deck_type'], self::PERIODIC_SEALED_POOL_DECK_TYPES) ? $game['deck_type'] : null;
 
         $this->withGameLock($gameId, function () use ($draftMatchId, $userId, $teammateUserId, $deckCardIds, $minDeckSize, $maxDeckSize, $enforceRarityCapsFor): void {
             $match = $this->fetchDraftMatch($draftMatchId);
@@ -9378,9 +9652,12 @@ final class GameService
             return;
         }
 
-        $deckTypeStmt = Connection::get()->prepare('SELECT deck_type FROM games WHERE draft_match_id = :match_id LIMIT 1');
+        $deckTypeStmt = Connection::get()->prepare(
+            'SELECT g.deck_type, dm.periodic_sealed_pool_id FROM games g JOIN draft_matches dm ON dm.id = g.draft_match_id WHERE g.draft_match_id = :match_id LIMIT 1'
+        );
         $deckTypeStmt->execute(['match_id' => $draftMatchId]);
-        if ($deckTypeStmt->fetchColumn() === 'chaos_draft') {
+        $matchRow = $deckTypeStmt->fetch();
+        if ($matchRow !== false && $matchRow['deck_type'] === 'chaos_draft') {
             return;
         }
 
@@ -9388,6 +9665,14 @@ final class GameService
 
         $this->bumpLifetimeStats([$winnerUserId], 'match_wins');
         $this->bumpLifetimeStats(array_diff($userIds, [$winnerUserId]), 'match_losses');
+
+        // Weekly Sealed Pool's own persistent standings (issue #520) --
+        // see recordWeeklySealedPoolStandings()'s own docblock for why
+        // this is funneled through here rather than instrumented
+        // separately at each of this method's own 3 call sites.
+        if ($matchRow !== false && $matchRow['deck_type'] === 'weekly_sealed_pool' && $matchRow['periodic_sealed_pool_id'] !== null) {
+            $this->recordWeeklySealedPoolStandings((int) $matchRow['periodic_sealed_pool_id'], $winnerUserId, $userIds);
+        }
     }
 
     /** @param string $column one of user_lifetime_stats' own counter columns -- never user input, so safe to interpolate directly */
@@ -13006,9 +13291,9 @@ final class GameService
                 null,
                 $teammateUserId,
             );
-            // Sealed Pool of the Day (issue #520) only -- omitted (not
-            // just null) for ordinary Sealed Deck, which has no
-            // per-rarity deck cap at all. Merged onto 'deck_building'
+            // Sealed Pool of the Day/Weekly Sealed Pool (issue #520) only --
+            // omitted (not just null) for ordinary Sealed Deck, which has
+            // no per-rarity deck cap at all. Merged onto 'deck_building'
             // itself (rather than living as a sibling field on $state)
             // purely so renderDraftDeckBuilding() in game.js -- called
             // with just this one sub-object, shared verbatim across
@@ -13019,7 +13304,7 @@ final class GameService
             // submitDraftDeck() itself validates against, rather than
             // the player only finding out by having a submission
             // rejected.
-            if ($game['deck_type'] === 'sealed_pool_of_the_day') {
+            if (array_key_exists($game['deck_type'], self::PERIODIC_SEALED_POOL_DECK_TYPES)) {
                 $state['deck_building']['rarity_caps'] = self::PERIODIC_SEALED_POOL_RARITY_DECK_CAPS;
             }
         }
@@ -14406,7 +14691,7 @@ final class GameService
                 $response['rotisserie_draft'] = $this->rotisserieDraftStateFor($game, $viewerUserId);
             } elseif ($game['deck_type'] === 'tiered_rotisserie_draft' && $game['draft_match_id'] !== null) {
                 $response['tiered_rotisserie_draft'] = $this->tieredRotisserieDraftStateFor($game, $viewerUserId);
-            } elseif (($game['deck_type'] === 'sealed_deck' || $game['deck_type'] === 'sealed_pool_of_the_day') && $game['draft_match_id'] !== null) {
+            } elseif (($game['deck_type'] === 'sealed_deck' || array_key_exists($game['deck_type'], self::PERIODIC_SEALED_POOL_DECK_TYPES)) && $game['draft_match_id'] !== null) {
                 // Sealed Pool of the Day (issue #520) reuses the exact
                 // same 'sealed_deck' response field/UI as ordinary Sealed
                 // Deck -- deck-building is mechanically identical (see

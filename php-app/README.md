@@ -3809,6 +3809,100 @@ except where a pool's cards actually come from and the new rarity cap), so
 `'sealed_deck'` rather than needing its own parallel dispatch anywhere in
 this shared machinery.
 
+### Weekly Sealed Pool (issue #520)
+
+The slower-cadence sibling of Sealed Pool of the Day, paired with its own
+lightweight continuous matchmaking queue and a persistent standings/
+leaderboard. Mechanically, a Weekly Sealed Pool match (`deck_type:
+'weekly_sealed_pool'`) is nothing more than Sealed Pool of the Day with a
+`'weekly'` period instead of `'daily'` -- every constant/method the two
+deck types share is keyed off `PERIODIC_SEALED_POOL_DECK_TYPES` (`[
+'sealed_pool_of_the_day' => 'daily', 'weekly_sealed_pool' => 'weekly']`),
+so `getOrCreatePeriodicSealedPool()`, the rarity distribution/deck caps,
+the rarity-cap validation, the bot exclusion, and `getState()`'s dispatch
+to the shared `sealed_deck` response field/`sealedDeckStateFor()` method
+all already generalize -- this section only covers what's genuinely new:
+the queue and the standings.
+
+**`WeeklySealedPoolQueueService` (`src/Matchmaking/`) -- a FIFO auto-pairing
+queue, deliberately separate from `MatchmakingService`'s own open-lobby
+system.** Posting/browsing/joining a listing (issue #116) is the wrong
+shape for this: a player just wants to be matched against *someone*
+eligible right now, not browse a list. `joinQueue()` looks for the
+earliest still-queued player (`weekly_sealed_pool_queue`, migration 0273)
+the joiner hasn't already faced this week -- `GameService::
+haveWeeklySealedPoolOpponentsAlreadyPlayed()` answers that directly against
+`draft_matches`/`draft_match_players` (no separate pairing-history table
+needed: `draft_matches.periodic_sealed_pool_id` already scopes every match
+to the week it was paired in, and a still-in-progress match between a pair
+counts as "already played" too, so two players mid-match are never
+re-paired against each other a second time that same week). A match found
+this way calls `GameService::createGame()` exactly the way any other
+2-player `'draft'` game would, immediately (no browsing/waiting-room step
+once two eligible players exist); finding none, the joiner is simply
+inserted into the queue to wait. `withQueueLock()` mirrors
+`MatchmakingService::withListingLock()`'s own `GET_LOCK()` advisory-lock
+pattern, under one single fixed lock name (there's exactly one queue here,
+not one per listing), keeping "look for an eligible opponent, maybe pair"
+atomic against two players joining at the same instant.
+
+**Concurrent-match cap.** `WeeklySealedPoolQueueService::CONCURRENT_MATCH_CAP`
+(2, the maintainer's own suggested number) blocks `joinQueue()` outright
+once a player already has that many of this week's own Weekly Sealed Pool
+matches still in progress (`GameService::
+countInProgressWeeklySealedPoolMatchesForUser()`) -- enforced at join time
+only, not by proactively pulling a player back out of the queue the moment
+some other event pushes them over the cap (nothing else can add to a
+queued player's own in-progress count while they're sitting in the queue
+in the first place, so there's no such event to react to).
+
+**Persistent standings (`weekly_sealed_pool_standings`, migration 0273) --
+one row per (week, player), accumulating across every match that player
+completes that week, not one row per match.** `GameService::
+recordWeeklySealedPoolStandings()` is called from the existing
+`recordMatchCompletionStats()` -- already the one place every draft-family
+match-completion path (`advanceDraftMatch()`'s ordinary finish,
+`resignFromDraftMatch()`'s auto-win, `finalizeWinstonDraft()`'s
+short-player auto-win) funnels through with a `$draftMatchId`/
+`$winnerUserId` pair already in hand, so instrumenting there covers every
+completion path without touching any of them individually. `wins`/`losses`
+are the plain record a player actually sees; `score` is the hidden
+internal ranking value (`WEEKLY_SEALED_POOL_RANKING_POINTS`: win +3/loss
+-2, the maintainer's own asymmetric choice) used only to sort placement --
+rewarding playing (and mostly winning) more matches over a small, cautious
+sample, e.g. a 2-1 record (score 4) outranks a "perfect" 1-0 record (score
+3). This score is never returned to the frontend at all, let alone shown
+to a player.
+
+A row only ever exists for a player who has completed at least one match
+that week (`recordWeeklySealedPoolStandings()` only ever runs on a
+completion), so "has a row this week" doubles as "is ranked" --
+`weeklySealedPoolStandings()` naturally excludes anyone who's only
+queued/still mid-match, without needing a separate filter. It also turns
+the score-ordered rows into `rank`/`percentile` via the shared
+`rankedStandingsRows()` helper -- percentile is "top N%"
+(`ceil(rank / total * 100)`, so 1st of 20 reads "top 5%" and 20th of 20
+reads "top 100%", never "top 0%"), deliberately not a raw rank number, so
+it stays comparable across weeks that draw very different numbers of
+players.
+
+**Reading standings.** `currentWeeklySealedPoolId()` always get-or-creates
+(same as Sealed Pool of the Day's own daily pool) -- the current week
+always "exists" the moment anyone asks. `priorWeeklySealedPoolId()`
+deliberately does NOT get-or-create: if last week never had a single
+match played, there's genuinely no prior event, and fabricating an empty
+pool row here would misrepresent that as "a week happened with zero
+participants" rather than "no event ran at all" -- `GET /weekly-sealed-pool/standings?week=prior`
+returns `standings: null` in that case (as opposed to `[]`, meaning the
+week existed but nobody had finished a match in it yet), and the frontend
+distinguishes the two in its own empty-state wording (see "Weekly Sealed
+Pool" in `web-static/README.md`). `priorWeeklySealedPoolEventsFor()`
+(User info's own "prior events" list, one row per past week the viewer
+took part in) walks every OTHER past week's `periodic_sealed_pools` row
+the viewer has a standings entry in, explicitly excluding the current
+week -- that one is still live, and belongs on the event page's own
+"current standings" view instead, not next to already-final past weeks.
+
 ### Best of three (issue #90)
 
 Every draft-family deck type has had its own best-of-three match wrapper

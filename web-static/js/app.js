@@ -460,6 +460,33 @@ function cancelOpenGame(listingId) {
     });
 }
 
+// Weekly Sealed Pool's own queue (issue #520) -- a FIFO auto-pairing
+// ladder, deliberately separate from the open-lobby endpoints above (see
+// WeeklySealedPoolQueueService's own docblock). getWeeklySealedPoolQueueStatus()
+// resolves to { queued, in_progress_count, concurrent_match_cap };
+// joinWeeklySealedPoolQueue() resolves to either { status: 'waiting' } or
+// { status: 'paired', game_id, opponent_username }.
+function getWeeklySealedPoolQueueStatus() {
+    return apiRequest('/weekly-sealed-pool/queue');
+}
+
+function joinWeeklySealedPoolQueue() {
+    return apiRequest('/weekly-sealed-pool/queue', { method: 'POST' });
+}
+
+function leaveWeeklySealedPoolQueue() {
+    return apiRequest('/weekly-sealed-pool/queue/leave', { method: 'POST' });
+}
+
+// week: 'current' (the still-live week, the default) or 'prior' (last
+// week's now-final standings). Resolves to { standings } where standings
+// is null if that week has no event at all yet (see
+// GameService::priorWeeklySealedPoolId()'s own docblock), or a rank-
+// ordered list of { user_id, username, wins, losses, rank, percentile }.
+function getWeeklySealedPoolStandings(week = 'current') {
+    return apiRequest(`/weekly-sealed-pool/standings?week=${week}`);
+}
+
 // Saved user decklists (issue #92) -- see "Saved decklists" in
 // web-static/README.md. listDecklists() returns { own, friends } where
 // friends is grouped per accepted friend who has 1+ friends-visible decks.
@@ -907,6 +934,7 @@ const DECK_TYPE_LABELS = {
     one_of_each: 'One of Each Card',
     sealed_deck: 'Sealed Deck',
     sealed_pool_of_the_day: 'Sealed Pool of the Day',
+    weekly_sealed_pool: 'Weekly Sealed Pool',
 };
 
 function deckTypeLabel(deckType) {

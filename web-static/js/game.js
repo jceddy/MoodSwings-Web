@@ -1774,7 +1774,7 @@
     // literal list at every call site the way this file used to) since
     // issue #520's own 'sealed_pool_of_the_day' addition was the point
     // every one of those repeats needed to change anyway.
-    const DRAFT_DECK_TYPES = ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck', 'sealed_pool_of_the_day'];
+    const DRAFT_DECK_TYPES = ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck', 'sealed_pool_of_the_day', 'weekly_sealed_pool'];
 
     // Mirrors GameService::isSharedDeckType() -- every deck_type except
     // custom_duel and the draft-based ones puts the whole table on one
@@ -2254,7 +2254,14 @@
             // cards" premise reads oddly against a pool that's already
             // shared with the whole rest of the app for the day, so this
             // is deliberately narrower in scope than Sealed Deck itself.
-            case 'sealed_pool_of_the_day': return false;
+            // Weekly Sealed Pool (issue #520) is never selectable here
+            // either -- unlike every other entry in this dispatch, it has
+            // no New Game dialog path at all (a match is only ever
+            // created by WeeklySealedPoolQueueService pairing two already-
+            // queued players), so this arm is purely defensive.
+            case 'sealed_pool_of_the_day':
+            case 'weekly_sealed_pool':
+                return false;
             case 'power': return format !== 'team' && format !== 'closed_team';
             default: return true;
         }
@@ -2531,11 +2538,12 @@
             const deckDescription = game.deck_type === 'custom'
                 ? (game.custom_deck_name || 'Uploaded Deck')
                 : deckTypeLabel(game.deck_type) + ' deck';
-            // Sealed Deck/Sealed Pool of the Day are UI-only sentinels
-            // over format 'draft' -- see renderBoard()'s own identical
-            // exception for why this replaces the whole format/deck
-            // combination rather than showing "Draft, Sealed Deck deck".
-            const formatAndDeckDescription = (game.deck_type === 'sealed_deck' || game.deck_type === 'sealed_pool_of_the_day')
+            // Sealed Deck/Sealed Pool of the Day/Weekly Sealed Pool are
+            // UI-only sentinels over format 'draft' -- see renderBoard()'s
+            // own identical exception for why this replaces the whole
+            // format/deck combination rather than showing "Draft, Sealed
+            // Deck deck".
+            const formatAndDeckDescription = ['sealed_deck', 'sealed_pool_of_the_day', 'weekly_sealed_pool'].includes(game.deck_type)
                 ? deckTypeLabel(game.deck_type)
                 : formatLabel(game.format) + ', ' + deckDescription;
             const formatEl = document.createElement('div');
@@ -2674,12 +2682,13 @@
         const deckDescription = firstGame.deck_type === 'custom'
             ? (firstGame.custom_deck_name || 'Uploaded Deck')
             : deckTypeLabel(firstGame.deck_type) + ' deck';
-        // Sealed Deck/Sealed Pool of the Day's own 2-player best-of-three
-        // match is grouped here too (each has a draft_match_id just like
-        // Quick/Winston Draft) -- see renderBoard()'s own identical
-        // exception for why this replaces the whole format/deck
-        // combination rather than showing "Draft, Sealed Deck deck".
-        const formatAndDeckDescription = (firstGame.deck_type === 'sealed_deck' || firstGame.deck_type === 'sealed_pool_of_the_day')
+        // Sealed Deck/Sealed Pool of the Day/Weekly Sealed Pool's own
+        // 2-player best-of-three match is grouped here too (each has a
+        // draft_match_id just like Quick/Winston Draft) -- see
+        // renderBoard()'s own identical exception for why this replaces
+        // the whole format/deck combination rather than showing "Draft,
+        // Sealed Deck deck".
+        const formatAndDeckDescription = ['sealed_deck', 'sealed_pool_of_the_day', 'weekly_sealed_pool'].includes(firstGame.deck_type)
             ? deckTypeLabel(firstGame.deck_type)
             : formatLabel(firstGame.format) + ', ' + deckDescription;
         const formatEl = document.createElement('div');
@@ -2939,10 +2948,11 @@
             return true;
         }
         // Mirrors GameService::botsSupportedFor()'s own exclusion --
-        // chooseDraftDeck() has no awareness of a Sealed Pool of the
-        // Day deck's own per-rarity cap, so a bot could build one the
-        // server would then reject. See that method's own docblock.
-        if (deckType === 'sealed_pool_of_the_day') {
+        // chooseDraftDeck() has no awareness of Sealed Pool of the
+        // Day/Weekly Sealed Pool's own per-rarity cap, so a bot could
+        // build one the server would then reject. See that method's own
+        // docblock.
+        if (deckType === 'sealed_pool_of_the_day' || deckType === 'weekly_sealed_pool') {
             return false;
         }
         if (DRAFT_DECK_TYPES.includes(deckType)) {
@@ -3667,6 +3677,117 @@
 
     document.getElementById('open-games-close-button').addEventListener('click', () => {
         openGamesDialog.close();
+    });
+
+    // Weekly Sealed Pool's own queue/standings dialog (issue #520) -- see
+    // WeeklySealedPoolQueueService's own docblock for why this is a
+    // separate FIFO auto-pairing queue rather than another open-lobby
+    // listing. A player who gets paired while sitting on this dialog
+    // (rather than by their own Join Queue click) isn't specially
+    // detected here -- they'll simply see the new game show up the next
+    // time refreshLobby()'s own 4-second poll runs, the same as a game
+    // any other player created against them.
+    const weeklySealedPoolDialog = document.getElementById('weekly-sealed-pool-dialog');
+
+    async function refreshWeeklySealedPoolQueueStatus() {
+        const statusEl = document.getElementById('weekly-sealed-pool-queue-status');
+        const joinButton = document.getElementById('weekly-sealed-pool-join-button');
+        const leaveButton = document.getElementById('weekly-sealed-pool-leave-button');
+
+        const { ok, body } = await getWeeklySealedPoolQueueStatus();
+        if (!ok) {
+            statusEl.textContent = '';
+            return;
+        }
+
+        const inProgressText = `${body.in_progress_count}/${body.concurrent_match_cap} matches in progress this week.`;
+        if (body.queued) {
+            statusEl.textContent = `You're in the queue, waiting for an opponent. ${inProgressText}`;
+            joinButton.hidden = true;
+            leaveButton.hidden = false;
+        } else {
+            statusEl.textContent = inProgressText;
+            joinButton.hidden = false;
+            // Mirrors WeeklySealedPoolQueueService::joinQueue()'s own
+            // concurrent-match cap -- disabled here rather than left to
+            // surface only as a rejected-click error.
+            joinButton.disabled = body.in_progress_count >= body.concurrent_match_cap;
+            leaveButton.hidden = true;
+        }
+    }
+
+    async function loadWeeklySealedPoolStandings(week) {
+        document.getElementById('weekly-sealed-pool-standings-current-button').setAttribute('aria-pressed', String(week === 'current'));
+        document.getElementById('weekly-sealed-pool-standings-prior-button').setAttribute('aria-pressed', String(week === 'prior'));
+
+        const list = document.getElementById('weekly-sealed-pool-standings-list');
+        const empty = document.getElementById('weekly-sealed-pool-standings-empty');
+        list.innerHTML = '';
+
+        const { ok, body } = await getWeeklySealedPoolStandings(week);
+        const standings = ok ? body.standings : null;
+        if (!standings || standings.length === 0) {
+            // standings === null means the week itself doesn't exist at
+            // all (only possible for 'prior' -- see GameService::
+            // priorWeeklySealedPoolId()'s own docblock); an empty array
+            // means the week exists but nobody has finished a match in it
+            // yet (only possible for 'current' -- priorWeeklySealedPoolId()
+            // only ever resolves to a week that had at least one
+            // completed match, by construction). Worded differently since
+            // "be the first to finish a match" makes no sense for a week
+            // that's already over.
+            empty.textContent = standings === null
+                ? 'There was no Weekly Sealed Pool event last week.'
+                : 'No standings yet -- be the first to finish a match this week!';
+            empty.hidden = false;
+            return;
+        }
+        empty.hidden = true;
+
+        standings.forEach((row) => {
+            const item = document.createElement('li');
+            const isYou = row.user_id === user.id;
+            item.textContent = `#${row.rank} ${row.username}${isYou ? ' (you)' : ''} — ${row.wins}-${row.losses} (top ${row.percentile}%)`;
+            list.appendChild(item);
+        });
+    }
+
+    document.getElementById('weekly-sealed-pool-button').addEventListener('click', async () => {
+        weeklySealedPoolDialog.showModal();
+        await refreshWeeklySealedPoolQueueStatus();
+        await loadWeeklySealedPoolStandings('current');
+    });
+
+    document.getElementById('weekly-sealed-pool-close-button').addEventListener('click', () => {
+        weeklySealedPoolDialog.close();
+    });
+
+    document.getElementById('weekly-sealed-pool-standings-current-button').addEventListener('click', () => loadWeeklySealedPoolStandings('current'));
+    document.getElementById('weekly-sealed-pool-standings-prior-button').addEventListener('click', () => loadWeeklySealedPoolStandings('prior'));
+
+    document.getElementById('weekly-sealed-pool-join-button').addEventListener('click', async () => {
+        const errorEl = document.getElementById('weekly-sealed-pool-queue-error');
+        errorEl.hidden = true;
+
+        const { ok, body } = await joinWeeklySealedPoolQueue();
+        if (!ok) {
+            errorEl.textContent = body.message || 'Could not join the queue.';
+            errorEl.hidden = false;
+            return;
+        }
+
+        if (body.status === 'paired') {
+            weeklySealedPoolDialog.close();
+            showBoard(body.game_id);
+            return;
+        }
+
+        await refreshWeeklySealedPoolQueueStatus();
+    });
+
+    document.getElementById('weekly-sealed-pool-leave-button').addEventListener('click', async () => {
+        await leaveWeeklySealedPoolQueue();
+        await refreshWeeklySealedPoolQueueStatus();
     });
 
     newGameForm.addEventListener('submit', async (event) => {
@@ -5591,7 +5712,7 @@
         // actually picked, so it replaces the whole format/deck
         // combination the same way custom/custom_duel's own deck name
         // already does above.
-        const formatAndDeckDescription = (state.game.deck_type === 'sealed_deck' || state.game.deck_type === 'sealed_pool_of_the_day')
+        const formatAndDeckDescription = ['sealed_deck', 'sealed_pool_of_the_day', 'weekly_sealed_pool'].includes(state.game.deck_type)
             ? deckTypeLabel(state.game.deck_type)
             : formatLabel(state.game.format) + ', ' + deckDescription;
         // "Default selections" mode (issue #274) -- mirrors the lobby
@@ -5906,7 +6027,7 @@
                     : state.game.deck_type === 'winston_draft' ? state.winston_draft
                         : state.game.deck_type === 'grid_draft' ? state.grid_draft
                             : state.game.deck_type === 'rotisserie_draft' ? state.rotisserie_draft
-                                : (state.game.deck_type === 'sealed_deck' || state.game.deck_type === 'sealed_pool_of_the_day') ? state.sealed_deck
+                                : ['sealed_deck', 'sealed_pool_of_the_day', 'weekly_sealed_pool'].includes(state.game.deck_type) ? state.sealed_deck
                                     : state.tiered_rotisserie_draft;
                 document.getElementById('board-round-status').textContent =
                     draftState.status === 'drafting' ? 'Drafting your deck.' : 'Building your deck.';
