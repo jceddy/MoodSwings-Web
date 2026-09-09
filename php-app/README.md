@@ -8814,39 +8814,46 @@ every candidate of every logged turn.
 `GameService::tacticalBotReasoningSince(int $gameId, int $viewerUserId)`
 (`GET /games/bot-reasoning?game_id=`) scopes the returned list PER
 VIEWER, not per game or per round: it finds the CALLER's own most recent
-`game_events` row (any event type, `acting_game_player_id` matching their
-own seat -- but excluding `round_grants_computed`, the same bookkeeping
-event `gameEventHistory()`/`humanReadableEventHistory()` already filter
-out of the general event log, since it logs one row per player at every
-round's start regardless of whose turn it actually was, which would
-otherwise push this boundary past reasoning genuinely new to the viewer)
-to establish a boundary id, then returns every `tactical_bot_reasoning`
-event after it. This means two humans watching the same Team Play game
-each see exactly the Tactical Bot turns THEY personally haven't caught up
-on yet, not a shared whole-round log -- and a viewer who hasn't acted at
-all yet this game sees the entire history. Throws `GameStateException`
-for an unseated viewer or a non-diagnostic game (mirrored client-side:
-the "View bot reasoning" button is only ever shown once
-`diagnostic_bot_hands` is non-null, which already implies both).
+qualifying `game_events` row (`acting_game_player_id` matching their own
+seat) to establish a boundary id, then returns every
+`tactical_bot_reasoning` event after it. This means two humans watching
+the same Team Play game each see exactly the Tactical Bot turns THEY
+personally haven't caught up on yet, not a shared whole-round log -- and
+a viewer who hasn't acted at all yet this game sees the entire history.
+Throws `GameStateException` for an unseated viewer or a non-diagnostic
+game (mirrored client-side: the "View bot reasoning" button is only
+ever shown once `diagnostic_bot_hands` is non-null, which already
+implies both).
 
-`pending_decision_created` is excluded from that boundary search too
-(reported live: the dialog showed empty even right after a Tactical
-Bot's move was clearly visible in Recent plays). Its own
-`acting_game_player_id` isn't always "whoever just acted" -- a
-scoring-time (Enthusiasm/Passion) or after-scoring order decision logs it
-as whoever now OWNS that pending decision
-(`writeScoringDecisionBatch()`/`writeAfterScoringOrderDecisionBatch()`'s
-own `$nextDecision['ownerId']`/`$nextOrderDecision['ownerId']`), which
-can easily be the viewer purely because the ROUND the bot's move was
-part of happened to end in a decision now awaiting them -- nothing they
-themselves did. Counting that row as "the viewer's own last play" pushed
-the boundary past the very `tactical_bot_reasoning` row that decision
-resulted from, hiding it. Excluding it costs nothing: the genuine
-completed action is logged separately, once the viewer actually answers,
-as `pending_decision_resolved` (still counted here) -- so either the
-decision is still unresolved (nothing else could have happened in the
-meantime anyway, `assertNoPendingDecision()`) or it's already resolved,
-in which case that resolution's own row is both later and still counted.
+"Qualifying" is an ALLOWLIST of event types that genuinely represent the
+viewer having just acted -- `mood_played`, `turn_passed`,
+`pending_decision_resolved`, and Open/Closed Team Play's own
+`team_turn_order_decided`/`team_draw_recipient_decided`/
+`closed_team_leader_decided` -- rather than every OTHER event type
+attributed to their own seat. Reported live TWICE: first "the reasoning
+dialog showed empty even right after a Tactical Bot's move was clearly
+visible in Recent plays" (traced to `pending_decision_created` --
+logged, for a scoring-time Enthusiasm/Passion or after-scoring order
+decision, as whoever now OWNS that pending decision
+(`writeScoringDecisionBatch()`'s/`writeAfterScoringOrderDecisionBatch()`'s
+own `$nextDecision['ownerId']`/`$nextOrderDecision['ownerId']`), not
+whoever just acted -- fixed by excluding it from a
+BLOCKLIST alongside `round_grants_computed`, which logs one row per
+player at every round's start regardless of whose turn it actually was);
+then again -- "it still seems to always show [empty] when I click it at
+the beginning of my turn... show all reasoning since the end of my
+previous turn" (traced to `match_first_player_decided` -- a
+best-of-three match's loser choosing who goes first in the next game
+logs it as whoever was CHOSEN, an announcement about them, not a
+decision they made, so it landed right at the start of that chosen
+player's own next turn). Rather than adding a third blocklisted name (and
+risking a fourth, a fifth, every time some other bookkeeping event
+happens to log the viewer's own seat without them actually having done
+anything), the check was inverted to this allowlist: only an event type
+that's unambiguously the viewer's own completed action -- ending their
+previous turn, or answering a decision -- ever moves the boundary
+forward, and anything else is simply never consulted, closing off the
+entire class of bug rather than one instance of it at a time.
 
 ### Auto-pass on empty hand
 

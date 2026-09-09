@@ -7304,36 +7304,47 @@ final class GameService
         }
 
         $pdo = Connection::get();
-        // round_grants_computed is excluded the same way the general event
-        // history already does (see gameEventHistory()/humanReadableEventHistory())
-        // -- it logs one bookkeeping row per player at round end regardless
-        // of whose turn it was, so it isn't really "the viewer's own play"
-        // and would otherwise push this boundary past reasoning that's
-        // genuinely new to them.
+        // Reported live, twice now: first "the reasoning dialog showed
+        // empty even right after a Tactical Bot's move was clearly
+        // visible in Recent plays" (fixed by excluding
+        // pending_decision_created from this boundary), then again --
+        // "it still seems to always show [empty] when I click it at the
+        // beginning of my turn... change it to show all reasoning since
+        // the end of my previous turn". A blocklist of "event types that
+        // don't really count as the viewer's own play" (round_grants_computed,
+        // then pending_decision_created too) kept needing a new entry
+        // every time some OTHER bookkeeping event turned out to log
+        // acting_game_player_id = the viewer without them actually having
+        // done anything -- round_grants_computed logs one row per player
+        // at every round's start regardless of whose turn it was;
+        // pending_decision_created's own acting_game_player_id is
+        // whoever now OWNS a scoring-time (Enthusiasm/Passion) or
+        // after-scoring order decision (writeScoringDecisionBatch()'s/
+        // writeAfterScoringOrderDecisionBatch()'s own `$nextDecision['ownerId']`/
+        // `$nextOrderDecision['ownerId']`), not whoever just acted;
+        // match_first_player_decided logs whoever a best-of-three match's
+        // loser chose to go first in the NEXT game, an announcement
+        // about them, not a decision BY them. Any of these landing after
+        // the viewer's own actual last turn (and, per the "beginning of
+        // my turn" report, apparently something along these lines keeps
+        // recurring) silently pushed this boundary past reasoning that
+        // was genuinely new to them.
         //
-        // pending_decision_created is excluded too (reported live: the
-        // reasoning dialog showed empty even right after a Tactical Bot's
-        // move was clearly visible in Recent plays) -- its own
-        // acting_game_player_id is NOT always "whoever just acted": a
-        // scoring-time (Enthusiasm/Passion) or after-scoring order
-        // decision logs it as whoever now OWNS that pending decision (see
-        // writeScoringDecisionBatch()/writeAfterScoringOrderDecisionBatch()'s
-        // own call sites, `$nextDecision['ownerId']`/
-        // `$nextOrderDecision['ownerId']`), which can easily be this same
-        // viewer purely because the ROUND the Tactical Bot's move was
-        // part of happened to end in a decision now awaiting them --
-        // nothing they themselves did. Counting that as "the viewer's own
-        // last play" pushed the boundary past the very
-        // tactical_bot_reasoning row that decision resulted from, hiding
-        // it. The genuine completed action is logged separately, once
-        // they actually answer, as pending_decision_resolved (still
-        // counted here) -- so excluding the "created" row costs nothing:
-        // either it's still unresolved (nothing else could have happened
-        // in the meantime anyway, see assertNoPendingDecision()) or it's
-        // already resolved, in which case that resolution's own row is
-        // both later and still counted.
+        // Inverted to an ALLOWLIST instead: only an event type that
+        // genuinely represents the viewer having just acted -- ending
+        // their own previous turn, answering a decision, or (Open/Closed
+        // Team Play) taking part in their team's own turn-order/draw-
+        // recipient/leader decision -- ever moves this boundary forward.
+        // Anything else attributed to the viewer's own seat (today's
+        // three blocklisted types above, and whatever else might log
+        // acting_game_player_id = them without it being their own doing
+        // in the future) is simply never consulted here at all, rather
+        // than needing yet another name added to a blocklist every time
+        // one more such type is caught live.
         $lastOwnEventStmt = $pdo->prepare(
-            "SELECT id FROM game_events WHERE game_id = :game_id AND acting_game_player_id = :player_id AND event_type NOT IN ('round_grants_computed', 'pending_decision_created') ORDER BY id DESC LIMIT 1"
+            "SELECT id FROM game_events WHERE game_id = :game_id AND acting_game_player_id = :player_id
+             AND event_type IN ('mood_played', 'turn_passed', 'pending_decision_resolved', 'disillusionment_color_chosen', 'team_turn_order_decided', 'team_draw_recipient_decided', 'closed_team_leader_decided')
+             ORDER BY id DESC LIMIT 1"
         );
         $lastOwnEventStmt->execute(['game_id' => $gameId, 'player_id' => $viewerGamePlayerId]);
         $sinceEventId = $lastOwnEventStmt->fetchColumn();

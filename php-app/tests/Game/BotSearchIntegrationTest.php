@@ -643,6 +643,42 @@ final class BotSearchIntegrationTest extends TestCase
         self::assertCount(1, $reasoning, 'a decision merely becoming pending for the viewer is not their own play, and must not hide the bot reasoning that led to it');
     }
 
+    /**
+     * Reported live a second time: "it still seems to always show [empty]
+     * when I click it at the beginning of my turn - can we change it to
+     * show all reasoning since the end of my previous turn?" --
+     * match_first_player_decided (a best-of-three match's loser choosing
+     * who goes first in the NEXT game) logs acting_game_player_id as
+     * whoever was CHOSEN to go first, an announcement about them, not a
+     * decision they made -- if the viewer is that chosen player, this
+     * used to count as "their own last play" the moment their new game's
+     * very first turn began, exactly matching "at the beginning of my
+     * turn." tacticalBotReasoningSince() was rewritten from a blocklist
+     * (excluding known-bad event types one at a time as each was caught)
+     * to an allowlist (only event types that genuinely represent the
+     * viewer having just acted), so this -- and any other similar
+     * bookkeeping type not yet caught live -- is never consulted here at
+     * all.
+     */
+    public function testMatchFirstPlayerDecidedForTheViewerDoesNotCountAsTheirOwnPlay(): void
+    {
+        ['human' => $human, 'bot' => $bot, 'gameId' => $gameId] = $this->createTacticalBotGame(diagnosticMode: true);
+        $botPlayerId = $this->games->gamePlayerIdFor($gameId, $bot);
+        $humanPlayerId = $this->games->gamePlayerIdFor($gameId, $human);
+
+        $this->insertReasoningEvent($gameId, $botPlayerId, 'reasoning behind the bot play from the previous game');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO game_events (game_id, acting_game_player_id, event_type, details)
+             VALUES (:game_id, :player_id, 'match_first_player_decided', :details)"
+        );
+        $stmt->execute(['game_id' => $gameId, 'player_id' => $humanPlayerId, 'details' => json_encode(['game_player_id' => $humanPlayerId])]);
+
+        $reasoning = $this->games->tacticalBotReasoningSince($gameId, $human);
+
+        self::assertCount(1, $reasoning, 'being announced as the next game\'s first player is not the viewer\'s own play, and must not hide earlier bot reasoning');
+    }
+
     private function insertReasoningEvent(int $gameId, int $botPlayerId, string $note): void
     {
         $details = json_encode([
