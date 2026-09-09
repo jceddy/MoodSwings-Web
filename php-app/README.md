@@ -8012,20 +8012,51 @@ since it already holds that dependency):
   field unfilled, same as before this fix) only once no non-teammate
   opponent has any mood in play at all.
 - `chooseDecisionAnswer(BoardState $state, array $field, int
-  $botGamePlayerId, string $decisionType = ''): array` -- `[]` (submits
-  as a plain empty answer, i.e. "declined") for an optional pending-
-  decision field (Duplicity's own repeat offer, Enthusiasm's/Passion's
-  own scoring bonuses, Pride's optional player), or `[$field['key'] =>
-  $value]` from the resolver for a required one (Compulsion, Betrayal,
-  Instability, Fury, Confusion, Suspicion, Avoidance, Arrogance, Malice,
-  Intimidation's own revealed-card grant, the after-scoring order
-  decision). `$decisionType` (the triggering `game_pending_decisions`
-  row's own `decision_type` column -- `advanceAutomatedTurns()`'s own
-  bot-decision branch reads it back via `activePendingDecision()` and
-  passes it straight through) exists purely so this method can
-  special-case `disillusionment_choose_color` below; every other
-  decision type ignores it and falls through to the generic
-  resolver-driven behavior above, same as before this parameter existed.
+  $botGamePlayerId, string $decisionType = '', ?int $sourceCardId =
+  null): array` -- `[]` (submits as a plain empty answer, i.e.
+  "declined") for an optional pending-decision field (Enthusiasm's/
+  Passion's own scoring bonuses, Pride's optional player), or
+  `[$field['key'] => $value]` from the resolver for a required one
+  (Compulsion, Betrayal, Instability, Fury, Confusion, Suspicion,
+  Avoidance, Arrogance, Malice, Intimidation's own revealed-card grant,
+  the after-scoring order decision). `$decisionType` (the triggering
+  `game_pending_decisions` row's own `decision_type` column --
+  `advanceAutomatedTurns()`'s own bot-decision branch reads it back via
+  `activePendingDecision()` and passes it straight through) exists
+  purely so this method can special-case `disillusionment_choose_color`/
+  `duplicity_repeat_offer` below; every other decision type ignores it
+  and falls through to the generic resolver-driven behavior above, same
+  as before this parameter existed.
+
+  **Duplicity's own "repeat this mood's own effect?" offer** (reported
+  live: "bots should always take extra 'after playing this mood'
+  triggers from Duplicity, if they have targets for them - especially
+  for moods like Pacifism (suppressing additional opponent moods), Shock
+  (putting additional opponent moods in discard), Joy (getting
+  additional extra turns)") used to always fall into the generic "declined"
+  case above -- the top-level field is `type: 'nested'` (`repeat`/
+  `choices`), which `BotChoiceResolver::resolve()` never fills in (not
+  one of its handled field types, and never in
+  `ALWAYS_FILLED_OPTIONAL_FIELDS` either), so a bot's own Pacifism/Shock/
+  Joy while holding Duplicity only ever got the single suppression/
+  discard/extra-play its ORIGINAL play already banked, never the second
+  one Duplicity was printed to offer. `duplicityRepeatChoices()` now
+  answers it via `buildChoicesForCard()` -- $sourceCardId here is the
+  mood being REPEATED (e.g. Pacifism), not Duplicity itself -- exactly
+  as if it were being played fresh, so every existing targeting policy
+  above (`pacifismTargetMoodIds()`, `shockTargetMoodIds()`, ...) decides
+  the repeat's own choices too, with nothing new to keep in sync. Takes
+  the repeat (`{"repeat": true, "choices": {...}}`) whenever that comes
+  back non-empty (a genuine target/choice found) OR the mood has no
+  after-playing fields at all (`CardChoiceSchema::afterPlayingFields()`
+  empty -- an unconditional grant like Joy/Charity/Duplicity itself,
+  nothing to "target" in the first place, so always worth stacking);
+  declines (same `[]` as before this fix) otherwise -- either no legal
+  target exists for a targeting effect (buildChoicesForCard() itself
+  already decided there's nothing worth doing, the same judgment a fresh
+  play would make), or a required field (base or attached chaos) has no
+  legal value at all, making the repeat illegal the same way it would
+  make a fresh play of that card unplayable.
 
   **Disillusionment** (reported live: "bots should pick a color for
   disillusionment that will result in the largest point swing in their

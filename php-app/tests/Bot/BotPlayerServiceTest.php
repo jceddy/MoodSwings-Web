@@ -3755,4 +3755,96 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame(24, $action['card_id']);
         self::assertSame(['target_mood_id' => 4], $action['choices']);
     }
+
+    // -- Duplicity's "repeat this mood's own effect?" offer (reported live) ----
+
+    /**
+     * Reported live: "bots should always take extra 'after playing this
+     * mood' triggers from Duplicity, if they have targets for them -
+     * especially for moods like Pacifism (suppressing additional
+     * opponent moods), Shock (putting additional opponent moods in
+     * discard), Joy (getting additional extra turns)." An opponent's
+     * Chivalry (value 3) in play gives Pacifism (id 20) a real target --
+     * chooseDecisionAnswer() must take the repeat, filling 'choices'
+     * exactly the same way playing Pacifism fresh would.
+     */
+    public function testChooseDecisionAnswerRepeatsDuplicityForPacifismWithATarget(): void
+    {
+        $state = $this->boardState(hands: [2 => [4]]); // opponent's Chivalry, value 3
+        $state->moveHandToInPlay(2, 4);
+
+        $answer = $this->bot->chooseDecisionAnswer($state, ['key' => 'duplicity_repeat'], 1, 'duplicity_repeat_offer', 20);
+
+        self::assertSame(['duplicity_repeat' => ['repeat' => true, 'choices' => ['target_mood_ids' => [4]]]], $answer);
+    }
+
+    /**
+     * No non-teammate opponent has any mood in play at all -- Pacifism's
+     * own target_mood_ids field is optional and pacifismTargetMoodIds()
+     * comes back empty, so buildChoicesForCard() returns [] and the
+     * repeat is declined (nothing to target, same as leaving it unfilled
+     * when playing Pacifism fresh).
+     */
+    public function testChooseDecisionAnswerDeclinesDuplicityForPacifismWithNoTarget(): void
+    {
+        $state = $this->boardState();
+
+        $answer = $this->bot->chooseDecisionAnswer($state, ['key' => 'duplicity_repeat'], 1, 'duplicity_repeat_offer', 20);
+
+        self::assertSame([], $answer);
+    }
+
+    /** Same policy for Shock (id 101) -- an opponent's Panic (id 48, value 1, within Shock's own value-3-or-less ceiling) is a real target worth repeating for. */
+    public function testChooseDecisionAnswerRepeatsDuplicityForShockWithATarget(): void
+    {
+        $state = $this->boardState(hands: [2 => [48]]); // opponent's Panic, value 1
+        $state->moveHandToInPlay(2, 48);
+
+        $answer = $this->bot->chooseDecisionAnswer($state, ['key' => 'duplicity_repeat'], 1, 'duplicity_repeat_offer', 101);
+
+        self::assertSame(['duplicity_repeat' => ['repeat' => true, 'choices' => ['target_mood_ids' => [48]]]], $answer);
+    }
+
+    /** No opponent mood at or under Shock's own value-3-or-less ceiling -- shockTargetMoodIds() comes back empty, so the repeat is declined. */
+    public function testChooseDecisionAnswerDeclinesDuplicityForShockWithNoTarget(): void
+    {
+        $state = $this->boardState();
+
+        $answer = $this->bot->chooseDecisionAnswer($state, ['key' => 'duplicity_repeat'], 1, 'duplicity_repeat_offer', 101);
+
+        self::assertSame([], $answer);
+    }
+
+    /**
+     * Joy (id 125) -- "you may play an additional mood on your next
+     * turn" -- has no after-playing choice fields at all (CardChoiceSchema::
+     * afterPlayingFields('joy') === []), so there's nothing to "target"
+     * in the first place: the repeat is always worth taking regardless of
+     * board state, unlike Pacifism/Shock's own targeting policy above.
+     */
+    public function testChooseDecisionAnswerAlwaysRepeatsDuplicityForJoyWithNoFieldsToFill(): void
+    {
+        $state = $this->boardState();
+
+        $answer = $this->bot->chooseDecisionAnswer($state, ['key' => 'duplicity_repeat'], 1, 'duplicity_repeat_offer', 125);
+
+        self::assertSame(['duplicity_repeat' => ['repeat' => true, 'choices' => []]], $answer);
+    }
+
+    /**
+     * Conviction (id 6) has a REQUIRED target_mood_id field -- with no
+     * mood anywhere on the board at all (not even the bot's own),
+     * convictionTargetMoodId() can't supply any legal value, so
+     * buildChoicesForCard() itself returns null (repeating would be
+     * illegal) and the offer is declined, the same as a required field
+     * with no legal value makes a fresh play of the card unplayable.
+     */
+    public function testChooseDecisionAnswerDeclinesDuplicityWhenARequiredFieldHasNoLegalValue(): void
+    {
+        $state = $this->boardState();
+
+        $answer = $this->bot->chooseDecisionAnswer($state, ['key' => 'duplicity_repeat'], 1, 'duplicity_repeat_offer', 6);
+
+        self::assertSame([], $answer);
+    }
 }
