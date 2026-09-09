@@ -9758,7 +9758,7 @@ final class GameServiceIntegrationTest extends TestCase
         $bob = $this->insertUser('draft-nonquickdraft-bob');
 
         $this->expectException(GameStateException::class);
-        $this->expectExceptionMessage('only supports the "quick_draft"/"winston_draft"/"grid_draft"/"rotisserie_draft"/"tiered_rotisserie_draft"/"sealed_deck" deck types');
+        $this->expectExceptionMessage('only supports the "quick_draft"/"winston_draft"/"grid_draft"/"rotisserie_draft"/"tiered_rotisserie_draft"/"sealed_deck"/"sealed_pool_of_the_day" deck types');
 
         $this->games->createGame($creator, [$creator, $bob], format: 'draft', deckType: 'structure');
     }
@@ -17306,6 +17306,148 @@ final class GameServiceIntegrationTest extends TestCase
         );
 
         self::assertSame(2, $this->games->getState($gameId, $alice)['sealed_deck']['games_to_win'], 'A 2-player Sealed Deck match should be best-of-three, same as every other draft deck_type (issue #189)');
+    }
+
+    // -- Sealed Pool of the Day (issue #520) -----------------------------
+
+    public function testCreateGameRejectsSealedPoolOfTheDayForNonDraftFormat(): void
+    {
+        $creator = $this->insertUser('sealedpool-nondraft-alice');
+        $bob = $this->insertUser('sealedpool-nondraft-bob');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('only supported for the "draft" format');
+
+        $this->games->createGame($creator, [$creator, $bob], format: 'standard', deckType: 'sealed_pool_of_the_day');
+    }
+
+    /**
+     * The defining difference from ordinary Sealed Deck (see
+     * testCreateGameSealedDeckPoolsAreIndependentAcrossPlayers() above,
+     * which asserts the exact opposite for that deck_type): every seated
+     * player gets the IDENTICAL 50-card pool, not an independently
+     * randomized one.
+     */
+    public function testCreateGameSealedPoolOfTheDayDealsTheIdenticalFiftyCardPoolToEveryPlayer(): void
+    {
+        $alice = $this->insertUser('sealedpool-identical-alice');
+        $bob = $this->insertUser('sealedpool-identical-bob');
+
+        $gameId = $this->games->createGame(
+            $alice,
+            [$alice, $bob],
+            format: 'draft',
+            deckType: 'sealed_pool_of_the_day',
+        );
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $match = $this->fetchDraftMatch($draftMatchId);
+        self::assertSame('deck_building', $match['status'], 'Sealed Pool of the Day has no live drafting phase either, same as ordinary Sealed Deck');
+
+        $aliceCardIds = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $alice)['drafted_card_ids'], true);
+        $bobCardIds = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $bob)['drafted_card_ids'], true);
+        self::assertCount(50, $aliceCardIds);
+        self::assertSame($aliceCardIds, $bobCardIds, 'Every seated player should be dealt the exact same shared pool, not independently randomized ones');
+
+        self::assertSame(
+            ['rare' => 4, 'mythic' => 2],
+            $this->games->getState($gameId, $alice)['sealed_deck']['deck_building']['rarity_caps'],
+            'The deck-building state should surface the per-rarity caps so the UI can show/enforce them'
+        );
+    }
+
+    /**
+     * The shared pool is generated ONCE per UTC+6 calendar day and
+     * persisted (periodic_sealed_pools), not re-rolled per game -- a
+     * second game created the same day should reuse the exact same pool
+     * (and the exact same periodic_sealed_pools row) as the first,
+     * rather than each game getting its own fresh 50 cards.
+     */
+    public function testCreateGameSealedPoolOfTheDayReusesTheSamePoolForASecondGameTheSameDay(): void
+    {
+        $alice = $this->insertUser('sealedpool-reuse-alice');
+        $bob = $this->insertUser('sealedpool-reuse-bob');
+        $carol = $this->insertUser('sealedpool-reuse-carol');
+        $dave = $this->insertUser('sealedpool-reuse-dave');
+
+        $firstGameId = $this->games->createGame($alice, [$alice, $bob], format: 'draft', deckType: 'sealed_pool_of_the_day');
+        $secondGameId = $this->games->createGame($carol, [$carol, $dave], format: 'draft', deckType: 'sealed_pool_of_the_day');
+
+        $firstDraftMatchId = (int) $this->fetchGame($firstGameId)['draft_match_id'];
+        $secondDraftMatchId = (int) $this->fetchGame($secondGameId)['draft_match_id'];
+
+        $firstPoolId = $this->fetchDraftMatch($firstDraftMatchId)['periodic_sealed_pool_id'];
+        $secondPoolId = $this->fetchDraftMatch($secondDraftMatchId)['periodic_sealed_pool_id'];
+        self::assertNotNull($firstPoolId);
+        self::assertSame($firstPoolId, $secondPoolId, 'Both games were created the same day, so they should share the exact same periodic_sealed_pools row');
+
+        $aliceCardIds = json_decode((string) $this->fetchDraftMatchPlayer($firstDraftMatchId, $alice)['drafted_card_ids'], true);
+        $carolCardIds = json_decode((string) $this->fetchDraftMatchPlayer($secondDraftMatchId, $carol)['drafted_card_ids'], true);
+        self::assertSame($aliceCardIds, $carolCardIds, 'Both games should have been dealt the exact same 50 cards');
+
+        $poolRowCount = (int) $this->pdo->query('SELECT COUNT(*) FROM periodic_sealed_pools')->fetchColumn();
+        self::assertSame(1, $poolRowCount, 'Only one pool row should exist for the day, regardless of how many games read it');
+    }
+
+    public function testCreateGameRejectsABotForSealedPoolOfTheDay(): void
+    {
+        $human = $this->insertUser('sealedpool-bot-human');
+        $bot = $this->insertBotUser('sealedpool-bot-bot');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('Practice bots are only supported for');
+
+        $this->games->createGame($human, [$human, $bot], format: 'draft', deckType: 'sealed_pool_of_the_day');
+    }
+
+    public function testSubmitDraftDeckRejectsExceedingTheMythicCapForSealedPoolOfTheDay(): void
+    {
+        $alice = $this->insertUser('sealedpool-mythiccap-alice');
+        $bob = $this->insertUser('sealedpool-mythiccap-bob');
+
+        $gameId = $this->games->createGame($alice, [$alice, $bob], format: 'draft', deckType: 'sealed_pool_of_the_day');
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $pooledCardIds = array_map(intval(...), json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $alice)['drafted_card_ids'], true));
+
+        $catalog = $this->pdo->query('SELECT id, rarity FROM cards')->fetchAll();
+        $rarityById = array_column($catalog, 'rarity', 'id');
+        $mythicIds = array_values(array_filter($pooledCardIds, fn (int $id) => $rarityById[$id] === 'mythic'));
+        $nonMythicIds = array_values(array_filter($pooledCardIds, fn (int $id) => $rarityById[$id] !== 'mythic'));
+        self::assertGreaterThan(2, count($mythicIds), 'The pool should contain more than the 2-card cap worth of Mythics (5, per PERIODIC_SEALED_POOL_RARITY_COUNTS)');
+
+        // 3 Mythics (one over the cap of 2) plus enough filler to clear
+        // the 12-card minimum.
+        $deckCardIds = [...array_slice($mythicIds, 0, 3), ...array_slice($nonMythicIds, 0, 9)];
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('at most 2 mythic card(s)');
+
+        $this->games->submitDraftDeck($gameId, $alice, $deckCardIds);
+    }
+
+    public function testSubmitDraftDeckAcceptsADeckWithinTheRarityCapsForSealedPoolOfTheDay(): void
+    {
+        $alice = $this->insertUser('sealedpool-withincap-alice');
+        $bob = $this->insertUser('sealedpool-withincap-bob');
+
+        $gameId = $this->games->createGame($alice, [$alice, $bob], format: 'draft', deckType: 'sealed_pool_of_the_day');
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $pooledCardIds = array_map(intval(...), json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $alice)['drafted_card_ids'], true));
+
+        $catalog = $this->pdo->query('SELECT id, rarity FROM cards')->fetchAll();
+        $rarityById = array_column($catalog, 'rarity', 'id');
+        $mythicIds = array_values(array_filter($pooledCardIds, fn (int $id) => $rarityById[$id] === 'mythic'));
+        $nonMythicIds = array_values(array_filter($pooledCardIds, fn (int $id) => $rarityById[$id] !== 'mythic'));
+
+        // Exactly 2 Mythics (right at the cap) plus filler -- should be
+        // accepted without throwing.
+        $deckCardIds = [...array_slice($mythicIds, 0, 2), ...array_slice($nonMythicIds, 0, 10)];
+        $this->games->submitDraftDeck($gameId, $alice, $deckCardIds);
+
+        self::assertSame(
+            $deckCardIds,
+            array_map(intval(...), json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $alice)['deck_card_ids'], true))
+        );
     }
 
     // Issue #90: Duel/Open Team Play/Closed Team Play's own best-of-three

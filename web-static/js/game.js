@@ -1769,13 +1769,20 @@
         document.getElementById('replay-next-button').disabled = replayEventIndex >= replayEvents.length - 1;
     }
 
+    // Mirrors GameService::DRAFT_DECK_TYPES -- every draft-family
+    // deck_type, kept as one shared array (rather than repeating the
+    // literal list at every call site the way this file used to) since
+    // issue #520's own 'sealed_pool_of_the_day' addition was the point
+    // every one of those repeats needed to change anyway.
+    const DRAFT_DECK_TYPES = ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck', 'sealed_pool_of_the_day'];
+
     // Mirrors GameService::isSharedDeckType() -- every deck_type except
-    // custom_duel and the five draft-based ones puts the whole table on
-    // one shared deck rather than giving each player their own, so those
-    // six are the only deck_types with no single "the deck" for
+    // custom_duel and the draft-based ones puts the whole table on one
+    // shared deck rather than giving each player their own, so those are
+    // the only deck_types with no single "the deck" for
     // openSharedDeckView() (issue #197) to show.
     function isSharedDeckType(deckType) {
-        return !['custom_duel', 'quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck'].includes(deckType);
+        return deckType !== 'custom_duel' && !DRAFT_DECK_TYPES.includes(deckType);
     }
 
     // Plain-language explanation shown under the New Game dialog's own
@@ -1796,6 +1803,7 @@
         tiered_rotisserie_draft: 'Like Rotisserie Draft, but split into several tiers drafted one after another (turn order carries straight through from one tier into the next). Choose the fixed rarity tiering (Mythic/Rare/Uncommon/Common, each tier\'s own layout twice what it distributes -- a 15-card pool per player) or configure 2-4 custom tiers yourself, each with its own pool and cutoff count. 2-4 players; a 2-player draft plays a best-of-three match, sideboarding freely between games, while a 3-4 player draft plays a single game.',
         chaos_draft: 'Quick Draft\'s own drafting, deck-building, and match structure, unchanged -- but at the start of every round, each player (or team, in Open Team Play) is offered a choice between two randomly-generated effects and attaches the chosen one permanently to a card in their hand, stacking with that card\'s own printed ability.',
         sealed_deck: '2-4 players, no live drafting at all: each player is independently dealt their own random 45-card Structure deck-style sealed pool (23 common, 14 uncommon, 6 rare, 2 mythic) and builds a deck of at least 12 cards straight from it. A 2-player game plays a best-of-three match, sideboarding freely between games from that same fixed pool; a 3-4 player game is a single game.',
+        sealed_pool_of_the_day: '2-4 players, all dealt the exact SAME 50-card pool (20 common, 15 uncommon, 10 rare, 5 mythic) -- generated once per day and shared by every Sealed Pool of the Day game created that day, so everyone is building from identical card availability. Your deck (at least 12 cards) can include at most 4 rares and 2 mythics from that pool, even though it holds more than that of each -- a real choice of which ones to build around, not just "run every good card." A 2-player game plays a best-of-three match; a 3-4 player game is a single game.',
         one_of_each: 'The full 133-card pool — one copy of every printed mood.',
     };
 
@@ -2237,6 +2245,16 @@
             case 'tiered_rotisserie_draft': return format === 'closed_team' || format === 'team';
             case 'chaos_draft': return format === 'closed_team' || format === 'team';
             case 'sealed_deck': return format === 'closed_team' || format === 'team';
+            // Never independently selectable in this dropdown for any
+            // format, unlike 'sealed_deck' above -- reached only through
+            // its own top-level Format sentinel (see
+            // updateDeckTypeAvailability()'s own early-return branch),
+            // never as a Team Play/Closed Team Play deck-type choice.
+            // Open Team Play's own "teammates see each other's drafted
+            // cards" premise reads oddly against a pool that's already
+            // shared with the whole rest of the app for the day, so this
+            // is deliberately narrower in scope than Sealed Deck itself.
+            case 'sealed_pool_of_the_day': return false;
             case 'power': return format !== 'team' && format !== 'closed_team';
             default: return true;
         }
@@ -2249,7 +2267,7 @@
     // migration 0027), so this only ever applies to a non-draft deck_type
     // under one of the three non-draft formats.
     function isBestOfThreeAvailable(deckType, format) {
-        const isDraftDeckType = ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck'].includes(deckType);
+        const isDraftDeckType = DRAFT_DECK_TYPES.includes(deckType);
         if (isDraftDeckType) {
             return false;
         }
@@ -2304,7 +2322,7 @@
     // sentinel already isn't any of those.
     function effectiveNewGameFormat() {
         const raw = document.getElementById('new-game-format').value;
-        return raw === 'sealed_deck' ? 'draft' : raw;
+        return raw === 'sealed_deck' || raw === 'sealed_pool_of_the_day' ? 'draft' : raw;
     }
 
     // Unavailable deck types are hidden (not merely disabled) so the
@@ -2329,9 +2347,16 @@
         // stays visible and up to date regardless, via
         // updateDeckTypeDescription() below.
         const isSealedDeckFormat = format === 'sealed_deck';
-        document.getElementById('new-game-deck-type-label').hidden = isSealedDeckFormat;
-        if (isSealedDeckFormat) {
-            deckTypeSelect.value = 'sealed_deck';
+        // Sealed Pool of the Day (issue #520) is the identical kind of
+        // UI-only sentinel as Sealed Deck immediately above -- a real
+        // format: 'draft' game, deck_type: 'sealed_pool_of_the_day' (see
+        // the submit handler below) -- and for the same reason (no live
+        // drafting phase, so the Deck dropdown would just be a dead
+        // single-option control) hides that dropdown entirely too.
+        const isSealedPoolOfTheDayFormat = format === 'sealed_pool_of_the_day';
+        document.getElementById('new-game-deck-type-label').hidden = isSealedDeckFormat || isSealedPoolOfTheDayFormat;
+        if (isSealedDeckFormat || isSealedPoolOfTheDayFormat) {
+            deckTypeSelect.value = isSealedDeckFormat ? 'sealed_deck' : 'sealed_pool_of_the_day';
             updateDeckTypeDescription();
             updateOpponentSelectionLimit();
             return;
@@ -2506,12 +2531,12 @@
             const deckDescription = game.deck_type === 'custom'
                 ? (game.custom_deck_name || 'Uploaded Deck')
                 : deckTypeLabel(game.deck_type) + ' deck';
-            // Sealed Deck is a UI-only sentinel over format 'draft' -- see
-            // renderBoard()'s own identical exception for why this
-            // replaces the whole format/deck combination rather than
-            // showing "Draft, Sealed Deck deck".
-            const formatAndDeckDescription = game.deck_type === 'sealed_deck'
-                ? 'Sealed Deck'
+            // Sealed Deck/Sealed Pool of the Day are UI-only sentinels
+            // over format 'draft' -- see renderBoard()'s own identical
+            // exception for why this replaces the whole format/deck
+            // combination rather than showing "Draft, Sealed Deck deck".
+            const formatAndDeckDescription = (game.deck_type === 'sealed_deck' || game.deck_type === 'sealed_pool_of_the_day')
+                ? deckTypeLabel(game.deck_type)
                 : formatLabel(game.format) + ', ' + deckDescription;
             const formatEl = document.createElement('div');
             formatEl.className = 'lobby-format';
@@ -2649,13 +2674,13 @@
         const deckDescription = firstGame.deck_type === 'custom'
             ? (firstGame.custom_deck_name || 'Uploaded Deck')
             : deckTypeLabel(firstGame.deck_type) + ' deck';
-        // Sealed Deck's own 2-player best-of-three match is grouped here
-        // too (it has a draft_match_id just like Quick/Winston Draft) --
-        // see renderBoard()'s own identical exception for why this
-        // replaces the whole format/deck combination rather than showing
-        // "Draft, Sealed Deck deck".
-        const formatAndDeckDescription = firstGame.deck_type === 'sealed_deck'
-            ? 'Sealed Deck'
+        // Sealed Deck/Sealed Pool of the Day's own 2-player best-of-three
+        // match is grouped here too (each has a draft_match_id just like
+        // Quick/Winston Draft) -- see renderBoard()'s own identical
+        // exception for why this replaces the whole format/deck
+        // combination rather than showing "Draft, Sealed Deck deck".
+        const formatAndDeckDescription = (firstGame.deck_type === 'sealed_deck' || firstGame.deck_type === 'sealed_pool_of_the_day')
+            ? deckTypeLabel(firstGame.deck_type)
             : formatLabel(firstGame.format) + ', ' + deckDescription;
         const formatEl = document.createElement('div');
         formatEl.className = 'lobby-format';
@@ -2913,7 +2938,14 @@
         if (format === 'duel' && deckType === 'custom_duel') {
             return true;
         }
-        if (['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck'].includes(deckType)) {
+        // Mirrors GameService::botsSupportedFor()'s own exclusion --
+        // chooseDraftDeck() has no awareness of a Sealed Pool of the
+        // Day deck's own per-rarity cap, so a bot could build one the
+        // server would then reject. See that method's own docblock.
+        if (deckType === 'sealed_pool_of_the_day') {
+            return false;
+        }
+        if (DRAFT_DECK_TYPES.includes(deckType)) {
             return true;
         }
         return ['structure', 'power', 'jceddys_75', 'one_of_each', 'custom'].includes(deckType);
@@ -3433,10 +3465,13 @@
             const formatSelect = document.getElementById('new-game-format');
             // prefill.format/prefill.deckType are the real backend values
             // off the previous game (always 'draft'/'sealed_deck' for a
-            // Sealed Deck rematch, never the UI-only 'sealed_deck' format
-            // sentinel) -- translate back so the dropdown lands on its own
-            // top-level "Sealed Deck" option rather than "Draft".
-            formatSelect.value = (prefill.format === 'draft' && prefill.deckType === 'sealed_deck') ? 'sealed_deck' : prefill.format;
+            // Sealed Deck rematch, or 'draft'/'sealed_pool_of_the_day' for
+            // a Sealed Pool of the Day one -- never the UI-only format
+            // sentinel itself) -- translate back so the dropdown lands on
+            // the matching top-level option rather than "Draft".
+            formatSelect.value = (prefill.format === 'draft' && (prefill.deckType === 'sealed_deck' || prefill.deckType === 'sealed_pool_of_the_day'))
+                ? prefill.deckType
+                : prefill.format;
             formatSelect.dispatchEvent(new Event('change'));
 
             const deckTypeSelect = document.getElementById('new-game-deck-type');
@@ -3506,6 +3541,7 @@
         custom_duel: 'Custom Decklists (Duel)', quick_draft: 'Quick Draft', winston_draft: 'Winston Draft',
         grid_draft: 'Grid Draft', rotisserie_draft: 'Rotisserie Draft', tiered_rotisserie_draft: 'Tiered Rotisserie Draft',
         chaos_draft: 'Chaos Draft', one_of_each: 'One of Each Card', sealed_deck: 'Sealed Deck',
+        sealed_pool_of_the_day: 'Sealed Pool of the Day',
     };
 
     // "2 of 4 joined" -- listing.joined_count itself never includes the
@@ -3518,11 +3554,12 @@
     function openGameSummary(listing) {
         const params = listing.create_game_params;
         const deckType = NEW_GAME_DECK_TYPE_LABELS[params.deck_type] || params.deck_type;
-        // Sealed Deck (issue #392) is a 'draft' format deck_type with no
-        // actual drafting phase, so leading with "Draft" would be
-        // misleading here -- the deck_type name alone already says
-        // everything a player needs to know.
-        const format = params.deck_type === 'sealed_deck'
+        // Sealed Deck (issue #392)/Sealed Pool of the Day (issue #520)
+        // are 'draft' format deck_types with no actual drafting phase,
+        // so leading with "Draft" would be misleading here -- the
+        // deck_type name alone already says everything a player needs
+        // to know.
+        const format = (params.deck_type === 'sealed_deck' || params.deck_type === 'sealed_pool_of_the_day')
             ? deckType
             : `${NEW_GAME_FORMAT_LABELS[params.format] || params.format} – ${deckType}`;
         return `${format} (${listing.joined_count + 1} of ${listing.target_player_count} joined)`;
@@ -5554,8 +5591,8 @@
         // actually picked, so it replaces the whole format/deck
         // combination the same way custom/custom_duel's own deck name
         // already does above.
-        const formatAndDeckDescription = state.game.deck_type === 'sealed_deck'
-            ? 'Sealed Deck'
+        const formatAndDeckDescription = (state.game.deck_type === 'sealed_deck' || state.game.deck_type === 'sealed_pool_of_the_day')
+            ? deckTypeLabel(state.game.deck_type)
             : formatLabel(state.game.format) + ', ' + deckDescription;
         // "Default selections" mode (issue #274) -- mirrors the lobby
         // row's own indicator (buildGameRow()) so it's visible once a
@@ -5590,7 +5627,7 @@
         // a pending decision is known (nothing can freeze a still-waiting
         // draft the same way, so there's nothing to gate here yet).
         const canResignWhileWaiting = state.game.status === 'waiting'
-            && ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck'].includes(state.game.deck_type);
+            && DRAFT_DECK_TYPES.includes(state.game.deck_type);
         const resignButton = document.getElementById('resign-button');
         resignButton.hidden = isReadOnlyView()
             || !(state.game.status === 'in_progress' || canResignWhileWaiting)
@@ -5863,13 +5900,13 @@
                 document.getElementById('draft-deck-building').hidden = true;
                 renderDuelDeckSubmission(state);
                 autoStartGameIfReady(state.players.every((p) => p.deck_submitted));
-            } else if (state.game.deck_type === 'quick_draft' || state.game.deck_type === 'winston_draft' || state.game.deck_type === 'grid_draft' || state.game.deck_type === 'rotisserie_draft' || state.game.deck_type === 'tiered_rotisserie_draft' || state.game.deck_type === 'chaos_draft' || state.game.deck_type === 'sealed_deck') {
+            } else if (DRAFT_DECK_TYPES.includes(state.game.deck_type)) {
                 document.getElementById('duel-deck-submission').hidden = true;
                 const draftState = state.game.deck_type === 'quick_draft' || state.game.deck_type === 'chaos_draft' ? state.quick_draft
                     : state.game.deck_type === 'winston_draft' ? state.winston_draft
                         : state.game.deck_type === 'grid_draft' ? state.grid_draft
                             : state.game.deck_type === 'rotisserie_draft' ? state.rotisserie_draft
-                                : state.game.deck_type === 'sealed_deck' ? state.sealed_deck
+                                : (state.game.deck_type === 'sealed_deck' || state.game.deck_type === 'sealed_pool_of_the_day') ? state.sealed_deck
                                     : state.tiered_rotisserie_draft;
                 document.getElementById('board-round-status').textContent =
                     draftState.status === 'drafting' ? 'Drafting your deck.' : 'Building your deck.';
@@ -7753,7 +7790,18 @@
         const poolLabel = deckBuilding.team_drafted_cards
             ? "your team's " + deckBuilding.drafted_cards.length + ' available drafted cards'
             : 'your ' + deckBuilding.drafted_cards.length + ' drafted cards';
-        statusEl.textContent = 'Choose ' + sizeText + ' from ' + poolLabel + ' for your deck. Tap a card to select/de-select it.';
+        // Sealed Pool of the Day (issue #520) only -- deckBuilding.rarity_caps
+        // is only ever present for that deck_type (see
+        // GameService::sealedDeckStateFor()'s own docblock on why it's
+        // merged onto this specific sub-object). Spelled out up front
+        // (not just enforced silently at submit time) since every
+        // player's own pool is the exact same cards this way, and
+        // exceeding a cap is a genuinely easy mistake to make when
+        // nothing about the pool itself hints at the limit.
+        const rarityCapsText = deckBuilding.rarity_caps
+            ? ' At most ' + Object.entries(deckBuilding.rarity_caps).map(([rarity, cap]) => cap + ' ' + rarity).join(' and ') + '.'
+            : '';
+        statusEl.textContent = 'Choose ' + sizeText + ' from ' + poolLabel + ' for your deck. Tap a card to select/de-select it.' + rarityCapsText;
         picker.innerHTML = '';
 
         deckBuilding.drafted_cards.forEach((card, index) => {
@@ -7782,8 +7830,19 @@
             picker.appendChild(thumb);
         });
 
+        // Sealed Pool of the Day's own per-rarity caps (see this
+        // function's own rarityCapsText above) -- mirrors
+        // GameService::assertWithinPeriodicSealedPoolRarityCaps() so a
+        // player finds out from a disabled Submit button, not only after
+        // clicking it and getting a server error back.
+        const exceedsARarityCap = deckBuilding.rarity_caps && Object.entries(deckBuilding.rarity_caps).some(([rarity, cap]) => {
+            const countOfRarity = [...draftDeckSelection].filter((index) => deckBuilding.drafted_cards[index].rarity === rarity).length;
+
+            return countOfRarity > cap;
+        });
+
         submitButton.hidden = false;
-        submitButton.disabled = draftDeckSelection.size < deckBuilding.min_deck_size || draftDeckSelection.size > deckBuilding.max_deck_size;
+        submitButton.disabled = draftDeckSelection.size < deckBuilding.min_deck_size || draftDeckSelection.size > deckBuilding.max_deck_size || exceedsARarityCap;
         saveButton.hidden = false;
         saveButton.disabled = submitButton.disabled;
         selectAllButton.hidden = false;

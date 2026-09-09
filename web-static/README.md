@@ -2041,6 +2041,24 @@ deck's `cards`.
     from a finished Sealed Deck game lands back on the same option a human
     would have picked.
 
+    `#new-game-format`'s "Sealed Pool of the Day" option (issue #520, right
+    after "Sealed Deck") is the exact same UI-only sentinel pattern applied
+    to `deck_type: 'sealed_pool_of_the_day'` -- same reasons (no live
+    drafting phase, a redundant would-be Deck-dropdown name), same
+    mechanics (`updateDeckTypeAvailability()`'s early-return branch hiding
+    the Deck dropdown and forcing `#new-game-deck-type` to
+    `'sealed_pool_of_the_day'` under the hood, `effectiveNewGameFormat()`/
+    the rematch-prefill reverse translation both extended to cover it
+    alongside `'sealed_deck'`). Two things about it are NOT shared with
+    Sealed Deck's own sentinel, though: `DECK_TYPE_DESCRIPTIONS`' entry for
+    it spells out the per-rarity deck caps up front (see "Sealed Pool of the
+    Day" in `php-app/README.md`) since every player's pool is the identical
+    50 cards that day, and `botsSupportedFor()` returns `false` for it
+    specifically (unlike Sealed Deck, which does support bots) -- so the New
+    Game dialog's bot checkboxes stay hidden whenever this option is
+    selected, the same way they would for any other bot-unsupported deck
+    type.
+
     The
     dialog's Deck dropdown (`#new-game-deck-type` -- Structure, Power,
     jceddy's 75 Card, Custom Decklist, Custom Decklists (Duel), Quick
@@ -3045,6 +3063,20 @@ deck's `cards`.
       offered as its own top-level `#new-game-format` option ("Sealed
       Deck," next to "Draft") rather than one of "Draft"'s own Deck
       dropdown choices -- see "New Game dialog"'s own note on this below.
+    - **Sealed Pool of the Day** (issue #520) reuses Sealed Deck's shared
+      `#draft-deck-building` view unchanged (same `renderDraftPanel()`
+      dispatch, same top-level `#new-game-format` sentinel treatment -- see
+      "New Game dialog" above and "Sealed Pool of the Day" in
+      `php-app/README.md`), with one addition inside
+      `renderDraftDeckBuilding()` itself: when `state.sealed_deck.
+      deck_building.rarity_caps` is present (only for this deck type), its
+      status text appends a plain-language "At most N rare and N mythic"
+      sentence, and a computed `exceedsARarityCap` flag (counting the
+      current selection's own cards by `rarity`) gets OR'd into the same
+      condition that already disables Submit/Save for being outside the
+      12-50 card range -- so going over a cap disables submission
+      immediately, the same way an invalid size already did, rather than
+      only surfacing as a rejected-submission error after the fact.
 
     Clicking any hand
     card opens `#choices-panel` inline, underneath the hand -- a plain

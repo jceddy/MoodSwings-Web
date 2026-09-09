@@ -3722,6 +3722,93 @@ while `draft_matches.status === 'drafting'` (never true for Sealed Deck), a
 bot seated here goes straight to submitting its own deck the very first time
 `advanceAutomatedTurns()` runs, with no pick-turn logic needed at all.
 
+### Sealed Pool of the Day (issue #520)
+
+`deck_type: 'sealed_pool_of_the_day'` is a `format: 'draft'` deck type built
+directly on top of Sealed Deck's own machinery (same `draft_matches`/
+`draft_match_players` tables, same no-live-drafting `initializeSealedDeck()`-
+style jump straight to `'deck_building'`, same `sealedDeckStateFor()`/
+`renderDraftDeckBuilding()` rendering path) but with one deliberate
+difference: instead of every seated player getting their OWN independently
+randomized pool, every player across EVERY game of this deck type created on
+the same calendar day gets the IDENTICAL 50-card pool. The point is to
+isolate deck-building skill from pool luck -- two players comparing notes on
+the same day are building from the exact same cards, not two different
+random draws that merely happen to share a deck type.
+
+**A new, persisted, once-per-day pool** -- `periodic_sealed_pools` (migration
+`0272`) stores one row per `(period_type, period_start)` pair:
+`period_type` is `'daily'` or `'weekly'` (the column deliberately supports
+both from day one, even though only `'daily'` has a real caller so far --
+see "Weekly Sealed Pool" once it lands for the second), `period_start` is
+the calendar date (or the Monday) the pool covers, and `pool_card_ids` is
+the JSON-encoded 50-id array itself. `getOrCreatePeriodicSealedPool()`
+follows the same get-or-create-under-a-unique-key-race pattern as the
+pre-existing `getOrCreateSpectateCode()`: try a `SELECT` for today's row
+first, and only build+`INSERT` a fresh pool on a miss; if two games are
+created in the same instant and both miss the `SELECT`, the loser's `INSERT`
+fails on the table's `UNIQUE KEY (period_type, period_start)` with a
+duplicate-key `PDOException`, which is caught and turned into a re-`SELECT`
+of whichever row actually won, so both callers end up with the same pool id
+either way. `currentDailySealedPoolPeriodStart()` fixes the day boundary at
+UTC+6 midnight (an explicit product choice, not the server's own timezone),
+via `new \DateTimeImmutable('now', new \DateTimeZone('+06:00'))`.
+
+**A new, wider rarity distribution than Sealed Deck's** --
+`PERIODIC_SEALED_POOL_RARITY_COUNTS` (20 common, 15 uncommon, 10 rare, 5
+mythic; `buildPeriodicSealedPoolCardIds()`) is deliberately NOT the same
+23/14/6/2 structure-deck-style split Sealed Deck reuses. With only two
+Mythics printed at Sealed Deck's old 2-mythic count, every deck would
+converge on running both available Mythics every time; a bigger pool (5
+Mythics, 10 Rares) paired with a hard per-deck cap (below) forces an actual
+choice of which few to build around instead.
+
+**Per-rarity deck caps -- a genuinely new validation category** --
+`PERIODIC_SEALED_POOL_RARITY_DECK_CAPS` (`rare` => 4, `mythic` => 2) is
+enforced by `assertWithinPeriodicSealedPoolRarityCaps()`, called from
+`submitDraftDeck()` only for this deck type, after the existing
+pool-membership check. Nothing else in the game ever caps a submitted
+deck by rarity (every other deck type's own validation is min-size and
+pool-membership only), so this is a new kind of rule, not a reuse of an
+existing one. `sealedDeckStateFor()` merges the same caps onto its
+`deck_building` sub-object as `rarity_caps` (present only for this deck
+type) so the frontend's deck-building screen can spell the limit out
+up front and disable Submit the moment a selection exceeds it (see
+"New Game dialog" in `web-static/README.md`), rather than a player only
+discovering the cap from a rejected submission.
+
+**Every player gets the SAME pool** -- `createGame()` calls
+`getOrCreatePeriodicSealedPool('daily')` once (not once per player) when
+this deck type is chosen, and hands every seated player's own
+`draft_match_players.drafted_card_ids` the identical array via
+`array_fill()` in place of Sealed Deck's own per-player `array_map()` over
+independent `buildSealedDeckPlayerPool()` calls. `draft_matches.
+periodic_sealed_pool_id` records which shared pool a match was dealt from
+(`NULL` for every other deck type, including ordinary `sealed_deck`) --
+this column, not `deck_type` alone, is the authoritative "was this match
+dealt from a shared periodic pool, and which one" signal.
+
+**Bots are not supported** -- `botsSupportedFor()` returns `false` for this
+deck type before its normal `DRAFT_DECK_TYPES` check even runs, because
+`BotPlayerService::chooseDraftDeck()` has no awareness of the new rarity
+caps and could hand back an over-cap deck that `submitDraftDeck()`'s own new
+validation would then reject with an uncaught exception from inside
+`advanceBotDraftDeck()` -- the same silent, permanent-stall failure class an
+existing docblock on that method already warns about for an unrelated
+historical bug. This may be revisited once `chooseDraftDeck()` itself learns
+to respect a rarity cap.
+
+**Deck-building/match progression are otherwise identical to Sealed Deck**:
+`draftMinDeckSizeFor()` reuses the same `SEALED_DECK_MIN_DECK_SIZE` (12)
+floor, `draftGamesToWin()`'s best-of-three (2 players)/single-game (3-4
+players) split applies unchanged, and `getState()` dispatches to the exact
+same `sealed_deck` response field/`sealedDeckStateFor()` method Sealed Deck
+itself uses (the two deck types share every bit of deck-building mechanics
+except where a pool's cards actually come from and the new rarity cap), so
+`'sealed_pool_of_the_day'` was added to `DRAFT_DECK_TYPES` alongside
+`'sealed_deck'` rather than needing its own parallel dispatch anywhere in
+this shared machinery.
+
 ### Best of three (issue #90)
 
 Every draft-family deck type has had its own best-of-three match wrapper
