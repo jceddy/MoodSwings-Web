@@ -66,6 +66,18 @@ final class GameServiceIntegrationTest extends TestCase
         $pdo->exec('TRUNCATE TABLE draft_tiered_rotisserie_state');
         $pdo->exec('TRUNCATE TABLE draft_match_players');
         $pdo->exec('TRUNCATE TABLE draft_matches');
+        // Issue #520: not referenced BY draft_matches (periodic_sealed_pool_id
+        // is a nullable FK the OTHER way), so truncating draft_matches
+        // above never cleans these up on its own -- without this, a
+        // periodic_sealed_pools row created by an earlier test run stays
+        // in the table (its own (period_type, period_start) unique key is
+        // keyed off the real current date/week, not anything a test can
+        // reset) and gets silently reused by every later test's own
+        // getOrCreatePeriodicSealedPool() call for the rest of that
+        // calendar day/week, rather than each test seeing a clean slate.
+        $pdo->exec('TRUNCATE TABLE weekly_sealed_pool_standings');
+        $pdo->exec('TRUNCATE TABLE weekly_sealed_pool_queue');
+        $pdo->exec('TRUNCATE TABLE periodic_sealed_pools');
         $pdo->exec('TRUNCATE TABLE game_notes');
         $pdo->exec('TRUNCATE TABLE game_chat_messages');
         $pdo->exec('TRUNCATE TABLE game_initial_card_passes');
@@ -9758,7 +9770,7 @@ final class GameServiceIntegrationTest extends TestCase
         $bob = $this->insertUser('draft-nonquickdraft-bob');
 
         $this->expectException(GameStateException::class);
-        $this->expectExceptionMessage('only supports the "quick_draft"/"winston_draft"/"grid_draft"/"rotisserie_draft"/"tiered_rotisserie_draft"/"sealed_deck"/"sealed_pool_of_the_day" deck types');
+        $this->expectExceptionMessage('only supports the "quick_draft"/"winston_draft"/"grid_draft"/"rotisserie_draft"/"tiered_rotisserie_draft"/"sealed_deck"/"sealed_pool_of_the_day"/"weekly_sealed_pool" deck types');
 
         $this->games->createGame($creator, [$creator, $bob], format: 'draft', deckType: 'structure');
     }
@@ -17448,6 +17460,216 @@ final class GameServiceIntegrationTest extends TestCase
             $deckCardIds,
             array_map(intval(...), json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $alice)['deck_card_ids'], true))
         );
+    }
+
+    // -- Weekly Sealed Pool (issue #520) ---------------------------------
+
+    private function weeklyQueue(): \MoodSwings\Matchmaking\WeeklySealedPoolQueueService
+    {
+        return new \MoodSwings\Matchmaking\WeeklySealedPoolQueueService($this->games);
+    }
+
+    public function testJoinQueuePairsTwoWaitingPlayers(): void
+    {
+        $alice = $this->insertUser('weeklypool-pair-alice');
+        $bob = $this->insertUser('weeklypool-pair-bob');
+        $queue = $this->weeklyQueue();
+
+        $first = $queue->joinQueue($alice);
+        self::assertSame(['status' => 'waiting'], $first, 'nobody else is queued yet, so the first joiner just waits');
+
+        $second = $queue->joinQueue($bob);
+        self::assertSame('paired', $second['status']);
+        self::assertSame('weeklypool-pair-alice', $second['opponent_username']);
+
+        $game = $this->fetchGame($second['game_id']);
+        self::assertSame('weekly_sealed_pool', $game['deck_type']);
+        self::assertSame('draft', $game['format']);
+
+        $draftMatchId = (int) $game['draft_match_id'];
+        self::assertNotNull($draftMatchId);
+        $aliceCardIds = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $alice)['drafted_card_ids'], true);
+        $bobCardIds = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $bob)['drafted_card_ids'], true);
+        self::assertCount(50, $aliceCardIds);
+        self::assertSame($aliceCardIds, $bobCardIds, 'a Weekly Sealed Pool match reuses the same shared-pool mechanism as Sealed Pool of the Day');
+
+        // The joiner (bob) was paired immediately -- neither player
+        // should still have a row in the queue.
+        $queueCount = (int) $this->pdo->query('SELECT COUNT(*) FROM weekly_sealed_pool_queue')->fetchColumn();
+        self::assertSame(0, $queueCount);
+    }
+
+    public function testJoinQueueWaitsWhenNoEligibleOpponentIsQueued(): void
+    {
+        $alice = $this->insertUser('weeklypool-wait-alice');
+        $queue = $this->weeklyQueue();
+
+        $result = $queue->joinQueue($alice);
+
+        self::assertSame(['status' => 'waiting'], $result);
+        $queueCount = (int) $this->pdo->query('SELECT COUNT(*) FROM weekly_sealed_pool_queue')->fetchColumn();
+        self::assertSame(1, $queueCount);
+    }
+
+    public function testJoinQueueRejectsJoiningTwice(): void
+    {
+        $alice = $this->insertUser('weeklypool-twice-alice');
+        $queue = $this->weeklyQueue();
+        $queue->joinQueue($alice);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('already in the Weekly Sealed Pool queue');
+
+        $queue->joinQueue($alice);
+    }
+
+    public function testLeaveQueueRemovesAWaitingPlayerAndIsIdempotent(): void
+    {
+        $alice = $this->insertUser('weeklypool-leave-alice');
+        $queue = $this->weeklyQueue();
+        $queue->joinQueue($alice);
+
+        $queue->leaveQueue($alice);
+        self::assertSame(0, (int) $this->pdo->query('SELECT COUNT(*) FROM weekly_sealed_pool_queue')->fetchColumn());
+
+        // Leaving again (already not queued) must not throw.
+        $queue->leaveQueue($alice);
+    }
+
+    /**
+     * The pairing rule's own "haven't already faced this week" half --
+     * see GameService::haveWeeklySealedPoolOpponentsAlreadyPlayed(). Alice
+     * and Bob already share a Weekly Sealed Pool match this week (created
+     * directly here, bypassing the queue, to set up the precondition);
+     * Carol joining after both are queued should pair with whichever of
+     * them she reaches, but a THIRD join from whichever of Alice/Bob is
+     * left must keep waiting rather than being re-paired with the other.
+     */
+    public function testJoinQueueSkipsAnOpponentAlreadyPlayedThisWeek(): void
+    {
+        $alice = $this->insertUser('weeklypool-rematch-alice');
+        $bob = $this->insertUser('weeklypool-rematch-bob');
+        $queue = $this->weeklyQueue();
+
+        // Alice and Bob already played each other this week.
+        $this->games->createGame($alice, [$alice, $bob], format: 'draft', deckType: 'weekly_sealed_pool');
+
+        $queue->joinQueue($alice);
+        $result = $queue->joinQueue($bob);
+
+        self::assertSame('waiting', $result['status'], 'Bob must not be re-paired against Alice again this same week');
+        self::assertSame(2, (int) $this->pdo->query('SELECT COUNT(*) FROM weekly_sealed_pool_queue')->fetchColumn(), 'both Alice and Bob should now be waiting, since neither is an eligible opponent for the other');
+    }
+
+    public function testJoinQueueEnforcesTheConcurrentMatchCap(): void
+    {
+        $alice = $this->insertUser('weeklypool-cap-alice');
+        $bob = $this->insertUser('weeklypool-cap-bob');
+        $carol = $this->insertUser('weeklypool-cap-carol');
+        $dave = $this->insertUser('weeklypool-cap-dave');
+        $queue = $this->weeklyQueue();
+
+        // Alice already has 2 Weekly Sealed Pool matches in progress this
+        // week (the maintainer's own suggested cap) -- both left
+        // unresolved (status stays 'waiting'/'deck_building', never
+        // completed) so they still count as "in progress".
+        $this->games->createGame($alice, [$alice, $bob], format: 'draft', deckType: 'weekly_sealed_pool');
+        $this->games->createGame($alice, [$alice, $carol], format: 'draft', deckType: 'weekly_sealed_pool');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('2 Weekly Sealed Pool matches in progress');
+
+        $queue->joinQueue($alice);
+    }
+
+    /**
+     * Drives a Weekly Sealed Pool match to completion the simplest way
+     * available -- resigning while the match is still in its
+     * deck_building 'waiting' phase, which resignFromDraftMatch() turns
+     * into an immediate single-survivor win (see that method's own
+     * docblock) without needing to submit decks or actually play a game
+     * out. This exercises the exact same recordMatchCompletionStats()
+     * path an ordinary best-of-three finish would.
+     */
+    public function testCompletingAWeeklySealedPoolMatchRecordsStandings(): void
+    {
+        $alice = $this->insertUser('weeklypool-standings-alice');
+        $bob = $this->insertUser('weeklypool-standings-bob');
+
+        $gameId = $this->games->createGame($alice, [$alice, $bob], format: 'draft', deckType: 'weekly_sealed_pool');
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $bob));
+
+        $poolId = $this->games->currentWeeklySealedPoolId();
+        $standings = $this->games->weeklySealedPoolStandings($poolId);
+        $byUser = array_column($standings, null, 'user_id');
+
+        self::assertSame(1, $byUser[$alice]['wins']);
+        self::assertSame(0, $byUser[$alice]['losses']);
+        self::assertSame(0, $byUser[$bob]['wins']);
+        self::assertSame(1, $byUser[$bob]['losses']);
+        self::assertSame(1, $byUser[$alice]['rank'], 'the winner should rank ahead of the loser');
+    }
+
+    /**
+     * The whole point of ranking by a hidden score rather than plain win
+     * count (the maintainer's own asymmetric win +3/loss -2 choice):
+     * Alice's 2-1 record (score 6 - 2 = 4) outranks Bob's perfect-but-
+     * smaller 1-0 record (score 3) despite having a loss on it -- playing
+     * (and mostly winning) more matches beats turtling on one clean win,
+     * exactly the shape the formula is meant to produce.
+     */
+    public function testWeeklySealedPoolStandingsRankByHiddenScoreNotRawWinCount(): void
+    {
+        $alice = $this->insertUser('weeklypool-rank-alice');
+        $bob = $this->insertUser('weeklypool-rank-bob');
+        $carol = $this->insertUser('weeklypool-rank-carol');
+        $dave = $this->insertUser('weeklypool-rank-dave');
+
+        // Alice: 2-1 (score 4). Bob: 1-0 (score 3). Carol: 1-1 (score 1). Dave: 0-2 (score -4).
+        $game1 = $this->games->createGame($alice, [$alice, $carol], format: 'draft', deckType: 'weekly_sealed_pool');
+        $this->games->resignGame($game1, $this->games->gamePlayerIdFor($game1, $carol));
+        $game2 = $this->games->createGame($alice, [$alice, $dave], format: 'draft', deckType: 'weekly_sealed_pool');
+        $this->games->resignGame($game2, $this->games->gamePlayerIdFor($game2, $dave));
+        $game3 = $this->games->createGame($carol, [$carol, $alice], format: 'draft', deckType: 'weekly_sealed_pool');
+        $this->games->resignGame($game3, $this->games->gamePlayerIdFor($game3, $alice));
+        $game4 = $this->games->createGame($bob, [$bob, $dave], format: 'draft', deckType: 'weekly_sealed_pool');
+        $this->games->resignGame($game4, $this->games->gamePlayerIdFor($game4, $dave));
+
+        $poolId = $this->games->currentWeeklySealedPoolId();
+        $standings = $this->games->weeklySealedPoolStandings($poolId);
+        $rankedUserIds = array_column($standings, 'user_id');
+
+        self::assertSame([$alice, $bob, $carol, $dave], $rankedUserIds, 'Alice (score 4) > Bob (score 3) > Carol (score 1) > Dave (score -4)');
+
+        $byUser = array_column($standings, null, 'user_id');
+        self::assertSame(2, $byUser[$alice]['wins']);
+        self::assertSame(1, $byUser[$alice]['losses']);
+        self::assertSame(1, $byUser[$bob]['wins']);
+        self::assertSame(0, $byUser[$bob]['losses']);
+        self::assertSame(25, $byUser[$alice]['percentile'], '1st of 4 -> ceil(1/4 * 100) = 25%');
+        self::assertSame(100, $byUser[$dave]['percentile'], 'last of 4 -> 100%');
+    }
+
+    /**
+     * A player who has only queued/is still mid-match (nothing completed
+     * yet) has no standings row at all, so they're correctly absent
+     * rather than cluttering the list with an untested 0-0 entry.
+     */
+    public function testWeeklySealedPoolStandingsOmitsPlayersWithNoCompletedMatch(): void
+    {
+        $alice = $this->insertUser('weeklypool-unranked-alice');
+        $bob = $this->insertUser('weeklypool-unranked-bob');
+        $this->games->createGame($alice, [$alice, $bob], format: 'draft', deckType: 'weekly_sealed_pool');
+
+        $poolId = $this->games->currentWeeklySealedPoolId();
+        $standings = $this->games->weeklySealedPoolStandings($poolId);
+
+        self::assertSame([], $standings, 'neither player has completed a match yet, so neither is ranked');
+    }
+
+    public function testPriorWeeklySealedPoolIdIsNullWithNoPriorEvent(): void
+    {
+        self::assertNull($this->games->priorWeeklySealedPoolId());
     }
 
     // Issue #90: Duel/Open Team Play/Closed Team Play's own best-of-three

@@ -40,6 +40,7 @@ use MoodSwings\Matchmaking\MatchmakingService;
 use MoodSwings\Matchmaking\NotAuthorizedToCancelListingException;
 use MoodSwings\Matchmaking\NotDiscoverableException;
 use MoodSwings\Matchmaking\OpenGameListingNotFoundException;
+use MoodSwings\Matchmaking\WeeklySealedPoolQueueService;
 use MoodSwings\Notifications\NotificationService;
 use MoodSwings\Notifications\PushNotificationChannel;
 use MoodSwings\Repository\DiscordAccountRepository;
@@ -817,6 +818,7 @@ $chaosRegistry = ChaosDefaultEffectRegistry::build();
 $cardStats = new CardStatsService();
 $games = new GameService(new BoardStateRepository($gameRegistry, $chaosRegistry), new MoodPlayService($gameRegistry, $chaosRegistry), new RoundScorer(), $userDecklists, new ReplayStateBuilder($gameRegistry), notifications: $notifications, cardStats: $cardStats, chaosRegistry: $chaosRegistry);
 $matchmaking = new MatchmakingService(new OpenGameListingRepository(), new UserRepository(), new FriendshipRepository(), $games);
+$weeklySealedPoolQueue = new WeeklySealedPoolQueueService($games);
 
 // Lifetime game/match wins-losses (issue #106) -- see
 // GameService::lifetimeStatsFor()/recordGameCompletionStats()/
@@ -828,6 +830,10 @@ if ($path === '/user/stats' && $method === 'GET') {
         'status' => 'ok',
         'username' => $currentUser['username'],
         'stats' => $games->lifetimeStatsFor((int) $currentUser['id']),
+        // Issue #520's own "prior events" list -- one row per past Weekly
+        // Sealed Pool week this user completed at least one match in, see
+        // GameService::priorWeeklySealedPoolEventsFor()'s own docblock.
+        'prior_weekly_sealed_pool_events' => $games->priorWeeklySealedPoolEventsFor((int) $currentUser['id']),
     ]);
 }
 
@@ -1317,6 +1323,48 @@ if ($path === '/open-games/cancel' && $method === 'POST') {
     } catch (NotAuthorizedToCancelListingException $e) {
         respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
     }
+}
+
+// Weekly Sealed Pool's own queue (issue #520) -- see WeeklySealedPoolQueueService's
+// own docblock for why this is a separate FIFO auto-pairing queue rather
+// than another use of the open-lobby endpoints just above.
+if ($path === '/weekly-sealed-pool/queue' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    respond(200, ['status' => 'ok', ...$weeklySealedPoolQueue->queueStatusFor((int) $currentUser['id'])]);
+}
+
+if ($path === '/weekly-sealed-pool/queue' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+
+    try {
+        $result = $weeklySealedPoolQueue->joinQueue((int) $currentUser['id']);
+        respond(200, ['status' => 'ok', ...$result]);
+    } catch (GameStateException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/weekly-sealed-pool/queue/leave' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $weeklySealedPoolQueue->leaveQueue((int) $currentUser['id']);
+    respond(200, ['status' => 'ok']);
+}
+
+// ?week=prior shows last week's now-final standings instead of the
+// current, still-live week -- see GameService::priorWeeklySealedPoolId()'s
+// own docblock for why that one never fabricates a pool that never
+// existed, unlike the current week (always get-or-create).
+if ($path === '/weekly-sealed-pool/standings' && $method === 'GET') {
+    requireAuth($auth);
+
+    $periodicSealedPoolId = ($_GET['week'] ?? '') === 'prior'
+        ? $games->priorWeeklySealedPoolId()
+        : $games->currentWeeklySealedPoolId();
+
+    respond(200, [
+        'status' => 'ok',
+        'standings' => $periodicSealedPoolId !== null ? $games->weeklySealedPoolStandings($periodicSealedPoolId) : null,
+    ]);
 }
 
 if ($path === '/user/matchmaking-discoverable-preference' && $method === 'POST') {

@@ -58,6 +58,29 @@
             <p id="user-stats-match-note">Matches are Quick/Winston/Grid Draft best-of-three results.</p>
         </section>
 
+        <!-- Weekly Sealed Pool's own "prior events" list (issue #520) --
+             one row per past week this user completed at least one match
+             in, newest first. Placement is a PERCENTAGE ("top 10%"), not a
+             raw rank -- see GameService::priorWeeklySealedPoolEventsFor()'s
+             own docblock for why (stays comparable across weeks with very
+             different player counts). The current, still-live week is
+             deliberately not here -- see the "Weekly Sealed Pool" dialog
+             from the lobby (../game/) for that. -->
+        <section id="user-prior-weekly-sealed-pool-events-section">
+            <h2>Weekly Sealed Pool -- prior events</h2>
+            <table id="user-prior-weekly-sealed-pool-events-table">
+                <thead>
+                    <tr>
+                        <th scope="col">Week of</th>
+                        <th scope="col">Record</th>
+                        <th scope="col">Placement</th>
+                    </tr>
+                </thead>
+                <tbody id="user-prior-weekly-sealed-pool-events-body"></tbody>
+            </table>
+            <p id="user-prior-weekly-sealed-pool-events-empty" hidden>No Weekly Sealed Pool events yet.</p>
+        </section>
+
         <!-- Online/presence indicator (issue #110) -- lets a user opt out
              of sharing their derived online/offline status with friends
              and fellow game players entirely; shown to others as a

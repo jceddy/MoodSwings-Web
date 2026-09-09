@@ -34,6 +34,27 @@
             recordFormatted(stats.game_wins, stats.game_losses, stats.game_win_percentage);
         document.getElementById('user-stats-match-record').textContent =
             recordFormatted(stats.match_wins, stats.match_losses, stats.match_win_percentage);
+
+        // Weekly Sealed Pool's own "prior events" list (issue #520) --
+        // see GameService::priorWeeklySealedPoolEventsFor().
+        const priorEvents = body.prior_weekly_sealed_pool_events || [];
+        const priorEventsBody = document.getElementById('user-prior-weekly-sealed-pool-events-body');
+        document.getElementById('user-prior-weekly-sealed-pool-events-empty').hidden = priorEvents.length > 0;
+        priorEvents.forEach((event) => {
+            const row = document.createElement('tr');
+
+            const weekCell = document.createElement('td');
+            weekCell.textContent = event.period_start;
+
+            const recordCell = document.createElement('td');
+            recordCell.textContent = `${event.wins}-${event.losses}`;
+
+            const placementCell = document.createElement('td');
+            placementCell.textContent = `Top ${event.percentile}%`;
+
+            row.append(weekCell, recordCell, placementCell);
+            priorEventsBody.appendChild(row);
+        });
     }
 
     // Online/presence indicator (issue #110) -- initialized from

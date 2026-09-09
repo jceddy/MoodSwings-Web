@@ -1193,6 +1193,51 @@ every other Settings checkbox (`POST /user/matchmaking-discoverable-preference`)
 Only gates whether YOUR OWN listings are shown to strangers -- joining
 someone else's listing needs no opt-in of its own.
 
+### Weekly Sealed Pool (issue #520)
+
+A new "Weekly Sealed Pool" button (next to "Open games") opens
+`#weekly-sealed-pool-dialog` -- deliberately its own dialog, not a fourth
+section bolted onto `#open-games-dialog` above, since there's no listing
+to browse here at all: `GET /weekly-sealed-pool/queue` on open (and after
+every join/leave) reports `{ queued, in_progress_count,
+concurrent_match_cap }`, which `refreshWeeklySealedPoolQueueStatus()`
+turns into either a "Join Queue" button (disabled once
+`in_progress_count >= concurrent_match_cap`, mirroring
+`WeeklySealedPoolQueueService`'s own concurrent-match cap rather than
+leaving it to surface only as a rejected click) or a "Leave Queue" one
+while already queued. Clicking Join Queue calls `POST
+/weekly-sealed-pool/queue`; a `{"status": "paired"}` response closes the
+dialog and jumps straight to the resulting board the same way
+`joinOpenGame()`'s own `{"status": "started"}` case does above, while
+`{"status": "waiting"}` just refreshes the status text in place. A player
+who gets paired by someone ELSE while sitting on this dialog isn't
+specially detected -- they simply see the new game appear in their normal
+games list the next time `refreshLobby()`'s own 4-second poll runs, same
+as any other game created against them.
+
+The same dialog also hosts the event's own standings -- "This week"/"Last
+week" toggle buttons (`aria-pressed` reflecting which is active) driving
+`GET /weekly-sealed-pool/standings?week=current|prior`, rendered as a
+plain ranked list (`#rank username (you) — wins-losses (top N%)`), never
+showing the hidden internal score itself (see "Weekly Sealed Pool" in
+`php-app/README.md` for why placement is ranked by that score rather than
+plain win count). The two empty states are worded differently rather than
+sharing one message: `standings: null` (no prior-week event ever
+happened, only possible for `week=prior`) reads "There was no Weekly
+Sealed Pool event last week," while `standings: []` (the current week
+exists but nobody's finished a match in it yet) reads "No standings yet
+-- be the first to finish a match this week!" -- the first would be a
+non sequitur about a week that's already over.
+
+User info (`../user/`) gets its own new "Weekly Sealed Pool -- prior
+events" table (`GET /user/stats`'s new `prior_weekly_sealed_pool_events`
+field, alongside its existing `stats`) -- one row per past week the
+viewer completed at least one match in, newest first, each showing the
+week's date, plain win/loss record, and percentage placement ("top N%").
+Deliberately excludes the current, still-live week -- that one only ever
+shows up in the lobby's own dialog above, via its "This week" standings
+toggle.
+
 ### Best of three (issue #90)
 
 `#new-game-best-of-three-label` (a checkbox, right above the Deck
