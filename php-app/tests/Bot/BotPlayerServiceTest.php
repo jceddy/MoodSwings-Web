@@ -2231,6 +2231,100 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame(['target_mood_id' => 3], $action['choices']);
     }
 
+    // -- Recklessness (confirmed by the maintainer) ----------------------------
+
+    /**
+     * Player 2's Hope (id 124, value 0) sits alongside their own
+     * Complacency (id 5, value 4) -- recklessnessTargetMoodId() takes
+     * Hope anyway, ahead of the higher-value mood, since permanently
+     * denying an opponent their own extra play (for as long as the bot
+     * holds it) is worth far more than Hope's plain printed value of 0
+     * would suggest.
+     */
+    public function testChooseActionTargetsHopeOverAHigherValueOpponentMoodWhenPlayingRecklessness(): void
+    {
+        $state = $this->boardState(hands: [1 => [100], 2 => [124, 5]]);
+        $state->moveHandToInPlay(2, 124);
+        $state->moveHandToInPlay(2, 5);
+
+        $action = $this->bot->chooseAction($state, [100], 1);
+
+        self::assertSame(100, $action['card_id']);
+        self::assertSame(['target_mood_id' => 124], $action['choices']);
+    }
+
+    /**
+     * Same as above but with Grace (id 121, value 0) instead of Hope --
+     * both get the same "take it regardless of value" priority.
+     */
+    public function testChooseActionTargetsGraceOverAHigherValueOpponentMoodWhenPlayingRecklessness(): void
+    {
+        $state = $this->boardState(hands: [1 => [100], 2 => [121, 5]]);
+        $state->moveHandToInPlay(2, 121);
+        $state->moveHandToInPlay(2, 5);
+
+        $action = $this->bot->chooseAction($state, [100], 1);
+
+        self::assertSame(100, $action['card_id']);
+        self::assertSame(['target_mood_id' => 121], $action['choices']);
+    }
+
+    /**
+     * With no Hope/Grace anywhere on the board, recklessnessTargetMoodId()
+     * falls back to the highest-value non-teammate opponent mood --
+     * player 2's Complacency (value 4) over player 3's Doubt (value 2).
+     */
+    public function testChooseActionTargetsTheHighestValueOpponentsMoodWhenPlayingRecklessnessWithNoHopeOrGrace(): void
+    {
+        $state = $this->boardState(hands: [1 => [100], 2 => [5], 3 => [36]]);
+        $state->moveHandToInPlay(2, 5);
+        $state->moveHandToInPlay(3, 36);
+
+        $action = $this->bot->chooseAction($state, [100], 1);
+
+        self::assertSame(100, $action['card_id']);
+        self::assertSame(['target_mood_id' => 5], $action['choices']);
+    }
+
+    /**
+     * A teammate's own Hope doesn't count as "an opponent" (the same
+     * exclusion Contempt/Conviction already apply) -- Recklessness stays
+     * untargeted (its "you may" field simply left unfilled) rather than
+     * taking a mood that already contributes to the bot's own GROUP
+     * total in Open Team Play.
+     */
+    public function testChooseActionDoesNotTargetATeammatesMoodWhenPlayingRecklessness(): void
+    {
+        $state = new BoardState(
+            $this->sampleCatalog(),
+            DefaultEffectRegistry::build(),
+            [1, 2, 3],
+            hands: [1 => [100], 2 => [124]],
+            teamIdByPlayer: [1 => 0, 2 => 0, 3 => 1],
+        );
+        $state->moveHandToInPlay(2, 124);
+
+        $action = $this->bot->chooseAction($state, [100], 1);
+
+        self::assertSame(100, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
+    /**
+     * No opponent has any mood in play at all -- Recklessness's own "you
+     * may" field is left unfilled entirely, matching Contempt/
+     * Conviction's own "nothing worth targeting" behavior.
+     */
+    public function testChooseActionLeavesRecklessnessUntargetedWithNoOpponentMoodInPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [100]]);
+
+        $action = $this->bot->chooseAction($state, [100], 1);
+
+        self::assertSame(100, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
     // -- Hate (confirmed by the maintainer) -----------------------------------
 
     /**

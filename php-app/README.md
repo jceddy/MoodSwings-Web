@@ -7987,6 +7987,30 @@ since it already holds that dependency):
   away. `hateTargetMoodId()` returns `null` whenever the bot itself has
   one of these in play, skipping the target field (and the draw)
   entirely regardless of how good an opponent target might otherwise be.
+- **Recklessness's own targeting policy** (reported live: "bots should
+  actually target an opponent's mood when they play Recklessness -- Hope
+  or Grace first, if they have it, then prioritizing highest points
+  first"), via `recklessnessTargetMoodId()`: previously never filled in
+  at all (`recklessness` wasn't in `BESPOKE_CHOICE_EFFECT_KEYS`, and its
+  own `target_mood_id` field isn't on `BotChoiceResolver::
+  isAlwaysFilledOptionalField()`'s own allowlist either, so the generic
+  schema loop always skipped this "you may" field outright -- a bot
+  playing Recklessness only ever got the guaranteed bottom-of-deck-plus-
+  draw half, never the opponent's mood). Now always takes a target when
+  one exists: an opponent's Hope or Grace first, REGARDLESS of value --
+  both print at `base_value` 0 despite being top-tier "extra play every
+  turn"/"extra play from the discard pile" engines, the same "a 0
+  printed value can still be the single best target on the board" trap
+  `angerSwingMaximizingTargets()`/`ambitionSafeHandCardIds()` already
+  work around for Hope elsewhere in this file -- taking either away
+  disables that opponent's own extra play for as long as the bot holds
+  it (and, per `RecklessnessEffect`'s own "give the mood back after
+  scoring if you still have it" text, hands the bot itself that same
+  extra play in the meantime). With neither in play anywhere on the
+  board, falls back to `convictionBestOpponentMoodId()`'s own highest-
+  CURRENT-value non-teammate-opponent-mood policy; `null` (leaving the
+  field unfilled, same as before this fix) only once no non-teammate
+  opponent has any mood in play at all.
 - `chooseDecisionAnswer(BoardState $state, array $field, int
   $botGamePlayerId, string $decisionType = ''): array` -- `[]` (submits
   as a plain empty answer, i.e. "declined") for an optional pending-
@@ -8558,10 +8582,10 @@ the bot its turn.
 **Legal actions (`LegalChoiceEnumerator`).** Reuses
 `BotPlayerService::buildChoicesForCard()`'s own existing, already-tested
 choice-set as the always-included default action per playable card. For
-the ~16 hand-written "bespoke" per-effect-key choice builders inside it
+the ~17 hand-written "bespoke" per-effect-key choice builders inside it
 (Rationalization, Avoidance, Cynicism, Intimidation, Paranoia, Pacifism,
 Creativity, Anger, Denial, Hate, Conviction, Nostalgia, Contempt,
-Sneakiness, Shock, Exhilaration -- `BotPlayerService::usesBespokeChoiceBuilding()`), that
+Sneakiness, Shock, Exhilaration, Recklessness -- `BotPlayerService::usesBespokeChoiceBuilding()`), that
 default is the ONLY action generated for that card; reimplementing full
 legal-choice enumeration for each of these wasn't worth it just to widen
 the search over cards the heuristic already handles reasonably. For
