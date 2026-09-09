@@ -10315,8 +10315,8 @@ final class GameService
         $seats = $seatStmt->fetchAll();
 
         $insertGame = $pdo->prepare(
-            "INSERT INTO games (format, deck_type, draft_match_id, match_game_number, status, created_by_user_id, wins_needed, default_selections_mode)
-             VALUES (:format, :deck_type, :draft_match_id, :match_game_number, 'waiting', :created_by, :wins_needed, :default_selections_mode)"
+            "INSERT INTO games (format, deck_type, draft_match_id, match_game_number, status, created_by_user_id, wins_needed, default_selections_mode, diagnostic_mode)
+             VALUES (:format, :deck_type, :draft_match_id, :match_game_number, 'waiting', :created_by, :wins_needed, :default_selections_mode, :diagnostic_mode)"
         );
         $insertGame->execute([
             'format' => $game['format'],
@@ -10331,6 +10331,16 @@ final class GameService
             // at the match's own creation (issue #274's per-game, not
             // per-user, decision), not re-chosen game to game.
             'default_selections_mode' => (int) $game['default_selections_mode'],
+            // Reported live: "in best of three matches, the bot
+            // diagnostic mode should be carried forward through all of
+            // the match games" -- decided once at createGame() time
+            // (issue reported live: "add a 'diagnostic mode' checkbox
+            // when creating a game including one or more tactical
+            // bot(s)"), same "chosen once at match creation" reasoning
+            // as default_selections_mode just above, not left to reset
+            // to off (this INSERT's own implicit default) every time a
+            // fresh game row is created for the next game of the match.
+            'diagnostic_mode' => (int) $game['diagnostic_mode'],
         ]);
         $nextGameId = (int) $pdo->lastInsertId();
 
@@ -10484,12 +10494,12 @@ final class GameService
                 format, deck_type, custom_deck_name, custom_deck_card_ids,
                 custom_duel_rules_preset, custom_duel_min_cards, custom_duel_rarity_limits, custom_duel_duplicate_limits,
                 custom_duel_even_color_distribution_rarities, game_match_id, match_game_number,
-                status, created_by_user_id, wins_needed, default_selections_mode
+                status, created_by_user_id, wins_needed, default_selections_mode, diagnostic_mode
              ) VALUES (
                 :format, :deck_type, :custom_deck_name, :custom_deck_card_ids,
                 :duel_rules_preset, :duel_min_cards, :duel_rarity_limits, :duel_duplicate_limits,
                 :duel_even_color_distribution_rarities, :game_match_id, :match_game_number,
-                'waiting', :created_by, :wins_needed, :default_selections_mode
+                'waiting', :created_by, :wins_needed, :default_selections_mode, :diagnostic_mode
              )"
         );
         $insertGame->execute([
@@ -10510,6 +10520,14 @@ final class GameService
             'created_by' => (int) $game['created_by_user_id'],
             'wins_needed' => (int) $game['wins_needed'],
             'default_selections_mode' => (int) $game['default_selections_mode'],
+            // Reported live: "in best of three matches, the bot
+            // diagnostic mode should be carried forward through all of
+            // the match games" -- decided once at createGame() time, the
+            // same "chosen once at match creation" reasoning as
+            // default_selections_mode just above, not left to reset to
+            // off (this INSERT's own implicit default) every time a
+            // fresh game row is created for the next game of the match.
+            'diagnostic_mode' => (int) $game['diagnostic_mode'],
         ]);
         $nextGameId = (int) $pdo->lastInsertId();
 
