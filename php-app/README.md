@@ -3972,6 +3972,16 @@ both completion paths and stays consistent across a match's games since
 counts a team format's match wins by `winner_team_id` matching the
 just-completed game's own, rather than by the representative's `user_id`.
 
+**Diagnostic mode carries forward across match games** (bugfix, reported
+live: "in best of three matches, the bot diagnostic mode should be
+carried forward through all of the match games") -- `advanceGameMatch()`'s
+own `INSERT INTO games` for the next game never included
+`diagnostic_mode` at all, so it silently reset to off (the column's own
+default) every time, the same gap `advanceDraftMatch()` had for its own
+draft-family matches. Both now carry it forward explicitly, the same
+"decided once at match creation, not re-chosen game to game" treatment
+`default_selections_mode` already gets.
+
 **Lobby match-winner display credits the whole team too** (bugfix,
 follow-up to the above) -- `gameMatchSummaryFor()`'s own `winner_usernames`
 (an array, renamed from the old singular `winner_username`) resolves the

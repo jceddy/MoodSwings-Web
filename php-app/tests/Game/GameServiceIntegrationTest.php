@@ -10455,6 +10455,39 @@ final class GameServiceIntegrationTest extends TestCase
         }
     }
 
+    /**
+     * Reported live: "in best of three matches, the bot diagnostic mode
+     * should be carried forward through all of the match games."
+     * advanceDraftMatch()'s own INSERT for the next game never included
+     * diagnostic_mode at all, so it silently reset to off (the column's
+     * own default) every time -- diagnostic mode manually flipped on here
+     * (rather than seating a real Tactical Bot) since this test only
+     * cares whether the CARRY-FORWARD itself works, not the separate
+     * "diagnostic mode requires a Tactical Bot" gate createGame() already
+     * enforces and other tests already cover.
+     */
+    public function testQuickDraftMatchCarriesDiagnosticModeForwardIntoGameTwo(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture(winsNeeded: 1);
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+        $this->submitFullQuickDraftDeck($gameId, $u1);
+        $this->submitFullQuickDraftDeck($gameId, $u2);
+        $this->games->startGame($gameId);
+
+        $this->pdo->prepare('UPDATE games SET diagnostic_mode = 1 WHERE id = :id')->execute(['id' => $gameId]);
+
+        $this->completeQuickDraftGameByPassing($gameId);
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE draft_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $draftMatchId]);
+        $game2Id = (int) $nextGameStmt->fetchColumn();
+
+        self::assertSame(1, (int) $this->fetchGame($game2Id)['diagnostic_mode'], 'diagnostic mode must carry forward into game 2 of a best-of-three draft match');
+    }
+
     /** @return array{gameId: int, u1: int, u2: int, nextGameId: int, winnerUserId: int, loserUserId: int} */
     private function buildQuickDraftMatchThroughGameOne(): array
     {
@@ -17886,6 +17919,35 @@ final class GameServiceIntegrationTest extends TestCase
 
         $nextGameStmt->execute(['match_id' => $gameMatchId]);
         self::assertFalse($nextGameStmt->fetchColumn(), 'a best-of-three match can never need a 4th game');
+    }
+
+    /**
+     * Reported live: "in best of three matches, the bot diagnostic mode
+     * should be carried forward through all of the match games."
+     * advanceGameMatch()'s own INSERT for the next game never included
+     * diagnostic_mode at all, so it silently reset to off (the column's
+     * own default) every time.
+     */
+    public function testBestOfThreeDuelMatchCarriesDiagnosticModeForwardIntoGameTwo(): void
+    {
+        $human = $this->insertUser('bo3-diag-human');
+        $bot = $this->insertBotUser('bo3-diag-bot');
+        $this->pdo->prepare('UPDATE users SET uses_tactical_ai = 1 WHERE id = :id')->execute(['id' => $bot]);
+
+        $gameId = $this->games->createGame($human, [$human, $bot], format: 'duel', deckType: 'structure', bestOfThree: true, diagnosticMode: true);
+        self::assertSame(1, (int) $this->fetchGame($gameId)['diagnostic_mode'], 'game 1 itself should have diagnostic mode on, per createGame()\'s own gate');
+
+        $this->games->startGame($gameId);
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $human));
+
+        $gameMatchId = (int) $this->fetchGame($gameId)['game_match_id'];
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE game_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $gameMatchId]);
+        $game2Id = (int) $nextGameStmt->fetchColumn();
+
+        self::assertSame(1, (int) $this->fetchGame($game2Id)['diagnostic_mode'], 'diagnostic mode must carry forward into game 2 of the match');
     }
 
     // getState()'s own top-level 'game_match' field (GameService::
