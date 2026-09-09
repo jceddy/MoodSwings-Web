@@ -363,4 +363,130 @@ final class PauseBeforeOwnTurnIntegrationTest extends TestCase
         $this->expectException(GameStateException::class);
         $this->games->pass($gameId, $p1);
     }
+
+    /**
+     * The exact scenario reported live (migration 0275): "if an opponent
+     * plays recklessness and steals one of my boredom, I want to be able
+     * to see the board State with their recklessness in play and my
+     * boredom on their side before I move on to the next round." p1
+     * steals p2's Boredom via Recklessness during round 1; round 1 scores
+     * with p1 the winner (they now hold both Recklessness and Boredom,
+     * worth more than p2's now-empty board), so p1 -- who opted into the
+     * pause -- becomes round 2's own current turn holder. Before
+     * acknowledging, GET /games/state must show the board exactly as it
+     * stood the instant round 1 ended: Recklessness still in play (not
+     * yet bottomed) and Boredom still under p1's own control (not yet
+     * given back to p2) -- NOT the fully-resolved after-scoring state.
+     * Once acknowledged, the same call must flip over to the real,
+     * already-advanced board.
+     */
+    public function testGetStateShowsTheFrozenPreAfterScoringBoardUntilAcknowledged(): void
+    {
+        $u1 = $this->insertUser('human1');
+        $u2 = $this->insertUser('human2');
+        (new UserRepository())->setPauseBeforeOwnTurn($u1, true);
+        $gameId = $this->insertGame('standard', 'structure', $u1, winsNeeded: 3);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        // Boredom is genuinely PLAYED below (not pre-seeded straight into
+        // 'in_play') -- ReplayStateBuilder only ever knows about a card's
+        // entering play via its own logged 'mood_played' event, so a card
+        // planted directly into the database would be invisible to the
+        // frozen-board reconstruction this test is actually proving out.
+        $boredomId = $this->insertGameCard($gameId, 83, 'hand', $p2); // Boredom
+        $recklessnessId = $this->insertGameCard($gameId, 100, 'hand', $p1); // Recklessness
+        $this->insertGameRound($gameId, 1, $p2, $p2, 1); // p2 goes first this round
+
+        $this->games->playMood($gameId, $p2, $boredomId, []);
+        // Turn handing to p1 mid-round is ALSO a "your turn" moment (see
+        // notifyItsYourTurn()'s own docblock) -- p1 opted into the pause,
+        // so this needs its own acknowledgment too, same as any other
+        // handoff would.
+        $this->games->acknowledgeTurnStart($gameId, $p1);
+        $result = $this->games->playMood($gameId, $p1, $recklessnessId, ['target_mood_id' => $boredomId]);
+        // Recklessness alone leaves p1 controlling TWO of their own
+        // pending after-scoring effects once the round ends (its own
+        // "bottom and draw" self-tag, plus the "return Boredom to its
+        // owner" tag it placed on Boredom) -- an after-scoring ORDER
+        // decision (same mechanism GameServiceIntegrationTest's own
+        // Betrayal/Recklessness tests exercise) must be answered before
+        // the round can actually finish scoring. Order is immaterial
+        // here (the two effects touch different cards), so this just
+        // answers with whatever default order the server offers.
+        self::assertTrue($result['pending_decision'] ?? false);
+        $orderDecision = $this->games->getState($gameId, $u1)['round']['pending_decision'];
+        self::assertSame('after_scoring_order', $orderDecision['decision_type']);
+        $orderedCardIds = array_column($orderDecision['field']['cards'], 'card_id');
+        $result = $this->games->respondToDecision($gameId, $p1, ['ordered_card_ids' => $orderedCardIds]);
+        self::assertTrue($result['round_scored']);
+
+        $round = $this->fetchRound($gameId);
+        self::assertSame(2, (int) $round['round_number']);
+        self::assertSame($p1, (int) $round['current_turn_game_player_id']);
+        self::assertSame(1, (int) $round['turn_pending_acknowledgment']);
+
+        $frozenState = $this->games->getState($gameId, $u1);
+        $frozenInPlayByCardId = array_column($frozenState['in_play'], null, 'card_id');
+        self::assertArrayHasKey($recklessnessId, $frozenInPlayByCardId, 'Recklessness should still be shown in play, not yet bottomed');
+        self::assertArrayHasKey($boredomId, $frozenInPlayByCardId, 'Boredom should still be shown in play');
+        self::assertSame($p1, $frozenInPlayByCardId[$boredomId]['owner_game_player_id'], 'Boredom should still be shown under the taker, not yet given back');
+
+        $this->games->acknowledgeTurnStart($gameId, $p1);
+
+        $liveState = $this->games->getState($gameId, $u1);
+        $liveInPlayByCardId = array_column($liveState['in_play'], null, 'card_id');
+        self::assertArrayNotHasKey($recklessnessId, $liveInPlayByCardId, 'Recklessness should now be bottomed');
+        self::assertArrayHasKey($boredomId, $liveInPlayByCardId, 'Boredom should still be in play');
+        self::assertSame($p2, $liveInPlayByCardId[$boredomId]['owner_game_player_id'], 'Boredom should now be back with its original owner');
+    }
+
+    /**
+     * Once p1 has genuinely acted during round 2 (not just acknowledged
+     * -- an actual card played), p2's own later turn that same round
+     * must NOT replay round 1's stale watermark -- see
+     * GameService::roundHasAnyPlayedCard()'s own docblock. p2 should see
+     * whatever p1 actually did in round 2, not a snapshot from before
+     * round 2 even started.
+     */
+    public function testALaterHandoffWithinTheSameRoundNeverReplaysTheStaleWatermark(): void
+    {
+        $u1 = $this->insertUser('human1');
+        $u2 = $this->insertUser('human2');
+        (new UserRepository())->setPauseBeforeOwnTurn($u2, true);
+        $gameId = $this->insertGame('standard', 'structure', $u1, winsNeeded: 3);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $boredomId = $this->insertGameCard($gameId, 83, 'in_play', $p2); // Boredom
+        $recklessnessId = $this->insertGameCard($gameId, 100, 'hand', $p1); // Recklessness
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $recklessnessId, ['target_mood_id' => $boredomId]);
+        // p2 opted into the pause, so this first-ever handoff to them
+        // needs its own acknowledgment before they can pass.
+        $this->games->acknowledgeTurnStart($gameId, $p2);
+        $this->games->pass($gameId, $p2);
+        // Recklessness alone leaves p1 controlling two of their own
+        // pending after-scoring effects -- see the other test's own
+        // identical comment for why this order decision exists at all.
+        $orderDecision = $this->games->getState($gameId, $u1)['round']['pending_decision'];
+        $orderedCardIds = array_column($orderDecision['field']['cards'], 'card_id');
+        $this->games->respondToDecision($gameId, $p1, ['ordered_card_ids' => $orderedCardIds]); // scores round 1; p1 wins, becomes round 2's first player
+
+        // p1 (no pause preference) plays a real card during round 2 --
+        // Courage (id 7, value 1) -- before it becomes p2's own turn.
+        $courageId = $this->insertGameCard($gameId, 7, 'hand', $p1);
+        $round = $this->fetchRound($gameId);
+        self::assertSame(0, (int) $round['turn_pending_acknowledgment'], 'p1 never opted in, so round 2 starts unblocked');
+        $this->games->playMood($gameId, $p1, $courageId, []);
+
+        $round = $this->fetchRound($gameId);
+        self::assertSame($p2, (int) $round['current_turn_game_player_id']);
+        self::assertSame(1, (int) $round['turn_pending_acknowledgment'], 'p2 opted in, so their own handoff within round 2 is still gated');
+
+        // p2's own view must show Courage (p1's real round-2 play), NOT
+        // the stale round-1-end snapshot, which predates it entirely.
+        $state = $this->games->getState($gameId, $u2);
+        $inPlayCardIds = array_column($state['in_play'], 'card_id');
+        self::assertContains($courageId, $inPlayCardIds, 'the frozen watermark must not hide a real play made during round 2 itself');
+    }
 }
