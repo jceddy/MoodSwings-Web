@@ -906,6 +906,7 @@ const DECK_TYPE_LABELS = {
     chaos_draft: 'Chaos Draft',
     one_of_each: 'One of Each Card',
     sealed_deck: 'Sealed Deck',
+    sealed_pool_of_the_day: 'Sealed Pool of the Day',
 };
 
 function deckTypeLabel(deckType) {
