@@ -610,6 +610,39 @@ final class BotSearchIntegrationTest extends TestCase
         self::assertSame('new reasoning, after the boundary', $reasoning[0]['candidates'][0]['note']);
     }
 
+    /**
+     * Reported live: the "View bot reasoning" dialog showed empty even
+     * right after a Tactical Bot's move was clearly visible in Recent
+     * plays. Root cause: a scoring-time (Enthusiasm/Passion) or
+     * after-scoring order decision logs its own 'pending_decision_created'
+     * row with acting_game_player_id set to whoever now OWNS that
+     * decision (see GameService::writeScoringDecisionBatch()/
+     * writeAfterScoringOrderDecisionBatch()'s own call sites) -- which can
+     * be the viewer purely because the round the bot's move was part of
+     * happened to end in a decision now awaiting them, not because they
+     * themselves did anything. tacticalBotReasoningSince() was treating
+     * that row as "the viewer's own last play," pushing the boundary past
+     * the very tactical_bot_reasoning row the decision resulted from.
+     */
+    public function testAPendingDecisionCreatedForTheViewerDoesNotCountAsTheirOwnPlay(): void
+    {
+        ['human' => $human, 'bot' => $bot, 'gameId' => $gameId] = $this->createTacticalBotGame(diagnosticMode: true);
+        $botPlayerId = $this->games->gamePlayerIdFor($gameId, $bot);
+        $humanPlayerId = $this->games->gamePlayerIdFor($gameId, $human);
+
+        $this->insertReasoningEvent($gameId, $botPlayerId, 'reasoning behind the bot play that led to this decision');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO game_events (game_id, acting_game_player_id, event_type, details)
+             VALUES (:game_id, :player_id, 'pending_decision_created', '{\"scoring_trigger\":true}')"
+        );
+        $stmt->execute(['game_id' => $gameId, 'player_id' => $humanPlayerId]);
+
+        $reasoning = $this->games->tacticalBotReasoningSince($gameId, $human);
+
+        self::assertCount(1, $reasoning, 'a decision merely becoming pending for the viewer is not their own play, and must not hide the bot reasoning that led to it');
+    }
+
     private function insertReasoningEvent(int $gameId, int $botPlayerId, string $note): void
     {
         $details = json_encode([

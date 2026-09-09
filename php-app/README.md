@@ -8798,6 +8798,25 @@ for an unseated viewer or a non-diagnostic game (mirrored client-side:
 the "View bot reasoning" button is only ever shown once
 `diagnostic_bot_hands` is non-null, which already implies both).
 
+`pending_decision_created` is excluded from that boundary search too
+(reported live: the dialog showed empty even right after a Tactical
+Bot's move was clearly visible in Recent plays). Its own
+`acting_game_player_id` isn't always "whoever just acted" -- a
+scoring-time (Enthusiasm/Passion) or after-scoring order decision logs it
+as whoever now OWNS that pending decision
+(`writeScoringDecisionBatch()`/`writeAfterScoringOrderDecisionBatch()`'s
+own `$nextDecision['ownerId']`/`$nextOrderDecision['ownerId']`), which
+can easily be the viewer purely because the ROUND the bot's move was
+part of happened to end in a decision now awaiting them -- nothing they
+themselves did. Counting that row as "the viewer's own last play" pushed
+the boundary past the very `tactical_bot_reasoning` row that decision
+resulted from, hiding it. Excluding it costs nothing: the genuine
+completed action is logged separately, once the viewer actually answers,
+as `pending_decision_resolved` (still counted here) -- so either the
+decision is still unresolved (nothing else could have happened in the
+meantime anyway, `assertNoPendingDecision()`) or it's already resolved,
+in which case that resolution's own row is both later and still counted.
+
 ### Auto-pass on empty hand
 
 A personal preference (`users.auto_pass_on_empty_hand`, migration
