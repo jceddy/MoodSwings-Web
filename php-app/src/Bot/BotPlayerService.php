@@ -1677,6 +1677,30 @@ final class BotPlayerService
         return in_array($effectKey, self::BESPOKE_CHOICE_EFFECT_KEYS, true);
     }
 
+    /**
+     * A lightweight classification of which policy path buildChoicesForCard()
+     * took for $cardId -- reported live: "could we add some kind of
+     * reasoning text for the default bots? like if they're using a
+     * specific card override rule or something like that when making
+     * their decisions? or even just like if they are randomly choosing
+     * something or choosing a safe target by default." usesBespokeChoiceBuilding()'s
+     * own effect-key list already draws exactly this line -- a
+     * hand-tuned per-card rule (Pacifism's own value swing calculation,
+     * Rationalization's own steal-vs-refresh policy, etc.) versus the
+     * generic, schema-driven `CardChoiceSchema`/`BotChoiceResolver` field
+     * loop every other card falls through to -- so this just names that
+     * existing distinction rather than computing a new one. Exposed
+     * purely for GameService's own diagnostic-mode reasoning log; has no
+     * effect on buildChoicesForCard()'s own decision, just describes
+     * which path it already took.
+     */
+    public function choicePolicyPathFor(BoardState $state, int $cardId): string
+    {
+        $effectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
+
+        return $this->usesBespokeChoiceBuilding($effectKey) ? 'bespoke_rule' : 'generic_resolver';
+    }
+
     /** @return ?array<string, mixed> */
     private function buildBaseChoicesForCard(BoardState $state, int $cardId, int $botGamePlayerId): ?array
     {

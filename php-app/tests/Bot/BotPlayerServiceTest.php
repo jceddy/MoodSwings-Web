@@ -3847,4 +3847,33 @@ final class BotPlayerServiceTest extends TestCase
 
         self::assertSame([], $answer);
     }
+
+    /**
+     * Reported live: "could we add some kind of reasoning text for the
+     * default bots? like if they're using a specific card override rule
+     * or something like that when making their decisions?" --
+     * choicePolicyPathFor() just names usesBespokeChoiceBuilding()'s own
+     * existing effect-key list -- Pacifism (id 20) is one of
+     * buildBaseChoicesForCard()'s own hand-tuned per-card branches.
+     */
+    public function testChoicePolicyPathForReportsBespokeRuleForAnEffectKeyWithItsOwnHandTunedLogic(): void
+    {
+        $state = $this->boardState([1 => [20]]);
+
+        self::assertSame('bespoke_rule', $this->bot->choicePolicyPathFor($state, 20));
+    }
+
+    /**
+     * Curiosity (id 33) has no bespoke branch of its own in
+     * buildBaseChoicesForCard() -- it falls through to the generic,
+     * schema-driven CardChoiceSchema/BotChoiceResolver field loop, the
+     * "randomly choosing something or choosing a safe target by default"
+     * half of the same live report above.
+     */
+    public function testChoicePolicyPathForReportsGenericResolverForAnEffectKeyWithNoBespokeBranch(): void
+    {
+        $state = $this->boardState([1 => [33]]);
+
+        self::assertSame('generic_resolver', $this->bot->choicePolicyPathFor($state, 33));
+    }
 }

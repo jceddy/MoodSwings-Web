@@ -104,6 +104,52 @@ final class SearchBotPlayerServiceTest extends TestCase
     }
 
     /**
+     * Reported live: "is there any way that we could have the tactical
+     * bot use any results found so far from a partial search when it
+     * gets to time instead of completely abandoning any information" --
+     * $onProgress (migration 0283) is GameService's own hook for
+     * checkpointing a recoverable snapshot into bot_search_jobs
+     * periodically DURING the search, not just once at the end, in case
+     * the whole process is killed outright before the deadline. A budget
+     * comfortably past CHECKPOINT_INTERVAL_SECONDS (1.0) guarantees at
+     * least one callback actually lands within this one test.
+     */
+    public function testChooseActionWithReasoningInvokesOnProgressPeriodicallyWithTheBestActionSoFar(): void
+    {
+        $state = $this->boardState([1 => [55, 32], 2 => []]);
+        $state->startTurn(1);
+
+        $progressCalls = [];
+        $this->search->chooseActionWithReasoning($state, [55, 32], 1, timeBudgetSeconds: 1.3, onProgress: function (?array $action) use (&$progressCalls): void {
+            $progressCalls[] = $action;
+        });
+
+        self::assertNotEmpty($progressCalls, 'a budget well past the checkpoint interval must invoke onProgress at least once');
+        foreach ($progressCalls as $action) {
+            self::assertNotNull($action, 'both candidates here are always-legal inert cards -- pass should never be the reported best action so far');
+            self::assertContains($action['card_id'], [55, 32]);
+        }
+    }
+
+    public function testChooseActionNeverInvokesOnProgressWhenOnlyOneLegalActionExists(): void
+    {
+        // Zero playable cards -- $rootActions ends up as just [null]
+        // ("pass" is always itself a candidate, see
+        // chooseActionWithReasoning()'s own docblock) -- the SAME early
+        // return a single-legal-CARD turn does NOT hit, since "play the
+        // one card" vs. "pass" is still two candidates to compare.
+        $state = $this->boardState([1 => [], 2 => []]);
+        $state->startTurn(1);
+
+        $progressCalls = [];
+        $this->search->chooseActionWithReasoning($state, [], 1, timeBudgetSeconds: 1.3, onProgress: function (?array $action) use (&$progressCalls): void {
+            $progressCalls[] = $action;
+        });
+
+        self::assertSame([], $progressCalls, 'a single-candidate (nothing playable but pass) turn resolves via the early return, with nothing actually searched over to checkpoint');
+    }
+
+    /**
      * Reported live: "bots should not play Rationalization without
      * choosing a mode, I think we made a change around this before, but
      * it seems like the tactical bots are ignoring it." Rationalization

@@ -5990,6 +5990,9 @@ final class GameService
                     fn (int $cardId) => $this->plays->isPlayable($state, $currentTurnGamePlayerId, $cardId),
                 ));
                 $action = $this->bots->chooseAction($state, $playableCardIds, $currentTurnGamePlayerId, $this->roundWinsStillNeededToWinGame($gameId, $currentTurnGamePlayerId), $this->roundWinsNeededToWinGameForActivePlayers($gameId, $state));
+                if ((bool) $this->fetchGame($gameId)['diagnostic_mode']) {
+                    $this->logHeuristicBotReasoning($gameId, $state, $currentTurnGamePlayerId, $action);
+                }
                 try {
                     $lastResult = $action !== null
                         ? $this->playMood($gameId, $currentTurnGamePlayerId, $action['card_id'], $action['choices'])
@@ -7040,10 +7043,18 @@ final class GameService
      *   request) will check back later exactly the same way.
      * - A job 'running' but past its own budget + grace -> presumed
      *   crashed (a dev-server restart, PHP-FPM recycling the worker that
-     *   spawned it, etc.) -- marked 'failed' here, and this method falls
-     *   back to playing immediately via the ordinary fast heuristic bot
+     *   spawned it, or -- per migration 0283's own docblock -- a shared
+     *   host's own process supervisor killing the detached search process
+     *   outright the moment the launching request ended, etc.) -- marked
+     *   'failed' here. If that job's own periodic checkpoint (see
+     *   SearchBotPlayerService::chooseActionWithReasoning()'s own
+     *   $onProgress) ever landed (best_action_recorded_at is non-null),
+     *   plays that recorded best-so-far action instead of discarding it
+     *   (playRecoveredPartialSearchResult()); otherwise -- no checkpoint
+     *   ever landed at all, so there's nothing to recover -- falls back
+     *   to playing immediately via the ordinary fast heuristic bot
      *   instead, so the game is never left stuck waiting on a dead
-     *   process. Also flips on $tacticalFallbackGamePlayerIds[$gamePlayerId]
+     *   process either way. Also flips on $tacticalFallbackGamePlayerIds[$gamePlayerId]
      *   (passed in BY REFERENCE from advanceAutomatedTurns()'s own local,
      *   per-call-only tracking, never persisted) -- a bot's own turn can
      *   span several plays (extra grants), and once one has been judged
@@ -7075,6 +7086,10 @@ final class GameService
             $this->botSearchJobs->markFailed($job['id'], 'stale (exceeded its own time budget + grace, presumed crashed)');
             $tacticalFallbackGamePlayerIds[$gamePlayerId] = true;
 
+            if ($job['best_action_recorded_at'] !== null) {
+                return $this->playRecoveredPartialSearchResult($gameId, $gamePlayerId, $job['best_action_card_id'], $job['best_action_choices']);
+            }
+
             return $this->playViaHeuristicBotFallback($gameId, $gamePlayerId);
         }
 
@@ -7092,9 +7107,43 @@ final class GameService
             fn (int $cardId) => $this->plays->isPlayable($state, $gamePlayerId, $cardId),
         ));
         $action = $this->bots->chooseAction($state, $playableCardIds, $gamePlayerId, $this->roundWinsStillNeededToWinGame($gameId, $gamePlayerId), $this->roundWinsNeededToWinGameForActivePlayers($gameId, $state));
+        // A Tactical Bot's own turn landing here means its own search had
+        // nothing recoverable at all (see advanceTacticalBotSearch()'s
+        // own docblock) -- logging the heuristic fallback's OWN reasoning
+        // when diagnostic_mode is on means this turn is no longer a total
+        // blank in the reasoning dialog, just a different (coarser) kind
+        // of reasoning than a completed search would have logged.
+        if ((bool) $this->fetchGame($gameId)['diagnostic_mode']) {
+            $this->logHeuristicBotReasoning($gameId, $state, $gamePlayerId, $action);
+        }
 
         return $action !== null
             ? $this->playMood($gameId, $gamePlayerId, $action['card_id'], $action['choices'])
+            : $this->pass($gameId, $gamePlayerId, automated: true);
+    }
+
+    /**
+     * A stale/crashed job's own last periodic checkpoint (migration
+     * 0283), applied in place of the plain heuristic bot -- see
+     * advanceTacticalBotSearch()'s own docblock for why this exists.
+     * Safe to apply exactly as recorded without re-validating legality:
+     * nothing else can have mutated the board since the checkpoint was
+     * taken -- this seat's own turn is still open the entire time (the
+     * same single-current-player invariant runTacticalBotSearchJob()'s
+     * own re-validation already relies on), so the checkpointed action
+     * is exactly as trustworthy now as it was the moment it was recorded.
+     *
+     * @param ?array<string, mixed> $choices
+     */
+    private function playRecoveredPartialSearchResult(int $gameId, int $gamePlayerId, ?int $cardId, ?array $choices): array
+    {
+        if ((bool) $this->fetchGame($gameId)['diagnostic_mode']) {
+            $action = $cardId !== null ? ['card_id' => $cardId, 'choices' => $choices ?? []] : null;
+            $this->logTacticalBotReasoning($gameId, $gamePlayerId, $action, ['excluded_by_heuristic' => [], 'candidates' => []], recoveredFromStalledSearch: true);
+        }
+
+        return $cardId !== null
+            ? $this->playMood($gameId, $gamePlayerId, $cardId, $choices ?? [])
             : $this->pass($gameId, $gamePlayerId, automated: true);
     }
 
@@ -7177,6 +7226,15 @@ final class GameService
             return;
         }
 
+        // Stamped immediately on boot, before the search itself even
+        // starts -- see migration 0283's own docblock. A stale job whose
+        // heartbeat_at is STILL null once advanceTacticalBotSearch()'s
+        // grace period elapses means this method's own process never got
+        // even this far (the shared-hosting exec()-survival theory that
+        // prompted this column), as opposed to one that started and then
+        // died partway through the search below.
+        $this->botSearchJobs->recordHeartbeat($jobId);
+
         try {
             $state = $this->boardStates->load($job['game_id']);
             if ($state->currentPlayerId() !== $job['game_player_id']) {
@@ -7192,17 +7250,27 @@ final class GameService
             $roundWinsNeeded = $this->roundWinsStillNeededToWinGame($job['game_id'], $job['game_player_id']);
             $roundWinsNeededByPlayer = $this->roundWinsNeededToWinGameForActivePlayers($job['game_id'], $state);
 
+            // Periodic checkpoint (migration 0283) -- see
+            // SearchBotPlayerService::chooseActionWithReasoning()'s own
+            // $onProgress docblock. Refreshes heartbeat_at too, since a
+            // job still reaching this callback is proof the process is
+            // genuinely still alive, not just that it once booted.
+            $onProgress = function (?array $action) use ($jobId): void {
+                $this->botSearchJobs->recordHeartbeat($jobId);
+                $this->botSearchJobs->recordBestActionSoFar($jobId, $action['card_id'] ?? null, $action['choices'] ?? null);
+            };
+
             // Diagnostic mode (reported live: "a button to show the
             // 'reasoning' behind every play the bot has made") -- only
             // ever pays for the extra reasoning bookkeeping (never an
             // extra rollout/simulation, see chooseActionWithReasoning()'s
             // own docblock) when this specific game opted in.
             if ((bool) $this->fetchGame($job['game_id'])['diagnostic_mode']) {
-                $result = $this->tacticalBots->chooseActionWithReasoning($state, $playableCardIds, $job['game_player_id'], (float) $job['time_budget_seconds'], $roundWinsNeeded, $roundWinsNeededByPlayer);
+                $result = $this->tacticalBots->chooseActionWithReasoning($state, $playableCardIds, $job['game_player_id'], (float) $job['time_budget_seconds'], $roundWinsNeeded, $roundWinsNeededByPlayer, $onProgress);
                 $action = $result['action'];
                 $this->logTacticalBotReasoning($job['game_id'], $job['game_player_id'], $action, $result['reasoning']);
             } else {
-                $action = $this->tacticalBots->chooseAction($state, $playableCardIds, $job['game_player_id'], (float) $job['time_budget_seconds'], $roundWinsNeeded, $roundWinsNeededByPlayer);
+                $action = $this->tacticalBots->chooseAction($state, $playableCardIds, $job['game_player_id'], (float) $job['time_budget_seconds'], $roundWinsNeeded, $roundWinsNeededByPlayer, $onProgress);
             }
 
             if ($action !== null) {
@@ -7231,6 +7299,32 @@ final class GameService
     }
 
     /**
+     * The plain heuristic bot's own answer to "reasoning text for the
+     * default bots" (reported live, alongside the Tactical Bot partial-
+     * search recovery above -- see BotPlayerService::choicePolicyPathFor()'s
+     * own docblock for the "bespoke_rule"/"generic_resolver" distinction
+     * this records). Only ever called when diagnostic_mode is on for
+     * $gameId, so an ordinary game pays nothing extra -- same
+     * "diagnostic mode only" gate logTacticalBotReasoning()'s own callers
+     * already apply, just for the heuristic bot's own plays instead of
+     * the Tactical Bot's. A far coarser signal than tactical_bot_reasoning's
+     * own per-candidate scoring (there's no comparison of alternatives to
+     * report here, just which policy path fired), but still answers the
+     * two concrete things asked for: "using a specific card override
+     * rule" versus "randomly choosing something or choosing a safe
+     * target by default."
+     *
+     * @param ?array{card_id: int, choices: array<string, mixed>} $action
+     */
+    private function logHeuristicBotReasoning(int $gameId, BoardState $state, int $botGamePlayerId, ?array $action): void
+    {
+        $this->logEvent($gameId, null, $botGamePlayerId, 'heuristic_bot_reasoning', $action['card_id'] ?? null, [
+            'chosen_choices' => $action['choices'] ?? null,
+            'choice_policy_path' => $action !== null ? $this->bots->choicePolicyPathFor($state, $action['card_id']) : null,
+        ]);
+    }
+
+    /**
      * Diagnostic mode's own "reasoning behind every play" (see
      * createGame()'s own $diagnosticMode docblock) -- logged as an
      * ordinary game_events row (event_type 'tactical_bot_reasoning')
@@ -7252,15 +7346,24 @@ final class GameService
      * events" style query could filter/join on it the same way; nothing
      * currently reads it back that way.
      *
+     * $recoveredFromStalledSearch (migration 0283) marks a reasoning row
+     * logged from advanceTacticalBotSearch()'s own stale-job fallback
+     * instead of a completed runTacticalBotSearchJob() -- $reasoning is
+     * necessarily empty in that case (just the one checkpointed action,
+     * not a full candidate comparison), so the dialog can tell "the
+     * search never got to finish, this is its own last checkpoint" apart
+     * from an ordinary completed search's own full reasoning.
+     *
      * @param ?array{card_id: int, choices: array<string, mixed>} $action
      * @param array{excluded_by_heuristic: int[], candidates: array<int, array{card_id: ?int, choices: ?array<string, mixed>, visits: int, average_reward: float}>} $reasoning
      */
-    private function logTacticalBotReasoning(int $gameId, int $botGamePlayerId, ?array $action, array $reasoning): void
+    private function logTacticalBotReasoning(int $gameId, int $botGamePlayerId, ?array $action, array $reasoning, bool $recoveredFromStalledSearch = false): void
     {
         $this->logEvent($gameId, null, $botGamePlayerId, 'tactical_bot_reasoning', $action['card_id'] ?? null, [
             'chosen_choices' => $action['choices'] ?? null,
             'excluded_by_heuristic' => $reasoning['excluded_by_heuristic'],
             'candidates' => $reasoning['candidates'],
+            'recovered_from_stalled_search' => $recoveredFromStalledSearch,
         ]);
     }
 
@@ -7281,13 +7384,31 @@ final class GameService
      * whole-round log. A viewer who hasn't acted at all yet this game
      * (no own event exists) sees every logged decision from the start.
      *
+     * Also includes 'heuristic_bot_reasoning' rows (reported live:
+     * "could we add some kind of reasoning text for the default bots?"
+     * -- see BotPlayerService::choicePolicyPathFor()'s own docblock and
+     * GameService::logHeuristicBotReasoning()'s own callers) merged in
+     * chronologically alongside the Tactical Bot's own entries, so a
+     * diagnostic-mode game with a mix of bot tiers shows one combined
+     * timeline rather than two separate dialogs -- `source` on each
+     * returned entry tells the two apart. `excluded_by_heuristic`/
+     * `candidates` are always empty for a 'heuristic' entry (there is no
+     * comparison of alternatives to report, just which policy path
+     * fired); `choice_policy_path` is always null for a 'tactical' entry
+     * that isn't itself a recovered partial search
+     * (`recovered_from_stalled_search`, see playRecoveredPartialSearchResult()'s
+     * own docblock).
+     *
      * @return array<int, array{
+     *     source: 'tactical'|'heuristic',
      *     game_player_id: int,
      *     username: string,
      *     card_id: ?int,
      *     choices: ?array<string, mixed>,
      *     excluded_by_heuristic: int[],
      *     candidates: array<int, array{card_id: ?int, choices: ?array<string, mixed>, visits: int, average_reward: float}>,
+     *     choice_policy_path: ?string,
+     *     recovered_from_stalled_search: bool,
      *     created_at: string,
      * }>
      */
@@ -7344,25 +7465,29 @@ final class GameService
         $sinceEventId = $this->viewerOwnLastTurnEventId($gameId, $viewerGamePlayerId);
 
         $reasoningStmt = $pdo->prepare(
-            "SELECT ge.acting_game_player_id, u.username, ge.card_id, ge.details, ge.created_at
+            "SELECT ge.event_type, ge.acting_game_player_id, u.username, ge.card_id, ge.details, ge.created_at
              FROM game_events ge
              JOIN game_players gp ON gp.id = ge.acting_game_player_id
              JOIN users u ON u.id = gp.user_id
-             WHERE ge.game_id = :game_id AND ge.event_type = 'tactical_bot_reasoning' AND ge.id > :since_id
+             WHERE ge.game_id = :game_id AND ge.event_type IN ('tactical_bot_reasoning', 'heuristic_bot_reasoning') AND ge.id > :since_id
              ORDER BY ge.id ASC"
         );
         $reasoningStmt->execute(['game_id' => $gameId, 'since_id' => $sinceEventId]);
 
         return array_map(static function (array $row): array {
             $details = json_decode((string) $row['details'], true) ?? [];
+            $isTactical = $row['event_type'] === 'tactical_bot_reasoning';
 
             return [
+                'source' => $isTactical ? 'tactical' : 'heuristic',
                 'game_player_id' => (int) $row['acting_game_player_id'],
                 'username' => $row['username'],
                 'card_id' => $row['card_id'] !== null ? (int) $row['card_id'] : null,
                 'choices' => $details['chosen_choices'] ?? null,
-                'excluded_by_heuristic' => $details['excluded_by_heuristic'] ?? [],
-                'candidates' => $details['candidates'] ?? [],
+                'excluded_by_heuristic' => $isTactical ? ($details['excluded_by_heuristic'] ?? []) : [],
+                'candidates' => $isTactical ? ($details['candidates'] ?? []) : [],
+                'choice_policy_path' => $isTactical ? null : ($details['choice_policy_path'] ?? null),
+                'recovered_from_stalled_search' => $isTactical ? (bool) ($details['recovered_from_stalled_search'] ?? false) : false,
                 'created_at' => $row['created_at'],
             ];
         }, $reasoningStmt->fetchAll());

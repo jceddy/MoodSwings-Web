@@ -8893,6 +8893,100 @@ default "No tactical bot plays since your own last play," so a
 diagnostic-mode player can tell "this is broken" apart from "there is
 genuinely nothing to explain."
 
+**Heartbeat + partial-search recovery (migration `0283`).** Reported
+live, once `fallback_turns_since` above made the stale-fallback rate
+visible: "based on the results I'm seeing when I test this process must
+be crashing basically all the time." This app deploys to Bluehost shared
+cPanel hosting (`deploy.yml`/`deploy-dev.yml`), and
+`launchTacticalBotSearchJob()`'s background search process is started via
+a bare `exec("php ... > /dev/null 2>&1 &")` with no
+`setsid`/`nohup`/process-group detachment -- exactly the kind of
+fire-and-forget spawn shared-hosting process supervision (CageFS/LVE
+limits, suexec/FastCGI process trees) is known to kill outright the
+moment the launching request's own process group tears down, rather than
+the search genuinely running long and crashing partway through. Until
+now there was no way to tell those two situations apart from a
+`bot_search_jobs` row alone.
+
+`bot_search_jobs.heartbeat_at` is stamped by the background process
+itself (`runTacticalBotSearchJob()`) immediately on boot, before the
+search even starts, and then periodically DURING the search loop (see
+below) -- so a stale job whose `heartbeat_at` is still `NULL` means the
+process never even got PHP running at all (the hosting/`exec()` theory
+above); an old `heartbeat_at` means it started and died partway through;
+a recent one means it was simply still alive and slow, not crashed.
+
+The other half of the same live report: "is there any way that we could
+have the tactical bot use any results found so far from a partial search
+when it gets to time instead of completely abandoning any information
+this hurts would have turned up?" `SearchBotPlayerService::
+chooseActionWithReasoning()` now takes an optional `$onProgress`
+callback, invoked periodically (`CHECKPOINT_INTERVAL_SECONDS = 1.0`,
+gated by wall time rather than iteration count, alongside the existing
+`DEADLINE_CHECK_INTERVAL` deadline check) with the single best root
+action found so far -- the same `bestArmByAverage()` the method's own
+final return value already uses. `runTacticalBotSearchJob()` wires this
+to `BotSearchJobRepository::recordHeartbeat()`/`recordBestActionSoFar()`,
+persisting `best_action_card_id`/`best_action_choices`/
+`best_action_recorded_at` into the SAME job row. `best_action_recorded_at`
+(rather than a NULL `best_action_card_id`) is what actually marks "a
+snapshot exists" -- a checkpointed pass is itself a legitimate snapshot.
+Never invoked at all for a single-candidate turn (nothing to search over
+to checkpoint).
+
+`advanceTacticalBotSearch()`'s own stale-job branch now checks this
+before falling back: if `best_action_recorded_at` is non-null, it plays
+that recorded action via the new `playRecoveredPartialSearchResult()`
+(logging a `tactical_bot_reasoning` row with
+`recovered_from_stalled_search: true` when diagnostic mode is on, since
+there's no candidate comparison to report -- just the one checkpointed
+action) instead of discarding every rollout the job ever ran. Only when
+NO checkpoint ever landed at all (a genuinely instant death, or a
+single-candidate turn) does it still fall back to
+`playViaHeuristicBotFallback()` exactly as before -- which now ALSO logs
+its own (coarser) reasoning when diagnostic mode is on, see "Heuristic
+bot reasoning" below, so this turn is no longer a total blank in the
+dialog either way.
+
+**Heuristic bot reasoning (Part A).** The other reported request
+alongside the above: "could we add some kind of reasoning text for the
+default bots? like if they're using a specific card override rule or
+something like that when making their decisions? or even just like if
+they are randomly choosing something or choosing a safe target by
+default." `BotPlayerService::choicePolicyPathFor()` names the existing
+`usesBespokeChoiceBuilding()` distinction rather than computing a new
+one: `'bespoke_rule'` for one of `buildBaseChoicesForCard()`'s own
+hand-tuned per-effect-key branches (Pacifism's value-swing calculation,
+Rationalization's steal-vs-refresh policy, etc.), `'generic_resolver'`
+for the schema-driven `CardChoiceSchema`/`BotChoiceResolver` field loop
+every other card falls through to -- a far coarser signal than the
+Tactical Bot's own per-candidate scoring (there's no comparison of
+alternatives to report, just which policy path fired), but enough to
+answer the two concrete things asked for.
+
+Logged as a new `heuristic_bot_reasoning` `game_events` row
+(`GameService::logHeuristicBotReasoning()`) from every place the plain
+heuristic bot decides a PLAY, when the game's own `diagnostic_mode` is
+on: `advanceAutomatedTurns()`'s own ordinary (non-Tactical) bot branch,
+AND `playViaHeuristicBotFallback()` (so a Tactical Bot seat that fell all
+the way back to the heuristic, with no checkpoint to recover, still gets
+SOME reasoning logged for that turn). Deliberately scoped to card PLAYS
+only, mirroring the Tactical Bot's own reasoning scope -- decision
+answers, team-decision proposals, and draft picks are a v1 scope cut,
+same convention as the Tactical Bot's own documented cuts above.
+
+`tacticalBotReasoningSince()` now merges `heuristic_bot_reasoning` rows
+in alongside the Tactical Bot's own, in one combined chronological list
+-- a diagnostic-mode game with a mix of bot tiers gets one dialog, not
+two. Each returned entry carries a new `source` (`'tactical'` or
+`'heuristic'`) field; `excluded_by_heuristic`/`candidates` are always
+empty for a `'heuristic'` entry, and `choice_policy_path` is always null
+for a `'tactical'` entry that isn't itself a recovered partial search.
+`web-static/js/game.js`'s `buildBotReasoningTurn()` branches on `source`
+(and `recovered_from_stalled_search`) to show a plain explanatory line
+instead of the full candidate comparison for either case -- see
+"Bot reasoning dialog" in `web-static/README.md`.
+
 ### Auto-pass on empty hand
 
 A personal preference (`users.auto_pass_on_empty_hand`, migration

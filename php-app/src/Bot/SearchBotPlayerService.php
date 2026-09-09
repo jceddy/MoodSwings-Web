@@ -84,6 +84,24 @@ final class SearchBotPlayerService
     /** How often (in iterations) the deadline is actually checked -- microtime() on every single iteration would itself become measurable overhead across many thousands of cheap rollouts. */
     private const DEADLINE_CHECK_INTERVAL = 4;
 
+    /**
+     * Minimum wall-clock spacing between $onProgress checkpoints (see
+     * chooseActionWithReasoning()'s own docblock) -- reported live: "is
+     * there any way that we could have the tactical bot use any results
+     * found so far from a partial search when it gets to time instead of
+     * completely abandoning any information." A background search
+     * process can be killed outright at any moment (a shared-hosting
+     * process supervisor tearing down the launching request's own
+     * process group, not just a slow/hung search -- see migration 0283's
+     * own docblock), so the checkpoint needs to land periodically DURING
+     * the loop, not just once at the end; gated by wall time rather than
+     * iteration count (like DEADLINE_CHECK_INTERVAL above) since a
+     * caller wiring this to a database write cares about how often that
+     * write actually happens, not how many cheap in-memory rollouts ran
+     * in between.
+     */
+    private const CHECKPOINT_INTERVAL_SECONDS = 1.0;
+
     /** See playAndFullyResolve()'s own docblock. */
     private const MAX_PENDING_DECISION_ROUNDS = 30;
 
@@ -131,11 +149,13 @@ final class SearchBotPlayerService
      * @param array<int, int> $roundWinsNeededToWinGameByPlayerId see
      *     BotPlayerService::chooseAction()'s own docblock -- forwarded
      *     the same way as $roundWinsNeededToWinGame above.
+     * @param ?callable(?array{card_id: int, choices: array<string, mixed>}): void $onProgress see
+     *     chooseActionWithReasoning()'s own docblock -- forwarded unchanged.
      * @return ?array{card_id: int, choices: array<string, mixed>}
      */
-    public function chooseAction(BoardState $state, array $playableCardIds, int $botGamePlayerId, float $timeBudgetSeconds, ?int $roundWinsNeededToWinGame = null, array $roundWinsNeededToWinGameByPlayerId = []): ?array
+    public function chooseAction(BoardState $state, array $playableCardIds, int $botGamePlayerId, float $timeBudgetSeconds, ?int $roundWinsNeededToWinGame = null, array $roundWinsNeededToWinGameByPlayerId = [], ?callable $onProgress = null): ?array
     {
-        return $this->chooseActionWithReasoning($state, $playableCardIds, $botGamePlayerId, $timeBudgetSeconds, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId)['action'];
+        return $this->chooseActionWithReasoning($state, $playableCardIds, $botGamePlayerId, $timeBudgetSeconds, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId, $onProgress)['action'];
     }
 
     /**
@@ -153,6 +173,24 @@ final class SearchBotPlayerService
      *
      * @param int[] $playableCardIds
      * @param array<int, int> $roundWinsNeededToWinGameByPlayerId
+     * @param ?callable(?array{card_id: int, choices: array<string, mixed>}): void $onProgress
+     *     Reported live: "is there any way that we could have the
+     *     tactical bot use any results found so far from a partial
+     *     search when it gets to time instead of completely abandoning
+     *     any information." Invoked periodically (see
+     *     CHECKPOINT_INTERVAL_SECONDS) DURING the rollout loop below with
+     *     the single best root action found so far (by the exact same
+     *     bestArmByAverage() this method's own return value uses) -- so a
+     *     caller can persist a recoverable snapshot before the deadline
+     *     is ever reached, in case the whole process is killed outright
+     *     (GameService::runTacticalBotSearchJob()'s own background
+     *     process, on a shared host, can die mid-search with nothing else
+     *     left to salvage -- see migration 0283's own docblock) rather
+     *     than genuinely running long. Never invoked when there's only
+     *     one legal root action (the early return just below) -- nothing
+     *     is actually being searched over in that case, so there's
+     *     nothing a checkpoint would add over just applying the action
+     *     immediately.
      * @return array{
      *     action: ?array{card_id: int, choices: array<string, mixed>},
      *     reasoning: array{
@@ -161,7 +199,7 @@ final class SearchBotPlayerService
      *     },
      * }
      */
-    public function chooseActionWithReasoning(BoardState $state, array $playableCardIds, int $botGamePlayerId, float $timeBudgetSeconds, ?int $roundWinsNeededToWinGame = null, array $roundWinsNeededToWinGameByPlayerId = []): array
+    public function chooseActionWithReasoning(BoardState $state, array $playableCardIds, int $botGamePlayerId, float $timeBudgetSeconds, ?int $roundWinsNeededToWinGame = null, array $roundWinsNeededToWinGameByPlayerId = [], ?callable $onProgress = null): array
     {
         $deadline = microtime(true) + max(0.0, $timeBudgetSeconds);
 
@@ -194,13 +232,27 @@ final class SearchBotPlayerService
         $totals = array_fill(0, count($rootActions), 0.0);
 
         $iteration = 0;
+        $lastCheckpointAt = microtime(true);
         do {
             $index = $this->selectArm($visits, $totals);
             $reward = $this->simulate($state, $botGamePlayerId, $rootActions[$index]);
             $visits[$index]++;
             $totals[$index] += $reward;
             $iteration++;
-        } while ($iteration % self::DEADLINE_CHECK_INTERVAL !== 0 || microtime(true) < $deadline);
+
+            if ($iteration % self::DEADLINE_CHECK_INTERVAL !== 0) {
+                continue;
+            }
+
+            $now = microtime(true);
+            if ($onProgress !== null && $now - $lastCheckpointAt >= self::CHECKPOINT_INTERVAL_SECONDS) {
+                $onProgress($rootActions[$this->bestArmByAverage($visits, $totals)]);
+                $lastCheckpointAt = $now;
+            }
+            if ($now >= $deadline) {
+                break;
+            }
+        } while (true);
 
         $candidates = [];
         foreach ($rootActions as $i => $rootAction) {

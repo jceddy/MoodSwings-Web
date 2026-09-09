@@ -1026,6 +1026,30 @@ existing `view-shared-deck-button` visibility check.
   distinct message now says outright instead of reading as though the
   dialog were still broken.
 
+**Mixed-source entries (php-app/README.md's own "Heuristic bot
+reasoning"/"Heartbeat + partial-search recovery" sections).**
+`body.reasoning` now merges in the plain heuristic bot's own entries
+alongside the Tactical Bot's, and a Tactical Bot entry can itself be a
+recovered partial search rather than a completed one --
+`buildBotReasoningTurn()` branches on each entry's own `source` field
+(`'tactical'`/`'heuristic'`) and `recovered_from_stalled_search` flag:
+
+- `source === 'heuristic'` (reported live: "could we add some kind of
+  reasoning text for the default bots?") -- no candidate comparison to
+  show, just one explanatory line naming `choice_policy_path`
+  (`'bespoke_rule'`: "used a card-specific override rule for this play";
+  `'generic_resolver'`: "used the generic default targeting rule... no
+  card-specific override applied").
+- `recovered_from_stalled_search` (reported live: "is there any way that
+  we could have the tactical bot use any results found so far from a
+  partial search when it gets to time instead of completely abandoning
+  any information") -- also just one line ("this search didn't finish in
+  time -- showing the best option it had found so far, not a full
+  comparison"), since there's only the one checkpointed action recorded,
+  no comparison of alternatives.
+- Otherwise, unchanged: the full candidate/excluded-card rendering
+  described above.
+
 ### Custom card/effect formats preference (issue #405 follow-up)
 
 `#settings-allow-custom-content-checkbox`, in the Settings dialog's
