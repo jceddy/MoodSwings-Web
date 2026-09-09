@@ -1,0 +1,25 @@
+-- Reported live a third time: a Tactical Bot's move was clearly visible
+-- in Recent plays, yet "View bot reasoning" showed the same generic
+-- empty message ("No tactical bot plays since your own last play"),
+-- even after two earlier fixes (migrations 0277/0280) already corrected
+-- the "since" boundary itself.
+--
+-- Suspected root cause: a stale/crashed search job (or one whose own
+-- process threw) falls back to the ordinary heuristic bot for that turn
+-- (GameService::advanceTacticalBotSearch()'s/runTacticalBotSearchJob()'s
+-- own fallback paths), which never logs a tactical_bot_reasoning row at
+-- all -- there is genuinely nothing recorded to show, a materially
+-- different situation from "nothing has happened yet" that the dialog
+-- couldn't previously tell apart.
+--
+-- New GameService::tacticalBotFallbackTurnsSince() (also returned by
+-- GET /games/bot-reasoning as fallback_turns_since) counts Tactical Bot
+-- turns since the same boundary tacticalBotReasoningSince() uses with no
+-- matching reasoning logged. web-static/js/game.js's
+-- openBotReasoningView() now shows a distinct message when this is
+-- positive, so a diagnostic-mode player can tell "this is broken" apart
+-- from "there is genuinely nothing to explain."
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.39.9' WHERE id = 1;

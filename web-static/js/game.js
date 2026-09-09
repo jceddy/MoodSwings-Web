@@ -5044,21 +5044,45 @@
         }
 
         metaEl.textContent = '';
-        emptyEl.hidden = body.reasoning.length > 0;
+        const hasReasoning = body.reasoning.length > 0;
+        emptyEl.hidden = hasReasoning;
+        if (!hasReasoning) {
+            // fallback_turns_since (GameService::tacticalBotFallbackTurnsSince())
+            // distinguishes "nothing has happened yet" from "something
+            // happened, but a stale/crashed search's own fallback left
+            // nothing recorded at all" (a rarer case now that a stale
+            // job's own partial-search checkpoint, and the plain
+            // heuristic fallback itself, both log SOMETHING when
+            // diagnostic mode is on -- see buildBotReasoningTurn()'s own
+            // 'heuristic'-source handling just below -- this message only
+            // still applies when even that logging itself failed).
+            emptyEl.textContent = body.fallback_turns_since > 0
+                ? "A tactical bot played since your last turn, but its search didn't finish in time and fell back to the standard bot -- there's no reasoning recorded for that play."
+                : 'No tactical bot plays since your own last play.';
+        }
 
         for (const turn of body.reasoning) {
             turnsEl.appendChild(buildBotReasoningTurn(turn));
         }
     }
 
-    // A single tactical_bot_reasoning event -- see
-    // GameService::logTacticalBotReasoning()/tacticalBotReasoningSince()'s
-    // own docblocks for exactly what each field means. Candidates are
-    // shown sorted highest-average_reward first (the search's own
-    // preference order), with the card the bot actually chose marked, and
-    // heuristically-excluded cards listed separately underneath -- those
-    // never even reached the search, so they never got a visits/
-    // average_reward of their own to sort by.
+    // A single tactical_bot_reasoning OR heuristic_bot_reasoning event --
+    // see GameService::logTacticalBotReasoning()/logHeuristicBotReasoning()/
+    // tacticalBotReasoningSince()'s own docblocks for exactly what each
+    // field means. `source` tells the two apart: a 'heuristic' entry (the
+    // plain, non-searching bot tier -- reported live: "could we add some
+    // kind of reasoning text for the default bots?") has no
+    // candidates/excluded_by_heuristic to show, just which policy path
+    // fired (choice_policy_path); a 'tactical' entry shows the full
+    // search comparison the same way it always has, UNLESS it's itself a
+    // recovered partial search (recovered_from_stalled_search), which has
+    // no comparison to show either -- just the one checkpointed action a
+    // stale/crashed search still managed to salvage. Candidates (when
+    // present) are shown sorted highest-average_reward first (the
+    // search's own preference order), with the card the bot actually
+    // chose marked, and heuristically-excluded cards listed separately
+    // underneath -- those never even reached the search, so they never
+    // got a visits/average_reward of their own to sort by.
     function buildBotReasoningTurn(turn) {
         const wrapper = document.createElement('details');
         wrapper.open = true;
@@ -5069,6 +5093,26 @@
         summary.textContent = turn.username + ' ' + (chosenCard ? 'played ' + chosenCard.name : 'passed')
             + ' — ' + new Date(turn.created_at).toLocaleString();
         wrapper.appendChild(summary);
+
+        if (turn.source === 'heuristic') {
+            const note = document.createElement('p');
+            note.className = 'bot-reasoning-note';
+            note.textContent = turn.choice_policy_path === 'bespoke_rule'
+                ? 'Standard bot: used a card-specific override rule for this play.'
+                : 'Standard bot: used the generic default targeting rule for this play (no card-specific override applied).';
+            wrapper.appendChild(note);
+
+            return wrapper;
+        }
+
+        if (turn.recovered_from_stalled_search) {
+            const note = document.createElement('p');
+            note.className = 'bot-reasoning-note';
+            note.textContent = "This search didn't finish in time -- showing the best option it had found so far, not a full comparison.";
+            wrapper.appendChild(note);
+
+            return wrapper;
+        }
 
         const candidatesDiv = document.createElement('div');
         candidatesDiv.className = 'bot-reasoning-candidates';

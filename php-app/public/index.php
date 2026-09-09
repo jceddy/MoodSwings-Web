@@ -1478,7 +1478,16 @@ if ($path === '/games/bot-reasoning' && $method === 'GET') {
 
     requireGamePlayer($games, $gameId, (int) $currentUser['id']);
     try {
-        respond(200, ['status' => 'ok', 'reasoning' => $games->tacticalBotReasoningSince($gameId, (int) $currentUser['id'])]);
+        respond(200, [
+            'status' => 'ok',
+            'reasoning' => $games->tacticalBotReasoningSince($gameId, (int) $currentUser['id']),
+            // See GameService::tacticalBotFallbackTurnsSince()'s own
+            // docblock -- lets the dialog distinguish "nothing has
+            // happened yet" from "something happened, but a stale/crashed
+            // search fell back to the heuristic bot, which never logs
+            // reasoning at all."
+            'fallback_turns_since' => $games->tacticalBotFallbackTurnsSince($gameId, (int) $currentUser['id']),
+        ]);
     } catch (GameStateException $e) {
         respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
     }

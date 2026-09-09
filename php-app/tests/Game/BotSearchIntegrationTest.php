@@ -160,6 +160,18 @@ final class BotSearchIntegrationTest extends TestCase
         return (int) $this->pdo->lastInsertId();
     }
 
+    /** is_bot without uses_tactical_ai -- the ordinary heuristic tier, never handed off to advanceTacticalBotSearch()'s own job machinery. */
+    private function insertHeuristicBotUser(string $username): int
+    {
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO users (username, email, password_hash, email_verified_at, is_bot, uses_tactical_ai)
+             VALUES (:username, :email, 'hash', NOW(), 1, 0)"
+        );
+        $stmt->execute(['username' => $username, 'email' => "{$username}@example.com"]);
+
+        return (int) $this->pdo->lastInsertId();
+    }
+
     /**
      * Deals the game and hands off to advanceAutomatedTurns() exactly the
      * way public/index.php does after every mutating route -- neither
@@ -212,6 +224,23 @@ final class BotSearchIntegrationTest extends TestCase
         $stmt->execute(['game_id' => $gameId, 'card_id' => $cardId, 'zone' => $zone, 'owner' => $owner]);
     }
 
+    /**
+     * game_cards.id (the engine's own "instance id", everywhere a
+     * `card_id` parameter/return value actually means -- see
+     * BoardStateRepository::load()'s own $catalogCardIdFor) is an
+     * auto-increment surrogate, NOT the catalog card_id column
+     * insertGameCard() above takes -- so a test asserting a SPECIFIC
+     * played/checkpointed card must look this up rather than assuming
+     * the catalog id it inserted with is what comes back out.
+     */
+    private function gameCardInstanceId(int $gameId, int $catalogCardId): int
+    {
+        $stmt = $this->pdo->prepare('SELECT id FROM game_cards WHERE game_id = :game_id AND card_id = :card_id');
+        $stmt->execute(['game_id' => $gameId, 'card_id' => $catalogCardId]);
+
+        return (int) $stmt->fetchColumn();
+    }
+
     private function insertGameRound(int $gameId, int $roundNumber, int $firstPlayerId, int $currentTurnPlayerId, int $playsRemaining): void
     {
         $stmt = $this->pdo->prepare(
@@ -240,15 +269,15 @@ final class BotSearchIntegrationTest extends TestCase
      * @param int[] $botHandCardIds
      * @return array{gameId: int, botPlayerId: int}
      */
-    private function createRawTacticalBotGame(GameService $games, array $botHandCardIds): array
+    private function createRawTacticalBotGame(GameService $games, array $botHandCardIds, bool $diagnosticMode = false): array
     {
         $human = $this->insertUser('bs-raw-human-' . uniqid());
         $bot = $this->insertTacticalBotUser('bs-raw-bot-' . uniqid());
 
         $stmt = $this->pdo->prepare(
-            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed, diagnostic_mode) VALUES ('standard', 'in_progress', :created_by, 3, :diagnostic_mode)"
         );
-        $stmt->execute(['created_by' => $human]);
+        $stmt->execute(['created_by' => $human, 'diagnostic_mode' => $diagnosticMode ? 1 : 0]);
         $gameId = (int) $this->pdo->lastInsertId();
 
         $this->insertGamePlayer($gameId, $human, 0);
@@ -260,6 +289,40 @@ final class BotSearchIntegrationTest extends TestCase
         $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
 
         $games->advanceAutomatedTurns($gameId);
+
+        return ['gameId' => $gameId, 'botPlayerId' => $botPlayerId];
+    }
+
+    /**
+     * Same shape as createRawTacticalBotGame(), but for the plain
+     * heuristic tier (is_bot without uses_tactical_ai) -- exercises
+     * advanceAutomatedTurns()'s own ordinary bot branch (never handed off
+     * to the Tactical Bot's job machinery at all) for
+     * logHeuristicBotReasoning()'s own tests below.
+     *
+     * @param int[] $botHandCardIds
+     * @return array{gameId: int, botPlayerId: int}
+     */
+    private function createRawHeuristicBotGame(array $botHandCardIds, bool $diagnosticMode): array
+    {
+        $human = $this->insertUser('bs-raw-human-' . uniqid());
+        $bot = $this->insertHeuristicBotUser('bs-raw-heur-bot-' . uniqid());
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed, diagnostic_mode) VALUES ('standard', 'in_progress', :created_by, 3, :diagnostic_mode)"
+        );
+        $stmt->execute(['created_by' => $human, 'diagnostic_mode' => $diagnosticMode ? 1 : 0]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $this->insertGamePlayer($gameId, $human, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $bot, 1);
+
+        foreach ($botHandCardIds as $cardId) {
+            $this->insertGameCard($gameId, $cardId, 'hand', $botPlayerId);
+        }
+        $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
+
+        $this->games->advanceAutomatedTurns($gameId);
 
         return ['gameId' => $gameId, 'botPlayerId' => $botPlayerId];
     }
@@ -449,6 +512,188 @@ final class BotSearchIntegrationTest extends TestCase
         self::assertGreaterThan(0, (int) $eventStmt->fetchColumn(), 'the bot\'s own turn must have actually been taken, not left untouched');
     }
 
+    // -- Heartbeat + partial-search checkpoint (migration 0283) -------------
+
+    /**
+     * Reported live: "based on the results I'm seeing when I test this
+     * process must be crashing basically all the time" -- heartbeat_at is
+     * stamped immediately on boot, before the search itself even starts,
+     * so a stale job whose heartbeat_at is STILL null tells the
+     * difference between "the process never even got PHP running" and
+     * "it started and died partway through" (see migration 0283's own
+     * docblock). A near-zero time budget (this suite's usual setup) still
+     * means the process itself genuinely ran, so heartbeat_at must always
+     * end up set by the time runTacticalBotSearchJob() returns.
+     */
+    public function testRunTacticalBotSearchJobRecordsAHeartbeatImmediately(): void
+    {
+        ['bot' => $bot, 'gameId' => $gameId] = $this->createTacticalBotGame();
+        $botPlayerId = $this->games->gamePlayerIdFor($gameId, $bot);
+
+        $jobStmt = $this->pdo->prepare('SELECT id, heartbeat_at FROM bot_search_jobs WHERE game_player_id = :id ORDER BY id DESC LIMIT 1');
+        $jobStmt->execute(['id' => $botPlayerId]);
+        $jobRow = $jobStmt->fetch();
+        self::assertNull($jobRow['heartbeat_at'], 'a freshly launched job has not run yet -- nothing should have stamped a heartbeat before runTacticalBotSearchJob() itself is called');
+
+        $this->games->runTacticalBotSearchJob((int) $jobRow['id']);
+
+        $heartbeatStmt = $this->pdo->prepare('SELECT heartbeat_at FROM bot_search_jobs WHERE id = :id');
+        $heartbeatStmt->execute(['id' => $jobRow['id']]);
+        self::assertNotNull($heartbeatStmt->fetchColumn());
+    }
+
+    /**
+     * Reported live: "is there any way that we could have the tactical
+     * bot use any results found so far from a partial search when it
+     * gets to time instead of completely abandoning any information" --
+     * a budget comfortably past SearchBotPlayerService::CHECKPOINT_INTERVAL_SECONDS
+     * (1.0) guarantees the search loop's own periodic $onProgress
+     * callback actually lands at least once, writing a real
+     * best_action_card_id/best_action_choices/best_action_recorded_at
+     * snapshot into this exact job row -- end-to-end through GameService,
+     * not just SearchBotPlayerServiceTest's own unit-level coverage of
+     * $onProgress itself.
+     */
+    public function testRunTacticalBotSearchJobRecordsAPeriodicBestActionCheckpointForALongerSearch(): void
+    {
+        $games = $this->gamesWithBudget(2);
+        ['gameId' => $gameId, 'botPlayerId' => $botPlayerId] = $this->createRawTacticalBotGame($games, [55, 7]); // Apathy, Courage -- both always legally playable
+        $instanceIds = [$this->gameCardInstanceId($gameId, 55), $this->gameCardInstanceId($gameId, 7)];
+
+        $jobStmt = $this->pdo->prepare('SELECT id FROM bot_search_jobs WHERE game_player_id = :id ORDER BY id DESC LIMIT 1');
+        $jobStmt->execute(['id' => $botPlayerId]);
+        $jobId = (int) $jobStmt->fetchColumn();
+
+        $games->runTacticalBotSearchJob($jobId);
+
+        $rowStmt = $this->pdo->prepare('SELECT best_action_card_id, best_action_recorded_at FROM bot_search_jobs WHERE id = :id');
+        $rowStmt->execute(['id' => $jobId]);
+        $row = $rowStmt->fetch();
+        self::assertNotNull($row['best_action_recorded_at'], 'a 2-second search over two real candidates must have checkpointed at least once');
+        if ($row['best_action_card_id'] !== null) {
+            self::assertContains((int) $row['best_action_card_id'], $instanceIds);
+        }
+    }
+
+    /**
+     * The other half of the same live report as the checkpoint test
+     * above: a stale/crashed job whose own last checkpoint DID land
+     * (best_action_recorded_at non-null) must play THAT action instead of
+     * discarding it for the plain heuristic bot -- see
+     * playRecoveredPartialSearchResult()'s own docblock. Manually written
+     * here (rather than waiting out a real checkpoint) for a fast,
+     * deterministic test of the recovery branch itself.
+     */
+    public function testAdvanceTacticalBotSearchAppliesARecoveredBestActionCheckpointInsteadOfTheHeuristicFallback(): void
+    {
+        ['gameId' => $gameId, 'botPlayerId' => $botPlayerId] = $this->createRawTacticalBotGame($this->games, [55, 7], diagnosticMode: true);
+        $apathyInstanceId = $this->gameCardInstanceId($gameId, 55);
+
+        $jobStmt = $this->pdo->prepare('SELECT id FROM bot_search_jobs WHERE game_player_id = :id ORDER BY id DESC LIMIT 1');
+        $jobStmt->execute(['id' => $botPlayerId]);
+        $jobId = (int) $jobStmt->fetchColumn();
+
+        $this->pdo->prepare(
+            "UPDATE bot_search_jobs SET best_action_card_id = :card_id, best_action_choices = '[]', best_action_recorded_at = NOW(),
+                 started_at = started_at - INTERVAL 1 HOUR WHERE id = :id"
+        )->execute(['id' => $jobId, 'card_id' => $apathyInstanceId]);
+
+        $this->games->advanceAutomatedTurns($gameId);
+
+        $statusStmt = $this->pdo->prepare('SELECT status FROM bot_search_jobs WHERE id = :id');
+        $statusStmt->execute(['id' => $jobId]);
+        self::assertSame('failed', $statusStmt->fetchColumn(), 'still a stale job -- recovering its checkpoint does not change that it was never actually finished');
+
+        $playedStmt = $this->pdo->prepare(
+            "SELECT COUNT(*) FROM game_events WHERE game_id = :game_id AND acting_game_player_id = :bot_id AND event_type = 'mood_played' AND card_id = :card_id"
+        );
+        $playedStmt->execute(['game_id' => $gameId, 'bot_id' => $botPlayerId, 'card_id' => $apathyInstanceId]);
+        self::assertSame(1, (int) $playedStmt->fetchColumn(), 'the checkpointed card (Apathy) must actually have been played, not Courage or a pass');
+
+        $reasoningStmt = $this->pdo->prepare(
+            "SELECT details FROM game_events WHERE game_id = :game_id AND acting_game_player_id = :bot_id AND event_type = 'tactical_bot_reasoning'"
+        );
+        $reasoningStmt->execute(['game_id' => $gameId, 'bot_id' => $botPlayerId]);
+        $details = json_decode((string) $reasoningStmt->fetchColumn(), true);
+        self::assertNotNull($details, 'a recovered checkpoint still logs a tactical_bot_reasoning row when diagnostic mode is on');
+        self::assertTrue($details['recovered_from_stalled_search'], 'must be flagged as recovered, not a completed search');
+    }
+
+    /**
+     * The genuine total-loss case -- a stale job with NO checkpoint ever
+     * recorded (best_action_recorded_at still null) has nothing to
+     * recover, so it still falls back to the plain heuristic bot exactly
+     * as before -- but that fallback now ALSO logs a
+     * 'heuristic_bot_reasoning' row (playViaHeuristicBotFallback()'s own
+     * new diagnostic-mode logging), so this turn is no longer a total
+     * blank in the reasoning dialog either, just a coarser kind of
+     * reasoning than a completed search would have logged.
+     */
+    public function testAdvanceTacticalBotSearchLogsHeuristicReasoningWhenStaleWithNoCheckpointAtAll(): void
+    {
+        ['gameId' => $gameId, 'botPlayerId' => $botPlayerId] = $this->createRawTacticalBotGame($this->games, [55, 7], diagnosticMode: true);
+
+        $this->pdo->exec('UPDATE bot_search_jobs SET started_at = started_at - INTERVAL 1 HOUR');
+
+        $this->games->advanceAutomatedTurns($gameId);
+
+        $statusStmt = $this->pdo->query('SELECT status FROM bot_search_jobs ORDER BY id DESC LIMIT 1');
+        self::assertSame('failed', $statusStmt->fetchColumn());
+
+        $tacticalReasoningStmt = $this->pdo->prepare(
+            "SELECT COUNT(*) FROM game_events WHERE game_id = :game_id AND acting_game_player_id = :bot_id AND event_type = 'tactical_bot_reasoning'"
+        );
+        $tacticalReasoningStmt->execute(['game_id' => $gameId, 'bot_id' => $botPlayerId]);
+        self::assertSame(0, (int) $tacticalReasoningStmt->fetchColumn(), 'no checkpoint existed, so there is genuinely no tactical reasoning to log');
+
+        $heuristicReasoningStmt = $this->pdo->prepare(
+            "SELECT details FROM game_events WHERE game_id = :game_id AND acting_game_player_id = :bot_id AND event_type = 'heuristic_bot_reasoning'"
+        );
+        $heuristicReasoningStmt->execute(['game_id' => $gameId, 'bot_id' => $botPlayerId]);
+        $details = json_decode((string) $heuristicReasoningStmt->fetchColumn(), true);
+        self::assertNotNull($details, 'the heuristic fallback itself must still log its own (coarser) reasoning when diagnostic mode is on');
+        self::assertContains($details['choice_policy_path'], ['bespoke_rule', 'generic_resolver']);
+    }
+
+    // -- Heuristic bot reasoning (Part A) ------------------------------------
+
+    /**
+     * Reported live: "could we add some kind of reasoning text for the
+     * default bots? like if they're using a specific card override rule
+     * or something like that when making their decisions?" -- Apathy (55)
+     * has no bespoke branch of its own in BotPlayerService::
+     * buildBaseChoicesForCard(), so it falls through to the generic
+     * resolver -- exactly the "or even just like if they are randomly
+     * choosing something or choosing a safe target by default" half of
+     * that same report.
+     */
+    public function testAdvanceAutomatedTurnsLogsHeuristicBotReasoningWhenDiagnosticModeIsOn(): void
+    {
+        ['gameId' => $gameId, 'botPlayerId' => $botPlayerId] = $this->createRawHeuristicBotGame([55], diagnosticMode: true);
+        $apathyInstanceId = $this->gameCardInstanceId($gameId, 55);
+
+        $stmt = $this->pdo->prepare(
+            "SELECT details FROM game_events WHERE game_id = :game_id AND acting_game_player_id = :bot_id AND event_type = 'heuristic_bot_reasoning' AND card_id = :card_id"
+        );
+        $stmt->execute(['game_id' => $gameId, 'bot_id' => $botPlayerId, 'card_id' => $apathyInstanceId]);
+        $details = json_decode((string) $stmt->fetchColumn(), true);
+
+        self::assertNotNull($details, 'diagnostic mode must log the ordinary heuristic bot\'s own reasoning too, not just the Tactical Bot\'s');
+        self::assertSame('generic_resolver', $details['choice_policy_path']);
+    }
+
+    /** The exact same turn, but without diagnostic mode -- no reasoning event should exist at all, same convention as the Tactical Bot's own logTacticalBotReasoning(). */
+    public function testAdvanceAutomatedTurnsDoesNotLogHeuristicBotReasoningWhenDiagnosticModeIsOff(): void
+    {
+        ['gameId' => $gameId, 'botPlayerId' => $botPlayerId] = $this->createRawHeuristicBotGame([55], diagnosticMode: false);
+
+        $stmt = $this->pdo->prepare(
+            "SELECT COUNT(*) FROM game_events WHERE game_id = :game_id AND acting_game_player_id = :bot_id AND event_type = 'heuristic_bot_reasoning'"
+        );
+        $stmt->execute(['game_id' => $gameId, 'bot_id' => $botPlayerId]);
+        self::assertSame(0, (int) $stmt->fetchColumn());
+    }
+
     // -- Diagnostic mode ----------------------------------------------------
 
     /**
@@ -611,6 +856,39 @@ final class BotSearchIntegrationTest extends TestCase
     }
 
     /**
+     * Reported live: "could we add some kind of reasoning text for the
+     * default bots?" -- tacticalBotReasoningSince() now merges
+     * 'heuristic_bot_reasoning' rows in alongside the Tactical Bot's own,
+     * in the same chronological order, with `source` telling them apart.
+     */
+    public function testTacticalBotReasoningSinceMergesHeuristicAndTacticalEntriesChronologically(): void
+    {
+        ['human' => $human, 'bot' => $bot, 'gameId' => $gameId] = $this->createTacticalBotGame(diagnosticMode: true);
+        $botPlayerId = $this->games->gamePlayerIdFor($gameId, $bot);
+
+        $this->insertReasoningEvent($gameId, $botPlayerId, 'a tactical search result');
+        $this->insertHeuristicReasoningEvent($gameId, $botPlayerId, 'bespoke_rule');
+
+        $reasoning = $this->games->tacticalBotReasoningSince($gameId, $human);
+
+        self::assertCount(2, $reasoning);
+        self::assertSame('tactical', $reasoning[0]['source']);
+        self::assertNull($reasoning[0]['choice_policy_path']);
+        self::assertSame('heuristic', $reasoning[1]['source']);
+        self::assertSame('bespoke_rule', $reasoning[1]['choice_policy_path']);
+        self::assertSame([], $reasoning[1]['candidates'], 'a heuristic entry has no comparison of alternatives to report');
+    }
+
+    private function insertHeuristicReasoningEvent(int $gameId, int $botPlayerId, string $choicePolicyPath): void
+    {
+        $details = json_encode(['chosen_choices' => null, 'choice_policy_path' => $choicePolicyPath]);
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO game_events (game_id, acting_game_player_id, event_type, details) VALUES (:game_id, :player_id, 'heuristic_bot_reasoning', :details)"
+        );
+        $stmt->execute(['game_id' => $gameId, 'player_id' => $botPlayerId, 'details' => $details]);
+    }
+
+    /**
      * Reported live: the "View bot reasoning" dialog showed empty even
      * right after a Tactical Bot's move was clearly visible in Recent
      * plays. Root cause: a scoring-time (Enthusiasm/Passion) or
@@ -677,6 +955,52 @@ final class BotSearchIntegrationTest extends TestCase
         $reasoning = $this->games->tacticalBotReasoningSince($gameId, $human);
 
         self::assertCount(1, $reasoning, 'being announced as the next game\'s first player is not the viewer\'s own play, and must not hide earlier bot reasoning');
+    }
+
+    /**
+     * Reported live: a Tactical Bot's move was clearly visible in Recent
+     * plays, yet "View bot reasoning" showed the same generic empty
+     * message even though tacticalBotReasoningSince() was already scoped
+     * correctly by this point (see the two tests above) -- suspected root
+     * cause: a stale/crashed search job (or one whose own process threw)
+     * falls back to the ordinary heuristic bot for that turn, which never
+     * logs a tactical_bot_reasoning row at all. tacticalBotFallbackTurnsSince()
+     * detects this: a mood_played row attributed to the Tactical Bot's
+     * own seat with no matching reasoning row logged for it.
+     */
+    public function testTacticalBotFallbackTurnsSinceCountsAPlayWithNoReasoningLogged(): void
+    {
+        ['human' => $human, 'bot' => $bot, 'gameId' => $gameId] = $this->createTacticalBotGame(diagnosticMode: true);
+        $botPlayerId = $this->games->gamePlayerIdFor($gameId, $bot);
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO game_events (game_id, acting_game_player_id, event_type, details) VALUES (:game_id, :player_id, 'mood_played', '{}')"
+        );
+        $stmt->execute(['game_id' => $gameId, 'player_id' => $botPlayerId]);
+
+        self::assertSame(1, $this->games->tacticalBotFallbackTurnsSince($gameId, $human));
+    }
+
+    /** A real search-backed play logs its own reasoning immediately before the resulting mood_played row -- nothing unexplained here. */
+    public function testTacticalBotFallbackTurnsSinceIsZeroWhenReasoningWasLogged(): void
+    {
+        ['human' => $human, 'bot' => $bot, 'gameId' => $gameId] = $this->createTacticalBotGame(diagnosticMode: true);
+        $botPlayerId = $this->games->gamePlayerIdFor($gameId, $bot);
+
+        $this->insertReasoningEvent($gameId, $botPlayerId, 'reasoning behind this play');
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO game_events (game_id, acting_game_player_id, event_type, details) VALUES (:game_id, :player_id, 'mood_played', '{}')"
+        );
+        $stmt->execute(['game_id' => $gameId, 'player_id' => $botPlayerId]);
+
+        self::assertSame(0, $this->games->tacticalBotFallbackTurnsSince($gameId, $human));
+    }
+
+    public function testTacticalBotFallbackTurnsSinceIsZeroWithNothingSinceTheBoundary(): void
+    {
+        ['human' => $human, 'gameId' => $gameId] = $this->createTacticalBotGame(diagnosticMode: true);
+
+        self::assertSame(0, $this->games->tacticalBotFallbackTurnsSince($gameId, $human));
     }
 
     private function insertReasoningEvent(int $gameId, int $botPlayerId, string $note): void

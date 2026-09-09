@@ -1229,6 +1229,16 @@ body.game-page {
     text-align: center;
 }
 
+/* A 'heuristic'-source entry (Part A: "reasoning text for the default
+   bots") or a 'tactical' entry recovered from a stalled search (Part B) --
+   see buildBotReasoningTurn() in game.js -- neither has a candidate
+   comparison to show, just this one explanatory line instead. */
+.bot-reasoning-note {
+    font-size: 0.9em;
+    font-style: italic;
+    margin: 0.25rem 0 0;
+}
+
 #hand-list li,
 #discard-list li,
 #teammate-hand-list li,
