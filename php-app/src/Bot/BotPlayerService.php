@@ -264,7 +264,20 @@ use MoodSwings\Rules\RoundScorer;
  * value alone (2, no target) would both take the round's lead AND win
  * the entire game outright, the exact same
  * rationalizationWouldClinchTheGame()-shaped check (duplicated, not
- * shared) Rationalization's own game-win carve-out above already uses.
+ * shared) Rationalization's own game-win carve-out above already uses;
+ * and duplicityRepeatChoices() (reported live: "bots should always take
+ * extra 'after playing this mood' triggers from Duplicity, if they have
+ * targets for them - especially for moods like Pacifism (suppressing
+ * additional opponent moods), Shock (putting additional opponent moods
+ * in discard), Joy (getting additional extra turns)"), which answers
+ * Duplicity's own "repeat this mood's own effect?" offer by reusing
+ * buildChoicesForCard() for the mood being repeated exactly as if it
+ * were being played fresh, taking the repeat whenever that comes back
+ * non-empty (a genuine target/choice found) or the mood has no
+ * after-playing fields at all (an unconditional grant like Joy, nothing
+ * to "target" to begin with), and declining otherwise (no legal target,
+ * or a required field that can't be filled at all) -- see that method's
+ * own docblock for the full policy.
  * GameService is the only caller
  * (see its own "Practice bots" section in php-app/README.md for how this
  * fits into the request lifecycle) -- legality itself
@@ -682,9 +695,65 @@ final class BotPlayerService
             return $color === null ? [] : [$field['key'] => $color];
         }
 
+        // Duplicity's own "repeat this mood's own effect?" offer --
+        // $field itself is a top-level 'nested' field (repeat/choices),
+        // which the generic resolver below would never fill in (it's
+        // optional, and 'nested' isn't one of its handled field types
+        // anyway) -- see duplicityRepeatChoices()'s own docblock.
+        if ($decisionType === 'duplicity_repeat_offer' && $sourceCardId !== null) {
+            $repeatChoices = $this->duplicityRepeatChoices($state, $sourceCardId, $botGamePlayerId);
+
+            return $repeatChoices === null ? [] : [$field['key'] => ['repeat' => true, 'choices' => $repeatChoices]];
+        }
+
         $value = $this->resolver->resolve($state, $field, $botGamePlayerId, 0, '');
 
         return $value === null ? [] : [$field['key'] => $value];
+    }
+
+    /**
+     * Duplicity's own "repeat this mood's own effect with a fresh set of
+     * choices" offer (reported live: "bots should always take extra
+     * 'after playing this mood' triggers from Duplicity, if they have
+     * targets for them - especially for moods like Pacifism (suppressing
+     * additional opponent moods), Shock (putting additional opponent
+     * moods in discard), Joy (getting additional extra turns)") --
+     * $sourceCardId is the mood being REPEATED (e.g. Pacifism), not
+     * Duplicity itself. Reuses buildChoicesForCard()'s own already-tested
+     * policy for it exactly as if it were being played fresh, so every
+     * existing bespoke/generic targeting policy above
+     * (pacifismTargetMoodIds(), shockTargetMoodIds(), ...) decides the
+     * repeat's own choices too, with no separate logic to keep in sync.
+     *
+     * Null return means "decline" (chooseDecisionAnswer()'s own caller
+     * treats a missing answer the same way as every other unfilled
+     * optional decision): either buildChoicesForCard() itself found the
+     * mood unplayable this way (a required field, base or attached
+     * chaos, with no legal value -- repeating would be illegal), or --
+     * for a mood whose after-playing effect actually targets something
+     * (CardChoiceSchema::afterPlayingFields() non-empty) -- it came back
+     * completely empty, meaning that mood's own targeting policy already
+     * decided there's nothing worth doing right now (no legal target for
+     * Pacifism/Shock, or -- Creativity/Malice-style -- no target worth
+     * the tradeoff): declining leaves that judgment intact rather than
+     * blindly repeating a no-op. A mood with NO after-playing fields at
+     * all (Joy, Charity, Duplicity itself, every other unconditional
+     * "you may play an additional mood" grant) has nothing to "target"
+     * in the first place, so it's always worth repeating regardless of
+     * $choices' own (necessarily empty) contents.
+     *
+     * @return ?array<string, mixed>
+     */
+    private function duplicityRepeatChoices(BoardState $state, int $sourceCardId, int $botGamePlayerId): ?array
+    {
+        $choices = $this->buildChoicesForCard($state, $sourceCardId, $botGamePlayerId);
+        if ($choices === null) {
+            return null;
+        }
+
+        $effectKey = $state->catalogRow($state->effectiveCardId($sourceCardId))['effectKey'];
+
+        return $choices !== [] || CardChoiceSchema::afterPlayingFields($effectKey) === [] ? $choices : null;
     }
 
     /**

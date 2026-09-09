@@ -1,0 +1,22 @@
+-- Bug fix (reported live: "if I resign from the deck building display
+-- in a sealed deck game, and then start a new sealed deck game, it
+-- opens to the previous game's pool until I refresh it").
+--
+-- game.js's showBoard() was meant to reset draftDeckSelectionInitialized
+-- (the flag gating renderDraftDeckBuilding()'s own one-time re-seeding
+-- of the deck-under-construction selection from the CURRENT game's own
+-- pool -- shared by every draft deck_type: Quick/Winston/Grid/
+-- Rotisserie/Tiered Rotisserie Draft, Sealed Deck) whenever a different
+-- game's board opens -- its own docblock already said as much. Instead
+-- it was resetting quickDraftDeckSelectionInitialized, a since-renamed
+-- variable left dead ever since the deck-building step was generalized
+-- past Quick Draft alone -- so the REAL flag never reset, and an
+-- abandoned (never submitted) selection from whichever game was open
+-- before carried straight into the next one's own picker, silently
+-- wrong until a hard refresh reset every module-level JS variable from
+-- scratch.
+--
+-- Now resets the correct variable. No schema change, just the version
+-- bump MaintenanceGate needs to see this deploy as caught up with the
+-- code.
+UPDATE schema_version SET version = '1.39.6' WHERE id = 1;

@@ -3112,6 +3112,68 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * Reported live: "bots should always take extra 'after playing this
+     * mood' triggers from Duplicity, if they have targets for them -
+     * especially for moods like Pacifism ... Shock ... Joy." Exercises
+     * the real round trip through advanceAutomatedTurns() -- not just
+     * BotPlayerService::chooseDecisionAnswer() in isolation (see
+     * BotPlayerServiceTest's own unit coverage for the policy itself) --
+     * a bot's own duplicity_repeat_offer is routed back to
+     * chooseDecisionAnswer() the exact same way any other pending
+     * decision targeting a bot seat already is
+     * (advanceAutomatedTurns()'s own dispatch loop).
+     *
+     * The original play manually targets only opponent 1's Courage
+     * (simulating whatever the bot's own initial targeting happened to
+     * pick), deliberately leaving opponent 2's Complacency untouched --
+     * a genuine target still available once Duplicity's own repeat
+     * offer comes up, which the fix must actually take.
+     */
+    public function testAdvanceAutomatedTurnsHasABotTakeDuplicitysRepeatOfferForPacifismWithATarget(): void
+    {
+        $bot = $this->insertBotUser('pacifismdup-bot');
+        $u2 = $this->insertUser('pacifismdup-opp1');
+        $u3 = $this->insertUser('pacifismdup-opp2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $bot]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $bot, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $p3 = $this->insertGamePlayer($gameId, $u3, 2);
+
+        $this->insertGameCard($gameId, 37, 'in_play', $p1); // Duplicity
+        $pacifismId = $this->insertGameCard($gameId, 20, 'hand', $p1); // Pacifism
+        $courageId = $this->insertGameCard($gameId, 7, 'in_play', $p2); // opponent 1's Courage, value 1
+        $complacencyId = $this->insertGameCard($gameId, 5, 'in_play', $p3); // opponent 2's Complacency, value 4 -- left for the repeat
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $playResult = $this->games->playMood($gameId, $p1, $pacifismId, ['target_mood_ids' => [$courageId]]);
+        self::assertTrue($playResult['pending_decision'] ?? false);
+
+        $pending = $this->games->getState($gameId, $bot)['round']['pending_decision'];
+        self::assertSame('duplicity_repeat_offer', $pending['decision_type']);
+        self::assertSame($p1, $pending['target_game_player_id']);
+
+        $this->games->advanceAutomatedTurns($gameId);
+
+        // getState()'s own round summary always carries a 'pending_decision'
+        // key (null when nothing's pending) rather than omitting it.
+        self::assertNull($this->games->getState($gameId, $bot)['round']['pending_decision']);
+
+        $registry = DefaultEffectRegistry::build();
+        $state = (new BoardStateRepository($registry))->load($gameId);
+        $suppressedByPacifism = $state->suppressedByCardId($pacifismId);
+        sort($suppressedByPacifism);
+        $expected = [$courageId, $complacencyId];
+        sort($expected);
+        self::assertSame($expected, $suppressedByPacifism);
+    }
+
+    /**
      * A real bug, caught live: Validation never reacted to Thrill's own
      * play when Thrill's own choice happened to return Validation itself
      * to hand, because the reaction loop used to re-query "who's in play
