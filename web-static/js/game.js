@@ -1607,7 +1607,18 @@
         // carries over a stale selection into a different match's picker.
         quickDraftPickSelection = new Set();
         quickDraftPickSelectionKey = null;
-        quickDraftDeckSelectionInitialized = false;
+        // Every draft deck_type's own deck-building trim step (Quick/
+        // Winston/Grid/Rotisserie/Tiered Rotisserie Draft, Sealed Deck --
+        // see renderDraftDeckBuilding()'s own docblock) shares this one
+        // flag; reset here for the same reason as quickDraftPickSelection
+        // just above (reported live: reopening the deck-building screen
+        // for a brand-new Sealed Deck game -- e.g. right after resigning
+        // an earlier one mid-build -- kept showing the PREVIOUS game's
+        // own selection until a hard refresh, since this used to reset a
+        // since-renamed variable -- quickDraftDeckSelectionInitialized,
+        // dead ever since the deck-building step was generalized past
+        // Quick Draft -- rather than this one).
+        draftDeckSelectionInitialized = false;
         showLoadingOverlay();
         refreshBoard().finally(hideLoadingOverlay);
         if (pollTimer) {
