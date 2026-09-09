@@ -7341,14 +7341,7 @@ final class GameService
         // in the future) is simply never consulted here at all, rather
         // than needing yet another name added to a blocklist every time
         // one more such type is caught live.
-        $lastOwnEventStmt = $pdo->prepare(
-            "SELECT id FROM game_events WHERE game_id = :game_id AND acting_game_player_id = :player_id
-             AND event_type IN ('mood_played', 'turn_passed', 'pending_decision_resolved', 'disillusionment_color_chosen', 'team_turn_order_decided', 'team_draw_recipient_decided', 'closed_team_leader_decided')
-             ORDER BY id DESC LIMIT 1"
-        );
-        $lastOwnEventStmt->execute(['game_id' => $gameId, 'player_id' => $viewerGamePlayerId]);
-        $sinceEventId = $lastOwnEventStmt->fetchColumn();
-        $sinceEventId = $sinceEventId !== false ? (int) $sinceEventId : 0;
+        $sinceEventId = $this->viewerOwnLastTurnEventId($gameId, $viewerGamePlayerId);
 
         $reasoningStmt = $pdo->prepare(
             "SELECT ge.acting_game_player_id, u.username, ge.card_id, ge.details, ge.created_at
@@ -7373,6 +7366,98 @@ final class GameService
                 'created_at' => $row['created_at'],
             ];
         }, $reasoningStmt->fetchAll());
+    }
+
+    /**
+     * The boundary id tacticalBotReasoningSince()/tacticalBotFallbackTurnsSince()
+     * both scope their own "since" queries to -- $viewerGamePlayerId's own
+     * most recent game_events row of a type that genuinely represents
+     * them having just acted (ending their own previous turn, answering a
+     * decision, or -- Open/Closed Team Play -- taking part in their
+     * team's own turn-order/draw-recipient/leader decision). See
+     * tacticalBotReasoningSince()'s own docblock for the full history of
+     * why this is an ALLOWLIST rather than excluding known-bad types one
+     * at a time. 0 (the start of the game) if no such event exists yet.
+     */
+    private function viewerOwnLastTurnEventId(int $gameId, int $viewerGamePlayerId): int
+    {
+        $stmt = Connection::get()->prepare(
+            "SELECT id FROM game_events WHERE game_id = :game_id AND acting_game_player_id = :player_id
+             AND event_type IN ('mood_played', 'turn_passed', 'pending_decision_resolved', 'disillusionment_color_chosen', 'team_turn_order_decided', 'team_draw_recipient_decided', 'closed_team_leader_decided')
+             ORDER BY id DESC LIMIT 1"
+        );
+        $stmt->execute(['game_id' => $gameId, 'player_id' => $viewerGamePlayerId]);
+        $id = $stmt->fetchColumn();
+
+        return $id !== false ? (int) $id : 0;
+    }
+
+    /**
+     * Reported live: a Tactical Bot's move was clearly visible in Recent
+     * plays, yet "View bot reasoning" showed empty even once
+     * tacticalBotReasoningSince() itself was already scoped correctly
+     * (see its own docblock for that history) -- suspected root cause: a
+     * stale/crashed search job (or one whose own PHP process threw) falls
+     * back to the ordinary heuristic bot for that turn
+     * (advanceTacticalBotSearch()'s/runTacticalBotSearchJob()'s own
+     * fallback paths), which never logs a tactical_bot_reasoning row at
+     * all -- there is genuinely nothing recorded to show, a materially
+     * different situation from "nothing has happened yet" that the
+     * dialog couldn't previously tell apart.
+     *
+     * Counts every Tactical Bot's own completed turn (a `mood_played`/
+     * `turn_passed` row attributed to one of tacticalBotGamePlayerIds())
+     * since the SAME boundary tacticalBotReasoningSince() uses, then
+     * subtracts however many `tactical_bot_reasoning` rows actually exist
+     * in that same window -- a real search-backed turn always logs
+     * exactly one of those immediately before its own resulting play (see
+     * runTacticalBotSearchJob()'s own docblock), so any turn beyond that
+     * count must have gone through the reasoning-less fallback instead.
+     * An approximation, not an exact per-turn correlation (a single
+     * Tactical Bot turn can itself span several plays via extra grants,
+     * each becoming its own `advanceTacticalBotSearch()` decision -- see
+     * that method's own docblock -- so this counts DECISIONS, the same
+     * granularity the search/fallback choice itself is actually made at,
+     * not "turns" in the everyday sense) -- but good enough to answer the
+     * one question the dialog needs: is there at least one Tactical Bot
+     * play since the viewer's own boundary that the dialog will never be
+     * able to explain, no matter how long they wait or how often they
+     * refresh?
+     *
+     * 0 whenever no Tactical Bot is seated at all (`tacticalBotGamePlayerIds()`
+     * empty) -- nothing here could ever apply to a plain heuristic bot,
+     * which never logs reasoning in the first place regardless of how it
+     * played.
+     */
+    public function tacticalBotFallbackTurnsSince(int $gameId, int $viewerUserId): int
+    {
+        $viewerGamePlayerId = $this->gamePlayerIdFor($gameId, $viewerUserId);
+        if ($viewerGamePlayerId === null) {
+            throw new GameStateException("User {$viewerUserId} is not seated in game {$gameId}");
+        }
+
+        $tacticalBotGamePlayerIds = $this->tacticalBotGamePlayerIds($gameId);
+        if ($tacticalBotGamePlayerIds === []) {
+            return 0;
+        }
+
+        $sinceEventId = $this->viewerOwnLastTurnEventId($gameId, $viewerGamePlayerId);
+        $pdo = Connection::get();
+
+        $placeholders = implode(',', array_fill(0, count($tacticalBotGamePlayerIds), '?'));
+        $turnsStmt = $pdo->prepare(
+            "SELECT COUNT(*) FROM game_events WHERE game_id = ? AND id > ? AND event_type IN ('mood_played', 'turn_passed') AND acting_game_player_id IN ({$placeholders})"
+        );
+        $turnsStmt->execute([$gameId, $sinceEventId, ...$tacticalBotGamePlayerIds]);
+        $tacticalBotTurns = (int) $turnsStmt->fetchColumn();
+
+        $reasoningCountStmt = $pdo->prepare(
+            'SELECT COUNT(*) FROM game_events WHERE game_id = :game_id AND id > :since_id AND event_type = \'tactical_bot_reasoning\''
+        );
+        $reasoningCountStmt->execute(['game_id' => $gameId, 'since_id' => $sinceEventId]);
+        $reasoningCount = (int) $reasoningCountStmt->fetchColumn();
+
+        return max(0, $tacticalBotTurns - $reasoningCount);
     }
 
     /**

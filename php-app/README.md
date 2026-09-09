@@ -8865,6 +8865,34 @@ previous turn, or answering a decision -- ever moves the boundary
 forward, and anything else is simply never consulted, closing off the
 entire class of bug rather than one instance of it at a time.
 
+Reported live a THIRD time, even once the boundary above was already
+correct: a Tactical Bot's move was clearly visible in Recent plays, yet
+the dialog still showed the same generic empty message.
+`GameService::tacticalBotFallbackTurnsSince(int $gameId, int
+$viewerUserId)` (also returned by `GET /games/bot-reasoning?game_id=`,
+as `fallback_turns_since`) answers a different question than the
+boundary above: not "is the boundary wrong," but "did a Tactical Bot
+turn happen that has NOTHING to show no matter how the boundary is
+computed" -- a stale/crashed search job (or one whose own process
+threw, see `advanceTacticalBotSearch()`'s/`runTacticalBotSearchJob()`'s
+own fallback paths) falls back to the ordinary heuristic bot, which
+never logs a `tactical_bot_reasoning` row at all. Counts every
+`mood_played`/`turn_passed` row attributed to one of
+`tacticalBotGamePlayerIds()` since the SAME boundary
+(`viewerOwnLastTurnEventId()`, extracted out of
+`tacticalBotReasoningSince()` so both share one source of truth for it),
+minus however many `tactical_bot_reasoning` rows exist in that same
+window -- an approximation (a single Tactical Bot turn can itself span
+several plays via extra grants, each its own `advanceTacticalBotSearch()`
+decision, so this counts decisions, not "turns" in the everyday sense),
+but enough to answer the one question the dialog needs. `web-static/js/game.js`'s
+`openBotReasoningView()` shows a distinct message when this is positive
+("...its search didn't finish in time and fell back to the standard
+bot -- there's no reasoning recorded for that play") instead of the
+default "No tactical bot plays since your own last play," so a
+diagnostic-mode player can tell "this is broken" apart from "there is
+genuinely nothing to explain."
+
 ### Auto-pass on empty hand
 
 A personal preference (`users.auto_pass_on_empty_hand`, migration

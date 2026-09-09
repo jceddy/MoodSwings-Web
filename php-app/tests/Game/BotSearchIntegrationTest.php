@@ -679,6 +679,52 @@ final class BotSearchIntegrationTest extends TestCase
         self::assertCount(1, $reasoning, 'being announced as the next game\'s first player is not the viewer\'s own play, and must not hide earlier bot reasoning');
     }
 
+    /**
+     * Reported live: a Tactical Bot's move was clearly visible in Recent
+     * plays, yet "View bot reasoning" showed the same generic empty
+     * message even though tacticalBotReasoningSince() was already scoped
+     * correctly by this point (see the two tests above) -- suspected root
+     * cause: a stale/crashed search job (or one whose own process threw)
+     * falls back to the ordinary heuristic bot for that turn, which never
+     * logs a tactical_bot_reasoning row at all. tacticalBotFallbackTurnsSince()
+     * detects this: a mood_played row attributed to the Tactical Bot's
+     * own seat with no matching reasoning row logged for it.
+     */
+    public function testTacticalBotFallbackTurnsSinceCountsAPlayWithNoReasoningLogged(): void
+    {
+        ['human' => $human, 'bot' => $bot, 'gameId' => $gameId] = $this->createTacticalBotGame(diagnosticMode: true);
+        $botPlayerId = $this->games->gamePlayerIdFor($gameId, $bot);
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO game_events (game_id, acting_game_player_id, event_type, details) VALUES (:game_id, :player_id, 'mood_played', '{}')"
+        );
+        $stmt->execute(['game_id' => $gameId, 'player_id' => $botPlayerId]);
+
+        self::assertSame(1, $this->games->tacticalBotFallbackTurnsSince($gameId, $human));
+    }
+
+    /** A real search-backed play logs its own reasoning immediately before the resulting mood_played row -- nothing unexplained here. */
+    public function testTacticalBotFallbackTurnsSinceIsZeroWhenReasoningWasLogged(): void
+    {
+        ['human' => $human, 'bot' => $bot, 'gameId' => $gameId] = $this->createTacticalBotGame(diagnosticMode: true);
+        $botPlayerId = $this->games->gamePlayerIdFor($gameId, $bot);
+
+        $this->insertReasoningEvent($gameId, $botPlayerId, 'reasoning behind this play');
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO game_events (game_id, acting_game_player_id, event_type, details) VALUES (:game_id, :player_id, 'mood_played', '{}')"
+        );
+        $stmt->execute(['game_id' => $gameId, 'player_id' => $botPlayerId]);
+
+        self::assertSame(0, $this->games->tacticalBotFallbackTurnsSince($gameId, $human));
+    }
+
+    public function testTacticalBotFallbackTurnsSinceIsZeroWithNothingSinceTheBoundary(): void
+    {
+        ['human' => $human, 'gameId' => $gameId] = $this->createTacticalBotGame(diagnosticMode: true);
+
+        self::assertSame(0, $this->games->tacticalBotFallbackTurnsSince($gameId, $human));
+    }
+
     private function insertReasoningEvent(int $gameId, int $botPlayerId, string $note): void
     {
         $details = json_encode([

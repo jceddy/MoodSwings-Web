@@ -5044,7 +5044,22 @@
         }
 
         metaEl.textContent = '';
-        emptyEl.hidden = body.reasoning.length > 0;
+        const hasReasoning = body.reasoning.length > 0;
+        emptyEl.hidden = hasReasoning;
+        if (!hasReasoning) {
+            // fallback_turns_since (GameService::tacticalBotFallbackTurnsSince())
+            // distinguishes "nothing has happened yet" from "something
+            // happened, but a stale/crashed search fell back to the
+            // ordinary heuristic bot, which never logs reasoning at all"
+            // -- reported live: a Tactical Bot's move was clearly visible
+            // in Recent plays, yet this dialog showed the same generic
+            // empty message either way, reading as though the dialog
+            // itself was still broken rather than there genuinely being
+            // nothing recorded for that specific play.
+            emptyEl.textContent = body.fallback_turns_since > 0
+                ? "A tactical bot played since your last turn, but its search didn't finish in time and fell back to the standard bot -- there's no reasoning recorded for that play."
+                : 'No tactical bot plays since your own last play.';
+        }
 
         for (const turn of body.reasoning) {
             turnsEl.appendChild(buildBotReasoningTurn(turn));

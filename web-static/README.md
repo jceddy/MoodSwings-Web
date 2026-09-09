@@ -1013,7 +1013,18 @@ existing `view-shared-deck-button` visibility check.
   translation. Candidates are shown sorted highest-`average_reward`
   first, the card the bot actually chose outlined, with
   heuristically-excluded cards (never even reached by the search) listed
-  separately underneath.
+  separately underneath. When `body.reasoning` comes back empty, the
+  empty-state message shown depends on `body.fallback_turns_since`
+  (`GameService::tacticalBotFallbackTurnsSince()`, php-app/README.md's
+  own docblock): 0 means genuinely nothing has happened since the
+  viewer's own last turn (the default "No tactical bot plays since your
+  own last play" text stays), but a positive count means a Tactical
+  Bot's search actually ran out of time and fell back to the ordinary
+  heuristic bot for that turn -- reported live a third time, after the
+  boundary computation itself was already fixed twice over, because
+  that fallback genuinely never logs any reasoning to show, which this
+  distinct message now says outright instead of reading as though the
+  dialog were still broken.
 
 ### Custom card/effect formats preference (issue #405 follow-up)
 
