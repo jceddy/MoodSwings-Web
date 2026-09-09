@@ -1589,7 +1589,7 @@ final class BotPlayerService
         'rationalization', 'avoidance', 'cynicism', 'intimidation', 'paranoia',
         'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
         'nostalgia', 'contempt', 'sneakiness', 'shock', 'exhilaration',
-        'rejection', 'guilt', 'scorn',
+        'rejection', 'guilt', 'scorn', 'recklessness',
     ];
 
     /**
@@ -1687,6 +1687,12 @@ final class BotPlayerService
             $targetMoodId = $this->contemptTargetMoodId($state, $botGamePlayerId);
 
             return $targetMoodId !== null ? ['mode' => 'single', 'target_mood_id' => $targetMoodId] : [];
+        }
+
+        if ($effectKey === 'recklessness') {
+            $targetMoodId = $this->recklessnessTargetMoodId($state, $botGamePlayerId);
+
+            return $targetMoodId !== null ? ['target_mood_id' => $targetMoodId] : [];
         }
 
         if ($effectKey === 'sneakiness') {
@@ -2992,6 +2998,45 @@ final class BotPlayerService
         }
 
         return $this->wouldBecomeHighestScore($state, $botGamePlayerId, 0, $this->baseValue($state, $cardId));
+    }
+
+    /**
+     * Recklessness's own "who to target" policy (confirmed by the
+     * maintainer): an opponent's Hope or Grace always comes first, ahead
+     * of everything else regardless of value -- both sit at baseValue 0
+     * (their real power is the ongoing "extra play every turn"/"extra
+     * play from the discard pile" ability, not printed value), so the
+     * plain highest-valueOf() fallback below would never surface either
+     * one even though taking it away permanently disables that
+     * opponent's own extra play for as long as the bot holds it (and, in
+     * the meantime, hands the bot itself that same extra play -- see
+     * RecklessnessEffect's own "give the mood you took back to them
+     * after scoring" text). The same "a 0-baseValue mood can still be
+     * the single best target on the board" reasoning is already applied
+     * to Hope specifically by angerSwingMaximizingTargets()/
+     * ambitionSafeHandCardIds() elsewhere in this file. With no
+     * opponent Hope/Grace available, falls back to
+     * convictionBestOpponentMoodId()'s own highest-CURRENT-value
+     * non-teammate-opponent-mood policy; null (skip the "you may" field
+     * entirely) only once no non-teammate opponent has any mood in play
+     * at all.
+     */
+    private function recklessnessTargetMoodId(BoardState $state, int $botGamePlayerId): ?int
+    {
+        $bestHopeOrGraceMoodId = null;
+        foreach ($state->activePlayerOrder() as $playerId) {
+            if ($playerId === $botGamePlayerId || $state->isTeammate($botGamePlayerId, $playerId)) {
+                continue;
+            }
+            foreach ($state->moodsOwnedBy($playerId) as $mood) {
+                $effectKey = $state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'];
+                if (in_array($effectKey, ['hope', 'grace'], true)) {
+                    $bestHopeOrGraceMoodId ??= $mood->cardId;
+                }
+            }
+        }
+
+        return $bestHopeOrGraceMoodId ?? $this->convictionBestOpponentMoodId($state, $botGamePlayerId);
     }
 
     /**

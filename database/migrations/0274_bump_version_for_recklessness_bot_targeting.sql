@@ -1,0 +1,27 @@
+-- Bot policy fix (reported live: "bots should actually target an
+-- opponent's mood when they play Recklessness -- Hope or Grace first,
+-- if they have it, then prioritizing highest points first").
+--
+-- Recklessness's own "take one of your opponents' moods" field
+-- (target_mood_id, CardChoiceSchema) was previously never filled in for
+-- a bot at all -- it isn't in BESPOKE_CHOICE_EFFECT_KEYS, so it fell
+-- through to the generic schema-field loop, which only ever forces an
+-- OPTIONAL field for a small, explicit allowlist Recklessness wasn't on
+-- (BotChoiceResolver::isAlwaysFilledOptionalField()). A bot playing
+-- Recklessness therefore always skipped its own "you may take an
+-- opponent's mood" clause and only ever got the guaranteed bottom-of-
+-- deck-plus-draw half.
+--
+-- New BotPlayerService::recklessnessTargetMoodId() (added to
+-- BESPOKE_CHOICE_EFFECT_KEYS) now always takes a target when one's
+-- available: an opponent's Hope or Grace first, regardless of value
+-- (both print at base_value 0 despite being top-tier "extra play every
+-- turn" engines, so a plain highest-valueOf() sort -- the same trap
+-- already worked around for Hope by angerSwingMaximizingTargets()/
+-- ambitionSafeHandCardIds() -- would never surface either one); with
+-- neither in play, falls back to convictionBestOpponentMoodId()'s own
+-- highest-current-value non-teammate-opponent-mood policy.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.39.1' WHERE id = 1;
