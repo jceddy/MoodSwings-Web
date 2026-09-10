@@ -3755,6 +3755,26 @@ deck's `cards`.
     directly, so the secondary action reads as subordinate to the
     primary one instead of competing with it for the row's right edge.
 
+    **Reported live: diagnostic mode's internal reasoning bookkeeping
+    was leaking into both "Recent plays" and "View log".** With
+    diagnostic mode on, every action the bot even just *considers* gets
+    its own `'heuristic_bot_reasoning'`/`'tactical_bot_reasoning'`
+    `game_events` row (see "Heuristic bot reasoning" in
+    `php-app/README.md`), meant only for the dedicated "Bot reasoning"
+    dialog -- but `GET /games/state`'s own `recent_events` and `GET
+    /games/log` both included them too, and since neither event type is
+    handled by `describeEvent()`, each one rendered via its generic
+    fallback as a bare, detail-free `"{actor} played {card}"` line with
+    none of the usual "from hand"/grant wording -- interleaved with (and
+    visually indistinguishable from) the real play events. A bot combo
+    with several considered-but-not-yet-resolved steps in a row showed
+    up as a wall of these contentless lines, reading exactly like a
+    frozen game. Both event types are now excluded from both feeds
+    server-side (`GameService::fullEventLog()`/`recentEvents()`), so
+    this needed no frontend change at all -- worth calling out here
+    since it's this file's own two "Recent plays"/"Game log" UI
+    surfaces that were actually showing the symptom.
+
     **Download complete game data (issue #99).** A third lobby-row
     button, "Download data" (next to "View log"), fetches the entirely
     different `GET /games/export` (`GameService::exportGameData()`, see

@@ -1768,6 +1768,98 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame([], $action['choices']);
     }
 
+    // -- Panic (reported live) -----------------------------------------------
+
+    /**
+     * Reported live, from a game where Validation (id 26) was already in
+     * play: "when the bot played Panic, it should have targeted its own
+     * Compulsion or Suspicion so it could re-play it to take another card
+     * from my hand." Panic's own printed value is a fixed 1, so playing
+     * it is guaranteed to satisfy ValidationEffect::reactToAnotherPlay()'s
+     * own "0 or 1" check and hand back an extra play -- exactly the
+     * guarantee that makes bouncing Compulsion (id 86, value 3) back to
+     * hand here a strict gain rather than a gamble. See
+     * panicTargetMoodIds()'s own docblock for why this is scoped to
+     * exactly this case.
+     */
+    public function testChooseActionBouncesItsOwnCompulsionWithPanicWhileValidationIsInPlay(): void
+    {
+        $state = new BoardState(
+            $this->sampleCatalog(),
+            DefaultEffectRegistry::build(),
+            [1, 2],
+            hands: [1 => [48, 26, 86]],
+        );
+        $state->moveHandToInPlay(1, 26);
+        $state->moveHandToInPlay(1, 86);
+
+        $action = $this->bot->chooseAction($state, [48], 1);
+
+        self::assertSame(48, $action['card_id']);
+        self::assertSame(['target_mood_ids' => [86]], $action['choices']);
+    }
+
+    /**
+     * Same shape, but Suspicion (id 78, also value 3) is the bot's own
+     * "steal a card" mood in play instead of Compulsion -- proves the
+     * policy isn't hardcoded to Compulsion specifically.
+     */
+    public function testChooseActionBouncesItsOwnSuspicionWithPanicWhileValidationIsInPlay(): void
+    {
+        $state = new BoardState(
+            $this->sampleCatalog(),
+            DefaultEffectRegistry::build(),
+            [1, 2],
+            hands: [1 => [48, 26, 78]],
+        );
+        $state->moveHandToInPlay(1, 26);
+        $state->moveHandToInPlay(1, 78);
+
+        $action = $this->bot->chooseAction($state, [48], 1);
+
+        self::assertSame(48, $action['card_id']);
+        self::assertSame(['target_mood_ids' => [78]], $action['choices']);
+    }
+
+    /**
+     * Without Validation in play, there's no guaranteed extra play to
+     * replay a bounced Compulsion with -- bouncing it would just forfeit
+     * its current round-scoring value for nothing, so Panic correctly
+     * leaves it alone.
+     */
+    public function testChooseActionDoesNotBounceItsOwnCompulsionWithPanicWithoutValidationInPlay(): void
+    {
+        $state = new BoardState(
+            $this->sampleCatalog(),
+            DefaultEffectRegistry::build(),
+            [1, 2],
+            hands: [1 => [48, 86]],
+        );
+        $state->moveHandToInPlay(1, 86);
+
+        $action = $this->bot->chooseAction($state, [48], 1);
+
+        self::assertSame(48, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
+    /** With neither Compulsion nor Suspicion in play, Validation alone gives Panic nothing worth bouncing. */
+    public function testChooseActionDoesNotTargetAnythingWithPanicWithNoStealMoodInPlay(): void
+    {
+        $state = new BoardState(
+            $this->sampleCatalog(),
+            DefaultEffectRegistry::build(),
+            [1, 2],
+            hands: [1 => [48, 26]],
+        );
+        $state->moveHandToInPlay(1, 26);
+
+        $action = $this->bot->chooseAction($state, [48], 1);
+
+        self::assertSame(48, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
     // -- Denial (confirmed by the maintainer) -------------------------------
 
     /**

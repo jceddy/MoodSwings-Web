@@ -2033,6 +2033,86 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertContains($game2Id, array_column($this->games->listPastGamesForUser($bob), 'id'), 'as does game 2');
     }
 
+    /**
+     * Reported live (a follow-up to the report above -- the maintainer's
+     * own game was a Sealed Pool of the Day match against a bot, where
+     * THEY were the one who resigned game 1): "the completed game already
+     * got moved to the Past Games tab, even though the match is still in
+     * progress." The two tests just above only ever check the OTHER
+     * player's own view, never the RESIGNER's -- and it's specifically
+     * the resigner's own gp.resigned_at row that used to bypass the
+     * draft/game_match "wait for the whole match to decide" carve-out
+     * entirely (see listGamesForUser()'s own docblock), moving game 1 to
+     * their own Past games immediately even though they're still
+     * perfectly normally seated (no resignation of their own) in game 2,
+     * sitting right there in what should be their main lobby. Quick Draft
+     * here (not Sealed Pool of the Day) since the underlying bug is in
+     * the shared draft_matches carve-out, deck_type-agnostic.
+     */
+    public function testListGamesForUserKeepsAResignedDraftMatchGameVisibleForTheResignerWhileASiblingGameIsStillInProgress(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture(winsNeeded: 1);
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+        $this->submitFullQuickDraftDeck($gameId, $u1);
+        $this->submitFullQuickDraftDeck($gameId, $u2);
+        $this->games->startGame($gameId);
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $u1));
+
+        self::assertSame('completed', $this->fetchGame($gameId)['status']);
+        self::assertSame('deck_building', $this->fetchDraftMatch($draftMatchId)['status'], 'one game loss (even by resignation) is not enough to decide a best-of-three match');
+
+        self::assertContains($gameId, array_column($this->games->listGamesForUser($u1), 'id'), "the RESIGNER's own view must still show completed game 1 while the match is undecided, not just their opponent's");
+        self::assertNotContains($gameId, array_column($this->games->listPastGamesForUser($u1), 'id'), 'and must NOT yet appear in the resigner\'s own Past games');
+
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE draft_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $draftMatchId]);
+        $game2Id = (int) $nextGameStmt->fetchColumn();
+        self::assertContains($game2Id, array_column($this->games->listGamesForUser($u1), 'id'), 'game 2 (which the resigner has NOT resigned from) must also be in their own main lobby');
+
+        // Deciding the match (2-0 against the resigner) should THEN move
+        // both games to their own Past games, same as the non-resignation
+        // case already does.
+        $this->submitFullQuickDraftDeck($game2Id, $u1);
+        $this->submitFullQuickDraftDeck($game2Id, $u2);
+        $this->games->startGame($game2Id);
+        $this->games->resignGame($game2Id, $this->games->gamePlayerIdFor($game2Id, $u1));
+
+        self::assertSame('completed', $this->fetchDraftMatch($draftMatchId)['status'], 'the match is now decided 2-0 against the resigner');
+        self::assertNotContains($gameId, array_column($this->games->listGamesForUser($u1), 'id'), 'game 1 moves out of the resigner\'s own main lobby once the whole match is decided');
+        self::assertNotContains($game2Id, array_column($this->games->listGamesForUser($u1), 'id'), 'game 2 moves out too');
+        self::assertContains($gameId, array_column($this->games->listPastGamesForUser($u1), 'id'), 'game 1 now appears in the resigner\'s own Past games');
+        self::assertContains($game2Id, array_column($this->games->listPastGamesForUser($u1), 'id'), 'as does game 2');
+    }
+
+    /** Same fix, for the game_matches (Duel/Team/Closed Team Play/Traditional) wrapper -- see the draft_matches version just above. */
+    public function testListGamesForUserKeepsAResignedGameMatchGameVisibleForTheResignerWhileASiblingGameIsStillInProgress(): void
+    {
+        $alice = $this->insertUser('bo3-resigner-alice');
+        $bob = $this->insertUser('bo3-resigner-bob');
+
+        $gameId = $this->games->createGame($alice, [$alice, $bob], format: 'duel', deckType: 'structure', bestOfThree: true);
+        $this->games->startGame($gameId);
+
+        $gameMatchId = (int) $this->fetchGame($gameId)['game_match_id'];
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $alice));
+
+        self::assertSame('in_progress', $this->fetchGameMatch($gameMatchId)['status'], 'one game loss is not enough to decide a best-of-three match');
+
+        self::assertContains($gameId, array_column($this->games->listGamesForUser($alice), 'id'), "the RESIGNER's own view must still show completed game 1 while the match is undecided");
+        self::assertNotContains($gameId, array_column($this->games->listPastGamesForUser($alice), 'id'), 'and must NOT yet appear in the resigner\'s own Past games');
+
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE game_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $gameMatchId]);
+        $game2Id = (int) $nextGameStmt->fetchColumn();
+        self::assertContains($game2Id, array_column($this->games->listGamesForUser($alice), 'id'), 'game 2 must also be in the resigner\'s own main lobby');
+    }
+
     // -- Cleanup cron (issue #84) --------------------------------------------
 
     private function markGameStale(int $gameId, int $daysAgo): void
@@ -17727,6 +17807,79 @@ final class GameServiceIntegrationTest extends TestCase
         $rarityCounts = array_count_values(array_map(fn (int $id) => $rarityById[$id], array_map(intval(...), $botDeckCardIds)));
         self::assertLessThanOrEqual(4, $rarityCounts['rare'] ?? 0, "the bot's own deck should never exceed the rare cap");
         self::assertLessThanOrEqual(2, $rarityCounts['mythic'] ?? 0, "the bot's own deck should never exceed the mythic cap");
+    }
+
+    /**
+     * Reported live: "on the game lobby view, the completed game already
+     * got moved to the Past Games tab, even though the match is still in
+     * progress -- please fix this to make it behave like the regular
+     * Sealed Deck matches." Investigated at length against a Sealed Pool
+     * of the Day match against a bot (the only PERIODIC_SEALED_POOL_DECK_TYPES
+     * member bots are ever seated for -- Weekly Sealed Pool stays
+     * bot-excluded), the deck_type the maintainer confirmed the reported
+     * game actually used. This end-to-end reproduction -- human + bot,
+     * game 1 decided by a round win, game 2 already created and waiting
+     * -- could NOT reproduce the reported bug: listGamesForUser()/
+     * listPastGamesForUser()'s own draft_matches carve-out (see
+     * listGamesForUser()'s own docblock) is deck_type-agnostic, already
+     * covered for Quick Draft by
+     * testListGamesForUserKeepsACompletedDraftMatchGameVisibleWhileASiblingGameIsStillInProgress(),
+     * and behaves identically here. Kept as a permanent regression test
+     * for this exact human+bot Sealed Pool of the Day shape either way.
+     */
+    public function testListGamesForUserKeepsACompletedSealedPoolOfTheDayGameVisibleAgainstABotWhileTheMatchContinues(): void
+    {
+        $human = $this->insertUser('sealedpool-lobby-human');
+        $botUserId = $this->insertBotUser('sealedpool-lobby-bot');
+
+        $gameId = $this->games->createGame($human, [$human, $botUserId], format: 'draft', winsNeeded: 1, deckType: 'sealed_pool_of_the_day');
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        $catalog = $this->pdo->query('SELECT id, rarity FROM cards')->fetchAll();
+        $rarityById = array_column($catalog, 'rarity', 'id');
+        $deckCardIdsFor = function (int $userId) use ($draftMatchId, $rarityById): array {
+            $pooledCardIds = array_map(intval(...), json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userId)['drafted_card_ids'], true));
+            $mythicIds = array_values(array_filter($pooledCardIds, fn (int $id) => $rarityById[$id] === 'mythic'));
+            $nonMythicIds = array_values(array_filter($pooledCardIds, fn (int $id) => $rarityById[$id] !== 'mythic'));
+
+            return [...array_slice($mythicIds, 0, 2), ...array_slice($nonMythicIds, 0, 10)];
+        };
+        $this->games->submitDraftDeck($gameId, $human, $deckCardIdsFor($human));
+        // The bot's own deck is submitted directly here (not via
+        // advanceAutomatedTurns()) deliberately -- that call would also
+        // drive the bot straight into playing its own first turn the
+        // instant round 1 starts with the bot going first (a coin flip),
+        // leaving an unresolved pending decision behind that
+        // resignGame() below correctly refuses to resign through
+        // (assertNoPendingDecision(), same gate playMood()/pass() use).
+        // Submitting directly here starts the game without ever letting
+        // either side actually move, so the immediate resign below is
+        // always legal regardless of who the coin flip picked.
+        $this->games->submitDraftDeck($gameId, $botUserId, $deckCardIdsFor($botUserId));
+        $this->games->startGame($gameId);
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
+
+        // The bot resigns -- the simplest way to end game 1 deterministically
+        // without wading into round-by-round play (mirrors the identical
+        // shortcut testListGamesForUserKeepsAnInProgressGameMatchsFinishedGameVisibleWhileMatchContinues
+        // uses for the game_matches carve-out). Checked from the HUMAN's
+        // own perspective below specifically because THEY are the winner
+        // here, not the resigner -- gp.resigned_at routes a resigner
+        // straight to their own Past games regardless of match status, a
+        // separate and already-tested mechanism this test isn't targeting.
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $botUserId));
+
+        self::assertSame('completed', $this->fetchGame($gameId)['status'], 'sanity check: game 1 must have actually finished');
+        self::assertSame('deck_building', $this->fetchDraftMatch($draftMatchId)['status'], 'the match itself is not decided yet -- winsNeeded: 1 games still need 2 of them per draftGamesToWin()');
+
+        self::assertContains($gameId, array_column($this->games->listGamesForUser($human), 'id'), 'completed game 1 must stay in the main lobby while the Sealed Pool of the Day match is undecided');
+        self::assertNotContains($gameId, array_column($this->games->listPastGamesForUser($human), 'id'), 'and must NOT yet appear in Past games');
+
+        $nextGameStmt = $this->pdo->prepare("SELECT id FROM games WHERE draft_match_id = :match_id AND id != :game_id");
+        $nextGameStmt->execute(['match_id' => $draftMatchId, 'game_id' => $gameId]);
+        $game2Id = (int) $nextGameStmt->fetchColumn();
+        self::assertNotSame(0, $game2Id, 'game 2 of the match should already exist');
+        self::assertContains($game2Id, array_column($this->games->listGamesForUser($human), 'id'), 'game 2 (waiting on deck submission) must also be in the main lobby');
     }
 
     public function testSubmitDraftDeckRejectsExceedingTheMythicCapForSealedPoolOfTheDay(): void

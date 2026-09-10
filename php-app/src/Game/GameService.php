@@ -12377,17 +12377,27 @@ final class GameService
         // (last_move_at, falling back to started_at, then created_at for a
         // game nothing has happened in yet).
         //
-        // gp.resigned_at IS NULL excludes a game THIS caller has personally
-        // resigned from but that's still 'in_progress' for everyone else --
-        // only ever possible for 'standard' format's own 3-4 player
-        // "continue without them" resignation (resignGame()'s own
-        // skipTurnForResignedPlayer() path; every other format/player-count
-        // combination completes the whole game outright on resignation,
-        // already caught by the status check above). Once resigned, a
-        // player can never take another turn in that game (see
-        // advanceTurn()'s active-player filtering) or win it, so from
-        // their own perspective it's just as much history as a completed
-        // game -- listPastGamesForUser() picks it up via the same column.
+        // Reported live: "the completed game already got moved to the
+        // Past Games tab, even though the match is still in progress" --
+        // for a game the caller personally resigned from, this used to
+        // exclude it here UNCONDITIONALLY (gp.resigned_at IS NULL as its
+        // own top-level AND, regardless of the draft/game_match carve-outs
+        // just below), so a resigned game 1 of a still-undecided
+        // best-of-three match moved to Past games immediately even though
+        // the caller was still normally seated (no resignation of their
+        // own) in game 2, sitting right there in this same list. A
+        // resignation only ever completes THIS ONE game outright (or, for
+        // 'standard' format's own 3-4 player "continue without them" path
+        // -- resignGame()'s own skipTurnForResignedPlayer() -- leaves it
+        // 'in_progress' for everyone else); it says nothing about whether
+        // the caller can still act in a LATER game of the same match, so
+        // gp.resigned_at IS NULL now only gates the plain "still active"
+        // disjunct below, exactly like g.status NOT IN (...) already did,
+        // rather than blocking the draft/game_match carve-outs from ever
+        // applying to a resigned game at all. Once the whole match IS
+        // decided, a resigned game (like any other) correctly falls
+        // through to listPastGamesForUser() below, which mirrors this
+        // exact same change.
         //
         // The game_matches LEFT JOIN/OR-clause is issue #90's own
         // non-draft best-of-three match wrapper's exact analog of the
@@ -12401,9 +12411,8 @@ final class GameService
              LEFT JOIN draft_matches dm ON dm.id = g.draft_match_id
              LEFT JOIN game_matches gm ON gm.id = g.game_match_id
              WHERE gp.user_id = :user_id
-               AND gp.resigned_at IS NULL
                AND (
-                 g.status NOT IN ('completed', 'abandoned')
+                 (gp.resigned_at IS NULL AND g.status NOT IN ('completed', 'abandoned'))
                  OR (g.draft_match_id IS NOT NULL AND dm.status != 'completed')
                  OR (g.game_match_id IS NOT NULL AND gm.status != 'completed')
                )
@@ -12420,24 +12429,30 @@ final class GameService
 
     /**
      * The complement of listGamesForUser() above: every 'completed' or
-     * 'abandoned' game NOT still tied to an in-progress draft match (see
-     * that method's own docblock for exactly where the line falls, and
-     * why an 'abandoned' game never actually hits that carve-out in
+     * 'abandoned' game NOT still tied to an in-progress draft/game match
+     * (see that method's own docblock for exactly where the line falls,
+     * and why an 'abandoned' game never actually hits that carve-out in
      * practice), PLUS any game this caller has personally resigned from
-     * (gp.resigned_at IS NOT NULL) regardless of the game's own overall
-     * status -- the complement of listGamesForUser()'s own identical
-     * gp.resigned_at exclusion, for the one case (a 'standard' format 3-4
-     * player game the caller resigned from but that's still 'in_progress'
-     * for everyone else) where that status alone wouldn't already have
-     * routed it here. Sorted most-recently-completed first, the natural
-     * order for a "past games" archive (as opposed to listGamesForUser()'s
-     * own actionability-first ordering, which has no reason to apply once
-     * nothing here is actionable at all). An 'abandoned' game never gets
-     * its own completed_at set (only the draft_matches row it belonged to
-     * does -- see abandonDraftMatch()), and a resigned-but-still-
-     * 'in_progress' game never gets one at all until everyone else
-     * finishes it, so both naturally sort by last_move_at instead, same
-     * as they would anywhere else in the app.
+     * whose own match (if any) is ALSO already decided -- the complement
+     * of listGamesForUser()'s own identical treatment (see that method's
+     * own docblock for the live-reported bug this replaced: a resigned
+     * game used to land here unconditionally, even while a later game of
+     * the very same still-undecided match was sitting in the caller's
+     * main lobby). Still covers the one case status alone wouldn't --
+     * a 'standard' format 3-4 player game the caller resigned from but
+     * that's still 'in_progress' for everyone else -- exactly as before,
+     * just now equally subject to the match-undecided carve-out (moot in
+     * practice for that specific case, since a 3-4 player 'standard' game
+     * never gets a game_match_id at all -- see createGame()'s own
+     * $createGameMatch gate). Sorted most-recently-completed first, the
+     * natural order for a "past games" archive (as opposed to
+     * listGamesForUser()'s own actionability-first ordering, which has no
+     * reason to apply once nothing here is actionable at all). An
+     * 'abandoned' game never gets its own completed_at set (only the
+     * draft_matches row it belonged to does -- see abandonDraftMatch()),
+     * and a resigned-but-still-'in_progress' game never gets one at all
+     * until everyone else finishes it, so both naturally sort by
+     * last_move_at instead, same as they would anywhere else in the app.
      *
      * @return array<int, array{id:int,format:string,deck_type:string,status:string,wins_needed:int,created_at:string,started_at:?string,last_move_at:?string,completed_at:?string,players:array<int,array{user_id:int,username:string,seat_order:int}>,is_your_turn:bool,is_awaiting_your_response:bool,current_turn_username:?string,awaiting_response_usernames:array<int,string>,winner_usernames:array<int,string>,draft_match_id:?int,match_game_number:?int,draft_match:?array{status:string,your_wins:int,opponent_wins:int,games_to_win:int,winner_username:?string}}>
      */
@@ -12451,14 +12466,9 @@ final class GameService
              LEFT JOIN draft_matches dm ON dm.id = g.draft_match_id
              LEFT JOIN game_matches gm ON gm.id = g.game_match_id
              WHERE gp.user_id = :user_id
-               AND (
-                 gp.resigned_at IS NOT NULL
-                 OR (
-                   g.status IN ('completed', 'abandoned')
-                   AND (g.draft_match_id IS NULL OR dm.status = 'completed')
-                   AND (g.game_match_id IS NULL OR gm.status = 'completed')
-                 )
-               )
+               AND (gp.resigned_at IS NOT NULL OR g.status IN ('completed', 'abandoned'))
+               AND (g.draft_match_id IS NULL OR dm.status = 'completed')
+               AND (g.game_match_id IS NULL OR gm.status = 'completed')
              ORDER BY COALESCE(g.completed_at, g.last_move_at, g.started_at, g.created_at) DESC, g.id DESC"
         );
         $gameIdsStmt->execute(['user_id' => $userId]);
@@ -15627,6 +15637,33 @@ final class GameService
     }
 
     /**
+     * Reported live: with diagnostic_mode on, a long chain of Creativity
+     * copying an in-play Validation (each copy retriggers Validation's own
+     * "play another 0/1-value mood, get another extra play" reaction --
+     * confirmed as a legitimate, correctly-terminating combo, not an
+     * engine bug, by direct reproduction against the real engine) showed
+     * up in "Recent plays"/"View log" as a wall of bare, detail-free
+     * "BotSage played Creativity" lines with none of the usual "from
+     * hand"/"using an extra play from..."/grant wording -- indistinguishable
+     * from a genuinely stuck game, prompting a Resign that wasn't actually
+     * needed. Root cause: logHeuristicBotReasoning()/logTacticalBotReasoning()
+     * (see their own docblocks) log their own 'heuristic_bot_reasoning'/
+     * 'tactical_bot_reasoning' game_events row for EVERY action the bot
+     * even just *considers*, purely for the dedicated "Bot reasoning"
+     * dialog (tacticalBotReasoningSince()) -- these were never meant to
+     * be human-facing play-by-play, but neither fullEventLog() nor
+     * recentEvents() excluded them, so each one fell through
+     * describeEvent()'s unhandled-event-type default arm (the same bug
+     * class its own docblock already flags for closed_team_leader_decided/
+     * chaos_draft_effect_attached) and rendered as a misleading
+     * "{actor} played {cardName}" with every suffix/detail blank. Grouped
+     * here with round_grants_computed's own pre-existing exclusion, for
+     * the same reason: internal bookkeeping, not a play a human should
+     * ever see in these two feeds.
+     */
+    private const INTERNAL_ONLY_EVENT_TYPES_SQL = "'round_grants_computed', 'heuristic_bot_reasoning', 'tactical_bot_reasoning'";
+
+    /**
      * The entire game_events log for $gameId, oldest first (issue #98) --
      * unlike recentEvents() below, this is deliberately unbounded and
      * unpaginated: a typical game's event count (rarely more than a few
@@ -15686,7 +15723,7 @@ final class GameService
             "SELECT e.id, e.event_type, e.acting_game_player_id, e.card_id, e.details, e.created_at, r.round_number
              FROM game_events e
              LEFT JOIN game_rounds r ON r.id = e.game_round_id
-             WHERE e.game_id = :game_id AND e.event_type != 'round_grants_computed' ORDER BY e.id ASC"
+             WHERE e.game_id = :game_id AND e.event_type NOT IN (" . self::INTERNAL_ONLY_EVENT_TYPES_SQL . ') ORDER BY e.id ASC'
         );
         $stmt->execute(['game_id' => $gameId]);
 
@@ -16219,7 +16256,7 @@ final class GameService
     private function recentEvents(int $gameId, array $players, int $limit = 15, ?int $upToEventId = null): array
     {
         $sql = "SELECT id, event_type, acting_game_player_id, card_id, details, created_at
-                 FROM game_events WHERE game_id = :game_id AND event_type != 'round_grants_computed'";
+                 FROM game_events WHERE game_id = :game_id AND event_type NOT IN (" . self::INTERNAL_ONLY_EVENT_TYPES_SQL . ')';
         if ($upToEventId !== null) {
             $sql .= ' AND id <= :up_to_event_id';
         }

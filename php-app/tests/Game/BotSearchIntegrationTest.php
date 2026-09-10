@@ -697,6 +697,40 @@ final class BotSearchIntegrationTest extends TestCase
     }
 
     /**
+     * Reported live: with diagnostic mode on, a long chain of Creativity
+     * repeatedly copying an in-play Validation (each copy retriggers
+     * Validation's own "play another 0/1-value mood, get another extra
+     * play" reaction -- a legitimate, correctly-terminating combo, not an
+     * engine bug) showed up in "View log"/"Recent plays" as a wall of
+     * bare, detail-free "BotSage played Creativity" lines with none of
+     * the usual "from hand"/grant wording, indistinguishable from a
+     * genuinely stuck game and prompting an unneeded Resign. Root cause:
+     * 'heuristic_bot_reasoning' (this test's own event, logged for EVERY
+     * action the bot even just considers, purely for the dedicated "Bot
+     * reasoning" dialog) was never excluded from fullEventLog()/
+     * recentEvents(), so it fell through describeEvent()'s unhandled-
+     * event-type default arm -- same bug class as closed_team_leader_decided/
+     * chaos_draft_effect_attached before it, per that arm's own docblock.
+     * Mirrors round_grants_computed's own pre-existing exclusion from
+     * both feeds (GameService::INTERNAL_ONLY_EVENT_TYPES_SQL).
+     */
+    public function testFullEventLogAndRecentEventsExcludeHeuristicBotReasoning(): void
+    {
+        ['gameId' => $gameId, 'botPlayerId' => $botPlayerId] = $this->createRawHeuristicBotGame([55], diagnosticMode: true);
+
+        $eventTypes = array_column($this->games->fullEventLog($gameId), 'event_type');
+        self::assertNotContains('heuristic_bot_reasoning', $eventTypes, 'the human-facing full log must never leak diagnostic reasoning bookkeeping');
+
+        $humanUserId = (int) $this->pdo
+            ->query("SELECT user_id FROM game_players WHERE game_id = {$gameId} AND id != {$botPlayerId}")
+            ->fetchColumn();
+        $recentEvents = $this->games->getState($gameId, $humanUserId)['recent_events'];
+
+        self::assertCount(1, $recentEvents, '"Recent plays" must show exactly the one real play, not a duplicate bare reasoning entry alongside it');
+        self::assertStringContainsString('from hand', $recentEvents[0]['description'], 'the surviving entry must be the real, fully-described play, not the bare reasoning one');
+    }
+
+    /**
      * Reported live: a real heuristic-fallback play (not a pass) read as
      * "passed" in the dialog -- exactly this instance-id-vs-catalog-id
      * mismatch (see testTacticalBotReasoningSinceReturnsCatalogIdsNotInstanceIds()'s

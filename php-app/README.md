@@ -4719,6 +4719,30 @@ naturally-completed game with no sibling in progress. It has no
 `completed_at` of its own (only the `draft_matches` row does), so it sorts
 by `last_move_at` in `GET /games/past` instead.
 
+**A resigned game used to skip this whole carve-out** (reported live:
+"the completed game already got moved to the Past Games tab, even though
+the match is still in progress" -- from a Sealed Pool of the Day
+best-of-three match against a bot where the maintainer themselves
+resigned game 1). `gp.resigned_at IS NULL` used to be its own unconditional
+top-level `AND` in `listGamesForUser()`'s own query -- checked
+*regardless* of the draft/game_match carve-outs, rather than only gating
+the plain "still active" disjunct the way `g.status NOT IN (...)` already
+did. A resignation only ever completes THAT ONE game outright (or, for
+`'standard'` format's own 3-4 player "continue without them" path,
+leaves it `'in_progress'` for everyone else) -- it says nothing about
+whether the resigner can still act in a LATER game of the same match, so
+game 1 of a still-undecided match moved to the resigner's OWN Past games
+immediately even though they were perfectly normally seated (no
+resignation of their own) in game 2, sitting right there in what should
+have been their main lobby. `gp.resigned_at IS NULL` now only gates the
+"plain still active" disjunct, exactly parallel to `g.status NOT IN
+(...)`, so a resigned game becomes subject to the exact same
+match-undecided carve-out as a naturally-completed one; `listPastGamesForUser()`'s
+own complement changed the identical way. Checked from BOTH players' own
+perspectives now, not just the winner's -- the two existing tests only
+ever checked the non-resigner's view, which is exactly how this slipped
+through originally.
+
 ### Cleanup cron (issue #84)
 
 Past games alone doesn't actually delete anything -- an old game just
@@ -7694,6 +7718,70 @@ since it already holds that dependency):
   lost for the rest of the round unless something specific makes up for
   it). Every other in-play mood is left untouched for now; no other
   guaranteed-free Thrill combo is confirmed yet.
+
+  **Panic had the identical gap** (reported live, from a game where
+  Validation was already in play: "when the bot played Panic, it should
+  have targeted its own Compulsion or Suspicion so it could re-play it
+  to take another card from my hand"). Panic had ZERO bot logic of any
+  kind -- not in `BESPOKE_CHOICE_EFFECT_KEYS`, not in
+  `ALWAYS_FILLED_OPTIONAL_FIELDS` -- so its own `target_mood_ids` (also
+  `multi: true`, `required: false`, up to 2, one per distinct owner) was
+  always left empty, exactly like Thrill's before its own fix above.
+  `panicTargetMoodIds()` (added to `BESPOKE_CHOICE_EFFECT_KEYS`) is
+  scoped just as narrowly: Panic's own printed value is a fixed 1 (id
+  48, base value 1, no alt value), so playing it AT ALL is guaranteed to
+  satisfy `ValidationEffect::reactToAnotherPlay()`'s own "0 or 1" check
+  -- an in-play Validation the bot still owns therefore guarantees an
+  extra play lands the instant Panic resolves, regardless of anything
+  else on the board (exactly what happened in the reported game:
+  Validation had already granted the play Panic itself was cast with,
+  and was about to grant another the moment Panic finished). That
+  guaranteed extra play is what makes bouncing the bot's own
+  highest-value "steal a card from an opponent's hand" mood (Compulsion
+  or Suspicion, both already in `EARLY_PRIORITY_EFFECT_KEYS`'s "steals
+  from an opponent's hand" pair) a strict gain: it comes right back into
+  play via that guaranteed replay (auto-targeted correctly by the
+  generic resolver/`ALWAYS_FILLED_OPTIONAL_FIELDS`, the same as any
+  other Compulsion/Suspicion play), stealing another card in the
+  process. Without a confirmed extra play waiting, this stays silent
+  (no target at all), same reasoning as Thrill above -- and only ever
+  fills one of Panic's own two target slots; there's no confirmed-safe
+  policy yet for using the other on an opponent's own mood.
+
+  **A second, unrelated bug surfaced investigating a report from the
+  same game log**: "it seemed to get into a loop with Creativity at the
+  end, and I had to Resign from the game to break the loop." Direct
+  reproduction against the real engine (a bot with an in-play Validation
+  and several Creativity cards in hand) showed the underlying combo --
+  Creativity repeatedly copying the in-play Validation, each copy
+  delegating to `ValidationEffect::afterPlaying()`'s own unconditional
+  extra-play grant AND retriggering every other in-play
+  Validation-effective card's own `reactToAnotherPlay()` (including
+  every earlier Creativity-as-Validation copy, which is why the grant
+  count climbs with each successive copy) -- is a legitimate,
+  correctly-terminating combo: it's strictly bounded by how many
+  physical low-value cards the bot actually holds, and it burns through
+  them and then passes, same as any other turn. The real bug was in how
+  it got LOGGED: `logHeuristicBotReasoning()`/`logTacticalBotReasoning()`
+  (diagnostic mode, see "Heuristic bot reasoning" below) record their
+  own `'heuristic_bot_reasoning'`/`'tactical_bot_reasoning'` `game_events`
+  row for every action the bot even just *considers*, purely for the
+  dedicated "Bot reasoning" dialog -- but neither `fullEventLog()`
+  ("View log") nor `recentEvents()` ("Recent plays") excluded them, so
+  each one fell through `describeEvent()`'s unhandled-event-type default
+  arm (the identical bug class its own docblock already flags for
+  `closed_team_leader_decided`/`chaos_draft_effect_attached` -- a case
+  simply never added, silently falling through to the generic
+  `"{actor} played {card}"` template) and rendered as a misleading,
+  completely detail-free `"BotSage played Creativity"` line -- no "from
+  hand", no grant wording, nothing. A long combo like this one showed up
+  as a wall of these contentless lines, indistinguishable from a
+  genuinely stuck game, and prompted an unnecessary Resign. Both event
+  types are now excluded from both feeds via a new
+  `INTERNAL_ONLY_EVENT_TYPES_SQL` constant, mirroring
+  `round_grants_computed`'s own pre-existing exclusion for the same
+  reason: internal bookkeeping that was never meant to be human-facing
+  play-by-play.
 
   **Anger** (confirmed by the maintainer) gets its own targeting
   exception too, via `angerTargetMoodIds()` -- `buildChoicesForCard()`
