@@ -10573,8 +10573,10 @@ final class GameService
         }
 
         $resolvedOrders = $this->resolvedAfterScoringOrders($roundId);
+        $beforeAfterScoringHooks = $this->inPlayOwnershipSignature($state);
         $this->applyAfterScoringHooks($state, [$winnerId], $turnOrder, $resolvedOrders);
         $this->applyChaosAfterScoringHooks($state, $scores, [$winnerId], $this->scorer->hurtFeelings($activeScores, $turnOrder));
+        $afterScoringHooksChangedTheBoard = $beforeAfterScoringHooks !== $this->inPlayOwnershipSignature($state);
 
         // Hurt Feelings only exists in games of 3 or more (active) players.
         $hurtFeelingsHolder = count($turnOrder) >= 3 ? $this->scorer->hurtFeelings($activeScores, $turnOrder) : null;
@@ -10642,7 +10644,13 @@ final class GameService
         // "your turn" moment, and was missing its own notification entirely
         // until now -- the exact gap that made round-to-round handoffs go
         // silent even though same-round turn advances already worked.
-        $this->notifyItsYourTurn($newRoundId, $nextFirstPlayer);
+        // $afterScoringHooksChangedTheBoard (see inPlayOwnershipSignature()'s
+        // own docblock) skips the pause_before_own_turn gate specifically
+        // for THIS round-transition when it's a no-op -- an ordinary
+        // mid-round handoff (updateRoundTurnState() below) never passes
+        // this param at all, always pausing regardless, since there's no
+        // "was there anything to review" question for a plain pass-the-turn.
+        $this->notifyItsYourTurn($newRoundId, $nextFirstPlayer, $afterScoringHooksChangedTheBoard);
 
         return ['round_scored' => true, 'game_completed' => false];
     }
@@ -11305,6 +11313,43 @@ final class GameService
             }
             $this->chaosRegistry->for($chaosRow['effectKey'])->afterScoring($state, $mood->cardId, $mood->ownerId, $scores, $winningGamePlayerIds, $lowestScorePlayerId);
         }
+    }
+
+    /**
+     * A compact "did applyAfterScoringHooks()/applyChaosAfterScoringHooks()
+     * actually change anything visible" signature -- every mood cardId
+     * still in play mapped to its own owner, sorted by cardId so the
+     * exact same board always compares equal regardless of internal
+     * iteration order. Reported live: "Pause at the start of your turn"'s
+     * own frozen pre-after-scoring board (see that section's own
+     * docblock) isn't super useful when it's pixel-identical to the live
+     * board a click away -- Recklessness/Bashfulness/Gluttony/Insecurity's
+     * self-tags (discard/return-to-hand/bottom-and-draw) and
+     * "returnsToOwnerAfterScoring" foreign tags are the only ways
+     * applyAfterScoringHooks() ever mutates the board, and every one of
+     * them either removes a card from play or reassigns an in-play
+     * card's own owner -- both fully captured by this one cardId=>ownerId
+     * map. (A Chaos Draft effect that only flips a suppression flag
+     * without moving or reassigning any card -- rather than discarding
+     * or stealing one -- wouldn't register here; deliberately not chased
+     * further, since the reported case, and the overwhelming majority of
+     * real after-scoring effects, are exactly the move/reassign shape
+     * this already covers.) Compared before/after both hook calls in
+     * finishScoringAndAdvance() to decide whether the new round's first
+     * turn is even worth pausing on for a player who opted into
+     * pause_before_own_turn.
+     *
+     * @return array<int, int> cardId => ownerId, sorted by cardId
+     */
+    private function inPlayOwnershipSignature(BoardState $state): array
+    {
+        $signature = [];
+        foreach ($state->moodsInPlay() as $mood) {
+            $signature[$mood->cardId] = $mood->ownerId;
+        }
+        ksort($signature);
+
+        return $signature;
     }
 
     /**
@@ -17730,8 +17775,19 @@ final class GameService
      * pause_before_own_turn set (no UI a bot could use to turn it on),
      * so this never needs to special-case a bot seat the way the
      * automated-turn-advancing loop elsewhere in this class does.
+     *
+     * $worthPausingFor (reported live: "not super useful when the board
+     * State snapshot is identical to the actual board state") lets a
+     * round-transition call site opt OUT of the pause when
+     * inPlayOwnershipSignature()'s own before/after comparison found
+     * nothing for the frozen pre-after-scoring snapshot to actually show
+     * -- see finishScoringAndAdvance()'s own call site. Defaults true for
+     * every other call site (an ordinary mid-round pass-the-turn, or a
+     * fresh round with no scoring-effects question to even ask), which
+     * is exactly the original, unconditional "opted in means opted in"
+     * behavior this parameter's absence used to be.
      */
-    private function notifyItsYourTurn(int $roundId, int $gamePlayerId): void
+    private function notifyItsYourTurn(int $roundId, int $gamePlayerId, bool $worthPausingFor = true): void
     {
         $stmt = Connection::get()->prepare(
             'SELECT gr.game_id, gp.user_id, u.pause_before_own_turn
@@ -17746,7 +17802,7 @@ final class GameService
             return;
         }
 
-        if ((bool) $row['pause_before_own_turn']) {
+        if ((bool) $row['pause_before_own_turn'] && $worthPausingFor) {
             Connection::get()
                 ->prepare('UPDATE game_rounds SET turn_pending_acknowledgment = 1 WHERE id = :round_id')
                 ->execute(['round_id' => $roundId]);

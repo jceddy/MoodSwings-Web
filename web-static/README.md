@@ -1135,6 +1135,18 @@ the log -- changes while paused; only the ACTIONABLE affordances are
 held back, which is the entire point (they can still see everything
 that just happened, just can't act on it yet).
 
+**No frontend change needed for the "skip the pause when nothing
+after-scoring changed" follow-up** (reported live: "not super useful when
+the board State snapshot is identical to the actual board state" -- see
+"Pause at the start of your turn" in `php-app/README.md` for
+`inPlayOwnershipSignature()`'s own before/after comparison). The banner
+above is driven purely by `state.you.turn_pending_acknowledgment`; when
+the server decides a round transition isn't worth pausing for, it simply
+never sets that flag in the first place, so `renderBoard()`'s own existing
+`=== true` check already keeps the banner hidden -- the winner's very
+next poll just shows the live board with Pass/hand cards already
+clickable, no `#advance-turn-button` click required.
+
 **Onlookers get a text hint, not a banner of their own**: a
 spectator's/other player's own `#board-round-status` line reads
 `"Round N — <name>'s turn (reviewing)"` instead of the plain `"...'s
