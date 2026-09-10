@@ -2940,9 +2940,9 @@
     // a per-seat one, so a bot needs nothing extra to "have" one.
     // 'custom_duel' is its own separate special case (still not in this
     // list), since it's a genuinely per-seat decklist --
-    // #new-game-bot-decklist-fields below lets the creator supply the
-    // bot's own decklist directly for that one, rather than needing the
-    // bot to submit one itself; it can never combine with 'team'/
+    // #new-game-bot-decklist-fields below lets the creator supply each
+    // seated bot's own decklist directly for that one, rather than
+    // needing the bot to submit one itself; it can never combine with 'team'/
     // 'closed_team' anyway (Duel-only). Team Play (issue #360): up to all
     // 3 opponent seats can be bots, same as every other supported format
     // -- opponentSelectionMax()'s own cap and updateTeamFields()'s own
@@ -2986,20 +2986,125 @@
         return Array.from(opponentCheckboxes.querySelectorAll('input[data-is-bot][data-uses-tactical-ai]')).some((box) => box.checked);
     }
 
-    // #new-game-bot-decklist-fields (the bot's own decklist, since it can
-    // never submit one itself the way its human opponent does after the
-    // game is created) only makes sense once BOTH a bot is actually
-    // checked AND deck_type is 'custom_duel' -- unlike every other
-    // deck-type-driven field, this can't be computed from deckType alone.
-    // Called from updateDeckTypeDescription() (deck-type changes),
+    // #new-game-bot-decklist-fields (each seated bot's own decklist, since
+    // it can never submit one itself the way its human opponent does
+    // after the game is created) only makes sense once BOTH a bot is
+    // actually checked AND deck_type is 'custom_duel' -- unlike every
+    // other deck-type-driven field, this can't be computed from deckType
+    // alone. Renders one field-group per currently-checked bot (issue
+    // #505 follow-up: custom_duel now supports seating 2+ bots, each
+    // needing its own decklist), keyed by that bot's own user id
+    // (group.dataset.botUserId) so collectBotDecklists() below can read
+    // them back the same way. Rebuilt from scratch on every call rather
+    // than diffed/patched -- simpler, and cheap since there are at most
+    // MAX_PLAYERS - 1 bot seats -- but preserves any already-entered
+    // saved-deck choice/pasted text for a bot that's still checked, so
+    // toggling an unrelated bot's checkbox doesn't wipe out what was
+    // already filled in for this one. Called from
+    // updateDeckTypeDescription() (deck-type changes),
     // updateBotCheckboxAvailability() (format changes, which can hide/
     // uncheck a bot outright), and every bot checkbox's own 'change'.
-    function updateBotDecklistFieldsVisibility() {
+    async function updateBotDecklistFieldsVisibility() {
         const deckType = document.getElementById('new-game-deck-type').value;
-        const show = deckType === 'custom_duel' && anyBotChecked();
+        const checkedBots = Array.from(opponentCheckboxes.querySelectorAll('input[data-is-bot]:checked'));
+        const show = deckType === 'custom_duel' && checkedBots.length > 0;
         document.getElementById('new-game-bot-decklist-fields').hidden = !show;
-        document.getElementById('new-game-bot-decklist-paste-fields').hidden =
-            !show || document.getElementById('new-game-bot-saved-decklist').value !== '';
+        if (!show) {
+            return;
+        }
+
+        const container = document.getElementById('new-game-bot-decklist-groups');
+        const previousValues = {};
+        for (const group of container.querySelectorAll('[data-bot-user-id]')) {
+            previousValues[group.dataset.botUserId] = {
+                savedDecklistId: group.querySelector('.new-game-bot-decklist-saved').value,
+                decklistText: group.querySelector('.new-game-bot-decklist-text').value,
+            };
+        }
+
+        container.innerHTML = '';
+        for (const checkbox of checkedBots) {
+            const userId = checkbox.value;
+            const botUsername = checkbox.closest('label').textContent.trim();
+
+            const group = document.createElement('div');
+            group.className = 'new-game-bot-decklist-group';
+            group.dataset.botUserId = userId;
+
+            const heading = document.createElement('p');
+            heading.textContent = botUsername + "'s deck:";
+            group.appendChild(heading);
+
+            const savedLabel = document.createElement('label');
+            savedLabel.append('Use a saved deck ');
+            const savedSelect = document.createElement('select');
+            savedSelect.className = 'new-game-bot-decklist-saved';
+            savedLabel.appendChild(savedSelect);
+            group.appendChild(savedLabel);
+
+            const pasteFields = document.createElement('div');
+            pasteFields.className = 'new-game-bot-decklist-paste-fields';
+
+            const fileLabel = document.createElement('label');
+            fileLabel.append('Upload a decklist file ');
+            const fileInput = document.createElement('input');
+            fileInput.type = 'file';
+            fileInput.accept = '.txt,text/plain';
+            fileLabel.appendChild(fileInput);
+            pasteFields.appendChild(fileLabel);
+
+            const textLabel = document.createElement('label');
+            textLabel.append("Or paste the bot's decklist ");
+            const textArea = document.createElement('textarea');
+            textArea.className = 'new-game-bot-decklist-text decklist-textarea';
+            textArea.rows = 10;
+            textLabel.appendChild(textArea);
+            pasteFields.appendChild(textLabel);
+
+            group.appendChild(pasteFields);
+            container.appendChild(group);
+
+            // Same pattern as #new-game-decklist-file above: reading an
+            // uploaded file into the textarea lets both input methods
+            // share the same collectBotDecklists() read below.
+            fileInput.addEventListener('change', async (event) => {
+                const file = event.target.files[0];
+                if (!file) {
+                    return;
+                }
+                textArea.value = await file.text();
+            });
+            savedSelect.addEventListener('change', () => {
+                pasteFields.hidden = savedSelect.value !== '';
+            });
+
+            await populateSavedDecklistSelect(savedSelect);
+            const previous = previousValues[userId];
+            if (previous) {
+                savedSelect.value = previous.savedDecklistId;
+                textArea.value = previous.decklistText;
+            }
+            pasteFields.hidden = savedSelect.value !== '';
+        }
+    }
+
+    // Reads back what updateBotDecklistFieldsVisibility() above rendered
+    // -- one entry per currently-checked bot, keyed by that bot's own
+    // user id, each following the same "either decklist_text or
+    // saved_decklist_id" shape GameService::createGame()'s own
+    // $botDecklists expects. Only meaningful for deck_type 'custom_duel'
+    // with 1+ bots checked; the New Game form's own submit handler is the
+    // only caller.
+    function collectBotDecklists() {
+        const decklists = {};
+        for (const group of document.getElementById('new-game-bot-decklist-groups').querySelectorAll('[data-bot-user-id]')) {
+            const savedDecklistId = Number(group.querySelector('.new-game-bot-decklist-saved').value) || undefined;
+            decklists[group.dataset.botUserId] = {
+                saved_decklist_id: savedDecklistId,
+                decklist_text: savedDecklistId === undefined ? group.querySelector('.new-game-bot-decklist-text').value : undefined,
+            };
+        }
+        return decklists;
     }
 
     // Issue #417's own "let the bot go first" item -- only meaningful
@@ -3092,44 +3197,9 @@
         }
 
         updateOpponentSelectionLimit();
-        updateBotSelectionLimit();
         updateBotDecklistFieldsVisibility();
         updateBotGoesFirstFieldVisibility();
         updateDiagnosticModeFieldVisibility();
-    }
-
-    // A custom_duel game can only ever seat one practice bot (issue #505,
-    // constructed Duel now supporting 3-4 players) -- $botDecklistText/
-    // $botSavedDecklistId and #new-game-bot-decklist-fields (below) only
-    // ever supply a SINGLE bot's own decklist, with nowhere to put a
-    // second one, so GameService::createGame() itself now rejects 2+
-    // (see botUserCountAmong()'s own docblock). Mirrors
-    // updateOpponentSelectionLimit()'s own "uncheck/disable past the cap"
-    // shape so a player can't even reach that server error: unchecking
-    // every bot box past the first already-checked one, then disabling
-    // every unchecked one once the cap is hit. Every other deck_type
-    // needs no such cap (deckCardIdsFor() builds each bot's own seat
-    // automatically), so this only ever restricts anything for
-    // 'custom_duel'.
-    function updateBotSelectionLimit() {
-        const deckType = document.getElementById('new-game-deck-type').value;
-        const maxBots = deckType === 'custom_duel' ? 1 : Infinity;
-        const boxes = opponentCheckboxes.querySelectorAll('input[data-is-bot]');
-
-        let checkedCount = 0;
-        for (const box of boxes) {
-            if (box.checked) {
-                checkedCount += 1;
-                if (checkedCount > maxBots) {
-                    box.checked = false;
-                    checkedCount -= 1;
-                }
-            }
-        }
-
-        for (const box of boxes) {
-            box.disabled = checkedCount >= maxBots && !box.checked;
-        }
     }
 
     function updateOpponentSelectionLimit() {
@@ -3222,7 +3292,6 @@
     document.getElementById('new-game-deck-type').addEventListener('change', updateBotCheckboxAvailability);
     document.getElementById('new-game-deck-type').addEventListener('change', updateBestOfThreeFieldVisibility);
     document.getElementById('new-game-saved-decklist').addEventListener('change', updateDeckTypeDescription);
-    document.getElementById('new-game-bot-saved-decklist').addEventListener('change', updateBotDecklistFieldsVisibility);
     document.getElementById('new-game-duel-rules-preset').addEventListener('change', updateDuelRulesPresetVisibility);
     // Power Duel sideboarding's own checkbox depends on both the current
     // preset AND whether "Best of three" is itself checked -- see
@@ -3300,16 +3369,6 @@
         }
 
         document.getElementById('new-game-decklist-text').value = await file.text();
-    });
-
-    // Same pattern for the practice bot's own decklist file (custom_duel).
-    document.getElementById('new-game-bot-decklist-file').addEventListener('change', async (event) => {
-        const file = event.target.files[0];
-        if (!file) {
-            return;
-        }
-
-        document.getElementById('new-game-bot-decklist-text').value = await file.text();
     });
 
     // Reads the four rarity rows' own optional "max total"/"max
@@ -3446,7 +3505,6 @@
                 }
                 checkbox.checked = !!prefill && prefill.opponentUserIds.includes(bot.user_id);
                 checkbox.addEventListener('change', updateOpponentSelectionLimit);
-                checkbox.addEventListener('change', updateBotSelectionLimit);
                 checkbox.addEventListener('change', updateTeamFields);
                 checkbox.addEventListener('change', updateBotDecklistFieldsVisibility);
                 checkbox.addEventListener('change', updateBotGoesFirstFieldVisibility);
@@ -3461,7 +3519,6 @@
         updateTeamFields();
         updateBestOfThreeFieldVisibility();
         await populateSavedDecklistSelect(document.getElementById('new-game-saved-decklist'));
-        await populateSavedDecklistSelect(document.getElementById('new-game-bot-saved-decklist'));
         // Issue #290's own three draft-type pickers, sharing the exact
         // same decks (own + friends') as the 'custom' deck_type's own
         // select above -- just a different placeholder, since there's no
@@ -3528,19 +3585,31 @@
                     buildDecklistCardsText({ cards: prefill.customDecklistCards, sideboard_cards: [] });
             }
 
-            // The bot checkbox itself is already checked above (part of
-            // opponentUserIds), which is what
-            // updateBotDecklistFieldsVisibility() (already re-run by the
-            // deck-type 'change' dispatch above, via
-            // updateBotCheckboxAvailability()) needs to have shown this
-            // field at all -- reconstructed from
-            // players[].bot_decklist_cards (buildGameState()'s own
-            // creator-only field, see its docblock) via the same
-            // buildDecklistCardsText() the Decks dialog's own Edit/
-            // Download flows already use for a saved decklist's cards.
-            if (prefill.botDecklistCards) {
-                document.getElementById('new-game-bot-decklist-text').value =
-                    buildDecklistCardsText({ cards: prefill.botDecklistCards, sideboard_cards: [] });
+            // Every bot checkbox is already checked above (part of
+            // opponentUserIds); this fills in each one's own field-group
+            // (rendered fresh here, since the deck-type 'change' dispatch
+            // above already ran updateBotDecklistFieldsVisibility() once
+            // via updateBotCheckboxAvailability() -- but asynchronously,
+            // so awaiting it again here is the only way to know its own
+            // groups actually exist before writing into them) --
+            // reconstructed from players[].bot_decklist_cards
+            // (buildGameState()'s own creator-only field, see its
+            // docblock), keyed by each bot's own user id the same way
+            // buildRematchPrefill() built botDecklistCardsByUserId, via
+            // the same buildDecklistCardsText() the Decks dialog's own
+            // Edit/Download flows already use for a saved decklist's
+            // cards.
+            if (prefill.botDecklistCardsByUserId) {
+                await updateBotDecklistFieldsVisibility();
+                for (const [userId, cards] of Object.entries(prefill.botDecklistCardsByUserId)) {
+                    const group = document.querySelector(
+                        `#new-game-bot-decklist-groups [data-bot-user-id="${userId}"]`
+                    );
+                    if (group) {
+                        group.querySelector('.new-game-bot-decklist-text').value =
+                            buildDecklistCardsText({ cards, sideboard_cards: [] });
+                    }
+                }
             }
         }
 
@@ -3906,16 +3975,13 @@
             : deckType === 'rotisserie_draft' && rotisserieDraftPoolSource === 'saved_deck' ? Number(document.getElementById('new-game-rotisserie-draft-saved-decklist').value) || undefined
             : undefined;
         const defaultSelectionsMode = document.getElementById('new-game-default-selections').checked;
-        // Only meaningful for deck_type 'custom_duel' with a bot checked --
-        // see updateBotDecklistFieldsVisibility() for when these fields are
-        // actually shown to the creator.
+        // Only meaningful for deck_type 'custom_duel' with 1+ bots checked
+        // -- one entry per checked bot, keyed by that bot's own user id --
+        // see updateBotDecklistFieldsVisibility()/collectBotDecklists()
+        // for when/how these fields are actually shown to and read from
+        // the creator.
         const botCheckedForCustomDuel = deckType === 'custom_duel' && anyBotChecked();
-        const botSavedDecklistId = botCheckedForCustomDuel
-            ? Number(document.getElementById('new-game-bot-saved-decklist').value) || undefined
-            : undefined;
-        const botDecklistText = botCheckedForCustomDuel && botSavedDecklistId === undefined
-            ? document.getElementById('new-game-bot-decklist-text').value
-            : undefined;
+        const botDecklists = botCheckedForCustomDuel ? collectBotDecklists() : undefined;
         // Only meaningful for a non-team format with a bot checked -- see
         // updateBotGoesFirstFieldVisibility() for when this field is
         // actually shown to the creator; #new-game-bot-goes-first is
@@ -4005,8 +4071,8 @@
             gridDraftCustomPoolText,
             savedDecklistId,
             defaultSelectionsMode,
-            botDecklistText,
-            botSavedDecklistId,
+            undefined,
+            undefined,
             randomTeams,
             rotisserieDraftPoolSource,
             rotisserieDraftCustomPoolText,
@@ -4017,6 +4083,7 @@
             bestOfThree,
             allowSideboarding,
             diagnosticMode,
+            botDecklists,
         );
 
         if (!ok) {
@@ -6985,10 +7052,12 @@
     // deck_type/default_selections_mode/duel_deck_rules already exposed
     // for any viewer, the creator's own teammate (team/closed_team,
     // derived from matching team_id -- there's no separate "who's your
-    // partner" field to read), a bot opponent's own previous custom_duel
-    // decklist (players[].bot_decklist_cards, creator-only -- see
-    // buildGameState()'s own docblock for why it's not just
-    // custom_deck_card_ids exposed raw), and the creator's own previous
+    // partner" field to read), every bot opponent's own previous
+    // custom_duel decklist (players[].bot_decklist_cards, creator-only --
+    // see buildGameState()'s own docblock for why it's not just
+    // custom_deck_card_ids exposed raw), keyed by each bot's own user id
+    // (issue #505 follow-up: custom_duel now supports seating 2+ bots,
+    // each with its own decklist), and the creator's own previous
     // deck_type 'custom' decklist (game.custom_decklist_cards, the same
     // creator-only reconstruction idea, one issue #398 follow-up wider).
     // Still deliberately narrow beyond that -- draft pool source choices,
@@ -7002,7 +7071,7 @@
         const opponents = state.players.filter((p) => p.user_id !== state.game.created_by_user_id);
         const you = state.players.find((p) => p.user_id === state.game.created_by_user_id);
         const partner = you && you.team_id !== null ? opponents.find((p) => p.team_id === you.team_id) : null;
-        const botOpponent = opponents.find((p) => p.bot_decklist_cards);
+        const botOpponents = opponents.filter((p) => p.bot_decklist_cards);
 
         return {
             format: state.game.format,
@@ -7011,7 +7080,7 @@
             opponentUserIds: opponents.map((p) => p.user_id),
             partnerUserId: partner ? partner.user_id : null,
             duelDeckRules: state.game.duel_deck_rules,
-            botDecklistCards: botOpponent ? botOpponent.bot_decklist_cards : null,
+            botDecklistCardsByUserId: Object.fromEntries(botOpponents.map((p) => [p.user_id, p.bot_decklist_cards])),
             customDecklistCards: state.game.custom_decklist_cards,
         };
     }

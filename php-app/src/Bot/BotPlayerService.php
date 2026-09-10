@@ -1914,12 +1914,18 @@ final class BotPlayerService
 
     /**
      * How many MORE cards a seat neighbor needs over the bot's own
-     * current hand size before 'rotate' toward them is worth it --
-     * below this, giving away the bot's own whole hand (rotate moves
-     * EVERY seated player's hand, not just a private trade with one
-     * opponent -- see RationalizationEffect's own docblock) isn't
-     * clearly a net gain once the bot's own cards are considered lost
-     * too.
+     * REMAINING hand size (after playing Rationalization -- it's already
+     * out of hand and sitting in play by the time 'rotate' actually
+     * exchanges hands, see rationalizationStealDirection()'s own
+     * docblock for the "reported live" bug this fixed) before 'rotate'
+     * toward them is worth it -- below this, giving away the bot's own
+     * whole remaining hand (rotate moves EVERY seated player's hand, not
+     * just a private trade with one opponent -- see RationalizationEffect's
+     * own docblock) isn't clearly a net gain once the bot's own cards are
+     * considered lost too. Skipped entirely (treated as 0) once the
+     * REMAINING hand is itself empty -- see rationalizationStealDirection()'s
+     * own docblock for why there's nothing left to weigh against in that
+     * case.
      */
     private const RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE = 3;
 
@@ -1978,7 +1984,7 @@ final class BotPlayerService
      */
     private function rationalizationChoices(BoardState $state, int $cardId, int $botGamePlayerId): array
     {
-        $direction = $this->rationalizationStealDirection($state, $botGamePlayerId);
+        $direction = $this->rationalizationStealDirection($state, $cardId, $botGamePlayerId);
         if ($direction !== null) {
             return ['mode' => 'rotate', 'direction' => $direction];
         }
@@ -2015,14 +2021,46 @@ final class BotPlayerService
      * makes THAT neighbor's own 'left' pass land on the bot, and vice
      * versa). Returns whichever of the two qualifies (at least
      * RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE more cards than the
-     * bot's own current hand) and holds the larger hand, if both do; null
-     * if neither seat neighbor currently qualifies (a heads-up duel has
-     * only one "neighbor" either direction resolves to the same single
-     * opponent, so both checks simply agree there).
+     * bot's own REMAINING hand, see $cardId below) and holds the larger
+     * hand, if both do; null if neither seat neighbor currently qualifies
+     * (a heads-up duel has only one "neighbor" either direction resolves
+     * to the same single opponent, so both checks simply agree there).
+     *
+     * @param int $cardId Rationalization's own card id, EXCLUDED from the
+     *        bot's own hand-size count the same way rationalizationLowValueHand()
+     *        already excludes it -- by the time 'rotate' actually swaps
+     *        hands, Rationalization itself is no longer in the bot's hand
+     *        (already played, sitting in play), so it's the REMAINING
+     *        hand that's actually given away, not the pre-play total.
+     *        Reported live (jceddy): with Rationalization as the bot's
+     *        ONLY card (a remaining hand of zero once it's played) and an
+     *        opponent holding 3, the bot refreshed instead of rotating --
+     *        the pre-play total of 1 required the opponent to hold 4+ to
+     *        qualify, even though the bot was really about to trade an
+     *        EMPTY hand for the opponent's 3-card one, a pure win with
+     *        nothing at all lost. Counting the card still queued to be
+     *        played as part of what's "given away" overstated the actual
+     *        cost by exactly one card in every case, hardest to notice
+     *        when Rationalization was the bot's whole hand (a 1-card
+     *        overcount is the entire hand at that point).
+     *
+     *        Reported live, follow-up (jceddy): once $ownHandSize is
+     *        actually zero -- Rationalization really was the bot's ONLY
+     *        card -- RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE is skipped
+     *        entirely rather than still requiring a neighbor to hold 3+:
+     *        with nothing left to give away, 'rotate' can never do worse
+     *        than 'refresh' (which is itself a total no-op against an
+     *        empty hand -- bottoming and redrawing zero cards), and it's
+     *        strictly better the moment ANY neighbor holds even a single
+     *        card. There's no "not worth the risk" case left to guard
+     *        against once the bot's own side of the trade is empty, so
+     *        the maintainer confirmed this should always fire rather than
+     *        only past the usual 3-card margin.
      */
-    private function rationalizationStealDirection(BoardState $state, int $botGamePlayerId): ?string
+    private function rationalizationStealDirection(BoardState $state, int $cardId, int $botGamePlayerId): ?string
     {
-        $ownHandSize = count($state->hand($botGamePlayerId));
+        $ownHandSize = count(array_diff($state->hand($botGamePlayerId), [$cardId]));
+        $requiredAdvantage = $ownHandSize === 0 ? 0 : self::RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE;
 
         $bestDirection = null;
         $bestGiverHandSize = -1;
@@ -2034,7 +2072,7 @@ final class BotPlayerService
             }
 
             $giverHandSize = count($state->hand($giverId));
-            if ($giverHandSize >= $ownHandSize + self::RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE && $giverHandSize > $bestGiverHandSize) {
+            if ($giverHandSize >= $ownHandSize + $requiredAdvantage && $giverHandSize > $bestGiverHandSize) {
                 $bestDirection = $direction;
                 $bestGiverHandSize = $giverHandSize;
             }
@@ -2073,7 +2111,7 @@ final class BotPlayerService
      */
     private function rationalizationHasAGoodReasonToPlayNow(BoardState $state, int $cardId, int $botGamePlayerId, ?int $roundWinsNeededToWinGame = null, array $roundWinsNeededToWinGameByPlayerId = []): bool
     {
-        return $this->rationalizationStealDirection($state, $botGamePlayerId) !== null
+        return $this->rationalizationStealDirection($state, $cardId, $botGamePlayerId) !== null
             || $this->rationalizationWouldClinchTheGame($state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame)
             || $this->rationalizationWouldPreventLosingTheGame($state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGameByPlayerId);
     }

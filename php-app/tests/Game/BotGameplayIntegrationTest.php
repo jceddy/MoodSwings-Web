@@ -1437,8 +1437,10 @@ final class BotGameplayIntegrationTest extends TestCase
         $this->insertGameCard($gameId, 49, 'hand', $botPlayerId); // Rationalization, base value 3
         $this->insertGameCard($gameId, 4, 'hand', $botPlayerId); // Chivalry, value 3 -- keeps the remaining hand from reading as "low value"
         // Seat 1 (the bot's own left neighbor) holds 5 cards against the
-        // bot's own 2 -- exactly RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE
-        // (3) worth of edge.
+        // bot's own REMAINING hand of 1 (Chivalry -- Rationalization
+        // itself is excluded, see rationalizationStealDirection()'s own
+        // docblock) -- comfortably past RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE
+        // (3).
         $overstuffedHand = [38, 39, 20, 7, 3];
         foreach ($overstuffedHand as $cardId) {
             $this->insertGameCard($gameId, $cardId, 'hand', $p1);

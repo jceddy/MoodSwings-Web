@@ -139,7 +139,7 @@ function getCardStats() {
     return apiRequest('/stats/cards');
 }
 
-function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId, defaultSelectionsMode, botDecklistText, botSavedDecklistId, randomTeams, rotisserieDraftPoolSource, rotisserieDraftCustomPoolText, rotisserieDraftCutoffCount, tieredRotisserieDraftMode, tieredRotisserieDraftTiers, botGoesFirst, bestOfThree, allowSideboarding, diagnosticMode) {
+function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId, defaultSelectionsMode, botDecklistText, botSavedDecklistId, randomTeams, rotisserieDraftPoolSource, rotisserieDraftCustomPoolText, rotisserieDraftCutoffCount, tieredRotisserieDraftMode, tieredRotisserieDraftTiers, botGoesFirst, bestOfThree, allowSideboarding, diagnosticMode, botDecklists) {
     return apiRequest('/games', {
         method: 'POST',
         body: JSON.stringify({
@@ -176,13 +176,20 @@ function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText,
             // once here alongside format/deck_type. See "Default
             // selections mode" in web-static/README.md.
             default_selections_mode: defaultSelectionsMode,
-            // Only meaningful for deck_type 'custom_duel' with a practice
-            // bot seated (issue #140's Duel extension) -- the bot can't
-            // submit its own decklist via POST /games/decklist the way a
-            // human opponent does, so its creator supplies it here
+            // Only meaningful for deck_type 'custom_duel' with a single
+            // practice bot seated (issue #140's Duel extension) -- the bot
+            // can't submit its own decklist via POST /games/decklist the
+            // way a human opponent does, so its creator supplies it here
             // instead. See "Practice bots" in web-static/README.md.
             bot_decklist_text: botDecklistText,
             bot_saved_decklist_id: botSavedDecklistId,
+            // Only meaningful for deck_type 'custom_duel' with 2+ practice
+            // bots seated (issue #505 follow-up) -- bot_decklist_text/
+            // bot_saved_decklist_id above have nowhere to name more than
+            // one bot's own decklist, so with 2+ bots each one's own
+            // decklist is instead keyed here by that bot's own user id.
+            // See "Practice bots" in web-static/README.md.
+            bot_decklists: botDecklists,
             // Only meaningful for format 'team'/'closed_team' -- randomly
             // assigns the creator's partner instead of requiring
             // partner_user_id. See "Open Team Play"/"Closed Team Play" in

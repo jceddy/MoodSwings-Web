@@ -3222,15 +3222,25 @@ final class BotPlayerServiceTest extends TestCase
 
     // -- Rationalization -------------------------------------------------
 
-    /** Card 49 = Rationalization (base value 3, blue, rare). */
-    public function testChooseActionRefreshesWhenRationalizationIsTheOnlyCardInHand(): void
+    /**
+     * Card 49 = Rationalization (base value 3, blue, rare). Superseded by
+     * testChooseActionStillRotatesWhenTheBotsHandIsEmptyAndNoNeighborHoldsAnyCardsEither
+     * below (reported live, jceddy: "if Rationalization is the last card
+     * the bot has in hand, it should *always* choose rotate instead of
+     * refresh") -- 'rotate' is now chosen even here, where neither
+     * neighbor holds any cards either, since it can never do worse than
+     * 'refresh' once the bot's own remaining hand is empty. Kept
+     * (renamed) to document that 'refresh' is no longer reachable for
+     * this exact board, not just silently dropped.
+     */
+    public function testChooseActionRotatesRatherThanRefreshesWhenRationalizationIsTheOnlyCardInHand(): void
     {
         $state = $this->boardState(hands: [1 => [49]]);
 
         $action = $this->bot->chooseAction($state, [49], 1);
 
         self::assertSame(49, $action['card_id']);
-        self::assertSame(['mode' => 'refresh'], $action['choices']);
+        self::assertSame('rotate', $action['choices']['mode'] ?? null);
     }
 
     /** Fear (38) and Fickleness (39) are both base value 0 -- a remaining hand this weak (average 0) is always worth refreshing over. */
@@ -3313,15 +3323,17 @@ final class BotPlayerServiceTest extends TestCase
      * Player order is [1, 2, 3] (boardState()'s own fixed seating), so
      * player 2 sits at the bot's (1) own LEFT and player 3 at its RIGHT
      * (activeNeighbor()'s "left is index+1" rule). Player 2 here holds 5
-     * cards against the bot's own 2 (Rationalization + Chivalry) --
-     * RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE (3) worth of edge --
-     * which 'rotate' toward 'right' is what actually routes player 2's
-     * own hand onto the bot (see rationalizationStealDirection()'s own
-     * docblock for why the direction is the OPPOSITE side from where the
-     * giving neighbor sits). This also proves Rationalization gets
-     * PRIORITIZED (chosen over Chivalry, which alone would otherwise tie
-     * it on printed value) once a trigger is actually live, not just
-     * "eventually played last".
+     * cards against the bot's own REMAINING hand of 1 (Chivalry --
+     * Rationalization itself is excluded, see rationalizationStealDirection()'s
+     * own docblock: it's already out of hand by the time 'rotate' swaps
+     * hands, not part of what's given away) -- comfortably past
+     * RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE (3) -- which 'rotate'
+     * toward 'right' is what actually routes player 2's own hand onto the
+     * bot (see that same docblock for why the direction is the OPPOSITE
+     * side from where the giving neighbor sits). This also proves
+     * Rationalization gets PRIORITIZED (chosen over Chivalry, which alone
+     * would otherwise tie it on printed value) once a trigger is actually
+     * live, not just "eventually played last".
      */
     public function testChooseActionRotatesTowardAnOverstuffedLeftHandNeighbor(): void
     {
@@ -3390,18 +3402,95 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame(['mode' => 'rotate', 'direction' => 'right'], $action['choices']);
     }
 
-    /** Exactly RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE (3) more cards is enough to qualify -- 2 more is not. */
+    /**
+     * Exactly RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE (3) more cards
+     * than the bot's own REMAINING hand (1, Chivalry -- Rationalization
+     * itself excluded, see rationalizationStealDirection()'s own
+     * docblock) is enough to qualify. This same board used to be treated
+     * as SHORT of the threshold, back when the bot's own pre-play hand
+     * size (2, still counting Rationalization) was compared instead --
+     * an overcount by exactly one card, invisible here since it only
+     * flips the boundary case (see the "reported live" fix below for
+     * where it actually mattered).
+     */
+    public function testChooseActionRotatesWhenTheMarginIsExactlyTheThreshold(): void
+    {
+        $state = $this->boardState(hands: [
+            1 => [49, 4],
+            2 => [38, 39, 20, 7], // exactly 3 more than the bot's own remaining hand of 1
+        ]);
+
+        $action = $this->bot->chooseAction($state, [49, 4], 1);
+
+        self::assertSame(49, $action['card_id']);
+        self::assertSame(['mode' => 'rotate', 'direction' => 'right'], $action['choices']);
+    }
+
+    /** One short of the threshold -- 2 more than the bot's own remaining hand of 1 doesn't qualify. */
     public function testChooseActionDoesNotRotateForAnUnderstuffedNeighbor(): void
     {
         $state = $this->boardState(hands: [
             1 => [49, 4],
-            2 => [38, 39, 20, 7], // only 2 more than the bot's own 2 -- short of the 3-card threshold
+            2 => [38, 39, 20], // only 2 more than the bot's own remaining hand of 1 -- short of the 3-card threshold
         ]);
 
         $action = $this->bot->chooseAction($state, [49, 4], 1);
 
         self::assertSame(4, $action['card_id'], 'no trigger applies, so Rationalization should still be saved for last');
     }
+
+    /**
+     * Reported live (jceddy): with Rationalization as the bot's ONLY
+     * card -- a remaining hand of ZERO once it's played -- and an
+     * opponent holding just 3 cards, the bot refreshed instead of
+     * rotating. The old pre-play hand count (1, still counting
+     * Rationalization itself) required the opponent to hold 4+ cards to
+     * qualify, even though the bot was really about to trade an EMPTY
+     * hand for the opponent's 3-card one -- a pure win with nothing at
+     * all lost. See rationalizationStealDirection()'s own docblock for
+     * the fix (excluding the card about to be played, the same way
+     * rationalizationLowValueHand() already did).
+     */
+    public function testChooseActionRotatesEvenWhenTheBotsRemainingHandIsEmpty(): void
+    {
+        $state = $this->boardState(hands: [
+            1 => [49],
+            2 => [38, 39, 20], // exactly 3 more than the bot's own (empty) remaining hand
+        ]);
+
+        $action = $this->bot->chooseAction($state, [49], 1);
+
+        self::assertSame(49, $action['card_id']);
+        self::assertSame(['mode' => 'rotate', 'direction' => 'right'], $action['choices']);
+    }
+
+    /**
+     * Reported live, follow-up (jceddy): "if Rationalization is the last
+     * card the bot has in hand, it should *always* choose rotate instead
+     * of refresh" -- confirmed as an unconditional rule, not just a
+     * lower threshold. With the bot's own remaining hand empty, an
+     * opponent holding only 2 cards is still well short of the ordinary
+     * RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE (3) margin, but 'rotate'
+     * gives away NOTHING (an empty hand) in exchange for those 2 cards
+     * -- strictly better than 'refresh', which would gain nothing at all
+     * against an empty hand (bottoming and redrawing zero cards is a
+     * pure no-op). See rationalizationStealDirection()'s own docblock
+     * for the fix (RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE is skipped
+     * entirely once the bot's own remaining hand is zero).
+     */
+    public function testChooseActionAlwaysRotatesWhenTheBotsHandIsEmptyEvenBelowTheUsualThreshold(): void
+    {
+        $state = $this->boardState(hands: [
+            1 => [49],
+            2 => [38, 39], // only 2 cards -- short of the usual 3-card threshold, but still worth stealing for free
+        ]);
+
+        $action = $this->bot->chooseAction($state, [49], 1);
+
+        self::assertSame(49, $action['card_id']);
+        self::assertSame(['mode' => 'rotate', 'direction' => 'right'], $action['choices']);
+    }
+
 
     /**
      * Reported live: "Rationalization should be saved... it should not
