@@ -1,0 +1,16 @@
+-- Reported live: a Sealed Pool of the Day match started right after
+-- testing earlier the same day drew a different pool -- confirmed to
+-- be the daily/weekly period boundary rolling over as expected, not a
+-- side effect of a deploy. The maintainer then corrected their own
+-- earlier confirmation: the boundary was meant to be midnight UTC-6,
+-- not UTC+6 -- currentDailySealedPoolPeriodStart()/
+-- currentWeeklySealedPoolPeriodStart() both now use
+-- new \DateTimeZone('-06:00') instead of '+06:00', a 12-hour
+-- correction to when each daily/weekly pool actually rolls over.
+--
+-- No schema change (period_start stays a plain 'Y-m-d' string either
+-- way -- existing periodic_sealed_pools rows are untouched, just no
+-- longer added to under the old, incorrect boundary going forward),
+-- just the version bump MaintenanceGate needs to see this deploy as
+-- caught up with the code.
+UPDATE schema_version SET version = '1.39.28' WHERE id = 1;
