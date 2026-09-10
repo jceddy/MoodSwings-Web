@@ -1,0 +1,28 @@
+-- Reported live a third time: a full round's worth of Tactical Bot plays
+-- (several extra-play chained moods, ending in an automatic no-legal-play
+-- pass) went entirely missing from the "View bot reasoning" dialog, even
+-- though none of the previously-fixed culprits (migrations 0277/0280)
+-- applied this time.
+--
+-- Traced to the round's own Enthusiasm/Passion "take the bonus?" decision
+-- (or an after-scoring order decision), resolved by the viewer
+-- immediately after that round's plays as part of scoring --
+-- respondToDecision()'s own scoring-time branch logs this as a
+-- 'pending_decision_resolved' row attributed to the viewer (they ARE the
+-- one who answered it), which GameService::viewerOwnLastTurnEventId()
+-- was treating as "the viewer's own last play" -- pushing the boundary
+-- PAST that entire round's own Tactical Bot reasoning, which the viewer
+-- never got any earlier chance to see (this resolution happens
+-- automatically right after the round's plays, with no turn of the
+-- viewer's own in between).
+--
+-- The scoring-time 'pending_decision_resolved' event is now tagged
+-- 'scoring_trigger' (mirroring the sibling 'pending_decision_created'
+-- event's own use of that flag), and viewerOwnLastTurnEventId() skips it
+-- when computing the boundary -- an ordinary MID-TURN decision response
+-- (e.g. Intimidation's target revealing a card) has no such flag and
+-- still counts, exactly as before.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.39.12' WHERE id = 1;
