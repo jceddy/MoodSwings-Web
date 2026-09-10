@@ -9680,7 +9680,35 @@ needed, and `pre_after_scoring_event_id` is still recorded on the row
 regardless (harmless -- nothing ever reads it once `turn_pending_acknowledgment`
 itself is never true).
 
-### Board layout preference (issue #417)
+**A mid-round handoff is skipped the same way when the incoming turn
+holder is the very player who just caused it** (reported live, yet
+another follow-up: "BotSage played Suspicion from hand, waiting on a
+response (player: jceddy) ... A response to Suspicion was resolved
+(discarded card: Shock) ... I don't think I need to see the 'Advance
+turn' button at this point because nothing is changing between the end
+of the opponent's turn and the beginning of mine"). Answering someone
+else's card's decision (Suspicion targeting you, Intimidation revealing
+from your hand, etc.) as its target can, once every other target has
+also answered, immediately end the ACTING player's own turn (no plays
+left) and hand it straight to the responder -- true in a 2-player game
+by construction, and true in 3-4 whenever seat order happens to put the
+responder next. `updateRoundTurnState()` gained a fourth param,
+`?int $requestingGamePlayerId` (default `null`, preserving the original
+unconditional behavior everywhere else), and `advanceTurn()` is the one
+call site that passes it -- the real `$requestingGamePlayerId` value
+threaded, unchanged, all the way from `respondToDecision()`'s own
+responder through `finishPlay()`. When the new turn's own `$playerId`
+equals it, `notifyItsYourTurn()` is called with `$worthPausingFor: false`
+(the exact same param `finishScoringAndAdvance()`'s own call site
+already uses, just computed a different way here): the responder just
+personally chose the outcome (which card to discard/reveal/etc.), so
+there's nothing a pause would show them that they don't already know.
+An ordinary play/pass never triggers this by itself -- `advanceTurn()`
+is only ever reached once the ACTING player has no plays left, so
+`$nextPlayerId` (whoever's turn starts next) is always someone else,
+never the player whose own play/pass just ran; the comparison only ever
+actually fires for the "answered as someone else's target, then
+inherited the turn" shape the report describes.
 
 "Move the whole Round / Score / Players section under my hand" -- rather
 than moving it unconditionally, this is a personal preference
