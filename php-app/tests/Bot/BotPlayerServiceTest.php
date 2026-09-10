@@ -3313,15 +3313,17 @@ final class BotPlayerServiceTest extends TestCase
      * Player order is [1, 2, 3] (boardState()'s own fixed seating), so
      * player 2 sits at the bot's (1) own LEFT and player 3 at its RIGHT
      * (activeNeighbor()'s "left is index+1" rule). Player 2 here holds 5
-     * cards against the bot's own 2 (Rationalization + Chivalry) --
-     * RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE (3) worth of edge --
-     * which 'rotate' toward 'right' is what actually routes player 2's
-     * own hand onto the bot (see rationalizationStealDirection()'s own
-     * docblock for why the direction is the OPPOSITE side from where the
-     * giving neighbor sits). This also proves Rationalization gets
-     * PRIORITIZED (chosen over Chivalry, which alone would otherwise tie
-     * it on printed value) once a trigger is actually live, not just
-     * "eventually played last".
+     * cards against the bot's own REMAINING hand of 1 (Chivalry --
+     * Rationalization itself is excluded, see rationalizationStealDirection()'s
+     * own docblock: it's already out of hand by the time 'rotate' swaps
+     * hands, not part of what's given away) -- comfortably past
+     * RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE (3) -- which 'rotate'
+     * toward 'right' is what actually routes player 2's own hand onto the
+     * bot (see that same docblock for why the direction is the OPPOSITE
+     * side from where the giving neighbor sits). This also proves
+     * Rationalization gets PRIORITIZED (chosen over Chivalry, which alone
+     * would otherwise tie it on printed value) once a trigger is actually
+     * live, not just "eventually played last".
      */
     public function testChooseActionRotatesTowardAnOverstuffedLeftHandNeighbor(): void
     {
@@ -3390,17 +3392,89 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame(['mode' => 'rotate', 'direction' => 'right'], $action['choices']);
     }
 
-    /** Exactly RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE (3) more cards is enough to qualify -- 2 more is not. */
+    /**
+     * Exactly RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE (3) more cards
+     * than the bot's own REMAINING hand (1, Chivalry -- Rationalization
+     * itself excluded, see rationalizationStealDirection()'s own
+     * docblock) is enough to qualify. This same board used to be treated
+     * as SHORT of the threshold, back when the bot's own pre-play hand
+     * size (2, still counting Rationalization) was compared instead --
+     * an overcount by exactly one card, invisible here since it only
+     * flips the boundary case (see the "reported live" fix below for
+     * where it actually mattered).
+     */
+    public function testChooseActionRotatesWhenTheMarginIsExactlyTheThreshold(): void
+    {
+        $state = $this->boardState(hands: [
+            1 => [49, 4],
+            2 => [38, 39, 20, 7], // exactly 3 more than the bot's own remaining hand of 1
+        ]);
+
+        $action = $this->bot->chooseAction($state, [49, 4], 1);
+
+        self::assertSame(49, $action['card_id']);
+        self::assertSame(['mode' => 'rotate', 'direction' => 'right'], $action['choices']);
+    }
+
+    /** One short of the threshold -- 2 more than the bot's own remaining hand of 1 doesn't qualify. */
     public function testChooseActionDoesNotRotateForAnUnderstuffedNeighbor(): void
     {
         $state = $this->boardState(hands: [
             1 => [49, 4],
-            2 => [38, 39, 20, 7], // only 2 more than the bot's own 2 -- short of the 3-card threshold
+            2 => [38, 39, 20], // only 2 more than the bot's own remaining hand of 1 -- short of the 3-card threshold
         ]);
 
         $action = $this->bot->chooseAction($state, [49, 4], 1);
 
         self::assertSame(4, $action['card_id'], 'no trigger applies, so Rationalization should still be saved for last');
+    }
+
+    /**
+     * Reported live (jceddy): with Rationalization as the bot's ONLY
+     * card -- a remaining hand of ZERO once it's played -- and an
+     * opponent holding just 3 cards, the bot refreshed instead of
+     * rotating. The old pre-play hand count (1, still counting
+     * Rationalization itself) required the opponent to hold 4+ cards to
+     * qualify, even though the bot was really about to trade an EMPTY
+     * hand for the opponent's 3-card one -- a pure win with nothing at
+     * all lost. See rationalizationStealDirection()'s own docblock for
+     * the fix (excluding the card about to be played, the same way
+     * rationalizationLowValueHand() already did).
+     */
+    public function testChooseActionRotatesEvenWhenTheBotsRemainingHandIsEmpty(): void
+    {
+        $state = $this->boardState(hands: [
+            1 => [49],
+            2 => [38, 39, 20], // exactly 3 more than the bot's own (empty) remaining hand
+        ]);
+
+        $action = $this->bot->chooseAction($state, [49], 1);
+
+        self::assertSame(49, $action['card_id']);
+        self::assertSame(['mode' => 'rotate', 'direction' => 'right'], $action['choices']);
+    }
+
+    /**
+     * Mirror of the empty-hand case above, one card short: with
+     * Rationalization as the bot's only card and an opponent holding
+     * just 2, the steal trigger still correctly doesn't fire (2 is short
+     * of the 3-card threshold even against an empty remaining hand) --
+     * proving the fix didn't overcorrect into ALWAYS stealing whenever
+     * the bot's remaining hand happens to be empty. Falls through to
+     * 'refresh' instead, since an empty remaining hand is itself always
+     * "low value" (rationalizationLowValueHand()'s own docblock).
+     */
+    public function testChooseActionDoesNotRotateWhenTheBotsEmptyHandStillFallsShort(): void
+    {
+        $state = $this->boardState(hands: [
+            1 => [49],
+            2 => [38, 39], // only 2 more than the bot's own (empty) remaining hand -- short of the 3-card threshold
+        ]);
+
+        $action = $this->bot->chooseAction($state, [49], 1);
+
+        self::assertSame(49, $action['card_id']);
+        self::assertSame(['mode' => 'refresh'], $action['choices']);
     }
 
     /**

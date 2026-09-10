@@ -7068,14 +7068,17 @@ since it already holds that dependency):
   option, so `buildChoicesForCard()` special-cases `effectKey ===
   'rationalization'` to `rationalizationChoices()` entirely, bypassing
   the generic per-field `CardChoiceSchema` loop for this one card:
-  - `rationalizationStealDirection(BoardState $state, int
+  - `rationalizationStealDirection(BoardState $state, int $cardId, int
     $botGamePlayerId): ?string` -- `'rotate'` toward whichever seat
     neighbor currently holds at least
     `RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE` (3) more cards than the
-    bot's own current hand, so the bot ends up with that larger hand
-    once hands actually rotate. `'rotate'` moves EVERY seated player's
-    hand to their own neighbor in ONE shared direction (`RationalizationEffect`'s
-    own docblock), not a private trade with a single opponent, so the
+    bot's own REMAINING hand (every OTHER card still in hand once
+    Rationalization itself is played -- `$cardId` is excluded from the
+    count, the same `array_diff()` `rationalizationLowValueHand()` below
+    already uses), so the bot ends up with that larger hand once hands
+    actually rotate. `'rotate'` moves EVERY seated player's hand to their
+    own neighbor in ONE shared direction (`RationalizationEffect`'s own
+    docblock), not a private trade with a single opponent, so the
     neighbor the bot actually RECEIVES FROM under direction `$d` is
     whichever one sits on the OPPOSITE side -- `activeNeighbor()`'s own
     "`'left'` is index+1" rule means a neighbor at the bot's own
@@ -7093,7 +7096,24 @@ since it already holds that dependency):
     like, so gaining several more cards outright always beats gambling a
     random redraw of the bot's own (typically small, at that point)
     remaining hand -- a live steal opportunity wins over a merely weak
-    hand whenever both apply at once.
+    hand whenever both apply at once. **Off-by-one, reported live
+    (jceddy):** originally counted the bot's own PRE-play hand (still
+    including Rationalization itself, via a plain `count($state->hand())`
+    with no `$cardId` param at all) rather than the remaining hand it
+    actually gives away once `'rotate'` fires -- by then, Rationalization
+    is already out of hand and sitting in play, so counting it as part of
+    what's "at stake" overstated the bot's own cost by exactly one card
+    every time, hardest to notice when Rationalization was the bot's
+    WHOLE hand (a 1-card overcount is the entire hand at that point). A
+    bot holding only Rationalization against an opponent's 3-card hand
+    refreshed instead of rotating -- trading away an already-empty hand
+    for 3 free cards is an unambiguous win, but the old formula demanded
+    the opponent hold 4+ (`1 + 3`) before it would ever fire. Now takes
+    `$cardId` and excludes it the same way `rationalizationLowValueHand()`
+    already did, matching the original "at least a 3 card increase in
+    hand size" spec literally (see `rationalizationWouldClinchTheGame()`'s
+    own quote below) once the pre-play/post-play hand-size mismatch is
+    gone.
   - Otherwise, `rationalizationLowValueHand(BoardState $state, int
     $cardId, int $botGamePlayerId): bool` -- `'refresh'` whenever the
     bot's own remaining hand (every OTHER card still in hand once
