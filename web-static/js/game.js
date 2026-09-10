@@ -1814,7 +1814,7 @@
         tiered_rotisserie_draft: 'Like Rotisserie Draft, but split into several tiers drafted one after another (turn order carries straight through from one tier into the next). Choose the fixed rarity tiering (Mythic/Rare/Uncommon/Common, each tier\'s own layout twice what it distributes -- a 15-card pool per player) or configure 2-4 custom tiers yourself, each with its own pool and cutoff count. 2-4 players; a 2-player draft plays a best-of-three match, sideboarding freely between games, while a 3-4 player draft plays a single game.',
         chaos_draft: 'Quick Draft\'s own drafting, deck-building, and match structure, unchanged -- but at the start of every round, each player (or team, in Open Team Play) is offered a choice between two randomly-generated effects and attaches the chosen one permanently to a card in their hand, stacking with that card\'s own printed ability.',
         sealed_deck: '2-4 players, no live drafting at all: each player is independently dealt their own random 45-card Structure deck-style sealed pool (23 common, 14 uncommon, 6 rare, 2 mythic) and builds a deck of at least 12 cards straight from it. A 2-player game plays a best-of-three match, sideboarding freely between games from that same fixed pool; a 3-4 player game is a single game.',
-        sealed_pool_of_the_day: '2-4 players, all dealt the exact SAME 50-card pool (20 common, 15 uncommon, 10 rare, 5 mythic) -- generated once per day and shared by every Sealed Pool of the Day game created that day, so everyone is building from identical card availability. Your deck (at least 12 cards) can include at most 4 rares and 2 mythics from that pool, even though it holds more than that of each -- a real choice of which ones to build around, not just "run every good card." A 2-player game plays a best-of-three match; a 3-4 player game is a single game.',
+        sealed_pool_of_the_day: 'Exactly 2 players, both dealt the exact SAME 50-card pool (20 common, 15 uncommon, 10 rare, 5 mythic) -- generated once per day and shared by every Sealed Pool of the Day game created that day, so everyone is building from identical card availability. Your deck (at least 12 cards) can include at most 4 rares and 2 mythics from that pool, even though it holds more than that of each -- a real choice of which ones to build around, not just "run every good card." Always plays a best-of-three match.',
         one_of_each: 'The full 133-card pool — one copy of every printed mood.',
     };
 
@@ -2921,12 +2921,23 @@
     // (custom_duel/power/structure/jceddys_75) does too as of issue #505
     // (enforced server-side by GameService::isDuelShapedFormat()'s own
     // check in createGame()) -- 'duel' no longer needs its own lower cap
-    // here. Re-run on every checkbox change and every format/deck-type-
-    // dropdown change, so switching to a combination that supports fewer
-    // players with more already checked un-checks the extras (keeping
-    // the earliest ones) rather than leaving a selection the server
-    // would just reject.
+    // here. Sealed Pool of the Day is the one exception (issue #520
+    // follow-up, reported live: "let's limit sealed pool of the day/week
+    // to only two players") -- capped at 1 opponent, matching
+    // GameService::createGame()'s own exactly-2-players requirement for
+    // this deck type. Weekly Sealed Pool is checked here too purely for
+    // defensive symmetry -- it has no New Game dialog path at all (see
+    // isDeckTypeAvailableForFormat()'s own docblock), so this never
+    // actually fires for it in practice. Re-run on every checkbox change
+    // and every format/deck-type-dropdown change, so switching to a
+    // combination that supports fewer players with more already checked
+    // un-checks the extras (keeping the earliest ones) rather than
+    // leaving a selection the server would just reject.
     function opponentSelectionMax() {
+        const deckType = document.getElementById('new-game-deck-type').value;
+        if (deckType === 'sealed_pool_of_the_day' || deckType === 'weekly_sealed_pool') {
+            return 1;
+        }
         return 3;
     }
 
@@ -3250,18 +3261,32 @@
     // the creator actually choose a total (2-4); 'duel' is always 2 and
     // the team formats are always 4, both forced server-side regardless
     // of what this field would send, so it stays hidden for those.
-    // updateTeamFields() (called via the format 'change' listener already
-    // wired below) independently keeps #new-game-team-fields hidden in
-    // this mode even for a team format -- there's no partner to choose
-    // from strangers, so teams are always assigned randomly once the
-    // roster fills (see MatchmakingService::joinOpenGame()).
+    // Sealed Pool of the Day is the same idea (issue #520 follow-up,
+    // reported live: "let's limit sealed pool of the day/week to only
+    // two players") -- always 2, forced server-side by
+    // MatchmakingService::postOpenGame() regardless of what this field
+    // would send, so it stays hidden for it too rather than offering a
+    // choice that's silently overridden. updateTeamFields() (called via
+    // the format 'change' listener already wired below) independently
+    // keeps #new-game-team-fields hidden in this mode even for a team
+    // format -- there's no partner to choose from strangers, so teams
+    // are always assigned randomly once the roster fills (see
+    // MatchmakingService::joinOpenGame()).
     function updateNewGameModeFields() {
         const isOpenLobby = document.getElementById('new-game-mode-open').checked;
         document.getElementById('new-game-friends-fields').hidden = isOpenLobby;
 
         const format = effectiveNewGameFormat();
+        // Reads the RAW format select's own value, not the deck-type
+        // select -- this runs before updateDeckTypeAvailability() (see
+        // this listener's own registration order below), which is what
+        // actually forces the deck-type select to 'sealed_pool_of_the_day'
+        // for this sentinel, so checking that select here would still see
+        // its stale, pre-switch value on the very change event that
+        // matters.
+        const isSealedPoolOfTheDayFormat = document.getElementById('new-game-format').value === 'sealed_pool_of_the_day';
         document.getElementById('new-game-open-player-count-label').hidden =
-            !isOpenLobby || (format !== 'draft' && format !== 'standard');
+            !isOpenLobby || (format !== 'draft' && format !== 'standard') || isSealedPoolOfTheDayFormat;
 
         document.getElementById('new-game-submit-button').textContent = isOpenLobby ? 'Post to open lobby' : 'Create game';
         updateTeamFields();

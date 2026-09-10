@@ -1458,6 +1458,40 @@ final class GameService
                 throw new GameStateException("A {$deckType} game must have 2-4 players");
             }
         }
+        // Sealed Pool of the Day / Weekly Sealed Pool (issue #520
+        // follow-up, reported live: "let's limit sealed pool of the
+        // day/week to only two players") -- unlike every other
+        // DRAFT_DECK_TYPES member (2-4 players, the range check just
+        // above), these two are deliberately head-to-head only: Weekly
+        // Sealed Pool's own standings (weekly_sealed_pool_standings.
+        // wins/losses) are a straightforward 1v1 win/loss ladder with no
+        // notion of a 3-4-player free-for-all's own scoring, and
+        // WeeklySealedPoolQueueService's own FIFO pairing already only
+        // ever matches exactly 2 players at a time -- this closes off
+        // the two OTHER paths that could otherwise still seat more: a
+        // direct 'draft'-format request naming 3-4 opponent_user_ids
+        // (Sealed Pool of the Day's own New Game dialog path), or
+        // 'team'/'closed_team', which the generic DRAFT_DECK_TYPES
+        // format check further below otherwise allows every deck_type
+        // under (see the "Team Play/Closed Team Play... may also draft"
+        // check). Any OTHER invalid format (e.g. 'standard') is left for
+        // that generic check to reject with its own existing message --
+        // this only adds the two restrictions that check doesn't already
+        // cover. Checked ahead of isTeamFormat()'s own exactly-4-players
+        // requirement just below so a 'team'/'closed_team' request
+        // naming one of these deck types gets THIS exact error, not
+        // "must have exactly 4 players" for a mode it was never eligible
+        // for in the first place. See MatchmakingService::postOpenGame()'s
+        // own matching $targetPlayerCount force for the open-lobby
+        // posting path.
+        if (array_key_exists($deckType, self::PERIODIC_SEALED_POOL_DECK_TYPES)) {
+            if ($format === 'team' || $format === 'closed_team') {
+                throw new GameStateException("The \"{$deckType}\" deck type doesn't support Team Play or Closed Team Play -- the \"draft\" format only");
+            }
+            if ($format === 'draft' && count($userIds) !== 2) {
+                throw new GameStateException("A {$deckType} game must have exactly 2 players");
+            }
+        }
         if ($deckType === 'rotisserie_draft' && ($rotisserieDraftCutoffCount < self::ROTISSERIE_DRAFT_MIN_CUTOFF || $rotisserieDraftCutoffCount > self::ROTISSERIE_DRAFT_MAX_CUTOFF)) {
             throw new GameStateException(
                 'Rotisserie Draft\'s cutoff count must be between ' . self::ROTISSERIE_DRAFT_MIN_CUTOFF
