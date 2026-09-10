@@ -3788,15 +3788,36 @@ periodic_sealed_pool_id` records which shared pool a match was dealt from
 this column, not `deck_type` alone, is the authoritative "was this match
 dealt from a shared periodic pool, and which one" signal.
 
-**Bots are not supported** -- `botsSupportedFor()` returns `false` for this
-deck type before its normal `DRAFT_DECK_TYPES` check even runs, because
-`BotPlayerService::chooseDraftDeck()` has no awareness of the new rarity
-caps and could hand back an over-cap deck that `submitDraftDeck()`'s own new
-validation would then reject with an uncaught exception from inside
+**Bots ARE supported -- since fixed** (issue #520 follow-up, reported live:
+"since we aren't tracking standings for sealed pool of the day, let's allow
+practice bots for those"). Originally `botsSupportedFor()` returned `false`
+for this deck type before its normal `DRAFT_DECK_TYPES` check even ran,
+because `BotPlayerService::chooseDraftDeck()` had no awareness of the new
+rarity caps and could hand back an over-cap deck that `submitDraftDeck()`'s
+own new validation would then reject with an uncaught exception from inside
 `advanceBotDraftDeck()` -- the same silent, permanent-stall failure class an
 existing docblock on that method already warns about for an unrelated
-historical bug. This may be revisited once `chooseDraftDeck()` itself learns
-to respect a rarity cap.
+historical bug. `chooseDraftDeck()` now takes an optional `?array $rarityCaps`
+param (`null` for every OTHER draft deck_type, unchanged behavior): when
+given, its top-N-by-score trim walks the sorted candidates and SKIPS any
+card whose own rarity has already hit its cap, continuing to the next-best
+card instead of stopping -- greedy in score, not in raw position, so the
+result is still the best-scoring LEGAL deck that ordering can build.
+`advanceBotDraftDeck()` passes `PERIODIC_SEALED_POOL_RARITY_DECK_CAPS`
+straight through whenever `$deckType` is a `PERIODIC_SEALED_POOL_DECK_TYPES`
+member, guaranteeing a legal deck every time. The pool's own generous
+uncapped filler (20 common/15 uncommon, only rare/mythic capped at 4/2 out
+of a 50-card pool) means this can never run out of legal candidates before
+reaching `SEALED_DECK_MIN_DECK_SIZE` (12) the way an aggressively-capped
+format theoretically could. Weekly Sealed Pool stays bot-excluded despite
+sharing this same fix (`botsSupportedFor()` now checks `$deckType ===
+'weekly_sealed_pool'` specifically, not the whole
+`PERIODIC_SEALED_POOL_DECK_TYPES` map) -- its own `weekly_sealed_pool_standings`
+ladder has no way to represent "one side was a practice bot," and every
+real match is already created by `WeeklySealedPoolQueueService`'s own
+pairing of two real, already-queued players (never a bot), so this is
+purely the same direct-`createGame()`-call safety net every other
+bot-scope check already is, not a live gap.
 
 **Deck-building/match progression are otherwise identical to Sealed Deck**:
 `draftMinDeckSizeFor()` reuses the same `SEALED_DECK_MIN_DECK_SIZE` (12)

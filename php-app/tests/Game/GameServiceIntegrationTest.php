@@ -17663,15 +17663,70 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame(1, $poolRowCount, 'Only one pool row should exist for the day, regardless of how many games read it');
     }
 
-    public function testCreateGameRejectsABotForSealedPoolOfTheDay(): void
+    /**
+     * Reported live: "since we aren't tracking standings for sealed pool
+     * of the day, let's allow practice bots for those" -- previously
+     * rejected outright (botsSupportedFor()) because
+     * BotPlayerService::chooseDraftDeck() had no awareness of
+     * PERIODIC_SEALED_POOL_RARITY_DECK_CAPS; see
+     * testAdvanceAutomatedTurnsBuildsARarityCappedDeckForABotInSealedPoolOfTheDay()
+     * below for proof the bot's own eventual deck actually stays legal,
+     * now that advanceBotDraftDeck() passes those caps through.
+     */
+    public function testCreateGameAcceptsABotForSealedPoolOfTheDay(): void
     {
         $human = $this->insertUser('sealedpool-bot-human');
         $bot = $this->insertBotUser('sealedpool-bot-bot');
 
+        $gameId = $this->games->createGame($human, [$human, $bot], format: 'draft', deckType: 'sealed_pool_of_the_day');
+
+        self::assertIsInt($gameId);
+    }
+
+    /**
+     * Weekly Sealed Pool stays bot-excluded even after the fix above --
+     * its own standings ladder has no way to represent a practice bot,
+     * and WeeklySealedPoolQueueService never queues one anyway, but
+     * createGame() itself still refuses to seat one directly.
+     */
+    public function testCreateGameRejectsABotForWeeklySealedPool(): void
+    {
+        $human = $this->insertUser('weeklypool-bot-human');
+        $bot = $this->insertBotUser('weeklypool-bot-bot');
+
         $this->expectException(GameStateException::class);
         $this->expectExceptionMessage('Practice bots are only supported for');
 
-        $this->games->createGame($human, [$human, $bot], format: 'draft', deckType: 'sealed_pool_of_the_day');
+        $this->games->createGame($human, [$human, $bot], format: 'draft', deckType: 'weekly_sealed_pool');
+    }
+
+    /**
+     * End-to-end proof that a bot seated in Sealed Pool of the Day
+     * builds a LEGAL deck once drafting/deck-building resolves --
+     * advanceBotDraftDeck() now passes PERIODIC_SEALED_POOL_RARITY_DECK_CAPS
+     * into chooseDraftDeck(), so the bot's own submitDraftDeck() call
+     * should never hit the "silent, permanent stall" an over-cap
+     * rejection would otherwise cause.
+     */
+    public function testAdvanceAutomatedTurnsBuildsARarityCappedDeckForABotInSealedPoolOfTheDay(): void
+    {
+        $human = $this->insertUser('sealedpool-botdeck-human');
+        $botUserId = $this->insertBotUser('sealedpool-botdeck-bot');
+
+        $gameId = $this->games->createGame($human, [$human, $botUserId], format: 'draft', deckType: 'sealed_pool_of_the_day');
+
+        self::assertNotNull($this->games->advanceAutomatedTurns($gameId), 'the bot should have built and submitted its own deck');
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $botDeckCardIds = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $botUserId)['deck_card_ids'], true);
+        self::assertNotNull($botDeckCardIds, 'the bot should not still be sitting deckless');
+        self::assertGreaterThanOrEqual(12, count($botDeckCardIds));
+
+        $catalog = $this->pdo->query('SELECT id, rarity FROM cards')->fetchAll();
+        $rarityById = array_column($catalog, 'rarity', 'id');
+        $rarityCounts = array_count_values(array_map(fn (int $id) => $rarityById[$id], array_map(intval(...), $botDeckCardIds)));
+        self::assertLessThanOrEqual(4, $rarityCounts['rare'] ?? 0, "the bot's own deck should never exceed the rare cap");
+        self::assertLessThanOrEqual(2, $rarityCounts['mythic'] ?? 0, "the bot's own deck should never exceed the mythic cap");
     }
 
     public function testSubmitDraftDeckRejectsExceedingTheMythicCapForSealedPoolOfTheDay(): void

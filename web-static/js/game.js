@@ -2970,11 +2970,17 @@
             return true;
         }
         // Mirrors GameService::botsSupportedFor()'s own exclusion --
-        // chooseDraftDeck() has no awareness of Sealed Pool of the
-        // Day/Weekly Sealed Pool's own per-rarity cap, so a bot could
-        // build one the server would then reject. See that method's own
-        // docblock.
-        if (deckType === 'sealed_pool_of_the_day' || deckType === 'weekly_sealed_pool') {
+        // Weekly Sealed Pool's own standings ladder has no way to
+        // represent a practice bot (and its queue never seats one
+        // anyway), so it's excluded here regardless of format. Sealed
+        // Pool of the Day itself is fully supported now (issue #520
+        // follow-up: "since we aren't tracking standings for sealed pool
+        // of the day, let's allow practice bots for those" -- chooseDraftDeck()
+        // learned to respect the per-rarity cap, see that method's own
+        // docblock), so it's no longer excluded here either -- it just
+        // falls through to the DRAFT_DECK_TYPES check below like every
+        // other draft deck_type.
+        if (deckType === 'weekly_sealed_pool') {
             return false;
         }
         if (DRAFT_DECK_TYPES.includes(deckType)) {

@@ -3100,10 +3100,15 @@ final class BotPlayerServiceTest extends TestCase
      * @param array<int, array{times_in_deck: int, deck_win_rate: ?float}> $deckWinRatesByCardId
      * @return array{rowsById: array<int, array{draftPriorityScore: int}>, synergyPartnersByMythicId: array<int, int[]>, deckWinRatesByCardId: array<int, array{times_in_deck: int, deck_win_rate: ?float}>}
      */
-    private function draftScoringData(array $scoresById, array $synergyPartnersByMythicId = [], array $deckWinRatesByCardId = []): array
+    private function draftScoringData(array $scoresById, array $synergyPartnersByMythicId = [], array $deckWinRatesByCardId = [], array $rarityById = []): array
     {
+        $rowsById = [];
+        foreach ($scoresById as $cardId => $score) {
+            $rowsById[$cardId] = ['draftPriorityScore' => $score, 'rarity' => $rarityById[$cardId] ?? null];
+        }
+
         return [
-            'rowsById' => array_map(static fn (int $score): array => ['draftPriorityScore' => $score], $scoresById),
+            'rowsById' => $rowsById,
             'synergyPartnersByMythicId' => $synergyPartnersByMythicId,
             'deckWinRatesByCardId' => $deckWinRatesByCardId,
         ];
@@ -3218,6 +3223,48 @@ final class BotPlayerServiceTest extends TestCase
         $deck = $this->bot->chooseDraftDeck([801, 802], minDeckSize: 12, draftScoringData: $data);
 
         self::assertSame([801, 802], $deck);
+    }
+
+    /**
+     * Sealed Pool of the Day's own $rarityCaps param (issue #520
+     * follow-up: "since we aren't tracking standings for sealed pool of
+     * the day, let's allow practice bots for those" -- this is the fix
+     * that made it safe to). 3 Mythics (901/902/903, scores 50/40/30)
+     * would otherwise be the 3 highest-scored cards in the whole pool,
+     * but a cap of 2 Mythics skips the 3rd-best one (903) even though
+     * it outscores every Common here -- the deck fills its remaining
+     * slot with the next-best UNCAPPED card (905) instead of stopping
+     * short, so this is a genuine "skip and keep going" trim, not just
+     * "stop at the cap."
+     */
+    public function testChooseDraftDeckRespectsRarityCapsForSealedPoolOfTheDay(): void
+    {
+        $data = $this->draftScoringData(
+            scoresById: [901 => 50, 902 => 40, 903 => 30, 904 => 10, 905 => 9, 906 => 8],
+            rarityById: [901 => 'mythic', 902 => 'mythic', 903 => 'mythic', 904 => 'common', 905 => 'common', 906 => 'common'],
+        );
+
+        $deck = $this->bot->chooseDraftDeck([901, 902, 903, 904, 905, 906], minDeckSize: 4, draftScoringData: $data, rarityCaps: ['mythic' => 2]);
+
+        self::assertSame([901, 902, 904, 905], $deck, 'the 3rd Mythic (903) should be skipped for the cap despite outscoring every Common');
+    }
+
+    /**
+     * Mirror of the cap test above with the cap never actually
+     * threatened (only 1 Rare in the whole pool, well under the cap of
+     * 4) -- proves $rarityCaps doesn't change anything when nothing
+     * would exceed it, still returning the plain highest-scored trim.
+     */
+    public function testChooseDraftDeckRarityCapsAreANoOpWhenNeverExceeded(): void
+    {
+        $data = $this->draftScoringData(
+            scoresById: [911 => 50, 912 => 40, 913 => 30],
+            rarityById: [911 => 'rare', 912 => 'common', 913 => 'common'],
+        );
+
+        $deck = $this->bot->chooseDraftDeck([911, 912, 913], minDeckSize: 2, draftScoringData: $data, rarityCaps: ['rare' => 4, 'mythic' => 2]);
+
+        self::assertSame([911, 912], $deck);
     }
 
     // -- Rationalization -------------------------------------------------
