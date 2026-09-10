@@ -1,0 +1,24 @@
+-- Reported live: "would it be possible to only show the 'Advance game'
+-- button if there actually were post-scoring effects? it's not super
+-- useful when the board State snapshot is identical to the actual
+-- board state." A round-transition "Pause at the start of your turn"
+-- (users.pause_before_own_turn) used to gate unconditionally, even
+-- when nothing after-scoring actually changed the board.
+--
+-- GameService::inPlayOwnershipSignature() (every in-play mood's own
+-- cardId => ownerId, sorted by cardId) is now compared before and
+-- after applyAfterScoringHooks()/applyChaosAfterScoringHooks() run in
+-- finishScoringAndAdvance() -- every way those hooks can mutate the
+-- board (Recklessness/Bashfulness/Gluttony/Insecurity's self-tags,
+-- any "returnsToOwnerAfterScoring" foreign tag) either removes a card
+-- from play or reassigns an in-play card's own owner, so this one
+-- signature catches all of them. notifyItsYourTurn() gained a third
+-- param, $worthPausingFor (default true, unchanged for every other
+-- call site), and finishScoringAndAdvance() now passes false when the
+-- two signatures come back identical -- the new round's
+-- turn_pending_acknowledgment simply never gets set, so the winner can
+-- act immediately with no "Advance Turn" click needed.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.39.30' WHERE id = 1;

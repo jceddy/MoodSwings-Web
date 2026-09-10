@@ -335,9 +335,20 @@ final class PauseBeforeOwnTurnIntegrationTest extends TestCase
      * mid-round handoff -- finishScoringAndAdvance()'s own raw INSERT
      * (never routed through updateRoundTurnState()) still reaches
      * notifyItsYourTurn(), so the new round's own first player gets the
-     * same pending-acknowledgment treatment if they opted in.
+     * same pending-acknowledgment treatment if they opted in -- but only
+     * when there's actually something for the frozen pre-after-scoring
+     * board to show (reported live, a follow-up: "not super useful when
+     * the board State snapshot is identical to the actual board state").
+     * Apathy alone has no after-scoring effect at all, so
+     * inPlayOwnershipSignature() comes back identical before and after
+     * applyAfterScoringHooks()/applyChaosAfterScoringHooks() run --
+     * round 2 correctly starts UNgated even though p1 opted in, and they
+     * can act immediately with no acknowledgment needed.
+     * testGetStateShowsTheFrozenPreAfterScoringBoardUntilAcknowledged()
+     * below covers the opposite case, where Recklessness genuinely
+     * changes who owns what.
      */
-    public function testANewRoundStartingAfterScoringAlsoSetsThePendingFlagForTheWinner(): void
+    public function testANewRoundStartingAfterScoringWithNoVisibleAfterScoringEffectsLeavesThePendingFlagClear(): void
     {
         $u1 = $this->insertUser('human1');
         $u2 = $this->insertUser('human2');
@@ -354,14 +365,16 @@ final class PauseBeforeOwnTurnIntegrationTest extends TestCase
         self::assertTrue($result['round_scored']);
 
         // p1 won round 1 (higher score), so round 2 starts with them as
-        // the current turn holder -- opted in, so it's gated.
+        // the current turn holder -- opted in, but nothing after-scoring
+        // happened, so it's NOT gated.
         $round = $this->fetchRound($gameId);
         self::assertSame(2, (int) $round['round_number']);
         self::assertSame($p1, (int) $round['current_turn_game_player_id']);
-        self::assertSame(1, (int) $round['turn_pending_acknowledgment']);
+        self::assertSame(0, (int) $round['turn_pending_acknowledgment']);
 
-        $this->expectException(GameStateException::class);
-        $this->games->pass($gameId, $p1);
+        // p1 can act immediately -- no GameStateException, no acknowledgeTurnStart() needed.
+        $result = $this->games->pass($gameId, $p1);
+        self::assertFalse($result['round_scored']);
     }
 
     /**

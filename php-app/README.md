@@ -9653,6 +9653,33 @@ again -- nothing about the real game state was ever actually delayed for
 anyone, including the paused viewer's own eventual play/pass once they
 un-pause.
 
+**The round-transition pause is skipped entirely when nothing after-scoring
+actually happened** (reported live, a further follow-up: "not super useful
+when the board State snapshot is identical to the actual board state").
+`notifyItsYourTurn()` gained a third param, `$worthPausingFor` (default
+`true`, preserving the original unconditional behavior for every OTHER
+call site -- an ordinary mid-round pass-the-turn, or Awe's own skip-scoring
+path, neither of which has an after-scoring-effects question to even ask).
+`finishScoringAndAdvance()`'s own call site is the one exception: it now
+computes `GameService::inPlayOwnershipSignature($state)` (every in-play
+mood's own cardId => ownerId, sorted by cardId) both right before
+`applyAfterScoringHooks()`/`applyChaosAfterScoringHooks()` run and right
+after, and passes `$worthPausingFor: false` when the two signatures come
+back identical. Every way `applyAfterScoringHooks()` can ever mutate the
+board -- Recklessness/Bashfulness/Gluttony/Insecurity's self-tags
+(discard/return-to-hand/bottom-and-draw) and any "returnsToOwnerAfterScoring"
+foreign tag -- either removes a card from play or reassigns an in-play
+card's own owner, so this one comparison catches all of them; a purely
+cosmetic Chaos Draft effect that only flips a suppression flag without
+moving or reassigning anything would slip past it, deliberately not
+chased further since it's not the reported shape and not how the
+overwhelming majority of real after-scoring effects behave. When skipped,
+the new round's `turn_pending_acknowledgment` simply never gets set in the
+first place -- the winner can act immediately, no `POST /games/advance-turn`
+needed, and `pre_after_scoring_event_id` is still recorded on the row
+regardless (harmless -- nothing ever reads it once `turn_pending_acknowledgment`
+itself is never true).
+
 ### Board layout preference (issue #417)
 
 "Move the whole Round / Score / Players section under my hand" -- rather
