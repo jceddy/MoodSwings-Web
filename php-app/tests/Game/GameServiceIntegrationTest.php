@@ -17541,6 +17541,61 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * Reported live: "let's limit sealed pool of the day/week to only
+     * two players" -- unlike every other DRAFT_DECK_TYPES member (2-4
+     * players), createGame() rejects a 3rd (or 4th) seat outright for
+     * this deck type.
+     */
+    public function testCreateGameRejectsSealedPoolOfTheDayWithMoreThanTwoPlayers(): void
+    {
+        $alice = $this->insertUser('sealedpool-3p-alice');
+        $bob = $this->insertUser('sealedpool-3p-bob');
+        $carol = $this->insertUser('sealedpool-3p-carol');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('must have exactly 2 players');
+
+        $this->games->createGame($alice, [$alice, $bob, $carol], format: 'draft', deckType: 'sealed_pool_of_the_day');
+    }
+
+    /**
+     * The same restriction blocks Team Play/Closed Team Play outright
+     * too, even at their own required 4 players -- every OTHER
+     * DRAFT_DECK_TYPES member supports both team formats (see "Duel:
+     * separate per-player decks"), but Weekly Sealed Pool's own 1v1
+     * standings ladder (and Sealed Pool of the Day sharing the same
+     * restriction for consistency) has no equivalent team-vs-team
+     * scoring concept.
+     */
+    public function testCreateGameRejectsSealedPoolOfTheDayForTeamPlay(): void
+    {
+        $alice = $this->insertUser('sealedpool-team-alice');
+        $bob = $this->insertUser('sealedpool-team-bob');
+        $carol = $this->insertUser('sealedpool-team-carol');
+        $dave = $this->insertUser('sealedpool-team-dave');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage("doesn't support Team Play or Closed Team Play");
+
+        $this->games->createGame($alice, [$alice, $bob, $carol, $dave], format: 'team', partnerUserId: $bob, deckType: 'sealed_pool_of_the_day');
+    }
+
+    /**
+     * The mirror-image case -- exactly 2 players -- still works, proving
+     * the rejection above is scoped to 3+ specifically, not 'draft'
+     * format Sealed Pool of the Day in general.
+     */
+    public function testCreateGameAcceptsSealedPoolOfTheDayWithExactlyTwoPlayers(): void
+    {
+        $alice = $this->insertUser('sealedpool-2p-alice');
+        $bob = $this->insertUser('sealedpool-2p-bob');
+
+        $gameId = $this->games->createGame($alice, [$alice, $bob], format: 'draft', deckType: 'sealed_pool_of_the_day');
+
+        self::assertIsInt($gameId);
+    }
+
+    /**
      * The defining difference from ordinary Sealed Deck (see
      * testCreateGameSealedDeckPoolsAreIndependentAcrossPlayers() above,
      * which asserts the exact opposite for that deck_type): every seated
@@ -17674,6 +17729,39 @@ final class GameServiceIntegrationTest extends TestCase
     private function weeklyQueue(): \MoodSwings\Matchmaking\WeeklySealedPoolQueueService
     {
         return new \MoodSwings\Matchmaking\WeeklySealedPoolQueueService($this->games);
+    }
+
+    /**
+     * The same "exactly 2 players" restriction Sealed Pool of the Day
+     * gets (both deck types share PERIODIC_SEALED_POOL_DECK_TYPES/the
+     * same createGame() validation) -- WeeklySealedPoolQueueService's own
+     * FIFO pairing only ever calls createGame() with exactly 2 players
+     * anyway, but this is the direct createGame()-level guarantee, not
+     * just an incidental property of how the queue happens to call it.
+     */
+    public function testCreateGameRejectsWeeklySealedPoolWithMoreThanTwoPlayers(): void
+    {
+        $alice = $this->insertUser('weeklypool-3p-alice');
+        $bob = $this->insertUser('weeklypool-3p-bob');
+        $carol = $this->insertUser('weeklypool-3p-carol');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('must have exactly 2 players');
+
+        $this->games->createGame($alice, [$alice, $bob, $carol], format: 'draft', deckType: 'weekly_sealed_pool');
+    }
+
+    public function testCreateGameRejectsWeeklySealedPoolForTeamPlay(): void
+    {
+        $alice = $this->insertUser('weeklypool-team-alice');
+        $bob = $this->insertUser('weeklypool-team-bob');
+        $carol = $this->insertUser('weeklypool-team-carol');
+        $dave = $this->insertUser('weeklypool-team-dave');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage("doesn't support Team Play or Closed Team Play");
+
+        $this->games->createGame($alice, [$alice, $bob, $carol, $dave], format: 'closed_team', partnerUserId: $bob, deckType: 'weekly_sealed_pool');
     }
 
     public function testJoinQueuePairsTwoWaitingPlayers(): void

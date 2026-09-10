@@ -43,12 +43,15 @@ final class MatchmakingService
      *   joining; see joinOpenGame())
      * @param int $targetPlayerCount how many total seats (including the
      *   creator) this listing needs before the game is created -- forced
-     *   to the only legal value for 'duel' (2) and 'team'/'closed_team'
-     *   (4) regardless of what's passed; only 'draft'/'standard' actually
-     *   let the creator choose (2-4). $createGameParams' own
-     *   'best_of_three' (issue #90 follow-up) is silently a no-op for
-     *   'standard' unless this ends up exactly 2 -- see createGame()'s own
-     *   docblock for why.
+     *   to the only legal value for 'duel' (2), 'team'/'closed_team' (4),
+     *   and deck_type 'sealed_pool_of_the_day'/'weekly_sealed_pool' (2,
+     *   issue #520 follow-up: reported live, "let's limit sealed pool of
+     *   the day/week to only two players" -- see GameService::createGame()'s
+     *   own matching restriction) regardless of what's passed; only
+     *   'draft'/'standard' with every OTHER deck_type actually let the
+     *   creator choose (2-4). $createGameParams' own 'best_of_three'
+     *   (issue #90 follow-up) is silently a no-op for 'standard' unless
+     *   this ends up exactly 2 -- see createGame()'s own docblock for why.
      */
     public function postOpenGame(int $userId, array $createGameParams, int $targetPlayerCount): int
     {
@@ -64,6 +67,8 @@ final class MatchmakingService
             throw new GameStateException("Open lobby games don't support the \"{$format}\" format.");
         }
 
+        $deckType = (string) ($createGameParams['deck_type'] ?? 'structure');
+
         // Same "custom card/effect formats" opt-in (users.allow_custom_content)
         // GameService::createGame() itself enforces for every seated player --
         // checked here against the creator alone, since nobody else is known
@@ -71,15 +76,16 @@ final class MatchmakingService
         // listing that then has to be hidden from every other non-opted-in
         // browser (see listOpenGames()) and would still blow up in
         // createGame() the moment someone finally joined it.
-        if ((string) ($createGameParams['deck_type'] ?? 'structure') === 'chaos_draft' && !(bool) $user['allow_custom_content']) {
+        if ($deckType === 'chaos_draft' && !(bool) $user['allow_custom_content']) {
             throw new GameStateException(
                 'Chaos Draft uses custom, fan-made card effects -- opt in first via Settings > "Allow custom card/effect formats" before posting one to the open lobby.'
             );
         }
 
-        $targetPlayerCount = match ($format) {
-            'duel' => 2,
-            'team', 'closed_team' => 4,
+        $targetPlayerCount = match (true) {
+            $format === 'duel' => 2,
+            $format === 'team' || $format === 'closed_team' => 4,
+            $deckType === 'sealed_pool_of_the_day' || $deckType === 'weekly_sealed_pool' => 2,
             default => $targetPlayerCount,
         };
 

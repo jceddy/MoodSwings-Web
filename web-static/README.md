@@ -1177,7 +1177,16 @@ supported; choosing "open" (`updateNewGameModeFields()`) hides
 `#new-game-open-player-count-label` -- a `2`-`4` select for exactly how
 many total players (including the creator) the listing needs before it
 starts, forced to `2` for `duel` and `4` for the team formats regardless
-(both hide the field, since there's nothing to choose). A team format's
+(both hide the field, since there's nothing to choose). Sealed Pool of
+the Day is the same idea (issue #520 follow-up, reported live: "let's
+limit sealed pool of the day/week to only two players") -- forced to `2`
+server-side by `MatchmakingService::postOpenGame()` regardless of what's
+sent, so this field stays hidden for it too, checked against the RAW
+`#new-game-format` select's own value rather than `effectiveNewGameFormat()`'s
+mapped `'draft'` (this listener runs before `updateDeckTypeAvailability()`
+forces `#new-game-deck-type` to `'sealed_pool_of_the_day'` on the same
+event, so reading that select here instead would still see its stale,
+pre-switch value the one time it matters). A team format's
 own partner-choice fields (`#new-game-team-fields`) stay hidden in this
 mode too, even though the format itself is otherwise shown normally --
 `updateTeamFields()`'s own open-lobby check keeps it that way, since
@@ -2076,16 +2085,18 @@ deck's `cards`.
     -- rather than always starting unchecked; see "Settings dialog"
     above and "Personal preference for the New Game dialog's default" in
     `php-app/README.md`. `updateOpponentSelectionLimit()` caps how many
-    friends can be checked at once at 3 (4 players total) for every
-    format now (`opponentSelectionMax()`, see its own writeup further
-    below) -- Duel used to cap at just 1 (2 players total, the server's
-    own hard limit before issue #505), and Draft's own analogous cap was
-    already lifted by issue #189, so this is no longer a per-format
-    distinction at all. It runs on every checkbox's own `change` as well
-    as the format `<select>`'s: switching to a format/deck_type
-    combination that supports fewer players than are already checked
-    auto-unchecks the extras and disables the rest, so you can't submit a
-    request the server will just reject with a 400.
+    friends can be checked at once at 3 (4 players total) for almost
+    every format/deck_type now (`opponentSelectionMax()`, see its own
+    writeup further below) -- Duel used to cap at just 1 (2 players
+    total, the server's own hard limit before issue #505), and Draft's
+    own analogous cap was already lifted by issue #189. Sealed Pool of
+    the Day is the one deliberate exception again (issue #520 follow-up,
+    reported live: "let's limit sealed pool of the day/week to only two
+    players"), capped back down to 1. It runs on every checkbox's own
+    `change` as well as the format `<select>`'s: switching to a
+    format/deck_type combination that supports fewer players than are
+    already checked auto-unchecks the extras and disables the rest, so
+    you can't submit a request the server will just reject with a 400.
     Selecting Open Team Play or Closed Team Play reveals
     `#new-game-team-fields` (`updateTeamFields()`, wired to the same
     checkbox/format `change` events): a partner `<select>` populated from
@@ -2144,15 +2155,20 @@ deck's `cards`.
     the Deck dropdown and forcing `#new-game-deck-type` to
     `'sealed_pool_of_the_day'` under the hood, `effectiveNewGameFormat()`/
     the rematch-prefill reverse translation both extended to cover it
-    alongside `'sealed_deck'`). Two things about it are NOT shared with
+    alongside `'sealed_deck'`). Three things about it are NOT shared with
     Sealed Deck's own sentinel, though: `DECK_TYPE_DESCRIPTIONS`' entry for
     it spells out the per-rarity deck caps up front (see "Sealed Pool of the
     Day" in `php-app/README.md`) since every player's pool is the identical
-    50 cards that day, and `botsSupportedFor()` returns `false` for it
+    50 cards that day, `botsSupportedFor()` returns `false` for it
     specifically (unlike Sealed Deck, which does support bots) -- so the New
     Game dialog's bot checkboxes stay hidden whenever this option is
     selected, the same way they would for any other bot-unsupported deck
-    type.
+    type -- and `opponentSelectionMax()` caps it at 1 opponent rather than
+    3 (issue #520 follow-up, reported live: "let's limit sealed pool of
+    the day/week to only two players" -- see "Sealed Pool of the Day" in
+    `php-app/README.md` for the matching server-side restriction), so its
+    friend-checkbox list only ever lets one be checked at a time,
+    disabling the rest.
 
     The
     dialog's Deck dropdown (`#new-game-deck-type` -- Structure, Power,
@@ -2328,16 +2344,19 @@ deck's `cards`.
     kind of live drafting process; Quick Draft was the first, Winston
     Draft joined it next, Grid Draft joined after that -- see "Draft
     format" in `php-app/README.md`). `updateOpponentSelectionLimit()` caps
-    opponent selection at 3 (up to 4 players total) for every format now
-    (`opponentSelectionMax()`, no longer even taking a `format` parameter
-    -- Duel's own cap of 1 was removed once constructed Duel deck types
-    started supporting 2-4 players too, issue #505, the same way the
-    function's earlier `deck_type` parameter was already removed once
-    Quick Draft, Winston Draft, and Grid Draft all three ended up
-    supporting 2-4 players and that branching became dead code); a
-    format/deck-type change that leaves fewer players supported than are
-    currently checked still un-checks the extras, keeping the earliest
-    ones checked. Polls `GET /games` every 4 seconds while the lobby is
+    opponent selection at 3 (up to 4 players total) for almost every
+    format/deck_type now (`opponentSelectionMax()`, which never took a
+    `format` parameter -- Duel's own cap of 1 was removed once
+    constructed Duel deck types started supporting 2-4 players too,
+    issue #505, the same way an earlier `deck_type` parameter was
+    already removed once Quick Draft, Winston Draft, and Grid Draft all
+    three ended up supporting 2-4 players and that branching became dead
+    code). Sealed Pool of the Day brought a `deck_type` read back (issue
+    #520 follow-up, reported live: "let's limit sealed pool of the
+    day/week to only two players") -- its own cap is 1, the only
+    exception left; a format/deck-type change that leaves fewer players
+    supported than are currently checked still un-checks the extras,
+    keeping the earliest ones checked. Polls `GET /games` every 4 seconds while the lobby is
     open (mirroring the board's own poll below, and mutually exclusive
     with it via the same `pollTimer` variable, since only one of the two
     views is ever visible at once) — so a game another player just
