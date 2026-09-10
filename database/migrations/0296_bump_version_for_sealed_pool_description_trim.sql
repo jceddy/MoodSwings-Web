@@ -1,0 +1,11 @@
+-- Reported live: trim '... even though it holds more than that of each --
+-- a real choice of which ones to build around, not just "run every good
+-- card."' from the New Game dialog's Sealed Pool of the Day description
+-- (DECK_TYPE_DESCRIPTIONS.sealed_pool_of_the_day, web-static/js/game.js)
+-- -- unnecessarily verbose. The rarity caps themselves (4 rares, 2
+-- mythics) are still spelled out; only the editorializing justification
+-- for why they exist is gone.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.39.23' WHERE id = 1;
