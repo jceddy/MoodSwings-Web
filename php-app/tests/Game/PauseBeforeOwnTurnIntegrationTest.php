@@ -502,4 +502,49 @@ final class PauseBeforeOwnTurnIntegrationTest extends TestCase
         $inPlayCardIds = array_column($state['in_play'], 'card_id');
         self::assertContains($courageId, $inPlayCardIds, 'the frozen watermark must not hide a real play made during round 2 itself');
     }
+
+    /**
+     * Reported live, a further follow-up: "BotSage played Suspicion from
+     * hand, waiting on a response (player: jceddy) ... A response to
+     * Suspicion was resolved (discarded card: Shock) ... I don't think I
+     * need to see the 'Advance turn' button at this point because
+     * nothing is changing between the end of the opponent's turn and the
+     * beginning of mine." p1 plays Suspicion targeting p2; p2 answers
+     * their own "discard a card" decision as the target, which both
+     * finishes p1's turn (no plays left) AND hands the turn straight to
+     * p2 -- the very player whose own request just caused the handoff.
+     * They already know exactly what happened (they chose which card to
+     * discard), so this must NOT gate their own turn even though they
+     * opted into pause_before_own_turn.
+     */
+    public function testAnsweringADecisionThatHandsTheTurnToTheResponderSkipsThePause(): void
+    {
+        $u1 = $this->insertUser('human1');
+        $u2 = $this->insertUser('human2');
+        (new UserRepository())->setPauseBeforeOwnTurn($u2, true);
+        $gameId = $this->insertGame('standard', 'structure', $u1, winsNeeded: 3);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $suspicionId = $this->insertGameCard($gameId, 78, 'hand', $p1); // Suspicion
+        $shockId = $this->insertGameCard($gameId, 101, 'hand', $p2); // Shock -- the card p2 will discard
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $result = $this->games->playMood($gameId, $p1, $suspicionId, ['player_ids' => [$p2]]);
+        self::assertTrue($result['pending_decision'] ?? false);
+
+        $result = $this->games->respondToDecision($gameId, $p2, ['discarded_card_id_' . $p2 => $shockId]);
+        self::assertFalse($result['round_scored'] ?? true);
+
+        $round = $this->fetchRound($gameId);
+        self::assertSame($p2, (int) $round['current_turn_game_player_id']);
+        self::assertSame(0, (int) $round['turn_pending_acknowledgment'], 'p2 just answered their own decision, so their own resulting turn must not be gated');
+
+        // p2 can act immediately -- no GameStateException (assertTurnAcknowledged()
+        // would throw one), no acknowledgeTurnStart() needed first. Round
+        // 1 correctly scores right after (p1 and p2 have each now made
+        // their own single play/pass this round) -- immaterial to what
+        // this test is actually proving.
+        $result = $this->games->pass($gameId, $p2);
+        self::assertTrue($result['round_scored']);
+    }
 }

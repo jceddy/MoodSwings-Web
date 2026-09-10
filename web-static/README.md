@@ -1147,6 +1147,16 @@ never sets that flag in the first place, so `renderBoard()`'s own existing
 next poll just shows the live board with Pass/hand cards already
 clickable, no `#advance-turn-button` click required.
 
+**Same story for the "answering someone else's decision handed you the
+turn" follow-up** (reported live: "I don't think I need to see the
+'Advance turn' button at this point because nothing is changing between
+the end of the opponent's turn and the beginning of mine" -- see "Pause
+at the start of your turn" in `php-app/README.md` for
+`updateRoundTurnState()`'s own `$requestingGamePlayerId` comparison).
+Once again purely a server-side decision about whether to ever set
+`turn_pending_acknowledgment` in the first place -- nothing here needed
+to change to keep the banner correctly hidden when it isn't.
+
 **Onlookers get a text hint, not a banner of their own**: a
 spectator's/other player's own `#board-round-status` line reads
 `"Round N — <name>'s turn (reviewing)"` instead of the plain `"...'s
