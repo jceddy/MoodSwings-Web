@@ -547,4 +547,49 @@ final class PauseBeforeOwnTurnIntegrationTest extends TestCase
         $result = $this->games->pass($gameId, $p2);
         self::assertTrue($result['round_scored']);
     }
+
+    /**
+     * The exact scenario reported live (game320log.txt): "the after
+     * scoring part of Insecurity's effect is changing the board between
+     * scoring and the start of the next turn ... this is where I want
+     * the 'Advance turn' button to show up, between scoring and
+     * resolution of after-scoring effects, only when there actually are
+     * after-scoring effects to resolve." p2 plays Insecurity, then
+     * Conviction (using Insecurity's granted extra play) to bottom p1's
+     * Apathy; p2 wins round 1 holding Insecurity + Conviction against
+     * p1's now-empty board. Insecurity's own afterScoring tag then
+     * returns Conviction to p2's hand once the round scores -- a real
+     * board change between scoring and round 2's own first turn -- so
+     * round 2 (p2 goes first, having won) must be gated for p2.
+     */
+    public function testInsecurityReturningItsExtraPlayCardToHandAfterScoringGatesTheWinnersNextRound(): void
+    {
+        $u1 = $this->insertUser('human1');
+        $u2 = $this->insertUser('human2');
+        (new UserRepository())->setPauseBeforeOwnTurn($u2, true);
+        $gameId = $this->insertGame('standard', 'structure', $u1, winsNeeded: 3);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $apathyId = $this->insertGameCard($gameId, 55, 'in_play', $p1); // Apathy, Conviction's target
+        $insecurityId = $this->insertGameCard($gameId, 45, 'hand', $p2); // Insecurity
+        $convictionId = $this->insertGameCard($gameId, 6, 'hand', $p2); // Conviction, played via Insecurity's extra play
+        $this->insertGameRound($gameId, 1, $p2, $p2, 1); // p2 goes first
+
+        $result = $this->games->playMood($gameId, $p2, $insecurityId, []);
+        self::assertFalse($result['round_scored'] ?? true);
+
+        $result = $this->games->playMood($gameId, $p2, $convictionId, ['target_mood_id' => $apathyId]);
+        self::assertFalse($result['round_scored'] ?? true);
+
+        $round = $this->fetchRound($gameId);
+        self::assertSame($p1, (int) $round['current_turn_game_player_id'], 'p2 used both its plays; p1 (no pause preference) is up next');
+
+        $result = $this->games->pass($gameId, $p1); // p1's hand is empty
+        self::assertTrue($result['round_scored']);
+
+        $round = $this->fetchRound($gameId);
+        self::assertSame(2, (int) $round['round_number']);
+        self::assertSame($p2, (int) $round['current_turn_game_player_id'], 'p2 won round 1 with Insecurity + Conviction vs. an empty board');
+        self::assertSame(1, (int) $round['turn_pending_acknowledgment'], "Insecurity's own return-to-hand effect changes the board after scoring, so p2's own round 2 must be gated");
+    }
 }
