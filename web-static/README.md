@@ -1039,7 +1039,11 @@ recovered partial search rather than a completed one --
   show, just one explanatory line naming `choice_policy_path`
   (`'bespoke_rule'`: "used a card-specific override rule for this play";
   `'generic_resolver'`: "used the generic default targeting rule... no
-  card-specific override applied").
+  card-specific override applied"; `null` -- a PASS, no card was chosen
+  at all -- "found no card worth playing and passed". Reported live: a
+  passed turn used to fall into the `'generic_resolver'` wording too
+  (treated as "anything but bespoke_rule"), reading as though a card had
+  been played when nothing was.).
 - `recovered_from_stalled_search` (reported live: "is there any way that
   we could have the tactical bot use any results found so far from a
   partial search when it gets to time instead of completely abandoning

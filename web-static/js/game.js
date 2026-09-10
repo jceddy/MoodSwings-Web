@@ -5095,11 +5095,23 @@
         wrapper.appendChild(summary);
 
         if (turn.source === 'heuristic') {
+            // choice_policy_path is null for a pass (GameService::
+            // logHeuristicBotReasoning() only ever sets it when a card was
+            // actually chosen) -- reported live: a bot that PASSED still
+            // showed "used the generic default targeting rule for this
+            // play," which reads as though a card had been played, because
+            // this used to treat "not bespoke_rule" (including null) as
+            // "generic_resolver" without a distinct branch for "no card at
+            // all."
             const note = document.createElement('p');
             note.className = 'bot-reasoning-note';
-            note.textContent = turn.choice_policy_path === 'bespoke_rule'
-                ? 'Standard bot: used a card-specific override rule for this play.'
-                : 'Standard bot: used the generic default targeting rule for this play (no card-specific override applied).';
+            if (turn.choice_policy_path === 'bespoke_rule') {
+                note.textContent = 'Standard bot: used a card-specific override rule for this play.';
+            } else if (turn.choice_policy_path === 'generic_resolver') {
+                note.textContent = 'Standard bot: used the generic default targeting rule for this play (no card-specific override applied).';
+            } else {
+                note.textContent = 'Standard bot: found no card worth playing and passed.';
+            }
             wrapper.appendChild(note);
 
             return wrapper;

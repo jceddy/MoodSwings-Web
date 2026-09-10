@@ -1,0 +1,19 @@
+-- Reported live: a Tactical Bot's turn ended in a PASS (a stale search
+-- job with no checkpoint to recover fell all the way back to the
+-- heuristic bot, which then had no legal/worthwhile card to play --
+-- migration 0283's own "Heuristic bot reasoning" addition), and the
+-- reasoning dialog showed "BotSageQuick passed" right next to "Standard
+-- bot: used the generic default targeting rule for this play" -- reading
+-- as though a card HAD been played, when nothing was.
+--
+-- web-static/js/game.js's buildBotReasoningTurn() only ever special-cased
+-- choice_policy_path === 'bespoke_rule', treating every other value --
+-- including null, which GameService::logHeuristicBotReasoning() sets
+-- specifically for a PASS (no card was chosen, so there's no policy path
+-- to name) -- as 'generic_resolver'. Now branches on all three: bespoke
+-- rule, generic resolver, or (choice_policy_path === null) a distinct
+-- "found no card worth playing and passed" message.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.39.11' WHERE id = 1;
