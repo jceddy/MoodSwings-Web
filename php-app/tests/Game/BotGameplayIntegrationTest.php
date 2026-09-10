@@ -722,6 +722,40 @@ final class BotGameplayIntegrationTest extends TestCase
     }
 
     /**
+     * End-to-end coverage of BotPlayerService::thrillHandMoodIds() (see
+     * BotPlayerServiceTest for the policy itself in isolation) through the
+     * FULL advanceAutomatedTurns() -> playMood() -> ThrillEffect::afterPlaying()
+     * -> playMood() -> NostalgiaEffect::afterPlaying() request lifecycle --
+     * reported live: a bot with Nostalgia already in play and Compulsion
+     * sitting in the discard pile played Thrill with no targets at all,
+     * missing the free combo. Thrill (103) should bounce the already-in-play
+     * Nostalgia (128) back to the bot's own hand, granting one extra play;
+     * the bot then replays Nostalgia with that extra play, picking
+     * Compulsion (86) back up from the discard pile and using Nostalgia's
+     * own separate unconditional extra play to actually play it too.
+     */
+    public function testBotBouncesNostalgiaWithThrillThenReplaysItToRetrieveCompulsionFromDiscard(): void
+    {
+        $u1 = $this->insertUser('human9');
+        $botUserId = $this->insertBotUser('bot9');
+        $gameId = $this->insertGame('standard', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+
+        $this->insertGameCard($gameId, 103, 'hand', $botPlayerId); // Thrill
+        $this->insertGameCard($gameId, 128, 'in_play', $botPlayerId); // Nostalgia, already in play
+        $this->insertGameCard($gameId, 86, 'discard'); // Compulsion, sitting in the discard pile
+        $this->insertGameCard($gameId, 8, 'hand', $p1); // human needs a non-empty hand too
+        $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
+
+        self::assertNotNull($this->games->advanceAutomatedTurns($gameId));
+
+        self::assertTrue($this->cardIsInPlay($gameId, 103), 'Thrill itself should be in play');
+        self::assertTrue($this->cardIsInPlay($gameId, 128), 'Nostalgia should be back in play after being bounced and replayed, not left sitting in hand');
+        self::assertTrue($this->cardIsInPlay($gameId, 86), "Compulsion should have been picked up from discard and played too, using Nostalgia's own extra play");
+    }
+
+    /**
      * End-to-end coverage of BotPlayerService::shouldAttemptValueBoostDiscard()
      * (see BotPlayerServiceTest for the policy itself in isolation) through
      * the FULL advanceAutomatedTurns() -> playMood() request lifecycle --

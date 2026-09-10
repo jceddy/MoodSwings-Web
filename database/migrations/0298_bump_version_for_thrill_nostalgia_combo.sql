@@ -1,0 +1,21 @@
+-- Reported live: a bot with Nostalgia already in play and Compulsion
+-- sitting in the discard pile played Thrill with no targets at all,
+-- missing a genuinely free combo -- bouncing Nostalgia back to hand and
+-- replaying it that same turn costs nothing (its own extra-play grant
+-- is unconditional, so the replayed copy lands back in play at its own
+-- unchanged value) while also picking Compulsion back up from discard.
+--
+-- Thrill's own hand_mood_ids field (multi, optional) was never in
+-- BotChoiceResolver::ALWAYS_FILLED_OPTIONAL_FIELDS, so the generic
+-- resolver always left it empty -- an earlier fix only ever changed
+-- WHETHER/WHEN a bot leads with Thrill, never WHAT it actually bounces
+-- once played. BotPlayerService::thrillHandMoodIds() now gives Thrill
+-- its own bespoke targeting policy, scoped to exactly the one
+-- guaranteed-free case: an in-play Nostalgia whose own
+-- nostalgiaDiscardCardId() would find something worth taking (reusing
+-- that method also carries its own "skip the pickup while Sadness/Wonder
+-- is in play" exception through automatically).
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.39.25' WHERE id = 1;

@@ -1727,7 +1727,7 @@ final class BotPlayerService
         'rationalization', 'avoidance', 'cynicism', 'intimidation', 'paranoia',
         'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
         'nostalgia', 'contempt', 'sneakiness', 'shock', 'exhilaration',
-        'rejection', 'guilt', 'scorn', 'recklessness',
+        'rejection', 'guilt', 'scorn', 'recklessness', 'thrill',
     ];
 
     /**
@@ -1803,6 +1803,12 @@ final class BotPlayerService
             $targetMoodIds = $this->pacifismTargetMoodIds($state, $botGamePlayerId);
 
             return $targetMoodIds !== [] ? ['target_mood_ids' => $targetMoodIds] : [];
+        }
+
+        if ($effectKey === 'thrill') {
+            $handMoodIds = $this->thrillHandMoodIds($state, $cardId, $botGamePlayerId);
+
+            return $handMoodIds !== [] ? ['hand_mood_ids' => $handMoodIds] : [];
         }
 
         if ($effectKey === 'shock') {
@@ -3306,6 +3312,51 @@ final class BotPlayerService
         usort($bestMoodIdByOpponent, fn (int $a, int $b) => $state->valueOf($b) <=> $state->valueOf($a));
 
         return array_slice($bestMoodIdByOpponent, 0, 2);
+    }
+
+    /**
+     * Thrill's own "which of my other in-play moods to return to hand"
+     * policy (reported live: a bot with Nostalgia in play, and Compulsion
+     * sitting in the discard pile, played Thrill with no targets at all
+     * instead of bouncing Nostalgia to replay it and pick Compulsion back
+     * up). Scoped to exactly one case for now, the only one confirmed
+     * genuinely free: an in-play Nostalgia whose OWN nostalgiaDiscardCardId()
+     * would find something worth taking (that method already excludes an
+     * empty discard pile, and skips the pickup entirely while a
+     * DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS mood -- Sadness/Wonder -- is
+     * in play, both reused verbatim here). Bouncing such a Nostalgia and
+     * replaying it this same turn (via Thrill's own unconditional
+     * one-extra-play-per-returned-mood grant) can never net LESS than
+     * leaving it alone: NostalgiaEffect::afterPlaying()'s own extra play
+     * is unconditional and unrestricted, so the replayed copy lands back
+     * in play at its own unchanged printed value (nothing lost) while
+     * ALSO picking up whatever nostalgiaDiscardCardId() already judged
+     * worth having and granting one more extra play to spend on it (or
+     * anything else already playable) -- a strict gain, never a cost, so
+     * there's no real "should I?" judgment call left the way there would
+     * be for bouncing a mood whose own value might not come back.
+     * Every OTHER in-play mood is left untouched -- bouncing anything
+     * else genuinely does cost that mood's own value for the rest of this
+     * round unless something specific is already known to make up for
+     * it, and no other such guaranteed-free combo is confirmed yet.
+     *
+     * @return int[]
+     */
+    private function thrillHandMoodIds(BoardState $state, int $cardId, int $botGamePlayerId): array
+    {
+        $targets = [];
+        foreach ($state->moodsOwnedBy($botGamePlayerId) as $mood) {
+            if ($mood->cardId === $cardId) {
+                continue;
+            }
+
+            $effectKey = $state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'];
+            if ($effectKey === 'nostalgia' && $this->nostalgiaDiscardCardId($state, $mood->cardId, $botGamePlayerId) !== null) {
+                $targets[] = $mood->cardId;
+            }
+        }
+
+        return $targets;
     }
 
     /**

@@ -7666,6 +7666,35 @@ since it already holds that dependency):
   bot with anything left to play always has, and Bravado's own identical
   "needs a mood already in play" gap wasn't part of what was reported.
 
+  **Thrill's own targeting was still entirely unfilled, though** (reported
+  live: a bot with Nostalgia already in play and Compulsion sitting in
+  the discard pile played Thrill with no targets at all, missing a
+  genuinely free combo). `hand_mood_ids` (`multi: true`, `required: false`)
+  isn't in `BotChoiceResolver::ALWAYS_FILLED_OPTIONAL_FIELDS`, so the
+  generic resolver never fills it at all -- the "reverts to ordinary
+  boosted treatment" fix above only ever changed WHETHER/WHEN Thrill gets
+  led with, never WHAT it actually bounces once played, so it was still
+  played with an empty `hand_mood_ids` every time. `thrillHandMoodIds()`
+  now gives it a bespoke targeting policy (`effectKey === 'thrill'` added
+  to `BESPOKE_CHOICE_EFFECT_KEYS`, alongside Pacifism/Anger/Creativity
+  above), but deliberately scoped to exactly one case rather than "bounce
+  everything" or "bounce the highest-value mood": an in-play Nostalgia
+  whose own `nostalgiaDiscardCardId()` (see "Nostalgia" below) would find
+  something worth taking. That reuse matters -- it means the same
+  "skip the pickup while a Sadness/Wonder is also in play" exception
+  automatically carries through here too, with no separate check needed.
+  Bouncing and replaying such a Nostalgia this same turn can never cost
+  anything: `NostalgiaEffect::afterPlaying()`'s own extra-play grant is
+  unconditional and unrestricted, so the replayed copy lands back in play
+  at its own unchanged printed value (nothing lost) while ALSO picking up
+  whatever `nostalgiaDiscardCardId()` already judged worth having and
+  granting one more extra play to spend on it (or anything else already
+  playable) -- a strict gain, never a real "should I?" trade-off the way
+  bouncing any OTHER mood genuinely would be (its own value really is
+  lost for the rest of the round unless something specific makes up for
+  it). Every other in-play mood is left untouched for now; no other
+  guaranteed-free Thrill combo is confirmed yet.
+
   **Anger** (confirmed by the maintainer) gets its own targeting
   exception too, via `angerTargetMoodIds()` -- `buildChoicesForCard()`
   special-cases `effectKey === 'anger'` the same way it does
