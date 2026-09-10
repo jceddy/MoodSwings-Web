@@ -601,7 +601,7 @@ final class GameService
     /**
      * Sealed Pool of the Day (issue #520): every seated player draws from
      * the exact same pool, shared across every 'sealed_pool_of_the_day'
-     * game created during the same UTC+6 calendar day -- generated once
+     * game created during the same UTC-6 calendar day -- generated once
      * (lazily, on whichever game/queue-join is first to ask for it that
      * day) and persisted, never re-rolled per game or per player the way
      * buildSealedDeckPlayerPool() is. Reuses initializeSealedDeck()
@@ -609,10 +609,12 @@ final class GameService
      * drafting phase to initialize, since every seat's drafted_card_ids
      * is already written by createGame() before this runs.
      *
-     * "Midnight UTC+6" (confirmed by the maintainer) rather than plain
-     * UTC -- an arbitrary but fixed choice every daily/weekly period
-     * boundary in this feature uses consistently (see
-     * currentWeeklySealedPoolPeriodStart() below for the weekly
+     * "Midnight UTC-6" (confirmed by the maintainer -- reported live: an
+     * earlier UTC+6 confirmation had given the wrong sign, so the pool
+     * was rolling over 12 hours off from where it was actually meant to)
+     * rather than plain UTC -- an arbitrary but fixed choice every
+     * daily/weekly period boundary in this feature uses consistently
+     * (see currentWeeklySealedPoolPeriodStart() below for the weekly
      * counterpart). DateTimeImmutable's own 'Y-m-d' format in that
      * timezone is the period's own identity -- periodic_sealed_pools'
      * (period_type, period_start) unique key is exactly this string,
@@ -620,24 +622,26 @@ final class GameService
      */
     private static function currentDailySealedPoolPeriodStart(): string
     {
-        return (new \DateTimeImmutable('now', new \DateTimeZone('+06:00')))->format('Y-m-d');
+        return (new \DateTimeImmutable('now', new \DateTimeZone('-06:00')))->format('Y-m-d');
     }
 
     /**
      * Weekly Sealed Pool's own period boundary (issue #520): Monday
-     * midnight UTC+6 (confirmed by the maintainer), computed by walking
-     * back from "today" (in that timezone) to the most recent Monday --
-     * DateTimeImmutable::format('N') returns the ISO-8601 day of the
-     * week, 1 (Monday) through 7 (Sunday), so subtracting (N - 1) days
-     * always lands on this week's own Monday, including when today
-     * already IS Monday (N - 1 = 0, no-op). Arithmetic on the day-of-week
-     * number rather than a relative date string ('monday this week') --
-     * PHP's own relative-format parsing has documented edge cases around
-     * "this week" depending on the current day, not worth the risk here.
+     * midnight UTC-6 (confirmed by the maintainer -- see
+     * currentDailySealedPoolPeriodStart()'s own docblock for the sign
+     * correction this shares), computed by walking back from "today" (in
+     * that timezone) to the most recent Monday -- DateTimeImmutable::
+     * format('N') returns the ISO-8601 day of the week, 1 (Monday)
+     * through 7 (Sunday), so subtracting (N - 1) days always lands on
+     * this week's own Monday, including when today already IS Monday
+     * (N - 1 = 0, no-op). Arithmetic on the day-of-week number rather
+     * than a relative date string ('monday this week') -- PHP's own
+     * relative-format parsing has documented edge cases around "this
+     * week" depending on the current day, not worth the risk here.
      */
     private static function currentWeeklySealedPoolPeriodStart(): string
     {
-        $today = new \DateTimeImmutable('now', new \DateTimeZone('+06:00'));
+        $today = new \DateTimeImmutable('now', new \DateTimeZone('-06:00'));
 
         return $today->modify('-' . ((int) $today->format('N') - 1) . ' days')->format('Y-m-d');
     }
@@ -1681,7 +1685,7 @@ final class GameService
         // Sealed Pool of the Day (issue #520) inverts this: every seat
         // gets the exact SAME array (not count($userIds) independent
         // draws) -- getOrCreatePeriodicSealedPool()'s own pool, generated
-        // once per UTC+6 calendar day and persisted, not re-rolled here.
+        // once per UTC-6 calendar day and persisted, not re-rolled here.
         // array_fill() rather than array_map() makes that "identical, not
         // independently random" intent explicit at the call site.
         $periodicSealedPool = array_key_exists($deckType, self::PERIODIC_SEALED_POOL_DECK_TYPES)

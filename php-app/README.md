@@ -3751,8 +3751,10 @@ fails on the table's `UNIQUE KEY (period_type, period_start)` with a
 duplicate-key `PDOException`, which is caught and turned into a re-`SELECT`
 of whichever row actually won, so both callers end up with the same pool id
 either way. `currentDailySealedPoolPeriodStart()` fixes the day boundary at
-UTC+6 midnight (an explicit product choice, not the server's own timezone),
-via `new \DateTimeImmutable('now', new \DateTimeZone('+06:00'))`.
+UTC-6 midnight (an explicit product choice, not the server's own timezone --
+reported live: an earlier UTC+6 confirmation had the sign backwards, rolling
+the pool over 12 hours off from where it was actually meant to), via
+`new \DateTimeImmutable('now', new \DateTimeZone('-06:00'))`.
 
 **A new, wider rarity distribution than Sealed Deck's** --
 `PERIODIC_SEALED_POOL_RARITY_COUNTS` (20 common, 15 uncommon, 10 rare, 5

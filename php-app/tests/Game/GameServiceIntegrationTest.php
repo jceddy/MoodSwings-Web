@@ -17711,7 +17711,7 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
-     * The shared pool is generated ONCE per UTC+6 calendar day and
+     * The shared pool is generated ONCE per UTC-6 calendar day and
      * persisted (periodic_sealed_pools), not re-rolled per game -- a
      * second game created the same day should reuse the exact same pool
      * (and the exact same periodic_sealed_pools row) as the first,
