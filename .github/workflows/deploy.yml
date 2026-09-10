@@ -118,6 +118,22 @@ jobs:
           cp -R php-app/src dist/src
           cp -R php-app/vendor dist/vendor
 
+          # Standalone CLI scripts (bin/run_bot_search.php,
+          # bin/recheck_automated_turn.php, the cron sweeps, etc.) --
+          # GameService::launchTacticalBotSearchJob()/
+          # scheduleAutomatedTurnRecheck() locate these via
+          # dirname(__DIR__, 2) . '/bin/...' from src/Game/GameService.php,
+          # i.e. a sibling of dist/src, same as dist/database below.
+          # Missing entirely before this: every exec()'d background search
+          # job failed to even start (no such file), which read exactly
+          # like the search process crashing or a hosting/exec()
+          # restriction -- reported live: "based on the results I'm seeing
+          # when I test this process must be crashing basically all the
+          # time" -- confirmed via bot_search_jobs.heartbeat_at (migration
+          # 0283) staying NULL on every stale job, meaning the spawned
+          # process never got far enough to even boot its own autoloader.
+          cp -R php-app/bin dist/bin
+
           # Migration files, so the "Run database migrations" step below
           # (a POST /migrate call against the just-deployed app, which has
           # no shell access of its own) can find them via
