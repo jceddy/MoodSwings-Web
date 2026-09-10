@@ -1593,10 +1593,26 @@ final class BotPlayerService
      * "no sideboarding" note for bots.
      *
      * @param int[] $draftedCardIds
-     * @param array{rowsById: array<int, array{draftPriorityScore: int}>, synergyPartnersByMythicId: array<int, int[]>, deckWinRatesByCardId: array<int, array{times_in_deck: int, deck_win_rate: ?float}>} $draftScoringData
+     * @param array{rowsById: array<int, array{draftPriorityScore: int, rarity?: string}>, synergyPartnersByMythicId: array<int, int[]>, deckWinRatesByCardId: array<int, array{times_in_deck: int, deck_win_rate: ?float}>} $draftScoringData
+     * @param ?array<string, int> $rarityCaps Sealed Pool of the Day's own
+     *        PERIODIC_SEALED_POOL_RARITY_DECK_CAPS (issue #520 follow-up:
+     *        "since we aren't tracking standings for sealed pool of the
+     *        day, let's allow practice bots for those") -- null for every
+     *        OTHER draft deck_type (no cap at all, the original greedy
+     *        top-N trim below). When given, the top-N trim instead walks
+     *        $sorted in score order and SKIPS any card whose own rarity
+     *        has already hit its cap, continuing to the next-best card
+     *        rather than stopping -- greedy in score, not in raw
+     *        position, so the deck is still the best-scoring LEGAL deck
+     *        this ordering can build. Sealed Pool of the Day's own pool
+     *        (20 common/15 uncommon/10 rare/5 mythic, only rare/mythic
+     *        capped at 4/2) always has far more uncapped filler than
+     *        SEALED_DECK_MIN_DECK_SIZE (12) needs, so this can never run
+     *        out of legal candidates before reaching $minDeckSize the way
+     *        an aggressively-capped format theoretically could.
      * @return int[]
      */
-    public function chooseDraftDeck(array $draftedCardIds, int $minDeckSize, array $draftScoringData): array
+    public function chooseDraftDeck(array $draftedCardIds, int $minDeckSize, array $draftScoringData, ?array $rarityCaps = null): array
     {
         $sorted = $draftedCardIds;
         usort($sorted, fn (int $a, int $b) => $this->draftCardScore(
@@ -1613,7 +1629,30 @@ final class BotPlayerService
             $draftScoringData['deckWinRatesByCardId'],
         ));
 
-        return array_slice($sorted, 0, $minDeckSize);
+        if ($rarityCaps === null) {
+            return array_slice($sorted, 0, $minDeckSize);
+        }
+
+        $deck = [];
+        $countByRarity = [];
+        foreach ($sorted as $cardId) {
+            if (count($deck) >= $minDeckSize) {
+                break;
+            }
+
+            $rarity = $draftScoringData['rowsById'][$cardId]['rarity'] ?? null;
+            $cap = $rarityCaps[$rarity] ?? null;
+            if ($cap !== null && ($countByRarity[$rarity] ?? 0) >= $cap) {
+                continue;
+            }
+
+            $deck[] = $cardId;
+            if ($rarity !== null) {
+                $countByRarity[$rarity] = ($countByRarity[$rarity] ?? 0) + 1;
+            }
+        }
+
+        return $deck;
     }
 
     /**

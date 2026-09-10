@@ -2155,20 +2155,24 @@ deck's `cards`.
     the Deck dropdown and forcing `#new-game-deck-type` to
     `'sealed_pool_of_the_day'` under the hood, `effectiveNewGameFormat()`/
     the rematch-prefill reverse translation both extended to cover it
-    alongside `'sealed_deck'`). Three things about it are NOT shared with
+    alongside `'sealed_deck'`). Two things about it are NOT shared with
     Sealed Deck's own sentinel, though: `DECK_TYPE_DESCRIPTIONS`' entry for
     it spells out the per-rarity deck caps up front (see "Sealed Pool of the
     Day" in `php-app/README.md`) since every player's pool is the identical
-    50 cards that day, `botsSupportedFor()` returns `false` for it
-    specifically (unlike Sealed Deck, which does support bots) -- so the New
-    Game dialog's bot checkboxes stay hidden whenever this option is
-    selected, the same way they would for any other bot-unsupported deck
-    type -- and `opponentSelectionMax()` caps it at 1 opponent rather than
-    3 (issue #520 follow-up, reported live: "let's limit sealed pool of
-    the day/week to only two players" -- see "Sealed Pool of the Day" in
-    `php-app/README.md` for the matching server-side restriction), so its
-    friend-checkbox list only ever lets one be checked at a time,
-    disabling the rest.
+    50 cards that day, and `opponentSelectionMax()` caps it at 1 opponent
+    rather than 3 (issue #520 follow-up, reported live: "let's limit sealed
+    pool of the day/week to only two players" -- see "Sealed Pool of the
+    Day" in `php-app/README.md` for the matching server-side restriction),
+    so its friend/bot-checkbox list only ever lets one be checked at a
+    time, disabling the rest. Bot checkboxes themselves are NOT hidden for
+    this option, unlike an earlier version of this feature (issue #520
+    follow-up, reported live: "since we aren't tracking standings for
+    sealed pool of the day, let's allow practice bots for those") --
+    `botsSupportedFor()` now returns `true` for it the same as every other
+    draft deck_type (see "Sealed Pool of the Day" in `php-app/README.md`
+    for `chooseDraftDeck()`'s own matching rarity-cap fix); Weekly Sealed
+    Pool stays the one bot-unsupported deck_type, though it's never
+    reachable from this dialog at all regardless.
 
     The
     dialog's Deck dropdown (`#new-game-deck-type` -- Structure, Power,

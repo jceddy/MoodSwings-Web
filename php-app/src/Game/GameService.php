@@ -1552,7 +1552,7 @@ final class GameService
         // request never gets as far as e.g. parsing a decklist.
         $botUserIds = $this->botUserIdsAmong($userIds);
         if ($botUserIds !== [] && !$this->botsSupportedFor($format, $deckType)) {
-            throw new GameStateException('Practice bots are only supported for Traditional/Duel/Team Play/Closed Team Play games using a Structure, Power, jceddy\'s 75 Card, Custom Decklist, or One of Each Card deck, Duel using Custom Decklists (Duel), or any Quick Draft/Winston Draft/Grid Draft/Rotisserie Draft/Tiered Rotisserie Draft/Sealed Deck game');
+            throw new GameStateException('Practice bots are only supported for Traditional/Duel/Team Play/Closed Team Play games using a Structure, Power, jceddy\'s 75 Card, Custom Decklist, or One of Each Card deck, Duel using Custom Decklists (Duel), or any Quick Draft/Winston Draft/Grid Draft/Rotisserie Draft/Tiered Rotisserie Draft/Sealed Deck/Sealed Pool of the Day game');
         }
         // Issue #505 follow-up: constructed Duel supports 3-4 players, so
         // a custom_duel game may seat 2+ bots -- each needs its own
@@ -2047,24 +2047,28 @@ final class GameService
         if ($format === 'duel' && $deckType === 'custom_duel') {
             return true;
         }
-        // Sealed Pool of the Day/Weekly Sealed Pool (issue #520) are the
-        // only DRAFT_DECK_TYPES members deliberately excluded here:
-        // BotPlayerService::chooseDraftDeck() (used by
-        // advanceBotDraftDeck() below to build a bot's own deck) has no
-        // awareness of PERIODIC_SEALED_POOL_RARITY_DECK_CAPS, so a bot
-        // could pick a deck submitDraftDeck() would then reject as
-        // over-cap -- an uncaught GameStateException there is exactly the
-        // "silent, permanent stall" class of bug advanceBotDraftDeck()'s
-        // own docblock warns about for a different historical case.
-        // Rejected outright here (createGame() throws before ever seating
-        // the bot) rather than risk that; may be revisited once
-        // chooseDraftDeck() itself learns to respect a rarity cap. Moot
-        // for Weekly Sealed Pool in practice (its own matches are only
-        // ever created by the queue's pairing of two real, already-queued
-        // players -- see WeeklySealedPoolService -- never with a bot
-        // seated), but kept here anyway for the same direct-createGame()-call
-        // safety net Sealed Pool of the Day itself has.
-        if (array_key_exists($deckType, self::PERIODIC_SEALED_POOL_DECK_TYPES)) {
+        // Weekly Sealed Pool (issue #520) is the one DRAFT_DECK_TYPES
+        // member still deliberately excluded here (issue #520 follow-up:
+        // "since we aren't tracking standings for sealed pool of the
+        // day, let's allow practice bots for those" -- Sealed Pool of
+        // the Day itself was the ORIGINAL reason both were excluded,
+        // since BotPlayerService::chooseDraftDeck() had no awareness of
+        // PERIODIC_SEALED_POOL_RARITY_DECK_CAPS and could hand back a
+        // deck submitDraftDeck() would reject as over-cap -- an uncaught
+        // GameStateException there being exactly the "silent, permanent
+        // stall" class of bug advanceBotDraftDeck()'s own docblock warns
+        // about for a different historical case. advanceBotDraftDeck()
+        // now passes those same caps straight into chooseDraftDeck(),
+        // which is guaranteed to build a legal deck from them, so Sealed
+        // Pool of the Day itself no longer needs this exclusion). Weekly
+        // Sealed Pool stays excluded regardless of that fix, though: its
+        // own weekly_sealed_pool_standings ladder has no way to represent
+        // "one side was a practice bot" and every real match is already
+        // created by the queue's own pairing of two real, already-queued
+        // players (WeeklySealedPoolQueueService never queues a bot) --
+        // this is purely the same direct-createGame()-call safety net
+        // every other bot-scope check here already is, not a real gap.
+        if ($deckType === 'weekly_sealed_pool') {
             return false;
         }
         if (in_array($format, ['draft', 'team', 'closed_team'], true) && in_array($deckType, self::DRAFT_DECK_TYPES, true)) {
@@ -6876,7 +6880,22 @@ final class GameService
             $teammateUserId = $this->openTeamPlayTeammateUserId($gameId, $format, $botUserId);
             $pickableCardIds = $this->pickableDraftPoolFor($draftMatchId, $botUserId, $teammateUserId);
             $minDeckSize = self::draftMinDeckSizeFor($deckType);
-            $deckCardIds = $this->bots->chooseDraftDeck($pickableCardIds, $minDeckSize, $this->draftBotScoringData());
+            // Sealed Pool of the Day (issue #520 follow-up: "since we
+            // aren't tracking standings for sealed pool of the day,
+            // let's allow practice bots for those") is the only
+            // PERIODIC_SEALED_POOL_DECK_TYPES member a bot can ever
+            // reach here (botsSupportedFor() still excludes Weekly
+            // Sealed Pool entirely, so $deckType is never
+            // 'weekly_sealed_pool' at this point) -- passing its own
+            // PERIODIC_SEALED_POOL_RARITY_DECK_CAPS makes
+            // chooseDraftDeck() build a deck that's guaranteed to clear
+            // submitDraftDeck()'s own rarity-cap check below, rather
+            // than risk the "silent, permanent stall" an uncaught
+            // over-cap rejection would cause.
+            $rarityCaps = array_key_exists($deckType, self::PERIODIC_SEALED_POOL_DECK_TYPES)
+                ? self::PERIODIC_SEALED_POOL_RARITY_DECK_CAPS
+                : null;
+            $deckCardIds = $this->bots->chooseDraftDeck($pickableCardIds, $minDeckSize, $this->draftBotScoringData(), $rarityCaps);
 
             $this->submitDraftDeck($gameId, $botUserId, $deckCardIds);
 
