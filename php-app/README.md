@@ -7290,10 +7290,30 @@ since it already holds that dependency):
   meeting some restriction (Benevolence, Eagerness, Friendliness,
   Kindness, Pride, Intimidation's own restriction to the one card just
   taken), or as an ongoing while-in-play grant rather than a one-time
-  one (Hope, Grace, Stubbornness). Generosity is deliberately excluded:
-  it grants its own extra play to a chosen OPPONENT, not the acting
-  player, so boosting it would help whoever's targeted instead of the
-  bot itself.
+  one (Grace, Stubbornness -- Hope belongs to this same family too, but
+  gets its own even-higher bonus below instead). Generosity is
+  deliberately excluded: it grants its own extra play to a chosen
+  OPPONENT, not the acting player, so boosting it would help whoever's
+  targeted instead of the bot itself.
+
+  **Hope** (reported live: "bots should always play Hope first if they
+  have it") gets its own `HOPE_PRIORITY_BONUS` (20) instead of sharing
+  `EARLY_PRIORITY_BONUS` with the rest of that list. Hope's own printed
+  value is 0, so the shared +10 bonus alone could still be outranked by
+  another early-priority card with a high enough `baseValue()` -- exactly
+  backwards, since unlike a one-time grant (Charity, Duplicity, ...) or a
+  CONDITIONAL ongoing one (Grace needs a color-matching discard-pile card
+  each turn; Stubbornness needs an opponent with more moods, and never
+  even applies the turn it's played itself), Hope's own "an additional
+  mood during each of your turns, including the turn you play this mood"
+  is both unconditional and applies starting the very turn it's played --
+  so delaying it by even a single turn (to lead with some other, merely
+  higher-printed-value card instead) permanently forfeits that turn's own
+  extra play, with nothing later ever making up the difference.
+  `HOPE_PRIORITY_BONUS` is comfortably above `EARLY_PRIORITY_BONUS` plus
+  the catalog's own highest `baseValue()` combined, so Hope always
+  outranks every OTHER early-priority card too, not just an un-boosted
+  one.
 
   **Intimidation** (confirmed by the maintainer) gets a further, related
   exception: `buildChoicesForCard()` special-cases `effectKey ===
