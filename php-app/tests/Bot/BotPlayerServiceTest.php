@@ -2389,17 +2389,17 @@ final class BotPlayerServiceTest extends TestCase
     }
 
     /**
-     * Reported live: "bots should not play hate without a target."
-     * hateTargetMoodId() used to return null whenever the bot had
-     * Euphoria (id 117, "value increases by 1 for each mood in play") in
-     * play, on the theory that bottoming ANY mood via Hate would shrink
-     * the in-play mood count and so cost Euphoria a point of its own
-     * value for the rest of the round -- a real cost, but confirmed live
-     * to not be worth leaving Hate's own play completely wasted over.
-     * Hate now still targets player 2's Complacency (value 4) here even
-     * with Euphoria in play, exactly as it would without Euphoria at all.
+     * Reported live, then refined live a second time: "bots should not
+     * play hate without a target" was initially fixed by dropping the
+     * Euphoria (id 117, "value increases by 1 for each mood in play")
+     * carve-out entirely, but "we should keep the euphoria carve out,
+     * but change it -- if an opponent had a mood with value 2 or higher,
+     * it should be targeted regardless of the bot having euphoria (there
+     * is still a net positive point swing)." Player 2's Complacency
+     * (value 4) is comfortably above HATE_MIN_OPPONENT_VALUE_WORTH_EUPHORIAS_COST
+     * (2), so it's still targeted even with Euphoria in play.
      */
-    public function testChooseActionStillTargetsAnOpponentsMoodWithHateWhenEuphoriaIsInPlay(): void
+    public function testChooseActionStillTargetsAnOpponentsMoodWithHateWhenEuphoriaIsInPlayAndItsValueClearsTheThreshold(): void
     {
         $state = $this->boardState(hands: [1 => [66, 117], 2 => [5]]);
         $state->moveHandToInPlay(1, 117);
@@ -2411,8 +2411,41 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame(['target_mood_id' => 5], $action['choices']);
     }
 
-    /** Even with Euphoria in play and no opponent mood available, Hate still falls back to targeting itself rather than being left untargeted. */
-    public function testChooseActionStillTargetsHateItselfWhenEuphoriaIsInPlayAndNoOpponentMoodExists(): void
+    /** Benevolence (id 2, value 2) exactly meets HATE_MIN_OPPONENT_VALUE_WORTH_EUPHORIAS_COST -- still worth the trade, since the swing is net zero-or-better, not strictly required to be positive. */
+    public function testChooseActionTargetsAnOpponentsMoodWithHateWhenEuphoriaIsInPlayAndItsValueExactlyMeetsTheThreshold(): void
+    {
+        $state = $this->boardState(hands: [1 => [66, 117], 2 => [2]]);
+        $state->moveHandToInPlay(1, 117);
+        $state->moveHandToInPlay(2, 2);
+
+        $action = $this->bot->chooseAction($state, [66], 1);
+
+        self::assertSame(66, $action['card_id']);
+        self::assertSame(['target_mood_id' => 2], $action['choices']);
+    }
+
+    /**
+     * Courage (id 7, value 1) is below HATE_MIN_OPPONENT_VALUE_WORTH_EUPHORIAS_COST
+     * (2) -- bottoming it would cost Euphoria a point for less than a
+     * point of opponent value denied, a net-negative swing, so Hate is
+     * played with NO target at all here (not even its own generic
+     * self-target fallback, which would ALSO cost that same point for
+     * nothing but a card draw).
+     */
+    public function testChooseActionDoesNotTargetAnythingWithHateWhenEuphoriaIsInPlayAndTheBestOpponentMoodIsBelowTheThreshold(): void
+    {
+        $state = $this->boardState(hands: [1 => [66, 117], 2 => [7]]);
+        $state->moveHandToInPlay(1, 117);
+        $state->moveHandToInPlay(2, 7);
+
+        $action = $this->bot->chooseAction($state, [66], 1);
+
+        self::assertSame(66, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
+    /** With Euphoria in play and no opponent mood at all, Hate is left untargeted -- not even the generic self-target fallback, which would cost Euphoria a point for nothing but a card draw. */
+    public function testChooseActionDoesNotTargetAnythingWithHateWhenEuphoriaIsInPlayAndNoOpponentMoodExists(): void
     {
         $state = $this->boardState(hands: [1 => [66, 117]]);
         $state->moveHandToInPlay(1, 117);
@@ -2420,7 +2453,7 @@ final class BotPlayerServiceTest extends TestCase
         $action = $this->bot->chooseAction($state, [66], 1);
 
         self::assertSame(66, $action['card_id']);
-        self::assertSame(['target_mood_id' => 66], $action['choices']);
+        self::assertSame([], $action['choices']);
     }
 
     // -- Anger (confirmed by the maintainer) ---------------------------------

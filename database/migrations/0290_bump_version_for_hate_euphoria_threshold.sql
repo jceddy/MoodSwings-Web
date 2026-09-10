@@ -1,0 +1,20 @@
+-- Reported live, refining migration 0289's own fix: "we should keep the
+-- euphoria carve out, but change it - if an opponent had a mood with
+-- value 2 or higher, it should be targeted regardless of the bot having
+-- euphoria (there is still a net positive point swing)."
+--
+-- 0289 removed the Euphoria carve-out from BotPlayerService::
+-- hateTargetMoodId() entirely, so Hate always targeted something (the
+-- best opponent mood, or itself as a last resort) regardless of whether
+-- the acting player had Euphoria in play. Restored the carve-out, but
+-- narrowed it: with Euphoria (or another MOOD_COUNT_VALUE_BOOST_EFFECT_KEYS
+-- mood) in play, Hate now targets the best opponent mood only when it's
+-- worth at least HATE_MIN_OPPONENT_VALUE_WORTH_EUPHORIAS_COST (2) --
+-- enough to net a positive swing even after paying Euphoria's own
+-- 1-point cost -- and is left with NO target at all otherwise (not even
+-- Hate's own generic self-target fallback, which would ALSO cost that
+-- same point for nothing but a card draw).
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.39.17' WHERE id = 1;

@@ -1759,7 +1759,9 @@ final class BotPlayerService
         }
 
         if ($effectKey === 'hate') {
-            return ['target_mood_id' => $this->hateTargetMoodId($state, $cardId, $botGamePlayerId)];
+            $targetMoodId = $this->hateTargetMoodId($state, $cardId, $botGamePlayerId);
+
+            return $targetMoodId !== null ? ['target_mood_id' => $targetMoodId] : [];
         }
 
         if ($effectKey === 'conviction') {
@@ -2873,37 +2875,62 @@ final class BotPlayerService
     }
 
     /**
+     * Every effect key whose value scales up with the sheer COUNT of
+     * moods in play (own and opponents' alike) -- currently just
+     * Euphoria ("this mood's value increases by 1 for each mood in
+     * play, including itself and other players' moods"). Bottoming ANY
+     * mood via Hate (even Hate itself) shrinks that count by one and so
+     * costs a mood like that exactly one point of its own value for the
+     * rest of the round -- see hateTargetMoodId()'s own docblock for how
+     * that factors into its own targeting math.
+     */
+    private const MOOD_COUNT_VALUE_BOOST_EFFECT_KEYS = ['euphoria'];
+
+    /**
+     * The minimum CURRENT value an opponent's mood must have for
+     * hateTargetMoodId() to still target it while the acting player has
+     * a MOOD_COUNT_VALUE_BOOST_EFFECT_KEYS mood (Euphoria) in play --
+     * bottoming that opponent mood costs exactly 1 point of Euphoria's
+     * own value (its own docblock), so the play is only a net POSITIVE
+     * point swing once the opponent's mood is worth strictly more than
+     * that 1-point cost, i.e. 2 or more.
+     */
+    private const HATE_MIN_OPPONENT_VALUE_WORTH_EUPHORIAS_COST = 2;
+
+    /**
      * Hate's own "what to target" policy (confirmed by the maintainer):
      * "After playing this mood, you may put any mood on the bottom of
      * the deck. If you do, draw a card." Hate's own printed base value
      * is 0, so leaving it untargeted wastes the play entirely -- a
      * random card draw is strictly better than nothing, so this always
-     * returns a real target and never leaves the field unfilled the way
-     * an ordinary "should we bother" policy would. Prefers the
-     * highest-CURRENT-value mood owned by a non-teammate opponent (the
-     * one that nets the biggest swing: the draw AND denies them that
-     * scored value this round -- strictly better than targeting
-     * anything of the acting player's own, which would only ever cost
-     * the same draw for less benefit); falls back to Hate itself (its
-     * own $cardId, always a legal target -- HateEffect's own field has
-     * `includes_self`) only once no qualifying opponent mood exists,
-     * since removing a 0-value mood that was never going to score
-     * anyway is the one target that never costs the acting player
-     * anything.
+     * returns a real target UNLESS the Euphoria carve-out below applies.
+     * Prefers the highest-CURRENT-value mood owned by a non-teammate
+     * opponent (the one that nets the biggest swing: the draw AND
+     * denying them that scored value this round -- strictly better than
+     * targeting anything of the acting player's own, which would only
+     * ever cost the same draw for less benefit); falls back to Hate
+     * itself (its own $cardId, always a legal target -- HateEffect's
+     * own field has `includes_self`) only once no qualifying opponent
+     * mood exists, since removing a 0-value mood that was never going
+     * to score anyway is the one target that never costs the acting
+     * player anything.
      *
-     * Reported live: "bots should not play hate without a target" --
-     * this used to also return null (skipping the target field, and so
-     * the card draw, entirely) whenever the acting player had a
-     * count-of-moods-scaling mood in play (Euphoria: "this mood's value
-     * increases by 1 for each mood in play"), on the theory that
-     * bottoming ANY mood shrinks that count and so permanently costs a
-     * point of Euphoria's own value for the rest of the round -- a real
-     * cost, but confirmed live to not be worth leaving Hate's own play
-     * completely wasted over: a single point off one mood's value for
-     * the rest of THIS round is still worth less than the guaranteed
-     * card draw plus whatever an opponent's own highest mood is worth.
+     * Reported live, then refined live a second time: "bots should not
+     * play hate without a target" was initially fixed by dropping the
+     * Euphoria carve-out entirely, but "we should keep the euphoria
+     * carve out, but change it -- if an opponent had a mood with value 2
+     * or higher, it should be targeted regardless of the bot having
+     * euphoria (there is still a net positive point swing)." Whenever
+     * the acting player has a MOOD_COUNT_VALUE_BOOST_EFFECT_KEYS mood in
+     * play, this now targets the best opponent mood ONLY if it's worth
+     * at least HATE_MIN_OPPONENT_VALUE_WORTH_EUPHORIAS_COST (2) -- enough
+     * to net a positive swing even after paying Euphoria's own 1-point
+     * cost -- and returns null (skipping the target field, and so the
+     * card draw, entirely -- not even Hate's own generic self-target
+     * fallback, which would ALSO cost that same point for nothing but a
+     * card draw) otherwise.
      */
-    private function hateTargetMoodId(BoardState $state, int $cardId, int $botGamePlayerId): int
+    private function hateTargetMoodId(BoardState $state, int $cardId, int $botGamePlayerId): ?int
     {
         $bestOpponentMoodId = null;
         foreach ($state->activePlayerOrder() as $playerId) {
@@ -2914,6 +2941,14 @@ final class BotPlayerService
                 if ($bestOpponentMoodId === null || $state->valueOf($mood->cardId) > $state->valueOf($bestOpponentMoodId)) {
                     $bestOpponentMoodId = $mood->cardId;
                 }
+            }
+        }
+
+        foreach (self::MOOD_COUNT_VALUE_BOOST_EFFECT_KEYS as $effectKey) {
+            if ($state->playerHasMoodInPlay($botGamePlayerId, $effectKey)) {
+                return $bestOpponentMoodId !== null && $state->valueOf($bestOpponentMoodId) >= self::HATE_MIN_OPPONENT_VALUE_WORTH_EUPHORIAS_COST
+                    ? $bestOpponentMoodId
+                    : null;
             }
         }
 

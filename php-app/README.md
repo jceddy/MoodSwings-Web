@@ -7975,27 +7975,39 @@ since it already holds that dependency):
   so it falls back to the LOWEST-value other mood currently in play (the
   bot's own, or a teammate's in Open/Closed Team Play) rather than
   leaving the field empty.
-- **Hate's own "never leave it untargeted" policy** (confirmed by the
-  maintainer), via `hateTargetMoodId()`: unlike every OTHER optional
-  `CardChoiceSchema` field (left blank by default per `BotChoiceResolver`'s
-  own docblock), Hate's `target_mood_id` is always filled in -- its own
-  printed value is 0, so a plain untargeted play wastes the card outright,
-  while "put any mood on the bottom of the deck, then draw a card" has
-  no real cost when the target is Hate itself. Prefers the highest-CURRENT-value
-  mood owned by a non-teammate opponent -- the one that nets the biggest
-  swing: the same card draw, plus denying them that scored value this
-  round -- strictly better than targeting the bot's own or a teammate's
-  mood, which HateEffect's own field permits but this never does, the
-  same "an opponent" exclusion Contempt/Denial already use; falls back
-  to Hate's own `$cardId` (always legal -- `includes_self`) only once no
-  such opponent mood exists. `hateTargetMoodId()`'s return type is a
-  plain `int`, never `?int` -- it's unconditional, with no veto of any
-  kind (reported live, after an earlier version of this policy carved
-  out an exception for a mood like Euphoria that scales with the in-play
-  mood count: "bots should not play hate without a target" -- confirmed
-  that a one-time point off such a mood's own value for the rest of the
-  round is still worth less than the guaranteed draw plus an opponent's
-  own highest mood).
+- **Hate's own "never leave it untargeted, except..." policy** (confirmed
+  by the maintainer), via `hateTargetMoodId()`: unlike every OTHER
+  optional `CardChoiceSchema` field (left blank by default per
+  `BotChoiceResolver`'s own docblock), Hate's `target_mood_id` is
+  normally always filled in -- its own printed value is 0, so a plain
+  untargeted play wastes the card outright, while "put any mood on the
+  bottom of the deck, then draw a card" has no real cost when the target
+  is Hate itself. Prefers the highest-CURRENT-value mood owned by a
+  non-teammate opponent -- the one that nets the biggest swing: the same
+  card draw, plus denying them that scored value this round -- strictly
+  better than targeting the bot's own or a teammate's mood, which
+  HateEffect's own field permits but this never does, the same "an
+  opponent" exclusion Contempt/Denial already use; falls back to Hate's
+  own `$cardId` (always legal -- `includes_self`) only once no such
+  opponent mood exists.
+
+  The one exception, reported live and then refined live a second time:
+  "bots should not play hate without a target" was initially fixed by
+  dropping an EARLIER carve-out for `MOOD_COUNT_VALUE_BOOST_EFFECT_KEYS`
+  (currently just Euphoria, "this mood's value increases by 1 for each
+  mood in play") entirely -- but "we should keep the euphoria carve out,
+  but change it -- if an opponent had a mood with value 2 or higher, it
+  should be targeted regardless of the bot having euphoria (there is
+  still a net positive point swing)." Bottoming ANY mood via Hate
+  (including Hate itself) shrinks the in-play mood count by one, costing
+  a mood like Euphoria exactly 1 point of its own value for the rest of
+  the round -- so whenever the acting player has one of these in play,
+  `hateTargetMoodId()` now targets the best opponent mood only when it's
+  worth at least `HATE_MIN_OPPONENT_VALUE_WORTH_EUPHORIAS_COST` (2,
+  enough to net a positive swing even after that 1-point cost), and
+  returns `null` (skipping the target field, and so the draw, entirely --
+  NOT even Hate's own generic self-target fallback, which would ALSO pay
+  that same point for nothing but a card draw) otherwise.
 - **Recklessness's own targeting policy** (reported live: "bots should
   actually target an opponent's mood when they play Recklessness -- Hope
   or Grace first, if they have it, then prioritizing highest points
