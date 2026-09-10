@@ -1281,29 +1281,99 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
-     * custom_duel's own $botDecklistText/$botSavedDecklistId (and the New
-     * Game dialog's own single #new-game-bot-decklist-fields) only ever
-     * supply ONE bot's own decklist -- reported as a design gap while
-     * implementing issue #505 (3-4p constructed Duel could otherwise seat
-     * 2+ bots with no way to submit a decklist for more than one of
-     * them). Rejected outright rather than silently leaving a second bot
-     * deckless and the game stuck 'waiting' forever.
+     * Issue #505 follow-up: custom_duel now supports seating 2+ bots,
+     * each supplying its OWN decklist via $botDecklists (keyed by that
+     * bot's own user id) rather than createGame() rejecting 2+ bots
+     * outright the way it used to -- $botDecklistText/$botSavedDecklistId
+     * alone only ever had room for one. Bot1 uses plain pasted text,
+     * bot2 a saved decklist (authorized against the creator, same as the
+     * single-bot $botSavedDecklistId path always was) -- two distinct
+     * decks prove each bot's own game_players row gets its own submitted
+     * deck, not one copied onto the other or a shared pool.
      */
-    public function testCreateGameRejectsACustomDuelGameWithTwoBots(): void
+    public function testCreateGameAcceptsACustomDuelGameWithTwoBotsEachSuppliedTheirOwnDecklist(): void
     {
-        $human = $this->insertUser('duel-2bots-human');
-        $bot1 = $this->insertBotUser('duel-2bots-bot1');
-        $bot2 = $this->insertBotUser('duel-2bots-bot2');
+        $human = $this->insertUser('duel-2bots-own-human');
+        $bot1 = $this->insertBotUser('duel-2bots-own-bot1');
+        $bot2 = $this->insertBotUser('duel-2bots-own-bot2');
+        $bot2DecklistId = $this->insertSavedDecklist($human, "Bot2's deck", [3, 4, 5, 2, 6, 11, 12]);
+
+        $gameId = $this->games->createGame(
+            $human,
+            [$human, $bot1, $bot2],
+            format: 'duel',
+            deckType: 'custom_duel',
+            duelDeckRules: ['preset' => 'user_defined', 'min_cards' => 7],
+            botDecklists: [
+                $bot1 => ['decklist_text' => "1 Charity\n1 Chivalry\n1 Complacency\n1 Benevolence\n1 Conviction\n1 Encouragement\n1 Faith"],
+                $bot2 => ['saved_decklist_id' => $bot2DecklistId],
+            ],
+        );
+
+        $bot1PlayerId = $this->games->gamePlayerIdFor($gameId, $bot1);
+        $bot2PlayerId = $this->games->gamePlayerIdFor($gameId, $bot2);
+        $bot1CardIds = json_decode((string) $this->fetchGamePlayer($bot1PlayerId)['custom_deck_card_ids'], true);
+        $bot2CardIds = json_decode((string) $this->fetchGamePlayer($bot2PlayerId)['custom_deck_card_ids'], true);
+
+        self::assertCount(7, $bot1CardIds);
+        self::assertEqualsCanonicalizing([3, 4, 5, 2, 6, 11, 12], $bot2CardIds);
+    }
+
+    /**
+     * Every seated bot needs its OWN decklist -- a $botDecklists missing
+     * an entry for one of them would otherwise leave that bot silently
+     * deckless (a bot can never call submitCustomDuelDeck() itself the
+     * way its human opponent does), stuck 'waiting' forever with no way
+     * for its creator to supply one after the fact. Rejected outright at
+     * creation time instead, the same "fail fast" precedent the old
+     * single-bot-only rejection this test replaces already established.
+     */
+    public function testCreateGameRejectsACustomDuelGameWhenASeatedBotHasNoDecklistOfItsOwn(): void
+    {
+        $human = $this->insertUser('duel-2bots-missing-human');
+        $bot1 = $this->insertBotUser('duel-2bots-missing-bot1');
+        $bot2 = $this->insertBotUser('duel-2bots-missing-bot2');
 
         $this->expectException(GameStateException::class);
-        $this->expectExceptionMessage('can only seat one practice bot');
+        $this->expectExceptionMessage('A decklist for each seated practice bot is required');
         $this->games->createGame(
             $human,
             [$human, $bot1, $bot2],
             format: 'duel',
             deckType: 'custom_duel',
-            botDecklistText: "1 Charity\n1 Chivalry\n1 Complacency\n1 Benevolence\n1 Conviction\n1 Encouragement\n1 Faith",
+            duelDeckRules: ['preset' => 'user_defined', 'min_cards' => 7],
+            botDecklists: [
+                $bot1 => ['decklist_text' => "1 Charity\n1 Chivalry\n1 Complacency\n1 Benevolence\n1 Conviction\n1 Encouragement\n1 Faith"],
+            ],
         );
+    }
+
+    /**
+     * The single-bot case may use $botDecklists too (a one-entry map
+     * keyed by that bot's own user id), not just the legacy singular
+     * $botDecklistText/$botSavedDecklistId params -- proving the two
+     * input shapes are genuinely interchangeable for one bot, not just
+     * $botDecklists being multi-bot-only.
+     */
+    public function testCreateGameAcceptsACustomDuelGameWithOneBotUsingTheKeyedBotDecklistsParam(): void
+    {
+        $human = $this->insertUser('duel-1bot-keyed-human');
+        $bot = $this->insertBotUser('duel-1bot-keyed-bot');
+
+        $gameId = $this->games->createGame(
+            $human,
+            [$human, $bot],
+            format: 'duel',
+            deckType: 'custom_duel',
+            duelDeckRules: ['preset' => 'user_defined', 'min_cards' => 7],
+            botDecklists: [
+                $bot => ['decklist_text' => "1 Charity\n1 Chivalry\n1 Complacency\n1 Benevolence\n1 Conviction\n1 Encouragement\n1 Faith"],
+            ],
+        );
+
+        $botPlayerId = $this->games->gamePlayerIdFor($gameId, $bot);
+        $cardIds = json_decode((string) $this->fetchGamePlayer($botPlayerId)['custom_deck_card_ids'], true);
+        self::assertCount(7, $cardIds);
     }
 
     /**

@@ -1080,9 +1080,28 @@ if ($path === '/games' && $method === 'POST') {
     // one of opponent_user_ids is a practice bot (issue #140) -- the
     // bot's own decklist, supplied by the creator since the bot can
     // never submit one itself via POST /games/decklist the way its human
-    // opponent does. See createGame()'s own docblock.
+    // opponent does. See createGame()'s own docblock. Only meaningful for
+    // the single-bot case once bot_decklists (below) is in play.
     $botDecklistText = isset($body['bot_decklist_text']) ? (string) $body['bot_decklist_text'] : null;
     $botSavedDecklistId = isset($body['bot_saved_decklist_id']) ? (int) $body['bot_saved_decklist_id'] : null;
+    // Only meaningful when deck_type is 'custom_duel' and 2+ of
+    // opponent_user_ids are practice bots (issue #505 follow-up) --
+    // bot_decklist_text/bot_saved_decklist_id above have nowhere to name
+    // more than one bot's own decklist, so with 2+ bots seated each
+    // bot's own decklist is instead supplied here, keyed by that bot's
+    // own user id: {"<bot_user_id>": {"decklist_text": ..., "saved_decklist_id": ...}, ...}.
+    // See createGame()'s own $botDecklists docblock.
+    $botDecklists = null;
+    if (is_array($body['bot_decklists'] ?? null)) {
+        $botDecklists = [];
+        foreach ($body['bot_decklists'] as $botUserId => $botDecklist) {
+            $botDecklist = (array) $botDecklist;
+            $botDecklists[(int) $botUserId] = [
+                'decklist_text' => isset($botDecklist['decklist_text']) ? (string) $botDecklist['decklist_text'] : null,
+                'saved_decklist_id' => isset($botDecklist['saved_decklist_id']) ? (int) $botDecklist['saved_decklist_id'] : null,
+            ];
+        }
+    }
     // Only meaningful for format 'team'/'closed_team' -- randomly assigns
     // the creator's partner instead of requiring partner_user_id. See
     // createGame()'s own docblock.
@@ -1160,6 +1179,7 @@ if ($path === '/games' && $method === 'POST') {
             $bestOfThree,
             $allowSideboarding,
             $diagnosticMode,
+            $botDecklists,
         );
         respond(201, ['status' => 'ok', 'game_id' => $gameId]);
     } catch (GameStateException $e) {

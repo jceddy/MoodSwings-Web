@@ -1,0 +1,27 @@
+-- Issue #505 follow-up (reported live: "allow more than one bot to be
+-- seated at a 3-4 player duel", then "yes, I would like to allow
+-- multiple bots to be seated for custom duel, as well").
+--
+-- Every OTHER constructed Duel deck_type (Structure/Power/jceddy's 75)
+-- already supported seating 2-3 practice bots alongside a human creator
+-- once issue #505 relaxed 'duel' to 2-4 players -- deckCardIdsFor()
+-- builds each seat's own deck automatically regardless of how many
+-- seats are bots. 'custom_duel' was the one holdout: each player needs
+-- a decklist submitted, and a bot can never submit one itself the way
+-- its human opponent does via POST /games/decklist, so createGame()
+-- supplies the bot's own decklist on its creator's behalf at creation
+-- time -- but the existing $botDecklistText/$botSavedDecklistId params
+-- (and the New Game dialog's own single shared decklist-input field)
+-- were both singular, with nowhere to put a second bot's own decklist.
+-- createGame() rejected seating 2+ bots in a custom_duel game outright
+-- rather than leaving the extra one(s) silently deckless forever.
+--
+-- Now: createGame() accepts a new $botDecklists param, keyed by each
+-- seated bot's own user id, resolved per bot instead of rejecting 2+
+-- outright; the New Game dialog renders one decklist-input field-group
+-- per checked bot instead of capping at one. No schema change -- the
+-- underlying game_players.custom_deck_card_ids/custom_deck_name/
+-- custom_deck_sideboard_card_ids columns were already per-seat -- just
+-- the version bump MaintenanceGate needs to see this deploy as caught
+-- up with the code.
+UPDATE schema_version SET version = '1.39.19' WHERE id = 1;

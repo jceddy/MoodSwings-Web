@@ -1984,43 +1984,54 @@ deck's `cards`.
 
     Checking a bot while `deckType` is `custom_duel` (issue #140's Duel
     extension -- see "Practice bots in Duel with a custom decklist" in
-    `php-app/README.md`) reveals `#new-game-bot-decklist-fields`: a
-    saved-deck `<select>` (`#new-game-bot-saved-decklist`, populated via
-    `populateSavedDecklistSelect()` the same as the dialog's other saved-
-    decklist pickers) plus a fallback file-upload/paste pair
-    (`#new-game-bot-decklist-file`/`#new-game-bot-decklist-text`, shown
-    only while no saved deck is chosen) -- since the bot can't submit its
-    own decklist the normal post-creation way, its creator picks one for
-    it right here. `updateBotDecklistFieldsVisibility()` computes this
-    visibility from *two* things at once, unlike every other deck-type-
-    driven field in this dialog: `deckType === 'custom_duel'` AND
-    `anyBotChecked()` (any `input[data-is-bot]` in `#opponent-checkboxes`
-    currently checked) -- so it's called from all three places either
-    input can change: `updateDeckTypeDescription()` (deck-type changes),
-    `updateBotCheckboxAvailability()` (format changes, which can hide/
-    force-uncheck a bot outright), and every bot checkbox's own `change`
-    listener. Submitting sends whichever of `bot_decklist_text`/
-    `bot_saved_decklist_id` is populated (mirroring how the dialog's
-    other saved-deck-vs-paste fields already resolve to one shared
-    param) alongside the rest of the request -- both omitted whenever no
-    bot is checked or `deckType` isn't `custom_duel`.
+    `php-app/README.md`) reveals `#new-game-bot-decklist-fields`, which
+    holds one field-group per currently-CHECKED bot (issue #505 follow-up:
+    `custom_duel` now supports seating 2+ bots, each needing its own
+    decklist -- previously capped at exactly one, see "At most one bot
+    for `custom_duel` -- since relaxed" below), rendered fresh into
+    `#new-game-bot-decklist-groups` by `updateBotDecklistFieldsVisibility()`
+    every time it's called. Each group is keyed by that bot's own user id
+    (`group.dataset.botUserId`, matching `input[data-is-bot]`'s own
+    `.value`) and offers the same choice the dialog's other saved-deck
+    fields do: a saved-deck `<select>` (`.new-game-bot-decklist-saved`,
+    populated via `populateSavedDecklistSelect()`) or a fallback file-
+    upload/paste pair (`.new-game-bot-decklist-file`-equivalent input/
+    `.new-game-bot-decklist-text`, shown only while no saved deck is
+    chosen) -- since the bot can't submit its own decklist the normal
+    post-creation way, its creator picks one for each seated bot right
+    here. Rebuilding from scratch on every call is simpler than
+    diffing/patching (at most `MAX_PLAYERS - 1` bot seats), but the
+    function still preserves any already-entered choice/text for a bot
+    that's still checked, so toggling an unrelated bot's checkbox doesn't
+    wipe out what was already filled in for this one.
+    `updateBotDecklistFieldsVisibility()` computes overall visibility
+    from *two* things at once, unlike every other deck-type-driven field
+    in this dialog: `deckType === 'custom_duel'` AND at least one checked
+    `input[data-is-bot]` in `#opponent-checkboxes` -- so it's called from
+    all three places either input can change: `updateDeckTypeDescription()`
+    (deck-type changes), `updateBotCheckboxAvailability()` (format
+    changes, which can hide/force-uncheck a bot outright), and every bot
+    checkbox's own `change` listener. Submitting reads every group back
+    via `collectBotDecklists()`, sending the result as `bot_decklists`
+    (`{"<bot_user_id>": {"decklist_text"?, "saved_decklist_id"?}, ...}`,
+    one entry per checked bot, each resolving to whichever of its own two
+    inputs is populated) -- omitted whenever no bot is checked or
+    `deckType` isn't `custom_duel`.
 
-    **At most one bot for `custom_duel`** (issue #505, a design gap
-    caught while adding 3-4p constructed Duel support, not reported
-    live): the fields above only ever supply a SINGLE bot's own
+    **At most one bot for `custom_duel` -- since relaxed** (issue #505, a
+    design gap caught while adding 3-4p constructed Duel support, not
+    reported live; the follow-up above then explicitly asked to relax
+    it): the fields originally only ever supplied a SINGLE bot's own
     decklist, with nowhere to put a second one, so a 3-4p `custom_duel`
-    game could otherwise seat 2+ bots and leave the extra one(s)
-    deckless forever (`GameService::createGame()` now rejects this
-    outright -- see "Duel: separate per-player decks" in
-    `php-app/README.md`). New `updateBotSelectionLimit()` mirrors
+    game could otherwise seat 2+ bots and leave the extra one(s) deckless
+    forever -- `GameService::createGame()` rejected this outright at the
+    time (see "Duel: separate per-player decks" in `php-app/README.md`).
+    A short-lived `updateBotSelectionLimit()` mirrored
     `updateOpponentSelectionLimit()`'s own "uncheck/disable past the cap"
-    shape, scoped to just the bot checkboxes: caps checked bots at 1
-    once `deckType` is `custom_duel` (unlimited for every other
-    deck_type, which needs no per-seat bot setup at all), unchecking any
-    extras and disabling the rest. Called from `updateBotCheckboxAvailability()`
-    (so it re-runs on every format/deck-type change) and every bot
-    checkbox's own `change` listener, the same trigger set
-    `updateOpponentSelectionLimit()` already uses.
+    shape to keep the dialog from ever reaching that server error, capping
+    checked bots at 1 for `custom_duel` -- removed entirely once the
+    per-bot field-groups above replaced it, since there's no longer any
+    cap to enforce client-side.
 
     Checking a bot in a non-team format reveals a third field,
     `#new-game-bot-goes-first-label` (issue #417, migration `0171`) -- a
@@ -2669,10 +2680,17 @@ deck's `cards`.
     `collectDuelDeckRules()`) get copied over, a team/closed_team
     creator's own previous partner gets reselected (matched by shared
     `team_id`, since there's no separate "who's your partner" field to
-    read), a bot opponent's own previous `custom_duel` decklist gets
-    reconstructed into `#new-game-bot-decklist-text` from `players[].
+    read), every bot opponent's own previous `custom_duel` decklist gets
+    reconstructed into its own field-group's `.new-game-bot-decklist-text`
+    (issue #505 follow-up: keyed by that bot's own user id, since 2+ bots
+    may now each have their own previous decklist) from `players[].
     bot_decklist_cards` (creator-only, see the php-app README) via
-    `buildDecklistCardsText()`, and, the same idea one deck_type wider, a
+    `buildDecklistCardsText()` -- `buildRematchPrefill()` collects these
+    into `botDecklistCardsByUserId`, and applying them awaits a fresh
+    `updateBotDecklistFieldsVisibility()` call first, since the field-
+    groups it needs to write into are rendered async and otherwise might
+    not exist yet at this point in `openNewGameDialog()`. And, the same
+    idea one deck_type wider, a
     HUMAN creator's own previous `'custom'` decklist gets reconstructed
     into `#new-game-decklist-text` from `game.custom_decklist_cards`
     (also creator-only -- see "Rematch" in `../php-app/README.md`) via
