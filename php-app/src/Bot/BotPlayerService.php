@@ -1727,7 +1727,7 @@ final class BotPlayerService
         'rationalization', 'avoidance', 'cynicism', 'intimidation', 'paranoia',
         'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
         'nostalgia', 'contempt', 'sneakiness', 'shock', 'exhilaration',
-        'rejection', 'guilt', 'scorn', 'recklessness', 'thrill',
+        'rejection', 'guilt', 'scorn', 'recklessness', 'thrill', 'panic',
     ];
 
     /**
@@ -1809,6 +1809,12 @@ final class BotPlayerService
             $handMoodIds = $this->thrillHandMoodIds($state, $cardId, $botGamePlayerId);
 
             return $handMoodIds !== [] ? ['hand_mood_ids' => $handMoodIds] : [];
+        }
+
+        if ($effectKey === 'panic') {
+            $targetMoodIds = $this->panicTargetMoodIds($state, $botGamePlayerId);
+
+            return $targetMoodIds !== [] ? ['target_mood_ids' => $targetMoodIds] : [];
         }
 
         if ($effectKey === 'shock') {
@@ -3357,6 +3363,69 @@ final class BotPlayerService
         }
 
         return $targets;
+    }
+
+    /**
+     * Panic's own "which of my own in-play moods to bounce back to my own
+     * hand" policy (reported live, from a game where Validation was
+     * already in play: "when the bot played Panic, it should have
+     * targeted its own Compulsion or Suspicion so it could re-play it to
+     * take another card from my hand" -- Panic had zero bot targeting
+     * logic at all, so target_mood_ids (optional, up to 2, one per
+     * distinct owner) was always left empty). Scoped exactly as narrowly
+     * as thrillHandMoodIds() above, for the same reason: PROVABLY
+     * risk-free, not merely plausible. Panic's own printed value is a
+     * fixed 1 (id 48, base_value 1, no alt_value), so playing it AT ALL
+     * is guaranteed to satisfy ValidationEffect::reactToAnotherPlay()'s
+     * own "0 or 1" check -- an in-play Validation the bot still owns
+     * therefore guarantees an extra play lands the instant Panic
+     * resolves, regardless of anything else on the board (this is
+     * exactly what happened in the reported game: Validation had already
+     * granted the play Panic itself was cast with, and was about to grant
+     * another the moment Panic finished). That guaranteed extra play is
+     * what makes bouncing the bot's own highest-value "steal a card from
+     * an opponent's hand" mood (Compulsion or Suspicion -- see
+     * EARLY_PRIORITY_EFFECT_KEYS' own "steals from an opponent's hand"
+     * pair) a strict gain: it comes right back into play via that
+     * guaranteed replay (auto-targeted correctly by the generic
+     * resolver/BotChoiceResolver::ALWAYS_FILLED_OPTIONAL_FIELDS the same
+     * as any other Compulsion/Suspicion play), stealing ANOTHER card in
+     * the process. Without a confirmed extra play waiting, bouncing
+     * either one would just forfeit its current round-scoring value for
+     * nothing, so this stays silent (no target at all) whenever
+     * Validation isn't in play, exactly as thrillHandMoodIds() stays
+     * silent without a worthwhile Nostalgia pickup waiting. Only ever
+     * fills ONE of Panic's own up-to-two target slots -- there's no
+     * confirmed-safe policy yet for the other (an opponent's mood would
+     * need its own denial-vs-tempo judgment call this doesn't attempt).
+     *
+     * @return int[]
+     */
+    private function panicTargetMoodIds(BoardState $state, int $botGamePlayerId): array
+    {
+        $ownsInPlayValidation = false;
+        foreach ($state->moodsOwnedBy($botGamePlayerId) as $mood) {
+            if ($state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'] === 'validation') {
+                $ownsInPlayValidation = true;
+                break;
+            }
+        }
+        if (!$ownsInPlayValidation) {
+            return [];
+        }
+
+        $bestStealMoodId = null;
+        foreach ($state->moodsOwnedBy($botGamePlayerId) as $mood) {
+            $effectKey = $state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'];
+            if (!in_array($effectKey, ['compulsion', 'suspicion'], true)) {
+                continue;
+            }
+            if ($bestStealMoodId === null || $state->valueOf($mood->cardId) > $state->valueOf($bestStealMoodId)) {
+                $bestStealMoodId = $mood->cardId;
+            }
+        }
+
+        return $bestStealMoodId !== null ? [$bestStealMoodId] : [];
     }
 
     /**

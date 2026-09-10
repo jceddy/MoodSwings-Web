@@ -15627,6 +15627,33 @@ final class GameService
     }
 
     /**
+     * Reported live: with diagnostic_mode on, a long chain of Creativity
+     * copying an in-play Validation (each copy retriggers Validation's own
+     * "play another 0/1-value mood, get another extra play" reaction --
+     * confirmed as a legitimate, correctly-terminating combo, not an
+     * engine bug, by direct reproduction against the real engine) showed
+     * up in "Recent plays"/"View log" as a wall of bare, detail-free
+     * "BotSage played Creativity" lines with none of the usual "from
+     * hand"/"using an extra play from..."/grant wording -- indistinguishable
+     * from a genuinely stuck game, prompting a Resign that wasn't actually
+     * needed. Root cause: logHeuristicBotReasoning()/logTacticalBotReasoning()
+     * (see their own docblocks) log their own 'heuristic_bot_reasoning'/
+     * 'tactical_bot_reasoning' game_events row for EVERY action the bot
+     * even just *considers*, purely for the dedicated "Bot reasoning"
+     * dialog (tacticalBotReasoningSince()) -- these were never meant to
+     * be human-facing play-by-play, but neither fullEventLog() nor
+     * recentEvents() excluded them, so each one fell through
+     * describeEvent()'s unhandled-event-type default arm (the same bug
+     * class its own docblock already flags for closed_team_leader_decided/
+     * chaos_draft_effect_attached) and rendered as a misleading
+     * "{actor} played {cardName}" with every suffix/detail blank. Grouped
+     * here with round_grants_computed's own pre-existing exclusion, for
+     * the same reason: internal bookkeeping, not a play a human should
+     * ever see in these two feeds.
+     */
+    private const INTERNAL_ONLY_EVENT_TYPES_SQL = "'round_grants_computed', 'heuristic_bot_reasoning', 'tactical_bot_reasoning'";
+
+    /**
      * The entire game_events log for $gameId, oldest first (issue #98) --
      * unlike recentEvents() below, this is deliberately unbounded and
      * unpaginated: a typical game's event count (rarely more than a few
@@ -15686,7 +15713,7 @@ final class GameService
             "SELECT e.id, e.event_type, e.acting_game_player_id, e.card_id, e.details, e.created_at, r.round_number
              FROM game_events e
              LEFT JOIN game_rounds r ON r.id = e.game_round_id
-             WHERE e.game_id = :game_id AND e.event_type != 'round_grants_computed' ORDER BY e.id ASC"
+             WHERE e.game_id = :game_id AND e.event_type NOT IN (" . self::INTERNAL_ONLY_EVENT_TYPES_SQL . ') ORDER BY e.id ASC'
         );
         $stmt->execute(['game_id' => $gameId]);
 
@@ -16219,7 +16246,7 @@ final class GameService
     private function recentEvents(int $gameId, array $players, int $limit = 15, ?int $upToEventId = null): array
     {
         $sql = "SELECT id, event_type, acting_game_player_id, card_id, details, created_at
-                 FROM game_events WHERE game_id = :game_id AND event_type != 'round_grants_computed'";
+                 FROM game_events WHERE game_id = :game_id AND event_type NOT IN (" . self::INTERNAL_ONLY_EVENT_TYPES_SQL . ')';
         if ($upToEventId !== null) {
             $sql .= ' AND id <= :up_to_event_id';
         }

@@ -756,6 +756,47 @@ final class BotGameplayIntegrationTest extends TestCase
     }
 
     /**
+     * Reported live, from a game where Validation was already in play:
+     * "when the bot played Panic, it should have targeted its own
+     * Compulsion or Suspicion so it could re-play it to take another card
+     * from my hand." End-to-end proof (see panicTargetMoodIds()'s own
+     * docblock for the policy in isolation): Panic bounces the bot's own
+     * in-play Compulsion back to its hand, playing Panic (value 1)
+     * guarantees Validation grants another extra play, and the bot then
+     * replays Compulsion with that extra play -- ending on a fresh
+     * pending decision waiting on the human to give up a card, exactly
+     * the same shape as Compulsion's very first play.
+     */
+    public function testBotBouncesItsOwnCompulsionWithPanicThenReplaysItForAnotherSteal(): void
+    {
+        $u1 = $this->insertUser('human_panic_combo');
+        $botUserId = $this->insertBotUser('bot_panic_combo');
+        $gameId = $this->insertGame('standard', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+
+        $this->insertGameCard($gameId, 26, 'in_play', $botPlayerId); // Validation, already in play
+        $compulsionId = $this->insertGameCard($gameId, 86, 'in_play', $botPlayerId); // Compulsion, already in play
+        $this->insertGameCard($gameId, 48, 'hand', $botPlayerId); // Panic -- the bot's only hand card
+        $this->insertGameCard($gameId, 8, 'hand', $p1); // human needs a hand card, both to keep the round going and for the replayed Compulsion to actually have something to take
+        $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
+
+        self::assertNotNull($this->games->advanceAutomatedTurns($gameId));
+
+        self::assertTrue($this->cardIsInPlay($gameId, 48), 'Panic itself should be in play');
+        self::assertTrue($this->cardIsInPlay($gameId, 26), 'Validation should still be in play, unaffected');
+        self::assertFalse($this->cardIsInHand($gameId, 86), 'Compulsion should already be back in play via its own guaranteed replay, not just sitting bounced in hand');
+        self::assertTrue($this->cardIsInPlay($gameId, 86), 'Compulsion should be back in play, replayed using the extra play Panic guaranteed from Validation');
+
+        $log = $this->games->fullEventLog($gameId);
+        $entry = $log[array_key_last($log)];
+        self::assertSame('pending_decision_created', $entry['event_type'], "the replayed Compulsion should be waiting on the human's own response, same as any other Compulsion play");
+        self::assertSame($compulsionId, $entry['card_id']);
+        self::assertSame($botPlayerId, $entry['acting_game_player_id'], 'the bot is the one who played this replayed Compulsion');
+        self::assertStringContainsString('waiting on a response', $entry['description']);
+    }
+
+    /**
      * End-to-end coverage of BotPlayerService::shouldAttemptValueBoostDiscard()
      * (see BotPlayerServiceTest for the policy itself in isolation) through
      * the FULL advanceAutomatedTurns() -> playMood() request lifecycle --
@@ -1934,6 +1975,54 @@ final class BotGameplayIntegrationTest extends TestCase
 
         self::assertNotNull($creativityCard);
         self::assertSame(55, $creativityCard['catalog_card_id'], 'Creativity should have copied the SAFE candidate, Apathy, not the unpayable Self-Loathing');
+    }
+
+    /**
+     * Reported live ("it seemed to get into a loop with Creativity at the
+     * end, and I had to Resign from the game to break the loop"): a real
+     * game log showed BotSage playing Creativity 7 times in a row with no
+     * detail at all. Direct reproduction against the real engine (this
+     * test) shows the underlying combo is legitimate and correctly
+     * terminating, not an engine bug -- each Creativity copying the
+     * in-play Validation delegates to Validation's own afterPlaying()
+     * (its own unconditional "play an additional mood" grant) AND
+     * retriggers every other in-play Validation-effective card's own
+     * reactToAnotherPlay() (the printed "0 or 1 in its top right corner"
+     * reaction) including every EARLIER Creativity-as-Validation copy,
+     * which is why the grant count grows with each successive copy --
+     * but it's still strictly bounded by how many physical low-value
+     * cards the bot actually holds, so it burns through them all and
+     * then passes once its hand is empty, same as any other turn. The
+     * actual bug (fixed alongside this test -- see
+     * testFullEventLogAndRecentEventsExcludeHeuristicBotReasoning() in
+     * BotSearchIntegrationTest) was that diagnostic mode's own internal
+     * reasoning bookkeeping leaked into the human-facing log as
+     * misleading, detail-free "played Creativity" lines that made this
+     * harmless (if flashy) combo look exactly like a stuck game.
+     */
+    public function testBotExhaustsItsCreativitySupplyAgainstAnInPlayValidationWithoutHanging(): void
+    {
+        $u1 = $this->insertUser('human_creativity_loop');
+        $botUserId = $this->insertBotUser('bot_creativity_loop');
+        $gameId = $this->insertGame('standard', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+
+        $this->insertGameCard($gameId, 26, 'in_play', $botPlayerId); // Validation, already in play
+        for ($i = 0; $i < 5; $i++) {
+            $this->insertGameCard($gameId, 32, 'hand', $botPlayerId); // Creativity x5 -- the bot's entire hand
+        }
+        $this->insertGameCard($gameId, 8, 'hand', $p1); // human needs a non-empty hand
+        $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
+
+        self::assertNotNull($this->games->advanceAutomatedTurns($gameId));
+
+        $round = $this->fetchRound($gameId);
+        self::assertSame($p1, (int) $round['current_turn_game_player_id'], 'the turn must settle on the human once the bot genuinely has nothing left to play, not hang mid-combo');
+
+        $inPlay = $this->games->getState($gameId, $u1)['in_play'];
+        $creativityCopiesInPlay = array_filter($inPlay, fn (array $mood) => $mood['is_creativity_copy'] && $mood['catalog_card_id'] === 26);
+        self::assertCount(5, $creativityCopiesInPlay, 'all 5 Creativity cards should have been played as copies of Validation');
     }
 
     /**

@@ -17729,6 +17729,79 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertLessThanOrEqual(2, $rarityCounts['mythic'] ?? 0, "the bot's own deck should never exceed the mythic cap");
     }
 
+    /**
+     * Reported live: "on the game lobby view, the completed game already
+     * got moved to the Past Games tab, even though the match is still in
+     * progress -- please fix this to make it behave like the regular
+     * Sealed Deck matches." Investigated at length against a Sealed Pool
+     * of the Day match against a bot (the only PERIODIC_SEALED_POOL_DECK_TYPES
+     * member bots are ever seated for -- Weekly Sealed Pool stays
+     * bot-excluded), the deck_type the maintainer confirmed the reported
+     * game actually used. This end-to-end reproduction -- human + bot,
+     * game 1 decided by a round win, game 2 already created and waiting
+     * -- could NOT reproduce the reported bug: listGamesForUser()/
+     * listPastGamesForUser()'s own draft_matches carve-out (see
+     * listGamesForUser()'s own docblock) is deck_type-agnostic, already
+     * covered for Quick Draft by
+     * testListGamesForUserKeepsACompletedDraftMatchGameVisibleWhileASiblingGameIsStillInProgress(),
+     * and behaves identically here. Kept as a permanent regression test
+     * for this exact human+bot Sealed Pool of the Day shape either way.
+     */
+    public function testListGamesForUserKeepsACompletedSealedPoolOfTheDayGameVisibleAgainstABotWhileTheMatchContinues(): void
+    {
+        $human = $this->insertUser('sealedpool-lobby-human');
+        $botUserId = $this->insertBotUser('sealedpool-lobby-bot');
+
+        $gameId = $this->games->createGame($human, [$human, $botUserId], format: 'draft', winsNeeded: 1, deckType: 'sealed_pool_of_the_day');
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        $catalog = $this->pdo->query('SELECT id, rarity FROM cards')->fetchAll();
+        $rarityById = array_column($catalog, 'rarity', 'id');
+        $deckCardIdsFor = function (int $userId) use ($draftMatchId, $rarityById): array {
+            $pooledCardIds = array_map(intval(...), json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userId)['drafted_card_ids'], true));
+            $mythicIds = array_values(array_filter($pooledCardIds, fn (int $id) => $rarityById[$id] === 'mythic'));
+            $nonMythicIds = array_values(array_filter($pooledCardIds, fn (int $id) => $rarityById[$id] !== 'mythic'));
+
+            return [...array_slice($mythicIds, 0, 2), ...array_slice($nonMythicIds, 0, 10)];
+        };
+        $this->games->submitDraftDeck($gameId, $human, $deckCardIdsFor($human));
+        // The bot's own deck is submitted directly here (not via
+        // advanceAutomatedTurns()) deliberately -- that call would also
+        // drive the bot straight into playing its own first turn the
+        // instant round 1 starts with the bot going first (a coin flip),
+        // leaving an unresolved pending decision behind that
+        // resignGame() below correctly refuses to resign through
+        // (assertNoPendingDecision(), same gate playMood()/pass() use).
+        // Submitting directly here starts the game without ever letting
+        // either side actually move, so the immediate resign below is
+        // always legal regardless of who the coin flip picked.
+        $this->games->submitDraftDeck($gameId, $botUserId, $deckCardIdsFor($botUserId));
+        $this->games->startGame($gameId);
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
+
+        // The bot resigns -- the simplest way to end game 1 deterministically
+        // without wading into round-by-round play (mirrors the identical
+        // shortcut testListGamesForUserKeepsAnInProgressGameMatchsFinishedGameVisibleWhileMatchContinues
+        // uses for the game_matches carve-out). Checked from the HUMAN's
+        // own perspective below specifically because THEY are the winner
+        // here, not the resigner -- gp.resigned_at routes a resigner
+        // straight to their own Past games regardless of match status, a
+        // separate and already-tested mechanism this test isn't targeting.
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $botUserId));
+
+        self::assertSame('completed', $this->fetchGame($gameId)['status'], 'sanity check: game 1 must have actually finished');
+        self::assertSame('deck_building', $this->fetchDraftMatch($draftMatchId)['status'], 'the match itself is not decided yet -- winsNeeded: 1 games still need 2 of them per draftGamesToWin()');
+
+        self::assertContains($gameId, array_column($this->games->listGamesForUser($human), 'id'), 'completed game 1 must stay in the main lobby while the Sealed Pool of the Day match is undecided');
+        self::assertNotContains($gameId, array_column($this->games->listPastGamesForUser($human), 'id'), 'and must NOT yet appear in Past games');
+
+        $nextGameStmt = $this->pdo->prepare("SELECT id FROM games WHERE draft_match_id = :match_id AND id != :game_id");
+        $nextGameStmt->execute(['match_id' => $draftMatchId, 'game_id' => $gameId]);
+        $game2Id = (int) $nextGameStmt->fetchColumn();
+        self::assertNotSame(0, $game2Id, 'game 2 of the match should already exist');
+        self::assertContains($game2Id, array_column($this->games->listGamesForUser($human), 'id'), 'game 2 (waiting on deck submission) must also be in the main lobby');
+    }
+
     public function testSubmitDraftDeckRejectsExceedingTheMythicCapForSealedPoolOfTheDay(): void
     {
         $alice = $this->insertUser('sealedpool-mythiccap-alice');
