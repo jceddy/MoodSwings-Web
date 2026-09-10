@@ -7113,7 +7113,19 @@ since it already holds that dependency):
     already did, matching the original "at least a 3 card increase in
     hand size" spec literally (see `rationalizationWouldClinchTheGame()`'s
     own quote below) once the pre-play/post-play hand-size mismatch is
-    gone.
+    gone. **Always rotate on an empty hand, reported live follow-up
+    (jceddy):** "if Rationalization is the last card the bot has in
+    hand, it should *always* choose rotate instead of refresh" --
+    confirmed as unconditional, not just a lower threshold.
+    `RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE` is skipped entirely
+    (treated as `0`) once the bot's own remaining hand is actually zero:
+    with nothing left to give away, `'rotate'` can never do worse than
+    `'refresh'` (itself a total no-op against an empty hand -- bottoming
+    and redrawing zero cards), and it's strictly better the instant ANY
+    neighbor holds even a single card. Fires even in the fully
+    degenerate case where neither neighbor holds any cards either
+    (both sides of the trade are empty) -- "always" means always, not
+    "whenever it would actually gain something."
   - Otherwise, `rationalizationLowValueHand(BoardState $state, int
     $cardId, int $botGamePlayerId): bool` -- `'refresh'` whenever the
     bot's own remaining hand (every OTHER card still in hand once

@@ -1,0 +1,23 @@
+-- Reported live, follow-up (jceddy): "if Rationalization is the last
+-- card the bot has in hand, it should *always* choose rotate instead of
+-- refresh."
+--
+-- The previous fix (migration 0293) corrected
+-- BotPlayerService::rationalizationStealDirection() to compare against
+-- the bot's own REMAINING hand (excluding Rationalization itself) rather
+-- than its pre-play total, but still required a neighbor to hold
+-- RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE (3) more cards than that
+-- remaining hand before 'rotate' would fire. Once the remaining hand is
+-- actually zero, there's nothing left to weigh against: 'rotate' can
+-- never do worse than 'refresh' (itself a total no-op against an empty
+-- hand), and it's strictly better the instant any neighbor holds even a
+-- single card.
+--
+-- RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE is now skipped entirely
+-- (treated as 0) whenever the bot's own remaining hand is empty, so
+-- 'rotate' always fires in that case -- even when neither neighbor holds
+-- any cards either, matching "always" literally.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.39.21' WHERE id = 1;

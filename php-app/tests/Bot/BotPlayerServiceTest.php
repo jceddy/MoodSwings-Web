@@ -3222,15 +3222,25 @@ final class BotPlayerServiceTest extends TestCase
 
     // -- Rationalization -------------------------------------------------
 
-    /** Card 49 = Rationalization (base value 3, blue, rare). */
-    public function testChooseActionRefreshesWhenRationalizationIsTheOnlyCardInHand(): void
+    /**
+     * Card 49 = Rationalization (base value 3, blue, rare). Superseded by
+     * testChooseActionStillRotatesWhenTheBotsHandIsEmptyAndNoNeighborHoldsAnyCardsEither
+     * below (reported live, jceddy: "if Rationalization is the last card
+     * the bot has in hand, it should *always* choose rotate instead of
+     * refresh") -- 'rotate' is now chosen even here, where neither
+     * neighbor holds any cards either, since it can never do worse than
+     * 'refresh' once the bot's own remaining hand is empty. Kept
+     * (renamed) to document that 'refresh' is no longer reachable for
+     * this exact board, not just silently dropped.
+     */
+    public function testChooseActionRotatesRatherThanRefreshesWhenRationalizationIsTheOnlyCardInHand(): void
     {
         $state = $this->boardState(hands: [1 => [49]]);
 
         $action = $this->bot->chooseAction($state, [49], 1);
 
         self::assertSame(49, $action['card_id']);
-        self::assertSame(['mode' => 'refresh'], $action['choices']);
+        self::assertSame('rotate', $action['choices']['mode'] ?? null);
     }
 
     /** Fear (38) and Fickleness (39) are both base value 0 -- a remaining hand this weak (average 0) is always worth refreshing over. */
@@ -3455,27 +3465,32 @@ final class BotPlayerServiceTest extends TestCase
     }
 
     /**
-     * Mirror of the empty-hand case above, one card short: with
-     * Rationalization as the bot's only card and an opponent holding
-     * just 2, the steal trigger still correctly doesn't fire (2 is short
-     * of the 3-card threshold even against an empty remaining hand) --
-     * proving the fix didn't overcorrect into ALWAYS stealing whenever
-     * the bot's remaining hand happens to be empty. Falls through to
-     * 'refresh' instead, since an empty remaining hand is itself always
-     * "low value" (rationalizationLowValueHand()'s own docblock).
+     * Reported live, follow-up (jceddy): "if Rationalization is the last
+     * card the bot has in hand, it should *always* choose rotate instead
+     * of refresh" -- confirmed as an unconditional rule, not just a
+     * lower threshold. With the bot's own remaining hand empty, an
+     * opponent holding only 2 cards is still well short of the ordinary
+     * RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE (3) margin, but 'rotate'
+     * gives away NOTHING (an empty hand) in exchange for those 2 cards
+     * -- strictly better than 'refresh', which would gain nothing at all
+     * against an empty hand (bottoming and redrawing zero cards is a
+     * pure no-op). See rationalizationStealDirection()'s own docblock
+     * for the fix (RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE is skipped
+     * entirely once the bot's own remaining hand is zero).
      */
-    public function testChooseActionDoesNotRotateWhenTheBotsEmptyHandStillFallsShort(): void
+    public function testChooseActionAlwaysRotatesWhenTheBotsHandIsEmptyEvenBelowTheUsualThreshold(): void
     {
         $state = $this->boardState(hands: [
             1 => [49],
-            2 => [38, 39], // only 2 more than the bot's own (empty) remaining hand -- short of the 3-card threshold
+            2 => [38, 39], // only 2 cards -- short of the usual 3-card threshold, but still worth stealing for free
         ]);
 
         $action = $this->bot->chooseAction($state, [49], 1);
 
         self::assertSame(49, $action['card_id']);
-        self::assertSame(['mode' => 'refresh'], $action['choices']);
+        self::assertSame(['mode' => 'rotate', 'direction' => 'right'], $action['choices']);
     }
+
 
     /**
      * Reported live: "Rationalization should be saved... it should not

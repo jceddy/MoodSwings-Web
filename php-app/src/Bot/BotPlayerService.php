@@ -1922,7 +1922,10 @@ final class BotPlayerService
      * whole remaining hand (rotate moves EVERY seated player's hand, not
      * just a private trade with one opponent -- see RationalizationEffect's
      * own docblock) isn't clearly a net gain once the bot's own cards are
-     * considered lost too.
+     * considered lost too. Skipped entirely (treated as 0) once the
+     * REMAINING hand is itself empty -- see rationalizationStealDirection()'s
+     * own docblock for why there's nothing left to weigh against in that
+     * case.
      */
     private const RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE = 3;
 
@@ -2040,10 +2043,24 @@ final class BotPlayerService
      *        cost by exactly one card in every case, hardest to notice
      *        when Rationalization was the bot's whole hand (a 1-card
      *        overcount is the entire hand at that point).
+     *
+     *        Reported live, follow-up (jceddy): once $ownHandSize is
+     *        actually zero -- Rationalization really was the bot's ONLY
+     *        card -- RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE is skipped
+     *        entirely rather than still requiring a neighbor to hold 3+:
+     *        with nothing left to give away, 'rotate' can never do worse
+     *        than 'refresh' (which is itself a total no-op against an
+     *        empty hand -- bottoming and redrawing zero cards), and it's
+     *        strictly better the moment ANY neighbor holds even a single
+     *        card. There's no "not worth the risk" case left to guard
+     *        against once the bot's own side of the trade is empty, so
+     *        the maintainer confirmed this should always fire rather than
+     *        only past the usual 3-card margin.
      */
     private function rationalizationStealDirection(BoardState $state, int $cardId, int $botGamePlayerId): ?string
     {
         $ownHandSize = count(array_diff($state->hand($botGamePlayerId), [$cardId]));
+        $requiredAdvantage = $ownHandSize === 0 ? 0 : self::RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE;
 
         $bestDirection = null;
         $bestGiverHandSize = -1;
@@ -2055,7 +2072,7 @@ final class BotPlayerService
             }
 
             $giverHandSize = count($state->hand($giverId));
-            if ($giverHandSize >= $ownHandSize + self::RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE && $giverHandSize > $bestGiverHandSize) {
+            if ($giverHandSize >= $ownHandSize + $requiredAdvantage && $giverHandSize > $bestGiverHandSize) {
                 $bestDirection = $direction;
                 $bestGiverHandSize = $giverHandSize;
             }
