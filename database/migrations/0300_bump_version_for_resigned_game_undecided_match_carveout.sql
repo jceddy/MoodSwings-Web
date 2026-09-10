@@ -1,0 +1,24 @@
+-- Reported live: "the completed game already got moved to the Past
+-- Games tab, even though the match is still in progress" -- from a
+-- Sealed Pool of the Day best-of-three match against a bot where the
+-- maintainer themselves resigned game 1. A follow-up question ("is it
+-- possible this is a bug only with resigned games in best of three
+-- matches?") pinpointed the actual root cause: listGamesForUser()'s own
+-- gp.resigned_at IS NULL check used to be an unconditional top-level
+-- AND, checked regardless of the draft_matches/game_matches "wait for
+-- the whole match to decide" carve-out -- so a resigned game 1 of a
+-- still-undecided best-of-three match moved straight to the resigner's
+-- own Past games, even though they remained perfectly normally seated
+-- (no resignation of their own) in game 2 sitting right there in what
+-- should have been their main lobby. A resignation only ever completes
+-- THAT ONE game; it says nothing about whether the resigner can still
+-- act in a later game of the same match. gp.resigned_at IS NULL now
+-- only gates the plain "still active" disjunct, exactly parallel to
+-- g.status NOT IN ('completed', 'abandoned'), so a resigned game is
+-- subject to the identical match-undecided carve-out a naturally
+-- completed one already gets. listPastGamesForUser()'s own complement
+-- changed the identical way.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.39.27' WHERE id = 1;

@@ -4719,6 +4719,30 @@ naturally-completed game with no sibling in progress. It has no
 `completed_at` of its own (only the `draft_matches` row does), so it sorts
 by `last_move_at` in `GET /games/past` instead.
 
+**A resigned game used to skip this whole carve-out** (reported live:
+"the completed game already got moved to the Past Games tab, even though
+the match is still in progress" -- from a Sealed Pool of the Day
+best-of-three match against a bot where the maintainer themselves
+resigned game 1). `gp.resigned_at IS NULL` used to be its own unconditional
+top-level `AND` in `listGamesForUser()`'s own query -- checked
+*regardless* of the draft/game_match carve-outs, rather than only gating
+the plain "still active" disjunct the way `g.status NOT IN (...)` already
+did. A resignation only ever completes THAT ONE game outright (or, for
+`'standard'` format's own 3-4 player "continue without them" path,
+leaves it `'in_progress'` for everyone else) -- it says nothing about
+whether the resigner can still act in a LATER game of the same match, so
+game 1 of a still-undecided match moved to the resigner's OWN Past games
+immediately even though they were perfectly normally seated (no
+resignation of their own) in game 2, sitting right there in what should
+have been their main lobby. `gp.resigned_at IS NULL` now only gates the
+"plain still active" disjunct, exactly parallel to `g.status NOT IN
+(...)`, so a resigned game becomes subject to the exact same
+match-undecided carve-out as a naturally-completed one; `listPastGamesForUser()`'s
+own complement changed the identical way. Checked from BOTH players' own
+perspectives now, not just the winner's -- the two existing tests only
+ever checked the non-resigner's view, which is exactly how this slipped
+through originally.
+
 ### Cleanup cron (issue #84)
 
 Past games alone doesn't actually delete anything -- an old game just
