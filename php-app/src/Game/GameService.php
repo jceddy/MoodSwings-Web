@@ -7503,18 +7503,50 @@ final class GameService
      * tacticalBotReasoningSince()'s own docblock for the full history of
      * why this is an ALLOWLIST rather than excluding known-bad types one
      * at a time. 0 (the start of the game) if no such event exists yet.
+     *
+     * Reported live: a full round's worth of Tactical Bot plays (several
+     * extra-play chained moods, ending in an automatic no-legal-play pass)
+     * went entirely missing from the dialog, even though none of the
+     * usual "not really the viewer's own play" culprits applied this
+     * time -- traced to the round's OWN Enthusiasm/Passion "take the
+     * bonus?" decision, resolved by the viewer immediately after those
+     * plays as part of scoring, which logs its own 'pending_decision_resolved'
+     * row (respondToDecision()'s own scoring-time branch) -- genuinely the
+     * viewer's own answer, but to a prompt that happens automatically
+     * right after a round's plays with no turn of the viewer's own in
+     * between, not something that means "I've caught up on watching the
+     * bot's reasoning for this round" the way ending an actual turn does.
+     * Letting it move the boundary hid that entire round's own reasoning
+     * permanently, since there's no later chance to see it uncovered
+     * again. A 'pending_decision_resolved' row tagged 'scoring_trigger'
+     * (mirroring the sibling 'pending_decision_created' event's own use of
+     * that same flag) is now skipped here -- an ordinary MID-TURN decision
+     * resolution (e.g. Intimidation's target revealing a card) has no such
+     * flag and still counts, same as before.
+     *
+     * @return int
      */
     private function viewerOwnLastTurnEventId(int $gameId, int $viewerGamePlayerId): int
     {
         $stmt = Connection::get()->prepare(
-            "SELECT id FROM game_events WHERE game_id = :game_id AND acting_game_player_id = :player_id
+            "SELECT id, event_type, details FROM game_events WHERE game_id = :game_id AND acting_game_player_id = :player_id
              AND event_type IN ('mood_played', 'turn_passed', 'pending_decision_resolved', 'disillusionment_color_chosen', 'team_turn_order_decided', 'team_draw_recipient_decided', 'closed_team_leader_decided')
-             ORDER BY id DESC LIMIT 1"
+             ORDER BY id DESC"
         );
         $stmt->execute(['game_id' => $gameId, 'player_id' => $viewerGamePlayerId]);
-        $id = $stmt->fetchColumn();
 
-        return $id !== false ? (int) $id : 0;
+        foreach ($stmt->fetchAll() as $row) {
+            if ($row['event_type'] === 'pending_decision_resolved') {
+                $details = json_decode((string) $row['details'], true) ?? [];
+                if ($details['scoring_trigger'] ?? false) {
+                    continue;
+                }
+            }
+
+            return (int) $row['id'];
+        }
+
+        return 0;
     }
 
     /**
@@ -8218,7 +8250,20 @@ final class GameService
                     // decisions, if any. None of these decision types moves
                     // a card, so this branch's own event has no BoardState
                     // to fold card history from.
-                    $this->logEvent($gameId, $roundId, $gamePlayerId, 'pending_decision_resolved', $playedCardId, $choices);
+                    //
+                    // 'scoring_trigger' (mirroring the sibling
+                    // pending_decision_created event a few lines below)
+                    // marks this as a SCORING-TIME resolution -- reported
+                    // live: answering Enthusiasm's/Passion's own "take the
+                    // bonus?" prompt was pushing viewerOwnLastTurnEventId()'s
+                    // boundary past that entire round's own Tactical Bot
+                    // plays, hiding reasoning for a round the viewer never
+                    // actually got a chance to review (this resolution
+                    // happens automatically right after the round's plays,
+                    // with no turn of the viewer's own in between) -- see
+                    // that method's own docblock for why this flag is what
+                    // excludes it there.
+                    $this->logEvent($gameId, $roundId, $gamePlayerId, 'pending_decision_resolved', $playedCardId, [...$choices, 'scoring_trigger' => true]);
 
                     $state = $this->boardStates->load($gameId);
                     $turnOrder = $this->turnOrderForRound($gameId, $round);

@@ -8047,6 +8047,48 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame("Enthusiasm's scoring effect triggered, waiting on a response from enthlog1", $description);
     }
 
+    /**
+     * Reported live: a full round's worth of Tactical Bot reasoning went
+     * missing from the "View bot reasoning" dialog, traced to
+     * GameService::viewerOwnLastTurnEventId() treating the viewer's own
+     * answer to Enthusiasm's/Passion's scoring-time "take the bonus?"
+     * prompt as "their own last play," pushing the boundary past that
+     * entire round's own bot plays. respondToDecision()'s own scoring-time
+     * branch now tags its 'pending_decision_resolved' event
+     * 'scoring_trigger' (mirroring the sibling 'pending_decision_created'
+     * event's own use of that flag) specifically so that method can tell
+     * it apart from an ordinary mid-turn decision response.
+     */
+    public function testEnthusiasmsScoringDecisionResolutionIsTaggedAsAScoringTrigger(): void
+    {
+        $u1 = $this->insertUser('enthtag1');
+        $u2 = $this->insertUser('enthtag2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 116, 'in_play', $p1); // Enthusiasm
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->pass($gameId, $p1);
+        $this->games->pass($gameId, $p2);
+        $this->games->respondToDecision($gameId, $p1, ['take_bonus' => true]);
+
+        $stmt = $this->pdo->prepare(
+            "SELECT details FROM game_events WHERE game_id = :game_id AND event_type = 'pending_decision_resolved' ORDER BY id DESC LIMIT 1"
+        );
+        $stmt->execute(['game_id' => $gameId]);
+        $details = json_decode((string) $stmt->fetchColumn(), true);
+
+        self::assertTrue($details['scoring_trigger'] ?? false, 'a scoring-time decision resolution must be tagged so it can be excluded from "the viewer\'s own last play" boundary elsewhere');
+    }
+
     public function testEnthusiasmAddsNoBonusWhenDeclined(): void
     {
         $u1 = $this->insertUser('enth3');

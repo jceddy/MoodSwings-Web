@@ -958,6 +958,61 @@ final class BotSearchIntegrationTest extends TestCase
     }
 
     /**
+     * Reported live a third time: a full round's worth of Tactical Bot
+     * plays (several extra-play chained moods, ending in an automatic
+     * no-legal-play pass) went entirely missing from the dialog. Traced
+     * to the round's own Enthusiasm/Passion "take the bonus?" decision --
+     * resolved by the viewer immediately after those plays as part of
+     * scoring, which logs its own 'pending_decision_resolved' row
+     * (respondToDecision()'s own scoring-time branch, tagged
+     * 'scoring_trigger') -- genuinely the viewer's own answer, but to a
+     * prompt that happens automatically right after a round's plays with
+     * no turn of the viewer's own in between, unlike an ordinary MID-TURN
+     * decision resolution (no 'scoring_trigger' tag), which still counts.
+     */
+    public function testAScoringTimeDecisionResolvedByTheViewerDoesNotCountAsTheirOwnPlay(): void
+    {
+        ['human' => $human, 'bot' => $bot, 'gameId' => $gameId] = $this->createTacticalBotGame(diagnosticMode: true);
+        $botPlayerId = $this->games->gamePlayerIdFor($gameId, $bot);
+        $humanPlayerId = $this->games->gamePlayerIdFor($gameId, $human);
+
+        $this->insertReasoningEvent($gameId, $botPlayerId, 'reasoning behind the round\'s own bot plays');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO game_events (game_id, acting_game_player_id, event_type, details)
+             VALUES (:game_id, :player_id, 'pending_decision_resolved', '{\"take_bonus\":true,\"scoring_trigger\":true}')"
+        );
+        $stmt->execute(['game_id' => $gameId, 'player_id' => $humanPlayerId]);
+
+        $reasoning = $this->games->tacticalBotReasoningSince($gameId, $human);
+
+        self::assertCount(1, $reasoning, 'answering the round\'s own scoring-time bonus decision is not the viewer\'s own turn-ending play, and must not hide that round\'s own bot reasoning');
+    }
+
+    /** An ORDINARY mid-turn decision response (no scoring_trigger) is unaffected -- still counts as the viewer's own play, exactly as before. */
+    public function testAnOrdinaryMidTurnDecisionResolvedByTheViewerStillCountsAsTheirOwnPlay(): void
+    {
+        ['human' => $human, 'bot' => $bot, 'gameId' => $gameId] = $this->createTacticalBotGame(diagnosticMode: true);
+        $botPlayerId = $this->games->gamePlayerIdFor($gameId, $bot);
+        $humanPlayerId = $this->games->gamePlayerIdFor($gameId, $human);
+
+        $this->insertReasoningEvent($gameId, $botPlayerId, 'old reasoning, before the mid-turn decision');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO game_events (game_id, acting_game_player_id, event_type, details)
+             VALUES (:game_id, :player_id, 'pending_decision_resolved', '{\"revealed_card_id\":1}')"
+        );
+        $stmt->execute(['game_id' => $gameId, 'player_id' => $humanPlayerId]);
+
+        $this->insertReasoningEvent($gameId, $botPlayerId, 'new reasoning, after the mid-turn decision');
+
+        $reasoning = $this->games->tacticalBotReasoningSince($gameId, $human);
+
+        self::assertCount(1, $reasoning, 'a real mid-turn decision response still moves the boundary forward, same as before');
+        self::assertSame('new reasoning, after the mid-turn decision', $reasoning[0]['candidates'][0]['note']);
+    }
+
+    /**
      * Reported live: a Tactical Bot's move was clearly visible in Recent
      * plays, yet "View bot reasoning" showed the same generic empty
      * message even though tacticalBotReasoningSince() was already scoped

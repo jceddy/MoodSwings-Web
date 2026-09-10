@@ -8893,6 +8893,27 @@ default "No tactical bot plays since your own last play," so a
 diagnostic-mode player can tell "this is broken" apart from "there is
 genuinely nothing to explain."
 
+Reported live a FOURTH time (migration `0285`): a full round's worth of
+Tactical Bot plays (several extra-play chained moods, ending in an
+automatic no-legal-play pass) went missing from the dialog, even though
+none of the three culprits above applied this time. Traced to the
+round's own Enthusiasm/Passion "take the bonus?" decision (or an
+after-scoring order decision) -- `respondToDecision()`'s own scoring-time
+branch logs its `pending_decision_resolved` row with
+`acting_game_player_id` set to whoever answered it, genuinely the
+viewer's own action, but one that happens automatically right after a
+round's plays with no turn of the viewer's own in between, not "I've
+caught up on watching the bot's reasoning for this round" the way ending
+an actual turn does. `viewerOwnLastTurnEventId()` was treating it as
+exactly that anyway, permanently hiding that round's own reasoning (no
+later turn ever uncovers it again, since the boundary only ever moves
+forward). Fixed by tagging that scoring-time resolution `scoring_trigger`
+(mirroring the sibling `pending_decision_created` event's own use of that
+same flag two paragraphs up) and having `viewerOwnLastTurnEventId()` skip
+a `pending_decision_resolved` row carrying it -- an ordinary MID-TURN
+decision response (e.g. Intimidation's target revealing a card) has no
+such flag and still moves the boundary forward, exactly as before.
+
 **Heartbeat + partial-search recovery (migration `0283`).** Reported
 live, once `fallback_turns_since` above made the stale-fallback rate
 visible: "based on the results I'm seeing when I test this process must
