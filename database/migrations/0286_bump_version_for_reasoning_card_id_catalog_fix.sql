@@ -1,0 +1,30 @@
+-- Reported live, twice, as a real (obviously not "passed") play --
+-- Melancholy, then Awe -- reading as "BotSageQuick passed" in the "View
+-- bot reasoning" dialog. Every card_id an action carries throughout
+-- BotPlayerService/SearchBotPlayerService (and thus every card_id a
+-- tactical_bot_reasoning/heuristic_bot_reasoning game_events row ever
+-- logged) is the per-game INSTANCE id (game_cards.id), never translated
+-- before being logged, since nothing about choosing or applying an
+-- action needs anything else. But the reasoning dialog deliberately
+-- returns a bare card_id for the FRONTEND to resolve against its own
+-- already-loaded catalog (deckBuilderCatalogById, keyed by the catalog's
+-- own cards.id) rather than re-serializing a full card for every
+-- candidate of every logged turn -- which only ever worked by
+-- coincidence, for the rare case where an instance id happens to also be
+-- a valid (if utterly wrong) catalog id. Once an instance id climbs past
+-- the catalog's own highest id -- which it eventually always does, as a
+-- game accumulates played cards -- the frontend's own catalog lookup
+-- finds nothing, and the dialog's own "played X"/"passed" summary line
+-- falls back to "passed" even though a real card was chosen.
+--
+-- GameService::tacticalBotReasoningSince() now translates every card_id
+-- a returned entry carries (its own, every candidate's, every
+-- heuristically-excluded one) via BoardState::catalogCardId() -- the
+-- same instance -> catalog id mapping catalogRow() already uses for
+-- every other card lookup -- fixed at READ time rather than at logging
+-- time, so this reaches reasoning rows already written before this fix
+-- shipped, not just new ones.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.39.13' WHERE id = 1;

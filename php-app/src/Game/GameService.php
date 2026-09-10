@@ -7473,24 +7473,59 @@ final class GameService
              ORDER BY ge.id ASC"
         );
         $reasoningStmt->execute(['game_id' => $gameId, 'since_id' => $sinceEventId]);
+        $rows = $reasoningStmt->fetchAll();
 
-        return array_map(static function (array $row): array {
+        // Every card_id a reasoning event carries (its own, each
+        // candidate's, each heuristically-excluded one) is the PER-GAME
+        // INSTANCE id (game_cards.id) $action['card_id'] always means
+        // throughout BotPlayerService/SearchBotPlayerService -- never
+        // translated before being logged, since nothing about choosing or
+        // applying an action needs anything else. But the frontend
+        // deliberately receives a bare card_id to resolve against its own
+        // already-loaded catalog (deckBuilderCatalogById, keyed by the
+        // CATALOG's own cards.id -- see this method's own docblock on
+        // why candidates aren't fully re-serialized), which only works at
+        // all for the coincidental case where an instance id happens to
+        // also be a valid (if utterly wrong) catalog id. Reported live,
+        // twice, as a play with a real, obviously-not-inert card
+        // (Melancholy, then Awe) reading as "passed" in the dialog: once
+        // an instance id climbs past the catalog's own highest id (which
+        // it eventually always does, as a game accumulates played
+        // cards), cardFromCatalog() finds nothing and the summary line's
+        // own `chosenCard ? 'played '+name : 'passed'` falls to "passed"
+        // -- even though $row['card_id'] itself was never null. Translated
+        // here, once per returned row, via BoardState::catalogCardId()
+        // (the same instance -> catalog id mapping catalogRow() already
+        // uses for every other card lookup) rather than at LOG time,
+        // since the fix needs to reach rows already written before it
+        // shipped, not just new ones.
+        $catalogCardId = $rows !== [] ? $this->boardStates->load($gameId)->catalogCardId(...) : null;
+
+        return array_map(static function (array $row) use ($catalogCardId): array {
             $details = json_decode((string) $row['details'], true) ?? [];
             $isTactical = $row['event_type'] === 'tactical_bot_reasoning';
+
+            $candidates = $isTactical ? ($details['candidates'] ?? []) : [];
+            foreach ($candidates as &$candidate) {
+                if (($candidate['card_id'] ?? null) !== null) {
+                    $candidate['card_id'] = $catalogCardId($candidate['card_id']);
+                }
+            }
+            unset($candidate);
 
             return [
                 'source' => $isTactical ? 'tactical' : 'heuristic',
                 'game_player_id' => (int) $row['acting_game_player_id'],
                 'username' => $row['username'],
-                'card_id' => $row['card_id'] !== null ? (int) $row['card_id'] : null,
+                'card_id' => $row['card_id'] !== null ? $catalogCardId((int) $row['card_id']) : null,
                 'choices' => $details['chosen_choices'] ?? null,
-                'excluded_by_heuristic' => $isTactical ? ($details['excluded_by_heuristic'] ?? []) : [],
-                'candidates' => $isTactical ? ($details['candidates'] ?? []) : [],
+                'excluded_by_heuristic' => $isTactical ? array_map($catalogCardId, $details['excluded_by_heuristic'] ?? []) : [],
+                'candidates' => $candidates,
                 'choice_policy_path' => $isTactical ? null : ($details['choice_policy_path'] ?? null),
                 'recovered_from_stalled_search' => $isTactical ? (bool) ($details['recovered_from_stalled_search'] ?? false) : false,
                 'created_at' => $row['created_at'],
             ];
-        }, $reasoningStmt->fetchAll());
+        }, $rows);
     }
 
     /**

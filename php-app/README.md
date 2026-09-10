@@ -8821,6 +8821,30 @@ frontend already has the whole catalog loaded (`GET /cards/catalog`, the
 deck builder's own source), so there's no need to re-serialize a card on
 every candidate of every logged turn.
 
+**`card_id` is a per-game INSTANCE id, translated to a catalog id on the
+way out (migration `0286`).** Reported live, twice, as a real (obviously
+not "passed") play -- Melancholy, then Awe -- reading as "BotSageQuick
+passed" in the dialog. Every `card_id` an action carries throughout
+`BotPlayerService`/`SearchBotPlayerService` (and thus every `card_id` a
+`tactical_bot_reasoning`/`heuristic_bot_reasoning` event logs) is the
+per-game instance id (`game_cards.id`), never translated before logging
+since nothing about choosing or applying an action needs anything else.
+But the paragraph above's own "bare `card_id`" design assumed the
+frontend's catalog lookup (keyed by the catalog's own `cards.id`) could
+resolve it directly -- which only ever worked by coincidence, for the
+rare case where an instance id happens to also be a valid (if utterly
+wrong) catalog id. Once an instance id climbs past the catalog's own
+highest id -- which it eventually always does, as a game accumulates
+played cards -- the frontend's own lookup finds nothing, and the
+dialog's `chosenCard ? 'played '+name : 'passed'` summary line falls to
+"passed" even though `card_id` itself was never null.
+`tacticalBotReasoningSince()` now translates every `card_id` a returned
+entry carries (its own, every candidate's, every heuristically-excluded
+one) via `BoardState::catalogCardId()` -- the same instance -> catalog
+id mapping `catalogRow()` already uses for every other card lookup --
+fixed at READ time rather than at logging time, so it reaches reasoning
+rows already written before this shipped, not just new ones.
+
 `GameService::tacticalBotReasoningSince(int $gameId, int $viewerUserId)`
 (`GET /games/bot-reasoning?game_id=`) scopes the returned list PER
 VIEWER, not per game or per round: it finds the CALLER's own most recent
