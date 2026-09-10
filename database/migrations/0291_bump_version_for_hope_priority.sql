@@ -1,0 +1,26 @@
+-- Reported live: "bots should always play Hope first if they have it in
+-- the opening hand."
+--
+-- Hope was already in BotPlayerService::EARLY_PRIORITY_EFFECT_KEYS,
+-- sharing that list's flat +10 sortPriorityValue() bonus with every
+-- other extra-play grant -- but Hope's own printed base value is 0, so
+-- another early-priority card with a high enough baseValue() (the
+-- catalog's own values top out around 6) could still combine to a
+-- higher total priority and get chosen first instead. Exactly backwards:
+-- unlike a one-time grant (Charity, Duplicity, ...) or a CONDITIONAL
+-- ongoing one (Grace needs a color-matching discard-pile card each turn;
+-- Stubbornness needs an opponent with more moods, and never even applies
+-- the turn it's played itself), Hope's own "an additional mood during
+-- each of your turns, including the turn you play this mood" is both
+-- unconditional and applies starting the very turn it's played -- so
+-- delaying it by even a single turn permanently forfeits that turn's
+-- own extra play, with nothing later making up the difference.
+--
+-- Hope now gets its own HOPE_PRIORITY_BONUS (20), comfortably above
+-- EARLY_PRIORITY_BONUS (10) plus the catalog's own highest baseValue()
+-- combined, so it always outranks every other early-priority card too,
+-- not just an un-boosted one.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.39.18' WHERE id = 1;

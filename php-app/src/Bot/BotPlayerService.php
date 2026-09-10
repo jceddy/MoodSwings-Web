@@ -1104,7 +1104,9 @@ final class BotPlayerService
 
         $effectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
         $priority = $this->baseValue($state, $cardId);
-        if (in_array($effectKey, self::EARLY_PRIORITY_EFFECT_KEYS, true)) {
+        if ($effectKey === 'hope') {
+            $priority += self::HOPE_PRIORITY_BONUS;
+        } elseif (in_array($effectKey, self::EARLY_PRIORITY_EFFECT_KEYS, true)) {
             $priority += self::EARLY_PRIORITY_BONUS;
         }
         if ($effectKey === 'pacifism') {
@@ -1239,16 +1241,19 @@ final class BotPlayerService
      * play meeting some restriction (Benevolence, Eagerness,
      * Friendliness, Kindness, Pride, Intimidation's own restriction to
      * the one card just taken) or an ongoing while-in-play grant instead
-     * of a one-time one (Hope, Grace, Stubbornness) -- "legal, not
-     * strategic" stops short of predicting whether a conditional grant
-     * will actually be used. Generosity deliberately excluded: it grants
-     * its own extra play to a chosen OPPONENT, not the acting player, so
-     * leading with it would help whoever's targeted, not the bot itself.
-     * Thrill is the one exception actually vetoed above
-     * (hasGoodReasonToPlayNow()) rather than just left to this blanket
-     * boost -- unlike Fear/Ambition, Thrill's own "if you do" grant needs
-     * another of the bot's own moods ALREADY in play to put back, so it's
-     * dead on an opening play with nothing else on the board yet.
+     * of a one-time one (Grace, Stubbornness -- Hope belongs to this same
+     * family too, but gets its own even-higher HOPE_PRIORITY_BONUS below
+     * instead of sharing this one, see that constant's own docblock for
+     * why) -- "legal, not strategic" stops short of predicting whether a
+     * conditional grant will actually be used. Generosity deliberately
+     * excluded: it grants its own extra play to a chosen OPPONENT, not
+     * the acting player, so leading with it would help whoever's
+     * targeted, not the bot itself. Thrill is the one exception actually
+     * vetoed above (hasGoodReasonToPlayNow()) rather than just left to
+     * this blanket boost -- unlike Fear/Ambition, Thrill's own "if you
+     * do" grant needs another of the bot's own moods ALREADY in play to
+     * put back, so it's dead on an opening play with nothing else on the
+     * board yet.
      *
      * @var string[]
      */
@@ -1260,7 +1265,7 @@ final class BotPlayerService
         // grants the acting player an extra play
         'charity', 'duplicity', 'idealism', 'validation', 'ambition', 'bravado', 'fear', 'nostalgia',
         'gluttony', 'insecurity', 'angst', 'harmony', 'grief', 'thrill', 'benevolence', 'eagerness',
-        'friendliness', 'kindness', 'pride', 'hope', 'grace', 'stubbornness', 'joy',
+        'friendliness', 'kindness', 'pride', 'grace', 'stubbornness', 'joy',
     ];
 
     /**
@@ -1270,6 +1275,31 @@ final class BotPlayerService
      * of either one's own printed value.
      */
     private const EARLY_PRIORITY_BONUS = 10;
+
+    /**
+     * Reported live: "bots should always play Hope first if they have it
+     * ... " -- Hope's own printed value is 0, so
+     * EARLY_PRIORITY_EFFECT_KEYS' shared +10 bonus alone (its own
+     * previous treatment) could still be outranked by another
+     * early-priority card with a high enough baseValue() (the catalog's
+     * own values top out around 6, i.e. up to 16 combined) -- exactly
+     * backwards from what actually matters here: unlike a one-time
+     * grant (Charity, Duplicity, ...) or a CONDITIONAL ongoing one
+     * (Grace needs a color-matching discard-pile card each turn;
+     * Stubbornness needs an opponent with more moods, and never even
+     * applies the turn it's played itself -- see their own effect
+     * classes' docblocks), Hope's own "an additional mood during each of
+     * your turns, including the turn you play this mood" is both
+     * UNCONDITIONAL and applies starting the very turn it's played --
+     * so delaying it by even a single turn (to lead with some other,
+     * merely higher-printed-value card instead) permanently forfeits
+     * that turn's own extra play, with nothing later ever making up the
+     * difference. Comfortably above EARLY_PRIORITY_BONUS plus the
+     * catalog's own highest baseValue() combined, so Hope always
+     * outranks every other early-priority card too, not just an
+     * un-boosted one.
+     */
+    private const HOPE_PRIORITY_BONUS = 20;
 
     /**
      * Just the "grants the acting player an extra play" third of

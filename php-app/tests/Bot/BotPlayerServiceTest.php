@@ -669,6 +669,28 @@ final class BotPlayerServiceTest extends TestCase
     }
 
     /**
+     * Reported live: "bots should always play Hope first if they have
+     * it." Joy (id 125, base value 3) is itself one of
+     * EARLY_PRIORITY_EFFECT_KEYS' own extra-play grants (priority
+     * 3 + 10 = 13), which would otherwise outrank Hope (id 124, base
+     * value 0)'s own OLD shared +10 bonus (priority 0 + 10 = 10) purely
+     * because Joy's printed value happens to be higher -- exactly
+     * backwards, since delaying Hope by even one turn permanently loses
+     * that turn's own extra play, while Joy's own one-time grant loses
+     * nothing by waiting. Hope's own HOPE_PRIORITY_BONUS (20) now always
+     * wins regardless of any other early-priority card's printed value.
+     */
+    public function testChooseActionAlwaysPrioritizesHopeOverOtherEarlyPriorityCards(): void
+    {
+        $state = $this->boardState(hands: [1 => [124, 125]]);
+
+        $action = $this->bot->chooseAction($state, [124, 125], 1);
+
+        self::assertSame(124, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
+    /**
      * Intimidation's own "always target an opponent" policy (confirmed
      * by the maintainer): player 2 has a card in hand, so it's the only
      * legal, non-teammate target -- the bot volunteers for its own
