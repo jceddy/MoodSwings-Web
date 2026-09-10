@@ -1,0 +1,12 @@
+-- Reported live: "there is redundant numbering" in the Weekly Sealed
+-- Pool standings dialog -- each row already prefixes its own rank
+-- (e.g. "#1 jceddy (you) — 1-0 (top 50%)"), but the list was rendered
+-- as an <ol>, so the browser doubled it up with its own auto-numbered
+-- "1."/"2."/... marker (e.g. "1. #1 jceddy ..."). game/index.html's
+-- #weekly-sealed-pool-standings-list is now a <ul>, giving it a plain
+-- bullet instead of a second, redundant number -- no change to
+-- loadWeeklySealedPoolStandings()'s own row text.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.39.29' WHERE id = 1;

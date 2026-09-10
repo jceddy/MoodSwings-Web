@@ -1269,7 +1269,11 @@ week" toggle buttons (`aria-pressed` reflecting which is active) driving
 plain ranked list (`#rank username (you) — wins-losses (top N%)`), never
 showing the hidden internal score itself (see "Weekly Sealed Pool" in
 `php-app/README.md` for why placement is ranked by that score rather than
-plain win count). The two empty states are worded differently rather than
+plain win count). `#weekly-sealed-pool-standings-list` is a `<ul>`, not an
+`<ol>` (reported live: "there is redundant numbering" -- each row's own
+`#rank` prefix was doubling up with the browser's own auto-numbered
+`1.`/`2.`/... from the list element itself, e.g. "1. #1 jceddy"). The two
+empty states are worded differently rather than
 sharing one message: `standings: null` (no prior-week event ever
 happened, only possible for `week=prior`) reads "There was no Weekly
 Sealed Pool event last week," while `standings: []` (the current week
