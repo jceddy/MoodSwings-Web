@@ -1,0 +1,20 @@
+-- Reported live: "bots should not play hate without a target - usually
+-- the target should be an opponent mood of the highest value, or that
+-- nets the highest point swing - as a last-ditch play, hate can target
+-- itself to draw a card."
+--
+-- BotPlayerService::hateTargetMoodId() already picked the highest-
+-- CURRENT-value non-teammate opponent mood, falling back to Hate itself
+-- when none exists -- except when the acting player had Euphoria
+-- ("this mood's value increases by 1 for each mood in play") in play,
+-- where it returned null instead, leaving Hate's own play with no
+-- target (and so no card draw) at all, on the theory that bottoming ANY
+-- mood would cost Euphoria a point of its own value for the rest of the
+-- round. Confirmed live that this isn't worth leaving the whole play
+-- wasted over -- Hate now always returns a real target regardless of
+-- Euphoria, the same MOOD_COUNT_VALUE_BOOST_EFFECT_KEYS carve-out
+-- removed entirely.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.39.16' WHERE id = 1;
