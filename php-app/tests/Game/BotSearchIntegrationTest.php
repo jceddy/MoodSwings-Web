@@ -308,6 +308,20 @@ final class BotSearchIntegrationTest extends TestCase
         $human = $this->insertUser('bs-raw-human-' . uniqid());
         $bot = $this->insertHeuristicBotUser('bs-raw-heur-bot-' . uniqid());
 
+        // The human's own hand is always empty here (this helper only
+        // ever deals the BOT's own hand) -- auto_pass_on_empty_hand
+        // defaults to on (migration 0096), which would otherwise
+        // auto-pass the human through round after round on its own,
+        // cascading advanceAutomatedTurns() well past this one bot
+        // decision -- fine for a test that only checks the RAW
+        // game_events row this call produces, but it also means the
+        // human racks up their own later turn_passed rows, moving
+        // viewerOwnLastTurnEventId()'s own boundary past this decision
+        // for anything checking tacticalBotReasoningSince() instead.
+        // Turning it off keeps this helper to exactly the one bot
+        // decision its own caller asked for.
+        $this->pdo->prepare('UPDATE users SET auto_pass_on_empty_hand = 0 WHERE id = :id')->execute(['id' => $human]);
+
         $stmt = $this->pdo->prepare(
             "INSERT INTO games (format, status, created_by_user_id, wins_needed, diagnostic_mode) VALUES ('standard', 'in_progress', :created_by, 3, :diagnostic_mode)"
         );
@@ -682,6 +696,29 @@ final class BotSearchIntegrationTest extends TestCase
         self::assertSame('generic_resolver', $details['choice_policy_path']);
     }
 
+    /**
+     * Reported live: a real heuristic-fallback play (not a pass) read as
+     * "passed" in the dialog -- exactly this instance-id-vs-catalog-id
+     * mismatch (see testTacticalBotReasoningSinceReturnsCatalogIdsNotInstanceIds()'s
+     * own docblock), just for a 'heuristic'-source entry instead of a
+     * 'tactical' one.
+     */
+    public function testTacticalBotReasoningSinceReturnsCatalogIdsNotInstanceIdsForAHeuristicEntry(): void
+    {
+        ['gameId' => $gameId, 'botPlayerId' => $botPlayerId] = $this->createRawHeuristicBotGame([55], diagnosticMode: true); // Apathy alone -- always legal, so the heuristic bot definitely plays it, never passes
+        $apathyInstanceId = $this->gameCardInstanceId($gameId, 55);
+        self::assertNotSame(55, $apathyInstanceId, 'this test only proves anything if the instance id genuinely differs from the catalog id it stands for');
+
+        $humanUserId = (int) $this->pdo
+            ->query("SELECT user_id FROM game_players WHERE game_id = {$gameId} AND id != {$botPlayerId}")
+            ->fetchColumn();
+
+        $reasoning = $this->games->tacticalBotReasoningSince($gameId, $humanUserId);
+
+        self::assertCount(1, $reasoning);
+        self::assertSame(55, $reasoning[0]['card_id'], 'must be the catalog id (what the frontend\'s catalog map is keyed by), not the per-game instance id');
+    }
+
     /** The exact same turn, but without diagnostic mode -- no reasoning event should exist at all, same convention as the Tactical Bot's own logTacticalBotReasoning(). */
     public function testAdvanceAutomatedTurnsDoesNotLogHeuristicBotReasoningWhenDiagnosticModeIsOff(): void
     {
@@ -760,6 +797,49 @@ final class BotSearchIntegrationTest extends TestCase
         foreach ($decoded['candidates'] as $candidate) {
             self::assertArrayHasKey('visits', $candidate);
             self::assertArrayHasKey('average_reward', $candidate);
+        }
+    }
+
+    /**
+     * Reported live, twice, as a real (obviously not "passed") play --
+     * Melancholy, then Awe -- reading as "BotSageQuick passed" in the
+     * dialog: every card_id an action carries throughout BotPlayerService/
+     * SearchBotPlayerService is the per-game INSTANCE id
+     * (game_cards.id, see gameCardInstanceId()'s own docblock), but the
+     * frontend resolves a reasoning entry's own card_id against its
+     * already-loaded CATALOG (deckBuilderCatalogById, keyed by the
+     * catalog's own cards.id) -- the two only coincidentally match for a
+     * low enough instance id, which is exactly why this went unnoticed
+     * for as long as it did. tacticalBotReasoningSince() now translates
+     * every card_id (the entry's own, every candidate's, every
+     * heuristically-excluded one) via BoardState::catalogCardId() before
+     * returning it.
+     */
+    public function testTacticalBotReasoningSinceReturnsCatalogIdsNotInstanceIds(): void
+    {
+        ['gameId' => $gameId, 'botPlayerId' => $botPlayerId] = $this->createRawTacticalBotGame($this->games, [55, 7], diagnosticMode: true); // Apathy, Courage
+        $apathyInstanceId = $this->gameCardInstanceId($gameId, 55);
+        self::assertNotSame(55, $apathyInstanceId, 'this test only proves anything if the instance id genuinely differs from the catalog id it stands for');
+
+        $jobStmt = $this->pdo->prepare('SELECT id FROM bot_search_jobs WHERE game_player_id = :id ORDER BY id DESC LIMIT 1');
+        $jobStmt->execute(['id' => $botPlayerId]);
+        $jobId = (int) $jobStmt->fetchColumn();
+        $this->games->runTacticalBotSearchJob($jobId);
+
+        $humanUserId = (int) $this->pdo
+            ->query("SELECT user_id FROM game_players WHERE game_id = {$gameId} AND id != {$botPlayerId}")
+            ->fetchColumn();
+
+        $reasoning = $this->games->tacticalBotReasoningSince($gameId, $humanUserId);
+
+        self::assertCount(1, $reasoning);
+        if ($reasoning[0]['card_id'] !== null) {
+            self::assertContains($reasoning[0]['card_id'], [55, 7], 'must be the catalog id (what the frontend\'s catalog map is keyed by), not the per-game instance id');
+        }
+        foreach ($reasoning[0]['candidates'] as $candidate) {
+            if ($candidate['card_id'] !== null) {
+                self::assertContains($candidate['card_id'], [55, 7]);
+            }
         }
     }
 
