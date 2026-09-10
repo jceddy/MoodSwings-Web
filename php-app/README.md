@@ -8779,6 +8779,35 @@ to run a script (`bin/run_bot_search.php`, and
 exist on the deployed server at all. Fixed by adding `cp -R php-app/bin
 dist/bin` to both workflows, right alongside the `src`/`vendor` copy.
 
+**`GameService::cliPhpBinary()` -- `PHP_BINARY` alone isn't always a
+real CLI binary (migration `0288`).** Reported live immediately after
+the fix above: once `bin/`'s own scripts were actually reaching the
+deployed server, `exec()`'s spawned process started throwing
+"`declare(strict_types=1)` declaration must be the very first
+statement" -- on a file byte-for-byte identical to every other `bin/`
+script that already worked (confirmed via `od -c`: a leading shebang
+line, then `<?php`, then `declare(strict_types=1);`, no BOM, no stray
+bytes). `PHP_BINARY` is only guaranteed to be a real, directly
+executable CLI binary under the CLI SAPI itself; under PHP-FPM (this
+app's own real request-serving SAPI on Bluehost/cPanel -- see
+`deploy.yml`'s own "Set up PHP" step and cPanel's MultiPHP Manager), it
+instead resolves to the FPM master's own binary path, which isn't a
+script runner at all and evidently mishandles a leading shebang line
+when handed one directly this way, producing this exact confusing parse
+error rather than a clean "not a valid invocation" one.
+`launchTacticalBotSearchJob()`/`scheduleAutomatedTurnRecheck()` now both
+go through `cliPhpBinary()`, which reads an optional `PHP_CLI_BINARY`
+`.env` value first (see `.env.example`'s own docblock for where to find
+this on a cPanel account -- typically an EasyApache path like
+`/opt/cpanel/ea-php83/root/usr/bin/php`), falling back to `PHP_BINARY`
+unchanged when unset -- so an environment where `PHP_BINARY` already
+resolves correctly (local dev, most CI) needs no configuration at all.
+Wired through both `deploy.yml`/`deploy-dev.yml` as a plain (not
+DEV_-prefixed -- same reasoning as the shared `SMTP_*` secrets) `vars.PHP_CLI_BINARY`,
+since it's a property of the hosting account's own PHP configuration,
+not something that differs between the dev and production sites on the
+same account.
+
 ### Diagnostic mode
 
 An opt-in, creation-time flag (`games.diagnostic_mode`, migration `0255`)

@@ -68,6 +68,12 @@ jobs:
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           APP_URL: ${{ vars.APP_URL }}
           SITE_URL: ${{ vars.SITE_URL }}
+          # See GameService::cliPhpBinary()'s own docblock -- optional,
+          # only needed when PHP_BINARY (the running PHP-FPM request's OWN
+          # binary, not a script-runnable CLI one) can't launch a
+          # background script directly on this host. A plain path, not a
+          # secret -- e.g. cPanel's own EasyApache CLI binary path.
+          PHP_CLI_BINARY: ${{ vars.PHP_CLI_BINARY }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
@@ -162,6 +168,7 @@ jobs:
           write_env_var DB_PASSWORD "$DB_PASSWORD"
           write_env_var APP_URL "$APP_URL"
           write_env_var SITE_URL "$SITE_URL"
+          write_env_var PHP_CLI_BINARY "$PHP_CLI_BINARY"
           write_env_var SMTP_HOST "$SMTP_HOST"
           write_env_var SMTP_PORT "$SMTP_PORT"
           write_env_var SMTP_USERNAME "$SMTP_USERNAME"
