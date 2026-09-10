@@ -65,6 +65,13 @@ jobs:
           DB_PASSWORD: ${{ secrets.DEV_DB_PASSWORD }}
           APP_URL: ${{ vars.DEV_APP_URL }}
           SITE_URL: ${{ vars.DEV_SITE_URL }}
+          # Not DEV_-prefixed, same reasoning as the plain SMTP_* secrets
+          # below: the CLI-capable php binary's own path (see
+          # GameService::cliPhpBinary()'s own docblock) is a property of
+          # the HOSTING ACCOUNT's own PHP version configuration, not
+          # something that differs between this dev subdomain and
+          # production -- both share the same cPanel account.
+          PHP_CLI_BINARY: ${{ vars.PHP_CLI_BINARY }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
@@ -159,6 +166,7 @@ jobs:
           write_env_var DB_PASSWORD "$DB_PASSWORD"
           write_env_var APP_URL "$APP_URL"
           write_env_var SITE_URL "$SITE_URL"
+          write_env_var PHP_CLI_BINARY "$PHP_CLI_BINARY"
           write_env_var SMTP_HOST "$SMTP_HOST"
           write_env_var SMTP_PORT "$SMTP_PORT"
           write_env_var SMTP_USERNAME "$SMTP_USERNAME"

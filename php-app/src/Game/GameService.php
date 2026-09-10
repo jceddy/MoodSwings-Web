@@ -7,6 +7,7 @@ namespace MoodSwings\Game;
 use MoodSwings\Bot\BotChoiceResolver;
 use MoodSwings\Bot\BotPlayerService;
 use MoodSwings\Bot\SearchBotPlayerService;
+use MoodSwings\Config;
 use MoodSwings\Database\Connection;
 use MoodSwings\Deck\UserDecklistService;
 use MoodSwings\Game\Exceptions\GameStateException;
@@ -6114,7 +6115,7 @@ final class GameService
         }
 
         $script = escapeshellarg(dirname(__DIR__, 2) . '/bin/recheck_automated_turn.php');
-        $phpBinary = escapeshellarg(PHP_BINARY);
+        $phpBinary = escapeshellarg(self::cliPhpBinary());
         $gameIdArg = escapeshellarg((string) $gameId);
         $depthArg = escapeshellarg((string) ($recheckChainDepth + 1));
         exec("{$phpBinary} {$script} {$gameIdArg} {$depthArg} > /dev/null 2>&1 &");
@@ -7187,9 +7188,42 @@ final class GameService
         }
 
         $script = escapeshellarg(dirname(__DIR__, 2) . '/bin/run_bot_search.php');
-        $phpBinary = escapeshellarg(PHP_BINARY);
+        $phpBinary = escapeshellarg(self::cliPhpBinary());
         $jobIdArg = escapeshellarg((string) $jobId);
         exec("{$phpBinary} {$script} {$jobIdArg} > /dev/null 2>&1 &");
+    }
+
+    /**
+     * The CLI-capable `php` binary these two `exec()`-spawned background
+     * scripts are run with -- NOT unconditionally `PHP_BINARY`, despite
+     * that constant looking like exactly the right thing ("the binary
+     * currently running this same PHP version"). Reported live: once
+     * `bin/`'s own scripts were actually reaching the deployed server
+     * (migration 0287's own fix), `exec()`'s own spawned process started
+     * throwing "strict_types declaration must be the very first
+     * statement" -- on a file whose bytes are provably fine (a leading
+     * shebang line, then `<?php`, then `declare(strict_types=1);`,
+     * byte-for-byte identical to every other `bin/` script that already
+     * worked). `PHP_BINARY` is only guaranteed to be a real, directly-
+     * executable CLI binary under the CLI SAPI itself; under PHP-FPM
+     * (this app's own real request-serving SAPI, per `deploy.yml`'s own
+     * "Set up PHP" step and cPanel's MultiPHP Manager), it instead
+     * resolves to the FPM master's own binary path -- which is not a
+     * script runner at all, and evidently mishandles a leading shebang
+     * line when handed one directly, producing this exact confusing
+     * parse error rather than a clean "not a valid PHP CLI invocation"
+     * one. `PHP_CLI_BINARY` (optional, `.env`) lets a deployment point
+     * this at the ACTUAL CLI binary for its own PHP version (e.g. a
+     * cPanel EasyApache path like `/opt/cpanel/ea-php83/root/usr/bin/php`
+     * -- found via `php -v`/`which php` over SSH, or cPanel's own MultiPHP
+     * Manager) when `PHP_BINARY` alone doesn't already resolve to one;
+     * falling back to `PHP_BINARY` keeps every existing environment
+     * (local dev, CI, anywhere already invoking this from a genuine CLI
+     * context) working unchanged.
+     */
+    private static function cliPhpBinary(): string
+    {
+        return Config::get('PHP_CLI_BINARY', PHP_BINARY);
     }
 
     /**
