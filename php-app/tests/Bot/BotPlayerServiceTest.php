@@ -1702,6 +1702,72 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame(103, $action['card_id']);
     }
 
+    /**
+     * Reported live: a bot with Nostalgia (id 128) already in play and
+     * Compulsion (id 86) sitting in the discard pile played Thrill (id
+     * 103) with no targets at all, missing a genuinely free combo --
+     * bouncing Nostalgia back to hand costs nothing (NostalgiaEffect's
+     * own extra-play grant is unconditional, so replaying it this same
+     * turn restores its exact printed value with nothing lost) while
+     * ALSO picking Compulsion back up via that replay's own
+     * nostalgiaDiscardCardId() pickup. See thrillHandMoodIds()'s own
+     * docblock for why this is scoped to exactly this case.
+     */
+    public function testChooseActionBouncesNostalgiaWithThrillWhenTheDiscardPileHasSomethingWorthTaking(): void
+    {
+        $state = new BoardState(
+            $this->sampleCatalog(),
+            DefaultEffectRegistry::build(),
+            [1, 2],
+            hands: [1 => [103, 128]],
+            discard: [86],
+        );
+        $state->moveHandToInPlay(1, 128);
+
+        $action = $this->bot->chooseAction($state, [103], 1);
+
+        self::assertSame(103, $action['card_id']);
+        self::assertSame(['hand_mood_ids' => [128]], $action['choices']);
+    }
+
+    /** With the discard pile empty, Nostalgia's own pickup has nothing to take -- Thrill correctly leaves it alone rather than bouncing it for no reason. */
+    public function testChooseActionDoesNotBounceNostalgiaWithThrillWhenTheDiscardPileIsEmpty(): void
+    {
+        $state = $this->boardState(hands: [1 => [103, 128]]);
+        $state->moveHandToInPlay(1, 128);
+
+        $action = $this->bot->chooseAction($state, [103], 1);
+
+        self::assertSame(103, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
+    /**
+     * Same "don't shrink the discard pile" exception nostalgiaDiscardCardId()
+     * already has for Sadness/Wonder (see that method's own docblock)
+     * carries straight through here -- with Sadness (id 74) also in play,
+     * shrinking the discard pile would undo part of Sadness's own value,
+     * so Thrill correctly leaves the in-play Nostalgia alone too despite
+     * Compulsion sitting right there in the discard pile.
+     */
+    public function testChooseActionDoesNotBounceNostalgiaWithThrillWhileSadnessIsInPlay(): void
+    {
+        $state = new BoardState(
+            $this->sampleCatalog(),
+            DefaultEffectRegistry::build(),
+            [1, 2],
+            hands: [1 => [103, 128, 74]],
+            discard: [86],
+        );
+        $state->moveHandToInPlay(1, 128);
+        $state->moveHandToInPlay(1, 74);
+
+        $action = $this->bot->chooseAction($state, [103], 1);
+
+        self::assertSame(103, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
     // -- Denial (confirmed by the maintainer) -------------------------------
 
     /**
