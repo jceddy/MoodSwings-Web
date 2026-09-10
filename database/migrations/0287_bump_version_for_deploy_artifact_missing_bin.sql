@@ -1,0 +1,21 @@
+-- Reported live: "based on the results I'm seeing when I test this
+-- process must be crashing basically all the time" -- confirmed via
+-- bot_search_jobs.heartbeat_at (migration 0283) staying NULL on every
+-- stale job, meaning the Tactical Bot's own spawned search process
+-- never got far enough to even boot its own autoloader.
+--
+-- Root cause: NOT exec()/disable_functions (the deployment prerequisite
+-- this codebase already knew to worry about), but a plain deploy
+-- pipeline gap -- deploy.yml/deploy-dev.yml's own "Assemble deploy
+-- artifact" step copied php-app/src, php-app/vendor, and
+-- database/migrations into the deploy artifact as siblings of dist/app,
+-- but never php-app/bin. exec() itself was never the problem; it was
+-- trying to run bin/run_bot_search.php (and bin/recheck_automated_turn.php
+-- for the same reason), which simply didn't exist on the deployed
+-- server at all. Fixed by adding `cp -R php-app/bin dist/bin` to both
+-- workflows.
+--
+-- No schema change, no application code changed either -- just the
+-- version bump MaintenanceGate needs to see this deploy (the one that
+-- finally includes bin/) as caught up.
+UPDATE schema_version SET version = '1.39.14' WHERE id = 1;

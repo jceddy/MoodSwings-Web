@@ -8762,6 +8762,23 @@ inherit the test's own environment (including its test-database
 connection) and race the test's own assertions against the very same
 `bot_search_jobs` row.
 
+**`bin/` must actually be deployed alongside `src/`/`vendor/`, as a
+sibling (`dirname(__DIR__, 2) . '/bin/...'` from
+`src/Game/GameService.php`).** Reported live: "based on the results I'm
+seeing when I test this process must be crashing basically all the
+time" -- every stale `bot_search_jobs` row's own `heartbeat_at`
+(migration `0283`) came back `NULL`, meaning the spawned process never
+got far enough to even boot its own autoloader, which first looked like
+the `disable_functions`/shared-hosting restriction above. The actual
+cause: `deploy.yml`/`deploy-dev.yml`'s own "Assemble deploy artifact"
+step copied `php-app/src`, `php-app/vendor`, and `database/migrations`
+into the deploy artifact as siblings of `dist/app`, but never
+`php-app/bin` -- so `exec()` itself was never the problem; it was trying
+to run a script (`bin/run_bot_search.php`, and
+`bin/recheck_automated_turn.php` for the same reason) that simply didn't
+exist on the deployed server at all. Fixed by adding `cp -R php-app/bin
+dist/bin` to both workflows, right alongside the `src`/`vendor` copy.
+
 ### Diagnostic mode
 
 An opt-in, creation-time flag (`games.diagnostic_mode`, migration `0255`)
