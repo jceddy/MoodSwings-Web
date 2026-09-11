@@ -9211,6 +9211,28 @@ since it's a property of the hosting account's own PHP configuration,
 not something that differs between the dev and production sites on the
 same account.
 
+**A recovered checkpoint can itself be stale.** Reported live: a bot
+auto-passed at the start of a fresh turn despite two cards sitting
+legally playable in its hand. Root cause: a job's own background
+process had already played its recorded checkpoint successfully via its
+own `playMood()` call, then was killed by the shared host (see
+`bin/run_bot_search.php`'s own deployment prerequisites above) before it
+could reach its very next line, `markDone()` -- leaving that job row
+stuck at `status = 'running'` forever, since nothing else ever revisits
+one specific job id again once its own turn has moved on. The next time
+that exact seat got a turn -- an entirely different decision, hours
+later -- `advanceTacticalBotSearch()` found that same orphaned row,
+correctly judged it long stale, and tried to replay its checkpoint,
+which had already been applied hours earlier and was nowhere to be
+found, throwing `IllegalPlayException`. `playRecoveredPartialSearchResult()`'s
+own catch block used to treat ANY failure here as "no legal play" and
+pass outright -- but a stale/already-applied checkpoint says nothing
+about whether the board, as it actually stands right now, has a legal
+play. It now falls back to the ordinary heuristic bot instead (exactly
+what `runTacticalBotSearchJob()`'s own catch block already does for an
+analogous failure), which makes a fresh decision from the current board
+and only passes if that genuinely turns out to have nothing playable.
+
 ### Diagnostic mode
 
 An opt-in, creation-time flag (`games.diagnostic_mode`, migration `0255`)

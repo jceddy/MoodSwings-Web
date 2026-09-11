@@ -1,0 +1,28 @@
+-- Reported live: a bot auto-passed at the start of a fresh turn despite
+-- two cards sitting legally playable in its hand.
+--
+-- Root cause: a Tactical Bot search job's own background process had
+-- already played its recorded checkpoint successfully via its own
+-- playMood() call, then was killed by the shared host before it could
+-- reach its very next line, markDone() -- leaving that job row stuck at
+-- status='running' forever, since nothing else ever revisits one
+-- specific job id again once its own turn has moved on. The next time
+-- that exact seat got a turn -- an entirely different decision, hours
+-- later -- advanceTacticalBotSearch() found that same orphaned row,
+-- correctly judged it long stale, and tried to replay its checkpoint,
+-- which had already been applied hours earlier and was nowhere to be
+-- found, throwing IllegalPlayException.
+--
+-- Fixed: playRecoveredPartialSearchResult()'s own catch block used to
+-- treat ANY failure here as "no legal play" and pass outright -- but a
+-- stale/already-applied checkpoint says nothing about whether the board,
+-- as it actually stands right now, has a legal play. It now falls back
+-- to the ordinary heuristic bot instead (exactly what
+-- runTacticalBotSearchJob()'s own catch block already does for an
+-- analogous failure), which makes a fresh decision from the current
+-- board and only passes if that genuinely turns out to have nothing
+-- playable.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.40.3' WHERE id = 1;
