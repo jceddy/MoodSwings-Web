@@ -1,0 +1,19 @@
+-- Reported live: a game showed the your-turn (green) highlight in the
+-- lobby even though the viewer couldn't actually act on it -- their own
+-- earlier play had opened a pending decision (Suspicion/Compulsion-style)
+-- targeting the OTHER seated player, so current_turn_game_player_id
+-- still nominally pointed at the viewer while the round was actually
+-- frozen until that other player answered.
+--
+-- Fixed: buildGameRow()'s own row-highlight logic (web-static/js/game.js)
+-- only ever downgraded the highlight for a decision targeting the viewer
+-- themselves (is_awaiting_your_response), not one targeting someone else.
+-- awaiting_response_usernames already names whoever the round is
+-- actually blocked on regardless of target, so the your-turn highlight
+-- is now suppressed whenever that list is non-empty at all -- matching
+-- the same target-agnostic "any open decision freezes the round" gate
+-- the board's own passButtonCanAct() already applies.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.40.4' WHERE id = 1;
