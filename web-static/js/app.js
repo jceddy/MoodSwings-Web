@@ -649,6 +649,26 @@ function getReplayGameState(gameId, eventId, code) {
     return apiRequest(path);
 }
 
+// "Is there a way I can replay these in the dev site using the game
+// export json files?" -- the same reconstructed-board shape
+// getReplayGameState() returns above, but for a game with no row in
+// THIS server's own database at all (played on a different environment
+// entirely): exportData is the whole parsed export JSON (exactly what
+// getGameExport() above hands back, or a file the user picked up
+// themselves via GET /games/export on wherever the game was actually
+// played), sent in the request body since there's no game_id to put in
+// the URL. Also bundles the steppable event list into the response
+// (GameService::replayFromExport()'s own 'steps' key) -- there's no
+// per-import GET /games/log to separately reuse the way the live path
+// above does, so see showImportedReplayBoard() for how this single call
+// replaces both getGameLog() and getReplayGameState() together.
+function postReplayImport(exportData, eventId) {
+    return apiRequest('/games/replay/import', {
+        method: 'POST',
+        body: JSON.stringify({ export: exportData, event_id: eventId }),
+    });
+}
+
 // A shared-deck game's full deck (issue #197) -- see GameService::viewSharedDeck().
 // code is only ever passed while spectating (issue #128) via a share code
 // rather than friendship -- see openSharedDeckView() in game.js.

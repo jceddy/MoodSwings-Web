@@ -5376,6 +5376,91 @@ only the final confirmed choice is logged).
 The frontend reuses the board renderer entirely -- see "Watch replay" in
 `web-static/README.md` for the step-control UI.
 
+### Replay from an exported game
+
+Reported live, debugging the Anger duplicate-in-hand-and-discard bug
+above: "is there a way I can replay these in the dev site using the
+game export json files? and if not, would it be possible to add
+something to do that?" -- a game played on a DIFFERENT environment's
+database (its own export downloaded from wherever it was actually
+played) has no row in THIS server's `games`/`game_players`/`game_cards`/
+`game_events` at all, so "Watch replay" above -- every one of its own
+routes queries by `$gameId` -- could never reach it.
+
+**Never written back to this database.** Importing the export's raw rows
+was considered and rejected: every id (`games.id`, each `game_players.id`,
+`game_cards.id`, `game_rounds.id`) would need remapping to freshly
+inserted rows, including every reference to one of those ids buried
+inside `game_events.details`' own nested `card_moves`/`draws`/
+`ownership_changes`/`target_mood_ids` -- and a real risk of colliding
+with an entirely unrelated game that already happens to reuse the same
+ids locally (confirmed live: this repo's own dev database already had
+unrelated unfinished games sitting at ids 502/473, the exact ids the two
+reported exports themselves used). Instead, the export is read entirely
+in memory, for exactly the one request that needs it, and never
+persisted anywhere.
+
+**`ReplayStateBuilder::contextFromExport(array $export): array`** is
+`loadContext()`'s own exported-JSON sibling -- $export is exactly
+`exportGameData()`'s own output (the same file `GET /games/export`
+already hands any seated player), reshaped into the identical context
+shape `loadContext()` builds from live SQL. `catalog` is the one
+exception: always loaded fresh from THIS server's own `cards` table via
+the existing `loadCatalog()`, since card definitions are shared
+reference data, not a per-game fact -- `exportGameData()` never includes
+them, so there'd be nothing to read from the export even if this
+preferred to. `genesisFromExport()`/`stateAsOfFromExport()` are `genesis()`/
+`stateAsOf()`'s own thin exported-JSON wrappers around this, sharing
+every byte of the actual reconstruction logic (`deriveGenesis()`/
+`applyEventForward()`/`assembleBoardState()`) with the live path --
+refactored into shared `genesisWithContext()`/`stateAsOfWithContext()`
+private methods rather than duplicated, so the Anger fix above (and any
+future fix to this reconstruction) automatically covers both.
+
+**`GameService::replayFromExport(array $export, int $eventId): array`**
+is `replayStateAsOf()`'s own exported-JSON sibling, returning
+`{snapshot, steps}` in one call -- `snapshot` the same top-level shape
+`serializeReplaySnapshot()` returns (so `renderBoard()` needs zero
+frontend changes to display it), `steps` the same shape `fullEventLog()`
+returns (so the exact same step-dropdown code works too). Both get their
+own dedicated, export-sourced implementations
+(`serializeExportReplaySnapshot()`/`exportEventSteps()`) rather than
+reusing the live ones directly, since the live versions are each coupled
+to `$gameId`-keyed SQL queries in several different ways: win counts
+(`totalWinsFor()`/`totalWinsForTeam()`, trivially reproducible by
+summing `wins_awarded` straight off the export's own `game_rounds`),
+player display names (`playerUsernamesFor()`'s live join has no export
+counterpart to lean on at all -- see `exportPlayerNames()`'s own
+docblock for the three-tier "real username, else `custom_deck_name`,
+else a bare seat number" fallback this uses instead, since a genuinely
+foreign export's own `user_id`s generally won't resolve against this
+server's `users` table), and the "recent plays" history
+(`recentEvents()`'s own SQL `LIMIT`/`ORDER BY`, reproduced in-memory by
+`exportRecentEvents()` over the export's own `game_events`). Every
+`BoardState`-only serialization helper (`serializeCard()`/
+`scoringEffectEntries()`/`boardEffectEntries()`/`suppressionFields()`/
+`affectingEntries()`/`temporaryOwnershipInfo()`/`boardPointTotalFor()`)
+is reused completely verbatim, unmodified -- none of them ever touch a
+per-game table, only `$state` itself plus whichever name maps are handed
+in, so they work identically for an export-derived `$state` as for a
+live one.
+
+**`POST /games/replay/import`** (body: `{export, event_id}`) is the one
+new route this needed. Any authenticated user, no seated-player/
+spectator/share-code gate at all -- unlike every other replay-adjacent
+route, there's no game to check membership against, and whoever already
+has the export file already has everything it reveals (every hand, same
+as any completed game's own live replay already shows). `400`s on a
+missing/malformed `export` (`GameStateException` from
+`contextFromExport()`'s own validation, or a non-`completed` game --
+`exportGameData()` itself already refuses to export one, so this is
+defense-in-depth against a hand-edited file) rather than the `403` every
+other route in this section would give an unauthorized viewer.
+
+See "Import replay" in `web-static/README.md` for the upload UI and how
+it reuses "Watch replay"'s own step-control code with the request source
+swapped out underneath it.
+
 ### View draft pool (issue #314)
 
 Once a Quick/Winston/Grid Draft match is `completed`, `GET /games/draft-pool`

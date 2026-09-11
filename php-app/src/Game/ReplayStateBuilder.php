@@ -74,11 +74,58 @@ final class ReplayStateBuilder
      */
     public function stateAsOf(int $gameId, int $eventId, bool $requireCompleted = true): BoardState
     {
+        return $this->stateAsOfWithContext($this->loadContext($gameId, $requireCompleted), $eventId);
+    }
+
+    /**
+     * Round-1 starting hands/decks, before any event exists -- the same
+     * reverse-derivation stateAsOf() uses to seed its own forward walk,
+     * exposed publicly since it's a well-defined point in a completed
+     * game's history in its own right (see this class's own docblock).
+     * Its discard pile and in-play zone are always empty by construction
+     * -- see deriveGenesis()'s own docblock.
+     */
+    public function genesis(int $gameId, bool $requireCompleted = true): BoardState
+    {
+        return $this->genesisWithContext($this->loadContext($gameId, $requireCompleted));
+    }
+
+    /**
+     * "Replay a game I only have an exported JSON for" (reported live: a
+     * user with games played on a different environment than this one --
+     * their own export has no row in THIS server's database at all, so
+     * $gameId-based stateAsOf()/genesis() above can never reach them).
+     * $export is exactly GameService::exportGameData()'s own output --
+     * see GameService::contextFromExport() for the exact shape expected
+     * of each section and why the catalog itself is always loaded fresh
+     * from THIS server's own `cards` table rather than trusted from the
+     * export (catalog rows are global reference data, not per-game
+     * facts, and every export already omits them for exactly that
+     * reason). Always requires 'completed', the same as every other
+     * caller of this class -- GameService::exportGameData() itself
+     * already refuses a non-completed game, so this is a second,
+     * defense-in-depth check against a hand-edited export.
+     */
+    public function stateAsOfFromExport(array $export, int $eventId): BoardState
+    {
+        return $this->stateAsOfWithContext($this->contextFromExport($export), $eventId);
+    }
+
+    /** @see stateAsOfFromExport()'s own docblock; the exported-JSON sibling of genesis(). */
+    public function genesisFromExport(array $export): BoardState
+    {
+        return $this->genesisWithContext($this->contextFromExport($export));
+    }
+
+    /**
+     * @param array{gameCards: array<int, array<string, mixed>>, events: array<int, array{id:int, event_type:string, acting_game_player_id:?int, card_id:?int, details: array<string, mixed>}>, hasSeparateDecks: bool} $context
+     */
+    private function stateAsOfWithContext(array $context, int $eventId): BoardState
+    {
         if ($eventId === 0) {
-            return $this->genesis($gameId, $requireCompleted);
+            return $this->genesisWithContext($context);
         }
 
-        $context = $this->loadContext($gameId, $requireCompleted);
         $events = $context['events'];
 
         $targetIndex = null;
@@ -89,7 +136,7 @@ final class ReplayStateBuilder
             }
         }
         if ($targetIndex === null) {
-            throw new GameStateException("Event {$eventId} does not belong to game {$gameId}");
+            throw new GameStateException("Event {$eventId} does not belong to this game");
         }
 
         $genesis = $this->deriveGenesis($context['gameCards'], $events, $context['hasSeparateDecks']);
@@ -109,16 +156,10 @@ final class ReplayStateBuilder
     }
 
     /**
-     * Round-1 starting hands/decks, before any event exists -- the same
-     * reverse-derivation stateAsOf() uses to seed its own forward walk,
-     * exposed publicly since it's a well-defined point in a completed
-     * game's history in its own right (see this class's own docblock).
-     * Its discard pile and in-play zone are always empty by construction
-     * -- see deriveGenesis()'s own docblock.
+     * @param array{gameCards: array<int, array<string, mixed>>, events: array<int, array{id:int, event_type:string, acting_game_player_id:?int, card_id:?int, details: array<string, mixed>}>, hasSeparateDecks: bool} $context
      */
-    public function genesis(int $gameId, bool $requireCompleted = true): BoardState
+    private function genesisWithContext(array $context): BoardState
     {
-        $context = $this->loadContext($gameId, $requireCompleted);
         $genesis = $this->deriveGenesis($context['gameCards'], $context['events'], $context['hasSeparateDecks']);
 
         return $this->assembleBoardState($context, $genesis['hands'], $genesis['decks'], [], [], []);
@@ -146,6 +187,83 @@ final class ReplayStateBuilder
         return [
             'game' => $game,
             'events' => $this->fetchEvents($gameId),
+            'catalog' => $this->loadCatalog(),
+            'gameCards' => $gameCards,
+            'catalogCardIdFor' => $catalogCardIdFor,
+            'playerIds' => $playerIds,
+            'teamIdByPlayer' => $teamIdByPlayer,
+            'resignedPlayerIds' => $resignedPlayerIds,
+            'hasSeparateDecks' => self::hasSeparateDecks($game['format']),
+        ];
+    }
+
+    /**
+     * The exported-JSON sibling of loadContext() -- $export is exactly
+     * GameService::exportGameData()'s own top-level shape (the SAME file
+     * a user downloads via GET /games/export), so this never touches
+     * this game's own row in `games`/`game_players`/`game_cards`/
+     * `game_events` at all -- there generally isn't one, since the whole
+     * point is replaying a game that was played on a DIFFERENT
+     * environment's database. `catalog` is the one exception: loaded
+     * fresh from THIS server's own `cards` table via loadCatalog(),
+     * exactly like loadContext() above, since card definitions are
+     * shared reference data, not a per-game fact -- exportGameData()
+     * itself never includes them, so there'd be nothing to read from the
+     * export even if this preferred to.
+     *
+     * @param array<string, mixed> $export
+     * @return array{game: array<string, mixed>, events: array<int, array{id:int, event_type:string, acting_game_player_id:?int, card_id:?int, details: array<string, mixed>}>, catalog: array<int, array<string, mixed>>, gameCards: array<int, array<string, mixed>>, catalogCardIdFor: array<int,int>, playerIds: int[], teamIdByPlayer: array<int,int>, resignedPlayerIds: int[], hasSeparateDecks: bool}
+     */
+    public function contextFromExport(array $export): array
+    {
+        foreach (['game', 'game_players', 'game_cards', 'game_events'] as $key) {
+            if (!isset($export[$key]) || !is_array($export[$key])) {
+                throw new GameStateException("Exported game data is missing its own '{$key}' section");
+            }
+        }
+
+        $game = $export['game'];
+        if (($game['status'] ?? null) !== 'completed') {
+            throw new GameStateException("Exported game isn't completed -- replay is only available once a game is over");
+        }
+
+        $gameCards = $export['game_cards'];
+        $catalogCardIdFor = [];
+        foreach ($gameCards as $row) {
+            $catalogCardIdFor[(int) $row['id']] = (int) $row['card_id'];
+        }
+
+        $playerRows = $export['game_players'];
+        usort($playerRows, static fn (array $a, array $b): int => $a['seat_order'] <=> $b['seat_order']);
+        $playerIds = [];
+        $teamIdByPlayer = [];
+        $resignedPlayerIds = [];
+        foreach ($playerRows as $row) {
+            $playerId = (int) $row['id'];
+            $playerIds[] = $playerId;
+            if (($row['team_id'] ?? null) !== null) {
+                $teamIdByPlayer[$playerId] = (int) $row['team_id'];
+            }
+            if (($row['resigned_at'] ?? null) !== null) {
+                $resignedPlayerIds[] = $playerId;
+            }
+        }
+
+        $events = array_map(
+            static fn (array $row): array => [
+                'id' => (int) $row['id'],
+                'event_type' => $row['event_type'],
+                'acting_game_player_id' => $row['acting_game_player_id'] !== null ? (int) $row['acting_game_player_id'] : null,
+                'card_id' => $row['card_id'] !== null ? (int) $row['card_id'] : null,
+                'details' => $row['details'] ?? [],
+            ],
+            $export['game_events'],
+        );
+        usort($events, static fn (array $a, array $b): int => $a['id'] <=> $b['id']);
+
+        return [
+            'game' => $game,
+            'events' => $events,
             'catalog' => $this->loadCatalog(),
             'gameCards' => $gameCards,
             'catalogCardIdFor' => $catalogCardIdFor,

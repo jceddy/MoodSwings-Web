@@ -1662,6 +1662,61 @@ deck's `cards`.
       `#replay-controls`, returning to the ordinary lobby the same way
       exiting spectator mode does. See "Watch replay" in
       `../php-app/README.md`.
+  - **Import replay**: reported live, debugging the Anger duplicate-in-
+    hand-and-discard bug above -- "is there a way I can replay these in
+    the dev site using the game export json files?" -- an "Import
+    replay" button (`#import-replay-button`, next to "Past games") opens
+    a hidden `#import-replay-file-input` (`accept=".json,application/json"`)
+    for picking a completed game's own exported file (whatever `GET
+    /games/export`/`getGameExport()` produced, on this environment or a
+    completely different one -- see "Replay from an exported game" in
+    `../php-app/README.md`). Its own `change` handler reads the file
+    (`file.text()`, the same pattern every custom-pool/decklist file
+    upload elsewhere already uses), `JSON.parse`s it, sanity-checks it
+    actually has a `game`/`game_events` section, and hands the parsed
+    object straight to `showImportedReplayBoard()` -- `showReplayBoard()`'s
+    own sibling for a game with no `game_id` row in this database at all.
+    - **Reuses every bit of "Watch replay"'s own board/step-control UI**
+      (`renderBoard()`, `#replay-controls`/`renderReplayControls()`,
+      `isReadOnlyView()`) with only the DATA SOURCE swapped out:
+      `importedReplayExport` (the whole parsed export, `null` for an
+      ordinary `$gameId`-based replay) is checked wherever
+      `refreshReplayBoard()` would otherwise call `getReplayGameState()`,
+      calling the new `postReplayImport()` (`POST /games/replay/import`)
+      instead -- same request body every step, since there's no session
+      to hold the uploaded file server-side between clicks (see
+      `GameService::replayFromExport()`'s own "never written back to
+      this database" docblock in `../php-app/README.md` for why). Unlike
+      the live path's own two-call split (`GET /games/log` once for the
+      step list, `GET /games/replay/state` per step),
+      `postReplayImport()` returns both in one response every time
+      (`{..., steps}`) -- `loadImportedReplayEventsAndShow()` (the
+      import-sourced sibling of `loadReplayEventsAndShow()`) always
+      starts at genesis (`event_id: 0`) and prepends the exact same
+      synthetic "Step 1" entry the live path does.
+    - `currentGameId` stays `null` for an imported replay's entire
+      lifetime -- there generally isn't a real game id to use, since the
+      whole point is a game played on a DIFFERENT environment's own
+      database. `renderReplayControls()`'s own dropdown-rebuild cache key
+      switches to `'import:' + importedReplayToken` in that case (a
+      counter bumped on every newly loaded import) rather than
+      `String(currentGameId)`, since two DIFFERENT imported files would
+      otherwise both cache-key as the literal string `'null'` and the
+      second one's dropdown would never actually rebuild.
+      `#view-log-button` hides itself for an imported replay specifically
+      (`importedReplayExport !== null`) rather than joining
+      `isReadOnlyView()`'s existing gate -- it always fetches by
+      `currentGameId`, which is null here, and the replay step dropdown's
+      own descriptions already cover the same ground anyway.
+    - Player display names come back from `GameService::
+      exportPlayerNames()`'s own three-tier fallback (a real username
+      resolved against THIS server's own `users` table, else the
+      player's own `custom_deck_name`, else a bare "Seat N") rather than
+      always a real username the way every other view in this app
+      guarantees -- a genuinely foreign export's own `user_id`s
+      generally won't resolve locally at all. No frontend change needed
+      for this: `players[].username` already renders wherever it always
+      has, whichever of the three it happens to be.
   - **Settings dialog**: a "Settings" button (`#settings-button`) opens
     `#settings-dialog` (`initSettings()` in `js/game.js`, formerly
     `initNotifications()` -- renamed since it now does more than
