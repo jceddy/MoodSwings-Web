@@ -7971,11 +7971,22 @@ final class GameService
      * the next resignation completes the game the same way a 2-player
      * game's own resignation always has.
      *
-     * Resigning while a decision is pending is disallowed (mirrors
-     * playMood()/pass()'s own assertNoPendingDecision() gate) rather than
-     * trying to reason about completing a game or reassigning a turn out
-     * from under an outstanding Compulsion-style decision -- resolve the
-     * decision first, then resign.
+     * Resigning while a decision is pending targeting someone ELSE is
+     * still disallowed (mirrors playMood()/pass()'s own
+     * assertNoPendingDecision() gate) rather than trying to reason about
+     * completing a game or reassigning a turn out from under an
+     * outstanding decision that isn't this player's own to answer --
+     * resolve the decision first, then resign.
+     *
+     * Reported live: "can we allow players to resign from a game while a
+     * choice (like from Compulsion/Suspicion) is waiting on them?" When
+     * the pending decision targets THIS player specifically, there's no
+     * one else who could ever answer it, so blocking the resignation just
+     * strands the game -- autoAnswerOwnPendingDecisionBeforeResigning()
+     * (called before the assertNoPendingDecision() check below) answers
+     * it with the same legal-default machinery BotPlayerService already
+     * uses to answer on a bot's behalf, then lets the resignation proceed
+     * normally.
      *
      * A Quick/Winston/Grid Draft match's own game row never reaches
      * status='in_progress' until drafting AND deck-building are both
@@ -8016,25 +8027,19 @@ final class GameService
                 throw new GameStateException("Player {$gamePlayerId} has already resigned");
             }
 
-            try {
-                $round = $this->currentRound($gameId);
-            } catch (GameStateException $e) {
-                // Team Play's own draw_recipient window (see
-                // latestRound()'s own docblock) -- completeGameByResignation(),
-                // the only path a team-format resignation can ever take
-                // (isTeamFormat() below is unconditional for it), only
-                // needs $round['id'] to mark it abandoned, so falling back
-                // to the latest round regardless of status still ends the
-                // game correctly. Any OTHER format hitting this is a
-                // genuine "nothing to resign from" state (already screened
-                // by the game['status'] !== 'in_progress' check above, so
-                // this shouldn't be reachable there anyway) -- rethrown
-                // rather than silently guessed at.
-                if (!self::isTeamFormat($game['format'])) {
-                    throw $e;
-                }
-                $round = $this->latestRound($gameId);
+            $round = $this->currentOrLatestRoundForResignation($gameId, $game);
+
+            $autoAnswerResult = $this->autoAnswerOwnPendingDecisionBeforeResigning($gameId, $gamePlayerId, (int) $round['id']);
+            if ($autoAnswerResult !== null) {
+                return $autoAnswerResult;
             }
+
+            // Auto-answering above may have advanced the round (or
+            // finished scoring into a fresh one) without ending the game
+            // outright -- re-resolve so the pending-decision check and
+            // everything below see the CURRENT round, not the one this
+            // method started with.
+            $round = $this->currentOrLatestRoundForResignation($gameId, $game);
             $this->assertNoPendingDecision((int) $round['id']);
 
             Connection::get()->prepare('UPDATE game_players SET resigned_at = NOW() WHERE id = :id')
@@ -8059,6 +8064,111 @@ final class GameService
         $this->clearQueuedNotificationForGamePlayer($gameId, $gamePlayerId);
 
         return $result;
+    }
+
+    /**
+     * resignGame()'s own "which round is this resignation against" lookup,
+     * shared between its pre-auto-answer call and its post-auto-answer
+     * re-check -- auto-answering a self-targeted decision (see
+     * autoAnswerOwnPendingDecisionBeforeResigning()) can itself advance
+     * the round, or finish scoring into a fresh one, without ending the
+     * game outright, so the round has to be re-resolved afterward too
+     * rather than reusing whichever one resignGame() started with.
+     */
+    private function currentOrLatestRoundForResignation(int $gameId, array $game): array
+    {
+        try {
+            return $this->currentRound($gameId);
+        } catch (GameStateException $e) {
+            // Team Play's own draw_recipient window (see latestRound()'s
+            // own docblock) -- completeGameByResignation(), the only path
+            // a team-format resignation can ever take (isTeamFormat()
+            // below is unconditional for it), only needs $round['id'] to
+            // mark it abandoned, so falling back to the latest round
+            // regardless of status still ends the game correctly. Any
+            // OTHER format hitting this is a genuine "nothing to resign
+            // from" state (already screened by resignGame()'s own
+            // game['status'] !== 'in_progress' check, so this shouldn't be
+            // reachable there anyway) -- rethrown rather than silently
+            // guessed at.
+            if (!self::isTeamFormat($game['format'])) {
+                throw $e;
+            }
+
+            return $this->latestRound($gameId);
+        }
+    }
+
+    /**
+     * resignGame()'s own pre-check -- reported live: "can we allow
+     * players to resign from a game while a choice (like from
+     * Compulsion/Suspicion) is waiting on them?" A decision that targets
+     * someone ELSE still blocks resignation, unchanged (see resignGame()'s
+     * own docblock for why forcing a turn to advance out from under an
+     * unresolved decision that isn't this player's own to answer isn't
+     * attempted here -- assertNoPendingDecision(), called right after this
+     * returns null, still catches that case). But when the decision is
+     * waiting on THIS player specifically, there's no one else who could
+     * ever answer it, so it gets a legal default answer instead --
+     * BotPlayerService::chooseDecisionAnswer() is the exact same
+     * target-agnostic machinery advanceAutomatedTurns() already uses to
+     * answer on a BOT's behalf, and a resigning human player is no
+     * different from that perspective. Looped rather than answered once,
+     * since a single batch can queue more than one step targeting
+     * different players in turn (e.g. Suspicion asks each targeted player
+     * in sequence) and this same player could come up again later in the
+     * same batch.
+     *
+     * Calls respondToDecisionLocked() directly rather than the public
+     * respondToDecision() -- both this method and resignGame() itself run
+     * inside resignGame()'s own withGameLock() closure already, and
+     * GET_LOCK() isn't documented as safely reentrant across MySQL/MariaDB
+     * versions.
+     *
+     * @return array{round_scored: bool, game_completed: bool, winner_game_player_id?: int, pending_decision?: bool}|null
+     *         non-null only if auto-answering finished the game outright
+     *         through ordinary play resolution (e.g. the decision was the
+     *         round's own last scoring decision) -- resignGame() returns
+     *         that result as-is rather than also trying to process a
+     *         resignation against a game that's already over.
+     */
+    private function autoAnswerOwnPendingDecisionBeforeResigning(int $gameId, int $gamePlayerId, int $roundId): ?array
+    {
+        while (true) {
+            $batch = $this->activePendingBatch($roundId);
+            if ($batch === null) {
+                return null;
+            }
+
+            $decision = $this->activePendingDecision((int) $batch['id']);
+            if ($decision === null || (int) $decision['target_game_player_id'] !== $gamePlayerId) {
+                // Nothing left unresolved, or it's waiting on someone
+                // else -- leave it alone either way.
+                return null;
+            }
+
+            $field = json_decode((string) $decision['field'], true);
+            $answer = $this->bots->chooseDecisionAnswer(
+                $this->boardStates->load($gameId),
+                $field,
+                $gamePlayerId,
+                (string) $decision['decision_type'],
+                (int) $batch['played_card_id'],
+            );
+            $result = $this->respondToDecisionLocked($gameId, $gamePlayerId, $answer);
+
+            if ($result['game_completed']) {
+                return $result;
+            }
+
+            try {
+                $roundId = (int) $this->currentRound($gameId)['id'];
+            } catch (GameStateException $e) {
+                // Between rounds now (e.g. Team Play's own draw_recipient
+                // window) -- nothing left tied to a round to auto-answer.
+                return null;
+            }
+        }
     }
 
     /**
@@ -8324,286 +8434,301 @@ final class GameService
      */
     public function respondToDecision(int $gameId, int $gamePlayerId, array $choices): array
     {
-        $result = $this->withGameLock($gameId, function () use ($gameId, $gamePlayerId, $choices): array {
-            $round = $this->currentRound($gameId);
-            $roundId = (int) $round['id'];
-
-            $batchRow = $this->activePendingBatch($roundId);
-            if ($batchRow === null) {
-                throw new GameStateException("Game {$gameId} has no decision pending");
-            }
-
-            $decisionRow = $this->activePendingDecision((int) $batchRow['id']);
-            if ($decisionRow === null || (int) $decisionRow['target_game_player_id'] !== $gamePlayerId) {
-                throw new GameStateException("Player {$gamePlayerId} has no decision pending in game {$gameId}");
-            }
-
-            $field = json_decode((string) $decisionRow['field'], true);
-            $answerKey = $field['key'];
-
-            if (($field['required'] ?? false) === true && ($choices[$answerKey] ?? null) === null) {
-                // Reject before ever writing this row -- otherwise a blank/
-                // missing submission gets persisted as "resolved" with a
-                // null answer, and the batch only surfaces the resulting
-                // failure later, to whichever OTHER player's response
-                // happens to complete it (resolvePendingDecisions() throws
-                // for this row's own key, and that throw rolls back that
-                // later player's own perfectly valid answer too -- see
-                // respondToDecision()'s catch block below). Validating here
-                // attributes the error to the player who actually caused it
-                // and never lets a bad answer reach "resolved" at all.
-                throw new InvalidChoiceException("Missing required choice '{$answerKey}'");
-            }
-
-            if ($decisionRow['decision_type'] === self::AFTER_SCORING_ORDER_DECISION_TYPE) {
-                // The only valid answer is a reordering of exactly this
-                // decision's own pending cards -- validated (and rejected
-                // before ever reaching "resolved") the same way the
-                // required-field check above already attributes a bad
-                // submission to whoever actually made it, rather than
-                // letting applyAfterScoringHooks() silently fall back to
-                // the default order for a malformed one later.
-                $expectedCardIds = array_column($field['cards'], 'card_id');
-                sort($expectedCardIds);
-                $submittedCardIds = array_map(intval(...), (array) ($choices[$answerKey] ?? []));
-                sort($submittedCardIds);
-                if ($submittedCardIds !== $expectedCardIds) {
-                    throw new InvalidChoiceException("'{$answerKey}' must be exactly this decision's own pending cards, in some order");
-                }
-            }
-
-            if (in_array($decisionRow['decision_type'], self::SCORING_DECISION_TYPES, true)) {
-                // A production bug caught live: Passion's target_mood_id
-                // used to only ever get checked by resolveScoringDecisionBonus()
-                // when this round's whole decision chain finished (or,
-                // worse, whenever a later getState() call recomputed
-                // serializeScoringPreview() -- see that method's docblock)
-                // -- never right here. For the round's LAST outstanding
-                // decision that's the same moment, but for any earlier one
-                // (this round has more than one Enthusiasm/Passion mood in
-                // play) a bad target got silently persisted as "resolved"
-                // with nothing to catch it until much later. Once that
-                // happened, every subsequent getState() call for the game
-                // re-threw the same InvalidChoiceException uncaught,
-                // permanently: "Could not load this game." with no way
-                // back in. Reusing resolveScoringDecisionBonus() here
-                // (its return value is discarded -- only the validation it
-                // performs matters) guarantees whatever gets persisted
-                // below is still valid whenever it's recomputed later, the
-                // same "reject before ever writing this row" principle the
-                // two checks above already follow.
-                $effectKey = $decisionRow['decision_type'] === self::ENTHUSIASM_DECISION_TYPE ? 'enthusiasm' : 'passion';
-                $this->resolveScoringDecisionBonus($this->boardStates->load($gameId), (int) $batchRow['played_card_id'], $effectKey, new PlayerChoices($choices));
-            }
-
-            $pdo = Connection::get();
-            $pdo->beginTransaction();
-
-            try {
-                $pdo->prepare('UPDATE game_pending_decisions SET answer = :answer, resolved_at = NOW() WHERE id = :id')
-                    ->execute([
-                        'answer' => json_encode([$answerKey => $choices[$answerKey] ?? null]),
-                        'id' => $decisionRow['id'],
-                    ]);
-
-                // Disillusionment's own queue asks every player in turn
-                // order for a color, but only actually moves any moods once
-                // every answer is in (its own combined pending_decision_resolved
-                // event, further below) -- so without this, an earlier
-                // player's own pick was invisible to everyone else the
-                // whole time they were waiting their own turn to answer,
-                // even though the card's own text is explicit that later
-                // players decide with that information already public
-                // (their own chosen colors apply simultaneously, but
-                // choosing itself is sequential and, on a real table,
-                // spoken aloud as it happens). Logged here, immediately,
-                // rather than waiting for the whole batch to resolve --
-                // deliberately scoped to just this one decision_type rather
-                // than every multi-target batch (e.g. Suspicion's own
-                // per-player discard choices), since that's what was
-                // actually asked for.
-                if ($decisionRow['decision_type'] === 'disillusionment_choose_color') {
-                    $this->logEvent($gameId, $roundId, $gamePlayerId, 'disillusionment_color_chosen', (int) $batchRow['played_card_id'], ['color' => $choices[$answerKey] ?? null]);
-                }
-
-                $remainingStmt = $pdo->prepare(
-                    'SELECT COUNT(*) FROM game_pending_decisions WHERE batch_id = :batch_id AND resolved_at IS NULL'
-                );
-                $remainingStmt->execute(['batch_id' => $batchRow['id']]);
-
-                if (((int) $remainingStmt->fetchColumn()) > 0) {
-                    // Other targets in this batch (e.g. Disillusionment's/
-                    // Suspicion's remaining players) still haven't answered.
-                    $pdo->commit();
-
-                    return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => true];
-                }
-
-                $playedCardId = (int) $batchRow['played_card_id'];
-                $pdo->prepare('UPDATE game_pending_decision_batches SET resolved_at = NOW() WHERE id = :id')
-                    ->execute(['id' => $batchRow['id']]);
-
-                if (in_array($decisionRow['decision_type'], self::SCORING_DECISION_TYPES, true) || $decisionRow['decision_type'] === self::AFTER_SCORING_ORDER_DECISION_TYPE) {
-                    // Every scoring-time decision (see scoreRoundAndAdvance()/
-                    // finishScoringAndAdvance()) resolves the same way,
-                    // whether it's Enthusiasm's/Passion's own (asked BEFORE
-                    // scores are computed) or an after-scoring order choice
-                    // (asked AFTER) -- entirely differently from a mid-play
-                    // one: no MoodPlayService chain to resume, just
-                    // re-entering finishScoringAndAdvance() itself, which
-                    // re-checks everything from scratch (both scoring
-                    // decisions, via nextUnresolvedScoringDecision() below,
-                    // and its own internal after-scoring-order check) and
-                    // either pauses again on whatever's next or finishes for
-                    // real. Recomputing $scoringDecisions here even when an
-                    // order decision (never a scoring one) was just answered
-                    // is harmless -- resolvedScoringDecisionBonuses() only
-                    // ever reads what's already resolved, which by this
-                    // point in the round can only be actual scoring
-                    // decisions, if any. None of these decision types moves
-                    // a card, so this branch's own event has no BoardState
-                    // to fold card history from.
-                    //
-                    // 'scoring_trigger' (mirroring the sibling
-                    // pending_decision_created event a few lines below)
-                    // marks this as a SCORING-TIME resolution -- reported
-                    // live: answering Enthusiasm's/Passion's own "take the
-                    // bonus?" prompt was pushing viewerOwnLastTurnEventId()'s
-                    // boundary past that entire round's own Tactical Bot
-                    // plays, hiding reasoning for a round the viewer never
-                    // actually got a chance to review (this resolution
-                    // happens automatically right after the round's plays,
-                    // with no turn of the viewer's own in between) -- see
-                    // that method's own docblock for why this flag is what
-                    // excludes it there.
-                    $this->logEvent($gameId, $roundId, $gamePlayerId, 'pending_decision_resolved', $playedCardId, [...$choices, 'scoring_trigger' => true]);
-
-                    $state = $this->boardStates->load($gameId);
-                    $turnOrder = $this->turnOrderForRound($gameId, $round);
-
-                    $nextDecision = $this->nextUnresolvedScoringDecision($state, $roundId, $turnOrder);
-                    if ($nextDecision !== null) {
-                        $this->writeScoringDecisionBatch($gameId, $roundId, $state, $nextDecision);
-                        $this->logEvent($gameId, $roundId, $nextDecision['ownerId'], 'pending_decision_created', $nextDecision['cardId'], ['scoring_trigger' => true], $state);
-
-                        $pdo->commit();
-
-                        return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => true];
-                    }
-
-                    $scoringDecisions = $this->resolvedScoringDecisionBonuses($state, $roundId);
-                    $result = $this->finishScoringAndAdvance($gameId, $round, $turnOrder, $state, $scoringDecisions, $gamePlayerId);
-                    $pdo->commit();
-
-                    return $result;
-                }
-
-                $answers = $this->collectAnswers((int) $batchRow['id']);
-                $state = $this->boardStates->load($gameId);
-                $topLevelChoices = new PlayerChoices((array) json_decode((string) $batchRow['top_level_choices'], true));
-                $invocationChoices = new PlayerChoices((array) json_decode((string) $batchRow['invocation_choices'], true));
-                $initiatingPlayerId = (int) $batchRow['initiating_game_player_id'];
-                $invocationSeq = (int) $batchRow['invocation_seq'];
-                $duplicityEligibleSources = (int) $batchRow['duplicity_eligible_sources'];
-                $reactorCandidateCardIds = array_map(intval(...), (array) json_decode((string) $batchRow['reactor_candidate_card_ids'], true));
-                $pendingSource = (string) $batchRow['pending_source'];
-
-                $result = $this->plays->resolvePendingDecisions(
-                    $state,
-                    $playedCardId,
-                    $initiatingPlayerId,
-                    $topLevelChoices,
-                    $invocationChoices,
-                    $invocationSeq,
-                    $answers,
-                    $duplicityEligibleSources,
-                    $reactorCandidateCardIds,
-                    $pendingSource,
-                );
-
-                // Logged only now, after resolvePendingDecisions() has
-                // actually run -- $choices here is just the last responder's
-                // own answer (every other target's answer was already
-                // written to game_pending_decisions when they responded, and
-                // isn't otherwise repeated here), but $state now carries
-                // every zone move the resolution itself just made (e.g.
-                // Malice's color cascade discarding moods beyond the two the
-                // acting player chose, or Disillusionment/Suspicion
-                // resolving every remaining target at once) -- see
-                // BoardState::consumeCardMoves(). Logging any earlier (as
-                // this used to, right after the UPDATE above) would always
-                // log an empty move list, since none of these moves have
-                // happened yet at that point.
-                //
-                // 'initiating_game_player_id' rides along in $details
-                // purely so describeEvent()'s own grants_created/grants_lost
-                // segments can attribute a grant to the right player --
-                // this event's own acting_game_player_id is $gamePlayerId,
-                // the RESPONDER (e.g. Intimidation's target, who just
-                // revealed a card), but any grant a card like Intimidation
-                // creates here always belongs to whoever's turn is actually
-                // active (the player who played the card in the first
-                // place), which is $initiatingPlayerId, not the responder --
-                // see describeEvent()'s own docblock for why $actor alone
-                // isn't a safe default for this one event type.
-                $this->logEvent(
-                    $gameId,
-                    $roundId,
-                    $gamePlayerId,
-                    'pending_decision_resolved',
-                    $playedCardId,
-                    [...$choices, 'initiating_game_player_id' => $initiatingPlayerId],
-                    $state,
-                );
-
-                if ($result->isPending) {
-                    // Resolving the last decision uncovered another one --
-                    // e.g. a Duplicity repeat of this same card also needing a
-                    // real opponent decision, or (now that Duplicity's repeat
-                    // is itself a pending decision) the acting player's own
-                    // "repeat again?" offer. $result->invocationChoices is
-                    // exactly the choices bag that new pause's own invocation
-                    // was given -- see PlayResult's own docblock for why this
-                    // can't be re-derived from any fixed location in
-                    // top_level_choices anymore. top_level_choices itself is
-                    // carried forward unchanged, same as the original play.
-                    // Already inside this method's own transaction, so this
-                    // just writes rows -- no nested beginTransaction().
-                    $this->boardStates->save($gameId, $state);
-                    $this->updateRoundTurnState($roundId, $initiatingPlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId());
-                    $this->writePendingBatch($gameId, $roundId, $initiatingPlayerId, $topLevelChoices, $result->invocationChoices, $result);
-                    $this->logEvent($gameId, $roundId, $initiatingPlayerId, 'pending_decision_created', $playedCardId, $this->withPlayedFrom($state, $playedCardId, []), $state);
-
-                    $pdo->commit();
-
-                    return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => true];
-                }
-
-                $pdo->commit();
-            } catch (Throwable $e) {
-                $pdo->rollBack();
-                throw $e;
-            }
-
-            // No closing 'mood_played' event here -- unlike playMood()'s own
-            // immediate-resolution path (which has no earlier event of its
-            // own for this play), every respondToDecision() call that
-            // reaches this point already has a 'pending_decision_created'
-            // event announcing the play and a 'pending_decision_resolved'
-            // event (just logged above, right after resolvePendingDecisions()
-            // itself ran) covering everything that actually happened --
-            // that event's own $state was already fully drained of
-            // card_moves/ownership_changes/revealed_card_ids by the time
-            // this point is reached, so a second 'mood_played' entry here
-            // would only ever repeat "played {$cardName} ({$choiceSummary})",
-            // a second time, with nothing new to say.
-            return $this->finishPlay($gameId, $round, $initiatingPlayerId, $state, $gamePlayerId);
-        });
+        $result = $this->withGameLock($gameId, fn (): array => $this->respondToDecisionLocked($gameId, $gamePlayerId, $choices));
 
         $this->touchLastMoveAt($gameId);
         $this->clearQueuedNotificationForGamePlayer($gameId, $gamePlayerId);
 
         return $result;
+    }
+
+    /**
+     * respondToDecision()'s own body, factored out so resignGame() can
+     * call it directly to auto-answer a resigning player's own pending
+     * decision (see that method's docblock) without trying to re-acquire
+     * withGameLock()'s advisory lock from inside a closure that's already
+     * holding it -- GET_LOCK() isn't documented as safely reentrant across
+     * MySQL/MariaDB versions, so this assumes the caller already holds it,
+     * exactly like respondToDecision() itself does above.
+     *
+     * @param array<string, mixed> $choices
+     * @return array{round_scored: bool, game_completed: bool, winner_game_player_id?: int, pending_decision?: bool}
+     */
+    private function respondToDecisionLocked(int $gameId, int $gamePlayerId, array $choices): array
+    {
+        $round = $this->currentRound($gameId);
+        $roundId = (int) $round['id'];
+
+        $batchRow = $this->activePendingBatch($roundId);
+        if ($batchRow === null) {
+            throw new GameStateException("Game {$gameId} has no decision pending");
+        }
+
+        $decisionRow = $this->activePendingDecision((int) $batchRow['id']);
+        if ($decisionRow === null || (int) $decisionRow['target_game_player_id'] !== $gamePlayerId) {
+            throw new GameStateException("Player {$gamePlayerId} has no decision pending in game {$gameId}");
+        }
+
+        $field = json_decode((string) $decisionRow['field'], true);
+        $answerKey = $field['key'];
+
+        if (($field['required'] ?? false) === true && ($choices[$answerKey] ?? null) === null) {
+            // Reject before ever writing this row -- otherwise a blank/
+            // missing submission gets persisted as "resolved" with a
+            // null answer, and the batch only surfaces the resulting
+            // failure later, to whichever OTHER player's response
+            // happens to complete it (resolvePendingDecisions() throws
+            // for this row's own key, and that throw rolls back that
+            // later player's own perfectly valid answer too -- see
+            // respondToDecision()'s catch block below). Validating here
+            // attributes the error to the player who actually caused it
+            // and never lets a bad answer reach "resolved" at all.
+            throw new InvalidChoiceException("Missing required choice '{$answerKey}'");
+        }
+
+        if ($decisionRow['decision_type'] === self::AFTER_SCORING_ORDER_DECISION_TYPE) {
+            // The only valid answer is a reordering of exactly this
+            // decision's own pending cards -- validated (and rejected
+            // before ever reaching "resolved") the same way the
+            // required-field check above already attributes a bad
+            // submission to whoever actually made it, rather than
+            // letting applyAfterScoringHooks() silently fall back to
+            // the default order for a malformed one later.
+            $expectedCardIds = array_column($field['cards'], 'card_id');
+            sort($expectedCardIds);
+            $submittedCardIds = array_map(intval(...), (array) ($choices[$answerKey] ?? []));
+            sort($submittedCardIds);
+            if ($submittedCardIds !== $expectedCardIds) {
+                throw new InvalidChoiceException("'{$answerKey}' must be exactly this decision's own pending cards, in some order");
+            }
+        }
+
+        if (in_array($decisionRow['decision_type'], self::SCORING_DECISION_TYPES, true)) {
+            // A production bug caught live: Passion's target_mood_id
+            // used to only ever get checked by resolveScoringDecisionBonus()
+            // when this round's whole decision chain finished (or,
+            // worse, whenever a later getState() call recomputed
+            // serializeScoringPreview() -- see that method's docblock)
+            // -- never right here. For the round's LAST outstanding
+            // decision that's the same moment, but for any earlier one
+            // (this round has more than one Enthusiasm/Passion mood in
+            // play) a bad target got silently persisted as "resolved"
+            // with nothing to catch it until much later. Once that
+            // happened, every subsequent getState() call for the game
+            // re-threw the same InvalidChoiceException uncaught,
+            // permanently: "Could not load this game." with no way
+            // back in. Reusing resolveScoringDecisionBonus() here
+            // (its return value is discarded -- only the validation it
+            // performs matters) guarantees whatever gets persisted
+            // below is still valid whenever it's recomputed later, the
+            // same "reject before ever writing this row" principle the
+            // two checks above already follow.
+            $effectKey = $decisionRow['decision_type'] === self::ENTHUSIASM_DECISION_TYPE ? 'enthusiasm' : 'passion';
+            $this->resolveScoringDecisionBonus($this->boardStates->load($gameId), (int) $batchRow['played_card_id'], $effectKey, new PlayerChoices($choices));
+        }
+
+        $pdo = Connection::get();
+        $pdo->beginTransaction();
+
+        try {
+            $pdo->prepare('UPDATE game_pending_decisions SET answer = :answer, resolved_at = NOW() WHERE id = :id')
+                ->execute([
+                    'answer' => json_encode([$answerKey => $choices[$answerKey] ?? null]),
+                    'id' => $decisionRow['id'],
+                ]);
+
+            // Disillusionment's own queue asks every player in turn
+            // order for a color, but only actually moves any moods once
+            // every answer is in (its own combined pending_decision_resolved
+            // event, further below) -- so without this, an earlier
+            // player's own pick was invisible to everyone else the
+            // whole time they were waiting their own turn to answer,
+            // even though the card's own text is explicit that later
+            // players decide with that information already public
+            // (their own chosen colors apply simultaneously, but
+            // choosing itself is sequential and, on a real table,
+            // spoken aloud as it happens). Logged here, immediately,
+            // rather than waiting for the whole batch to resolve --
+            // deliberately scoped to just this one decision_type rather
+            // than every multi-target batch (e.g. Suspicion's own
+            // per-player discard choices), since that's what was
+            // actually asked for.
+            if ($decisionRow['decision_type'] === 'disillusionment_choose_color') {
+                $this->logEvent($gameId, $roundId, $gamePlayerId, 'disillusionment_color_chosen', (int) $batchRow['played_card_id'], ['color' => $choices[$answerKey] ?? null]);
+            }
+
+            $remainingStmt = $pdo->prepare(
+                'SELECT COUNT(*) FROM game_pending_decisions WHERE batch_id = :batch_id AND resolved_at IS NULL'
+            );
+            $remainingStmt->execute(['batch_id' => $batchRow['id']]);
+
+            if (((int) $remainingStmt->fetchColumn()) > 0) {
+                // Other targets in this batch (e.g. Disillusionment's/
+                // Suspicion's remaining players) still haven't answered.
+                $pdo->commit();
+
+                return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => true];
+            }
+
+            $playedCardId = (int) $batchRow['played_card_id'];
+            $pdo->prepare('UPDATE game_pending_decision_batches SET resolved_at = NOW() WHERE id = :id')
+                ->execute(['id' => $batchRow['id']]);
+
+            if (in_array($decisionRow['decision_type'], self::SCORING_DECISION_TYPES, true) || $decisionRow['decision_type'] === self::AFTER_SCORING_ORDER_DECISION_TYPE) {
+                // Every scoring-time decision (see scoreRoundAndAdvance()/
+                // finishScoringAndAdvance()) resolves the same way,
+                // whether it's Enthusiasm's/Passion's own (asked BEFORE
+                // scores are computed) or an after-scoring order choice
+                // (asked AFTER) -- entirely differently from a mid-play
+                // one: no MoodPlayService chain to resume, just
+                // re-entering finishScoringAndAdvance() itself, which
+                // re-checks everything from scratch (both scoring
+                // decisions, via nextUnresolvedScoringDecision() below,
+                // and its own internal after-scoring-order check) and
+                // either pauses again on whatever's next or finishes for
+                // real. Recomputing $scoringDecisions here even when an
+                // order decision (never a scoring one) was just answered
+                // is harmless -- resolvedScoringDecisionBonuses() only
+                // ever reads what's already resolved, which by this
+                // point in the round can only be actual scoring
+                // decisions, if any. None of these decision types moves
+                // a card, so this branch's own event has no BoardState
+                // to fold card history from.
+                //
+                // 'scoring_trigger' (mirroring the sibling
+                // pending_decision_created event a few lines below)
+                // marks this as a SCORING-TIME resolution -- reported
+                // live: answering Enthusiasm's/Passion's own "take the
+                // bonus?" prompt was pushing viewerOwnLastTurnEventId()'s
+                // boundary past that entire round's own Tactical Bot
+                // plays, hiding reasoning for a round the viewer never
+                // actually got a chance to review (this resolution
+                // happens automatically right after the round's plays,
+                // with no turn of the viewer's own in between) -- see
+                // that method's own docblock for why this flag is what
+                // excludes it there.
+                $this->logEvent($gameId, $roundId, $gamePlayerId, 'pending_decision_resolved', $playedCardId, [...$choices, 'scoring_trigger' => true]);
+
+                $state = $this->boardStates->load($gameId);
+                $turnOrder = $this->turnOrderForRound($gameId, $round);
+
+                $nextDecision = $this->nextUnresolvedScoringDecision($state, $roundId, $turnOrder);
+                if ($nextDecision !== null) {
+                    $this->writeScoringDecisionBatch($gameId, $roundId, $state, $nextDecision);
+                    $this->logEvent($gameId, $roundId, $nextDecision['ownerId'], 'pending_decision_created', $nextDecision['cardId'], ['scoring_trigger' => true], $state);
+
+                    $pdo->commit();
+
+                    return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => true];
+                }
+
+                $scoringDecisions = $this->resolvedScoringDecisionBonuses($state, $roundId);
+                $result = $this->finishScoringAndAdvance($gameId, $round, $turnOrder, $state, $scoringDecisions, $gamePlayerId);
+                $pdo->commit();
+
+                return $result;
+            }
+
+            $answers = $this->collectAnswers((int) $batchRow['id']);
+            $state = $this->boardStates->load($gameId);
+            $topLevelChoices = new PlayerChoices((array) json_decode((string) $batchRow['top_level_choices'], true));
+            $invocationChoices = new PlayerChoices((array) json_decode((string) $batchRow['invocation_choices'], true));
+            $initiatingPlayerId = (int) $batchRow['initiating_game_player_id'];
+            $invocationSeq = (int) $batchRow['invocation_seq'];
+            $duplicityEligibleSources = (int) $batchRow['duplicity_eligible_sources'];
+            $reactorCandidateCardIds = array_map(intval(...), (array) json_decode((string) $batchRow['reactor_candidate_card_ids'], true));
+            $pendingSource = (string) $batchRow['pending_source'];
+
+            $result = $this->plays->resolvePendingDecisions(
+                $state,
+                $playedCardId,
+                $initiatingPlayerId,
+                $topLevelChoices,
+                $invocationChoices,
+                $invocationSeq,
+                $answers,
+                $duplicityEligibleSources,
+                $reactorCandidateCardIds,
+                $pendingSource,
+            );
+
+            // Logged only now, after resolvePendingDecisions() has
+            // actually run -- $choices here is just the last responder's
+            // own answer (every other target's answer was already
+            // written to game_pending_decisions when they responded, and
+            // isn't otherwise repeated here), but $state now carries
+            // every zone move the resolution itself just made (e.g.
+            // Malice's color cascade discarding moods beyond the two the
+            // acting player chose, or Disillusionment/Suspicion
+            // resolving every remaining target at once) -- see
+            // BoardState::consumeCardMoves(). Logging any earlier (as
+            // this used to, right after the UPDATE above) would always
+            // log an empty move list, since none of these moves have
+            // happened yet at that point.
+            //
+            // 'initiating_game_player_id' rides along in $details
+            // purely so describeEvent()'s own grants_created/grants_lost
+            // segments can attribute a grant to the right player --
+            // this event's own acting_game_player_id is $gamePlayerId,
+            // the RESPONDER (e.g. Intimidation's target, who just
+            // revealed a card), but any grant a card like Intimidation
+            // creates here always belongs to whoever's turn is actually
+            // active (the player who played the card in the first
+            // place), which is $initiatingPlayerId, not the responder --
+            // see describeEvent()'s own docblock for why $actor alone
+            // isn't a safe default for this one event type.
+            $this->logEvent(
+                $gameId,
+                $roundId,
+                $gamePlayerId,
+                'pending_decision_resolved',
+                $playedCardId,
+                [...$choices, 'initiating_game_player_id' => $initiatingPlayerId],
+                $state,
+            );
+
+            if ($result->isPending) {
+                // Resolving the last decision uncovered another one --
+                // e.g. a Duplicity repeat of this same card also needing a
+                // real opponent decision, or (now that Duplicity's repeat
+                // is itself a pending decision) the acting player's own
+                // "repeat again?" offer. $result->invocationChoices is
+                // exactly the choices bag that new pause's own invocation
+                // was given -- see PlayResult's own docblock for why this
+                // can't be re-derived from any fixed location in
+                // top_level_choices anymore. top_level_choices itself is
+                // carried forward unchanged, same as the original play.
+                // Already inside this method's own transaction, so this
+                // just writes rows -- no nested beginTransaction().
+                $this->boardStates->save($gameId, $state);
+                $this->updateRoundTurnState($roundId, $initiatingPlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId());
+                $this->writePendingBatch($gameId, $roundId, $initiatingPlayerId, $topLevelChoices, $result->invocationChoices, $result);
+                $this->logEvent($gameId, $roundId, $initiatingPlayerId, 'pending_decision_created', $playedCardId, $this->withPlayedFrom($state, $playedCardId, []), $state);
+
+                $pdo->commit();
+
+                return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => true];
+            }
+
+            $pdo->commit();
+        } catch (Throwable $e) {
+            $pdo->rollBack();
+            throw $e;
+        }
+
+        // No closing 'mood_played' event here -- unlike playMood()'s own
+        // immediate-resolution path (which has no earlier event of its
+        // own for this play), every respondToDecision() call that
+        // reaches this point already has a 'pending_decision_created'
+        // event announcing the play and a 'pending_decision_resolved'
+        // event (just logged above, right after resolvePendingDecisions()
+        // itself ran) covering everything that actually happened --
+        // that event's own $state was already fully drained of
+        // card_moves/ownership_changes/revealed_card_ids by the time
+        // this point is reached, so a second 'mood_played' entry here
+        // would only ever repeat "played {$cardName} ({$choiceSummary})",
+        // a second time, with nothing new to say.
+        return $this->finishPlay($gameId, $round, $initiatingPlayerId, $state, $gamePlayerId);
     }
 
     /**

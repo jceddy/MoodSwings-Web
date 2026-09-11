@@ -4981,8 +4981,10 @@ players, so a resigned player is simply never handed a turn, and
 `finishScoringAndAdvance()`'s winner/Hurt Feelings selection is narrowed
 the same way so they can never be picked as either, no matter how their
 own board state happens to score. Resigning while a decision is pending
-is disallowed (mirrors `playMood()`/`pass()`'s own
-`assertNoPendingDecision()` gate) -- resolve the decision first.
+against a *different* player is disallowed (mirrors `playMood()`/`pass()`'s
+own `assertNoPendingDecision()` gate) -- resolve the decision first. A
+decision pending against the *resigning* player themselves is handled
+differently -- see "Resigning while your own decision is pending" below.
 
 An immediate-completion (team-format) resignation doesn't actually
 require `currentRound()` to find an `'in_progress'` round at all --
@@ -5063,6 +5065,59 @@ live participant in every other sense a card effect can reach:
   `getState()`'s response, so a resigned player never even appears as a
   selectable option client-side -- purely a UI convenience layered on top
   of the server-side enforcement above, which is what actually matters.
+
+#### Resigning while your own decision is pending
+
+Reported live: "can we allow players to resign from a game while a choice
+(like from Compulsion/Suspicion) is waiting on them?" Before this fix,
+`resignGame()` called `assertNoPendingDecision()` unconditionally, the
+same gate `playMood()`/`pass()` use -- *any* unresolved
+`game_pending_decision_batches` row for the round blocked *every* player
+from resigning, regardless of who the decision actually targeted. For a
+decision targeting the would-be resigner themselves, that's a genuine
+dead end: they're the only one who could ever answer it, so if they'd
+rather quit than answer, there was no way to.
+
+The fix, `GameService::autoAnswerOwnPendingDecisionBeforeResigning()`,
+runs right before `assertNoPendingDecision()`: while the round's active
+pending decision targets the resigning player specifically, it computes a
+legal default answer via `BotPlayerService::chooseDecisionAnswer()` --
+the exact same target-agnostic machinery `advanceAutomatedTurns()`
+already uses to answer a *bot's* pending decisions -- and resolves it via
+a new `respondToDecisionLocked()` (the body of `respondToDecision()`,
+factored out so this can call it directly while already holding
+`resignGame()`'s own `withGameLock()` lock, rather than trying to
+re-acquire `GET_LOCK()` from inside a closure that's already holding it).
+It's a loop, not a single answer, since one batch can queue more than one
+step targeting different players in turn (Suspicion asks each targeted
+player in sequence), and the resigning player could come up again later
+in the same batch.
+
+Deliberately scoped no further than that: a decision targeting someone
+*else* still blocks resignation exactly as before. Auto-answering only
+ever touches a decision that names the resigning player as its own
+target -- if the active decision belongs to a different player,
+`autoAnswerOwnPendingDecisionBeforeResigning()` returns immediately and
+`assertNoPendingDecision()` still throws. This was a conscious
+design choice, not an oversight: the round's `current_turn_game_player_id`
+can still be sitting on whoever initiated that other decision's play, and
+forcing their turn to advance (via `skipTurnForResignedPlayer()`, if the
+resigning player happens to be them) out from under someone else's still
+half-resolved decision isn't a state `finishPlay()`/`respondToDecision()`
+were ever built to expect -- unlike a decision that targets the resigning
+player, where nothing else is left pending on that batch once it's
+answered.
+
+Auto-answering can itself finish scoring the round (if it happened to be
+the round's last outstanding decision) or even complete the game outright
+through ordinary play resolution -- `autoAnswerOwnPendingDecisionBeforeResigning()`
+returns that result directly in that case, and `resignGame()` returns it
+as-is rather than also trying to process a resignation against a game
+that's already over. Otherwise, `currentOrLatestRoundForResignation()` --
+the same `currentRound()`/`latestRound()` fallback `resignGame()` already
+needed for Team Play's own `draw_recipient` window -- is called again
+afterward, since auto-answering may have advanced the round without
+ending the game.
 
 #### Resigning from a draft match (issue #144)
 
