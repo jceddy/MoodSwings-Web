@@ -935,6 +935,30 @@ final class BotPlayerServiceTest extends TestCase
     }
 
     /**
+     * Reported live: "bots should not target Hope with Pacifism -- I had
+     * Hope and Sadness in play, both 0-point cards... Sadness has an
+     * effect that can increase its points, though, and that should be
+     * treated as a tie-breaker -- even though both cards have the same
+     * points value, Sadness has a much higher *potential* points value."
+     * Hope (id 124) and Sadness (id 74) are both worth a plain 0 with an
+     * empty discard pile, so the old comparison tied and fell through to
+     * iteration order, incidentally letting Hope win. pacifismTargetPriority()'s
+     * tie-break now prefers Sadness whenever current value ties, since it
+     * can still grow from here and Hope never will.
+     */
+    public function testChooseActionPrefersSadnessOverHopeWhenTiedOnCurrentValue(): void
+    {
+        $state = $this->boardState(hands: [1 => [20], 2 => [124, 74]]);
+        $state->moveHandToInPlay(2, 124);
+        $state->moveHandToInPlay(2, 74);
+
+        $action = $this->bot->chooseAction($state, [20], 1);
+
+        self::assertSame(20, $action['card_id']);
+        self::assertSame(['target_mood_ids' => [74]], $action['choices']);
+    }
+
+    /**
      * With no non-teammate opponent holding any mood in play at all,
      * suppressing nothing would be the only outcome, so Pacifism is
      * deprioritized behind Spite (id 76, value 1, plain filler) --

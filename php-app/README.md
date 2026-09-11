@@ -7679,6 +7679,28 @@ since it already holds that dependency):
   (only its own targeting is swing-aware), a similar latent gap flagged
   but not fixed here since it wasn't what was reported.
 
+  **Pacifism's own per-opponent target now breaks value ties by growth
+  potential, not iteration order** (reported live: "bots should not
+  target Hope with Pacifism -- I had Hope and Sadness in play, both
+  0-point cards... Sadness has an effect that can increase its points,
+  though, and that should be treated as a tie-breaker -- even though both
+  cards have the same points value, Sadness has a much higher *potential*
+  points value"). `pacifismTargetMoodIds()`'s per-opponent "highest-value
+  mood" comparison used plain `valueOf()`, so a genuine tie (a fresh
+  Sadness, discard pile still small, is worth exactly as little as Hope
+  right now) fell through to whichever mood happened to come first in
+  `moodsOwnedBy()`'s own iteration order -- incidental, not a deliberate
+  read of either card's actual threat level. New `pacifismTargetPriority()`
+  breaks a tied `valueOf()` by preferring a `DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS`
+  mood (Sadness/Wonder -- the same "can only grow from here" family
+  `nostalgiaDiscardCardId()`/`thrillHandMoodIds()` already treat
+  specially elsewhere in this file) over one that can't grow at all,
+  doubling `valueOf()` before adding the tie-break bit so it can never
+  override an actual value difference -- only ever decides between two
+  candidates already tied on real value. Used for both the per-opponent
+  selection and the cross-opponent `usort()` that picks which two
+  opponents' own best moods to fill Pacifism's two slots with.
+
   **Shock** (reported live: "bots should choose an opponent's mood to
   target with shock when playing it") gets its own targeting exception
   too, via `shockTargetMoodIds()`: `buildChoicesForCard()` special-cases

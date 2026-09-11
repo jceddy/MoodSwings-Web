@@ -3356,6 +3356,24 @@ final class BotPlayerService
      * happily let the bot suppress its own or a teammate's mood, but "an
      * opponent" per the maintainer means neither.
      *
+     * Reported live: "bots should not target Hope with Pacifism -- I had
+     * Hope and Sadness in play, both 0-point cards, [and the bot targeted
+     * Hope]. Sadness has an effect that can increase its points, though,
+     * and that should be treated as a tie-breaker -- even though both
+     * cards have the same points value, Sadness has a much higher
+     * *potential* points value." Both were tied on current valueOf() (a
+     * fresh Sadness, discard pile still small, is genuinely worth exactly
+     * as little as Hope right now), so the per-opponent "highest-value
+     * mood" comparison below fell through to iteration order --
+     * incidental, not a deliberate power-level judgment. Root-caused via
+     * pacifismTargetPriority(), which breaks a tied valueOf() by
+     * preferring a DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS mood (Sadness/
+     * Wonder, the same "can only grow from here" family
+     * nostalgiaDiscardCardId()/thrillHandMoodIds() already treat
+     * specially) over one that can't grow at all -- never overriding an
+     * actual value difference, since the tie-break's own contribution is
+     * always smaller than a single point of real value.
+     *
      * @return int[]
      */
     private function pacifismTargetMoodIds(BoardState $state, int $botGamePlayerId): array
@@ -3368,7 +3386,7 @@ final class BotPlayerService
 
             $bestMoodId = null;
             foreach ($state->moodsOwnedBy($playerId) as $mood) {
-                if ($bestMoodId === null || $state->valueOf($mood->cardId) > $state->valueOf($bestMoodId)) {
+                if ($bestMoodId === null || $this->pacifismTargetPriority($state, $mood->cardId) > $this->pacifismTargetPriority($state, $bestMoodId)) {
                     $bestMoodId = $mood->cardId;
                 }
             }
@@ -3378,9 +3396,26 @@ final class BotPlayerService
             }
         }
 
-        usort($bestMoodIdByOpponent, fn (int $a, int $b) => $state->valueOf($b) <=> $state->valueOf($a));
+        usort($bestMoodIdByOpponent, fn (int $a, int $b) => $this->pacifismTargetPriority($state, $b) <=> $this->pacifismTargetPriority($state, $a));
 
         return array_slice($bestMoodIdByOpponent, 0, 2);
+    }
+
+    /**
+     * pacifismTargetMoodIds()'s own per-candidate ranking -- current
+     * valueOf(), tie-broken by whether the mood can still grow from here
+     * (see that method's own docblock). Doubling valueOf() before adding
+     * the tie-break bit guarantees the bit can never flip an actual value
+     * difference (the smallest possible real gap, 1 point, is worth 2
+     * here) -- it only ever decides between two candidates already tied
+     * on real value.
+     */
+    private function pacifismTargetPriority(BoardState $state, int $cardId): int
+    {
+        $effectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
+        $canStillGrow = in_array($effectKey, self::DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS, true) ? 1 : 0;
+
+        return $state->valueOf($cardId) * 2 + $canStillGrow;
     }
 
     /**
