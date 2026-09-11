@@ -10562,6 +10562,78 @@ choices before that card has entered play, so it's never present in
 updated docblock explaining why -- there was no reachable bot-side gap to
 fix here, only the schema entry.
 
+### Lobby row highlight didn't account for a pending decision on someone else
+
+Reported live: a game showed the your-turn (`lobby-row--your-turn`) green
+highlight even though the viewer couldn't actually act on it -- their own
+earlier play had opened a `RequiresOpponentDecision` (Suspicion/Compulsion-
+style) pending decision targeting the OTHER seated player, so
+`current_turn_game_player_id` still nominally pointed at the viewer (`GET
+/games`'s own `is_your_turn`) while `assertNoPendingDecision()` would
+reject any play/pass from anyone until that other player actually
+answered. The per-player play-arrow/waiting-hourglass icons already showed
+this correctly (`current_turn_username`/`awaiting_response_usernames`),
+but `buildGameRow()`'s own row-highlight branch only ever downgraded the
+highlight for a decision targeting the viewer themselves
+(`is_awaiting_your_response`), not one targeting someone else --
+`awaiting_response_usernames` already names whoever the round is actually
+blocked on regardless of target, so this now suppresses the highlight
+whenever that list is non-empty at all, matching the same "any open
+decision freezes the round" gate `passButtonCanAct()` already applies on
+the board itself (`!pendingDecision`, target-agnostic there too).
+`is_your_turn` itself is left with its existing meaning (a `current_turn_
+game_player_id` match) since other consumers rely on that -- only the
+lobby's own highlight decision changes.
+
+### Contempt silently doing nothing when only its target was chosen
+
+Reported live (with a game export attached): a player played Contempt
+targeting Euphoria, and Euphoria was never put into the discard pile.
+Contempt's own choice_fields are both optional -- an independent `mode`
+dropdown (`single`/`all`) alongside a `target_mood_id` dropdown, matching
+its printed "you may choose one" text -- and nothing tied the two
+together: a player could pick a target from the `target_mood_id` dropdown
+without ever touching the separate `mode` dropdown, and the Play button's
+own client-side check only ever verified each field marked `required`
+individually satisfied, which neither of Contempt's own fields are.
+`ContemptEffect::afterPlaying()` returns immediately once `$mode` is
+`null`, before ever reading `target_mood_id`, so the play submitted as
+entirely legal and did nothing beyond entering play -- the targeted mood
+was never actually read, let alone discarded.
+
+`CardChoiceSchema` gained a new `requires_mode` flag (see its own
+docblock), set on Contempt's and Hesitation's `target_mood_id` fields.
+`game.js`'s own `cardHasATargetWithoutItsRequiredMode()` uses it to catch
+exactly this one unambiguous case -- a `requires_mode` field with a value
+while `mode` is missing entirely -- with the same "you're about to submit
+something that does nothing, play it anyway?" confirmation prompt
+`cardHasNoTargetSelected()`/`cardHasAnUncheckedConfirmBox()` already give
+other targetless-play shapes, rather than letting it through silently.
+(At the time this fix shipped, Guilt shared the identical modal choice
+but had its own `mode` field wrongly marked `required` -- see "Guilt
+should have the same optional pattern" just below, fixed immediately
+after.)
+
+### Guilt should have the same optional pattern as Contempt and Hesitation
+
+Reported live, immediately after the Contempt fix above: "Guilt should
+actually have the same pattern as Hesitation and Contempt." Guilt's
+printed text is "After playing this mood, you may choose one: ..." -- the
+`0003` catalog seed dropped "you may" (the same transcription mistake
+migrations `0030`/`0055` already caught and fixed for Rationalization/
+Hesitation), which made the effect read as mandatory, and `GuiltEffect`
+was implemented to match that wrongly-mandatory reading
+(`requireString('mode')`), forcing a mode choice on every play instead of
+letting the player decline the whole optional effect. Migration `0313`
+corrects the stored `rules_text` to match the real printed card;
+`GuiltEffect` itself now uses the same optional `string('mode')` +
+early-return pattern Contempt/Hesitation already use, `CardChoiceSchema`'s
+own `'guilt'` entry has `mode`'s `required` flipped to `false` with
+`requires_mode => 'single'` added to `target_mood_id`, and the bot's own
+`guiltChoices()` (unchanged) simply continues to always supply a mode --
+still perfectly legal now that doing so is a choice rather than a
+requirement, so no bot-side behavior change was needed.
+
 ## Tests
 
 Unit tests run without a database. The `AuthIntegrationTest` suite exercises

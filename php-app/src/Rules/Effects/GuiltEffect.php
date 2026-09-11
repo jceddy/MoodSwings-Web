@@ -10,10 +10,24 @@ use MoodSwings\Rules\Exceptions\InvalidChoiceException;
 use MoodSwings\Rules\PlayerChoices;
 
 /**
- * Guilt: "After playing this mood, choose one: suppress a black or red
- * mood for as long as you have this mood, or suppress all black and red
- * moods for as long as you have this mood." The first modal choice
- * between a single source-tied suppression and a mass one.
+ * Guilt: "After playing this mood, you may choose one: suppress a black
+ * or red mood for as long as you have this mood, or suppress all black
+ * and red moods for as long as you have this mood." The first modal
+ * choice between a single source-tied suppression and a mass one --
+ * optional, the same shape Contempt/Hesitation copy later in the catalog
+ * (see their own docblocks).
+ *
+ * Reported live: "Guilt should actually have the same pattern as
+ * Hesitation and Contempt" -- the 0003 catalog seed dropped "you may"
+ * from Guilt's own rules_text (the same transcription mistake migrations
+ * 0030/0055 already caught and fixed for Rationalization/Hesitation),
+ * which made the effect look mandatory and this class was implemented to
+ * match that wrongly-mandatory reading (`requireString('mode')`),
+ * forcing a mode choice on every play instead of letting the player
+ * decline. Corrected here to the same optional `string('mode')` +
+ * early-return pattern Contempt/Hesitation already use; the catalog's own
+ * rules_text is corrected in the same migration that bumps schema_version
+ * for this change.
  */
 final class GuiltEffect extends AbstractMoodEffect
 {
@@ -21,7 +35,10 @@ final class GuiltEffect extends AbstractMoodEffect
 
     public function afterPlaying(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices): void
     {
-        $mode = $choices->requireString('mode');
+        $mode = $choices->string('mode');
+        if ($mode === null) {
+            return;
+        }
 
         $targets = match ($mode) {
             'single' => [$this->validatedSingleTarget($state, $choices)],

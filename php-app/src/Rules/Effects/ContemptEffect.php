@@ -12,9 +12,10 @@ use MoodSwings\Rules\PlayerChoices;
 /**
  * Contempt: "After playing this mood, you may choose one: put a green or
  * white mood into the discard pile, or put all green and white moods into
- * the discard pile." Like Guilt's modal single-vs-mass choice, but the
- * whole thing is optional here ("you may choose one") rather than
- * mandatory.
+ * the discard pile." The same modal single-vs-mass choice as Guilt's own
+ * (also optional -- see GuiltEffect's own docblock for a catalog-seed
+ * transcription bug that used to make Guilt's copy of this exact shape
+ * look mandatory).
  */
 final class ContemptEffect extends AbstractMoodEffect
 {

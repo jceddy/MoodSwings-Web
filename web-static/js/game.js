@@ -2609,14 +2609,24 @@
         // highlight the same way, and takes priority when both apply -- a
         // pending decision freezes the round even on what's nominally your
         // own turn, so it's the more urgent of the two (see the CSS rule's
-        // own comment). Deliberately scoped to just these two viewer-centric
-        // conditions -- who's actually on turn/being waited on (possibly
-        // someone else entirely) is shown per-player via the play-arrow/
-        // waiting-hourglass icons below instead, so the row highlight only
-        // ever answers "is there something for ME to do here."
+        // own comment).
+        //
+        // Reported live: a game showed the your-turn highlight even though
+        // the viewer couldn't actually act -- their own earlier play had
+        // opened a pending decision targeting the OTHER player (Suspicion/
+        // Compulsion-style), so current_turn_game_player_id still nominally
+        // pointed at the viewer while assertNoPendingDecision() would
+        // reject any play/pass from anyone until that other player answers.
+        // awaiting_response_usernames already names whoever the round is
+        // actually blocked on, viewer or not, so an open decision on ANY
+        // player -- not just the viewer -- suppresses this highlight too;
+        // who's actually on turn/being waited on is still shown per-player
+        // via the play-arrow/waiting-hourglass icons below, so the row
+        // highlight only ever answers "is there something for ME to do
+        // here, right now."
         li.className = 'lobby-row' + (
             game.is_awaiting_your_response ? ' lobby-row--awaiting-response'
-                : game.is_your_turn ? ' lobby-row--your-turn'
+                : game.is_your_turn && game.awaiting_response_usernames.length === 0 ? ' lobby-row--your-turn'
                     : ''
         );
 
@@ -9946,6 +9956,26 @@
         return fieldKey !== undefined && !choices[fieldKey];
     }
 
+    // Reported live: a player chose Contempt's own target_mood_id but
+    // never touched its separate, optional 'mode' dropdown -- the whole
+    // play submitted as "legal", but ContemptEffect::afterPlaying()
+    // returns immediately once mode is null, before ever reading
+    // target_mood_id, so the chosen mood was never actually discarded and
+    // nothing told the player why. A schema field marked 'requires_mode'
+    // (see CardChoiceSchema's own docblock -- currently Contempt's and
+    // Hesitation's target_mood_id; Guilt has the same single-vs-all shape
+    // but its own 'mode' field is 'required' => true, so this can never
+    // happen there) having a value while 'mode' is missing ENTIRELY is
+    // never an intentional submission: choosing 'all' needs no target at
+    // all, and declining the whole optional effect needs neither -- so
+    // this is always either a missed click on the mode selector or a
+    // genuine "submit and do nothing" choice, the same unambiguous shape
+    // cardHasNoTargetSelected()/cardHasAnUncheckedConfirmBox() above
+    // already guard other cards against.
+    function cardHasATargetWithoutItsRequiredMode(card, choices) {
+        return card.choice_fields.some((field) => field.requires_mode !== undefined && field.key in choices) && !('mode' in choices);
+    }
+
     document.getElementById('play-card-button').addEventListener('click', async () => {
         const choices = buildChoicesFromFields(selectedCard.choice_fields);
         if (cardHasNoTargetSelected(selectedCard, choices)
@@ -9963,6 +9993,10 @@
             if (!(await showConfirmDialog(`You haven't checked "${field.label}" -- ${selectedCard.name}'s ability won't do anything. Play it anyway?`))) {
                 return;
             }
+        }
+        if (cardHasATargetWithoutItsRequiredMode(selectedCard, choices)
+            && !(await showConfirmDialog(`You've chosen a target for ${selectedCard.name}, but haven't chosen a mode -- as submitted, its ability won't do anything. Play it anyway?`))) {
+            return;
         }
         const playButton = document.getElementById('play-card-button');
         // Disabled + relabeled immediately (not after the request settles)
