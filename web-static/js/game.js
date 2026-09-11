@@ -2609,14 +2609,24 @@
         // highlight the same way, and takes priority when both apply -- a
         // pending decision freezes the round even on what's nominally your
         // own turn, so it's the more urgent of the two (see the CSS rule's
-        // own comment). Deliberately scoped to just these two viewer-centric
-        // conditions -- who's actually on turn/being waited on (possibly
-        // someone else entirely) is shown per-player via the play-arrow/
-        // waiting-hourglass icons below instead, so the row highlight only
-        // ever answers "is there something for ME to do here."
+        // own comment).
+        //
+        // Reported live: a game showed the your-turn highlight even though
+        // the viewer couldn't actually act -- their own earlier play had
+        // opened a pending decision targeting the OTHER player (Suspicion/
+        // Compulsion-style), so current_turn_game_player_id still nominally
+        // pointed at the viewer while assertNoPendingDecision() would
+        // reject any play/pass from anyone until that other player answers.
+        // awaiting_response_usernames already names whoever the round is
+        // actually blocked on, viewer or not, so an open decision on ANY
+        // player -- not just the viewer -- suppresses this highlight too;
+        // who's actually on turn/being waited on is still shown per-player
+        // via the play-arrow/waiting-hourglass icons below, so the row
+        // highlight only ever answers "is there something for ME to do
+        // here, right now."
         li.className = 'lobby-row' + (
             game.is_awaiting_your_response ? ' lobby-row--awaiting-response'
-                : game.is_your_turn ? ' lobby-row--your-turn'
+                : game.is_your_turn && game.awaiting_response_usernames.length === 0 ? ' lobby-row--your-turn'
                     : ''
         );
 

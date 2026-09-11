@@ -10562,6 +10562,29 @@ choices before that card has entered play, so it's never present in
 updated docblock explaining why -- there was no reachable bot-side gap to
 fix here, only the schema entry.
 
+### Lobby row highlight didn't account for a pending decision on someone else
+
+Reported live: a game showed the your-turn (`lobby-row--your-turn`) green
+highlight even though the viewer couldn't actually act on it -- their own
+earlier play had opened a `RequiresOpponentDecision` (Suspicion/Compulsion-
+style) pending decision targeting the OTHER seated player, so
+`current_turn_game_player_id` still nominally pointed at the viewer (`GET
+/games`'s own `is_your_turn`) while `assertNoPendingDecision()` would
+reject any play/pass from anyone until that other player actually
+answered. The per-player play-arrow/waiting-hourglass icons already showed
+this correctly (`current_turn_username`/`awaiting_response_usernames`),
+but `buildGameRow()`'s own row-highlight branch only ever downgraded the
+highlight for a decision targeting the viewer themselves
+(`is_awaiting_your_response`), not one targeting someone else --
+`awaiting_response_usernames` already names whoever the round is actually
+blocked on regardless of target, so this now suppresses the highlight
+whenever that list is non-empty at all, matching the same "any open
+decision freezes the round" gate `passButtonCanAct()` already applies on
+the board itself (`!pendingDecision`, target-agnostic there too).
+`is_your_turn` itself is left with its existing meaning (a `current_turn_
+game_player_id` match) since other consumers rely on that -- only the
+lobby's own highlight decision changes.
+
 ## Tests
 
 Unit tests run without a database. The `AuthIntegrationTest` suite exercises
