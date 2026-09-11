@@ -3242,7 +3242,12 @@ final class BotPlayerService
      * Play, whichever happens to be cheapest), so the forced target
      * costs the acting side as little as possible, rather than the
      * generic "highest-value 'any' scope" default BotChoiceResolver
-     * would otherwise apply.
+     * would otherwise apply. $cardId itself is never actually a
+     * candidate here in practice -- chooseAction() always calls
+     * buildChoicesForCard() on the pre-play board, before $cardId has
+     * entered play, so it can never show up in $state->moodsInPlay()
+     * for this loop to encounter in the first place; unlike the schema
+     * fix below, there's no reachable bot-side gap to fix.
      */
     private function convictionTargetMoodId(BoardState $state, int $cardId, int $botGamePlayerId): ?int
     {

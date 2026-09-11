@@ -67,10 +67,15 @@ namespace MoodSwings\Rules;
  *                           // targeting itself -- Anger ("put any number of moods with total value 5 or less
  *                           // into the discard pile," value 0, so discarding itself is not just legal but
  *                           // often efficient), Hate ("put any mood on the bottom of the deck," no owner/
- *                           // other-player restriction), and Hostility's own second stage ("put up to two
- *                           // moods, each with a value of 3 or less, into the discard pile" has no "other than
- *                           // this one" clause the way Worry's near-identical wording does, and Hostility's
- *                           // own flat value of 3 happens to qualify) are the first such cards. Set true to have fieldOptions()
+ *                           // other-player restriction), Conviction (reported live: "conviction should be
+ *                           // able to target itself" -- "choose a mood, its player puts it on the bottom of
+ *                           // the deck and draws a card," the same shape as Hate's own text, just with a
+ *                           // replacement draw added; ConvictionEffect's own docblock already said self-
+ *                           // targeting was legal, this schema entry had just never been updated to match),
+ *                           // and Hostility's own second stage ("put up to two moods, each with a value of 3
+ *                           // or less, into the discard pile" has no "other than this one" clause the way
+ *                           // Worry's near-identical wording does, and Hostility's own flat value of 3
+ *                           // happens to qualify) are the first such cards. Set true to have fieldOptions()
  *                           // synthesize a self entry directly from the card being played (labeled " [self]"
  *                           // so it isn't mistaken for some other in-play copy of the same card -- a duel
  *                           // deck, or two of the same custom card, can each be played independently in the
@@ -156,7 +161,7 @@ final class CardChoiceSchema
             ['key' => 'target_mood_ids', 'type' => 'mood', 'scope' => 'any', 'multi' => true, 'required' => false, 'label' => 'Moods to put into the discard pile (value 5+, up to 2, one per player)', 'filter' => ['min_value' => 5], 'count' => ['max' => 2], 'constraint' => ['type' => 'distinct_owners']],
         ],
         'conviction' => [
-            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'any', 'required' => true, 'label' => 'Mood to move to the bottom of the deck'],
+            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'any', 'required' => true, 'label' => 'Mood to move to the bottom of the deck', 'includes_self' => true],
         ],
         'zeal' => [
             ['key' => 'hand_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Card to bottom-deck and redraw'],

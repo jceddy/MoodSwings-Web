@@ -388,6 +388,24 @@ final class CardChoiceSchemaTest extends TestCase
     }
 
     /**
+     * Reported live: "conviction should be able to target itself."
+     * Conviction's own printed text ("choose a mood, its player puts it
+     * on the bottom of the deck and draws a card") has no owner/other-
+     * player restriction either -- the same shape as Hate's own near-
+     * identical wording just above, plus a replacement draw -- and
+     * ConvictionEffect's own docblock already said self-targeting was
+     * legal, but this schema entry was missing includes_self, so neither
+     * the game.js UI nor the bot ever actually offered it as a
+     * candidate.
+     */
+    public function testConvictionIncludesSelfAsATarget(): void
+    {
+        $fields = CardChoiceSchema::forEffectKey('conviction');
+
+        self::assertTrue($fields[0]['includes_self']);
+    }
+
+    /**
      * Hostility's own second-stage text ("put up to two moods, each with a
      * value of 3 or less, into the discard pile") has no "other than this
      * one" exclusion the way Worry's near-identical wording does, and
