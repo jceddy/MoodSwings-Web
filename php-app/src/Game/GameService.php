@@ -7213,12 +7213,33 @@ final class GameService
      * A stale/crashed job's own last periodic checkpoint (migration
      * 0283), applied in place of the plain heuristic bot -- see
      * advanceTacticalBotSearch()'s own docblock for why this exists.
-     * Safe to apply exactly as recorded without re-validating legality:
-     * nothing else can have mutated the board since the checkpoint was
-     * taken -- this seat's own turn is still open the entire time (the
-     * same single-current-player invariant runTacticalBotSearchJob()'s
-     * own re-validation already relies on), so the checkpointed action
-     * is exactly as trustworthy now as it was the moment it was recorded.
+     *
+     * Reported live: BotSage auto-passed at the start of a fresh turn
+     * despite Regret and Rationalization both sitting legally playable in
+     * its hand. Root cause: job 324's own background process HAD already
+     * played its recorded checkpoint (Creativity) successfully via its
+     * own playMood() call, but was killed by the shared host (see
+     * runTacticalBotSearchJob()'s own docblock) before it could reach its
+     * very next line, markDone() -- leaving the job row stuck at
+     * status='running' forever, since nothing else ever revisits a
+     * SPECIFIC job id again once its own turn has moved on. The next time
+     * this exact seat got a turn (a new round, hours later),
+     * advanceTacticalBotSearch() found that same orphaned row, correctly
+     * judged it long stale, and retried its checkpoint -- Creativity,
+     * already played hours earlier and nowhere to be found -- throwing
+     * the IllegalPlayException caught below. So the assumption this
+     * docblock used to state ("nothing else can have mutated the board
+     * since the checkpoint was taken, this seat's own turn is still open
+     * the entire time") does not actually hold: a checkpoint can outlive
+     * the very turn it was recorded for. A stale/already-applied
+     * checkpoint says nothing about whether the CURRENT board has a
+     * legal play, so falling back to a blind pass (as this used to)
+     * threw away Regret/Rationalization along with the bad checkpoint.
+     * Falling back to the ordinary heuristic bot instead -- exactly what
+     * runTacticalBotSearchJob()'s own catch block already does for an
+     * analogous failure -- makes a fresh decision from the board as it
+     * actually stands right now, and safely passes on its own if that
+     * really does turn out to have nothing playable.
      *
      * @param ?array<string, mixed> $choices
      */
@@ -7229,22 +7250,14 @@ final class GameService
             $this->logTacticalBotReasoning($gameId, $gamePlayerId, $action, ['excluded_by_heuristic' => [], 'candidates' => []], recoveredFromStalledSearch: true);
         }
 
-        // Same "never let a bot's own broken play attempt permanently
-        // break a game" guard advanceAutomatedTurns() already has around
-        // its own identical playMood()/pass() call -- a checkpointed
-        // action recorded mid-search is just as capable of tripping a
-        // choice-building bug as a fresh heuristic one is, and this call
-        // site used to have no catch of its own at all. See
-        // advanceAutomatedTurns()'s own catch block for the full
-        // reasoning; identical here, just a different caller.
         try {
             return $cardId !== null
                 ? $this->playMood($gameId, $gamePlayerId, $cardId, $choices ?? [])
                 : $this->pass($gameId, $gamePlayerId, automated: true);
         } catch (Throwable $e) {
-            error_log("playRecoveredPartialSearchResult({$gameId}): bot {$gamePlayerId}'s own recovered play attempt failed, passing instead -- " . $e);
+            error_log("playRecoveredPartialSearchResult({$gameId}): bot {$gamePlayerId}'s own recovered play attempt failed, falling back to the heuristic bot -- " . $e);
 
-            return $this->pass($gameId, $gamePlayerId, automated: true);
+            return $this->playViaHeuristicBotFallback($gameId, $gamePlayerId);
         }
     }
 

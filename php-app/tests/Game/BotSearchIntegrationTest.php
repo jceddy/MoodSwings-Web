@@ -634,6 +634,84 @@ final class BotSearchIntegrationTest extends TestCase
     }
 
     /**
+     * Reported live: "conviction should be able to target itself" was a
+     * different bug entirely, but the game log that led to THIS test
+     * ("why did the bot auto-pass when it has both Regret and
+     * Rationalization in hand -- both legal plays") traced back to a real
+     * production incident: a search job's own background process had
+     * already played its recorded checkpoint successfully, then was
+     * killed by the shared host before it could mark itself 'done' (see
+     * runTacticalBotSearchJob()'s own docblock on that exact failure
+     * mode), leaving the job row stuck at status='running' forever. The
+     * NEXT time that same seat got a turn -- an entirely different
+     * decision, hours later -- advanceTacticalBotSearch() found that
+     * same orphaned row, judged it stale, and tried to replay its
+     * long-since-applied checkpoint, which of course was no longer in
+     * hand -- see playRecoveredPartialSearchResult()'s own docblock.
+     *
+     * Simulated here by moving the checkpointed card (Apathy) out of the
+     * bot's hand and into play directly, standing in for "this card was
+     * already played by the time the stale recovery runs" without
+     * needing a second real job to reproduce the exact orphaning
+     * sequence. The fix: falling back to the ordinary heuristic bot
+     * (which sees the CURRENT board) instead of an outright pass, so the
+     * bot's other genuinely legal card (Courage) still gets played.
+     */
+    public function testAdvanceTacticalBotSearchFallsBackToTheHeuristicBotWhenTheRecoveredCheckpointIsNoLongerLegal(): void
+    {
+        ['gameId' => $gameId, 'botPlayerId' => $botPlayerId] = $this->createRawTacticalBotGame($this->games, [55, 7], diagnosticMode: true);
+        $apathyInstanceId = $this->gameCardInstanceId($gameId, 55);
+        $courageInstanceId = $this->gameCardInstanceId($gameId, 7);
+
+        $jobStmt = $this->pdo->prepare('SELECT id FROM bot_search_jobs WHERE game_player_id = :id ORDER BY id DESC LIMIT 1');
+        $jobStmt->execute(['id' => $botPlayerId]);
+        $jobId = (int) $jobStmt->fetchColumn();
+
+        // Stands in for "the checkpointed card was already played by an
+        // earlier, orphaned job" -- it's simply no longer in the bot's
+        // hand (or the discard pile) by the time this stale recovery
+        // actually runs.
+        $this->pdo->prepare("UPDATE game_cards SET zone = 'in_play' WHERE id = :id")->execute(['id' => $apathyInstanceId]);
+
+        $this->pdo->prepare(
+            "UPDATE bot_search_jobs SET best_action_card_id = :card_id, best_action_choices = '[]', best_action_recorded_at = NOW(),
+                 started_at = started_at - INTERVAL 1 HOUR WHERE id = :id"
+        )->execute(['id' => $jobId, 'card_id' => $apathyInstanceId]);
+
+        $this->games->advanceAutomatedTurns($gameId);
+
+        $statusStmt = $this->pdo->prepare('SELECT status FROM bot_search_jobs WHERE id = :id');
+        $statusStmt->execute(['id' => $jobId]);
+        self::assertSame('failed', $statusStmt->fetchColumn());
+
+        // Asserting Courage got played SOMEWHERE in the resulting event log
+        // isn't enough on its own: advanceAutomatedTurns() keeps looping
+        // after this decision (round 2 deals this same empty-handed bot
+        // seat another turn with Courage still unplayed), and
+        // $tacticalFallbackGamePlayerIds -- once set true for this exact
+        // request -- routes THAT later turn to the heuristic bot too,
+        // which would eventually play Courage regardless of whether this
+        // fix exists at all. What actually distinguishes the fix is
+        // whether the bot passes on THIS decision (the stale-checkpoint
+        // one, with Courage still genuinely legal) before ever getting to
+        // Courage -- so this checks that no turn_passed row for the bot
+        // precedes Courage's own mood_played row, not just that Courage
+        // was played at some point.
+        $courageStmt = $this->pdo->prepare(
+            "SELECT MIN(id) FROM game_events WHERE game_id = :game_id AND acting_game_player_id = :bot_id AND event_type = 'mood_played' AND card_id = :card_id"
+        );
+        $courageStmt->execute(['game_id' => $gameId, 'bot_id' => $botPlayerId, 'card_id' => $courageInstanceId]);
+        $courageEventId = $courageStmt->fetchColumn();
+        self::assertNotFalse($courageEventId, 'the bot\'s other genuinely legal card must be played at some point');
+
+        $earlierPassStmt = $this->pdo->prepare(
+            "SELECT COUNT(*) FROM game_events WHERE game_id = :game_id AND acting_game_player_id = :bot_id AND event_type = 'turn_passed' AND id < :courage_id"
+        );
+        $earlierPassStmt->execute(['game_id' => $gameId, 'bot_id' => $botPlayerId, 'courage_id' => $courageEventId]);
+        self::assertSame(0, (int) $earlierPassStmt->fetchColumn(), 'must not pass on the very decision where the stale checkpoint failed -- Courage was still legal right then');
+    }
+
+    /**
      * The genuine total-loss case -- a stale job with NO checkpoint ever
      * recorded (best_action_recorded_at still null) has nothing to
      * recover, so it still falls back to the plain heuristic bot exactly
