@@ -1150,12 +1150,23 @@ clickable, no `#advance-turn-button` click required.
 **Same story for the "answering someone else's decision handed you the
 turn" follow-up** (reported live: "I don't think I need to see the
 'Advance turn' button at this point because nothing is changing between
-the end of the opponent's turn and the beginning of mine" -- see "Pause
-at the start of your turn" in `php-app/README.md` for
-`updateRoundTurnState()`'s own `$requestingGamePlayerId` comparison).
-Once again purely a server-side decision about whether to ever set
+the end of the opponent's turn and the beginning of mine"). Once again
+purely a server-side decision about whether to ever set
 `turn_pending_acknowledgment` in the first place -- nothing here needed
 to change to keep the banner correctly hidden when it isn't.
+
+**And again for the final, broadest follow-up** ("what we really want is
+to *only* show the pause when there is an after-scoring effect that moves
+cards from one zone to another" -- see "Narrowed across three further
+live reports" in `php-app/README.md`'s "Pause at the start of your turn"
+section for the settled rule). An ordinary mid-round pass-the-turn -- an
+opponent playing any plain card, however eventful, like the reported
+"BotSage played Fondness from hand" case -- now never sets
+`turn_pending_acknowledgment` at all, only a round transition that
+genuinely moved a card after scoring can. `renderBoard()`'s own
+`state.you.turn_pending_acknowledgment === true` check needed no change
+to correctly keep the banner hidden for every one of these narrower
+cases.
 
 **Onlookers get a text hint, not a banner of their own**: a
 spectator's/other player's own `#board-round-status` line reads

@@ -9778,12 +9778,7 @@ final class GameService
         // which has to be persisted even though this turn's own play
         // didn't otherwise touch the board.
         $this->boardStates->save($gameId, $state);
-        // $requestingGamePlayerId passed through here (see updateRoundTurnState()'s
-        // own docblock) -- if $nextPlayerId happens to be the very player
-        // whose own request (e.g. answering a decision as someone else's
-        // target) just caused this handoff, they already know what
-        // happened and don't need a fresh pause to reveal it to them.
-        $this->updateRoundTurnState((int) $round['id'], $nextPlayerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $requestingGamePlayerId);
+        $this->updateRoundTurnState((int) $round['id'], $nextPlayerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId());
 
         return ['round_scored' => false, 'game_completed' => false];
     }
@@ -10650,11 +10645,12 @@ final class GameService
         // until now -- the exact gap that made round-to-round handoffs go
         // silent even though same-round turn advances already worked.
         // $afterScoringHooksChangedTheBoard (see inPlayOwnershipSignature()'s
-        // own docblock) skips the pause_before_own_turn gate specifically
-        // for THIS round-transition when it's a no-op -- an ordinary
-        // mid-round handoff (updateRoundTurnState() below) never passes
-        // this param at all, always pausing regardless, since there's no
-        // "was there anything to review" question for a plain pass-the-turn.
+        // own docblock) is the only thing that can ever open the
+        // pause_before_own_turn gate -- see notifyItsYourTurn()'s own
+        // $worthPausingFor docblock: every other call site (an ordinary
+        // mid-round handoff via updateRoundTurnState(), a fresh game's own
+        // first turn, Awe's skip-scoring round creation) always leaves it
+        // at its default of false.
         $this->notifyItsYourTurn($newRoundId, $nextFirstPlayer, $afterScoringHooksChangedTheBoard);
 
         return ['round_scored' => true, 'game_completed' => false];
@@ -17734,28 +17730,15 @@ final class GameService
      * a Duplicity repeat) would re-notify the player already mid-turn for
      * no reason.
      *
-     * $requestingGamePlayerId (reported live, a further follow-up: BotSage
-     * played Suspicion, jceddy answered its own "discard a card" decision
-     * as the target, and the turn then passed straight to jceddy -- "I
-     * don't think I need to see the 'Advance turn' button at this point
-     * because nothing is changing between the end of the opponent's turn
-     * and the beginning of mine") is, when given, whoever's own request
-     * just caused this handoff -- only ever passed by advanceTurn(), the
-     * one call site where it can differ from $playerId at all: a
-     * respondToDecision() call flows through as $requestingGamePlayerId
-     * unchanged all the way from the responder's own request into
-     * finishPlay()/advanceTurn(), while $playerId here is the NEXT
-     * player in seat order, which (in a 2-player game, always; in 3-4,
-     * whenever seating happens to put them next) is that SAME responder.
-     * They already know exactly what just happened -- they made the very
-     * choice that caused it -- so there's nothing for the pause to reveal
-     * that a fresh "Advance Turn" click would show them. Every other call
-     * site leaves this null (an ordinary play/pass always hands the turn
-     * to someone OTHER than whoever's request just ran, so the comparison
-     * would never fire for them anyway) -- see notifyItsYourTurn()'s own
-     * $worthPausingFor docblock for the sibling check this parallels.
+     * An ordinary same-round handoff never pauses the new turn holder,
+     * regardless of who they are or what triggered it -- see
+     * notifyItsYourTurn()'s own $worthPausingFor docblock: only
+     * finishScoringAndAdvance()'s round-transition path can ever prove an
+     * after-scoring hook actually moved something, so this is the one
+     * notifyItsYourTurn() call site that never even offers a
+     * $worthPausingFor argument, relying on its default of false.
      */
-    private function updateRoundTurnState(int $roundId, int $playerId, array $playGrants, bool $discardedThisRound, bool $skipScoringThisRound, ?int $skipScoringFirstPlayerId, ?int $skipScoringSourceCardId, ?int $skipScoringOwnerId, ?int $requestingGamePlayerId = null): void
+    private function updateRoundTurnState(int $roundId, int $playerId, array $playGrants, bool $discardedThisRound, bool $skipScoringThisRound, ?int $skipScoringFirstPlayerId, ?int $skipScoringSourceCardId, ?int $skipScoringOwnerId): void
     {
         $pdo = Connection::get();
 
@@ -17780,7 +17763,7 @@ final class GameService
         ]);
 
         if ($previousPlayerId !== $playerId) {
-            $this->notifyItsYourTurn($roundId, $playerId, $requestingGamePlayerId !== $playerId);
+            $this->notifyItsYourTurn($roundId, $playerId);
         }
     }
 
@@ -17802,18 +17785,25 @@ final class GameService
      * so this never needs to special-case a bot seat the way the
      * automated-turn-advancing loop elsewhere in this class does.
      *
-     * $worthPausingFor (reported live: "not super useful when the board
-     * State snapshot is identical to the actual board state") lets a
-     * round-transition call site opt OUT of the pause when
-     * inPlayOwnershipSignature()'s own before/after comparison found
-     * nothing for the frozen pre-after-scoring snapshot to actually show
-     * -- see finishScoringAndAdvance()'s own call site. Defaults true for
-     * every other call site (an ordinary mid-round pass-the-turn, or a
-     * fresh round with no scoring-effects question to even ask), which
-     * is exactly the original, unconditional "opted in means opted in"
-     * behavior this parameter's absence used to be.
+     * $worthPausingFor (reported live, across three successive follow-ups
+     * -- "not super useful when the board State snapshot is identical to
+     * the actual board state"; answering a decision that hands you your
+     * own next turn needs no fresh reveal; and finally, plainly: "we
+     * really want to *only* show the pause when there is an
+     * after-scoring effect that moves cards from one zone to another" --
+     * only ever true for the one call site that can actually prove that
+     * happened: finishScoringAndAdvance()'s own
+     * $afterScoringHooksChangedTheBoard, computed from
+     * inPlayOwnershipSignature()'s before/after comparison around
+     * applyAfterScoringHooks()/applyChaosAfterScoringHooks(). Defaults
+     * false for every other call site -- an ordinary mid-round
+     * pass-the-turn, a fresh game's very first turn, and Awe's own
+     * skip-scoring round creation all hand off the turn without any
+     * after-scoring hook ever running, so there's never anything for a
+     * frozen snapshot to reveal that the live board doesn't already
+     * show.
      */
-    private function notifyItsYourTurn(int $roundId, int $gamePlayerId, bool $worthPausingFor = true): void
+    private function notifyItsYourTurn(int $roundId, int $gamePlayerId, bool $worthPausingFor = false): void
     {
         $stmt = Connection::get()->prepare(
             'SELECT gr.game_id, gp.user_id, u.pause_before_own_turn

@@ -9494,17 +9494,16 @@ auto-* preferences above) and written via `POST
 same write-only, no-separate-GET pattern every other personal preference
 here already uses.
 
-**The gate applies to EVERY turn handoff, not just a round-to-round
-one** -- the report's own "before/after scoring effects happen" example
-is the highest-value case (a new round's own opening board state is the
-easiest to lose track of how it got there), but a plain mid-round
-pass-the-turn from one player to the next gets the exact same treatment.
-Both funnel through the one place that already knew, and already acted
-on, the instant a turn genuinely starts: `GameService::
-notifyItsYourTurn()` -- previously only the source of the "your turn"
+**Every genuine turn handoff funnels through one place** -- `GameService::
+notifyItsYourTurn()`, previously only the source of the "your turn"
 push/Discord notification (see "Browser push notifications"/"Discord"
-above), reached from exactly two shapes of call site, both meaning "a
-NEW player just became the current turn holder, for real":
+above) -- reached from exactly two shapes of call site, both meaning "a
+NEW player just became the current turn holder, for real" (as opposed to,
+say, a same-player extra play). Originally the gate applied at BOTH
+shapes unconditionally; three further live reports below narrowed it down
+to only the round-transition shape, and only when something genuinely
+moved after scoring -- see "Narrowed across three further live reports"
+below for the final rule this settled into.
 
 - `updateRoundTurnState()`'s own `$previousPlayerId !== $playerId` gate
   -- an ordinary same-round turn advance (`advanceTurn()`) or a Team
@@ -9653,62 +9652,58 @@ again -- nothing about the real game state was ever actually delayed for
 anyone, including the paused viewer's own eventual play/pass once they
 un-pause.
 
-**The round-transition pause is skipped entirely when nothing after-scoring
-actually happened** (reported live, a further follow-up: "not super useful
-when the board State snapshot is identical to the actual board state").
-`notifyItsYourTurn()` gained a third param, `$worthPausingFor` (default
-`true`, preserving the original unconditional behavior for every OTHER
-call site -- an ordinary mid-round pass-the-turn, or Awe's own skip-scoring
-path, neither of which has an after-scoring-effects question to even ask).
-`finishScoringAndAdvance()`'s own call site is the one exception: it now
-computes `GameService::inPlayOwnershipSignature($state)` (every in-play
-mood's own cardId => ownerId, sorted by cardId) both right before
-`applyAfterScoringHooks()`/`applyChaosAfterScoringHooks()` run and right
-after, and passes `$worthPausingFor: false` when the two signatures come
-back identical. Every way `applyAfterScoringHooks()` can ever mutate the
-board -- Recklessness/Bashfulness/Gluttony/Insecurity's self-tags
-(discard/return-to-hand/bottom-and-draw) and any "returnsToOwnerAfterScoring"
-foreign tag -- either removes a card from play or reassigns an in-play
-card's own owner, so this one comparison catches all of them; a purely
-cosmetic Chaos Draft effect that only flips a suppression flag without
-moving or reassigning anything would slip past it, deliberately not
-chased further since it's not the reported shape and not how the
-overwhelming majority of real after-scoring effects behave. When skipped,
-the new round's `turn_pending_acknowledgment` simply never gets set in the
-first place -- the winner can act immediately, no `POST /games/advance-turn`
-needed, and `pre_after_scoring_event_id` is still recorded on the row
-regardless (harmless -- nothing ever reads it once `turn_pending_acknowledgment`
-itself is never true).
+**Narrowed across three further live reports into its final rule: the pause
+now ONLY ever fires for a round-transition that genuinely moved a card
+between zones after scoring.** First (reported live: "not super useful
+when the board State snapshot is identical to the actual board state"),
+a round transition where nothing after-scoring actually happened stopped
+pausing. Then (reported live: "BotSage played Suspicion from hand,
+waiting on a response (player: jceddy) ... I don't think I need to see
+the 'Advance turn' button at this point because nothing is changing
+between the end of the opponent's turn and the beginning of mine"),
+answering someone else's decision in a way that immediately hands you
+the very next turn stopped pausing too. Finally, given a third example
+with no scoring or decision involved at all -- an opponent's turn was
+just "played Fondness from hand" (a plain value-only mood with no
+ability), handing off mid-round -- the maintainer settled the general
+rule outright: "what we really want is to *only* show the pause when
+there is an after-scoring effect that moves cards from one zone to
+another."
 
-**A mid-round handoff is skipped the same way when the incoming turn
-holder is the very player who just caused it** (reported live, yet
-another follow-up: "BotSage played Suspicion from hand, waiting on a
-response (player: jceddy) ... A response to Suspicion was resolved
-(discarded card: Shock) ... I don't think I need to see the 'Advance
-turn' button at this point because nothing is changing between the end
-of the opponent's turn and the beginning of mine"). Answering someone
-else's card's decision (Suspicion targeting you, Intimidation revealing
-from your hand, etc.) as its target can, once every other target has
-also answered, immediately end the ACTING player's own turn (no plays
-left) and hand it straight to the responder -- true in a 2-player game
-by construction, and true in 3-4 whenever seat order happens to put the
-responder next. `updateRoundTurnState()` gained a fourth param,
-`?int $requestingGamePlayerId` (default `null`, preserving the original
-unconditional behavior everywhere else), and `advanceTurn()` is the one
-call site that passes it -- the real `$requestingGamePlayerId` value
-threaded, unchanged, all the way from `respondToDecision()`'s own
-responder through `finishPlay()`. When the new turn's own `$playerId`
-equals it, `notifyItsYourTurn()` is called with `$worthPausingFor: false`
-(the exact same param `finishScoringAndAdvance()`'s own call site
-already uses, just computed a different way here): the responder just
-personally chose the outcome (which card to discard/reveal/etc.), so
-there's nothing a pause would show them that they don't already know.
-An ordinary play/pass never triggers this by itself -- `advanceTurn()`
-is only ever reached once the ACTING player has no plays left, so
-`$nextPlayerId` (whoever's turn starts next) is always someone else,
-never the player whose own play/pass just ran; the comparison only ever
-actually fires for the "answered as someone else's target, then
-inherited the turn" shape the report describes.
+`notifyItsYourTurn()`'s third param, `$worthPausingFor`, now defaults to
+`false` (previously `true`). `finishScoringAndAdvance()`'s own
+round-transition call site is the ONLY place that can still pass `true`:
+it computes `GameService::inPlayOwnershipSignature($state)` (every
+in-play mood's own cardId => ownerId, sorted by cardId) both right
+before `applyAfterScoringHooks()`/`applyChaosAfterScoringHooks()` run and
+right after, and only passes `$worthPausingFor: true` when the two
+signatures actually differ. Every way `applyAfterScoringHooks()` can
+ever mutate the board -- Recklessness/Bashfulness/Gluttony/Insecurity's
+self-tags (discard/return-to-hand/bottom-and-draw) and any
+"returnsToOwnerAfterScoring" foreign tag -- either removes a card from
+play or reassigns an in-play card's own owner, so this one comparison
+catches all of them; a purely cosmetic Chaos Draft effect that only
+flips a suppression flag without moving or reassigning anything would
+slip past it, deliberately not chased further since it's not the
+reported shape and not how the overwhelming majority of real
+after-scoring effects behave. Every OTHER call site -- an ordinary
+mid-round pass-the-turn via `updateRoundTurnState()` (whatever was just
+played, however eventful -- a decision answered, a card stolen mid-turn,
+anything), a fresh game's very first turn, and Awe's own skip-scoring
+round creation -- now just omits the argument and relies on the new
+`false` default, since none of them can ever prove an after-scoring hook
+ran. `updateRoundTurnState()`'s own `?int $requestingGamePlayerId` param
+(added for the responder-handoff follow-up above, to compute
+`$worthPausingFor` a different way for that one narrower case) is
+removed entirely now that it's redundant with the blanket rule; the
+`$requestingGamePlayerId` VALUE itself is unaffected and still threads
+through `advanceTurn()`/`finishPlay()` for its other, unrelated uses
+(e.g. `recordGameCompletionStats()`). When skipped, `turn_pending_acknowledgment`
+simply never gets set -- the new turn holder can act immediately, no
+`POST /games/advance-turn` needed, and (for a round transition)
+`pre_after_scoring_event_id` is still recorded on the row regardless
+(harmless -- nothing ever reads it once `turn_pending_acknowledgment`
+itself is never true).
 
 "Move the whole Round / Score / Players section under my hand" -- rather
 than moving it unconditionally, this is a personal preference

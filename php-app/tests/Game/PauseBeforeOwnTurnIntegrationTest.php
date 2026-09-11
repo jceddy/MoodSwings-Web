@@ -30,13 +30,21 @@ use PHPUnit\Framework\TestCase;
  * to figure out for many users"): users.pause_before_own_turn
  * (migration 0263, defaults to false) makes GameService::
  * notifyItsYourTurn() -- the single hook already used for the "your
- * turn" push/Discord notification, fired for every genuine turn
- * handoff, an ordinary mid-round pass-the-turn OR a brand new round
- * starting after scoring -- also set the new round's own
- * turn_pending_acknowledgment flag. GameService::playMood()/pass() both
- * refuse to act (assertTurnAcknowledged()) while it's set; only
- * GameService::acknowledgeTurnStart() (POST /games/advance-turn) clears
- * it.
+ * turn" push/Discord notification, fired for every genuine turn handoff
+ * -- also set the new round's own turn_pending_acknowledgment flag.
+ * GameService::playMood()/pass() both refuse to act
+ * (assertTurnAcknowledged()) while it's set; only GameService::
+ * acknowledgeTurnStart() (POST /games/advance-turn) clears it.
+ *
+ * Refined across three further live reports into its final, narrow
+ * rule: this only ever gates a round's own first turn, and only when
+ * finishScoringAndAdvance()'s own inPlayOwnershipSignature() before/after
+ * comparison proves an after-scoring hook actually moved a card between
+ * zones ("we really want to *only* show the pause when there is an
+ * after-scoring effect that moves cards from one zone to another"). An
+ * ordinary mid-round pass-the-turn -- whatever was just played, however
+ * plain or eventful -- never pauses; see notifyItsYourTurn()'s own
+ * $worthPausingFor docblock.
  */
 final class PauseBeforeOwnTurnIntegrationTest extends TestCase
 {
@@ -167,7 +175,20 @@ final class PauseBeforeOwnTurnIntegrationTest extends TestCase
         return $stmt->fetch();
     }
 
-    public function testHandoffToAnOptedInPlayerSetsThePendingFlag(): void
+    /**
+     * The exact scenario reported live (game320log.txt, a third
+     * follow-up): BotSage's own turn was just "played Fondness from
+     * hand" -- a plain value-only mood with no afterPlaying() ability at
+     * all -- handing the turn straight to jceddy mid-round. "There is no
+     * after scoring effect at the end of the turn, the board state is
+     * not changing between the bot playing Fondness and the beginning
+     * of my turn." An ordinary mid-round pass-the-turn like this one
+     * never pauses, even for an opted-in player -- only a round's own
+     * first turn, gated on finishScoringAndAdvance()'s own
+     * inPlayOwnershipSignature() proving an after-scoring hook actually
+     * moved a card, can ever set the flag.
+     */
+    public function testOrdinaryMidRoundHandoffNeverPausesEvenWhenOptedIn(): void
     {
         $u1 = $this->insertUser('human1');
         $u2 = $this->insertUser('human2');
@@ -182,7 +203,12 @@ final class PauseBeforeOwnTurnIntegrationTest extends TestCase
 
         $round = $this->fetchRound($gameId);
         self::assertSame($p2, (int) $round['current_turn_game_player_id']);
-        self::assertSame(1, (int) $round['turn_pending_acknowledgment']);
+        self::assertSame(0, (int) $round['turn_pending_acknowledgment']);
+
+        // p2 can act immediately -- no GameStateException, no
+        // acknowledgeTurnStart() needed first.
+        $result = $this->games->pass($gameId, $p2);
+        self::assertTrue($result['round_scored']);
     }
 
     public function testHandoffToAPlayerWhoOptedOutLeavesTheFlagClear(): void
@@ -202,16 +228,23 @@ final class PauseBeforeOwnTurnIntegrationTest extends TestCase
         self::assertSame(0, (int) $round['turn_pending_acknowledgment']);
     }
 
+    /** turn_pending_acknowledgment is seeded directly -- no ordinary handoff sets it anymore, see notifyItsYourTurn()'s own docblock -- to isolate this test to assertTurnAcknowledged()'s own gate. */
+    private function markTurnPending(int $gameId): void
+    {
+        $this->pdo->prepare('UPDATE game_rounds SET turn_pending_acknowledgment = 1 WHERE game_id = :game_id')
+            ->execute(['game_id' => $gameId]);
+    }
+
     public function testPassIsRejectedWhileTheTurnIsPendingAcknowledgment(): void
     {
         $u1 = $this->insertUser('human1');
         $u2 = $this->insertUser('human2');
         (new UserRepository())->setPauseBeforeOwnTurn($u2, true);
         $gameId = $this->insertGame('standard', 'structure', $u1);
-        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u1, 0);
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
-        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
-        $this->games->pass($gameId, $p1); // hands the turn to p2, setting the flag
+        $this->insertGameRound($gameId, 1, $p2, $p2, 1);
+        $this->markTurnPending($gameId);
 
         $this->expectException(GameStateException::class);
         $this->games->pass($gameId, $p2);
@@ -223,11 +256,11 @@ final class PauseBeforeOwnTurnIntegrationTest extends TestCase
         $u2 = $this->insertUser('human2');
         (new UserRepository())->setPauseBeforeOwnTurn($u2, true);
         $gameId = $this->insertGame('standard', 'structure', $u1);
-        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u1, 0);
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
         $this->insertGameCard($gameId, 55, 'hand', $p2); // Apathy
-        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
-        $this->games->pass($gameId, $p1); // hands the turn to p2, setting the flag
+        $this->insertGameRound($gameId, 1, $p2, $p2, 1);
+        $this->markTurnPending($gameId);
 
         $this->expectException(GameStateException::class);
         $this->games->playMood($gameId, $p2, 55, []);
@@ -239,10 +272,10 @@ final class PauseBeforeOwnTurnIntegrationTest extends TestCase
         $u2 = $this->insertUser('human2');
         (new UserRepository())->setPauseBeforeOwnTurn($u2, true);
         $gameId = $this->insertGame('standard', 'structure', $u1);
-        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u1, 0);
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
-        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
-        $this->games->pass($gameId, $p1); // hands the turn to p2, setting the flag
+        $this->insertGameRound($gameId, 1, $p2, $p2, 1);
+        $this->markTurnPending($gameId);
 
         $this->games->acknowledgeTurnStart($gameId, $p2);
 
@@ -250,7 +283,7 @@ final class PauseBeforeOwnTurnIntegrationTest extends TestCase
         self::assertSame(0, (int) $round['turn_pending_acknowledgment']);
         // No longer blocked -- pass() now succeeds instead of throwing.
         $result = $this->games->pass($gameId, $p2);
-        self::assertTrue($result['round_scored']);
+        self::assertFalse($result['round_scored']);
     }
 
     public function testAcknowledgeTurnStartRejectsSomeoneOtherThanTheCurrentTurnHolder(): void
@@ -261,8 +294,8 @@ final class PauseBeforeOwnTurnIntegrationTest extends TestCase
         $gameId = $this->insertGame('standard', 'structure', $u1);
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
-        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
-        $this->games->pass($gameId, $p1); // hands the turn to p2, setting the flag
+        $this->insertGameRound($gameId, 1, $p2, $p2, 1);
+        $this->markTurnPending($gameId);
 
         $this->expectException(GameStateException::class);
         $this->games->acknowledgeTurnStart($gameId, $p1);
@@ -411,11 +444,9 @@ final class PauseBeforeOwnTurnIntegrationTest extends TestCase
         $this->insertGameRound($gameId, 1, $p2, $p2, 1); // p2 goes first this round
 
         $this->games->playMood($gameId, $p2, $boredomId, []);
-        // Turn handing to p1 mid-round is ALSO a "your turn" moment (see
-        // notifyItsYourTurn()'s own docblock) -- p1 opted into the pause,
-        // so this needs its own acknowledgment too, same as any other
-        // handoff would.
-        $this->games->acknowledgeTurnStart($gameId, $p1);
+        // Turn handing to p1 mid-round is an ordinary pass-the-turn, so
+        // it does NOT pause even though p1 opted in -- p1 can act on
+        // Recklessness immediately, no acknowledgeTurnStart() needed.
         $result = $this->games->playMood($gameId, $p1, $recklessnessId, ['target_mood_id' => $boredomId]);
         // Recklessness alone leaves p1 controlling TWO of their own
         // pending after-scoring effects once the round ends (its own
@@ -454,12 +485,14 @@ final class PauseBeforeOwnTurnIntegrationTest extends TestCase
     }
 
     /**
-     * Once p1 has genuinely acted during round 2 (not just acknowledged
-     * -- an actual card played), p2's own later turn that same round
-     * must NOT replay round 1's stale watermark -- see
-     * GameService::roundHasAnyPlayedCard()'s own docblock. p2 should see
-     * whatever p1 actually did in round 2, not a snapshot from before
-     * round 2 even started.
+     * Since only a round's own first turn can ever be gated (and only
+     * when an after-scoring hook actually moved something), a SECOND
+     * handoff within the same round -- here, p1 playing Courage and
+     * handing off to p2 mid-round-2 -- never pauses, even for an
+     * opted-in p2. GameService::getState() must also show p2 the real,
+     * live round-2 board (including Courage), never a stale watermark
+     * left over from round 1 -- see GameService::roundHasAnyPlayedCard()'s
+     * own docblock.
      */
     public function testALaterHandoffWithinTheSameRoundNeverReplaysTheStaleWatermark(): void
     {
@@ -474,9 +507,8 @@ final class PauseBeforeOwnTurnIntegrationTest extends TestCase
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
         $this->games->playMood($gameId, $p1, $recklessnessId, ['target_mood_id' => $boredomId]);
-        // p2 opted into the pause, so this first-ever handoff to them
-        // needs its own acknowledgment before they can pass.
-        $this->games->acknowledgeTurnStart($gameId, $p2);
+        // Mid-round handoff to p2 -- an ordinary pass-the-turn, so it
+        // does NOT pause even though p2 opted in.
         $this->games->pass($gameId, $p2);
         // Recklessness alone leaves p1 controlling two of their own
         // pending after-scoring effects -- see the other test's own
@@ -494,7 +526,7 @@ final class PauseBeforeOwnTurnIntegrationTest extends TestCase
 
         $round = $this->fetchRound($gameId);
         self::assertSame($p2, (int) $round['current_turn_game_player_id']);
-        self::assertSame(1, (int) $round['turn_pending_acknowledgment'], 'p2 opted in, so their own handoff within round 2 is still gated');
+        self::assertSame(0, (int) $round['turn_pending_acknowledgment'], 'an ordinary mid-round handoff never pauses, even for an opted-in p2');
 
         // p2's own view must show Courage (p1's real round-2 play), NOT
         // the stale round-1-end snapshot, which predates it entirely.
@@ -512,10 +544,9 @@ final class PauseBeforeOwnTurnIntegrationTest extends TestCase
      * beginning of mine." p1 plays Suspicion targeting p2; p2 answers
      * their own "discard a card" decision as the target, which both
      * finishes p1's turn (no plays left) AND hands the turn straight to
-     * p2 -- the very player whose own request just caused the handoff.
-     * They already know exactly what happened (they chose which card to
-     * discard), so this must NOT gate their own turn even though they
-     * opted into pause_before_own_turn.
+     * p2. This is just an ordinary mid-round handoff -- like every other
+     * one, it never pauses, even though p2 opted into
+     * pause_before_own_turn.
      */
     public function testAnsweringADecisionThatHandsTheTurnToTheResponderSkipsThePause(): void
     {
