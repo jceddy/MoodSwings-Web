@@ -1,0 +1,23 @@
+-- Reported live: "can we allow players to resign from a game while a
+-- choice (like from Compulsion/Suspicion) is waiting on them?"
+--
+-- Root cause: resignGame() called assertNoPendingDecision() unconditionally,
+-- the same gate playMood()/pass() use -- ANY unresolved decision batch for
+-- the round blocked EVERY player from resigning, regardless of who it
+-- actually targeted. For a decision targeting the would-be resigner
+-- themselves, that's a dead end: they're the only one who could ever
+-- answer it, so there was no way to quit instead.
+--
+-- Fixed: GameService::autoAnswerOwnPendingDecisionBeforeResigning() now
+-- runs before assertNoPendingDecision() -- while the round's active
+-- pending decision targets the resigning player specifically, it computes
+-- a legal default answer via BotPlayerService::chooseDecisionAnswer() (the
+-- same target-agnostic machinery advanceAutomatedTurns() already uses for
+-- bots) and resolves it via a new respondToDecisionLocked(). A decision
+-- targeting someone else still blocks resignation exactly as before -- see
+-- php-app/README.md's "Resigning while your own decision is pending" for
+-- the full writeup, including why that boundary is deliberate.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.40.8' WHERE id = 1;
