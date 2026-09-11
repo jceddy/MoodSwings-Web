@@ -1,0 +1,24 @@
+-- Reported live, a third and final follow-up narrowing "pause at the
+-- start of your turn": "here is another case where I don't need to see
+-- the 'Advance turn' button - there is no after scoring effect at the
+-- end of the turn, the board state is not changing between the bot
+-- playing Fondness and the beginning of my turn" -- and, once asked how
+-- broadly to apply that: "what we really want is to *only* show the
+-- pause when there is an after-scoring effect that moves cards from
+-- one zone to another."
+--
+-- GameService::notifyItsYourTurn()'s own $worthPausingFor parameter now
+-- defaults to false instead of true. The ONLY call site that can still
+-- pass true is finishScoringAndAdvance()'s round-transition path, gated
+-- on inPlayOwnershipSignature()'s own before/after comparison actually
+-- proving an after-scoring hook moved a card between zones. Every other
+-- call site -- an ordinary mid-round pass-the-turn via
+-- updateRoundTurnState() (whose now-unused $requestingGamePlayerId
+-- parameter, added for the previous follow-up's narrower
+-- responder-handoff carve-out, is removed as redundant), a fresh game's
+-- very first turn, and Awe's own skip-scoring round creation -- never
+-- pauses, no matter what was just played.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.39.32' WHERE id = 1;
