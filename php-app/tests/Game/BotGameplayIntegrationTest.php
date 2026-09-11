@@ -797,6 +797,46 @@ final class BotGameplayIntegrationTest extends TestCase
     }
 
     /**
+     * The exact scenario reported live -- a bot ("stuck in a Creativity
+     * loop") repeatedly played Creativity as a copy of the human's own
+     * in-play Compulsion, crashing with "Missing required choice
+     * 'target_player_id'" every single retry and never advancing the
+     * turn at all, since nothing about the board state ever changed
+     * between attempts. End-to-end proof (see BotPlayerServiceTest for
+     * the choice-building fix in isolation) that the bot's own play now
+     * actually completes through the FULL advanceAutomatedTurns() ->
+     * chooseAction() -> playMood() -> MoodPlayService::
+     * resolveAfterPlayingChain() -> CompulsionEffect::pendingDecisionsFor()
+     * request lifecycle, landing on a genuine pending decision -- the
+     * same shape any other Compulsion play reaches -- rather than
+     * throwing.
+     */
+    public function testBotPlaysCreativityAsACopyOfTheHumansCompulsionWithoutCrashing(): void
+    {
+        $u1 = $this->insertUser('human_creativity_compulsion');
+        $botUserId = $this->insertBotUser('bot_creativity_compulsion');
+        $gameId = $this->insertGame('standard', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+
+        $compulsionId = $this->insertGameCard($gameId, 86, 'in_play', $p1); // Compulsion, already in play (the human's own)
+        $this->insertGameCard($gameId, 32, 'hand', $botPlayerId); // Creativity -- the bot's only hand card
+        $this->insertGameCard($gameId, 8, 'hand', $p1); // human needs a hand card, both to keep the round going and for Compulsion's own copy to actually have something to take
+        $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
+
+        self::assertNotNull($this->games->advanceAutomatedTurns($gameId));
+
+        self::assertTrue($this->cardIsInPlay($gameId, 32), "Creativity itself should be in play, copying the human's Compulsion");
+        self::assertTrue($this->cardIsInPlay($gameId, 86), "the human's own Compulsion should still be untouched in play");
+
+        $log = $this->games->fullEventLog($gameId);
+        $entry = $log[array_key_last($log)];
+        self::assertSame('pending_decision_created', $entry['event_type'], "Creativity-as-Compulsion should be waiting on the human's own response, same as any other Compulsion play, not crashed");
+        self::assertSame($botPlayerId, $entry['acting_game_player_id']);
+        self::assertStringContainsString('waiting on a response', $entry['description']);
+    }
+
+    /**
      * End-to-end coverage of BotPlayerService::shouldAttemptValueBoostDiscard()
      * (see BotPlayerServiceTest for the policy itself in isolation) through
      * the FULL advanceAutomatedTurns() -> playMood() request lifecycle --

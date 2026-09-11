@@ -5333,6 +5333,38 @@ reverse walk uses a precomputed "first `played_from` event id per card"
 map so only that exact event id triggers the "eject from in-play" undo
 step.
 
+**Reported live, a real bug this time**: "Anger was weirdly duplicated
+after it was played, still showed in hand after play, as well as in the
+discard pile" (plus a sibling report, a separately exported game, of an
+opening hand replaying with one card silently missing). `details['played_from']`
+above is written by `GameService::withPlayedFrom()`, a LIVE re-read of
+the just-played card's own `effectState('playedFromZone')` -- fine for
+the overwhelming majority of plays, but a card whose own `afterPlaying()`
+can legally target/discard/move ITSELF (Anger's "any number of moods,"
+`CardChoiceSchema`'s own `'includes_self' => true`; Conviction targeting
+itself; Rejection's own two-target variant) has already left
+`BoardState::$moodsInPlay` by the time that live read runs, since
+`effectState()` only ever looks there -- so `withPlayedFrom()` silently
+never attaches the top-level key at all for that event, even though the
+SAME event's own `effect_state_changes` already, unconditionally,
+recorded the mood's `playedFromZone` tag the instant it entered play
+(queued via `consumeEffectStateChanges()`, which -- unlike the live
+`effectState()` read -- survives the mood leaving play again within the
+same request). Both `applyEventForward()` and `deriveGenesis()`/
+`unapplyEvent()` keyed strictly off the (sometimes-missing) top-level
+key: the forward walk left the card sitting in hand while its own
+`card_moves` entry pushed it into the discard pile too (the reported
+duplicate), and the reverse walk left it stranded in a local scratch
+bucket that's never returned, silently dropping it from the
+reconstructed round-1 starting hand (the sibling report's missing
+card). Fixed with a new `ReplayStateBuilder::playedFromFor()`, used
+everywhere `details['played_from']` used to be read directly: falls
+back to scanning that same event's own `effect_state_changes` for a
+`playedFromZone` entry on the card in question whenever the top-level
+key is absent -- a strictly more reliable source than the live read
+`withPlayedFrom()` takes, since it's captured at the moment the card
+actually entered play rather than re-derived afterward.
+
 Out of scope, documented rather than silently dropped: **draft-phase
 pick-by-pick replay** (`quick_draft`'s `draft_round_picks` table actually
 has enough data for this already; `winston_draft`/`grid_draft` delete
@@ -5343,6 +5375,91 @@ only the final confirmed choice is logged).
 
 The frontend reuses the board renderer entirely -- see "Watch replay" in
 `web-static/README.md` for the step-control UI.
+
+### Replay from an exported game
+
+Reported live, debugging the Anger duplicate-in-hand-and-discard bug
+above: "is there a way I can replay these in the dev site using the
+game export json files? and if not, would it be possible to add
+something to do that?" -- a game played on a DIFFERENT environment's
+database (its own export downloaded from wherever it was actually
+played) has no row in THIS server's `games`/`game_players`/`game_cards`/
+`game_events` at all, so "Watch replay" above -- every one of its own
+routes queries by `$gameId` -- could never reach it.
+
+**Never written back to this database.** Importing the export's raw rows
+was considered and rejected: every id (`games.id`, each `game_players.id`,
+`game_cards.id`, `game_rounds.id`) would need remapping to freshly
+inserted rows, including every reference to one of those ids buried
+inside `game_events.details`' own nested `card_moves`/`draws`/
+`ownership_changes`/`target_mood_ids` -- and a real risk of colliding
+with an entirely unrelated game that already happens to reuse the same
+ids locally (confirmed live: this repo's own dev database already had
+unrelated unfinished games sitting at ids 502/473, the exact ids the two
+reported exports themselves used). Instead, the export is read entirely
+in memory, for exactly the one request that needs it, and never
+persisted anywhere.
+
+**`ReplayStateBuilder::contextFromExport(array $export): array`** is
+`loadContext()`'s own exported-JSON sibling -- $export is exactly
+`exportGameData()`'s own output (the same file `GET /games/export`
+already hands any seated player), reshaped into the identical context
+shape `loadContext()` builds from live SQL. `catalog` is the one
+exception: always loaded fresh from THIS server's own `cards` table via
+the existing `loadCatalog()`, since card definitions are shared
+reference data, not a per-game fact -- `exportGameData()` never includes
+them, so there'd be nothing to read from the export even if this
+preferred to. `genesisFromExport()`/`stateAsOfFromExport()` are `genesis()`/
+`stateAsOf()`'s own thin exported-JSON wrappers around this, sharing
+every byte of the actual reconstruction logic (`deriveGenesis()`/
+`applyEventForward()`/`assembleBoardState()`) with the live path --
+refactored into shared `genesisWithContext()`/`stateAsOfWithContext()`
+private methods rather than duplicated, so the Anger fix above (and any
+future fix to this reconstruction) automatically covers both.
+
+**`GameService::replayFromExport(array $export, int $eventId): array`**
+is `replayStateAsOf()`'s own exported-JSON sibling, returning
+`{snapshot, steps}` in one call -- `snapshot` the same top-level shape
+`serializeReplaySnapshot()` returns (so `renderBoard()` needs zero
+frontend changes to display it), `steps` the same shape `fullEventLog()`
+returns (so the exact same step-dropdown code works too). Both get their
+own dedicated, export-sourced implementations
+(`serializeExportReplaySnapshot()`/`exportEventSteps()`) rather than
+reusing the live ones directly, since the live versions are each coupled
+to `$gameId`-keyed SQL queries in several different ways: win counts
+(`totalWinsFor()`/`totalWinsForTeam()`, trivially reproducible by
+summing `wins_awarded` straight off the export's own `game_rounds`),
+player display names (`playerUsernamesFor()`'s live join has no export
+counterpart to lean on at all -- see `exportPlayerNames()`'s own
+docblock for the three-tier "real username, else `custom_deck_name`,
+else a bare seat number" fallback this uses instead, since a genuinely
+foreign export's own `user_id`s generally won't resolve against this
+server's `users` table), and the "recent plays" history
+(`recentEvents()`'s own SQL `LIMIT`/`ORDER BY`, reproduced in-memory by
+`exportRecentEvents()` over the export's own `game_events`). Every
+`BoardState`-only serialization helper (`serializeCard()`/
+`scoringEffectEntries()`/`boardEffectEntries()`/`suppressionFields()`/
+`affectingEntries()`/`temporaryOwnershipInfo()`/`boardPointTotalFor()`)
+is reused completely verbatim, unmodified -- none of them ever touch a
+per-game table, only `$state` itself plus whichever name maps are handed
+in, so they work identically for an export-derived `$state` as for a
+live one.
+
+**`POST /games/replay/import`** (body: `{export, event_id}`) is the one
+new route this needed. Any authenticated user, no seated-player/
+spectator/share-code gate at all -- unlike every other replay-adjacent
+route, there's no game to check membership against, and whoever already
+has the export file already has everything it reveals (every hand, same
+as any completed game's own live replay already shows). `400`s on a
+missing/malformed `export` (`GameStateException` from
+`contextFromExport()`'s own validation, or a non-`completed` game --
+`exportGameData()` itself already refuses to export one, so this is
+defense-in-depth against a hand-edited file) rather than the `403` every
+other route in this section would give an unauthorized viewer.
+
+See "Import replay" in `web-static/README.md` for the upload UI and how
+it reuses "Watch replay"'s own step-control code with the request source
+swapped out underneath it.
 
 ### View draft pool (issue #314)
 
@@ -8502,12 +8619,81 @@ current or future), logs it (`error_log()`, the same pattern
 to an automated `pass()` for that one seat instead of letting the
 exception propagate -- keeping the round, and the whole game, moving for
 every other seated player at the cost of skipping whatever that one
-bot's turn would have done. The underlying "why did Compulsion's own
-choices come back incomplete" question is still open (no fixture yet
-reproduces it in isolation -- every other seat's own targeting works
-correctly in tests, see `testChooseActionTargetsAPlayerWhenPlayingCompulsionInTeamPlay`)
-but can no longer break a game either way: a recurrence now logs instead
-of costing a human their ability to load their own game.
+bot's turn would have done. At the time, the underlying "why did
+Compulsion's own choices come back incomplete" question was left open --
+no fixture reproduced it in isolation, since every other seat's own
+direct targeting already worked correctly in tests (see
+`testChooseActionTargetsAPlayerWhenPlayingCompulsionInTeamPlay`).
+
+**That question's own answer, found later, reported live: a bot "stuck
+in a Creativity loop"** -- not broken Compulsion targeting at all, but
+Creativity COPYING Compulsion. `BotPlayerService::buildBaseChoicesForCard()`'s
+own `'creativity'` branch, once it picked a copy target via
+`creativityBestCopyTargetId()`, returned `['copy_card_id' => ...]` and
+stopped -- it never asked what the COPIED card's own effective effect
+key needs once it actually resolves as that copy, unlike a human
+player's own client (`game.js`'s `handleCreativityCopyChange()` already
+merges the copied mood's own `choice_fields` into the panel) or the
+server's own `MoodPlayService::playMood()`, which resolves the whole
+copy chain via `effectiveCardId()` before anything cost/effect-related
+ever runs. A bot electing to copy an in-play Compulsion this way built
+`{copy_card_id: ...}` with no `target_player_id` at all, `resolveAfterPlayingChain()`
+threw the exact same `InvalidChoiceException` this section's own fix
+above was written to survive -- and did, falling back to an automated
+`pass()` -- but Creativity never actually left the bot's hand (the play
+failed before entering play), so its next turn reproduced the identical
+failure. Worse, the Tactical Bot's own stale-job fallback path
+(`playViaHeuristicBotFallback()`/`playRecoveredPartialSearchResult()`,
+see "Tactical Bot" below) had no `catch` of its own at all, so a game
+leaning on tree search hit this with no automated `pass()` to fall back
+on -- genuinely stuck, a fresh multi-minute search launching, failing
+the same way, and repeating forever, exactly the reported "loop."
+
+Fixed at the actual source this time: `buildBaseChoicesForCard()` was
+split into a `choicesForEffectKey()` it can recurse into, so the
+`'creativity'` branch now resolves the copied card's own effective
+effect key and merges in whatever `choicesForEffectKey()` builds for
+THAT key -- a bespoke per-card rule (Panic/Recklessness/Conviction/
+etc.) or the generic `CardChoiceSchema`/`resolveSchemaFields()` loop
+alike, not just the generic case. A copied card whose own required
+field has no legal answer falls back to playing Creativity uncopied
+(`[]`) rather than submitting an incomplete play; copying another BLANK
+in-play Creativity (itself `'creativity'`, copying nothing) is
+deliberately left unmerged rather than recursed into, since it would
+just re-pick the identical "best" target and loop forever with nothing
+useful to actually copy. `LegalChoiceEnumerator`'s own
+`usesBespokeChoiceBuilding('creativity')` classification (see its own
+docblock) is unaffected -- Creativity's own effect key never changes,
+only what choices its bespoke branch now builds.
+
+`playViaHeuristicBotFallback()`/`playRecoveredPartialSearchResult()`
+(see "Tactical Bot" below) also each gained the identical
+`catch (Throwable)`-and-`pass()` guard `advanceAutomatedTurns()`'s own
+bot-turn branch already had, as defense in depth: whatever future bug
+might slip past `buildChoicesForCard()` next should degrade to a skipped
+turn on EVERY path a bot's own play can be driven from, not just the
+one this section originally covered.
+
+**A second, unrelated failure surfaced in the same incident's own error
+log**: `tactical_bot_reasoning` logging itself threw a `PDOException`
+("Invalid JSON text: The document is empty") often enough to make the
+tactical search look like it kept failing outright. A reasoning payload
+containing a non-finite float (`INF`/`NAN`, presumably from some
+edge-case search evaluation) made `json_encode()` return `false` rather
+than throw; `GameService::logEvent()` bound that `false` straight into
+the query, PDO cast it to an empty string, and MySQL's own JSON column
+validation rejected it -- an empty string is never valid JSON, not even
+`null`. `logEvent()` now checks `json_encode()`'s own return value and
+stores `NULL` instead whenever it's `false`, the same as it already does
+for a genuinely empty `$details` array -- every reader here already
+treats a `NULL`/absent `details` column as "no extra details," so this
+is a pure hardening fix with no behavior change for the success case.
+`testChooseActionFillsTheCopiedCardsOwnRequiredChoiceWhenCreativityCopiesCompulsion`/
+`testChooseActionDoesNotRecurseWhenCreativityWouldCopyAnotherBlankCreativity`
+(`BotPlayerServiceTest`) and
+`testBotPlaysCreativityAsACopyOfTheHumansCompulsionWithoutCrashing`
+(`BotGameplayIntegrationTest`, full `advanceAutomatedTurns()` ->
+`chooseAction()` -> `playMood()` end to end) cover the actual fix.
 
 **Hand visibility.** Needs no new rule at all -- a bot's hand is exactly
 as hidden from every other seated player as any other player's is

@@ -1775,6 +1775,24 @@ final class BotPlayerService
     {
         $effectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
 
+        return $this->choicesForEffectKey($effectKey, $state, $cardId, $botGamePlayerId);
+    }
+
+    /**
+     * The actual per-effect-key dispatch, pulled out of
+     * buildBaseChoicesForCard() above into its own method so the
+     * 'creativity' branch below can recurse into it for whatever mood
+     * Creativity is actually copying -- reusing every OTHER effect key's
+     * own choice-building logic (bespoke per-card rules AND the generic
+     * CardChoiceSchema field loop alike) exactly as if that mood had
+     * been played directly, rather than only ever building Creativity's
+     * own 'copy_card_id' field. See the 'creativity' branch's own
+     * comment below for the reported production bug this fixes.
+     *
+     * @return ?array<string, mixed>
+     */
+    private function choicesForEffectKey(string $effectKey, BoardState $state, int $cardId, int $botGamePlayerId): ?array
+    {
         if ($effectKey === 'rationalization') {
             return $this->rationalizationChoices($state, $cardId, $botGamePlayerId);
         }
@@ -1825,8 +1843,48 @@ final class BotPlayerService
 
         if ($effectKey === 'creativity') {
             $copyTargetCardId = $this->creativityBestCopyTargetId($state);
+            if ($copyTargetCardId === null) {
+                return [];
+            }
 
-            return $copyTargetCardId !== null ? ['copy_card_id' => $copyTargetCardId] : [];
+            // Reported live: a bot playing Creativity as a copy of
+            // Compulsion crashed with "Missing required choice
+            // 'target_player_id'" (MoodPlayService::resolveAfterPlayingChain()
+            // -> CompulsionEffect::pendingDecisionsFor()) and then retried
+            // the identical broken play forever, since nothing about the
+            // board state ever changes between attempts -- the classic
+            // "stuck in a Creativity loop" shape. The choices built here
+            // used to stop at 'copy_card_id' and never asked what the
+            // COPIED card's own effective effect key needs, unlike a human
+            // player's own client (game.js's handleCreativityCopyChange()
+            // already merges the copied mood's own choice_fields in) or
+            // the server's own MoodPlayService::playMood(), which resolves
+            // the whole copy chain via effectiveCardId() before anything
+            // cost/effect-related ever runs. Recursing back into this same
+            // dispatch for the copied card's own effect key reuses
+            // whatever choice-building it would normally get played
+            // directly -- a bespoke per-card rule (Panic/Recklessness/
+            // Conviction/etc.) or the generic schema loop alike -- rather
+            // than only ever covering the generic case.
+            $copiedEffectKey = $state->catalogRow($state->effectiveCardId($copyTargetCardId))['effectKey'];
+            // A blank in-play Creativity (played copying nothing) is its
+            // own effective effect key -- recursing into this same branch
+            // again would just re-pick the identical "best" target and
+            // loop forever. There's nothing useful to copy from an empty
+            // Creativity anyway, so this is the one effect key
+            // deliberately left unmerged.
+            $copiedChoices = $copiedEffectKey !== 'creativity'
+                ? $this->choicesForEffectKey($copiedEffectKey, $state, $cardId, $botGamePlayerId)
+                : [];
+            if ($copiedChoices === null) {
+                // The copied mood's own required choice had no legal
+                // answer (Compulsion with no legal opponent to target,
+                // say) -- play Creativity uncopied rather than submitting
+                // an incomplete play or leaving the whole card unplayable.
+                return [];
+            }
+
+            return ['copy_card_id' => $copyTargetCardId, ...$copiedChoices];
         }
 
         if ($effectKey === 'anger') {

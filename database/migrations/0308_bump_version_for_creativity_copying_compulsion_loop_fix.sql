@@ -1,0 +1,38 @@
+-- Reported live: a bot ("BotSage") stuck in a "Creativity loop,"
+-- repeatedly playing Creativity for over an hour without ever
+-- completing its turn. Production error log showed:
+-- InvalidChoiceException: Missing required choice 'target_player_id'
+-- in CompulsionEffect::pendingDecisionsFor(), via
+-- MoodPlayService::resolveAfterPlayingChain(), from BOTH the tactical
+-- search path and its own heuristic fallback.
+--
+-- Root cause: the bot was playing Creativity as a copy of an in-play
+-- Compulsion. BotPlayerService::buildBaseChoicesForCard()'s own
+-- 'creativity' branch built {copy_card_id: ...} and stopped -- it
+-- never asked what the COPIED card's own effective effect key needs
+-- once it actually resolves as that copy (Compulsion's own required
+-- target_player_id here), unlike a human player's own client
+-- (game.js's handleCreativityCopyChange()) or the server's own
+-- MoodPlayService::playMood(). This answers issue #196's own
+-- previously-open question ("why did Compulsion's own choices come
+-- back incomplete") -- it was never broken direct Compulsion
+-- targeting, only Creativity copying it.
+--
+-- Fixed: buildBaseChoicesForCard() split into a recursible
+-- choicesForEffectKey(), so the 'creativity' branch now merges in
+-- whatever that dispatch builds for the copied card's own effective
+-- effect key -- a bespoke per-card rule or the generic schema loop
+-- alike -- falling back to an uncopied Creativity if the copied
+-- card's own required field has no legal answer, rather than
+-- submitting an incomplete play. playViaHeuristicBotFallback()/
+-- playRecoveredPartialSearchResult() also each gained the same
+-- catch(Throwable)-and-pass() guard advanceAutomatedTurns() already
+-- had, as defense in depth on every path a bot's own play can be
+-- driven from. Separately, GameService::logEvent() no longer lets a
+-- json_encode() failure (a non-finite float in a reasoning payload,
+-- seen in the same incident's log) reach the database as an invalid
+-- empty-string JSON value.
+--
+-- No schema change, just the version bump MaintenanceGate needs to
+-- see this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.40.1' WHERE id = 1;

@@ -1644,6 +1644,37 @@ if ($path === '/games/replay/state' && $method === 'GET') {
     }
 }
 
+// "Is there a way I can replay these in the dev site using the game
+// export json files?" -- the same replay reconstruction as GET
+// /games/replay/state above, but for a game with no row in THIS
+// server's own database at all (played on a different environment
+// entirely): the request body carries the export JSON itself (exactly
+// GET /games/export's own output) rather than a game_id, so any
+// authenticated user can use it -- there's no seated-player/spectator
+// gate to check, since whoever already has the export file already has
+// everything it reveals (every hand, same as any completed game's own
+// replay), and it's never written to this database at all (see
+// GameService::replayFromExport()'s own docblock for why). Bundles the
+// step list into the same response, since there's no per-game GET
+// /games/log to separately reuse the way the live route above does.
+if ($path === '/games/replay/import' && $method === 'POST') {
+    requireAuth($auth);
+    $body = requestBody();
+    $export = $body['export'] ?? null;
+    $eventId = (int) ($body['event_id'] ?? 0);
+
+    if (!is_array($export)) {
+        respond(400, ['status' => 'error', 'message' => "Missing or invalid 'export' data"]);
+    }
+
+    try {
+        $result = $games->replayFromExport($export, $eventId);
+        respond(200, ['status' => 'ok', 'steps' => $result['steps'], ...$result['snapshot']]);
+    } catch (GameStateException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
 // Every card in a shared-deck game's single deck (issue #197) -- named
 // "/games/deck" rather than "/games/decklist" to avoid colliding with the
 // existing POST /games/decklist (custom_duel's own per-player deck

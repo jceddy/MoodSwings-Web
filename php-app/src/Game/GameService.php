@@ -7189,9 +7189,24 @@ final class GameService
             $this->logHeuristicBotReasoning($gameId, $state, $gamePlayerId, $action);
         }
 
-        return $action !== null
-            ? $this->playMood($gameId, $gamePlayerId, $action['card_id'], $action['choices'])
-            : $this->pass($gameId, $gamePlayerId, automated: true);
+        // Same "never let a bot's own broken play attempt permanently
+        // break a game" guard advanceAutomatedTurns() already has around
+        // its own identical playMood()/pass() call -- caught live: this
+        // exact call site is what's left running a broken play forever
+        // once a game leans on the Tactical Bot (advanceTacticalBotSearch()'s
+        // own stale-job fallback lands here), since it used to have no
+        // catch of its own at all. See advanceAutomatedTurns()'s own catch
+        // block for the full reasoning; identical here, just a different
+        // caller.
+        try {
+            return $action !== null
+                ? $this->playMood($gameId, $gamePlayerId, $action['card_id'], $action['choices'])
+                : $this->pass($gameId, $gamePlayerId, automated: true);
+        } catch (Throwable $e) {
+            error_log("playViaHeuristicBotFallback({$gameId}): bot {$gamePlayerId}'s own play attempt failed, passing instead -- " . $e);
+
+            return $this->pass($gameId, $gamePlayerId, automated: true);
+        }
     }
 
     /**
@@ -7214,9 +7229,23 @@ final class GameService
             $this->logTacticalBotReasoning($gameId, $gamePlayerId, $action, ['excluded_by_heuristic' => [], 'candidates' => []], recoveredFromStalledSearch: true);
         }
 
-        return $cardId !== null
-            ? $this->playMood($gameId, $gamePlayerId, $cardId, $choices ?? [])
-            : $this->pass($gameId, $gamePlayerId, automated: true);
+        // Same "never let a bot's own broken play attempt permanently
+        // break a game" guard advanceAutomatedTurns() already has around
+        // its own identical playMood()/pass() call -- a checkpointed
+        // action recorded mid-search is just as capable of tripping a
+        // choice-building bug as a fresh heuristic one is, and this call
+        // site used to have no catch of its own at all. See
+        // advanceAutomatedTurns()'s own catch block for the full
+        // reasoning; identical here, just a different caller.
+        try {
+            return $cardId !== null
+                ? $this->playMood($gameId, $gamePlayerId, $cardId, $choices ?? [])
+                : $this->pass($gameId, $gamePlayerId, automated: true);
+        } catch (Throwable $e) {
+            error_log("playRecoveredPartialSearchResult({$gameId}): bot {$gamePlayerId}'s own recovered play attempt failed, passing instead -- " . $e);
+
+            return $this->pass($gameId, $gamePlayerId, automated: true);
+        }
     }
 
     /**
@@ -15713,6 +15742,9 @@ final class GameService
      */
     private const INTERNAL_ONLY_EVENT_TYPES_SQL = "'round_grants_computed', 'heuristic_bot_reasoning', 'tactical_bot_reasoning'";
 
+    /** Same three event types as INTERNAL_ONLY_EVENT_TYPES_SQL above, as a plain array -- for filtering an in-memory export's own game_events instead of a SQL WHERE clause (exportRecentEvents()/exportEventSteps()). */
+    private const INTERNAL_ONLY_EVENT_TYPES = ['round_grants_computed', 'heuristic_bot_reasoning', 'tactical_bot_reasoning'];
+
     /**
      * The entire game_events log for $gameId, oldest first (issue #98) --
      * unlike recentEvents() below, this is deliberately unbounded and
@@ -16219,6 +16251,415 @@ final class GameService
             'rotisserie_draft' => null,
             'tiered_rotisserie_draft' => null,
         ];
+    }
+
+    /**
+     * "Is there a way I can replay these in the dev site using the game
+     * export json files?" -- for a game played on a different
+     * environment's database (there's no $gameId here at all to look
+     * up), replayStateAsOf()/serializeReplaySnapshot()/fullEventLog()
+     * above can never reach it: every one of them queries THIS server's
+     * own `games`/`game_players`/`game_cards`/`game_events` tables by
+     * id. $export is exactly exportGameData()'s own output (the same
+     * file `GET /games/export` already hands the user, so nothing new
+     * needs exposing to make this possible) -- never written back to
+     * this database at all (importing raw rows would mean remapping
+     * every id, including ones buried inside game_events.details' own
+     * nested card_moves/draws/ownership_changes, with real risk of
+     * colliding with an unrelated game that already happens to reuse
+     * the same ids locally). Bundles the step list (the same shape `GET
+     * /games/log`'s own fullEventLog() returns) into this one response
+     * alongside the snapshot, since there's no per-game route to fetch
+     * it separately the way the live replay route reuses `GET
+     * /games/log` for that.
+     *
+     * @param array<string, mixed> $export
+     * @return array{snapshot: array<string, mixed>, steps: array<int, array<string, mixed>>}
+     */
+    public function replayFromExport(array $export, int $eventId): array
+    {
+        $state = $this->replay->stateAsOfFromExport($export, $eventId);
+
+        return [
+            'snapshot' => $this->serializeExportReplaySnapshot($export, $eventId, $state),
+            'steps' => $this->exportEventSteps($export),
+        ];
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $gameRounds
+     */
+    private function exportWinsFor(array $gameRounds, int $gamePlayerId): int
+    {
+        $total = 0;
+        foreach ($gameRounds as $round) {
+            if ($round['status'] === 'scored' && (int) ($round['winner_game_player_id'] ?? 0) === $gamePlayerId) {
+                $total += (int) $round['wins_awarded'];
+            }
+        }
+
+        return $total;
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $gameRounds
+     */
+    private function exportWinsForTeam(array $gameRounds, int $teamId): int
+    {
+        $total = 0;
+        foreach ($gameRounds as $round) {
+            if ($round['status'] === 'scored' && (int) ($round['winner_team_id'] ?? -1) === $teamId) {
+                $total += (int) $round['wins_awarded'];
+            }
+        }
+
+        return $total;
+    }
+
+    /**
+     * cardNamesFor()'s own exported-JSON sibling: game_card id => catalog
+     * name, resolved against THIS server's own `cards` table (card
+     * definitions are shared reference data, not a per-game fact --
+     * exportGameData() never includes them, so there'd be nothing to
+     * read from the export even if this preferred to).
+     *
+     * @param array<int, array<string, mixed>> $gameCards
+     * @return array<int, string>
+     */
+    private function exportCardNames(array $gameCards): array
+    {
+        $catalogIds = array_unique(array_map(static fn (array $row): int => (int) $row['card_id'], $gameCards));
+        if ($catalogIds === []) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($catalogIds), '?'));
+        $stmt = Connection::get()->prepare("SELECT id, name FROM cards WHERE id IN ({$placeholders})");
+        $stmt->execute(array_values($catalogIds));
+        $namesByCatalogId = array_column($stmt->fetchAll(), 'name', 'id');
+
+        $names = [];
+        foreach ($gameCards as $row) {
+            $names[(int) $row['id']] = $namesByCatalogId[(int) $row['card_id']] ?? 'a card';
+        }
+
+        return $names;
+    }
+
+    /**
+     * Best-effort game_player id => display name for an imported export:
+     * this server generally has no row for the export's own user_id at
+     * all (the whole point is replaying a game played on a DIFFERENT
+     * environment's database), so this is neither cardNamesFor() nor
+     * playerUsernamesFor()'s live "always a real join" guarantee. Tries
+     * a real username first (a genuine hit whenever the export happens
+     * to reference a user id THIS server also has -- e.g. the same
+     * account exporting its own game to replay locally), then each
+     * player's own custom_deck_name (already present in every export,
+     * regardless of environment), then a bare seat number.
+     *
+     * @param array<int, array<string, mixed>> $playerRows
+     * @return array{0: array<int, string>, 1: array<int, bool>} game_player id => display name, game_player id => is_bot
+     */
+    private function exportPlayerNames(array $playerRows): array
+    {
+        $userIds = array_unique(array_map(static fn (array $row): int => (int) $row['user_id'], $playerRows));
+        $localUsers = [];
+        if ($userIds !== []) {
+            $placeholders = implode(',', array_fill(0, count($userIds), '?'));
+            $stmt = Connection::get()->prepare("SELECT id, username, is_bot FROM users WHERE id IN ({$placeholders})");
+            $stmt->execute(array_values($userIds));
+            foreach ($stmt->fetchAll() as $row) {
+                $localUsers[(int) $row['id']] = $row;
+            }
+        }
+
+        $names = [];
+        $isBot = [];
+        foreach ($playerRows as $row) {
+            $gamePlayerId = (int) $row['id'];
+            $local = $localUsers[(int) $row['user_id']] ?? null;
+            $names[$gamePlayerId] = $local['username']
+                ?? $row['custom_deck_name']
+                ?? ('Seat ' . ((int) $row['seat_order'] + 1));
+            $isBot[$gamePlayerId] = $local !== null && (bool) $local['is_bot'];
+        }
+
+        return [$names, $isBot];
+    }
+
+    /**
+     * serializeReplaySnapshot()'s own exported-JSON sibling -- see
+     * replayFromExport()'s own docblock for why this can't just call
+     * that one directly. Reuses every $state-only serialization helper
+     * (serializeCard()/scoringEffectEntries()/boardEffectEntries()/
+     * suppressionFields()/affectingEntries()/temporaryOwnershipInfo()/
+     * boardPointTotalFor()) verbatim -- none of them ever touch this
+     * server's own per-game tables, only $state itself plus whichever
+     * name maps are handed in, so they work identically for a
+     * ReplayStateBuilder-from-export $state as for a live one. Only the
+     * pieces those helpers DON'T cover -- win counts, player display
+     * names/is_bot, round number, recent-events history -- get their own
+     * export-sourced computation here instead of the live SQL queries
+     * serializeReplaySnapshot() itself uses.
+     *
+     * @param array<string, mixed> $export
+     * @return array<string, mixed>
+     */
+    private function serializeExportReplaySnapshot(array $export, int $eventId, BoardState $state): array
+    {
+        $game = $export['game'];
+        $gameRounds = $export['game_rounds'];
+        $playerRows = $export['game_players'];
+        usort($playerRows, static fn (array $a, array $b): int => $a['seat_order'] <=> $b['seat_order']);
+
+        $names = $this->exportCardNames($export['game_cards']);
+        [$displayNames, $isBot] = $this->exportPlayerNames($playerRows);
+
+        $winnerUsernames = [];
+        $players = [];
+        foreach ($playerRows as $row) {
+            $gamePlayerId = (int) $row['id'];
+            $teamId = $row['team_id'] !== null ? (int) $row['team_id'] : null;
+            $players[] = [
+                'game_player_id' => $gamePlayerId,
+                'user_id' => (int) $row['user_id'],
+                'username' => $displayNames[$gamePlayerId],
+                'seat_order' => (int) $row['seat_order'],
+                'team_id' => $teamId,
+                'is_bot' => $isBot[$gamePlayerId],
+                'hand_count' => count($state->hand($gamePlayerId)),
+                'total_wins' => $this->exportWinsFor($gameRounds, $gamePlayerId),
+                'total_score' => $this->boardPointTotalFor($state, $gamePlayerId),
+                'deck_count' => $state->hasSeparateDecks() ? count($state->deck($gamePlayerId)) : count($state->deck()),
+                'custom_deck_name' => $row['custom_deck_name'],
+                'deck_submitted' => $row['custom_deck_card_ids'] !== null,
+                'resigned' => $row['resigned_at'] !== null,
+                'hand' => array_map(
+                    fn (int $cardId) => $this->serializeCard($state, $cardId, $names, null),
+                    $state->hand($gamePlayerId),
+                ),
+            ];
+            if ($game['winner_team_id'] !== null && $teamId === (int) $game['winner_team_id']) {
+                $winnerUsernames[] = $displayNames[$gamePlayerId];
+            } elseif ($game['winner_game_player_id'] !== null && $gamePlayerId === (int) $game['winner_game_player_id']) {
+                $winnerUsernames[] = $displayNames[$gamePlayerId];
+            }
+        }
+        $playerNames = array_column($players, 'username', 'game_player_id');
+
+        $roundNumber = null;
+        foreach ($export['game_events'] as $eventRow) {
+            if ((int) $eventRow['id'] === $eventId) {
+                foreach ($gameRounds as $round) {
+                    if ((int) $round['id'] === (int) $eventRow['game_round_id']) {
+                        $roundNumber = (int) $round['round_number'];
+                    }
+                }
+                break;
+            }
+        }
+
+        $teams = null;
+        if (self::isTeamFormat($game['format'])) {
+            $teamTotals = [
+                0 => ['team_id' => 0, 'game_player_ids' => [], 'total_score' => 0, 'total_wins' => $this->exportWinsForTeam($gameRounds, 0)],
+                1 => ['team_id' => 1, 'game_player_ids' => [], 'total_score' => 0, 'total_wins' => $this->exportWinsForTeam($gameRounds, 1)],
+            ];
+            foreach ($players as $player) {
+                if ($player['team_id'] === null) {
+                    continue;
+                }
+                $teamTotals[$player['team_id']]['game_player_ids'][] = $player['game_player_id'];
+                $teamTotals[$player['team_id']]['total_score'] += $player['total_score'];
+            }
+            $teams = array_values($teamTotals);
+        }
+
+        return [
+            'game' => [
+                'id' => (int) $game['id'],
+                'format' => $game['format'],
+                'deck_type' => $game['deck_type'],
+                'custom_deck_name' => $game['custom_deck_name'],
+                'duel_deck_rules' => $game['deck_type'] === 'custom_duel' ? [
+                    'preset' => $game['custom_duel_rules_preset'],
+                    'min_cards' => (int) $game['custom_duel_min_cards'],
+                    'rarity_limits' => (array) ($game['custom_duel_rarity_limits'] ?? []),
+                    'duplicate_limits' => (array) ($game['custom_duel_duplicate_limits'] ?? []),
+                    'even_color_distribution_rarities' => (array) ($game['custom_duel_even_color_distribution_rarities'] ?? []),
+                ] : null,
+                'status' => $game['status'],
+                'wins_needed' => (int) $game['wins_needed'],
+                'winner_game_player_id' => $game['winner_game_player_id'] !== null ? (int) $game['winner_game_player_id'] : null,
+                'winner_usernames' => $winnerUsernames,
+                'winner_team_id' => $game['winner_team_id'] !== null ? (int) $game['winner_team_id'] : null,
+                'match_game_number' => $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null,
+            ],
+            'players' => $players,
+            'you' => ['game_player_id' => null],
+            'round' => [
+                'round_number' => $roundNumber,
+                'status' => null,
+                'current_turn_game_player_id' => null,
+                'plays_remaining' => 0,
+                'play_grants' => [],
+                'first_game_player_id' => null,
+                'went_first_game_player_id' => null,
+                'hurt_feelings_game_player_id' => null,
+                'banned_colors' => [],
+                'discarded_this_round' => false,
+                'pending_decision' => null,
+                'scoring_preview' => null,
+                'scoring_effects' => $this->scoringEffectEntries($state, $names, $playerNames),
+                'board_effects' => $this->boardEffectEntries($state, $names, $playerNames),
+            ],
+            'in_play' => array_map(
+                function (int $cardId) use ($state, $names, $playerNames): array {
+                    $mood = $state->moodsInPlay()[$cardId];
+                    $serialized = $this->serializeCard($state, $cardId, $names, null);
+                    $boosterCardId = $serialized['has_dice_value'] ? $state->diceValueBoosterCardId($cardId) : null;
+
+                    return [
+                        ...$serialized,
+                        'owner_game_player_id' => $mood->ownerId,
+                        'has_unused_play_grant' => false,
+                        'value_locked' => array_key_exists('valueOverride', $mood->effectState),
+                        'chaos_value_delta' => $state->chaosValueDeltaOf($cardId),
+                        'chaos_value_override' => $state->chaosValueOverrideOf($cardId),
+                        ...$this->suppressionFields($state, $cardId, $names),
+                        'boosted_by_card_id' => $boosterCardId,
+                        'boosted_by_name' => $boosterCardId !== null ? ($names[$boosterCardId] ?? null) : null,
+                        'affecting' => $this->affectingEntries($state, $cardId, $names),
+                        'temporary_ownership' => $this->temporaryOwnershipInfo($state, $cardId, $names, $playerNames),
+                        'bliss_discard_color' => $serialized['effect_key'] === 'bliss' ? $state->effectState($cardId, 'blissColor') : null,
+                    ];
+                },
+                array_keys($state->moodsInPlay()),
+            ),
+            'discard_pile' => array_map(
+                function (int $cardId) use ($state, $names, $playerNames): array {
+                    $lastOwnerId = $state->discardOwnerOf($cardId);
+
+                    return [
+                        ...$this->serializeCard($state, $cardId, $names, null),
+                        'last_owner_game_player_id' => $lastOwnerId,
+                        'last_owner_name' => $lastOwnerId !== null ? ($playerNames[$lastOwnerId] ?? null) : null,
+                    ];
+                },
+                $state->discardPile(),
+            ),
+            'deck_count' => 0,
+            'recent_events' => $this->exportRecentEvents($export, $playerNames, $names, $players, $eventId),
+            'teams' => $teams,
+            'team_decision' => null,
+            'initial_card_pass' => null,
+            'first_player_decision' => null,
+            'quick_draft' => null,
+            'winston_draft' => null,
+            'grid_draft' => null,
+            'rotisserie_draft' => null,
+            'tiered_rotisserie_draft' => null,
+        ];
+    }
+
+    /**
+     * recentEvents()'s own exported-JSON sibling.
+     *
+     * @param array<string, mixed> $export
+     * @param array<int, string> $playerNames
+     * @param array<int, string> $cardNames
+     * @param array<int, array<string, mixed>> $players
+     * @return array<int, array<string, mixed>>
+     */
+    private function exportRecentEvents(array $export, array $playerNames, array $cardNames, array $players, int $upToEventId, int $limit = 15): array
+    {
+        $teamMembersByTeamId = [];
+        foreach ($players as $player) {
+            if ($player['team_id'] !== null) {
+                $teamMembersByTeamId[$player['team_id']][] = $player['username'];
+            }
+        }
+
+        $rows = array_values(array_filter(
+            $export['game_events'],
+            static fn (array $row): bool => (int) $row['id'] <= $upToEventId && !in_array($row['event_type'], self::INTERNAL_ONLY_EVENT_TYPES, true),
+        ));
+        usort($rows, static fn (array $a, array $b): int => $b['id'] <=> $a['id']);
+        $rows = array_slice($rows, 0, $limit);
+
+        return array_map(
+            fn (array $row) => [
+                'id' => (int) $row['id'],
+                'created_at' => $row['created_at'],
+                'description' => $this->describeEvent(
+                    ['event_type' => $row['event_type'], 'acting_game_player_id' => $row['acting_game_player_id'], 'card_id' => $row['card_id'], 'details' => json_encode($row['details'])],
+                    $playerNames,
+                    $cardNames,
+                    $teamMembersByTeamId,
+                ),
+            ],
+            $rows,
+        );
+    }
+
+    /**
+     * fullEventLog()'s own exported-JSON sibling -- the step dropdown's
+     * data source for an imported replay, same shape fullEventLog()
+     * itself returns (minus the frontend's own synthetic "Step 1" (id 0)
+     * entry, which it already prepends client-side regardless of
+     * source -- see "Watch replay" in php-app/README.md). Every export
+     * is already a completed game's own data (exportGameData()/
+     * ReplayStateBuilder::contextFromExport() both refuse otherwise), so
+     * unlike fullEventLog()'s own live $isCompleted branch, draws'
+     * card_id is never redacted here.
+     *
+     * @param array<string, mixed> $export
+     * @return array<int, array<string, mixed>>
+     */
+    private function exportEventSteps(array $export): array
+    {
+        $playerRows = $export['game_players'];
+        [$displayNames] = $this->exportPlayerNames($playerRows);
+        $cardNames = $this->exportCardNames($export['game_cards']);
+
+        $teamMembersByTeamId = [];
+        foreach ($playerRows as $row) {
+            if (($row['team_id'] ?? null) !== null) {
+                $teamMembersByTeamId[(int) $row['team_id']][] = $displayNames[(int) $row['id']];
+            }
+        }
+
+        $roundNumberByRoundId = array_column($export['game_rounds'], 'round_number', 'id');
+
+        $rows = array_values(array_filter(
+            $export['game_events'],
+            static fn (array $row): bool => !in_array($row['event_type'], self::INTERNAL_ONLY_EVENT_TYPES, true),
+        ));
+        usort($rows, static fn (array $a, array $b): int => $a['id'] <=> $b['id']);
+
+        return array_map(
+            function (array $row) use ($displayNames, $cardNames, $teamMembersByTeamId, $roundNumberByRoundId): array {
+                $actingId = $row['acting_game_player_id'] !== null ? (int) $row['acting_game_player_id'] : null;
+                $cardId = $row['card_id'] !== null ? (int) $row['card_id'] : null;
+                $roundId = $row['game_round_id'] !== null ? (int) $row['game_round_id'] : null;
+                $rawRow = ['event_type' => $row['event_type'], 'acting_game_player_id' => $actingId, 'card_id' => $cardId, 'details' => json_encode($row['details'])];
+
+                return [
+                    'id' => (int) $row['id'],
+                    'created_at' => $row['created_at'],
+                    'round_number' => $roundId !== null ? ($roundNumberByRoundId[$roundId] ?? null) : null,
+                    'event_type' => $row['event_type'],
+                    'acting_game_player_id' => $actingId,
+                    'acting_username' => $actingId !== null ? ($displayNames[$actingId] ?? null) : null,
+                    'card_id' => $cardId,
+                    'card_name' => $cardId !== null ? ($cardNames[$cardId] ?? null) : null,
+                    'details' => $row['details'],
+                    'description' => $this->describeEvent($rawRow, $displayNames, $cardNames, $teamMembersByTeamId),
+                ];
+            },
+            $rows,
+        );
     }
 
     /**
@@ -18513,6 +18954,19 @@ final class GameService
     {
         $details = $this->withCardHistory($state, $details);
 
+        // Caught live: a tactical-bot reasoning payload containing a
+        // non-finite float (INF/NAN, presumably from some edge-case
+        // search evaluation) made json_encode() return false rather than
+        // throw -- PDO then bound that false as an empty string, and
+        // MySQL's own JSON column validation rejected it with "Invalid
+        // JSON text: The document is empty", surfacing as an uncaught
+        // PDOException instead of the graceful "couldn't log reasoning"
+        // this obviously should have been. Never let a failed encode
+        // reach the query at all -- an empty/absent details column is
+        // always valid (every reader here already treats NULL/'[]' as
+        // "no extra details"), unlike a guaranteed-invalid empty string.
+        $encodedDetails = $details !== [] ? json_encode($details) : null;
+
         $stmt = Connection::get()->prepare(
             'INSERT INTO game_events (game_id, game_round_id, acting_game_player_id, event_type, card_id, details)
              VALUES (:game_id, :round_id, :acting_player_id, :event_type, :card_id, :details)'
@@ -18523,7 +18977,7 @@ final class GameService
             'acting_player_id' => $actingPlayerId,
             'event_type' => $eventType,
             'card_id' => $cardId,
-            'details' => $details === [] ? null : json_encode($details),
+            'details' => $encodedDetails !== false ? $encodedDetails : null,
         ]);
     }
 

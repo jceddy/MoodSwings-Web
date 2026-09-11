@@ -3896,6 +3896,57 @@ final class BotPlayerServiceTest extends TestCase
         self::assertNotSame(3, $action['choices']['target_player_id'], 'Compulsion must target another player, never the acting player itself');
     }
 
+    /**
+     * The exact scenario reported live -- a bot ("stuck in a Creativity
+     * loop") repeatedly played Creativity as a copy of an opponent's
+     * in-play Compulsion, crashing with "Missing required choice
+     * 'target_player_id'" (CompulsionEffect::pendingDecisionsFor(), via
+     * MoodPlayService::resolveAfterPlayingChain()) every single retry,
+     * since nothing about the board state ever changed between attempts.
+     * buildBaseChoicesForCard()'s own 'creativity' branch used to stop
+     * at 'copy_card_id' and never asked what the COPIED card's own
+     * effective effect key needs -- unlike a human player's own client
+     * (game.js's handleCreativityCopyChange()) or the server's own
+     * MoodPlayService::playMood(), both of which already resolve the
+     * copy's own required fields.
+     */
+    public function testChooseActionFillsTheCopiedCardsOwnRequiredChoiceWhenCreativityCopiesCompulsion(): void
+    {
+        $state = $this->boardState(hands: [1 => [32], 2 => [86]]); // Creativity; Compulsion moved into play below
+        $state->moveHandToInPlay(2, 86);
+
+        $action = $this->bot->chooseAction($state, [32], 1);
+
+        self::assertNotNull($action);
+        self::assertSame(32, $action['card_id']);
+        self::assertSame(86, $action['choices']['copy_card_id']);
+        self::assertArrayHasKey('target_player_id', $action['choices']);
+        self::assertNotSame(1, $action['choices']['target_player_id'], 'Compulsion must target another player, never the acting player itself');
+    }
+
+    /**
+     * A bot considering Creativity when the only mood in play is another
+     * blank Creativity (played copying nothing) must not recurse into
+     * itself forever -- there's nothing useful to copy from an empty
+     * Creativity, so this is deliberately left unmerged rather than
+     * re-picking the same "best" target infinitely.
+     */
+    public function testChooseActionDoesNotRecurseWhenCreativityWouldCopyAnotherBlankCreativity(): void
+    {
+        // Two DISTINCT physical Creativity instances -- 32 stays in
+        // player 1's own hand (its own instance id doubling as its
+        // catalog id, per boardState()'s own usual convention), 101 is a
+        // second instance sharing the same catalog entry, already
+        // sitting blank in player 2's play.
+        $state = $this->boardState(hands: [1 => [32], 2 => [101]], catalogCardIdFor: [101 => 32]);
+        $state->moveHandToInPlay(2, 101);
+
+        $action = $this->bot->chooseAction($state, [32], 1);
+
+        self::assertNotNull($action);
+        self::assertSame(['copy_card_id' => 101], $action['choices']);
+    }
+
     // -- Rejection ---------------------------------------------------------
 
     /**

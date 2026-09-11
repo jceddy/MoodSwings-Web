@@ -1496,6 +1496,21 @@
     let replayCode = null;
     let replayEvents = [];
     let replayEventIndex = 0;
+    // "Is there a way I can replay these in the dev site using the game
+    // export json files?" -- the whole parsed export JSON when the
+    // current replay is reading from an uploaded file rather than a
+    // game_id this server actually has a row for (null otherwise, the
+    // ordinary case). currentGameId stays null throughout an imported
+    // replay -- there generally isn't a real game id to use, since the
+    // export was very likely produced by a different environment's own
+    // database -- so refreshReplayBoard()/renderReplayControls() below
+    // branch on this instead wherever they'd otherwise key off
+    // currentGameId. importedReplayToken changes on every newly loaded
+    // import, giving renderReplayControls() a cache key that's actually
+    // unique across two different imported files (currentGameId alone
+    // would stay null for both).
+    let importedReplayExport = null;
+    let importedReplayToken = 0;
     // Reset in showBoard() so the saved-deck dropdown is re-fetched fresh
     // for each newly-viewed custom_duel game, but not on every 4-second
     // poll's re-render of the SAME game -- see renderDuelDeckSubmission().
@@ -1568,6 +1583,7 @@
         replayCode = null;
         replayEvents = [];
         replayEventIndex = 0;
+        importedReplayExport = null;
         document.getElementById('back-to-lobby-button').textContent = '← Back to your games';
         document.getElementById('replay-controls').hidden = true;
         boardView.hidden = true;
@@ -1689,6 +1705,71 @@
         await loadReplayEventsAndShow().finally(hideLoadingOverlay);
     }
 
+    // "Is there a way I can replay these in the dev site using the game
+    // export json files?" -- showReplayBoard()'s own sibling for a game
+    // this server has no row for at all: exportData is the whole parsed
+    // export JSON (see openReplayImportPicker()), never currentGameId,
+    // since the export was very likely produced by an entirely different
+    // environment's own database. Reuses the exact same #board-view/
+    // renderBoard()/#replay-controls as every other read-only view above
+    // -- refreshReplayBoard()/renderReplayControls() branch on
+    // importedReplayExport wherever they'd otherwise need a real
+    // currentGameId.
+    async function showImportedReplayBoard(exportData) {
+        pushDisplayHistoryEntry();
+        currentGameId = null;
+        isReplaying = true;
+        replayCode = null;
+        importedReplayExport = exportData;
+        importedReplayToken += 1;
+        document.getElementById('back-to-lobby-button').textContent = '← Exit replay';
+        lobbyView.hidden = true;
+        boardView.hidden = false;
+        boardMessage.hidden = true;
+        showLoadingOverlay();
+        await loadImportedReplayEventsAndShow().finally(hideLoadingOverlay);
+    }
+
+    // loadReplayEventsAndShow()'s own imported-export sibling: unlike the
+    // live path (GET /games/log, reused as-is for the step list, then a
+    // separate GET /games/replay/state per step), postReplayImport()
+    // bundles both the step list (GameService::replayFromExport()'s own
+    // 'steps' key) and the requested snapshot into one call, since
+    // there's no per-import GET /games/log to fetch the list from
+    // separately -- so this always starts at genesis (event_id 0)
+    // itself, rather than delegating a second fetch to
+    // refreshReplayBoard() below.
+    async function loadImportedReplayEventsAndShow() {
+        boardError.hidden = true;
+        document.getElementById('replay-controls').hidden = false;
+        if (pollTimer) {
+            clearInterval(pollTimer);
+            pollTimer = null;
+        }
+
+        const seq = ++boardRequestSeq;
+        const { ok, body } = await postReplayImport(importedReplayExport, 0);
+        if (seq !== boardRequestSeq) {
+            return; // a newer refreshBoard()/refreshReplayBoard() call has since been issued -- stale, ignore it
+        }
+        if (!ok) {
+            boardError.textContent = body.message || 'Could not read this export file.';
+            boardError.hidden = false;
+            return;
+        }
+
+        replayEvents = [{ id: 0, round_number: null, description: 'Game start (hands dealt, nothing played yet)' }, ...body.steps];
+        replayEventIndex = 0;
+        boardError.hidden = true;
+        body.you = { game_player_id: null, hand: [], is_your_turn: false };
+        if (isSharedDeckType(body.game.deck_type) && body.players.length > 0) {
+            body.deck_count = body.players[0].deck_count;
+        }
+        currentState = body;
+        renderBoard(body);
+        renderReplayControls();
+    }
+
     // Shared by showReplayBoard() above and spectator mode watching a
     // COMPLETED game (issue #128 + #240, see refreshBoard()'s own
     // isSpectating branch below) -- both end up showing the exact same
@@ -1727,7 +1808,9 @@
     async function refreshReplayBoard() {
         const seq = ++boardRequestSeq;
         const eventId = replayEvents[replayEventIndex].id;
-        const { ok, body } = await getReplayGameState(currentGameId, eventId, activeShareCode());
+        const { ok, body } = importedReplayExport !== null
+            ? await postReplayImport(importedReplayExport, eventId)
+            : await getReplayGameState(currentGameId, eventId, activeShareCode());
         if (seq !== boardRequestSeq) {
             return; // a newer refreshBoard()/refreshReplayBoard() call has since been issued -- stale, ignore it
         }
@@ -1756,8 +1839,15 @@
     function renderReplayControls() {
         const select = document.getElementById('replay-event-select');
         const position = document.getElementById('replay-position');
+        // currentGameId stays null for the whole lifetime of an imported
+        // replay (see showImportedReplayBoard()'s own docblock), so a
+        // second, DIFFERENT imported file would otherwise share the same
+        // 'null' cache key as the first and never rebuild this dropdown
+        // -- importedReplayToken changes on every newly loaded import,
+        // giving each one a genuinely distinct key.
+        const replayCacheKey = importedReplayExport !== null ? 'import:' + importedReplayToken : String(currentGameId);
 
-        if (select.dataset.gameId !== String(currentGameId)) {
+        if (select.dataset.gameId !== replayCacheKey) {
             select.innerHTML = '';
             replayEvents.forEach((event, index) => {
                 const option = document.createElement('option');
@@ -1768,7 +1858,7 @@
                 option.textContent = label.length > 53 ? label.slice(0, 50) + '...' : label;
                 select.appendChild(option);
             });
-            select.dataset.gameId = String(currentGameId);
+            select.dataset.gameId = replayCacheKey;
         }
         select.value = String(replayEventIndex);
 
@@ -2872,6 +2962,40 @@
     // instead of left orphaned.
     document.getElementById('back-to-current-games-button').addEventListener('click', () => {
         history.back();
+    });
+
+    // "Is there a way I can replay these in the dev site using the game
+    // export json files?" -- opens the hidden file input; its own
+    // 'change' handler below actually reads and parses the file. A
+    // second click on an already-picked file doesn't fire 'change' on
+    // its own, so the value is cleared first -- otherwise re-importing
+    // the SAME file right after a parse error (or just to look at it
+    // again) would silently do nothing.
+    document.getElementById('import-replay-button').addEventListener('click', () => {
+        const input = document.getElementById('import-replay-file-input');
+        input.value = '';
+        input.click();
+    });
+
+    document.getElementById('import-replay-file-input').addEventListener('change', async (event) => {
+        const file = event.target.files[0];
+        if (!file) {
+            return;
+        }
+
+        let exportData;
+        try {
+            exportData = JSON.parse(await file.text());
+        } catch (error) {
+            alert("Couldn't read " + file.name + ' -- it doesn\'t look like valid JSON.');
+            return;
+        }
+        if (!exportData || typeof exportData !== 'object' || !exportData.game || !exportData.game_events) {
+            alert("Couldn't read " + file.name + " -- it doesn't look like a game export (expected the file GET /games/export downloads).");
+            return;
+        }
+
+        await showImportedReplayBoard(exportData);
     });
 
     // Routes through the browser's own back-navigation handling (see
@@ -5943,6 +6067,13 @@
         renderChat(state);
         document.getElementById('view-notes-button').hidden = isReadOnlyView()
             || (state.game.status === 'waiting' && !isDraftMatchWaitingWindow(state));
+        // openGameLog() below always fetches by currentGameId, which
+        // stays null for the whole lifetime of an imported replay (see
+        // showImportedReplayBoard()'s own docblock) -- there's no
+        // separate GET /games/log to call for one anyway, and the
+        // replay step dropdown's own descriptions already cover the
+        // same ground.
+        document.getElementById('view-log-button').hidden = importedReplayExport !== null;
 
         renderDraftMatchScoreline(state);
         renderRematchButton(state);

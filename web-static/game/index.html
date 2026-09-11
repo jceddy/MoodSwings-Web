@@ -102,6 +102,15 @@
                 <button id="open-games-button" type="button">Open games</button>
                 <button id="weekly-sealed-pool-button" type="button">Weekly Sealed Pool</button>
                 <button id="past-games-button" type="button">Past games</button>
+                <!-- "Is there a way I can replay these in the dev site using
+                     the game export json files?" -- a completed game's own
+                     exported data (GET /games/export, downloaded from
+                     wherever it was actually played) fed straight into the
+                     same step-through replay viewer "Watch replay" already
+                     uses, without needing a row for it in this database at
+                     all -- see showImportedReplayBoard() in game.js. -->
+                <button id="import-replay-button" type="button">Import replay</button>
+                <input type="file" id="import-replay-file-input" accept=".json,application/json" hidden>
                 <ul id="games-list"></ul>
                 <p id="games-empty" hidden>No games yet &mdash; start one!</p>
             </div>

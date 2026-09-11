@@ -74,11 +74,58 @@ final class ReplayStateBuilder
      */
     public function stateAsOf(int $gameId, int $eventId, bool $requireCompleted = true): BoardState
     {
+        return $this->stateAsOfWithContext($this->loadContext($gameId, $requireCompleted), $eventId);
+    }
+
+    /**
+     * Round-1 starting hands/decks, before any event exists -- the same
+     * reverse-derivation stateAsOf() uses to seed its own forward walk,
+     * exposed publicly since it's a well-defined point in a completed
+     * game's history in its own right (see this class's own docblock).
+     * Its discard pile and in-play zone are always empty by construction
+     * -- see deriveGenesis()'s own docblock.
+     */
+    public function genesis(int $gameId, bool $requireCompleted = true): BoardState
+    {
+        return $this->genesisWithContext($this->loadContext($gameId, $requireCompleted));
+    }
+
+    /**
+     * "Replay a game I only have an exported JSON for" (reported live: a
+     * user with games played on a different environment than this one --
+     * their own export has no row in THIS server's database at all, so
+     * $gameId-based stateAsOf()/genesis() above can never reach them).
+     * $export is exactly GameService::exportGameData()'s own output --
+     * see GameService::contextFromExport() for the exact shape expected
+     * of each section and why the catalog itself is always loaded fresh
+     * from THIS server's own `cards` table rather than trusted from the
+     * export (catalog rows are global reference data, not per-game
+     * facts, and every export already omits them for exactly that
+     * reason). Always requires 'completed', the same as every other
+     * caller of this class -- GameService::exportGameData() itself
+     * already refuses a non-completed game, so this is a second,
+     * defense-in-depth check against a hand-edited export.
+     */
+    public function stateAsOfFromExport(array $export, int $eventId): BoardState
+    {
+        return $this->stateAsOfWithContext($this->contextFromExport($export), $eventId);
+    }
+
+    /** @see stateAsOfFromExport()'s own docblock; the exported-JSON sibling of genesis(). */
+    public function genesisFromExport(array $export): BoardState
+    {
+        return $this->genesisWithContext($this->contextFromExport($export));
+    }
+
+    /**
+     * @param array{gameCards: array<int, array<string, mixed>>, events: array<int, array{id:int, event_type:string, acting_game_player_id:?int, card_id:?int, details: array<string, mixed>}>, hasSeparateDecks: bool} $context
+     */
+    private function stateAsOfWithContext(array $context, int $eventId): BoardState
+    {
         if ($eventId === 0) {
-            return $this->genesis($gameId, $requireCompleted);
+            return $this->genesisWithContext($context);
         }
 
-        $context = $this->loadContext($gameId, $requireCompleted);
         $events = $context['events'];
 
         $targetIndex = null;
@@ -89,7 +136,7 @@ final class ReplayStateBuilder
             }
         }
         if ($targetIndex === null) {
-            throw new GameStateException("Event {$eventId} does not belong to game {$gameId}");
+            throw new GameStateException("Event {$eventId} does not belong to this game");
         }
 
         $genesis = $this->deriveGenesis($context['gameCards'], $events, $context['hasSeparateDecks']);
@@ -109,16 +156,10 @@ final class ReplayStateBuilder
     }
 
     /**
-     * Round-1 starting hands/decks, before any event exists -- the same
-     * reverse-derivation stateAsOf() uses to seed its own forward walk,
-     * exposed publicly since it's a well-defined point in a completed
-     * game's history in its own right (see this class's own docblock).
-     * Its discard pile and in-play zone are always empty by construction
-     * -- see deriveGenesis()'s own docblock.
+     * @param array{gameCards: array<int, array<string, mixed>>, events: array<int, array{id:int, event_type:string, acting_game_player_id:?int, card_id:?int, details: array<string, mixed>}>, hasSeparateDecks: bool} $context
      */
-    public function genesis(int $gameId, bool $requireCompleted = true): BoardState
+    private function genesisWithContext(array $context): BoardState
     {
-        $context = $this->loadContext($gameId, $requireCompleted);
         $genesis = $this->deriveGenesis($context['gameCards'], $context['events'], $context['hasSeparateDecks']);
 
         return $this->assembleBoardState($context, $genesis['hands'], $genesis['decks'], [], [], []);
@@ -146,6 +187,83 @@ final class ReplayStateBuilder
         return [
             'game' => $game,
             'events' => $this->fetchEvents($gameId),
+            'catalog' => $this->loadCatalog(),
+            'gameCards' => $gameCards,
+            'catalogCardIdFor' => $catalogCardIdFor,
+            'playerIds' => $playerIds,
+            'teamIdByPlayer' => $teamIdByPlayer,
+            'resignedPlayerIds' => $resignedPlayerIds,
+            'hasSeparateDecks' => self::hasSeparateDecks($game['format']),
+        ];
+    }
+
+    /**
+     * The exported-JSON sibling of loadContext() -- $export is exactly
+     * GameService::exportGameData()'s own top-level shape (the SAME file
+     * a user downloads via GET /games/export), so this never touches
+     * this game's own row in `games`/`game_players`/`game_cards`/
+     * `game_events` at all -- there generally isn't one, since the whole
+     * point is replaying a game that was played on a DIFFERENT
+     * environment's database. `catalog` is the one exception: loaded
+     * fresh from THIS server's own `cards` table via loadCatalog(),
+     * exactly like loadContext() above, since card definitions are
+     * shared reference data, not a per-game fact -- exportGameData()
+     * itself never includes them, so there'd be nothing to read from the
+     * export even if this preferred to.
+     *
+     * @param array<string, mixed> $export
+     * @return array{game: array<string, mixed>, events: array<int, array{id:int, event_type:string, acting_game_player_id:?int, card_id:?int, details: array<string, mixed>}>, catalog: array<int, array<string, mixed>>, gameCards: array<int, array<string, mixed>>, catalogCardIdFor: array<int,int>, playerIds: int[], teamIdByPlayer: array<int,int>, resignedPlayerIds: int[], hasSeparateDecks: bool}
+     */
+    public function contextFromExport(array $export): array
+    {
+        foreach (['game', 'game_players', 'game_cards', 'game_events'] as $key) {
+            if (!isset($export[$key]) || !is_array($export[$key])) {
+                throw new GameStateException("Exported game data is missing its own '{$key}' section");
+            }
+        }
+
+        $game = $export['game'];
+        if (($game['status'] ?? null) !== 'completed') {
+            throw new GameStateException("Exported game isn't completed -- replay is only available once a game is over");
+        }
+
+        $gameCards = $export['game_cards'];
+        $catalogCardIdFor = [];
+        foreach ($gameCards as $row) {
+            $catalogCardIdFor[(int) $row['id']] = (int) $row['card_id'];
+        }
+
+        $playerRows = $export['game_players'];
+        usort($playerRows, static fn (array $a, array $b): int => $a['seat_order'] <=> $b['seat_order']);
+        $playerIds = [];
+        $teamIdByPlayer = [];
+        $resignedPlayerIds = [];
+        foreach ($playerRows as $row) {
+            $playerId = (int) $row['id'];
+            $playerIds[] = $playerId;
+            if (($row['team_id'] ?? null) !== null) {
+                $teamIdByPlayer[$playerId] = (int) $row['team_id'];
+            }
+            if (($row['resigned_at'] ?? null) !== null) {
+                $resignedPlayerIds[] = $playerId;
+            }
+        }
+
+        $events = array_map(
+            static fn (array $row): array => [
+                'id' => (int) $row['id'],
+                'event_type' => $row['event_type'],
+                'acting_game_player_id' => $row['acting_game_player_id'] !== null ? (int) $row['acting_game_player_id'] : null,
+                'card_id' => $row['card_id'] !== null ? (int) $row['card_id'] : null,
+                'details' => $row['details'] ?? [],
+            ],
+            $export['game_events'],
+        );
+        usort($events, static fn (array $a, array $b): int => $a['id'] <=> $b['id']);
+
+        return [
+            'game' => $game,
+            'events' => $events,
             'catalog' => $this->loadCatalog(),
             'gameCards' => $gameCards,
             'catalogCardIdFor' => $catalogCardIdFor,
@@ -227,7 +345,7 @@ final class ReplayStateBuilder
         // second, brand-new entering-play moment that would wipe out
         // whatever suppression/effectState the card had already
         // accumulated in play since the original event.
-        $playedFrom = $details['played_from'] ?? null;
+        $playedFrom = self::playedFromFor($details, $event['card_id']);
         if ($playedFrom !== null && $event['card_id'] !== null && !isset($inPlay[$event['card_id']])) {
             $cardId = $event['card_id'];
             $ownerId = $event['acting_game_player_id'];
@@ -382,7 +500,7 @@ final class ReplayStateBuilder
         $firstPlayedFromEventId = [];
         foreach ($events as $event) {
             $cardId = $event['card_id'];
-            if ($cardId !== null && ($event['details']['played_from'] ?? null) !== null && !isset($firstPlayedFromEventId[$cardId])) {
+            if ($cardId !== null && self::playedFromFor($event['details'], $cardId) !== null && !isset($firstPlayedFromEventId[$cardId])) {
                 $firstPlayedFromEventId[$cardId] = $event['id'];
             }
         }
@@ -416,7 +534,7 @@ final class ReplayStateBuilder
             $this->unapplyCardMove($move, $hasSeparateDecks, $hands, $decks, $discard, $inPlay);
         }
 
-        $playedFrom = $details['played_from'] ?? null;
+        $playedFrom = self::playedFromFor($details, $event['card_id']);
         if ($playedFrom !== null && $event['card_id'] !== null && $firstPlayedFromEventId[$event['card_id']] === $event['id']) {
             $cardId = $event['card_id'];
             $ownerId = $event['acting_game_player_id'];
@@ -455,6 +573,51 @@ final class ReplayStateBuilder
         } elseif ($move['from_zone'] === 'discard') {
             $discard[] = $cardId;
         }
+    }
+
+    /**
+     * Reported live: "Anger was weirdly duplicated after it was played,
+     * still showed in hand after play, as well as in the discard pile."
+     * $details['played_from'] is normally set by GameService::
+     * withPlayedFrom() right after a card enters play -- but that's a
+     * LIVE re-read of the mood's own current effectState
+     * (BoardState::effectState() only ever looks at $moodsInPlay), taken
+     * AFTER the same event's own afterPlaying() has already fully run.
+     * For an effect that can legally target/discard/move ITSELF as one
+     * of its own targets (Anger's "any number of moods" with
+     * CardChoiceSchema's own 'includes_self' => true, Conviction
+     * targeting itself, etc.), the just-played card has already left
+     * $moodsInPlay by the time that live read happens, so
+     * withPlayedFrom() silently never attaches the top-level key at all
+     * -- even though the SAME event's own 'effect_state_changes' always,
+     * unconditionally records the mood's 'playedFromZone' tag the
+     * instant it enters play (BoardState::initialEffectState(), queued
+     * via consumeEffectStateChanges() rather than re-derived from live
+     * state, so it survives the mood leaving play again within the same
+     * request). Without this fallback, both applyEventForward() and
+     * deriveGenesis()/unapplyEvent() below never recognize such an event
+     * as "this card just left hand/discard", so the forward walk leaves
+     * the card sitting in hand AND lets its own card_moves entry push it
+     * into the discard pile too (the reported duplicate), while the
+     * reverse walk (genesis) leaves it stranded in a local scratch
+     * bucket that's never returned, silently dropping it from the
+     * reconstructed round-1 starting hand entirely.
+     */
+    private static function playedFromFor(array $details, ?int $cardId): ?string
+    {
+        if (isset($details['played_from'])) {
+            return $details['played_from'];
+        }
+        if ($cardId === null) {
+            return null;
+        }
+        foreach ($details['effect_state_changes'] ?? [] as $change) {
+            if ($change['card_id'] === $cardId && $change['key'] === 'playedFromZone' && !$change['cleared']) {
+                return $change['value'];
+            }
+        }
+
+        return null;
     }
 
     /** @param int[] $list @return int[] */
