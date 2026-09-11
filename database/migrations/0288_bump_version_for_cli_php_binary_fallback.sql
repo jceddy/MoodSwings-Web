@@ -1,0 +1,26 @@
+-- Reported live: once migration 0287 got bin/'s own scripts actually
+-- deployed, exec()'s spawned processes started throwing "declare(strict_types=1)
+-- declaration must be the very first statement in the script" -- on a
+-- file byte-for-byte identical to every other bin/ script that already
+-- worked fine (a leading shebang line, then <?php, then
+-- declare(strict_types=1);).
+--
+-- Root cause: PHP_BINARY is only guaranteed to be a real, directly
+-- executable CLI binary under the CLI SAPI itself. Under PHP-FPM (this
+-- app's own real request-serving SAPI on Bluehost/cPanel), PHP_BINARY
+-- instead resolves to the FPM master's own binary path -- not a script
+-- runner at all -- which evidently mishandles a leading shebang line
+-- when handed one directly, producing this exact confusing parse error
+-- rather than a clean "not a valid invocation" one.
+--
+-- GameService::cliPhpBinary() (used by both launchTacticalBotSearchJob()
+-- and scheduleAutomatedTurnRecheck()) now reads an optional
+-- PHP_CLI_BINARY .env value first, falling back to PHP_BINARY unchanged
+-- when unset -- so an environment where PHP_BINARY already resolves
+-- correctly (local dev, most CI) needs no configuration at all, while a
+-- host where it doesn't can point this at the account's own real CLI
+-- binary path.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.39.15' WHERE id = 1;

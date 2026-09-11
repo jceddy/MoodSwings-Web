@@ -196,6 +196,33 @@ final class AuthService
     }
 
     /**
+     * An already-authenticated user changing their own password (Settings/
+     * User info -- unlike resetPassword() above, reached via a mailed
+     * token instead for someone who can't log in at all, this requires
+     * $currentPassword to match first, the same check login() itself
+     * makes). Every OTHER session is logged out -- a changed password is
+     * as much a "this may have been compromised" signal as a reset is --
+     * except $currentSessionTokenHash's own, so the user isn't logged out
+     * of the very session they just used to make this change; see
+     * SessionRepository::deleteAllForUserExcept()'s own docblock.
+     */
+    public function changePassword(int $userId, string $currentPassword, string $newPassword, string $currentSessionTokenHash): void
+    {
+        $user = $this->users->findById($userId);
+
+        if ($user === null || !password_verify($currentPassword, $user['password_hash'])) {
+            throw new InvalidCredentialsException('Current password is incorrect.');
+        }
+
+        if (strlen($newPassword) < 8 || strlen($newPassword) > 72) {
+            throw new \InvalidArgumentException('Password must be between 8 and 72 characters.');
+        }
+
+        $this->users->updatePasswordHash($userId, password_hash($newPassword, PASSWORD_BCRYPT));
+        $this->sessions->deleteAllForUserExcept($userId, $currentSessionTokenHash);
+    }
+
+    /**
      * @return array{user: array, token: string, expiresAt: DateTimeImmutable}
      */
     public function login(string $username, string $password, ?string $ipAddress, ?string $userAgent): array
@@ -224,7 +251,7 @@ final class AuthService
     }
 
     /**
-     * @return array{user: array{id: int, username: string, email: string, phone_number: ?string, share_presence: bool, default_selections_mode_preference: bool, auto_pass_on_empty_hand: bool, auto_apply_scoring_bonuses: bool, board_layout_preference: string, allow_custom_content: bool, matchmaking_discoverable: bool}, expiresAt: DateTimeImmutable}|null
+     * @return array{user: array{id: int, username: string, email: string, phone_number: ?string, share_presence: bool, default_selections_mode_preference: bool, auto_pass_on_empty_hand: bool, auto_apply_scoring_bonuses: bool, pause_before_own_turn: bool, board_layout_preference: string, allow_custom_content: bool, matchmaking_discoverable: bool}, expiresAt: DateTimeImmutable}|null
      */
     public function currentUser(string $token): ?array
     {
@@ -273,6 +300,20 @@ final class AuthService
                 // sneakinessPlayedThisRound()). See UserRepository::
                 // setAutoApplyScoringBonuses().
                 'auto_apply_scoring_bonuses' => (bool) $session['auto_apply_scoring_bonuses'],
+                // "Pause at the start of your turn" (reported live: "add
+                // a user setting to pause at the end of turn... so a
+                // game should not advance to that user's turn until they
+                // click an 'advance turn' button... to allow users to
+                // more clearly see what happened during a previous turn
+                // before/after scoring effects happen") as a personal
+                // preference (Settings dialog's "Game defaults" section)
+                // -- off by default, unlike auto_pass_on_empty_hand/
+                // auto_apply_scoring_bonuses above, since this adds a
+                // click rather than saving one. Drives GameService::
+                // notifyItsYourTurn()'s own game_rounds.
+                // turn_pending_acknowledgment flag. See UserRepository::
+                // setPauseBeforeOwnTurn().
+                'pause_before_own_turn' => (bool) $session['pause_before_own_turn'],
                 // "Board layout" (issue #417) as a personal preference
                 // (Settings dialog's "Display" section) -- 'above_play_area'
                 // (default) leaves the Round/Score/Players section exactly

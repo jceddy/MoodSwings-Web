@@ -1,0 +1,13 @@
+-- UI tweak (reported live: "in open team games, can we move teammate's
+-- hand under the card to play div that opens when you click a playable
+-- card?").
+--
+-- #teammate-hand-section (Open Team Play's own read-only view of your
+-- teammate's hand, web-static/game/index.html) moved to sit right after
+-- #choices-panel instead of before it -- a pure DOM reorder, no CSS
+-- order/flex/grid rework needed (plain block flow) and no JS changes,
+-- since renderTeammateHand() only ever looks the section up by id.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.33.16' WHERE id = 1;

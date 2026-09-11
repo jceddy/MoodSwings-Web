@@ -90,6 +90,7 @@ final class ReplayStateBuilderTest extends TestCase
                 new FriendshipService(new UserRepository(), new FriendshipRepository()),
             ),
             $this->replay,
+            spawnAutomatedTurnRecheckProcesses: false,
         );
     }
 
@@ -330,6 +331,104 @@ final class ReplayStateBuilderTest extends TestCase
         self::assertSame($viaGenesis->hand($p1), $viaSentinel->hand($p1));
         self::assertSame($viaGenesis->deck(), $viaSentinel->deck());
         self::assertSame([], $viaSentinel->moodsInPlay());
+    }
+
+    /**
+     * The exact scenario reported live: "Anger was weirdly duplicated
+     * after it was played, still showed in hand after play, as well as
+     * in the discard pile." Anger's own CardChoiceSchema field is
+     * 'includes_self' => true, so it can legally target (and discard)
+     * ITSELF as part of its own afterPlaying() -- by the time
+     * GameService::withPlayedFrom() takes its live read of the just-
+     * played card's own effectState to decide whether to log a
+     * top-level 'played_from' key, the card has already left play again
+     * (discarded by its own effect), so that live read comes back empty
+     * and the key never gets attached -- even though the SAME event's
+     * own 'effect_state_changes' already recorded the entering-play tag
+     * moments earlier. Without playedFromFor()'s own fallback to that
+     * more reliable source, stateAsOf() right after this play would show
+     * Anger BOTH still in hand (never removed, since applyEventForward()
+     * never recognized it as entering play) AND in the discard pile (its
+     * own card_moves entry pushes it there unconditionally regardless);
+     * genesis() would drop it from the reconstructed round-1 hand
+     * entirely (stranded in a local scratch bucket unapplyEvent() never
+     * empties back out, since it never recognized the card as having
+     * left play at all).
+     */
+    public function testStateAsOfAndGenesisHandleAngerDiscardingItself(): void
+    {
+        $u1 = $this->insertUser('replayanger1');
+        $u2 = $this->insertUser('replayanger2');
+        $gameId = $this->insertGame('standard', 'in_progress', $u1);
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $angerId = $this->insertGameCard($gameId, 80, 'hand', $p1); // Anger
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $angerId, ['target_mood_ids' => [$angerId]]);
+        $this->markCompleted($gameId);
+
+        $eventId = $this->games->fullEventLog($gameId)[0]['id'];
+
+        $afterAnger = $this->replay->stateAsOf($gameId, $eventId);
+        self::assertSame([], $afterAnger->hand($p1), 'Anger must not linger in hand once it has discarded itself');
+        self::assertSame([$angerId], $afterAnger->discardPile());
+        self::assertSame([], $afterAnger->moodsInPlay());
+
+        $genesis = $this->replay->genesis($gameId);
+        self::assertSame([$angerId], $genesis->hand($p1), 'Anger must still be recovered as round 1\'s original dealt hand');
+        self::assertSame([], $genesis->discardPile());
+    }
+
+    /**
+     * "Is there a way I can replay these in the dev site using the game
+     * export json files?" -- the full round trip a user with a game
+     * played on a different environment actually exercises:
+     * GameService::exportGameData()'s own output, fed straight into
+     * GameService::replayFromExport(), with no row for this game ever
+     * existing in this test's own database at all (the export is the
+     * ONLY source of truth here, same as it would be for a real cross-
+     * environment import). Reuses the exact same Anger-discards-itself
+     * fixture as the test above, so this doubles as confirmation that
+     * the reported duplicate-in-hand-and-discard bug stays fixed all the
+     * way through an export/import round trip too, not just a live
+     * $gameId-based replay.
+     */
+    public function testReplayFromExportReproducesTheSameStatesAsALiveReplay(): void
+    {
+        $u1 = $this->insertUser('replayimport1');
+        $u2 = $this->insertUser('replayimport2');
+        $gameId = $this->insertGame('standard', 'in_progress', $u1);
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $angerId = $this->insertGameCard($gameId, 80, 'hand', $p1); // Anger
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $angerId, ['target_mood_ids' => [$angerId]]);
+        $this->markCompleted($gameId);
+
+        $export = $this->games->exportGameData($gameId, $p1);
+        $eventId = $export['game_events'][0]['id'];
+
+        $genesisImport = $this->games->replayFromExport($export, 0);
+        $p1Genesis = array_values(array_filter($genesisImport['snapshot']['players'], static fn (array $p): bool => $p['game_player_id'] === $p1))[0];
+        self::assertSame(1, $p1Genesis['hand_count'], 'genesis: Anger is still in the original dealt hand');
+        self::assertSame([], $genesisImport['snapshot']['discard_pile']);
+        self::assertSame([], $genesisImport['snapshot']['in_play']);
+
+        $afterAngerImport = $this->games->replayFromExport($export, $eventId);
+        $p1AfterAnger = array_values(array_filter($afterAngerImport['snapshot']['players'], static fn (array $p): bool => $p['game_player_id'] === $p1))[0];
+        self::assertSame(0, $p1AfterAnger['hand_count'], 'Anger must not linger in hand once it has discarded itself, imported same as live');
+        self::assertCount(1, $afterAngerImport['snapshot']['discard_pile']);
+        self::assertSame($angerId, $afterAngerImport['snapshot']['discard_pile'][0]['card_id']);
+        self::assertSame([], $afterAngerImport['snapshot']['in_play']);
+
+        self::assertCount(1, $afterAngerImport['steps'], 'the one real play, same as fullEventLog() would show live');
+        self::assertStringContainsString('Anger', $afterAngerImport['steps'][0]['description']);
     }
 
     public function testStateAsOfRejectsANonCompletedGame(): void

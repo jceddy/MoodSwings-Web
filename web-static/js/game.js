@@ -335,6 +335,20 @@
             saveAutoApplyScoringBonusesPreference(autoApplyScoringBonusesCheckbox.checked);
         });
 
+        // "Pause at the start of your turn" (reported live) -- same
+        // wiring pattern as the two checkboxes above, another purely
+        // server-side behavior (GameService::notifyItsYourTurn()'s own
+        // turn_pending_acknowledgment gate). Starts UNCHECKED (off) by
+        // default, matching users.pause_before_own_turn's own DEFAULT 0
+        // -- unlike auto-pass/auto-apply above, this adds a click rather
+        // than saving one, so it's an explicit opt-in.
+        const pauseBeforeTurnCheckbox = document.getElementById('settings-pause-before-turn-checkbox');
+        pauseBeforeTurnCheckbox.checked = user.pause_before_own_turn;
+        pauseBeforeTurnCheckbox.addEventListener('change', () => {
+            user.pause_before_own_turn = pauseBeforeTurnCheckbox.checked;
+            savePauseBeforeOwnTurnPreference(pauseBeforeTurnCheckbox.checked);
+        });
+
         // "Custom card/effect formats" (issue #405 follow-up) -- same
         // wiring pattern as the checkboxes above, except this one starts
         // UNCHECKED (off) by default, matching users.allow_custom_content's
@@ -1482,6 +1496,21 @@
     let replayCode = null;
     let replayEvents = [];
     let replayEventIndex = 0;
+    // "Is there a way I can replay these in the dev site using the game
+    // export json files?" -- the whole parsed export JSON when the
+    // current replay is reading from an uploaded file rather than a
+    // game_id this server actually has a row for (null otherwise, the
+    // ordinary case). currentGameId stays null throughout an imported
+    // replay -- there generally isn't a real game id to use, since the
+    // export was very likely produced by a different environment's own
+    // database -- so refreshReplayBoard()/renderReplayControls() below
+    // branch on this instead wherever they'd otherwise key off
+    // currentGameId. importedReplayToken changes on every newly loaded
+    // import, giving renderReplayControls() a cache key that's actually
+    // unique across two different imported files (currentGameId alone
+    // would stay null for both).
+    let importedReplayExport = null;
+    let importedReplayToken = 0;
     // Reset in showBoard() so the saved-deck dropdown is re-fetched fresh
     // for each newly-viewed custom_duel game, but not on every 4-second
     // poll's re-render of the SAME game -- see renderDuelDeckSubmission().
@@ -1554,6 +1583,7 @@
         replayCode = null;
         replayEvents = [];
         replayEventIndex = 0;
+        importedReplayExport = null;
         document.getElementById('back-to-lobby-button').textContent = '← Back to your games';
         document.getElementById('replay-controls').hidden = true;
         boardView.hidden = true;
@@ -1593,7 +1623,18 @@
         // carries over a stale selection into a different match's picker.
         quickDraftPickSelection = new Set();
         quickDraftPickSelectionKey = null;
-        quickDraftDeckSelectionInitialized = false;
+        // Every draft deck_type's own deck-building trim step (Quick/
+        // Winston/Grid/Rotisserie/Tiered Rotisserie Draft, Sealed Deck --
+        // see renderDraftDeckBuilding()'s own docblock) shares this one
+        // flag; reset here for the same reason as quickDraftPickSelection
+        // just above (reported live: reopening the deck-building screen
+        // for a brand-new Sealed Deck game -- e.g. right after resigning
+        // an earlier one mid-build -- kept showing the PREVIOUS game's
+        // own selection until a hard refresh, since this used to reset a
+        // since-renamed variable -- quickDraftDeckSelectionInitialized,
+        // dead ever since the deck-building step was generalized past
+        // Quick Draft -- rather than this one).
+        draftDeckSelectionInitialized = false;
         showLoadingOverlay();
         refreshBoard().finally(hideLoadingOverlay);
         if (pollTimer) {
@@ -1664,6 +1705,71 @@
         await loadReplayEventsAndShow().finally(hideLoadingOverlay);
     }
 
+    // "Is there a way I can replay these in the dev site using the game
+    // export json files?" -- showReplayBoard()'s own sibling for a game
+    // this server has no row for at all: exportData is the whole parsed
+    // export JSON (see openReplayImportPicker()), never currentGameId,
+    // since the export was very likely produced by an entirely different
+    // environment's own database. Reuses the exact same #board-view/
+    // renderBoard()/#replay-controls as every other read-only view above
+    // -- refreshReplayBoard()/renderReplayControls() branch on
+    // importedReplayExport wherever they'd otherwise need a real
+    // currentGameId.
+    async function showImportedReplayBoard(exportData) {
+        pushDisplayHistoryEntry();
+        currentGameId = null;
+        isReplaying = true;
+        replayCode = null;
+        importedReplayExport = exportData;
+        importedReplayToken += 1;
+        document.getElementById('back-to-lobby-button').textContent = '← Exit replay';
+        lobbyView.hidden = true;
+        boardView.hidden = false;
+        boardMessage.hidden = true;
+        showLoadingOverlay();
+        await loadImportedReplayEventsAndShow().finally(hideLoadingOverlay);
+    }
+
+    // loadReplayEventsAndShow()'s own imported-export sibling: unlike the
+    // live path (GET /games/log, reused as-is for the step list, then a
+    // separate GET /games/replay/state per step), postReplayImport()
+    // bundles both the step list (GameService::replayFromExport()'s own
+    // 'steps' key) and the requested snapshot into one call, since
+    // there's no per-import GET /games/log to fetch the list from
+    // separately -- so this always starts at genesis (event_id 0)
+    // itself, rather than delegating a second fetch to
+    // refreshReplayBoard() below.
+    async function loadImportedReplayEventsAndShow() {
+        boardError.hidden = true;
+        document.getElementById('replay-controls').hidden = false;
+        if (pollTimer) {
+            clearInterval(pollTimer);
+            pollTimer = null;
+        }
+
+        const seq = ++boardRequestSeq;
+        const { ok, body } = await postReplayImport(importedReplayExport, 0);
+        if (seq !== boardRequestSeq) {
+            return; // a newer refreshBoard()/refreshReplayBoard() call has since been issued -- stale, ignore it
+        }
+        if (!ok) {
+            boardError.textContent = body.message || 'Could not read this export file.';
+            boardError.hidden = false;
+            return;
+        }
+
+        replayEvents = [{ id: 0, round_number: null, description: 'Game start (hands dealt, nothing played yet)' }, ...body.steps];
+        replayEventIndex = 0;
+        boardError.hidden = true;
+        body.you = { game_player_id: null, hand: [], is_your_turn: false };
+        if (isSharedDeckType(body.game.deck_type) && body.players.length > 0) {
+            body.deck_count = body.players[0].deck_count;
+        }
+        currentState = body;
+        renderBoard(body);
+        renderReplayControls();
+    }
+
     // Shared by showReplayBoard() above and spectator mode watching a
     // COMPLETED game (issue #128 + #240, see refreshBoard()'s own
     // isSpectating branch below) -- both end up showing the exact same
@@ -1702,7 +1808,9 @@
     async function refreshReplayBoard() {
         const seq = ++boardRequestSeq;
         const eventId = replayEvents[replayEventIndex].id;
-        const { ok, body } = await getReplayGameState(currentGameId, eventId, activeShareCode());
+        const { ok, body } = importedReplayExport !== null
+            ? await postReplayImport(importedReplayExport, eventId)
+            : await getReplayGameState(currentGameId, eventId, activeShareCode());
         if (seq !== boardRequestSeq) {
             return; // a newer refreshBoard()/refreshReplayBoard() call has since been issued -- stale, ignore it
         }
@@ -1731,8 +1839,15 @@
     function renderReplayControls() {
         const select = document.getElementById('replay-event-select');
         const position = document.getElementById('replay-position');
+        // currentGameId stays null for the whole lifetime of an imported
+        // replay (see showImportedReplayBoard()'s own docblock), so a
+        // second, DIFFERENT imported file would otherwise share the same
+        // 'null' cache key as the first and never rebuild this dropdown
+        // -- importedReplayToken changes on every newly loaded import,
+        // giving each one a genuinely distinct key.
+        const replayCacheKey = importedReplayExport !== null ? 'import:' + importedReplayToken : String(currentGameId);
 
-        if (select.dataset.gameId !== String(currentGameId)) {
+        if (select.dataset.gameId !== replayCacheKey) {
             select.innerHTML = '';
             replayEvents.forEach((event, index) => {
                 const option = document.createElement('option');
@@ -1743,7 +1858,7 @@
                 option.textContent = label.length > 53 ? label.slice(0, 50) + '...' : label;
                 select.appendChild(option);
             });
-            select.dataset.gameId = String(currentGameId);
+            select.dataset.gameId = replayCacheKey;
         }
         select.value = String(replayEventIndex);
 
@@ -1755,13 +1870,20 @@
         document.getElementById('replay-next-button').disabled = replayEventIndex >= replayEvents.length - 1;
     }
 
+    // Mirrors GameService::DRAFT_DECK_TYPES -- every draft-family
+    // deck_type, kept as one shared array (rather than repeating the
+    // literal list at every call site the way this file used to) since
+    // issue #520's own 'sealed_pool_of_the_day' addition was the point
+    // every one of those repeats needed to change anyway.
+    const DRAFT_DECK_TYPES = ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck', 'sealed_pool_of_the_day', 'weekly_sealed_pool'];
+
     // Mirrors GameService::isSharedDeckType() -- every deck_type except
-    // custom_duel and the five draft-based ones puts the whole table on
-    // one shared deck rather than giving each player their own, so those
-    // six are the only deck_types with no single "the deck" for
+    // custom_duel and the draft-based ones puts the whole table on one
+    // shared deck rather than giving each player their own, so those are
+    // the only deck_types with no single "the deck" for
     // openSharedDeckView() (issue #197) to show.
     function isSharedDeckType(deckType) {
-        return !['custom_duel', 'quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck'].includes(deckType);
+        return deckType !== 'custom_duel' && !DRAFT_DECK_TYPES.includes(deckType);
     }
 
     // Plain-language explanation shown under the New Game dialog's own
@@ -1782,6 +1904,7 @@
         tiered_rotisserie_draft: 'Like Rotisserie Draft, but split into several tiers drafted one after another (turn order carries straight through from one tier into the next). Choose the fixed rarity tiering (Mythic/Rare/Uncommon/Common, each tier\'s own layout twice what it distributes -- a 15-card pool per player) or configure 2-4 custom tiers yourself, each with its own pool and cutoff count. 2-4 players; a 2-player draft plays a best-of-three match, sideboarding freely between games, while a 3-4 player draft plays a single game.',
         chaos_draft: 'Quick Draft\'s own drafting, deck-building, and match structure, unchanged -- but at the start of every round, each player (or team, in Open Team Play) is offered a choice between two randomly-generated effects and attaches the chosen one permanently to a card in their hand, stacking with that card\'s own printed ability.',
         sealed_deck: '2-4 players, no live drafting at all: each player is independently dealt their own random 45-card Structure deck-style sealed pool (23 common, 14 uncommon, 6 rare, 2 mythic) and builds a deck of at least 12 cards straight from it. A 2-player game plays a best-of-three match, sideboarding freely between games from that same fixed pool; a 3-4 player game is a single game.',
+        sealed_pool_of_the_day: 'Exactly 2 players, both dealt the exact SAME 50-card pool (20 common, 15 uncommon, 10 rare, 5 mythic) -- generated once per day and shared by every Sealed Pool of the Day game created that day, so everyone is building from identical card availability. Your deck (at least 12 cards) can include at most 4 rares and 2 mythics from that pool. Always plays a best-of-three match.',
         one_of_each: 'The full 133-card pool — one copy of every printed mood.',
     };
 
@@ -2223,6 +2346,23 @@
             case 'tiered_rotisserie_draft': return format === 'closed_team' || format === 'team';
             case 'chaos_draft': return format === 'closed_team' || format === 'team';
             case 'sealed_deck': return format === 'closed_team' || format === 'team';
+            // Never independently selectable in this dropdown for any
+            // format, unlike 'sealed_deck' above -- reached only through
+            // its own top-level Format sentinel (see
+            // updateDeckTypeAvailability()'s own early-return branch),
+            // never as a Team Play/Closed Team Play deck-type choice.
+            // Open Team Play's own "teammates see each other's drafted
+            // cards" premise reads oddly against a pool that's already
+            // shared with the whole rest of the app for the day, so this
+            // is deliberately narrower in scope than Sealed Deck itself.
+            // Weekly Sealed Pool (issue #520) is never selectable here
+            // either -- unlike every other entry in this dispatch, it has
+            // no New Game dialog path at all (a match is only ever
+            // created by WeeklySealedPoolQueueService pairing two already-
+            // queued players), so this arm is purely defensive.
+            case 'sealed_pool_of_the_day':
+            case 'weekly_sealed_pool':
+                return false;
             case 'power': return format !== 'team' && format !== 'closed_team';
             default: return true;
         }
@@ -2235,19 +2375,21 @@
     // migration 0027), so this only ever applies to a non-draft deck_type
     // under one of the three non-draft formats.
     function isBestOfThreeAvailable(deckType, format) {
-        const isDraftDeckType = ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck'].includes(deckType);
+        const isDraftDeckType = DRAFT_DECK_TYPES.includes(deckType);
         if (isDraftDeckType) {
             return false;
         }
-        if (format === 'duel' || format === 'team' || format === 'closed_team') {
+        if (format === 'team' || format === 'closed_team') {
             return true;
         }
-        // Traditional (issue #90 follow-up) only qualifies at exactly 2
-        // players -- with 3-4, "first to 2 game wins" no longer names a
-        // single opponent, the same reason a draft match itself falls
-        // back to a single game past 2 players (see createGame()'s own
-        // docblock in php-app/README.md's "Best of three" section).
-        if (format === 'standard') {
+        // Duel/Traditional (issue #505/issue #90 follow-up) only qualify
+        // at exactly 2 players -- with 3-4, "first to 2 game wins" no
+        // longer names a single opponent, the same reason a draft match
+        // itself falls back to a single game past 2 players (see
+        // createGame()'s own docblock in php-app/README.md's "Best of
+        // three" section). The team formats above stay unrestricted --
+        // a "side" there is always exactly 2 of the 4 seats regardless.
+        if (format === 'duel' || format === 'standard') {
             return currentNewGamePlayerCount() === 2;
         }
 
@@ -2255,14 +2397,15 @@
     }
 
     // How many total players (including the creator) the New Game
-    // dialog's current selections add up to -- Duel/the team formats
-    // already have a fixed count of their own, so this only matters for
-    // isBestOfThreeAvailable()'s own Traditional check above.
+    // dialog's current selections add up to -- the team formats already
+    // have a fixed count of their own, so this only matters for
+    // isBestOfThreeAvailable()'s own Duel/Traditional check above. 'duel'
+    // no longer has a fixed count either (issue #505: constructed Duel
+    // deck types now support 2-4 players, same as 'draft'), so it falls
+    // through to the same checked-opponent-count formula 'draft'/
+    // 'standard' already use below.
     function currentNewGamePlayerCount() {
         const format = effectiveNewGameFormat();
-        if (format === 'duel') {
-            return 2;
-        }
         if (format === 'team' || format === 'closed_team') {
             return 4;
         }
@@ -2287,7 +2430,7 @@
     // sentinel already isn't any of those.
     function effectiveNewGameFormat() {
         const raw = document.getElementById('new-game-format').value;
-        return raw === 'sealed_deck' ? 'draft' : raw;
+        return raw === 'sealed_deck' || raw === 'sealed_pool_of_the_day' ? 'draft' : raw;
     }
 
     // Unavailable deck types are hidden (not merely disabled) so the
@@ -2312,9 +2455,16 @@
         // stays visible and up to date regardless, via
         // updateDeckTypeDescription() below.
         const isSealedDeckFormat = format === 'sealed_deck';
-        document.getElementById('new-game-deck-type-label').hidden = isSealedDeckFormat;
-        if (isSealedDeckFormat) {
-            deckTypeSelect.value = 'sealed_deck';
+        // Sealed Pool of the Day (issue #520) is the identical kind of
+        // UI-only sentinel as Sealed Deck immediately above -- a real
+        // format: 'draft' game, deck_type: 'sealed_pool_of_the_day' (see
+        // the submit handler below) -- and for the same reason (no live
+        // drafting phase, so the Deck dropdown would just be a dead
+        // single-option control) hides that dropdown entirely too.
+        const isSealedPoolOfTheDayFormat = format === 'sealed_pool_of_the_day';
+        document.getElementById('new-game-deck-type-label').hidden = isSealedDeckFormat || isSealedPoolOfTheDayFormat;
+        if (isSealedDeckFormat || isSealedPoolOfTheDayFormat) {
+            deckTypeSelect.value = isSealedDeckFormat ? 'sealed_deck' : 'sealed_pool_of_the_day';
             updateDeckTypeDescription();
             updateOpponentSelectionLimit();
             return;
@@ -2489,12 +2639,13 @@
             const deckDescription = game.deck_type === 'custom'
                 ? (game.custom_deck_name || 'Uploaded Deck')
                 : deckTypeLabel(game.deck_type) + ' deck';
-            // Sealed Deck is a UI-only sentinel over format 'draft' -- see
-            // renderBoard()'s own identical exception for why this
-            // replaces the whole format/deck combination rather than
-            // showing "Draft, Sealed Deck deck".
-            const formatAndDeckDescription = game.deck_type === 'sealed_deck'
-                ? 'Sealed Deck'
+            // Sealed Deck/Sealed Pool of the Day/Weekly Sealed Pool are
+            // UI-only sentinels over format 'draft' -- see renderBoard()'s
+            // own identical exception for why this replaces the whole
+            // format/deck combination rather than showing "Draft, Sealed
+            // Deck deck".
+            const formatAndDeckDescription = ['sealed_deck', 'sealed_pool_of_the_day', 'weekly_sealed_pool'].includes(game.deck_type)
+                ? deckTypeLabel(game.deck_type)
                 : formatLabel(game.format) + ', ' + deckDescription;
             const formatEl = document.createElement('div');
             formatEl.className = 'lobby-format';
@@ -2632,13 +2783,14 @@
         const deckDescription = firstGame.deck_type === 'custom'
             ? (firstGame.custom_deck_name || 'Uploaded Deck')
             : deckTypeLabel(firstGame.deck_type) + ' deck';
-        // Sealed Deck's own 2-player best-of-three match is grouped here
-        // too (it has a draft_match_id just like Quick/Winston Draft) --
-        // see renderBoard()'s own identical exception for why this
-        // replaces the whole format/deck combination rather than showing
-        // "Draft, Sealed Deck deck".
-        const formatAndDeckDescription = firstGame.deck_type === 'sealed_deck'
-            ? 'Sealed Deck'
+        // Sealed Deck/Sealed Pool of the Day/Weekly Sealed Pool's own
+        // 2-player best-of-three match is grouped here too (each has a
+        // draft_match_id just like Quick/Winston Draft) -- see
+        // renderBoard()'s own identical exception for why this replaces
+        // the whole format/deck combination rather than showing "Draft,
+        // Sealed Deck deck".
+        const formatAndDeckDescription = ['sealed_deck', 'sealed_pool_of_the_day', 'weekly_sealed_pool'].includes(firstGame.deck_type)
+            ? deckTypeLabel(firstGame.deck_type)
             : formatLabel(firstGame.format) + ', ' + deckDescription;
         const formatEl = document.createElement('div');
         formatEl.className = 'lobby-format';
@@ -2812,6 +2964,40 @@
         history.back();
     });
 
+    // "Is there a way I can replay these in the dev site using the game
+    // export json files?" -- opens the hidden file input; its own
+    // 'change' handler below actually reads and parses the file. A
+    // second click on an already-picked file doesn't fire 'change' on
+    // its own, so the value is cleared first -- otherwise re-importing
+    // the SAME file right after a parse error (or just to look at it
+    // again) would silently do nothing.
+    document.getElementById('import-replay-button').addEventListener('click', () => {
+        const input = document.getElementById('import-replay-file-input');
+        input.value = '';
+        input.click();
+    });
+
+    document.getElementById('import-replay-file-input').addEventListener('change', async (event) => {
+        const file = event.target.files[0];
+        if (!file) {
+            return;
+        }
+
+        let exportData;
+        try {
+            exportData = JSON.parse(await file.text());
+        } catch (error) {
+            alert("Couldn't read " + file.name + ' -- it doesn\'t look like valid JSON.');
+            return;
+        }
+        if (!exportData || typeof exportData !== 'object' || !exportData.game || !exportData.game_events) {
+            alert("Couldn't read " + file.name + " -- it doesn't look like a game export (expected the file GET /games/export downloads).");
+            return;
+        }
+
+        await showImportedReplayBoard(exportData);
+    });
+
     // Routes through the browser's own back-navigation handling (see
     // "Browser back button" below) rather than calling showLobby()/
     // window.location.href directly -- showBoard()/showSpectatorBoard()/
@@ -2852,18 +3038,31 @@
     const newGameError = document.getElementById('new-game-error');
     const opponentCheckboxes = document.getElementById('opponent-checkboxes');
 
-    // 'duel' games require exactly 2 players total (enforced server-side
-    // by GameService::isDuelShapedFormat()'s own check in createGame()),
-    // so at most 1 opponent may be chosen for that -- every 'draft'
-    // deck_type (quick_draft/grid_draft/winston_draft/rotisserie_draft)
-    // now supports 2-4 players (issue #189), so up to 3 opponents; every
-    // other format allows up to 3 as well. Re-run on every checkbox change and every
-    // format/deck-type-dropdown change, so switching to a 2-player-only
-    // combination with 2+ opponents already checked un-checks the extras
-    // (keeping the first one) rather than leaving a selection the server
-    // would just reject.
-    function opponentSelectionMax(format) {
-        return format === 'duel' ? 1 : 3;
+    // Every format supports up to 3 opponents (2-4 players total) now:
+    // every 'draft' deck_type (quick_draft/grid_draft/winston_draft/
+    // rotisserie_draft/tiered_rotisserie_draft/chaos_draft/sealed_deck)
+    // has since issue #189, and every constructed 'duel' deck_type
+    // (custom_duel/power/structure/jceddys_75) does too as of issue #505
+    // (enforced server-side by GameService::isDuelShapedFormat()'s own
+    // check in createGame()) -- 'duel' no longer needs its own lower cap
+    // here. Sealed Pool of the Day is the one exception (issue #520
+    // follow-up, reported live: "let's limit sealed pool of the day/week
+    // to only two players") -- capped at 1 opponent, matching
+    // GameService::createGame()'s own exactly-2-players requirement for
+    // this deck type. Weekly Sealed Pool is checked here too purely for
+    // defensive symmetry -- it has no New Game dialog path at all (see
+    // isDeckTypeAvailableForFormat()'s own docblock), so this never
+    // actually fires for it in practice. Re-run on every checkbox change
+    // and every format/deck-type-dropdown change, so switching to a
+    // combination that supports fewer players with more already checked
+    // un-checks the extras (keeping the earliest ones) rather than
+    // leaving a selection the server would just reject.
+    function opponentSelectionMax() {
+        const deckType = document.getElementById('new-game-deck-type').value;
+        if (deckType === 'sealed_pool_of_the_day' || deckType === 'weekly_sealed_pool') {
+            return 1;
+        }
+        return 3;
     }
 
     // Practice bots (issue #140) -- mirrors GameService::botsSupportedFor()
@@ -2876,9 +3075,9 @@
     // a per-seat one, so a bot needs nothing extra to "have" one.
     // 'custom_duel' is its own separate special case (still not in this
     // list), since it's a genuinely per-seat decklist --
-    // #new-game-bot-decklist-fields below lets the creator supply the
-    // bot's own decklist directly for that one, rather than needing the
-    // bot to submit one itself; it can never combine with 'team'/
+    // #new-game-bot-decklist-fields below lets the creator supply each
+    // seated bot's own decklist directly for that one, rather than
+    // needing the bot to submit one itself; it can never combine with 'team'/
     // 'closed_team' anyway (Duel-only). Team Play (issue #360): up to all
     // 3 opponent seats can be bots, same as every other supported format
     // -- opponentSelectionMax()'s own cap and updateTeamFields()'s own
@@ -2894,7 +3093,21 @@
         if (format === 'duel' && deckType === 'custom_duel') {
             return true;
         }
-        if (['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck'].includes(deckType)) {
+        // Mirrors GameService::botsSupportedFor()'s own exclusion --
+        // Weekly Sealed Pool's own standings ladder has no way to
+        // represent a practice bot (and its queue never seats one
+        // anyway), so it's excluded here regardless of format. Sealed
+        // Pool of the Day itself is fully supported now (issue #520
+        // follow-up: "since we aren't tracking standings for sealed pool
+        // of the day, let's allow practice bots for those" -- chooseDraftDeck()
+        // learned to respect the per-rarity cap, see that method's own
+        // docblock), so it's no longer excluded here either -- it just
+        // falls through to the DRAFT_DECK_TYPES check below like every
+        // other draft deck_type.
+        if (deckType === 'weekly_sealed_pool') {
+            return false;
+        }
+        if (DRAFT_DECK_TYPES.includes(deckType)) {
             return true;
         }
         return ['structure', 'power', 'jceddys_75', 'one_of_each', 'custom'].includes(deckType);
@@ -2905,20 +3118,134 @@
         return Array.from(opponentCheckboxes.querySelectorAll('input[data-is-bot]')).some((box) => box.checked);
     }
 
-    // #new-game-bot-decklist-fields (the bot's own decklist, since it can
-    // never submit one itself the way its human opponent does after the
-    // game is created) only makes sense once BOTH a bot is actually
-    // checked AND deck_type is 'custom_duel' -- unlike every other
-    // deck-type-driven field, this can't be computed from deckType alone.
-    // Called from updateDeckTypeDescription() (deck-type changes),
+    // Diagnostic mode (issue reported live: "add a 'diagnostic mode'
+    // checkbox when creating a game including one or more tactical
+    // bot(s)") only ever does anything once a checked bot is specifically
+    // a Tactical Bot -- see GameService::createGame()'s own
+    // $diagnosticMode docblock, which silently ignores it otherwise.
+    function anyTacticalBotChecked() {
+        return Array.from(opponentCheckboxes.querySelectorAll('input[data-is-bot][data-uses-tactical-ai]')).some((box) => box.checked);
+    }
+
+    // #new-game-bot-decklist-fields (each seated bot's own decklist, since
+    // it can never submit one itself the way its human opponent does
+    // after the game is created) only makes sense once BOTH a bot is
+    // actually checked AND deck_type is 'custom_duel' -- unlike every
+    // other deck-type-driven field, this can't be computed from deckType
+    // alone. Renders one field-group per currently-checked bot (issue
+    // #505 follow-up: custom_duel now supports seating 2+ bots, each
+    // needing its own decklist), keyed by that bot's own user id
+    // (group.dataset.botUserId) so collectBotDecklists() below can read
+    // them back the same way. Rebuilt from scratch on every call rather
+    // than diffed/patched -- simpler, and cheap since there are at most
+    // MAX_PLAYERS - 1 bot seats -- but preserves any already-entered
+    // saved-deck choice/pasted text for a bot that's still checked, so
+    // toggling an unrelated bot's checkbox doesn't wipe out what was
+    // already filled in for this one. Called from
+    // updateDeckTypeDescription() (deck-type changes),
     // updateBotCheckboxAvailability() (format changes, which can hide/
     // uncheck a bot outright), and every bot checkbox's own 'change'.
-    function updateBotDecklistFieldsVisibility() {
+    async function updateBotDecklistFieldsVisibility() {
         const deckType = document.getElementById('new-game-deck-type').value;
-        const show = deckType === 'custom_duel' && anyBotChecked();
+        const checkedBots = Array.from(opponentCheckboxes.querySelectorAll('input[data-is-bot]:checked'));
+        const show = deckType === 'custom_duel' && checkedBots.length > 0;
         document.getElementById('new-game-bot-decklist-fields').hidden = !show;
-        document.getElementById('new-game-bot-decklist-paste-fields').hidden =
-            !show || document.getElementById('new-game-bot-saved-decklist').value !== '';
+        if (!show) {
+            return;
+        }
+
+        const container = document.getElementById('new-game-bot-decklist-groups');
+        const previousValues = {};
+        for (const group of container.querySelectorAll('[data-bot-user-id]')) {
+            previousValues[group.dataset.botUserId] = {
+                savedDecklistId: group.querySelector('.new-game-bot-decklist-saved').value,
+                decklistText: group.querySelector('.new-game-bot-decklist-text').value,
+            };
+        }
+
+        container.innerHTML = '';
+        for (const checkbox of checkedBots) {
+            const userId = checkbox.value;
+            const botUsername = checkbox.closest('label').textContent.trim();
+
+            const group = document.createElement('div');
+            group.className = 'new-game-bot-decklist-group';
+            group.dataset.botUserId = userId;
+
+            const heading = document.createElement('p');
+            heading.textContent = botUsername + "'s deck:";
+            group.appendChild(heading);
+
+            const savedLabel = document.createElement('label');
+            savedLabel.append('Use a saved deck ');
+            const savedSelect = document.createElement('select');
+            savedSelect.className = 'new-game-bot-decklist-saved';
+            savedLabel.appendChild(savedSelect);
+            group.appendChild(savedLabel);
+
+            const pasteFields = document.createElement('div');
+            pasteFields.className = 'new-game-bot-decklist-paste-fields';
+
+            const fileLabel = document.createElement('label');
+            fileLabel.append('Upload a decklist file ');
+            const fileInput = document.createElement('input');
+            fileInput.type = 'file';
+            fileInput.accept = '.txt,text/plain';
+            fileLabel.appendChild(fileInput);
+            pasteFields.appendChild(fileLabel);
+
+            const textLabel = document.createElement('label');
+            textLabel.append("Or paste the bot's decklist ");
+            const textArea = document.createElement('textarea');
+            textArea.className = 'new-game-bot-decklist-text decklist-textarea';
+            textArea.rows = 10;
+            textLabel.appendChild(textArea);
+            pasteFields.appendChild(textLabel);
+
+            group.appendChild(pasteFields);
+            container.appendChild(group);
+
+            // Same pattern as #new-game-decklist-file above: reading an
+            // uploaded file into the textarea lets both input methods
+            // share the same collectBotDecklists() read below.
+            fileInput.addEventListener('change', async (event) => {
+                const file = event.target.files[0];
+                if (!file) {
+                    return;
+                }
+                textArea.value = await file.text();
+            });
+            savedSelect.addEventListener('change', () => {
+                pasteFields.hidden = savedSelect.value !== '';
+            });
+
+            await populateSavedDecklistSelect(savedSelect);
+            const previous = previousValues[userId];
+            if (previous) {
+                savedSelect.value = previous.savedDecklistId;
+                textArea.value = previous.decklistText;
+            }
+            pasteFields.hidden = savedSelect.value !== '';
+        }
+    }
+
+    // Reads back what updateBotDecklistFieldsVisibility() above rendered
+    // -- one entry per currently-checked bot, keyed by that bot's own
+    // user id, each following the same "either decklist_text or
+    // saved_decklist_id" shape GameService::createGame()'s own
+    // $botDecklists expects. Only meaningful for deck_type 'custom_duel'
+    // with 1+ bots checked; the New Game form's own submit handler is the
+    // only caller.
+    function collectBotDecklists() {
+        const decklists = {};
+        for (const group of document.getElementById('new-game-bot-decklist-groups').querySelectorAll('[data-bot-user-id]')) {
+            const savedDecklistId = Number(group.querySelector('.new-game-bot-decklist-saved').value) || undefined;
+            decklists[group.dataset.botUserId] = {
+                saved_decklist_id: savedDecklistId,
+                decklist_text: savedDecklistId === undefined ? group.querySelector('.new-game-bot-decklist-text').value : undefined,
+            };
+        }
+        return decklists;
     }
 
     // Issue #417's own "let the bot go first" item -- only meaningful
@@ -2937,6 +3264,19 @@
         document.getElementById('new-game-bot-goes-first-label').hidden = !show;
         if (!show) {
             document.getElementById('new-game-bot-goes-first').checked = false;
+        }
+    }
+
+    // Diagnostic mode's own checkbox -- shown whenever a checked bot is a
+    // Tactical Bot, regardless of format/deck_type (createGame() applies
+    // the same gating server-side no matter what else is chosen).
+    // Unchecked (not just hidden) whenever it goes out of view, same as
+    // every other conditionally-shown New Game field.
+    function updateDiagnosticModeFieldVisibility() {
+        const show = anyTacticalBotChecked();
+        document.getElementById('new-game-diagnostic-mode-label').hidden = !show;
+        if (!show) {
+            document.getElementById('new-game-diagnostic-mode').checked = false;
         }
     }
 
@@ -3000,11 +3340,11 @@
         updateOpponentSelectionLimit();
         updateBotDecklistFieldsVisibility();
         updateBotGoesFirstFieldVisibility();
+        updateDiagnosticModeFieldVisibility();
     }
 
     function updateOpponentSelectionLimit() {
-        const format = document.getElementById('new-game-format').value;
-        const maxOpponents = opponentSelectionMax(format);
+        const maxOpponents = opponentSelectionMax();
         const boxes = opponentCheckboxes.querySelectorAll('input');
 
         let checkedCount = 0;
@@ -3051,18 +3391,32 @@
     // the creator actually choose a total (2-4); 'duel' is always 2 and
     // the team formats are always 4, both forced server-side regardless
     // of what this field would send, so it stays hidden for those.
-    // updateTeamFields() (called via the format 'change' listener already
-    // wired below) independently keeps #new-game-team-fields hidden in
-    // this mode even for a team format -- there's no partner to choose
-    // from strangers, so teams are always assigned randomly once the
-    // roster fills (see MatchmakingService::joinOpenGame()).
+    // Sealed Pool of the Day is the same idea (issue #520 follow-up,
+    // reported live: "let's limit sealed pool of the day/week to only
+    // two players") -- always 2, forced server-side by
+    // MatchmakingService::postOpenGame() regardless of what this field
+    // would send, so it stays hidden for it too rather than offering a
+    // choice that's silently overridden. updateTeamFields() (called via
+    // the format 'change' listener already wired below) independently
+    // keeps #new-game-team-fields hidden in this mode even for a team
+    // format -- there's no partner to choose from strangers, so teams
+    // are always assigned randomly once the roster fills (see
+    // MatchmakingService::joinOpenGame()).
     function updateNewGameModeFields() {
         const isOpenLobby = document.getElementById('new-game-mode-open').checked;
         document.getElementById('new-game-friends-fields').hidden = isOpenLobby;
 
         const format = effectiveNewGameFormat();
+        // Reads the RAW format select's own value, not the deck-type
+        // select -- this runs before updateDeckTypeAvailability() (see
+        // this listener's own registration order below), which is what
+        // actually forces the deck-type select to 'sealed_pool_of_the_day'
+        // for this sentinel, so checking that select here would still see
+        // its stale, pre-switch value on the very change event that
+        // matters.
+        const isSealedPoolOfTheDayFormat = document.getElementById('new-game-format').value === 'sealed_pool_of_the_day';
         document.getElementById('new-game-open-player-count-label').hidden =
-            !isOpenLobby || (format !== 'draft' && format !== 'standard');
+            !isOpenLobby || (format !== 'draft' && format !== 'standard') || isSealedPoolOfTheDayFormat;
 
         document.getElementById('new-game-submit-button').textContent = isOpenLobby ? 'Post to open lobby' : 'Create game';
         updateTeamFields();
@@ -3093,7 +3447,6 @@
     document.getElementById('new-game-deck-type').addEventListener('change', updateBotCheckboxAvailability);
     document.getElementById('new-game-deck-type').addEventListener('change', updateBestOfThreeFieldVisibility);
     document.getElementById('new-game-saved-decklist').addEventListener('change', updateDeckTypeDescription);
-    document.getElementById('new-game-bot-saved-decklist').addEventListener('change', updateBotDecklistFieldsVisibility);
     document.getElementById('new-game-duel-rules-preset').addEventListener('change', updateDuelRulesPresetVisibility);
     // Power Duel sideboarding's own checkbox depends on both the current
     // preset AND whether "Best of three" is itself checked -- see
@@ -3171,16 +3524,6 @@
         }
 
         document.getElementById('new-game-decklist-text').value = await file.text();
-    });
-
-    // Same pattern for the practice bot's own decklist file (custom_duel).
-    document.getElementById('new-game-bot-decklist-file').addEventListener('change', async (event) => {
-        const file = event.target.files[0];
-        if (!file) {
-            return;
-        }
-
-        document.getElementById('new-game-bot-decklist-text').value = await file.text();
     });
 
     // Reads the four rarity rows' own optional "max total"/"max
@@ -3312,11 +3655,15 @@
                 checkbox.type = 'checkbox';
                 checkbox.value = bot.user_id;
                 checkbox.dataset.isBot = 'true';
+                if (bot.uses_tactical_ai) {
+                    checkbox.dataset.usesTacticalAi = 'true';
+                }
                 checkbox.checked = !!prefill && prefill.opponentUserIds.includes(bot.user_id);
                 checkbox.addEventListener('change', updateOpponentSelectionLimit);
                 checkbox.addEventListener('change', updateTeamFields);
                 checkbox.addEventListener('change', updateBotDecklistFieldsVisibility);
                 checkbox.addEventListener('change', updateBotGoesFirstFieldVisibility);
+                checkbox.addEventListener('change', updateDiagnosticModeFieldVisibility);
                 label.appendChild(checkbox);
                 label.append(' ' + bot.username + ' (practice bot)');
                 opponentCheckboxes.appendChild(label);
@@ -3327,7 +3674,6 @@
         updateTeamFields();
         updateBestOfThreeFieldVisibility();
         await populateSavedDecklistSelect(document.getElementById('new-game-saved-decklist'));
-        await populateSavedDecklistSelect(document.getElementById('new-game-bot-saved-decklist'));
         // Issue #290's own three draft-type pickers, sharing the exact
         // same decks (own + friends') as the 'custom' deck_type's own
         // select above -- just a different placeholder, since there's no
@@ -3352,10 +3698,13 @@
             const formatSelect = document.getElementById('new-game-format');
             // prefill.format/prefill.deckType are the real backend values
             // off the previous game (always 'draft'/'sealed_deck' for a
-            // Sealed Deck rematch, never the UI-only 'sealed_deck' format
-            // sentinel) -- translate back so the dropdown lands on its own
-            // top-level "Sealed Deck" option rather than "Draft".
-            formatSelect.value = (prefill.format === 'draft' && prefill.deckType === 'sealed_deck') ? 'sealed_deck' : prefill.format;
+            // Sealed Deck rematch, or 'draft'/'sealed_pool_of_the_day' for
+            // a Sealed Pool of the Day one -- never the UI-only format
+            // sentinel itself) -- translate back so the dropdown lands on
+            // the matching top-level option rather than "Draft".
+            formatSelect.value = (prefill.format === 'draft' && (prefill.deckType === 'sealed_deck' || prefill.deckType === 'sealed_pool_of_the_day'))
+                ? prefill.deckType
+                : prefill.format;
             formatSelect.dispatchEvent(new Event('change'));
 
             const deckTypeSelect = document.getElementById('new-game-deck-type');
@@ -3391,19 +3740,31 @@
                     buildDecklistCardsText({ cards: prefill.customDecklistCards, sideboard_cards: [] });
             }
 
-            // The bot checkbox itself is already checked above (part of
-            // opponentUserIds), which is what
-            // updateBotDecklistFieldsVisibility() (already re-run by the
-            // deck-type 'change' dispatch above, via
-            // updateBotCheckboxAvailability()) needs to have shown this
-            // field at all -- reconstructed from
-            // players[].bot_decklist_cards (buildGameState()'s own
-            // creator-only field, see its docblock) via the same
-            // buildDecklistCardsText() the Decks dialog's own Edit/
-            // Download flows already use for a saved decklist's cards.
-            if (prefill.botDecklistCards) {
-                document.getElementById('new-game-bot-decklist-text').value =
-                    buildDecklistCardsText({ cards: prefill.botDecklistCards, sideboard_cards: [] });
+            // Every bot checkbox is already checked above (part of
+            // opponentUserIds); this fills in each one's own field-group
+            // (rendered fresh here, since the deck-type 'change' dispatch
+            // above already ran updateBotDecklistFieldsVisibility() once
+            // via updateBotCheckboxAvailability() -- but asynchronously,
+            // so awaiting it again here is the only way to know its own
+            // groups actually exist before writing into them) --
+            // reconstructed from players[].bot_decklist_cards
+            // (buildGameState()'s own creator-only field, see its
+            // docblock), keyed by each bot's own user id the same way
+            // buildRematchPrefill() built botDecklistCardsByUserId, via
+            // the same buildDecklistCardsText() the Decks dialog's own
+            // Edit/Download flows already use for a saved decklist's
+            // cards.
+            if (prefill.botDecklistCardsByUserId) {
+                await updateBotDecklistFieldsVisibility();
+                for (const [userId, cards] of Object.entries(prefill.botDecklistCardsByUserId)) {
+                    const group = document.querySelector(
+                        `#new-game-bot-decklist-groups [data-bot-user-id="${userId}"]`
+                    );
+                    if (group) {
+                        group.querySelector('.new-game-bot-decklist-text').value =
+                            buildDecklistCardsText({ cards, sideboard_cards: [] });
+                    }
+                }
             }
         }
 
@@ -3425,6 +3786,7 @@
         custom_duel: 'Custom Decklists (Duel)', quick_draft: 'Quick Draft', winston_draft: 'Winston Draft',
         grid_draft: 'Grid Draft', rotisserie_draft: 'Rotisserie Draft', tiered_rotisserie_draft: 'Tiered Rotisserie Draft',
         chaos_draft: 'Chaos Draft', one_of_each: 'One of Each Card', sealed_deck: 'Sealed Deck',
+        sealed_pool_of_the_day: 'Sealed Pool of the Day',
     };
 
     // "2 of 4 joined" -- listing.joined_count itself never includes the
@@ -3437,11 +3799,12 @@
     function openGameSummary(listing) {
         const params = listing.create_game_params;
         const deckType = NEW_GAME_DECK_TYPE_LABELS[params.deck_type] || params.deck_type;
-        // Sealed Deck (issue #392) is a 'draft' format deck_type with no
-        // actual drafting phase, so leading with "Draft" would be
-        // misleading here -- the deck_type name alone already says
-        // everything a player needs to know.
-        const format = params.deck_type === 'sealed_deck'
+        // Sealed Deck (issue #392)/Sealed Pool of the Day (issue #520)
+        // are 'draft' format deck_types with no actual drafting phase,
+        // so leading with "Draft" would be misleading here -- the
+        // deck_type name alone already says everything a player needs
+        // to know.
+        const format = (params.deck_type === 'sealed_deck' || params.deck_type === 'sealed_pool_of_the_day')
             ? deckType
             : `${NEW_GAME_FORMAT_LABELS[params.format] || params.format} – ${deckType}`;
         return `${format} (${listing.joined_count + 1} of ${listing.target_player_count} joined)`;
@@ -3551,6 +3914,117 @@
         openGamesDialog.close();
     });
 
+    // Weekly Sealed Pool's own queue/standings dialog (issue #520) -- see
+    // WeeklySealedPoolQueueService's own docblock for why this is a
+    // separate FIFO auto-pairing queue rather than another open-lobby
+    // listing. A player who gets paired while sitting on this dialog
+    // (rather than by their own Join Queue click) isn't specially
+    // detected here -- they'll simply see the new game show up the next
+    // time refreshLobby()'s own 4-second poll runs, the same as a game
+    // any other player created against them.
+    const weeklySealedPoolDialog = document.getElementById('weekly-sealed-pool-dialog');
+
+    async function refreshWeeklySealedPoolQueueStatus() {
+        const statusEl = document.getElementById('weekly-sealed-pool-queue-status');
+        const joinButton = document.getElementById('weekly-sealed-pool-join-button');
+        const leaveButton = document.getElementById('weekly-sealed-pool-leave-button');
+
+        const { ok, body } = await getWeeklySealedPoolQueueStatus();
+        if (!ok) {
+            statusEl.textContent = '';
+            return;
+        }
+
+        const inProgressText = `${body.in_progress_count}/${body.concurrent_match_cap} matches in progress this week.`;
+        if (body.queued) {
+            statusEl.textContent = `You're in the queue, waiting for an opponent. ${inProgressText}`;
+            joinButton.hidden = true;
+            leaveButton.hidden = false;
+        } else {
+            statusEl.textContent = inProgressText;
+            joinButton.hidden = false;
+            // Mirrors WeeklySealedPoolQueueService::joinQueue()'s own
+            // concurrent-match cap -- disabled here rather than left to
+            // surface only as a rejected-click error.
+            joinButton.disabled = body.in_progress_count >= body.concurrent_match_cap;
+            leaveButton.hidden = true;
+        }
+    }
+
+    async function loadWeeklySealedPoolStandings(week) {
+        document.getElementById('weekly-sealed-pool-standings-current-button').setAttribute('aria-pressed', String(week === 'current'));
+        document.getElementById('weekly-sealed-pool-standings-prior-button').setAttribute('aria-pressed', String(week === 'prior'));
+
+        const list = document.getElementById('weekly-sealed-pool-standings-list');
+        const empty = document.getElementById('weekly-sealed-pool-standings-empty');
+        list.innerHTML = '';
+
+        const { ok, body } = await getWeeklySealedPoolStandings(week);
+        const standings = ok ? body.standings : null;
+        if (!standings || standings.length === 0) {
+            // standings === null means the week itself doesn't exist at
+            // all (only possible for 'prior' -- see GameService::
+            // priorWeeklySealedPoolId()'s own docblock); an empty array
+            // means the week exists but nobody has finished a match in it
+            // yet (only possible for 'current' -- priorWeeklySealedPoolId()
+            // only ever resolves to a week that had at least one
+            // completed match, by construction). Worded differently since
+            // "be the first to finish a match" makes no sense for a week
+            // that's already over.
+            empty.textContent = standings === null
+                ? 'There was no Weekly Sealed Pool event last week.'
+                : 'No standings yet -- be the first to finish a match this week!';
+            empty.hidden = false;
+            return;
+        }
+        empty.hidden = true;
+
+        standings.forEach((row) => {
+            const item = document.createElement('li');
+            const isYou = row.user_id === user.id;
+            item.textContent = `#${row.rank} ${row.username}${isYou ? ' (you)' : ''} — ${row.wins}-${row.losses} (top ${row.percentile}%)`;
+            list.appendChild(item);
+        });
+    }
+
+    document.getElementById('weekly-sealed-pool-button').addEventListener('click', async () => {
+        weeklySealedPoolDialog.showModal();
+        await refreshWeeklySealedPoolQueueStatus();
+        await loadWeeklySealedPoolStandings('current');
+    });
+
+    document.getElementById('weekly-sealed-pool-close-button').addEventListener('click', () => {
+        weeklySealedPoolDialog.close();
+    });
+
+    document.getElementById('weekly-sealed-pool-standings-current-button').addEventListener('click', () => loadWeeklySealedPoolStandings('current'));
+    document.getElementById('weekly-sealed-pool-standings-prior-button').addEventListener('click', () => loadWeeklySealedPoolStandings('prior'));
+
+    document.getElementById('weekly-sealed-pool-join-button').addEventListener('click', async () => {
+        const errorEl = document.getElementById('weekly-sealed-pool-queue-error');
+        errorEl.hidden = true;
+
+        const { ok, body } = await joinWeeklySealedPoolQueue();
+        if (!ok) {
+            errorEl.textContent = body.message || 'Could not join the queue.';
+            errorEl.hidden = false;
+            return;
+        }
+
+        if (body.status === 'paired') {
+            weeklySealedPoolDialog.close();
+            showBoard(body.game_id);
+            return;
+        }
+
+        await refreshWeeklySealedPoolQueueStatus();
+    });
+
+    document.getElementById('weekly-sealed-pool-leave-button').addEventListener('click', async () => {
+        await leaveWeeklySealedPoolQueue();
+        await refreshWeeklySealedPoolQueueStatus();
+    });
+
     newGameForm.addEventListener('submit', async (event) => {
         event.preventDefault();
         newGameError.hidden = true;
@@ -3656,16 +4130,13 @@
             : deckType === 'rotisserie_draft' && rotisserieDraftPoolSource === 'saved_deck' ? Number(document.getElementById('new-game-rotisserie-draft-saved-decklist').value) || undefined
             : undefined;
         const defaultSelectionsMode = document.getElementById('new-game-default-selections').checked;
-        // Only meaningful for deck_type 'custom_duel' with a bot checked --
-        // see updateBotDecklistFieldsVisibility() for when these fields are
-        // actually shown to the creator.
+        // Only meaningful for deck_type 'custom_duel' with 1+ bots checked
+        // -- one entry per checked bot, keyed by that bot's own user id --
+        // see updateBotDecklistFieldsVisibility()/collectBotDecklists()
+        // for when/how these fields are actually shown to and read from
+        // the creator.
         const botCheckedForCustomDuel = deckType === 'custom_duel' && anyBotChecked();
-        const botSavedDecklistId = botCheckedForCustomDuel
-            ? Number(document.getElementById('new-game-bot-saved-decklist').value) || undefined
-            : undefined;
-        const botDecklistText = botCheckedForCustomDuel && botSavedDecklistId === undefined
-            ? document.getElementById('new-game-bot-decklist-text').value
-            : undefined;
+        const botDecklists = botCheckedForCustomDuel ? collectBotDecklists() : undefined;
         // Only meaningful for a non-team format with a bot checked -- see
         // updateBotGoesFirstFieldVisibility() for when this field is
         // actually shown to the creator; #new-game-bot-goes-first is
@@ -3683,6 +4154,11 @@
         // unchecked whenever hidden, so reading .checked unconditionally
         // here already reflects that.
         const allowSideboarding = document.getElementById('new-game-allow-sideboarding').checked;
+        // Diagnostic mode -- see updateDiagnosticModeFieldVisibility() for
+        // when this field is actually shown; #new-game-diagnostic-mode is
+        // itself unchecked whenever hidden, so reading .checked
+        // unconditionally here already reflects that.
+        const diagnosticMode = document.getElementById('new-game-diagnostic-mode').checked;
 
         // Issue #116: post to the open lobby instead of creating the game
         // directly -- mirrors createGame()'s own params (see above) minus
@@ -3750,8 +4226,8 @@
             gridDraftCustomPoolText,
             savedDecklistId,
             defaultSelectionsMode,
-            botDecklistText,
-            botSavedDecklistId,
+            undefined,
+            undefined,
             randomTeams,
             rotisserieDraftPoolSource,
             rotisserieDraftCustomPoolText,
@@ -3761,6 +4237,8 @@
             botGoesFirst,
             bestOfThree,
             allowSideboarding,
+            diagnosticMode,
+            botDecklists,
         );
 
         if (!ok) {
@@ -4723,6 +5201,207 @@
         document.getElementById('shared-deck-dialog').close();
     });
 
+    // Diagnostic mode's own "View bot hand(s)" (issue reported live: "a
+    // button should be available to allow a human player to view the
+    // bot(s) hand(s)") -- reads currentState.diagnostic_bot_hands
+    // directly rather than issuing its own request, since it already
+    // rides along live in every ordinary getState() poll (see
+    // GameService::buildGameState()'s own docblock) and #view-bot-hands-button
+    // itself is only ever shown once that field is non-null (renderBoard()).
+    function openBotHandsView() {
+        const sectionsEl = document.getElementById('bot-hands-sections');
+        sectionsEl.innerHTML = '';
+
+        for (const bot of currentState.diagnostic_bot_hands || []) {
+            const heading = document.createElement('h3');
+            heading.textContent = bot.username + "'s hand (" + bot.hand.length + ' card(s))';
+            sectionsEl.appendChild(heading);
+
+            const cardsDiv = document.createElement('div');
+            for (const card of bot.hand) {
+                cardsDiv.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+            }
+            sectionsEl.appendChild(cardsDiv);
+        }
+
+        document.getElementById('bot-hands-dialog').showModal();
+    }
+
+    document.getElementById('view-bot-hands-button').addEventListener('click', openBotHandsView);
+
+    document.getElementById('bot-hands-close-button').addEventListener('click', () => {
+        document.getElementById('bot-hands-dialog').close();
+    });
+
+    // Diagnostic mode's own "View bot reasoning" (issue reported live: "a
+    // button to show the 'reasoning' behind every play the bot has made
+    // since the human player's previous play -- the heuristics involved,
+    // the play options considered, and the relative scoring assigned to
+    // those considered options"). GET /games/bot-reasoning (
+    // GameService::tacticalBotReasoningSince()) already scopes the
+    // returned list to plays since THIS viewer's own last play, so this
+    // just renders whatever it returns in order -- oldest first, matching
+    // "Recent plays"' own convention.
+    //
+    // Each candidate/excluded card is only ever a bare card_id (see that
+    // method's own docblock: the frontend's already-loaded card catalog
+    // covers name/art, so the server doesn't re-serialize a full card for
+    // every candidate on every turn) -- ensureDeckBuilderCatalogLoaded()
+    // is called first so deckBuilderCatalogById is guaranteed populated
+    // even if the deck builder itself was never opened this session.
+    async function openBotReasoningView(gameId) {
+        const metaEl = document.getElementById('bot-reasoning-meta');
+        const turnsEl = document.getElementById('bot-reasoning-turns');
+        const emptyEl = document.getElementById('bot-reasoning-empty');
+        metaEl.textContent = 'Loading...';
+        turnsEl.innerHTML = '';
+        emptyEl.hidden = true;
+        document.getElementById('bot-reasoning-dialog').showModal();
+
+        await ensureDeckBuilderCatalogLoaded();
+        const { ok, body } = await getTacticalBotReasoning(gameId);
+        if (!ok) {
+            metaEl.textContent = body.message || 'Could not load bot reasoning for this game.';
+            return;
+        }
+
+        metaEl.textContent = '';
+        const hasReasoning = body.reasoning.length > 0;
+        emptyEl.hidden = hasReasoning;
+        if (!hasReasoning) {
+            // fallback_turns_since (GameService::tacticalBotFallbackTurnsSince())
+            // distinguishes "nothing has happened yet" from "something
+            // happened, but a stale/crashed search's own fallback left
+            // nothing recorded at all" (a rarer case now that a stale
+            // job's own partial-search checkpoint, and the plain
+            // heuristic fallback itself, both log SOMETHING when
+            // diagnostic mode is on -- see buildBotReasoningTurn()'s own
+            // 'heuristic'-source handling just below -- this message only
+            // still applies when even that logging itself failed).
+            emptyEl.textContent = body.fallback_turns_since > 0
+                ? "A tactical bot played since your last turn, but its search didn't finish in time and fell back to the standard bot -- there's no reasoning recorded for that play."
+                : 'No tactical bot plays since your own last play.';
+        }
+
+        for (const turn of body.reasoning) {
+            turnsEl.appendChild(buildBotReasoningTurn(turn));
+        }
+    }
+
+    // A single tactical_bot_reasoning OR heuristic_bot_reasoning event --
+    // see GameService::logTacticalBotReasoning()/logHeuristicBotReasoning()/
+    // tacticalBotReasoningSince()'s own docblocks for exactly what each
+    // field means. `source` tells the two apart: a 'heuristic' entry (the
+    // plain, non-searching bot tier -- reported live: "could we add some
+    // kind of reasoning text for the default bots?") has no
+    // candidates/excluded_by_heuristic to show, just which policy path
+    // fired (choice_policy_path); a 'tactical' entry shows the full
+    // search comparison the same way it always has, UNLESS it's itself a
+    // recovered partial search (recovered_from_stalled_search), which has
+    // no comparison to show either -- just the one checkpointed action a
+    // stale/crashed search still managed to salvage. Candidates (when
+    // present) are shown sorted highest-average_reward first (the
+    // search's own preference order), with the card the bot actually
+    // chose marked, and heuristically-excluded cards listed separately
+    // underneath -- those never even reached the search, so they never
+    // got a visits/average_reward of their own to sort by.
+    function buildBotReasoningTurn(turn) {
+        const wrapper = document.createElement('details');
+        wrapper.open = true;
+        wrapper.className = 'bot-reasoning-turn';
+
+        const summary = document.createElement('summary');
+        const chosenCard = turn.card_id !== null ? cardFromCatalog(turn.card_id) : null;
+        summary.textContent = turn.username + ' ' + (chosenCard ? 'played ' + chosenCard.name : 'passed')
+            + ' — ' + new Date(turn.created_at).toLocaleString();
+        wrapper.appendChild(summary);
+
+        if (turn.source === 'heuristic') {
+            // choice_policy_path is null for a pass (GameService::
+            // logHeuristicBotReasoning() only ever sets it when a card was
+            // actually chosen) -- reported live: a bot that PASSED still
+            // showed "used the generic default targeting rule for this
+            // play," which reads as though a card had been played, because
+            // this used to treat "not bespoke_rule" (including null) as
+            // "generic_resolver" without a distinct branch for "no card at
+            // all."
+            const note = document.createElement('p');
+            note.className = 'bot-reasoning-note';
+            if (turn.choice_policy_path === 'bespoke_rule') {
+                note.textContent = 'Standard bot: used a card-specific override rule for this play.';
+            } else if (turn.choice_policy_path === 'generic_resolver') {
+                note.textContent = 'Standard bot: used the generic default targeting rule for this play (no card-specific override applied).';
+            } else {
+                note.textContent = 'Standard bot: found no card worth playing and passed.';
+            }
+            wrapper.appendChild(note);
+
+            return wrapper;
+        }
+
+        if (turn.recovered_from_stalled_search) {
+            const note = document.createElement('p');
+            note.className = 'bot-reasoning-note';
+            note.textContent = "This search didn't finish in time -- showing the best option it had found so far, not a full comparison.";
+            wrapper.appendChild(note);
+
+            return wrapper;
+        }
+
+        const candidatesDiv = document.createElement('div');
+        candidatesDiv.className = 'bot-reasoning-candidates';
+        const sortedCandidates = [...turn.candidates].sort((a, b) => b.average_reward - a.average_reward);
+        for (const candidate of sortedCandidates) {
+            const card = candidate.card_id !== null ? cardFromCatalog(candidate.card_id) : null;
+            const isChosen = candidate.card_id === turn.card_id
+                && JSON.stringify(candidate.choices || null) === JSON.stringify(turn.choices || null);
+
+            const row = document.createElement('div');
+            row.className = 'bot-reasoning-candidate' + (isChosen ? ' bot-reasoning-candidate--chosen' : '');
+            if (card) {
+                row.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+            } else {
+                const passLabel = document.createElement('span');
+                passLabel.textContent = 'Pass';
+                row.appendChild(passLabel);
+            }
+            const stats = document.createElement('span');
+            stats.className = 'bot-reasoning-candidate__stats';
+            stats.textContent = (isChosen ? 'Chosen — ' : '') + candidate.visits + ' visit(s), avg reward '
+                + candidate.average_reward.toFixed(2);
+            row.appendChild(stats);
+            candidatesDiv.appendChild(row);
+        }
+        wrapper.appendChild(candidatesDiv);
+
+        if (turn.excluded_by_heuristic.length > 0) {
+            const excludedDiv = document.createElement('div');
+            excludedDiv.className = 'bot-reasoning-excluded';
+            const label = document.createElement('p');
+            label.textContent = 'Excluded by heuristic before search (never considered):';
+            excludedDiv.appendChild(label);
+            for (const cardId of turn.excluded_by_heuristic) {
+                const card = cardFromCatalog(cardId);
+                if (card) {
+                    excludedDiv.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+                }
+            }
+            wrapper.appendChild(excludedDiv);
+        }
+
+        return wrapper;
+    }
+
+    function cardFromCatalog(cardId) {
+        return deckBuilderCatalogById ? deckBuilderCatalogById.get(cardId) || null : null;
+    }
+
+    document.getElementById('view-bot-reasoning-button').addEventListener('click', () => openBotReasoningView(currentGameId));
+
+    document.getElementById('bot-reasoning-close-button').addEventListener('click', () => {
+        document.getElementById('bot-reasoning-dialog').close();
+    });
+
     // Same WUBRG-style color wheel and print-frequency rarity order
     // web-static/js/stats.js's own RARITY_RANK/COLOR_RANK already sort by
     // -- duplicated here rather than shared, since this is a plain
@@ -5322,8 +6001,8 @@
         // actually picked, so it replaces the whole format/deck
         // combination the same way custom/custom_duel's own deck name
         // already does above.
-        const formatAndDeckDescription = state.game.deck_type === 'sealed_deck'
-            ? 'Sealed Deck'
+        const formatAndDeckDescription = ['sealed_deck', 'sealed_pool_of_the_day', 'weekly_sealed_pool'].includes(state.game.deck_type)
+            ? deckTypeLabel(state.game.deck_type)
             : formatLabel(state.game.format) + ', ' + deckDescription;
         // "Default selections" mode (issue #274) -- mirrors the lobby
         // row's own indicator (buildGameRow()) so it's visible once a
@@ -5358,7 +6037,7 @@
         // a pending decision is known (nothing can freeze a still-waiting
         // draft the same way, so there's nothing to gate here yet).
         const canResignWhileWaiting = state.game.status === 'waiting'
-            && ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck'].includes(state.game.deck_type);
+            && DRAFT_DECK_TYPES.includes(state.game.deck_type);
         const resignButton = document.getElementById('resign-button');
         resignButton.hidden = isReadOnlyView()
             || !(state.game.status === 'in_progress' || canResignWhileWaiting)
@@ -5388,6 +6067,13 @@
         renderChat(state);
         document.getElementById('view-notes-button').hidden = isReadOnlyView()
             || (state.game.status === 'waiting' && !isDraftMatchWaitingWindow(state));
+        // openGameLog() below always fetches by currentGameId, which
+        // stays null for the whole lifetime of an imported replay (see
+        // showImportedReplayBoard()'s own docblock) -- there's no
+        // separate GET /games/log to call for one anyway, and the
+        // replay step dropdown's own descriptions already cover the
+        // same ground.
+        document.getElementById('view-log-button').hidden = importedReplayExport !== null;
 
         renderDraftMatchScoreline(state);
         renderRematchButton(state);
@@ -5609,6 +6295,12 @@
 
         if (state.game.status === 'waiting') {
             inProgressArea.hidden = true;
+            // #recent-events-details now lives outside #in-progress-area
+            // (moved below #resign-button/#view-chat-button/
+            // #view-notes-button so those sit above the recent-plays list,
+            // reported live) -- it no longer inherits inProgressArea's own
+            // .hidden by nesting, so this mirrors it explicitly.
+            document.getElementById('recent-events-details').hidden = true;
             // #pending-decision-banner and #scoring-preview both live
             // outside #in-progress-area (a pending decision/scoring
             // preview belongs to whichever game most recently showed one,
@@ -5631,13 +6323,13 @@
                 document.getElementById('draft-deck-building').hidden = true;
                 renderDuelDeckSubmission(state);
                 autoStartGameIfReady(state.players.every((p) => p.deck_submitted));
-            } else if (state.game.deck_type === 'quick_draft' || state.game.deck_type === 'winston_draft' || state.game.deck_type === 'grid_draft' || state.game.deck_type === 'rotisserie_draft' || state.game.deck_type === 'tiered_rotisserie_draft' || state.game.deck_type === 'chaos_draft' || state.game.deck_type === 'sealed_deck') {
+            } else if (DRAFT_DECK_TYPES.includes(state.game.deck_type)) {
                 document.getElementById('duel-deck-submission').hidden = true;
                 const draftState = state.game.deck_type === 'quick_draft' || state.game.deck_type === 'chaos_draft' ? state.quick_draft
                     : state.game.deck_type === 'winston_draft' ? state.winston_draft
                         : state.game.deck_type === 'grid_draft' ? state.grid_draft
                             : state.game.deck_type === 'rotisserie_draft' ? state.rotisserie_draft
-                                : state.game.deck_type === 'sealed_deck' ? state.sealed_deck
+                                : ['sealed_deck', 'sealed_pool_of_the_day', 'weekly_sealed_pool'].includes(state.game.deck_type) ? state.sealed_deck
                                     : state.tiered_rotisserie_draft;
                 document.getElementById('board-round-status').textContent =
                     draftState.status === 'drafting' ? 'Drafting your deck.' : 'Building your deck.';
@@ -5679,6 +6371,7 @@
         document.getElementById('tiered-rotisserie-draft-panel').hidden = true;
         document.getElementById('draft-deck-building').hidden = true;
         inProgressArea.hidden = false;
+        document.getElementById('recent-events-details').hidden = false;
 
         // 'abandoned' (force-expired by the stale-game cron, or a draft
         // match resigned out of before any round ever started -- see
@@ -5702,8 +6395,16 @@
                     (p) => p.game_player_id === state.round.current_turn_game_player_id
                 );
                 turnSuffix = currentTurnPlayer ? " — " + currentTurnPlayer.username + "'s turn" : '';
+                // "Pause at the start of your turn" (reported live) --
+                // state.round.turn_pending_acknowledgment is public (see
+                // GameService::buildGameState()), so an onlooker can tell
+                // why nothing is happening yet instead of it just looking
+                // stalled.
+                if (currentTurnPlayer && state.round.turn_pending_acknowledgment) {
+                    turnSuffix += ' (reviewing)';
+                }
             } else if (state.you.is_your_turn) {
-                turnSuffix = ' — your turn';
+                turnSuffix = state.you.turn_pending_acknowledgment ? ' — your turn (click Advance Turn to continue)' : ' — your turn';
             }
             // Issue #419's own Tactical Bot tier: while its background
             // search job is still running, state.bot_thinking (see
@@ -5730,6 +6431,13 @@
                 boardRoundStatusEl.textContent = 'Round ' + state.round.round_number + turnSuffix;
             }
         }
+
+        // "Pause at the start of your turn" (reported live) -- only ever
+        // true for the actual current turn holder (see GameService::
+        // buildGameState()'s own you.turn_pending_acknowledgment), so
+        // this never shows for a spectator or for someone else's turn.
+        document.getElementById('turn-pending-acknowledgment-banner').hidden =
+            state.game.status !== 'in_progress' || !state.you.turn_pending_acknowledgment;
 
         const pendingDecision = state.round && state.round.pending_decision;
         renderPendingDecision(pendingDecision);
@@ -5830,13 +6538,31 @@
         // the 'waiting' branch above, which hides this whole area).
         document.getElementById('view-shared-deck-button').hidden = !isSharedDeckType(state.game.deck_type);
 
+        // Diagnostic mode (issue reported live: "a button should be
+        // available to allow a human player to view the bot(s) hand(s),
+        // as well as ... a button to show the 'reasoning' behind every
+        // play the bot has made"). state.diagnostic_bot_hands rides along
+        // live in this same getState() poll response -- see
+        // GameService::buildGameState()'s own docblock -- non-null only
+        // for a seated human viewer once the game itself opted in, which
+        // doubles here as "diagnostic mode is on" for both buttons.
+        const diagnosticModeOn = state.diagnostic_bot_hands !== null;
+        document.getElementById('bot-insight-actions').hidden = !diagnosticModeOn;
+        document.getElementById('view-bot-hands-button').hidden = !diagnosticModeOn;
+        document.getElementById('view-bot-reasoning-button').hidden = !diagnosticModeOn;
+
         // round.play_grants describes whoever's turn it currently is, not
         // the viewer specifically -- showing it while it's someone else's
         // turn would read as "you have a play left" when you don't, so the
         // whole indicator stays hidden until it's actually your turn.
+        // Also stays hidden while turn_pending_acknowledgment gates it
+        // (see "Pause at the start of your turn") -- nothing here can
+        // actually be spent yet, so surfacing it early would be
+        // misleading, not just premature.
+        const yourTurnReady = state.you.is_your_turn && !state.you.turn_pending_acknowledgment;
         const playGrantsDetails = document.getElementById('play-grants-details');
-        playGrantsDetails.hidden = !state.you.is_your_turn;
-        const playGrants = (state.you.is_your_turn && state.round && state.round.play_grants) || [];
+        playGrantsDetails.hidden = !yourTurnReady;
+        const playGrants = (yourTurnReady && state.round && state.round.play_grants) || [];
         document.getElementById('plays-remaining-count').textContent = playGrants.length;
         renderList(
             document.getElementById('play-grants-list'),
@@ -6128,7 +6854,12 @@
             return false;
         }
         const pendingDecision = Boolean(currentState.round && currentState.round.pending_decision);
-        return !isReadOnlyView() && currentState.game.status === 'in_progress' && currentState.you.is_your_turn && !pendingDecision && !chaosDraftOfferOpenForViewer && chaosDraftRoundReady;
+        // "Pause at the start of your turn" (reported live): turn_pending_
+        // acknowledgment gates play/pass the same way a pending decision
+        // does, until the viewer clicks "Advance Turn" (see
+        // #turn-pending-acknowledgment-banner) -- GameService::
+        // assertTurnAcknowledged() enforces this same block server-side.
+        return !isReadOnlyView() && currentState.game.status === 'in_progress' && currentState.you.is_your_turn && !currentState.you.turn_pending_acknowledgment && !pendingDecision && !chaosDraftOfferOpenForViewer && chaosDraftRoundReady;
     }
 
     // Applies passButtonCanAct() to the DOM immediately -- called both
@@ -6483,10 +7214,12 @@
     // deck_type/default_selections_mode/duel_deck_rules already exposed
     // for any viewer, the creator's own teammate (team/closed_team,
     // derived from matching team_id -- there's no separate "who's your
-    // partner" field to read), a bot opponent's own previous custom_duel
-    // decklist (players[].bot_decklist_cards, creator-only -- see
-    // buildGameState()'s own docblock for why it's not just
-    // custom_deck_card_ids exposed raw), and the creator's own previous
+    // partner" field to read), every bot opponent's own previous
+    // custom_duel decklist (players[].bot_decklist_cards, creator-only --
+    // see buildGameState()'s own docblock for why it's not just
+    // custom_deck_card_ids exposed raw), keyed by each bot's own user id
+    // (issue #505 follow-up: custom_duel now supports seating 2+ bots,
+    // each with its own decklist), and the creator's own previous
     // deck_type 'custom' decklist (game.custom_decklist_cards, the same
     // creator-only reconstruction idea, one issue #398 follow-up wider).
     // Still deliberately narrow beyond that -- draft pool source choices,
@@ -6500,7 +7233,7 @@
         const opponents = state.players.filter((p) => p.user_id !== state.game.created_by_user_id);
         const you = state.players.find((p) => p.user_id === state.game.created_by_user_id);
         const partner = you && you.team_id !== null ? opponents.find((p) => p.team_id === you.team_id) : null;
-        const botOpponent = opponents.find((p) => p.bot_decklist_cards);
+        const botOpponents = opponents.filter((p) => p.bot_decklist_cards);
 
         return {
             format: state.game.format,
@@ -6509,7 +7242,7 @@
             opponentUserIds: opponents.map((p) => p.user_id),
             partnerUserId: partner ? partner.user_id : null,
             duelDeckRules: state.game.duel_deck_rules,
-            botDecklistCards: botOpponent ? botOpponent.bot_decklist_cards : null,
+            botDecklistCardsByUserId: Object.fromEntries(botOpponents.map((p) => [p.user_id, p.bot_decklist_cards])),
             customDecklistCards: state.game.custom_decklist_cards,
         };
     }
@@ -6574,18 +7307,38 @@
                 .join(', ');
             el.textContent = 'Single-game match -- ' + scores;
         } else {
-            const opponent = state.players.find((p) => p.game_player_id !== state.you.game_player_id);
-            const opponentUsername = opponent ? opponent.username : 'opponent';
+            // Team/Closed Team (reported live): this match's own
+            // your_wins/opponent_wins are already aggregated per TEAM
+            // (see GameService::gameMatchSummaryFor()), but naming the
+            // opposing side here used to just grab the first seated
+            // player whose game_player_id differed from the viewer's own
+            // -- with no team_id check at all, that could even be the
+            // viewer's OWN teammate, and even when it happened to land on
+            // a genuine opponent, it named only one of the two, as if the
+            // other didn't exist. There's no single "the opponent" for a
+            // team match, so this now says "opponents" (plural, no name)
+            // instead of picking one teammate to stand in for their whole
+            // side -- "you" already carries the same "this whole side",
+            // no-specific-teammate meaning for the viewer's own side.
+            // state.you itself carries no team_id of its own -- looked up
+            // from state.players (which does) the same way renderBoard()'s
+            // own viewerTeamId does, by matching game_player_id.
+            const you = state.players.find((p) => p.game_player_id === state.you.game_player_id);
+            const isTeamFormat = you && you.team_id !== null;
+            const opponentLabel = isTeamFormat
+                ? 'opponents'
+                : (state.players.find((p) => p.game_player_id !== state.you.game_player_id)?.username || 'opponent');
 
             // "<leader> n-m" convention: tied reads as "tied n-n" (no leader
             // to name); otherwise whichever side is ahead is named first --
-            // "you" or the opponent's own username -- with their own win
-            // count first, e.g. "you 2-1"/"Dr Potato 2-1", never "1-2".
+            // "you"/"opponents" (team formats) or the opponent's own
+            // username (every other format) -- with their own win count
+            // first, e.g. "you 2-1"/"Dr Potato 2-1", never "1-2".
             const scoreText = matchState.your_wins === matchState.opponent_wins
                 ? 'tied ' + matchState.your_wins + '-' + matchState.opponent_wins
                 : matchState.your_wins > matchState.opponent_wins
                     ? 'you ' + matchState.your_wins + '-' + matchState.opponent_wins
-                    : opponentUsername + ' ' + matchState.opponent_wins + '-' + matchState.your_wins;
+                    : opponentLabel + ' ' + matchState.opponent_wins + '-' + matchState.your_wins;
 
             el.textContent = 'Best of ' + (matchState.games_to_win * 2 - 1) + ' match, game ' +
                 (state.game.match_game_number || 1) + ', ' + scoreText;
@@ -7464,7 +8217,18 @@
         const poolLabel = deckBuilding.team_drafted_cards
             ? "your team's " + deckBuilding.drafted_cards.length + ' available drafted cards'
             : 'your ' + deckBuilding.drafted_cards.length + ' drafted cards';
-        statusEl.textContent = 'Choose ' + sizeText + ' from ' + poolLabel + ' for your deck. Tap a card to select/de-select it.';
+        // Sealed Pool of the Day (issue #520) only -- deckBuilding.rarity_caps
+        // is only ever present for that deck_type (see
+        // GameService::sealedDeckStateFor()'s own docblock on why it's
+        // merged onto this specific sub-object). Spelled out up front
+        // (not just enforced silently at submit time) since every
+        // player's own pool is the exact same cards this way, and
+        // exceeding a cap is a genuinely easy mistake to make when
+        // nothing about the pool itself hints at the limit.
+        const rarityCapsText = deckBuilding.rarity_caps
+            ? ' At most ' + Object.entries(deckBuilding.rarity_caps).map(([rarity, cap]) => cap + ' ' + rarity).join(' and ') + '.'
+            : '';
+        statusEl.textContent = 'Choose ' + sizeText + ' from ' + poolLabel + ' for your deck. Tap a card to select/de-select it.' + rarityCapsText;
         picker.innerHTML = '';
 
         deckBuilding.drafted_cards.forEach((card, index) => {
@@ -7493,8 +8257,19 @@
             picker.appendChild(thumb);
         });
 
+        // Sealed Pool of the Day's own per-rarity caps (see this
+        // function's own rarityCapsText above) -- mirrors
+        // GameService::assertWithinPeriodicSealedPoolRarityCaps() so a
+        // player finds out from a disabled Submit button, not only after
+        // clicking it and getting a server error back.
+        const exceedsARarityCap = deckBuilding.rarity_caps && Object.entries(deckBuilding.rarity_caps).some(([rarity, cap]) => {
+            const countOfRarity = [...draftDeckSelection].filter((index) => deckBuilding.drafted_cards[index].rarity === rarity).length;
+
+            return countOfRarity > cap;
+        });
+
         submitButton.hidden = false;
-        submitButton.disabled = draftDeckSelection.size < deckBuilding.min_deck_size || draftDeckSelection.size > deckBuilding.max_deck_size;
+        submitButton.disabled = draftDeckSelection.size < deckBuilding.min_deck_size || draftDeckSelection.size > deckBuilding.max_deck_size || exceedsARarityCap;
         saveButton.hidden = false;
         saveButton.disabled = submitButton.disabled;
         selectAllButton.hidden = false;
@@ -7718,7 +8493,7 @@
 
         renderList(
             document.getElementById('duel-deck-submission-status'),
-            { hidden: true }, // always exactly 2 players in a duel
+            { hidden: true }, // state.players is never empty
             state.players,
             (player) => {
                 const li = document.createElement('li');
@@ -7912,6 +8687,29 @@
         choicesPanel.hidden = true;
         announceOutcome(body);
         await refreshBoard();
+    });
+
+    // "Pause at the start of your turn" (reported live) -- clears
+    // turn_pending_acknowledgment for the viewer, the only thing this
+    // button ever does; #turn-pending-acknowledgment-banner itself hides
+    // again once refreshBoard() below picks up the change, the same
+    // "let renderBoard() recompute visibility" pattern the pass button's
+    // own click handler above uses.
+    document.getElementById('advance-turn-button').addEventListener('click', async () => {
+        boardError.hidden = true;
+        boardMessage.hidden = true;
+        const advanceTurnButton = document.getElementById('advance-turn-button');
+        advanceTurnButton.disabled = true;
+        const { ok, body } = await advanceTurn(currentGameId);
+        if (!ok) {
+            boardError.textContent = body.message || 'Could not advance turn.';
+            boardError.hidden = false;
+            advanceTurnButton.disabled = false;
+            return;
+        }
+        announceOutcome(body);
+        await refreshBoard();
+        advanceTurnButton.disabled = false;
     });
 
     document.getElementById('resign-button').addEventListener('click', async () => {
@@ -8899,15 +9697,18 @@
     }
 
     // Post-start "who goes first" decision for game 2/3 of a best-of-three
-    // draft match -- per a rules clarification, the previous game's loser
-    // doesn't have to choose until they can see their own opening hand, so
-    // this is decided after the game (and round 1) has already started
-    // rather than during deck-building -- see GameService::
-    // setPlayFirstNextMatchGame()/firstPlayerDecisionStateFor(). Round 1
-    // stays frozen (see canAct in renderBoard()) for both players until
-    // this resolves one way or the other; state.first_player_decision is
-    // null once it has (or for game 1, which has no previous game to base
-    // a choice on), at which point this panel just stays hidden.
+    // match -- the draft-family's own draft_match_id, or the non-draft
+    // game_matches wrapper for Duel/Traditional/Team/Closed Team
+    // (migration 0223, issue #90 follow-up) -- per a rules clarification,
+    // the previous game's loser (or, for Team/Closed Team, either member
+    // of the losing team) doesn't have to choose until they can see their
+    // own opening hand, so this is decided after the game (and round 1)
+    // has already started rather than during deck-building -- see
+    // GameService::setPlayFirstNextMatchGame()/firstPlayerDecisionStateFor().
+    // Round 1 stays frozen (see canAct in renderBoard()) for both sides
+    // until this resolves one way or the other; state.first_player_decision
+    // is null once it has (or for game 1, which has no previous game to
+    // base a choice on), at which point this panel just stays hidden.
     function renderFirstPlayerDecision(state, decision) {
         const panel = document.getElementById('first-player-decision-panel');
         const statusEl = document.getElementById('first-player-decision-status');

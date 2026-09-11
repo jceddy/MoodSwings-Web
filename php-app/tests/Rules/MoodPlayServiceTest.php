@@ -246,6 +246,33 @@ final class MoodPlayServiceTest extends TestCase
         self::assertTrue($state->isInHand(2, 99));
     }
 
+    /**
+     * Reported live: "conviction should be able to target itself."
+     * ConvictionEffect's own card text has no "other than this one"
+     * exclusion (the same shape as Hostility's own second stage, see
+     * testHostilityCanTargetItselfInTheSecondStage() above), and
+     * MoodPlayService::playMood() already moves a card into play before
+     * resolving its own effect, so Conviction's own id is already a
+     * legal `isInPlay()` target by the time afterPlaying() runs -- this
+     * was never an engine gap, only CardChoiceSchema's own 'conviction'
+     * entry missing 'includes_self' (see CardChoiceSchemaTest), which
+     * kept the game.js UI from ever actually offering it.
+     */
+    public function testConvictionCanTargetItself(): void
+    {
+        $state = $this->boardState(hands: [1 => [6]], deck: [99]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 6, new PlayerChoices(['target_mood_id' => 6]));
+
+        self::assertFalse($state->isInPlay(6));
+        // 6 goes to the bottom of the deck (after 99), then its own
+        // owner (the acting player) immediately draws -- taking 99, the
+        // card that was already on top.
+        self::assertSame([6], $state->deck());
+        self::assertTrue($state->isInHand(1, 99));
+    }
+
     public function testZealCyclesAHandCardWhenChosen(): void
     {
         $state = $this->boardState(hands: [1 => [106, 2]], deck: [99]);

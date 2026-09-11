@@ -84,6 +84,24 @@ final class SearchBotPlayerService
     /** How often (in iterations) the deadline is actually checked -- microtime() on every single iteration would itself become measurable overhead across many thousands of cheap rollouts. */
     private const DEADLINE_CHECK_INTERVAL = 4;
 
+    /**
+     * Minimum wall-clock spacing between $onProgress checkpoints (see
+     * chooseActionWithReasoning()'s own docblock) -- reported live: "is
+     * there any way that we could have the tactical bot use any results
+     * found so far from a partial search when it gets to time instead of
+     * completely abandoning any information." A background search
+     * process can be killed outright at any moment (a shared-hosting
+     * process supervisor tearing down the launching request's own
+     * process group, not just a slow/hung search -- see migration 0283's
+     * own docblock), so the checkpoint needs to land periodically DURING
+     * the loop, not just once at the end; gated by wall time rather than
+     * iteration count (like DEADLINE_CHECK_INTERVAL above) since a
+     * caller wiring this to a database write cares about how often that
+     * write actually happens, not how many cheap in-memory rollouts ran
+     * in between.
+     */
+    private const CHECKPOINT_INTERVAL_SECONDS = 1.0;
+
     /** See playAndFullyResolve()'s own docblock. */
     private const MAX_PENDING_DECISION_ROUNDS = 30;
 
@@ -128,33 +146,128 @@ final class SearchBotPlayerService
      *     hasGoodReasonToPlayNow() veto (reported live: a Tactical Bot
      *     was ignoring that same policy entirely -- see
      *     withoutPrematurelyPlayedCards()'s own docblock for why).
+     * @param array<int, int> $roundWinsNeededToWinGameByPlayerId see
+     *     BotPlayerService::chooseAction()'s own docblock -- forwarded
+     *     the same way as $roundWinsNeededToWinGame above.
+     * @param ?callable(?array{card_id: int, choices: array<string, mixed>}): void $onProgress see
+     *     chooseActionWithReasoning()'s own docblock -- forwarded unchanged.
      * @return ?array{card_id: int, choices: array<string, mixed>}
      */
-    public function chooseAction(BoardState $state, array $playableCardIds, int $botGamePlayerId, float $timeBudgetSeconds, ?int $roundWinsNeededToWinGame = null): ?array
+    public function chooseAction(BoardState $state, array $playableCardIds, int $botGamePlayerId, float $timeBudgetSeconds, ?int $roundWinsNeededToWinGame = null, array $roundWinsNeededToWinGameByPlayerId = [], ?callable $onProgress = null): ?array
+    {
+        return $this->chooseActionWithReasoning($state, $playableCardIds, $botGamePlayerId, $timeBudgetSeconds, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId, $onProgress)['action'];
+    }
+
+    /**
+     * chooseAction()'s own exact decision, PLUS a "why" payload -- added
+     * for "diagnostic mode" (reported live: "a button to show the
+     * 'reasoning' behind every play the bot has made... the heuristics
+     * involved, the play options considered, and the relative scoring
+     * assigned to those considered options"). Never called by
+     * chooseAction() -- see that method's own one-line body -- only by
+     * GameService::runTacticalBotSearchJob() when the game's own
+     * diagnostic_mode is on, so an ordinary (non-diagnostic) game pays
+     * nothing extra: the reasoning payload is built from the exact same
+     * $rootActions/$visits/$totals this search already computes either
+     * way, never an extra rollout or simulation.
+     *
+     * @param int[] $playableCardIds
+     * @param array<int, int> $roundWinsNeededToWinGameByPlayerId
+     * @param ?callable(?array{card_id: int, choices: array<string, mixed>}): void $onProgress
+     *     Reported live: "is there any way that we could have the
+     *     tactical bot use any results found so far from a partial
+     *     search when it gets to time instead of completely abandoning
+     *     any information." Invoked periodically (see
+     *     CHECKPOINT_INTERVAL_SECONDS) DURING the rollout loop below with
+     *     the single best root action found so far (by the exact same
+     *     bestArmByAverage() this method's own return value uses) -- so a
+     *     caller can persist a recoverable snapshot before the deadline
+     *     is ever reached, in case the whole process is killed outright
+     *     (GameService::runTacticalBotSearchJob()'s own background
+     *     process, on a shared host, can die mid-search with nothing else
+     *     left to salvage -- see migration 0283's own docblock) rather
+     *     than genuinely running long. Never invoked when there's only
+     *     one legal root action (the early return just below) -- nothing
+     *     is actually being searched over in that case, so there's
+     *     nothing a checkpoint would add over just applying the action
+     *     immediately.
+     * @return array{
+     *     action: ?array{card_id: int, choices: array<string, mixed>},
+     *     reasoning: array{
+     *         excluded_by_heuristic: int[],
+     *         candidates: array<int, array{card_id: ?int, choices: ?array<string, mixed>, visits: int, average_reward: float}>,
+     *     },
+     * }
+     */
+    public function chooseActionWithReasoning(BoardState $state, array $playableCardIds, int $botGamePlayerId, float $timeBudgetSeconds, ?int $roundWinsNeededToWinGame = null, array $roundWinsNeededToWinGameByPlayerId = [], ?callable $onProgress = null): array
     {
         $deadline = microtime(true) + max(0.0, $timeBudgetSeconds);
 
-        $rootActions = $this->enumerator->enumerate($state, $playableCardIds, $botGamePlayerId);
-        $rootActions = $this->withoutPrematurelyPlayedCards($state, $rootActions, $botGamePlayerId, $playableCardIds, $roundWinsNeededToWinGame);
+        $enumeratedActions = $this->enumerator->enumerate($state, $playableCardIds, $botGamePlayerId);
+        $rootActions = $this->withoutPrematurelyPlayedCards($state, $enumeratedActions, $botGamePlayerId, $playableCardIds, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
+        // Every card the heuristic policy's own "hold this back" veto
+        // (BotPlayerService::hasGoodReasonToPlayNow()) excluded before the
+        // search ever got to weigh it against anything -- see
+        // withoutPrematurelyPlayedCards()'s own docblock for exactly when
+        // that happens (never when EVERY candidate is vetoed at once, only
+        // when at least one genuinely good option remains).
+        $excludedByHeuristicCardIds = array_values(array_diff(
+            array_map(static fn (array $action): int => $action['card_id'], $enumeratedActions),
+            array_map(static fn (array $action): int => $action['card_id'], $rootActions),
+        ));
         $rootActions[] = null; // "pass" is always itself a candidate
 
         if (count($rootActions) <= 1) {
-            return $rootActions[0] ?? null;
+            $chosen = $rootActions[0] ?? null;
+
+            return [
+                'action' => $chosen,
+                // Nothing to compare against, so no real candidate list --
+                // $chosen (or a bare pass) was the only legal option here.
+                'reasoning' => ['excluded_by_heuristic' => $excludedByHeuristicCardIds, 'candidates' => []],
+            ];
         }
 
         $visits = array_fill(0, count($rootActions), 0);
         $totals = array_fill(0, count($rootActions), 0.0);
 
         $iteration = 0;
+        $lastCheckpointAt = microtime(true);
         do {
             $index = $this->selectArm($visits, $totals);
             $reward = $this->simulate($state, $botGamePlayerId, $rootActions[$index]);
             $visits[$index]++;
             $totals[$index] += $reward;
             $iteration++;
-        } while ($iteration % self::DEADLINE_CHECK_INTERVAL !== 0 || microtime(true) < $deadline);
 
-        return $rootActions[$this->bestArmByAverage($visits, $totals)];
+            if ($iteration % self::DEADLINE_CHECK_INTERVAL !== 0) {
+                continue;
+            }
+
+            $now = microtime(true);
+            if ($onProgress !== null && $now - $lastCheckpointAt >= self::CHECKPOINT_INTERVAL_SECONDS) {
+                $onProgress($rootActions[$this->bestArmByAverage($visits, $totals)]);
+                $lastCheckpointAt = $now;
+            }
+            if ($now >= $deadline) {
+                break;
+            }
+        } while (true);
+
+        $candidates = [];
+        foreach ($rootActions as $i => $rootAction) {
+            $candidates[] = [
+                'card_id' => $rootAction['card_id'] ?? null,
+                'choices' => $rootAction['choices'] ?? null,
+                'visits' => $visits[$i],
+                'average_reward' => $visits[$i] > 0 ? $totals[$i] / $visits[$i] : 0.0,
+            ];
+        }
+
+        return [
+            'action' => $rootActions[$this->bestArmByAverage($visits, $totals)],
+            'reasoning' => ['excluded_by_heuristic' => $excludedByHeuristicCardIds, 'candidates' => $candidates],
+        ];
     }
 
     /**
@@ -188,13 +301,15 @@ final class SearchBotPlayerService
      *
      * @param array<int, array{card_id: int, choices: array<string, mixed>}> $rootActions
      * @param int[] $playableCardIds
+     * @param array<int, int> $roundWinsNeededToWinGameByPlayerId see
+     *     BotPlayerService::chooseAction()'s own docblock.
      * @return array<int, array{card_id: int, choices: array<string, mixed>}>
      */
-    private function withoutPrematurelyPlayedCards(BoardState $state, array $rootActions, int $botGamePlayerId, array $playableCardIds, ?int $roundWinsNeededToWinGame): array
+    private function withoutPrematurelyPlayedCards(BoardState $state, array $rootActions, int $botGamePlayerId, array $playableCardIds, ?int $roundWinsNeededToWinGame, array $roundWinsNeededToWinGameByPlayerId = []): array
     {
         $anyCardHasGoodReason = false;
         foreach ($playableCardIds as $candidateCardId) {
-            if ($this->heuristic->hasGoodReasonToPlayNow($state, $candidateCardId, $botGamePlayerId, $playableCardIds, $roundWinsNeededToWinGame)) {
+            if ($this->heuristic->hasGoodReasonToPlayNow($state, $candidateCardId, $botGamePlayerId, $playableCardIds, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId)) {
                 $anyCardHasGoodReason = true;
                 break;
             }
@@ -205,7 +320,7 @@ final class SearchBotPlayerService
 
         return array_values(array_filter(
             $rootActions,
-            fn (array $action) => $this->heuristic->hasGoodReasonToPlayNow($state, $action['card_id'], $botGamePlayerId, $playableCardIds, $roundWinsNeededToWinGame),
+            fn (array $action) => $this->heuristic->hasGoodReasonToPlayNow($state, $action['card_id'], $botGamePlayerId, $playableCardIds, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId),
         ));
     }
 
@@ -367,7 +482,7 @@ final class SearchBotPlayerService
 
             $answers = [];
             foreach ($result->pendingDecisions as $decision) {
-                $answer = $this->heuristic->chooseDecisionAnswer($sim, $decision->field, $decision->targetPlayerId, $decision->decisionType);
+                $answer = $this->heuristic->chooseDecisionAnswer($sim, $decision->field, $decision->targetPlayerId, $decision->decisionType, $result->playedCardId);
                 $answers[$decision->key] = new PlayerChoices($answer);
             }
 

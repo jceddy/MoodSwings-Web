@@ -1,0 +1,25 @@
+-- Reported live (jceddy): a bot holding ONLY Rationalization against an
+-- opponent's 3-card hand refreshed its own (already empty) hand instead
+-- of rotating, even though trading away nothing for 3 free cards is an
+-- unambiguous win.
+--
+-- BotPlayerService::rationalizationStealDirection() compared an
+-- overstuffed neighbor's hand size against the bot's own PRE-play hand
+-- (still counting Rationalization itself, since it hadn't been removed
+-- from the count) rather than the REMAINING hand actually given away
+-- once 'rotate' fires -- by then Rationalization is already out of hand
+-- and sitting in play. This overstated the bot's own cost by exactly
+-- one card every time, invisible except at the boundary and worst when
+-- Rationalization was the bot's whole hand (a 1-card overcount is the
+-- entire hand at that point): a bot with just Rationalization needed
+-- the opponent to hold 4+ cards before it would ever steal, instead of
+-- the intended 3+.
+--
+-- Now excludes the card being played from the count, the same
+-- array_diff() rationalizationLowValueHand() already used for its own
+-- "which mode" hand-quality check -- matching the original "at least a
+-- 3 card increase in hand size" spec literally.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.39.20' WHERE id = 1;

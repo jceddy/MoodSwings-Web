@@ -962,6 +962,98 @@ the text on its own next poll -- and applies identically for a spectator
 player, so nobody watching a Tactical Bot's own game is left staring at
 "waiting on another player" with no idea why it's taking a while.
 
+### Diagnostic mode
+
+Reported live: "add a 'diagnostic mode' checkbox when creating a game
+including one or more tactical bot(s) -- if diagnostic mode is enabled, a
+button should be available to allow a human player to view the bot(s)
+hand(s), as well as ... a button to show the 'reasoning' behind every
+play the bot has made since the human player's previous play." See
+"Diagnostic mode" in `php-app/README.md` for the full backend design
+(`games.diagnostic_mode`, `diagnostic_bot_hands`,
+`tactical_bot_reasoning` events).
+
+**New Game dialog.** `#new-game-diagnostic-mode-label` (unchecked by
+default, same as every other conditionally-shown checkbox here) is only
+ever shown once a CHECKED bot opponent is specifically a Tactical Bot --
+`anyTacticalBotChecked()` (an `anyBotChecked()` analogue scoped to
+`data-uses-tactical-ai`, set on a bot checkbox only when
+`GET /games/bots`' own `uses_tactical_ai` field is true) drives
+`updateDiagnosticModeFieldVisibility()`, run from the same bot-checkbox
+`change` listeners and `updateBotCheckboxAvailability()` every other
+bot-gated field already hooks into. Its value is sent as `diagnostic_mode`
+alongside `best_of_three`/`allow_sideboarding` in the `POST /games` body;
+never sent by `postOpenGame()`, since an open lobby listing can never
+seat a bot at all (strangers fill the other seats once the roster fills).
+
+**Board buttons.** `#view-bot-hands-button`/`#view-bot-reasoning-button`
+(next to "View log"/"View decklist") are shown only once
+`state.diagnostic_bot_hands` is non-null -- which doubles as "diagnostic
+mode is on for this viewer" -- computed in `renderBoard()` alongside the
+existing `view-shared-deck-button` visibility check.
+
+- **"View bot hand(s)"** (`openBotHandsView()`) reads
+  `currentState.diagnostic_bot_hands` directly rather than its own
+  request -- it already rides along live in every ordinary `getState()`
+  poll -- and renders each bot's hand with the same `buildCardThumb()`/
+  `openCardDetail()` pattern "Teammate's hand" already uses.
+- **"View bot reasoning"** (`openBotReasoningView()`) calls
+  `GET /games/bot-reasoning?game_id=` on demand (not polled -- a
+  diagnostic-mode game's own decision history doesn't change fast enough
+  to need it), which already scopes its response to plays since THIS
+  viewer's own last play (see `tacticalBotReasoningSince()`'s own
+  docblock in `php-app/README.md`), so this just renders whatever comes
+  back in order. Each candidate/excluded card is a bare `card_id` (the
+  server doesn't re-serialize a full card for every candidate of every
+  turn), so `ensureDeckBuilderCatalogLoaded()` is called first to
+  guarantee `deckBuilderCatalogById` is populated even if the deck
+  builder itself was never opened this session -- catalog cards are
+  already shaped to exactly what `buildCardThumb()`/`openCardDetail()`
+  read (see `CardCatalog::serialize()`'s own docblock), so they need no
+  translation. Candidates are shown sorted highest-`average_reward`
+  first, the card the bot actually chose outlined, with
+  heuristically-excluded cards (never even reached by the search) listed
+  separately underneath. When `body.reasoning` comes back empty, the
+  empty-state message shown depends on `body.fallback_turns_since`
+  (`GameService::tacticalBotFallbackTurnsSince()`, php-app/README.md's
+  own docblock): 0 means genuinely nothing has happened since the
+  viewer's own last turn (the default "No tactical bot plays since your
+  own last play" text stays), but a positive count means a Tactical
+  Bot's search actually ran out of time and fell back to the ordinary
+  heuristic bot for that turn -- reported live a third time, after the
+  boundary computation itself was already fixed twice over, because
+  that fallback genuinely never logs any reasoning to show, which this
+  distinct message now says outright instead of reading as though the
+  dialog were still broken.
+
+**Mixed-source entries (php-app/README.md's own "Heuristic bot
+reasoning"/"Heartbeat + partial-search recovery" sections).**
+`body.reasoning` now merges in the plain heuristic bot's own entries
+alongside the Tactical Bot's, and a Tactical Bot entry can itself be a
+recovered partial search rather than a completed one --
+`buildBotReasoningTurn()` branches on each entry's own `source` field
+(`'tactical'`/`'heuristic'`) and `recovered_from_stalled_search` flag:
+
+- `source === 'heuristic'` (reported live: "could we add some kind of
+  reasoning text for the default bots?") -- no candidate comparison to
+  show, just one explanatory line naming `choice_policy_path`
+  (`'bespoke_rule'`: "used a card-specific override rule for this play";
+  `'generic_resolver'`: "used the generic default targeting rule... no
+  card-specific override applied"; `null` -- a PASS, no card was chosen
+  at all -- "found no card worth playing and passed". Reported live: a
+  passed turn used to fall into the `'generic_resolver'` wording too
+  (treated as "anything but bespoke_rule"), reading as though a card had
+  been played when nothing was.).
+- `recovered_from_stalled_search` (reported live: "is there any way that
+  we could have the tactical bot use any results found so far from a
+  partial search when it gets to time instead of completely abandoning
+  any information") -- also just one line ("this search didn't finish in
+  time -- showing the best option it had found so far, not a full
+  comparison"), since there's only the one checkpointed action recorded,
+  no comparison of alternatives.
+- Otherwise, unchanged: the full candidate/excluded-card rendering
+  described above.
+
 ### Custom card/effect formats preference (issue #405 follow-up)
 
 `#settings-allow-custom-content-checkbox`, in the Settings dialog's
@@ -992,6 +1084,119 @@ from a non-opted-in invitee surfaces through the New Game dialog's own
 ordinary `#new-game-error` element, the same as any other creation
 failure.
 
+### Pause at the start of your turn
+
+Reported live: "add a user setting to pause at the end of turn ... so a
+game should not advance to that user's turn, until they click an
+'advance turn' button." `#settings-pause-before-turn-checkbox`, in the
+Settings dialog's "Game defaults" section, right below the
+matchmaking-discoverable checkbox -- unlike auto-pass/auto-apply above,
+this one starts **unchecked** (`users.pause_before_own_turn`, migration
+`0263`, defaults `false`): it deliberately ADDS a click before every one
+of this player's own turns rather than saving one, so it's an explicit
+opt-in. Same "sync on open, save on change" wiring as every other
+Settings checkbox (`POST /user/pause-before-own-turn-preference`,
+`user.pause_before_own_turn`, `savePauseBeforeOwnTurnPreference()`) --
+but unlike auto-pass/auto-apply (which have no client-side effect of
+their own at all, see the Settings dialog bullet above), this preference
+DOES have a real one: see "Pause at the start of your turn" in
+`php-app/README.md` for the full server-side mechanism
+(`GameService::notifyItsYourTurn()`'s own `turn_pending_acknowledgment`
+flag, `assertTurnAcknowledged()`, `acknowledgeTurnStart()`).
+
+**`#turn-pending-acknowledgment-banner`** ("It's your turn. Review what
+just happened, then continue when you're ready." plus an
+`#advance-turn-button`) is a new fixed-at-the-top banner, sitting just
+before `#pending-decision-banner` in `board-view` (deliberately BEFORE
+it, not after -- `applyBoardLayoutPreference()`'s own
+`pendingDecisionBanner.insertAdjacentElement('afterend', boardStatusGroup)`
+call anchors `#board-status-group` to `#pending-decision-banner`
+specifically, so a banner placed between them would get relocated along
+with that group instead of staying put with the others). `renderBoard()`
+shows it exactly when `state.you.turn_pending_acknowledgment` is `true`
+(only ever true for the actual current turn holder -- everyone else
+always sees `false`). Its own click handler calls `POST
+/games/advance-turn` (`advanceTurn()` in `js/app.js`) then
+`refreshBoard()`, the identical "disable immediately, re-enable only on
+failure, let the next render recompute visibility" pattern the Pass
+button's own click handler already uses right above it.
+
+**Every other turn-UI gate now also checks it**: `passButtonCanAct()`
+(gating the Pass button AND every hand card's own clickability) requires
+`!currentState.you.turn_pending_acknowledgment` alongside its existing
+`is_your_turn` check, and the play-grants-remaining indicator
+(`#play-grants-details`) requires the same before showing itself. Both
+deliberately compute a shared `yourTurnReady`/equivalent check rather
+than only gating on `is_your_turn` -- that field is left meaning exactly
+what it always has (see `GameService::buildGameState()`'s own comment on
+why the two are kept separate), so nothing about visibility -- the
+player's own hand, in-play moods, the discard pile, scoring effects,
+the log -- changes while paused; only the ACTIONABLE affordances are
+held back, which is the entire point (they can still see everything
+that just happened, just can't act on it yet).
+
+**No frontend change needed for the "skip the pause when nothing
+after-scoring changed" follow-up** (reported live: "not super useful when
+the board State snapshot is identical to the actual board state" -- see
+"Pause at the start of your turn" in `php-app/README.md` for
+`inPlayOwnershipSignature()`'s own before/after comparison). The banner
+above is driven purely by `state.you.turn_pending_acknowledgment`; when
+the server decides a round transition isn't worth pausing for, it simply
+never sets that flag in the first place, so `renderBoard()`'s own existing
+`=== true` check already keeps the banner hidden -- the winner's very
+next poll just shows the live board with Pass/hand cards already
+clickable, no `#advance-turn-button` click required.
+
+**Same story for the "answering someone else's decision handed you the
+turn" follow-up** (reported live: "I don't think I need to see the
+'Advance turn' button at this point because nothing is changing between
+the end of the opponent's turn and the beginning of mine"). Once again
+purely a server-side decision about whether to ever set
+`turn_pending_acknowledgment` in the first place -- nothing here needed
+to change to keep the banner correctly hidden when it isn't.
+
+**And again for the final, broadest follow-up** ("what we really want is
+to *only* show the pause when there is an after-scoring effect that moves
+cards from one zone to another" -- see "Narrowed across three further
+live reports" in `php-app/README.md`'s "Pause at the start of your turn"
+section for the settled rule). An ordinary mid-round pass-the-turn -- an
+opponent playing any plain card, however eventful, like the reported
+"BotSage played Fondness from hand" case -- now never sets
+`turn_pending_acknowledgment` at all, only a round transition that
+genuinely moved a card after scoring can. `renderBoard()`'s own
+`state.you.turn_pending_acknowledgment === true` check needed no change
+to correctly keep the banner hidden for every one of these narrower
+cases.
+
+**Onlookers get a text hint, not a banner of their own**: a
+spectator's/other player's own `#board-round-status` line reads
+`"Round N — <name>'s turn (reviewing)"` instead of the plain `"...'s
+turn"` whenever `state.round.turn_pending_acknowledgment` (public, sent
+to every viewer the same way `current_turn_game_player_id` itself
+already is) is `true` -- so the game doesn't just look stalled to
+someone else at the table while the current turn holder reviews what
+happened.
+
+### Change password
+
+`#change-password-form`, in the User info page's own `#user-account-section`
+(`user/index.html`, right below `#user-privacy-section`) -- three
+password fields (current, new, confirm new; `type="password"`, the new-
+password pair sharing `reset-password.html`'s own `minlength="8"
+maxlength="72"`) rather than a checkbox, so it's wired up in `js/user.js`
+as a form submit handler instead of a `change` listener. The confirm
+field is checked against the new-password field CLIENT-SIDE only
+(`newPassword !== newPasswordConfirm`) before the request is even sent
+-- identical to `reset-password.js`'s own confirm check -- so the server
+(`POST /user/change-password`, `changePassword()` in `js/app.js`) only
+ever receives `current_password`/`new_password`, no confirmation value
+of its own. On success the form clears (`form.reset()`) and
+`#change-password-success` shows the server's own message (which notes
+every other session was logged out -- see "Change password" in
+`../php-app/README.md`); on failure `#change-password-error` shows
+either the client-side mismatch message or whatever the server said
+(wrong current password, or the new one failing length validation).
+
 ### Open lobby matchmaking (issue #116)
 
 An alternative to naming specific friend opponents: the New Game
@@ -1005,7 +1210,16 @@ supported; choosing "open" (`updateNewGameModeFields()`) hides
 `#new-game-open-player-count-label` -- a `2`-`4` select for exactly how
 many total players (including the creator) the listing needs before it
 starts, forced to `2` for `duel` and `4` for the team formats regardless
-(both hide the field, since there's nothing to choose). A team format's
+(both hide the field, since there's nothing to choose). Sealed Pool of
+the Day is the same idea (issue #520 follow-up, reported live: "let's
+limit sealed pool of the day/week to only two players") -- forced to `2`
+server-side by `MatchmakingService::postOpenGame()` regardless of what's
+sent, so this field stays hidden for it too, checked against the RAW
+`#new-game-format` select's own value rather than `effectiveNewGameFormat()`'s
+mapped `'draft'` (this listener runs before `updateDeckTypeAvailability()`
+forces `#new-game-deck-type` to `'sealed_pool_of_the_day'` on the same
+event, so reading that select here instead would still see its stale,
+pre-switch value the one time it matters). A team format's
 own partner-choice fields (`#new-game-team-fields`) stay hidden in this
 mode too, even though the format itself is otherwise shown normally --
 `updateTeamFields()`'s own open-lobby check keeps it that way, since
@@ -1060,6 +1274,55 @@ every other Settings checkbox (`POST /user/matchmaking-discoverable-preference`)
 Only gates whether YOUR OWN listings are shown to strangers -- joining
 someone else's listing needs no opt-in of its own.
 
+### Weekly Sealed Pool (issue #520)
+
+A new "Weekly Sealed Pool" button (next to "Open games") opens
+`#weekly-sealed-pool-dialog` -- deliberately its own dialog, not a fourth
+section bolted onto `#open-games-dialog` above, since there's no listing
+to browse here at all: `GET /weekly-sealed-pool/queue` on open (and after
+every join/leave) reports `{ queued, in_progress_count,
+concurrent_match_cap }`, which `refreshWeeklySealedPoolQueueStatus()`
+turns into either a "Join Queue" button (disabled once
+`in_progress_count >= concurrent_match_cap`, mirroring
+`WeeklySealedPoolQueueService`'s own concurrent-match cap rather than
+leaving it to surface only as a rejected click) or a "Leave Queue" one
+while already queued. Clicking Join Queue calls `POST
+/weekly-sealed-pool/queue`; a `{"status": "paired"}` response closes the
+dialog and jumps straight to the resulting board the same way
+`joinOpenGame()`'s own `{"status": "started"}` case does above, while
+`{"status": "waiting"}` just refreshes the status text in place. A player
+who gets paired by someone ELSE while sitting on this dialog isn't
+specially detected -- they simply see the new game appear in their normal
+games list the next time `refreshLobby()`'s own 4-second poll runs, same
+as any other game created against them.
+
+The same dialog also hosts the event's own standings -- "This week"/"Last
+week" toggle buttons (`aria-pressed` reflecting which is active) driving
+`GET /weekly-sealed-pool/standings?week=current|prior`, rendered as a
+plain ranked list (`#rank username (you) — wins-losses (top N%)`), never
+showing the hidden internal score itself (see "Weekly Sealed Pool" in
+`php-app/README.md` for why placement is ranked by that score rather than
+plain win count). `#weekly-sealed-pool-standings-list` is a `<ul>`, not an
+`<ol>` (reported live: "there is redundant numbering" -- each row's own
+`#rank` prefix was doubling up with the browser's own auto-numbered
+`1.`/`2.`/... from the list element itself, e.g. "1. #1 jceddy"). The two
+empty states are worded differently rather than
+sharing one message: `standings: null` (no prior-week event ever
+happened, only possible for `week=prior`) reads "There was no Weekly
+Sealed Pool event last week," while `standings: []` (the current week
+exists but nobody's finished a match in it yet) reads "No standings yet
+-- be the first to finish a match this week!" -- the first would be a
+non sequitur about a week that's already over.
+
+User info (`../user/`) gets its own new "Weekly Sealed Pool -- prior
+events" table (`GET /user/stats`'s new `prior_weekly_sealed_pool_events`
+field, alongside its existing `stats`) -- one row per past week the
+viewer completed at least one match in, newest first, each showing the
+week's date, plain win/loss record, and percentage placement ("top N%").
+Deliberately excludes the current, still-live week -- that one only ever
+shows up in the lobby's own dialog above, via its "This week" standings
+toggle.
+
 ### Best of three (issue #90)
 
 `#new-game-best-of-three-label` (a checkbox, right above the Deck
@@ -1070,16 +1333,18 @@ hidden by `updateBestOfThreeFieldVisibility()` (`isBestOfThreeAvailable()`,
 wired to the same format/deck-type `change` events
 `updateDeckTypeAvailability()` already listens to, plus the opponent
 checkboxes/open-lobby player-count select/mode radios, and run once when
-the dialog opens): visible for `duel`/`team`/`closed_team` with a
-non-draft deck type unconditionally, or for `standard` only once the
-dialog's current selections add up to exactly 2 total players
-(`currentNewGamePlayerCount()`) -- with 3+ players there's no single
-"the opponent" for a best-of-three race to be between, the same reason
-`isDeckTypeAvailableForFormat()`'s own draft deck types already fall back
-to a single game past 2 players. Every draft-based deck type already gets
-its own best-of-three match regardless (`draft_match_id`), so the
-checkbox stays hidden there too rather than offering a second,
-meaningless toggle. Checking it sends `best_of_three: true`
+the dialog opens): visible for `team`/`closed_team` with a non-draft deck
+type unconditionally, or for `duel`/`standard` only once the dialog's
+current selections add up to exactly 2 total players
+(`currentNewGamePlayerCount()`, which as of issue #505 no longer
+hardcodes `duel` to a fixed 2 either -- it falls through to the same
+checked-opponent-count formula `draft`/`standard` already used) -- with
+3+ players there's no single "the opponent" for a best-of-three race to
+be between, the same reason `isDeckTypeAvailableForFormat()`'s own draft
+deck types already fall back to a single game past 2 players. Every
+draft-based deck type already gets its own best-of-three match regardless
+(`draft_match_id`), so the checkbox stays hidden there too rather than
+offering a second, meaningless toggle. Checking it sends `best_of_three: true`
 (`createGame()`'s new last parameter, both here and in app.js's own
 wrapper) to `POST /games`, or -- issue #90 follow-up, this was missing
 entirely at first, so checking the box while posting to the open lobby
@@ -1197,6 +1462,25 @@ field (`GameService::getState()`, bare card ids alongside the already-
 serialized `power_duel_sideboard_pool`) for pre-selection. The picker
 hides again once `deck_submitted` is true, the same as the rest of that
 form.
+
+**Who goes first in game 2/3** (reported live: "in non-draft best of 3
+formats, the loser should choose who plays first in the next game") --
+the draft-family's own `#first-player-decision-panel`/
+`renderFirstPlayerDecision()` (see "Who goes first" in `php-app/README.md`)
+now also renders for a `game_matches`-based rematch, with zero JS changes
+of its own needed: `state.first_player_decision` and
+`setPlayFirstNextMatchGame()` were already generic (a plain `gameId`/
+`playFirst`, no draft-specific fields), so once `GameService` started
+populating/accepting them for `game_match_id` too, this panel just
+started showing up for the right games automatically. For Team/Closed
+Team specifically, `you_are_previous_loser` is `true` for BOTH members
+of the losing team at once (either may click "I'll go first" -- whichever
+one does settles it for their whole side, no second teammate confirmation
+step the way `#team-decision-panel`'s own `turn_order`/`draw_recipient`
+choices need); round 1 stays frozen afterward either way -- for `team`,
+`#team-decision-panel` takes over next (that format's own live choice of
+which teammate actually goes), and for `closed_team`, the pregame card
+pass panel does.
 
 **Deck builder** -- the card-by-card Deck Builder (issue #93, see
 "Saved decklists" above) gained its own sideboard panel
@@ -1378,6 +1662,61 @@ deck's `cards`.
       `#replay-controls`, returning to the ordinary lobby the same way
       exiting spectator mode does. See "Watch replay" in
       `../php-app/README.md`.
+  - **Import replay**: reported live, debugging the Anger duplicate-in-
+    hand-and-discard bug above -- "is there a way I can replay these in
+    the dev site using the game export json files?" -- an "Import
+    replay" button (`#import-replay-button`, next to "Past games") opens
+    a hidden `#import-replay-file-input` (`accept=".json,application/json"`)
+    for picking a completed game's own exported file (whatever `GET
+    /games/export`/`getGameExport()` produced, on this environment or a
+    completely different one -- see "Replay from an exported game" in
+    `../php-app/README.md`). Its own `change` handler reads the file
+    (`file.text()`, the same pattern every custom-pool/decklist file
+    upload elsewhere already uses), `JSON.parse`s it, sanity-checks it
+    actually has a `game`/`game_events` section, and hands the parsed
+    object straight to `showImportedReplayBoard()` -- `showReplayBoard()`'s
+    own sibling for a game with no `game_id` row in this database at all.
+    - **Reuses every bit of "Watch replay"'s own board/step-control UI**
+      (`renderBoard()`, `#replay-controls`/`renderReplayControls()`,
+      `isReadOnlyView()`) with only the DATA SOURCE swapped out:
+      `importedReplayExport` (the whole parsed export, `null` for an
+      ordinary `$gameId`-based replay) is checked wherever
+      `refreshReplayBoard()` would otherwise call `getReplayGameState()`,
+      calling the new `postReplayImport()` (`POST /games/replay/import`)
+      instead -- same request body every step, since there's no session
+      to hold the uploaded file server-side between clicks (see
+      `GameService::replayFromExport()`'s own "never written back to
+      this database" docblock in `../php-app/README.md` for why). Unlike
+      the live path's own two-call split (`GET /games/log` once for the
+      step list, `GET /games/replay/state` per step),
+      `postReplayImport()` returns both in one response every time
+      (`{..., steps}`) -- `loadImportedReplayEventsAndShow()` (the
+      import-sourced sibling of `loadReplayEventsAndShow()`) always
+      starts at genesis (`event_id: 0`) and prepends the exact same
+      synthetic "Step 1" entry the live path does.
+    - `currentGameId` stays `null` for an imported replay's entire
+      lifetime -- there generally isn't a real game id to use, since the
+      whole point is a game played on a DIFFERENT environment's own
+      database. `renderReplayControls()`'s own dropdown-rebuild cache key
+      switches to `'import:' + importedReplayToken` in that case (a
+      counter bumped on every newly loaded import) rather than
+      `String(currentGameId)`, since two DIFFERENT imported files would
+      otherwise both cache-key as the literal string `'null'` and the
+      second one's dropdown would never actually rebuild.
+      `#view-log-button` hides itself for an imported replay specifically
+      (`importedReplayExport !== null`) rather than joining
+      `isReadOnlyView()`'s existing gate -- it always fetches by
+      `currentGameId`, which is null here, and the replay step dropdown's
+      own descriptions already cover the same ground anyway.
+    - Player display names come back from `GameService::
+      exportPlayerNames()`'s own three-tier fallback (a real username
+      resolved against THIS server's own `users` table, else the
+      player's own `custom_deck_name`, else a bare "Seat N") rather than
+      always a real username the way every other view in this app
+      guarantees -- a genuinely foreign export's own `user_id`s
+      generally won't resolve locally at all. No frontend change needed
+      for this: `players[].username` already renders wherever it always
+      has, whichever of the three it happens to be.
   - **Settings dialog**: a "Settings" button (`#settings-button`) opens
     `#settings-dialog` (`initSettings()` in `js/game.js`, formerly
     `initNotifications()` -- renamed since it now does more than
@@ -1746,26 +2085,54 @@ deck's `cards`.
 
     Checking a bot while `deckType` is `custom_duel` (issue #140's Duel
     extension -- see "Practice bots in Duel with a custom decklist" in
-    `php-app/README.md`) reveals `#new-game-bot-decklist-fields`: a
-    saved-deck `<select>` (`#new-game-bot-saved-decklist`, populated via
-    `populateSavedDecklistSelect()` the same as the dialog's other saved-
-    decklist pickers) plus a fallback file-upload/paste pair
-    (`#new-game-bot-decklist-file`/`#new-game-bot-decklist-text`, shown
-    only while no saved deck is chosen) -- since the bot can't submit its
-    own decklist the normal post-creation way, its creator picks one for
-    it right here. `updateBotDecklistFieldsVisibility()` computes this
-    visibility from *two* things at once, unlike every other deck-type-
-    driven field in this dialog: `deckType === 'custom_duel'` AND
-    `anyBotChecked()` (any `input[data-is-bot]` in `#opponent-checkboxes`
-    currently checked) -- so it's called from all three places either
-    input can change: `updateDeckTypeDescription()` (deck-type changes),
-    `updateBotCheckboxAvailability()` (format changes, which can hide/
-    force-uncheck a bot outright), and every bot checkbox's own `change`
-    listener. Submitting sends whichever of `bot_decklist_text`/
-    `bot_saved_decklist_id` is populated (mirroring how the dialog's
-    other saved-deck-vs-paste fields already resolve to one shared
-    param) alongside the rest of the request -- both omitted whenever no
-    bot is checked or `deckType` isn't `custom_duel`.
+    `php-app/README.md`) reveals `#new-game-bot-decklist-fields`, which
+    holds one field-group per currently-CHECKED bot (issue #505 follow-up:
+    `custom_duel` now supports seating 2+ bots, each needing its own
+    decklist -- previously capped at exactly one, see "At most one bot
+    for `custom_duel` -- since relaxed" below), rendered fresh into
+    `#new-game-bot-decklist-groups` by `updateBotDecklistFieldsVisibility()`
+    every time it's called. Each group is keyed by that bot's own user id
+    (`group.dataset.botUserId`, matching `input[data-is-bot]`'s own
+    `.value`) and offers the same choice the dialog's other saved-deck
+    fields do: a saved-deck `<select>` (`.new-game-bot-decklist-saved`,
+    populated via `populateSavedDecklistSelect()`) or a fallback file-
+    upload/paste pair (`.new-game-bot-decklist-file`-equivalent input/
+    `.new-game-bot-decklist-text`, shown only while no saved deck is
+    chosen) -- since the bot can't submit its own decklist the normal
+    post-creation way, its creator picks one for each seated bot right
+    here. Rebuilding from scratch on every call is simpler than
+    diffing/patching (at most `MAX_PLAYERS - 1` bot seats), but the
+    function still preserves any already-entered choice/text for a bot
+    that's still checked, so toggling an unrelated bot's checkbox doesn't
+    wipe out what was already filled in for this one.
+    `updateBotDecklistFieldsVisibility()` computes overall visibility
+    from *two* things at once, unlike every other deck-type-driven field
+    in this dialog: `deckType === 'custom_duel'` AND at least one checked
+    `input[data-is-bot]` in `#opponent-checkboxes` -- so it's called from
+    all three places either input can change: `updateDeckTypeDescription()`
+    (deck-type changes), `updateBotCheckboxAvailability()` (format
+    changes, which can hide/force-uncheck a bot outright), and every bot
+    checkbox's own `change` listener. Submitting reads every group back
+    via `collectBotDecklists()`, sending the result as `bot_decklists`
+    (`{"<bot_user_id>": {"decklist_text"?, "saved_decklist_id"?}, ...}`,
+    one entry per checked bot, each resolving to whichever of its own two
+    inputs is populated) -- omitted whenever no bot is checked or
+    `deckType` isn't `custom_duel`.
+
+    **At most one bot for `custom_duel` -- since relaxed** (issue #505, a
+    design gap caught while adding 3-4p constructed Duel support, not
+    reported live; the follow-up above then explicitly asked to relax
+    it): the fields originally only ever supplied a SINGLE bot's own
+    decklist, with nowhere to put a second one, so a 3-4p `custom_duel`
+    game could otherwise seat 2+ bots and leave the extra one(s) deckless
+    forever -- `GameService::createGame()` rejected this outright at the
+    time (see "Duel: separate per-player decks" in `php-app/README.md`).
+    A short-lived `updateBotSelectionLimit()` mirrored
+    `updateOpponentSelectionLimit()`'s own "uncheck/disable past the cap"
+    shape to keep the dialog from ever reaching that server error, capping
+    checked bots at 1 for `custom_duel` -- removed entirely once the
+    per-bot field-groups above replaced it, since there's no longer any
+    cap to enforce client-side.
 
     Checking a bot in a non-team format reveals a third field,
     `#new-game-bot-goes-first-label` (issue #417, migration `0171`) -- a
@@ -1809,15 +2176,19 @@ deck's `cards`.
     own personal preference -- `user.default_selections_mode_preference`
     -- rather than always starting unchecked; see "Settings dialog"
     above and "Personal preference for the New Game dialog's default" in
-    `php-app/README.md`. `updateOpponentSelectionLimit()` caps how many friends
-    can be checked at once to match the format's actual player count --
-    3 normally, but only 1 for Duel or Draft, since both are exactly 2
-    players and the server rejects anything else (see "Duel: separate
-    per-player decks" in `php-app/README.md`). It runs on every checkbox's
-    own `change` as well as the format `<select>`'s: switching to Duel or
-    Draft with 2 friends already checked auto-unchecks the second one and
-    disables the rest, and switching back to Traditional re-enables them,
-    so you can't submit a request the server will just reject with a 400.
+    `php-app/README.md`. `updateOpponentSelectionLimit()` caps how many
+    friends can be checked at once at 3 (4 players total) for almost
+    every format/deck_type now (`opponentSelectionMax()`, see its own
+    writeup further below) -- Duel used to cap at just 1 (2 players
+    total, the server's own hard limit before issue #505), and Draft's
+    own analogous cap was already lifted by issue #189. Sealed Pool of
+    the Day is the one deliberate exception again (issue #520 follow-up,
+    reported live: "let's limit sealed pool of the day/week to only two
+    players"), capped back down to 1. It runs on every checkbox's own
+    `change` as well as the format `<select>`'s: switching to a
+    format/deck_type combination that supports fewer players than are
+    already checked auto-unchecks the extras and disables the rest, so
+    you can't submit a request the server will just reject with a 400.
     Selecting Open Team Play or Closed Team Play reveals
     `#new-game-team-fields` (`updateTeamFields()`, wired to the same
     checkbox/format `change` events): a partner `<select>` populated from
@@ -1867,6 +2238,33 @@ deck's `cards`.
     game selects "Sealed Deck" here, not "Draft") so reopening the dialog
     from a finished Sealed Deck game lands back on the same option a human
     would have picked.
+
+    `#new-game-format`'s "Sealed Pool of the Day" option (issue #520, right
+    after "Sealed Deck") is the exact same UI-only sentinel pattern applied
+    to `deck_type: 'sealed_pool_of_the_day'` -- same reasons (no live
+    drafting phase, a redundant would-be Deck-dropdown name), same
+    mechanics (`updateDeckTypeAvailability()`'s early-return branch hiding
+    the Deck dropdown and forcing `#new-game-deck-type` to
+    `'sealed_pool_of_the_day'` under the hood, `effectiveNewGameFormat()`/
+    the rematch-prefill reverse translation both extended to cover it
+    alongside `'sealed_deck'`). Two things about it are NOT shared with
+    Sealed Deck's own sentinel, though: `DECK_TYPE_DESCRIPTIONS`' entry for
+    it spells out the per-rarity deck caps up front (see "Sealed Pool of the
+    Day" in `php-app/README.md`) since every player's pool is the identical
+    50 cards that day, and `opponentSelectionMax()` caps it at 1 opponent
+    rather than 3 (issue #520 follow-up, reported live: "let's limit sealed
+    pool of the day/week to only two players" -- see "Sealed Pool of the
+    Day" in `php-app/README.md` for the matching server-side restriction),
+    so its friend/bot-checkbox list only ever lets one be checked at a
+    time, disabling the rest. Bot checkboxes themselves are NOT hidden for
+    this option, unlike an earlier version of this feature (issue #520
+    follow-up, reported live: "since we aren't tracking standings for
+    sealed pool of the day, let's allow practice bots for those") --
+    `botsSupportedFor()` now returns `true` for it the same as every other
+    draft deck_type (see "Sealed Pool of the Day" in `php-app/README.md`
+    for `chooseDraftDeck()`'s own matching rarity-cap fix); Weekly Sealed
+    Pool stays the one bot-unsupported deck_type, though it's never
+    reachable from this dialog at all regardless.
 
     The
     dialog's Deck dropdown (`#new-game-deck-type` -- Structure, Power,
@@ -2041,16 +2439,20 @@ deck's `cards`.
     uses -- but restricted to deck types that build a deck through some
     kind of live drafting process; Quick Draft was the first, Winston
     Draft joined it next, Grid Draft joined after that -- see "Draft
-    format" in `php-app/README.md`). `updateOpponentSelectionLimit()`
-    caps opponent selection at 1 (2 players total) for Duel, and at 3 (up
-    to 4 players total) for Draft (`opponentSelectionMax()`, format-only
-    now that Quick Draft, Winston Draft, and Grid Draft all three support
-    2-4 players -- the function used to also need the selected
-    `deck_type` back when Winston Draft was still locked to 2, but that
-    branching became dead code once it joined the other two, so it was
-    removed rather than left half-refactored); switching away from Draft
-    entirely re-caps the selection at 1 and un-checks any extras, keeping the
-    first one checked. Polls `GET /games` every 4 seconds while the lobby is
+    format" in `php-app/README.md`). `updateOpponentSelectionLimit()` caps
+    opponent selection at 3 (up to 4 players total) for almost every
+    format/deck_type now (`opponentSelectionMax()`, which never took a
+    `format` parameter -- Duel's own cap of 1 was removed once
+    constructed Duel deck types started supporting 2-4 players too,
+    issue #505, the same way an earlier `deck_type` parameter was
+    already removed once Quick Draft, Winston Draft, and Grid Draft all
+    three ended up supporting 2-4 players and that branching became dead
+    code). Sealed Pool of the Day brought a `deck_type` read back (issue
+    #520 follow-up, reported live: "let's limit sealed pool of the
+    day/week to only two players") -- its own cap is 1, the only
+    exception left; a format/deck-type change that leaves fewer players
+    supported than are currently checked still un-checks the extras,
+    keeping the earliest ones checked. Polls `GET /games` every 4 seconds while the lobby is
     open (mirroring the board's own poll below, and mutually exclusive
     with it via the same `pollTimer` variable, since only one of the two
     views is ever visible at once) — so a game another player just
@@ -2154,7 +2556,16 @@ deck's `cards`.
     This section simply never renders anything for `closed_team`, since
     `getState()` never populates `teammate_hand` for that format at all
     (hands stay private between teammates -- see "Closed Team Play" in
-    `php-app/README.md`). A `#team-decision-panel` (`renderTeamDecision()`, reading
+    `php-app/README.md`). Its own static position in `index.html` sits
+    right after `#pending-decision-panel` below (reported live: "in open
+    team games, can we move teammate's hand under the card to play div
+    that opens when you click a playable card?", then "let's move the
+    pending decisions panel above the teammate's hand panel, as well") --
+    moved there in two steps from its original spot right after
+    `#your-hand-section`/`#spectator-final-hands-section`, each a pure DOM
+    reorder with no changes to `renderTeammateHand()` itself, which only
+    ever looks the section up by id regardless of where it sits on the
+    page. A `#team-decision-panel` (`renderTeamDecision()`, reading
     `state.team_decision`, `null` unless a `game_team_decisions` row is
     open) shows either a row of candidate buttons (`can_propose`, calling
     `proposeTeamDecision()`) or an Approve/Reject pair (`can_confirm`,
@@ -2314,7 +2725,19 @@ deck's `cards`.
     exists, regardless of whether the game itself is `waiting`/
     `in_progress`/`completed` -- "Best of 3 match, game N, you lead X-Y"
     (or "tied X-X"/"<opponent> leads Y-X", whichever side is actually
-    ahead). A 3-4 player Quick Draft/Winston Draft/Grid Draft/Rotisserie
+    ahead). For a Team/Closed Team best-of-three (reported live: this
+    line was naming a specific *opponent teammate* when their side led,
+    even though `your_wins`/`opponent_wins` are already aggregated per
+    TEAM, not per player -- worse, since it just grabbed the first
+    `state.players` entry whose `game_player_id` didn't match the
+    viewer's own with no `team_id` check at all, it could even land on
+    the viewer's OWN teammate), the trailing side is named "opponents"
+    (plural, no specific name) instead of one teammate standing in for
+    the whole side -- "you" already carries that same whole-side, no-
+    specific-teammate meaning for the viewer's own side, so this just
+    makes the wording symmetric. Every other format (`duel`/2-player
+    `standard`, where `player.team_id` is `null`) is unaffected and still
+    names the genuine lone opponent by username. A 3-4 player Quick Draft/Winston Draft/Grid Draft/Rotisserie
     Draft match (issue #189, always single-game -- `games_to_win` is 1)
     has more than one rival to show a score for, so it branches on
     `draftState.players.length > 2` instead and builds its text from
@@ -2372,10 +2795,17 @@ deck's `cards`.
     `collectDuelDeckRules()`) get copied over, a team/closed_team
     creator's own previous partner gets reselected (matched by shared
     `team_id`, since there's no separate "who's your partner" field to
-    read), a bot opponent's own previous `custom_duel` decklist gets
-    reconstructed into `#new-game-bot-decklist-text` from `players[].
+    read), every bot opponent's own previous `custom_duel` decklist gets
+    reconstructed into its own field-group's `.new-game-bot-decklist-text`
+    (issue #505 follow-up: keyed by that bot's own user id, since 2+ bots
+    may now each have their own previous decklist) from `players[].
     bot_decklist_cards` (creator-only, see the php-app README) via
-    `buildDecklistCardsText()`, and, the same idea one deck_type wider, a
+    `buildDecklistCardsText()` -- `buildRematchPrefill()` collects these
+    into `botDecklistCardsByUserId`, and applying them awaits a fresh
+    `updateBotDecklistFieldsVisibility()` call first, since the field-
+    groups it needs to write into are rendered async and otherwise might
+    not exist yet at this point in `openNewGameDialog()`. And, the same
+    idea one deck_type wider, a
     HUMAN creator's own previous `'custom'` decklist gets reconstructed
     into `#new-game-decklist-text` from `game.custom_decklist_cards`
     (also creator-only -- see "Rematch" in `../php-app/README.md`) via
@@ -2850,6 +3280,20 @@ deck's `cards`.
       offered as its own top-level `#new-game-format` option ("Sealed
       Deck," next to "Draft") rather than one of "Draft"'s own Deck
       dropdown choices -- see "New Game dialog"'s own note on this below.
+    - **Sealed Pool of the Day** (issue #520) reuses Sealed Deck's shared
+      `#draft-deck-building` view unchanged (same `renderDraftPanel()`
+      dispatch, same top-level `#new-game-format` sentinel treatment -- see
+      "New Game dialog" above and "Sealed Pool of the Day" in
+      `php-app/README.md`), with one addition inside
+      `renderDraftDeckBuilding()` itself: when `state.sealed_deck.
+      deck_building.rarity_caps` is present (only for this deck type), its
+      status text appends a plain-language "At most N rare and N mythic"
+      sentence, and a computed `exceedsARarityCap` flag (counting the
+      current selection's own cards by `rarity`) gets OR'd into the same
+      condition that already disables Submit/Save for being outside the
+      12-50 card range -- so going over a cap disables submission
+      immediately, the same way an invalid size already did, rather than
+      only surfacing as a rejected-submission error after the fact.
 
     Clicking any hand
     card opens `#choices-panel` inline, underneath the hand -- a plain
@@ -3403,6 +3847,26 @@ deck's `cards`.
     directly, so the secondary action reads as subordinate to the
     primary one instead of competing with it for the row's right edge.
 
+    **Reported live: diagnostic mode's internal reasoning bookkeeping
+    was leaking into both "Recent plays" and "View log".** With
+    diagnostic mode on, every action the bot even just *considers* gets
+    its own `'heuristic_bot_reasoning'`/`'tactical_bot_reasoning'`
+    `game_events` row (see "Heuristic bot reasoning" in
+    `php-app/README.md`), meant only for the dedicated "Bot reasoning"
+    dialog -- but `GET /games/state`'s own `recent_events` and `GET
+    /games/log` both included them too, and since neither event type is
+    handled by `describeEvent()`, each one rendered via its generic
+    fallback as a bare, detail-free `"{actor} played {card}"` line with
+    none of the usual "from hand"/grant wording -- interleaved with (and
+    visually indistinguishable from) the real play events. A bot combo
+    with several considered-but-not-yet-resolved steps in a row showed
+    up as a wall of these contentless lines, reading exactly like a
+    frozen game. Both event types are now excluded from both feeds
+    server-side (`GameService::fullEventLog()`/`recentEvents()`), so
+    this needed no frontend change at all -- worth calling out here
+    since it's this file's own two "Recent plays"/"Game log" UI
+    surfaces that were actually showing the symptom.
+
     **Download complete game data (issue #99).** A third lobby-row
     button, "Download data" (next to "View log"), fetches the entirely
     different `GET /games/export` (`GameService::exportGameData()`, see
@@ -3589,6 +4053,20 @@ deck's `cards`.
     Send button whenever the dialog opens (`isChatReadOnly()`), so a
     completed/abandoned game's read-only chat can't be worked around by
     clicking GG instead of typing it.
+
+    **Narrower emoji buttons on mobile** (reported live: one of the seven
+    quick-chat buttons was still wrapping to a second row on a narrow
+    phone). The five single-emoji buttons (everything but GL;HF/GG) carry
+    a `.quick-chat-emoji` class; under the existing `@media (max-width:
+    600px)` breakpoint in `style.css`, that class gets tighter side
+    padding (0.15rem, down from the row's own 0.5rem/0.4rem tiers) and
+    `#game-chat-quick-buttons` itself gets a tighter gap (0.25rem, down
+    from 0.4rem) -- GL;HF/GG keep their own wider padding (already close
+    to their text's own width) since only the emoji buttons had padding
+    to spare. Verified against a real 375px-wide layout (all 7 buttons
+    fit on one row after, versus 2 rows -- the last button wrapping --
+    before); desktop widths are unaffected, this only applies inside the
+    existing mobile breakpoint.
 
     **Duplicate-message guard.** Users reported seeing the same chat
     message sent twice -- traced to a rapid double-click on Send (or
@@ -4195,8 +4673,8 @@ using the same-origin `session_token` cookie for auth — see
   back with its own "Back to your games" button (`#user-back-to-lobby-button`,
   a real `<button>` matching the rest of the app's buttons rather than an
   anchor, with a click handler that navigates to `/game/`). Redirects to
-  `/` if there's no active session, same as `game/index.html`. Currently
-  just one section, `#user-lifetime-stats-section` -- a "Games" row
+  `/` if there's no active session, same as `game/index.html`. Its first
+  section, `#user-lifetime-stats-section` -- a "Games" row
   (lifetime wins-losses, every format) and a "Matches" row (lifetime
   wins-losses, `quick_draft`/`winston_draft`/`grid_draft` best-of-three
   results only, with a small note under the table saying so, since
@@ -4210,7 +4688,12 @@ using the same-origin `session_token` cookie for auth — see
   (tournament standings once issue #91's tournament system exists,
   per-format breakdowns, etc.), and each addition is meant to be its own
   `<section>` alongside this one rather than one flat list -- see
-  "Lifetime stats" in `../php-app/README.md`. Shares the same footer
+  "Lifetime stats" in `../php-app/README.md`. `#user-privacy-section`
+  (issue #110) holds the online/offline `#share-presence-checkbox` -- see
+  "Online/presence indicator" in `../php-app/README.md`.
+  `#user-account-section` holds the "Change password" form
+  (`#change-password-form`) -- see "Change password" below. Shares the
+  same footer
   (version indicator, Resources link/dialog, theme select) every other
   page already has.
 - `spectate/index.html` (`/spectate/`, issue #128) — Reached via the

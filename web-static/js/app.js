@@ -79,6 +79,16 @@ function resetPassword(token, password) {
     return apiRequest('/reset-password', { method: 'POST', body: JSON.stringify({ token, password }) });
 }
 
+// Change password (User info page's "Account" section) -- for an
+// already-authenticated user, unlike resetPassword() above (a mailed
+// token for someone who can't log in at all).
+function changePassword(currentPassword, newPassword) {
+    return apiRequest('/user/change-password', {
+        method: 'POST',
+        body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+    });
+}
+
 function listFriends() {
     return apiRequest('/friends');
 }
@@ -129,7 +139,7 @@ function getCardStats() {
     return apiRequest('/stats/cards');
 }
 
-function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId, defaultSelectionsMode, botDecklistText, botSavedDecklistId, randomTeams, rotisserieDraftPoolSource, rotisserieDraftCustomPoolText, rotisserieDraftCutoffCount, tieredRotisserieDraftMode, tieredRotisserieDraftTiers, botGoesFirst, bestOfThree, allowSideboarding) {
+function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId, defaultSelectionsMode, botDecklistText, botSavedDecklistId, randomTeams, rotisserieDraftPoolSource, rotisserieDraftCustomPoolText, rotisserieDraftCutoffCount, tieredRotisserieDraftMode, tieredRotisserieDraftTiers, botGoesFirst, bestOfThree, allowSideboarding, diagnosticMode, botDecklists) {
     return apiRequest('/games', {
         method: 'POST',
         body: JSON.stringify({
@@ -166,13 +176,20 @@ function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText,
             // once here alongside format/deck_type. See "Default
             // selections mode" in web-static/README.md.
             default_selections_mode: defaultSelectionsMode,
-            // Only meaningful for deck_type 'custom_duel' with a practice
-            // bot seated (issue #140's Duel extension) -- the bot can't
-            // submit its own decklist via POST /games/decklist the way a
-            // human opponent does, so its creator supplies it here
+            // Only meaningful for deck_type 'custom_duel' with a single
+            // practice bot seated (issue #140's Duel extension) -- the bot
+            // can't submit its own decklist via POST /games/decklist the
+            // way a human opponent does, so its creator supplies it here
             // instead. See "Practice bots" in web-static/README.md.
             bot_decklist_text: botDecklistText,
             bot_saved_decklist_id: botSavedDecklistId,
+            // Only meaningful for deck_type 'custom_duel' with 2+ practice
+            // bots seated (issue #505 follow-up) -- bot_decklist_text/
+            // bot_saved_decklist_id above have nowhere to name more than
+            // one bot's own decklist, so with 2+ bots each one's own
+            // decklist is instead keyed here by that bot's own user id.
+            // See "Practice bots" in web-static/README.md.
+            bot_decklists: botDecklists,
             // Only meaningful for format 'team'/'closed_team' -- randomly
             // assigns the creator's partner instead of requiring
             // partner_user_id. See "Open Team Play"/"Closed Team Play" in
@@ -202,6 +219,10 @@ function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText,
             // duel_deck_rules preset (issue #90 follow-up) -- see "Best of
             // three" in web-static/README.md.
             allow_sideboarding: allowSideboarding,
+            // Only meaningful with a practice Tactical Bot seated (see
+            // uses_tactical_ai) -- see "Diagnostic mode" in
+            // web-static/README.md.
+            diagnostic_mode: diagnosticMode,
         }),
     });
 }
@@ -336,6 +357,22 @@ function saveAutoApplyScoringBonusesPreference(autoApplyScoringBonuses) {
     });
 }
 
+// "Pause at the start of your turn" as a personal preference (Settings
+// dialog's "Game defaults" section) -- write-only, same reasoning as
+// saveAutoApplyScoringBonusesPreference() above: the current value
+// already rides on getCurrentUser()'s own user.pause_before_own_turn
+// field. Drives GameService::notifyItsYourTurn()'s own server-side
+// behavior entirely -- there's no client-side effect to apply beyond
+// persisting it (the "Advance Turn" banner itself reacts to
+// state.you.turn_pending_acknowledgment on the next poll, not to this
+// preference directly).
+function savePauseBeforeOwnTurnPreference(pauseBeforeOwnTurn) {
+    return apiRequest('/user/pause-before-own-turn-preference', {
+        method: 'POST',
+        body: JSON.stringify({ pause_before_own_turn: pauseBeforeOwnTurn }),
+    });
+}
+
 // Board layout (issue #417) as a personal preference (Settings dialog's
 // "Display" section) -- write-only, same reasoning as
 // saveAutoApplyScoringBonusesPreference() above: the current value
@@ -428,6 +465,33 @@ function cancelOpenGame(listingId) {
         method: 'POST',
         body: JSON.stringify({ id: listingId }),
     });
+}
+
+// Weekly Sealed Pool's own queue (issue #520) -- a FIFO auto-pairing
+// ladder, deliberately separate from the open-lobby endpoints above (see
+// WeeklySealedPoolQueueService's own docblock). getWeeklySealedPoolQueueStatus()
+// resolves to { queued, in_progress_count, concurrent_match_cap };
+// joinWeeklySealedPoolQueue() resolves to either { status: 'waiting' } or
+// { status: 'paired', game_id, opponent_username }.
+function getWeeklySealedPoolQueueStatus() {
+    return apiRequest('/weekly-sealed-pool/queue');
+}
+
+function joinWeeklySealedPoolQueue() {
+    return apiRequest('/weekly-sealed-pool/queue', { method: 'POST' });
+}
+
+function leaveWeeklySealedPoolQueue() {
+    return apiRequest('/weekly-sealed-pool/queue/leave', { method: 'POST' });
+}
+
+// week: 'current' (the still-live week, the default) or 'prior' (last
+// week's now-final standings). Resolves to { standings } where standings
+// is null if that week has no event at all yet (see
+// GameService::priorWeeklySealedPoolId()'s own docblock), or a rank-
+// ordered list of { user_id, username, wins, losses, rank, percentile }.
+function getWeeklySealedPoolStandings(week = 'current') {
+    return apiRequest(`/weekly-sealed-pool/standings?week=${week}`);
 }
 
 // Saved user decklists (issue #92) -- see "Saved decklists" in
@@ -585,6 +649,26 @@ function getReplayGameState(gameId, eventId, code) {
     return apiRequest(path);
 }
 
+// "Is there a way I can replay these in the dev site using the game
+// export json files?" -- the same reconstructed-board shape
+// getReplayGameState() returns above, but for a game with no row in
+// THIS server's own database at all (played on a different environment
+// entirely): exportData is the whole parsed export JSON (exactly what
+// getGameExport() above hands back, or a file the user picked up
+// themselves via GET /games/export on wherever the game was actually
+// played), sent in the request body since there's no game_id to put in
+// the URL. Also bundles the steppable event list into the response
+// (GameService::replayFromExport()'s own 'steps' key) -- there's no
+// per-import GET /games/log to separately reuse the way the live path
+// above does, so see showImportedReplayBoard() for how this single call
+// replaces both getGameLog() and getReplayGameState() together.
+function postReplayImport(exportData, eventId) {
+    return apiRequest('/games/replay/import', {
+        method: 'POST',
+        body: JSON.stringify({ export: exportData, event_id: eventId }),
+    });
+}
+
 // A shared-deck game's full deck (issue #197) -- see GameService::viewSharedDeck().
 // code is only ever passed while spectating (issue #128) via a share code
 // rather than friendship -- see openSharedDeckView() in game.js.
@@ -594,6 +678,14 @@ function getSharedDeck(gameId, code) {
         path += '&code=' + encodeURIComponent(code);
     }
     return apiRequest(path);
+}
+
+// Diagnostic mode (games.diagnostic_mode) -- every Tactical Bot play
+// logged since the caller's own last play. See
+// GameService::tacticalBotReasoningSince() and #view-bot-reasoning-button
+// in game.js.
+function getTacticalBotReasoning(gameId) {
+    return apiRequest('/games/bot-reasoning?game_id=' + encodeURIComponent(gameId));
 }
 
 // A completed Quick/Winston/Grid Draft match's full shared pool, sectioned
@@ -657,6 +749,16 @@ function playCard(gameId, cardId, choices) {
 
 function passTurn(gameId) {
     return apiRequest('/games/pass', {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId }),
+    });
+}
+
+// "Pause at the start of your turn" (reported live) -- clears the
+// current round's own turn_pending_acknowledgment flag for the caller,
+// unlocking their play/pass UI. See GameService::acknowledgeTurnStart().
+function advanceTurn(gameId) {
+    return apiRequest('/games/advance-turn', {
         method: 'POST',
         body: JSON.stringify({ game_id: gameId }),
     });
@@ -858,6 +960,8 @@ const DECK_TYPE_LABELS = {
     chaos_draft: 'Chaos Draft',
     one_of_each: 'One of Each Card',
     sealed_deck: 'Sealed Deck',
+    sealed_pool_of_the_day: 'Sealed Pool of the Day',
+    weekly_sealed_pool: 'Weekly Sealed Pool',
 };
 
 function deckTypeLabel(deckType) {

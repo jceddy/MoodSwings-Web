@@ -58,6 +58,29 @@
             <p id="user-stats-match-note">Matches are Quick/Winston/Grid Draft best-of-three results.</p>
         </section>
 
+        <!-- Weekly Sealed Pool's own "prior events" list (issue #520) --
+             one row per past week this user completed at least one match
+             in, newest first. Placement is a PERCENTAGE ("top 10%"), not a
+             raw rank -- see GameService::priorWeeklySealedPoolEventsFor()'s
+             own docblock for why (stays comparable across weeks with very
+             different player counts). The current, still-live week is
+             deliberately not here -- see the "Weekly Sealed Pool" dialog
+             from the lobby (../game/) for that. -->
+        <section id="user-prior-weekly-sealed-pool-events-section">
+            <h2>Weekly Sealed Pool -- prior events</h2>
+            <table id="user-prior-weekly-sealed-pool-events-table">
+                <thead>
+                    <tr>
+                        <th scope="col">Week of</th>
+                        <th scope="col">Record</th>
+                        <th scope="col">Placement</th>
+                    </tr>
+                </thead>
+                <tbody id="user-prior-weekly-sealed-pool-events-body"></tbody>
+            </table>
+            <p id="user-prior-weekly-sealed-pool-events-empty" hidden>No Weekly Sealed Pool events yet.</p>
+        </section>
+
         <!-- Online/presence indicator (issue #110) -- lets a user opt out
              of sharing their derived online/offline status with friends
              and fellow game players entirely; shown to others as a
@@ -69,6 +92,34 @@
                 <input type="checkbox" id="share-presence-checkbox">
                 Share my online/offline status with friends and opponents
             </label>
+        </section>
+
+        <!-- Change password -- unlike the "Forgot password?" flow
+             (reset-password.html, reached via a mailed token for someone
+             who can't log in at all), this is for an already-logged-in
+             user who knows their current password and just wants a new
+             one. Same field shape (type=password, minlength/maxlength
+             matching AuthService::changePassword()'s own 8-72 char
+             check) as reset-password.html's own form. -->
+        <section id="user-account-section">
+            <h2>Account</h2>
+            <form id="change-password-form">
+                <div class="field">
+                    <label for="change-password-current">Current password</label>
+                    <input type="password" id="change-password-current" name="current_password" required autocomplete="current-password">
+                </div>
+                <div class="field">
+                    <label for="change-password-new">New password</label>
+                    <input type="password" id="change-password-new" name="new_password" required autocomplete="new-password" minlength="8" maxlength="72">
+                </div>
+                <div class="field">
+                    <label for="change-password-confirm">Confirm new password</label>
+                    <input type="password" id="change-password-confirm" name="new_password_confirm" required autocomplete="new-password" minlength="8" maxlength="72">
+                </div>
+                <button type="submit">Change password</button>
+                <p id="change-password-error" class="error" hidden></p>
+                <p id="change-password-success" class="success" hidden></p>
+            </form>
         </section>
     </main>
 

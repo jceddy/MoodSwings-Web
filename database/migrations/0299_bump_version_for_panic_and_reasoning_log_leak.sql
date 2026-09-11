@@ -1,0 +1,34 @@
+-- Reported live, from one game log: two bugs.
+--
+-- 1) "when the bot played Panic, it should have targeted its own
+-- Compulsion or Suspicion so it could re-play it to take another card
+-- from my hand" -- Panic had zero bot targeting logic at all (unlike
+-- every other optional-target mood), so its target_mood_ids field was
+-- always left empty. BotPlayerService::panicTargetMoodIds() now bounces
+-- the bot's own highest-value Compulsion/Suspicion back to hand
+-- whenever an in-play Validation guarantees a free replay -- Panic's
+-- own printed value is a fixed 1, so playing it is guaranteed to
+-- satisfy ValidationEffect::reactToAnotherPlay()'s own "0 or 1" check
+-- and hand back an extra play, making the bounce a strict gain.
+--
+-- 2) "it seemed to get into a loop with Creativity at the end, and I
+-- had to Resign from the game to break the loop" -- direct reproduction
+-- against the real engine showed the underlying combo (Creativity
+-- repeatedly copying an in-play Validation) is a legitimate,
+-- correctly-terminating combo, not an engine bug. The actual bug: with
+-- diagnostic_mode on, logHeuristicBotReasoning()/logTacticalBotReasoning()
+-- log their own 'heuristic_bot_reasoning'/'tactical_bot_reasoning'
+-- game_events row for every action the bot even just considers, purely
+-- for the dedicated "Bot reasoning" dialog -- neither fullEventLog()
+-- nor recentEvents() excluded them, so each one fell through
+-- describeEvent()'s unhandled-event-type default arm (the same bug
+-- class already flagged there for closed_team_leader_decided/
+-- chaos_draft_effect_attached) and rendered as a misleading, detail-free
+-- "{actor} played {cardName}" line -- a long bot combo showed up as a
+-- wall of these, indistinguishable from a genuinely stuck game. Both
+-- event types are now excluded from both feeds, mirroring
+-- round_grants_computed's own pre-existing exclusion.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.39.26' WHERE id = 1;

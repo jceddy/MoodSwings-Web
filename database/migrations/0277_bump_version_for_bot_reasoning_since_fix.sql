@@ -1,0 +1,25 @@
+-- Bug fix (reported live: "the View bot reasoning button always shows
+-- 'No tactical bot plays since your own last play.'" -- confirmed
+-- happening even right after a Tactical Bot's move was clearly visible
+-- in Recent plays).
+--
+-- GameService::tacticalBotReasoningSince() finds the boundary id for
+-- "since the viewer's own last play" via their own most recent
+-- game_events row. That query already excluded 'round_grants_computed'
+-- (a bookkeeping row logged for every player regardless of whose turn it
+-- was) but not 'pending_decision_created' -- whose acting_game_player_id
+-- isn't always "whoever just acted": a scoring-time (Enthusiasm/Passion)
+-- or after-scoring order decision logs it as whoever now OWNS that
+-- pending decision, which can easily be the viewer purely because the
+-- ROUND the bot's move was part of happened to end in a decision now
+-- awaiting them -- nothing they themselves did. Counting that row as
+-- "the viewer's own last play" pushed the boundary past the very
+-- tactical_bot_reasoning row that decision resulted from, hiding it.
+--
+-- Now excluded alongside round_grants_computed -- the genuine completed
+-- action is logged separately, once the viewer actually answers, as
+-- pending_decision_resolved (still counted), so nothing is lost.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.39.4' WHERE id = 1;

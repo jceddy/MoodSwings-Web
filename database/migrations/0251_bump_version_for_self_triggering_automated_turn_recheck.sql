@@ -1,0 +1,27 @@
+-- Follow-up to migration 0250 (cron-driven automated turn advancement),
+-- reported live: "is there a way to implement this without requiring a
+-- cron job? can whatever is in the CRON script just run when the bot
+-- gets to the end of its turn?"
+--
+-- GameService::advanceAutomatedTurns() now schedules ONE follow-up
+-- recheck of itself (GameService::scheduleAutomatedTurnRecheck(), a
+-- detached `bin/recheck_automated_turn.php <game_id> <depth>` process,
+-- the same exec()-based fire-and-forget pattern
+-- launchTacticalBotSearchJob() already uses for the Tactical Bot's own
+-- search) every time it actually drives something. That recheck's own
+-- eventual advanceAutomatedTurns() call schedules ANOTHER one the same
+-- way, only if IT ALSO found something to drive -- so the chain
+-- self-perpetuates for exactly as long as there's genuinely more to
+-- advance, and stops the instant a real player's own turn is reached or
+-- the game completes, with no external scheduler needed at all.
+-- MAX_AUTOMATED_TURN_RECHECK_CHAIN_DEPTH (30 links) is a hard safety
+-- ceiling against a hypothetical future engine bug that never lets the
+-- game settle.
+--
+-- bin/advance_automated_turns.php (migration 0250's own cron sweep)
+-- remains available as an optional extra safety net, but is no longer
+-- required for this feature to work.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.33.15' WHERE id = 1;

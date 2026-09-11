@@ -1,0 +1,28 @@
+-- Reported live: "conviction should be able to target itself."
+--
+-- Conviction's own printed text ("choose a mood, its player puts it on
+-- the bottom of the deck and draws a card") carries no owner/other-
+-- player restriction, and ConvictionEffect's own docblock already said
+-- self-targeting was legal -- MoodPlayService::playMood() moves a card
+-- into play before resolving its own effect, so Conviction's own id was
+-- already a legal isInPlay() target by the time its effect actually ran.
+--
+-- The real gap was CardChoiceSchema's own 'conviction' entry missing
+-- 'includes_self' => true, the same schema-metadata bug already fixed
+-- once each for Hate, Anger, and Hostility's second stage: game.js's
+-- fieldOptions() builds a mood field's candidate list from the board
+-- BEFORE the current play is submitted, so a card that's legal to
+-- target itself needs this flag to have the frontend synthesize that
+-- option. Without it, neither a human player's own UI nor the bot ever
+-- offered Conviction as a candidate for its own required target.
+--
+-- BotPlayerService::convictionTargetMoodId()'s own $mood->cardId ===
+-- $cardId exclusion was inspected and confirmed already unreachable
+-- (chooseAction() builds a candidate card's choices before that card
+-- has entered play, so it's never present in moodsInPlay() for this
+-- loop to encounter) -- left as-is with a clarifying docblock, no
+-- functional change needed there.
+--
+-- No schema change, just the version bump MaintenanceGate needs to
+-- see this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.40.2' WHERE id = 1;

@@ -34,7 +34,7 @@ final class SessionRepository
         $stmt = Connection::get()->prepare(
             'SELECT sessions.id, sessions.user_id, users.username, users.email, users.phone_number, users.share_presence,
                     users.default_selections_mode_preference, users.auto_pass_on_empty_hand, users.auto_apply_scoring_bonuses,
-                    users.board_layout_preference, users.allow_custom_content, users.matchmaking_discoverable
+                    users.pause_before_own_turn, users.board_layout_preference, users.allow_custom_content, users.matchmaking_discoverable
              FROM sessions
              INNER JOIN users ON users.id = sessions.user_id
              WHERE sessions.token_hash = :token_hash AND sessions.expires_at > NOW()'
@@ -63,6 +63,21 @@ final class SessionRepository
     {
         $stmt = Connection::get()->prepare('DELETE FROM sessions WHERE user_id = :user_id');
         $stmt->execute(['user_id' => $userId]);
+    }
+
+    /**
+     * Same "log out everywhere" as deleteAllForUser() above, except the
+     * one session named by $exceptTokenHash survives -- used by
+     * AuthService::changePassword() so a user changing their own
+     * password (already authenticated, unlike resetPassword()'s mailed-
+     * token flow) isn't logged out of the very session they just used to
+     * do it, while every OTHER session (possibly compromised, the whole
+     * reason to change the password in the first place) still is.
+     */
+    public function deleteAllForUserExcept(int $userId, string $exceptTokenHash): void
+    {
+        $stmt = Connection::get()->prepare('DELETE FROM sessions WHERE user_id = :user_id AND token_hash != :except_token_hash');
+        $stmt->execute(['user_id' => $userId, 'except_token_hash' => $exceptTokenHash]);
     }
 
     /**

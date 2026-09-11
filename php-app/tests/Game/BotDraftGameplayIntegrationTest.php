@@ -97,6 +97,7 @@ final class BotDraftGameplayIntegrationTest extends TestCase
             new RoundScorer(),
             $userDecklists,
             new ReplayStateBuilder($registry),
+            spawnAutomatedTurnRecheckProcesses: false,
         );
     }
 

@@ -90,6 +90,7 @@ final class MatchmakingIntegrationTest extends TestCase
             new RoundScorer(),
             $userDecklists,
             new ReplayStateBuilder($registry),
+            spawnAutomatedTurnRecheckProcesses: false,
         );
 
         $this->users = new UserRepository();
@@ -174,6 +175,22 @@ final class MatchmakingIntegrationTest extends TestCase
         $this->matchmaking->postOpenGame($aliceId, ['format' => 'team', 'deck_type' => 'structure'], 2);
 
         self::assertSame(4, $this->matchmaking->listMyOpenGames($aliceId)[0]['target_player_count']);
+    }
+
+    /**
+     * Reported live: "let's limit sealed pool of the day/week to only
+     * two players" -- forced to 2 the same way 'duel' is above,
+     * regardless of what's passed, since GameService::createGame()
+     * itself now rejects any other count for this deck_type.
+     */
+    public function testTargetPlayerCountIsForcedToTwoForSealedPoolOfTheDay(): void
+    {
+        $aliceId = $this->insertUser('alice');
+        $this->makeDiscoverable($aliceId);
+
+        $this->matchmaking->postOpenGame($aliceId, ['format' => 'draft', 'deck_type' => 'sealed_pool_of_the_day'], 4);
+
+        self::assertSame(2, $this->matchmaking->listMyOpenGames($aliceId)[0]['target_player_count']);
     }
 
     public function testTargetPlayerCountOutOfRangeIsRejectedForStandard(): void

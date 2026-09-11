@@ -1,0 +1,26 @@
+-- Reported live: "since we aren't tracking standings for sealed pool of
+-- the day, let's allow practice bots for those."
+--
+-- Sealed Pool of the Day and Weekly Sealed Pool were both originally
+-- excluded from practice bot support (issue #520) because
+-- BotPlayerService::chooseDraftDeck() had no awareness of
+-- PERIODIC_SEALED_POOL_RARITY_DECK_CAPS -- a bot could build an over-cap
+-- deck that submitDraftDeck() would then reject, an uncaught exception
+-- deep inside advanceBotDraftDeck() that stalls the game permanently.
+--
+-- chooseDraftDeck() now takes an optional rarity-caps param: when given,
+-- its usual top-N-by-score trim skips any card whose own rarity has
+-- already hit its cap and moves on to the next-best candidate instead
+-- of stopping, so the result is always a legal deck.
+-- advanceBotDraftDeck() passes Sealed Pool of the Day's own caps through
+-- whenever it builds a bot's deck for that deck_type, and
+-- botsSupportedFor() now allows bots for it accordingly.
+--
+-- Weekly Sealed Pool stays bot-excluded, though: its own standings
+-- ladder has no way to represent a practice bot, and its own queue never
+-- seats one anyway -- only the deck-building crash risk is fixed, not
+-- the leaderboard-integrity reason that still applies there.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.39.24' WHERE id = 1;

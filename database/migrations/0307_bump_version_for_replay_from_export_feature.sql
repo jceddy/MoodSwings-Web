@@ -1,0 +1,22 @@
+-- Reported live, debugging the Anger duplicate-in-hand-and-discard bug
+-- (migration 0306): "is there a way I can replay these in the dev site
+-- using the game export json files? and if not, would it be possible
+-- to add something to do that?"
+--
+-- New feature: "Import replay" (web-static) / GameService::
+-- replayFromExport() (php-app) lets any authenticated user replay a
+-- COMPLETED game's own exported JSON (GET /games/export's output --
+-- from this environment or an entirely different one) through the
+-- exact same step-through board viewer "Watch replay" already uses,
+-- with no row for that game in this database at all. Never written
+-- back to this database: read entirely in memory for the one request
+-- that needs it, then discarded -- see ReplayStateBuilder::
+-- contextFromExport()/GameService::replayFromExport()'s own docblocks
+-- for why (id-remapping risk across every game_events.details' own
+-- nested references, and a real risk of colliding with an unrelated
+-- game that already reuses the same ids locally).
+--
+-- New route: POST /games/replay/import. No schema change otherwise,
+-- just the version bump MaintenanceGate needs to see this deploy as
+-- caught up with the code.
+UPDATE schema_version SET version = '1.40.0' WHERE id = 1;

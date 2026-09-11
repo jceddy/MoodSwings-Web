@@ -7,6 +7,7 @@ namespace MoodSwings\Game;
 use MoodSwings\Bot\BotChoiceResolver;
 use MoodSwings\Bot\BotPlayerService;
 use MoodSwings\Bot\SearchBotPlayerService;
+use MoodSwings\Config;
 use MoodSwings\Database\Connection;
 use MoodSwings\Deck\UserDecklistService;
 use MoodSwings\Game\Exceptions\GameStateException;
@@ -101,6 +102,58 @@ final class GameService
         'uncommon' => 14,
         'rare' => 6,
         'mythic' => 2,
+    ];
+
+    /**
+     * Sealed Pool of the Day/Weekly Sealed Pool's own pool (issue #520):
+     * deliberately NOT a reuse of STRUCTURE_DECK_RARITY_COUNTS above.
+     * Every seated player draws from the exact same pool here (unlike
+     * ordinary Sealed Deck, where each player's own pool is independently
+     * randomized) -- a structure-deck-style distribution would only ever
+     * hand everyone the same 2 Mythics to work with, and with no reason
+     * NOT to run every Mythic you have, that converges most decks onto
+     * running both, differing mainly in the cheap filler around them.
+     * More top-rarity cards in the POOL (5 Mythic/10 Rare instead of
+     * 2/6) gives real choice of which ones to build around, while
+     * PERIODIC_SEALED_POOL_RARITY_DECK_CAPS below caps how many of each
+     * can actually go in the built deck -- forcing real deckbuilding
+     * tradeoffs, and real variety between different players' decks, even
+     * though everyone is drawing from the literal same 50 cards. See
+     * buildPeriodicSealedPoolCardIds().
+     */
+    private const PERIODIC_SEALED_POOL_RARITY_COUNTS = [
+        'common' => 20,
+        'uncommon' => 15,
+        'rare' => 10,
+        'mythic' => 5,
+    ];
+
+    /**
+     * The per-rarity CAP on a submitted deck for Sealed Pool of the
+     * Day/Weekly Sealed Pool (issue #520) -- checked by submitDraftDeck()
+     * only for a draft_matches row whose own periodic_sealed_pool_id
+     * isn't null (see PERIODIC_SEALED_POOL_RARITY_COUNTS's own docblock
+     * for why this exists at all). 'common'/'uncommon' are deliberately
+     * absent -- no cap, same as every other draft-family deck_type's own
+     * deck-building rules today.
+     */
+    private const PERIODIC_SEALED_POOL_RARITY_DECK_CAPS = [
+        'rare' => 4,
+        'mythic' => 2,
+    ];
+
+    /**
+     * Maps each deck_type that draws from a shared periodic_sealed_pools
+     * row to the period_type getOrCreatePeriodicSealedPool() should use for
+     * it -- the single source of truth for "is this deck_type one of
+     * Sealed Pool of the Day/Weekly Sealed Pool" (createGame(),
+     * submitDraftDeck(), sealedDeckStateFor() all key off this rather than
+     * an inline in_array()/=== list of both deck_type strings, now that
+     * there are two of them to keep in sync).
+     */
+    private const PERIODIC_SEALED_POOL_DECK_TYPES = [
+        'sealed_pool_of_the_day' => 'daily',
+        'weekly_sealed_pool' => 'weekly',
     ];
 
     /**
@@ -546,6 +599,425 @@ final class GameService
     }
 
     /**
+     * Sealed Pool of the Day (issue #520): every seated player draws from
+     * the exact same pool, shared across every 'sealed_pool_of_the_day'
+     * game created during the same UTC-6 calendar day -- generated once
+     * (lazily, on whichever game/queue-join is first to ask for it that
+     * day) and persisted, never re-rolled per game or per player the way
+     * buildSealedDeckPlayerPool() is. Reuses initializeSealedDeck()
+     * verbatim for the same reason Sealed Deck itself does: no live
+     * drafting phase to initialize, since every seat's drafted_card_ids
+     * is already written by createGame() before this runs.
+     *
+     * "Midnight UTC-6" (confirmed by the maintainer -- reported live: an
+     * earlier UTC+6 confirmation had given the wrong sign, so the pool
+     * was rolling over 12 hours off from where it was actually meant to)
+     * rather than plain UTC -- an arbitrary but fixed choice every
+     * daily/weekly period boundary in this feature uses consistently
+     * (see currentWeeklySealedPoolPeriodStart() below for the weekly
+     * counterpart). DateTimeImmutable's own 'Y-m-d' format in that
+     * timezone is the period's own identity -- periodic_sealed_pools'
+     * (period_type, period_start) unique key is exactly this string,
+     * scoped to period_type 'daily'.
+     */
+    private static function currentDailySealedPoolPeriodStart(): string
+    {
+        return (new \DateTimeImmutable('now', new \DateTimeZone('-06:00')))->format('Y-m-d');
+    }
+
+    /**
+     * Weekly Sealed Pool's own period boundary (issue #520): Monday
+     * midnight UTC-6 (confirmed by the maintainer -- see
+     * currentDailySealedPoolPeriodStart()'s own docblock for the sign
+     * correction this shares), computed by walking back from "today" (in
+     * that timezone) to the most recent Monday -- DateTimeImmutable::
+     * format('N') returns the ISO-8601 day of the week, 1 (Monday)
+     * through 7 (Sunday), so subtracting (N - 1) days always lands on
+     * this week's own Monday, including when today already IS Monday
+     * (N - 1 = 0, no-op). Arithmetic on the day-of-week number rather
+     * than a relative date string ('monday this week') -- PHP's own
+     * relative-format parsing has documented edge cases around "this
+     * week" depending on the current day, not worth the risk here.
+     */
+    private static function currentWeeklySealedPoolPeriodStart(): string
+    {
+        $today = new \DateTimeImmutable('now', new \DateTimeZone('-06:00'));
+
+        return $today->modify('-' . ((int) $today->format('N') - 1) . ' days')->format('Y-m-d');
+    }
+
+    /**
+     * Sealed Pool of the Day/Weekly Sealed Pool's own shared pool (issue
+     * #520) -- get-or-create, safe under concurrent first-accessors the
+     * same "no explicit locking, rely on a UNIQUE constraint + conditional
+     * retry" shape GameService::getOrCreateSpectateCode() already uses
+     * elsewhere: try to read the current period's own row first (the
+     * overwhelmingly common case, every access after the very first one
+     * that day/week); if it doesn't exist yet, build a fresh pool and
+     * attempt to INSERT it, but if that INSERT loses a race to a
+     * concurrent caller who beat it to the same (period_type,
+     * period_start) unique key, catch the resulting duplicate-key
+     * PDOException and simply re-read whichever row actually won --
+     * never two different pools for the same day/week, and never a
+     * caller left with no pool at all.
+     *
+     * @param 'daily'|'weekly' $periodType
+     * @return array{id: int, pool_card_ids: int[]}
+     */
+    private function getOrCreatePeriodicSealedPool(string $periodType): array
+    {
+        $periodStart = $periodType === 'weekly'
+            ? self::currentWeeklySealedPoolPeriodStart()
+            : self::currentDailySealedPoolPeriodStart();
+
+        $pdo = Connection::get();
+        $selectStmt = $pdo->prepare(
+            'SELECT id, pool_card_ids FROM periodic_sealed_pools WHERE period_type = :period_type AND period_start = :period_start'
+        );
+        $selectStmt->execute(['period_type' => $periodType, 'period_start' => $periodStart]);
+        $row = $selectStmt->fetch();
+        if ($row !== false) {
+            return ['id' => (int) $row['id'], 'pool_card_ids' => array_map(intval(...), json_decode((string) $row['pool_card_ids'], true))];
+        }
+
+        $poolCardIds = $this->buildPeriodicSealedPoolCardIds();
+        try {
+            $insertStmt = $pdo->prepare(
+                'INSERT INTO periodic_sealed_pools (period_type, period_start, pool_card_ids) VALUES (:period_type, :period_start, :pool_card_ids)'
+            );
+            $insertStmt->execute([
+                'period_type' => $periodType,
+                'period_start' => $periodStart,
+                'pool_card_ids' => json_encode($poolCardIds),
+            ]);
+
+            return ['id' => (int) $pdo->lastInsertId(), 'pool_card_ids' => $poolCardIds];
+        } catch (PDOException $e) {
+            if (!str_contains($e->getMessage(), 'Duplicate entry')) {
+                throw $e;
+            }
+
+            $selectStmt->execute(['period_type' => $periodType, 'period_start' => $periodStart]);
+            $row = $selectStmt->fetch();
+
+            return ['id' => (int) $row['id'], 'pool_card_ids' => array_map(intval(...), json_decode((string) $row['pool_card_ids'], true))];
+        }
+    }
+
+    /**
+     * Builds ONE Sealed Pool of the Day/Weekly Sealed Pool card pool --
+     * called exactly once per period (day/week), by
+     * getOrCreatePeriodicSealedPool() above, unlike
+     * buildSealedDeckPlayerPool() which is called once per PLAYER. Same
+     * per-rarity random-draw-without-replacement shape as
+     * buildStructureDeckCardIds(), just PERIODIC_SEALED_POOL_RARITY_COUNTS'
+     * own bigger, differently-shaped distribution (see that constant's
+     * own docblock for why) instead of STRUCTURE_DECK_RARITY_COUNTS.
+     */
+    private function buildPeriodicSealedPoolCardIds(): array
+    {
+        $pdo = Connection::get();
+        $cardIds = [];
+        foreach (self::PERIODIC_SEALED_POOL_RARITY_COUNTS as $rarity => $count) {
+            $stmt = $pdo->prepare('SELECT id FROM cards WHERE rarity = :rarity AND is_token = 0');
+            $stmt->execute(['rarity' => $rarity]);
+            $rarityCardIds = array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
+
+            $chosenKeys = (array) array_rand($rarityCardIds, $count);
+            foreach ($chosenKeys as $key) {
+                $cardIds[] = $rarityCardIds[$key];
+            }
+        }
+
+        return $cardIds;
+    }
+
+    /**
+     * Sealed Pool of the Day's own per-rarity deck cap (issue #520) --
+     * see PERIODIC_SEALED_POOL_RARITY_DECK_CAPS' own docblock for why
+     * this exists at all. Nothing in the codebase enforced a per-rarity
+     * cap on a submitted deck before this -- every other draft-family
+     * deck_type's own submitDraftDeck() check is min-size (and, for a
+     * shared team pool, ownership) only -- so this is a genuinely new
+     * validation rule, not a variation of an existing one.
+     *
+     * @param int[] $deckCardIds already validated (by the caller) to be a
+     *     legal subset of this player's own pickable pool -- this only
+     *     adds the additional per-rarity ceiling on top of that.
+     */
+    private function assertWithinPeriodicSealedPoolRarityCaps(array $deckCardIds): void
+    {
+        $catalog = $this->loadCardCatalog();
+        $countsByRarity = [];
+        foreach ($deckCardIds as $cardId) {
+            $rarity = $catalog['rowsById'][$cardId]['rarity'];
+            $countsByRarity[$rarity] = ($countsByRarity[$rarity] ?? 0) + 1;
+        }
+
+        foreach (self::PERIODIC_SEALED_POOL_RARITY_DECK_CAPS as $rarity => $cap) {
+            if (($countsByRarity[$rarity] ?? 0) > $cap) {
+                throw new GameStateException(
+                    "Your deck can have at most {$cap} {$rarity} card(s), but has {$countsByRarity[$rarity]}"
+                );
+            }
+        }
+    }
+
+    /**
+     * Weekly Sealed Pool's own asymmetric ranking score (issue #520,
+     * confirmed by the maintainer): a win is worth meaningfully more than
+     * a loss costs, so playing (and winning) more matches always helps
+     * your placement rather than a cautious 1-0 record outscoring a
+     * grindier 4-2 one. This score is never shown to a player directly --
+     * only used internally to rank weeklySealedPoolStandings()' own
+     * placement -- what a player actually sees is their plain win/loss
+     * record (weekly_sealed_pool_standings.wins/losses) and the
+     * percentage placement derived from this score, never the score
+     * itself.
+     */
+    private const WEEKLY_SEALED_POOL_RANKING_POINTS = ['win' => 3, 'loss' => -2];
+
+    /**
+     * Current week's shared pool id, exposed publicly (unlike
+     * getOrCreatePeriodicSealedPool() itself) so WeeklySealedPoolQueueService
+     * can resolve it without duplicating the daily-vs-weekly period-start
+     * logic -- the queue needs this same id both to check pairing history
+     * (haveWeeklySealedPoolOpponentsAlreadyPlayed()) and to hand to
+     * createGame() indirectly via deck_type 'weekly_sealed_pool' (which
+     * resolves its own copy of the identical row).
+     */
+    public function currentWeeklySealedPoolId(): int
+    {
+        return $this->getOrCreatePeriodicSealedPool('weekly')['id'];
+    }
+
+    /**
+     * The event page's own "prior week's now-final standings" toggle
+     * (issue #520) -- unlike currentWeeklySealedPoolId(), this deliberately
+     * does NOT get-or-create: if last week never had a single Weekly
+     * Sealed Pool match played (so getOrCreatePeriodicSealedPool('weekly')
+     * was never called for it), there's genuinely no prior event to show,
+     * and fabricating an empty pool row here would misrepresent that as
+     * "a week happened with zero participants" rather than "no event ran
+     * at all".
+     */
+    public function priorWeeklySealedPoolId(): ?int
+    {
+        $priorPeriodStart = (new \DateTimeImmutable(self::currentWeeklySealedPoolPeriodStart()))->modify('-7 days')->format('Y-m-d');
+
+        $stmt = Connection::get()->prepare(
+            "SELECT id FROM periodic_sealed_pools WHERE period_type = 'weekly' AND period_start = :period_start"
+        );
+        $stmt->execute(['period_start' => $priorPeriodStart]);
+        $id = $stmt->fetchColumn();
+
+        return $id !== false ? (int) $id : null;
+    }
+
+    /**
+     * Weekly Sealed Pool's own pairing rule (issue #520): "the earliest
+     * other still-queued player they have NOT already played during this
+     * week's event" -- queried directly against draft_matches/
+     * draft_match_players rather than a dedicated pairing-history table,
+     * since draft_matches.periodic_sealed_pool_id already scopes every
+     * Weekly Sealed Pool match to the week it was paired in, and this
+     * table is small enough (at most a handful of matches per player per
+     * week) that the join is cheap. Counts a still-in-progress match
+     * between the pair the same as a completed one -- two players
+     * mid-match should never be re-paired against each other again this
+     * same week just because neither has won yet.
+     */
+    public function haveWeeklySealedPoolOpponentsAlreadyPlayed(int $periodicSealedPoolId, int $userIdA, int $userIdB): bool
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT 1 FROM draft_matches dm
+             JOIN draft_match_players p1 ON p1.draft_match_id = dm.id AND p1.user_id = :user_a
+             JOIN draft_match_players p2 ON p2.draft_match_id = dm.id AND p2.user_id = :user_b
+             WHERE dm.periodic_sealed_pool_id = :pool_id
+             LIMIT 1'
+        );
+        $stmt->execute(['user_a' => $userIdA, 'user_b' => $userIdB, 'pool_id' => $periodicSealedPoolId]);
+
+        return $stmt->fetchColumn() !== false;
+    }
+
+    /**
+     * Weekly Sealed Pool's own concurrent-match cap (issue #520, the
+     * maintainer's own suggested number, enforced at join-queue time only
+     * -- see WeeklySealedPoolQueueService::joinQueue()) -- how many of
+     * this week's own Weekly Sealed Pool matches $userId is still
+     * mid-match on right now, so one player can't accumulate a long tail
+     * of simultaneous opponents while everyone else waits on them.
+     */
+    public function countInProgressWeeklySealedPoolMatchesForUser(int $periodicSealedPoolId, int $userId): int
+    {
+        $stmt = Connection::get()->prepare(
+            "SELECT COUNT(*) FROM draft_matches dm
+             JOIN draft_match_players dmp ON dmp.draft_match_id = dm.id
+             WHERE dm.periodic_sealed_pool_id = :pool_id AND dm.status != 'completed' AND dmp.user_id = :user_id"
+        );
+        $stmt->execute(['pool_id' => $periodicSealedPoolId, 'user_id' => $userId]);
+
+        return (int) $stmt->fetchColumn();
+    }
+
+    /**
+     * Updates Weekly Sealed Pool's own persistent standings (issue #520)
+     * once a match actually finishes -- called from
+     * recordMatchCompletionStats() alongside its own lifetime match_wins/
+     * match_losses bump, for the same reason: this is the one place every
+     * draft-family match completion path (advanceDraftMatch()'s ordinary
+     * finish, resignFromDraftMatch()'s auto-win, finalizeWinstonDraft()'s
+     * short-player auto-win) already funnels through with a
+     * $draftMatchId/$winnerUserId pair in hand. A no-op for every other
+     * deck_type (checked by the caller) and for a bot-containing match
+     * (recordMatchCompletionStats() itself already returns before ever
+     * reaching here in that case) -- Weekly Sealed Pool never seats a bot
+     * in the first place (see botsSupportedFor()), so that exclusion is
+     * purely defensive here, not a real case.
+     *
+     * upsert (not a fresh row) since the SAME (periodic_sealed_pool_id,
+     * user_id) pair accumulates across every match a player completes
+     * that week -- a player queues repeatedly throughout the week,
+     * building up one running record, not one row per match.
+     */
+    private function recordWeeklySealedPoolStandings(int $periodicSealedPoolId, int $winnerUserId, array $userIds): void
+    {
+        $winPoints = self::WEEKLY_SEALED_POOL_RANKING_POINTS['win'];
+        $lossPoints = self::WEEKLY_SEALED_POOL_RANKING_POINTS['loss'];
+
+        $upsert = Connection::get()->prepare(
+            'INSERT INTO weekly_sealed_pool_standings (periodic_sealed_pool_id, user_id, wins, losses, score)
+             VALUES (:pool_id, :user_id, :wins, :losses, :score)
+             ON DUPLICATE KEY UPDATE wins = wins + :wins, losses = losses + :losses, score = score + :score'
+        );
+
+        $upsert->execute([
+            'pool_id' => $periodicSealedPoolId,
+            'user_id' => $winnerUserId,
+            'wins' => 1,
+            'losses' => 0,
+            'score' => $winPoints,
+        ]);
+
+        foreach (array_diff($userIds, [$winnerUserId]) as $loserUserId) {
+            $upsert->execute([
+                'pool_id' => $periodicSealedPoolId,
+                'user_id' => $loserUserId,
+                'wins' => 0,
+                'losses' => 1,
+                'score' => $lossPoints,
+            ]);
+        }
+    }
+
+    /**
+     * The event page's own standings menu (issue #520): every player who
+     * has completed at least one Weekly Sealed Pool match during
+     * $periodicSealedPoolId's own week, ranked by the hidden internal
+     * score (WEEKLY_SEALED_POOL_RANKING_POINTS) -- never returned itself,
+     * only used to order/place -- highest first. A player who has only
+     * queued/is mid-match with nothing finished yet has no row at all
+     * (recordWeeklySealedPoolStandings() only ever inserts on a
+     * completion), so they're correctly absent here rather than cluttering
+     * the list with an untested 0-0 entry.
+     *
+     * @return list<array{user_id: int, username: string, wins: int, losses: int, rank: int, percentile: int}>
+     */
+    public function weeklySealedPoolStandings(int $periodicSealedPoolId): array
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT s.user_id, u.username, s.wins, s.losses
+             FROM weekly_sealed_pool_standings s
+             JOIN users u ON u.id = s.user_id
+             WHERE s.periodic_sealed_pool_id = :pool_id
+             ORDER BY s.score DESC, s.wins DESC, u.username ASC'
+        );
+        $stmt->execute(['pool_id' => $periodicSealedPoolId]);
+        $rows = $stmt->fetchAll();
+
+        return self::rankedStandingsRows($rows);
+    }
+
+    /**
+     * Turns a score-ordered list of standings rows into ranked, percentile-
+     * placed ones -- shared by weeklySealedPoolStandings() (current/prior
+     * week's own full list) and priorWeeklySealedPoolEventsFor() (one
+     * viewer's own placement within each past week they took part in).
+     * Percentile is "top N%" (rank / total, rounded UP so 1st of 20 reads
+     * "top 5%" and 20th of 20 reads "top 100%", never "top 0%") --
+     * deliberately not a raw rank number, so it stays comparable across
+     * weeks that draw very different numbers of players (the maintainer's
+     * own reasoning: "top 10%" means the same thing at 6 players or 600,
+     * "3rd place" does not).
+     *
+     * @param list<array{user_id: int, username: string, wins: int, losses: int}> $scoreOrderedRows
+     * @return list<array{user_id: int, username: string, wins: int, losses: int, rank: int, percentile: int}>
+     */
+    private static function rankedStandingsRows(array $scoreOrderedRows): array
+    {
+        $total = count($scoreOrderedRows);
+        $ranked = [];
+        foreach (array_values($scoreOrderedRows) as $index => $row) {
+            $rank = $index + 1;
+            $ranked[] = [
+                'user_id' => (int) $row['user_id'],
+                'username' => $row['username'],
+                'wins' => (int) $row['wins'],
+                'losses' => (int) $row['losses'],
+                'rank' => $rank,
+                'percentile' => (int) ceil(($rank / $total) * 100),
+            ];
+        }
+
+        return $ranked;
+    }
+
+    /**
+     * User info's own "prior events" list (issue #520): one row per past
+     * Weekly Sealed Pool week $userId actually completed a match in,
+     * newest first, each with their own win/loss record and percentage
+     * placement within that week -- deliberately excludes the CURRENT,
+     * still-live week (that's the event page's own "current standings"
+     * menu instead, via weeklySealedPoolStandings()) so a still-in-
+     * progress week's placement doesn't masquerade as final here.
+     *
+     * @return list<array{period_start: string, wins: int, losses: int, rank: int, percentile: int}>
+     */
+    public function priorWeeklySealedPoolEventsFor(int $userId): array
+    {
+        $currentPeriodStart = self::currentWeeklySealedPoolPeriodStart();
+
+        $poolIdsStmt = Connection::get()->prepare(
+            "SELECT DISTINCT psp.id, psp.period_start
+             FROM periodic_sealed_pools psp
+             JOIN weekly_sealed_pool_standings s ON s.periodic_sealed_pool_id = psp.id
+             WHERE psp.period_type = 'weekly' AND psp.period_start != :current_period_start AND s.user_id = :user_id
+             ORDER BY psp.period_start DESC"
+        );
+        $poolIdsStmt->execute(['current_period_start' => $currentPeriodStart, 'user_id' => $userId]);
+
+        $events = [];
+        foreach ($poolIdsStmt->fetchAll() as $pool) {
+            $standings = $this->weeklySealedPoolStandings((int) $pool['id']);
+            foreach ($standings as $row) {
+                if ($row['user_id'] === $userId) {
+                    $events[] = [
+                        'period_start' => $pool['period_start'],
+                        'wins' => $row['wins'],
+                        'losses' => $row['losses'],
+                        'rank' => $row['rank'],
+                        'percentile' => $row['percentile'],
+                    ];
+                    break;
+                }
+            }
+        }
+
+        return $events;
+    }
+
+    /**
      * Rotisserie Draft's own turn order (confirmed by the maintainer) --
      * $pickIndex is a 0-based global counter of picks made so far in this
      * match; returns which of $userIds (in seat order) picks next.
@@ -737,6 +1209,20 @@ final class GameService
          * whenever they want the job to actually resolve.
          */
         private readonly bool $spawnBotSearchProcesses = true,
+        /**
+         * Mirrors $spawnBotSearchProcesses above, for
+         * scheduleAutomatedTurnRecheck()'s own detached background
+         * process instead of the Tactical Bot's -- kept as a SEPARATE
+         * flag (rather than reusing that one) since a test exercising one
+         * background-spawning feature has no reason to also silence the
+         * other. False for the exact same reason: a spawned
+         * bin/recheck_automated_turn.php subprocess would inherit a
+         * test's own environment and race its foreground assertions
+         * against the same DB rows. Tests instead call
+         * advanceAutomatedTurns() explicitly whenever they want a
+         * recheck's own effect.
+         */
+        private readonly bool $spawnAutomatedTurnRecheckProcesses = true,
     ) {
         $this->tacticalBots = $tacticalBots ?? new SearchBotPlayerService(
             $this->plays,
@@ -840,19 +1326,40 @@ final class GameService
      *        docblocks for what it actually changes once the game is
      *        underway.
      * @param ?string $botDecklistText only meaningful (and, alongside
-     *        $botSavedDecklistId, required) when $deckType is 'custom_duel'
-     *        and one of $userIds is a practice bot (issue #140) -- the
-     *        bot's own decklist, submitted here on its behalf since a bot
-     *        can never call submitCustomDuelDeck() itself the way its human
-     *        opponent does (via POST /games/decklist, after this call
-     *        returns). Same format as $decklistText/DecklistParser,
-     *        validated against this same call's own $duelDeckRules.
+     *        $botSavedDecklistId/$botDecklists, required) when $deckType is
+     *        'custom_duel' and one of $userIds is a practice bot (issue
+     *        #140) -- the bot's own decklist, submitted here on its behalf
+     *        since a bot can never call submitCustomDuelDeck() itself the
+     *        way its human opponent does (via POST /games/decklist, after
+     *        this call returns). Same format as $decklistText/
+     *        DecklistParser, validated against this same call's own
+     *        $duelDeckRules. When 2+ bots are seated (issue #505 follow-up),
+     *        this legacy singular param is ignored in favor of
+     *        $botDecklists, which alone can name a decklist per bot -- it
+     *        remains meaningful only for the original single-bot case.
      * @param ?int $botSavedDecklistId an alternative to $botDecklistText,
      *        same idea as $savedDecklistId -- but authorized against
      *        $createdByUserId's own accessible decklists (own or a
      *        friend's shared one), not the bot's, since a bot has no
      *        decklists or friendships of its own; see
-     *        submitCustomDuelDeck()'s own $accessCheckUserId param.
+     *        submitCustomDuelDeck()'s own $accessCheckUserId param. Same
+     *        single-bot-only scope as $botDecklistText once $botDecklists
+     *        is in play.
+     * @param ?array $botDecklists only meaningful when $deckType is
+     *        'custom_duel' and 2+ practice bots are seated among $userIds
+     *        -- $botDecklistText/$botSavedDecklistId above have nowhere to
+     *        name more than one bot's own decklist, so once a second bot is
+     *        seated, each seated bot's own decklist must instead be keyed
+     *        here by that bot's own user id:
+     *        `[$botUserId => ['decklist_text' => ?string, 'saved_decklist_id' => ?int], ...]`,
+     *        one entry per seated bot, each entry following the same
+     *        "either decklist_text or saved_decklist_id" shape
+     *        $botDecklistText/$botSavedDecklistId themselves follow. For
+     *        the single-bot case this may still be used instead of the
+     *        legacy singular params (a one-entry map keyed by that bot's
+     *        own user id) -- whichever is present is used; the legacy
+     *        params are only consulted as a single-bot fallback when this
+     *        is null or has no entry for that bot.
      * @param bool $randomTeams only meaningful when $format is 'team' or
      *        'closed_team' -- when true, $partnerUserId is ignored (it
      *        need not even be passed) and the creator's partner is instead
@@ -918,21 +1425,75 @@ final class GameService
         // sideboarding rule, replacing this preset's own default "deck is
         // locked, carried forward unchanged" behavior for the match.
         bool $allowSideboarding = false,
+        // Diagnostic mode (reported live: "add a 'diagnostic mode'
+        // checkbox when creating a game including one or more tactical
+        // bot(s)... a button... to view the bot(s) hand(s)... a button to
+        // show the 'reasoning' behind every play the bot has made"):
+        // silently ignored (not an error) unless $userIds includes at
+        // least one Tactical Bot (users.uses_tactical_ai, resolved just
+        // below) -- the same "harmless no-op outside its own narrow
+        // scope" convention every other creation-time opt-in here already
+        // follows. See getState()'s own $diagnosticBotHands and
+        // tacticalBotReasoningSince() for what this actually unlocks once
+        // a game has it: every seated bot's own live hand, and a
+        // game_events-backed log of each Tactical Bot decision's own
+        // considered candidates/heuristic exclusions.
+        bool $diagnosticMode = false,
+        ?array $botDecklists = null,
     ): int {
         if (count($userIds) > self::MAX_PLAYERS) {
             throw new GameStateException('A game cannot have more than ' . self::MAX_PLAYERS . ' players');
         }
         if (self::isDuelShapedFormat($format)) {
             // Quick Draft, Grid Draft, Winston Draft, Rotisserie Draft,
-            // Tiered Rotisserie Draft, and Sealed Deck all support 3-4
-            // players now (issue #189) -- 'duel' itself stays locked to
-            // exactly 2.
-            if ($format === 'draft' && in_array($deckType, ['quick_draft', 'grid_draft', 'winston_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck'], true)) {
-                if (count($userIds) < 2 || count($userIds) > 4) {
-                    throw new GameStateException("A {$deckType} game must have 2-4 players");
-                }
-            } elseif (count($userIds) !== 2) {
-                throw new GameStateException("A {$format} game must have exactly 2 players");
+            // Tiered Rotisserie Draft, Chaos Draft, and Sealed Deck all
+            // support 3-4 players (issue #189); the constructed 'duel'
+            // deck types (custom_duel/power/structure/jceddys_75) now do
+            // too (issue #505) -- format 'draft' and 'duel' each carry
+            // only their own deck_type family (see isDuelShapedFormat()'s
+            // own docblock), so every deck_type reaching here already
+            // supports separate per-player decks for any of 2-4 players
+            // regardless of which of the two formats it's under, and a
+            // single range check covers both. Best-of-three/Power Duel
+            // sideboarding stay 2-player-only for constructed 'duel'
+            // deck types specifically -- see $bestOfThree's own
+            // $createGameMatch condition further down.
+            if (count($userIds) < 2 || count($userIds) > 4) {
+                throw new GameStateException("A {$deckType} game must have 2-4 players");
+            }
+        }
+        // Sealed Pool of the Day / Weekly Sealed Pool (issue #520
+        // follow-up, reported live: "let's limit sealed pool of the
+        // day/week to only two players") -- unlike every other
+        // DRAFT_DECK_TYPES member (2-4 players, the range check just
+        // above), these two are deliberately head-to-head only: Weekly
+        // Sealed Pool's own standings (weekly_sealed_pool_standings.
+        // wins/losses) are a straightforward 1v1 win/loss ladder with no
+        // notion of a 3-4-player free-for-all's own scoring, and
+        // WeeklySealedPoolQueueService's own FIFO pairing already only
+        // ever matches exactly 2 players at a time -- this closes off
+        // the two OTHER paths that could otherwise still seat more: a
+        // direct 'draft'-format request naming 3-4 opponent_user_ids
+        // (Sealed Pool of the Day's own New Game dialog path), or
+        // 'team'/'closed_team', which the generic DRAFT_DECK_TYPES
+        // format check further below otherwise allows every deck_type
+        // under (see the "Team Play/Closed Team Play... may also draft"
+        // check). Any OTHER invalid format (e.g. 'standard') is left for
+        // that generic check to reject with its own existing message --
+        // this only adds the two restrictions that check doesn't already
+        // cover. Checked ahead of isTeamFormat()'s own exactly-4-players
+        // requirement just below so a 'team'/'closed_team' request
+        // naming one of these deck types gets THIS exact error, not
+        // "must have exactly 4 players" for a mode it was never eligible
+        // for in the first place. See MatchmakingService::postOpenGame()'s
+        // own matching $targetPlayerCount force for the open-lobby
+        // posting path.
+        if (array_key_exists($deckType, self::PERIODIC_SEALED_POOL_DECK_TYPES)) {
+            if ($format === 'team' || $format === 'closed_team') {
+                throw new GameStateException("The \"{$deckType}\" deck type doesn't support Team Play or Closed Team Play -- the \"draft\" format only");
+            }
+            if ($format === 'draft' && count($userIds) !== 2) {
+                throw new GameStateException("A {$deckType} game must have exactly 2 players");
             }
         }
         if ($deckType === 'rotisserie_draft' && ($rotisserieDraftCutoffCount < self::ROTISSERIE_DRAFT_MIN_CUTOFF || $rotisserieDraftCutoffCount > self::ROTISSERIE_DRAFT_MAX_CUTOFF)) {
@@ -983,22 +1544,46 @@ final class GameService
         // deck, not per-seat, so it needs no special-casing either, see
         // BOT_SUPPORTED_DECK_TYPES's own docblock), or Duel with
         // 'custom_duel' -- the one deck_type that DOES need per-player
-        // setup, but which this call itself supplies on the bot's behalf
-        // via $botDecklistText/$botSavedDecklistId below, rather than the
-        // bot ever needing to submit one itself. Issue #359 additionally
-        // supports every draft-based deck_type (see botsSupportedFor()'s
-        // own docblock) -- a bot seated there makes its own picks via
-        // advanceBotDraftTurn() instead of needing anything supplied here
-        // at creation time, same as every other bot-supported deck_type.
-        // Checked up front, ahead of the deck-type-specific validation/
-        // building below, so a doomed request never gets as far as e.g.
-        // parsing a decklist.
-        $botUserId = $this->botUserIdAmong($userIds);
-        if ($botUserId !== null && !$this->botsSupportedFor($format, $deckType)) {
-            throw new GameStateException('Practice bots are only supported for Traditional/Duel/Team Play/Closed Team Play games using a Structure, Power, jceddy\'s 75 Card, Custom Decklist, or One of Each Card deck, Duel using Custom Decklists (Duel), or any Quick Draft/Winston Draft/Grid Draft/Rotisserie Draft/Tiered Rotisserie Draft/Sealed Deck game');
+        // setup, but which this call itself supplies on each bot's behalf
+        // via $botDecklists/$botDecklistText/$botSavedDecklistId below,
+        // rather than the bot ever needing to submit one itself. Issue
+        // #359 additionally supports every draft-based deck_type (see
+        // botsSupportedFor()'s own docblock) -- a bot seated there makes
+        // its own picks via advanceBotDraftTurn() instead of needing
+        // anything supplied here at creation time, same as every other
+        // bot-supported deck_type. Checked up front, ahead of the
+        // deck-type-specific validation/building below, so a doomed
+        // request never gets as far as e.g. parsing a decklist.
+        $botUserIds = $this->botUserIdsAmong($userIds);
+        if ($botUserIds !== [] && !$this->botsSupportedFor($format, $deckType)) {
+            throw new GameStateException('Practice bots are only supported for Traditional/Duel/Team Play/Closed Team Play games using a Structure, Power, jceddy\'s 75 Card, Custom Decklist, or One of Each Card deck, Duel using Custom Decklists (Duel), or any Quick Draft/Winston Draft/Grid Draft/Rotisserie Draft/Tiered Rotisserie Draft/Sealed Deck/Sealed Pool of the Day game');
         }
-        if ($botUserId !== null && $deckType === 'custom_duel' && $botDecklistText === null && $botSavedDecklistId === null) {
-            throw new GameStateException('A decklist for the practice bot is required for a custom_duel game');
+        // Issue #505 follow-up: constructed Duel supports 3-4 players, so
+        // a custom_duel game may seat 2+ bots -- each needs its own
+        // decklist, supplied either via $botDecklists (keyed by bot user
+        // id, the only option once 2+ bots are seated) or, for a lone
+        // seated bot, the legacy singular $botDecklistText/
+        // $botSavedDecklistId params. Resolved into $resolvedBotDecklists,
+        // consulted again below once each bot's own game_players.id is
+        // known.
+        $resolvedBotDecklists = [];
+        if ($deckType === 'custom_duel') {
+            foreach ($botUserIds as $botUserId) {
+                $botDecklist = $botDecklists[$botUserId] ?? null;
+                $entryDecklistText = is_array($botDecklist) ? ($botDecklist['decklist_text'] ?? null) : null;
+                $entrySavedDecklistId = is_array($botDecklist) ? ($botDecklist['saved_decklist_id'] ?? null) : null;
+                if ($entryDecklistText === null && $entrySavedDecklistId === null && count($botUserIds) === 1) {
+                    $entryDecklistText = $botDecklistText;
+                    $entrySavedDecklistId = $botSavedDecklistId;
+                }
+                if ($entryDecklistText === null && $entrySavedDecklistId === null) {
+                    throw new GameStateException('A decklist for each seated practice bot is required for a custom_duel game');
+                }
+                $resolvedBotDecklists[$botUserId] = [
+                    'decklist_text' => $entryDecklistText,
+                    'saved_decklist_id' => $entrySavedDecklistId,
+                ];
+            }
         }
 
         $customDeckName = null;
@@ -1009,8 +1594,8 @@ final class GameService
         $duelDuplicateLimits = null;
         $duelEvenColorDistributionRarities = null;
 
-        if ($format === 'draft' && !in_array($deckType, ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck'], true)) {
-            throw new GameStateException('The "draft" format only supports the "quick_draft"/"winston_draft"/"grid_draft"/"rotisserie_draft"/"tiered_rotisserie_draft"/"sealed_deck" deck types');
+        if ($format === 'draft' && !in_array($deckType, self::DRAFT_DECK_TYPES, true)) {
+            throw new GameStateException('The "draft" format only supports the "quick_draft"/"winston_draft"/"grid_draft"/"rotisserie_draft"/"tiered_rotisserie_draft"/"sealed_deck"/"sealed_pool_of_the_day"/"weekly_sealed_pool" deck types');
         }
         // Team Play/Closed Team Play (issue #362) may also draft: each of
         // the 4 players still drafts and builds their own deck
@@ -1025,7 +1610,7 @@ final class GameService
         // gridDraftDraftingStateFor()'s/draftDeckBuildingStateFor()'s own
         // `team_drafted_cards` field. Closed Team Play stays fully private
         // between teammates instead, exactly like Stage 1 left it.
-        if (in_array($deckType, ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck'], true) && !in_array($format, ['draft', 'closed_team', 'team'], true)) {
+        if (in_array($deckType, self::DRAFT_DECK_TYPES, true) && !in_array($format, ['draft', 'closed_team', 'team'], true)) {
             throw new GameStateException("The \"{$deckType}\" deck type is only supported for the \"draft\" format, Team Play, or Closed Team Play");
         }
 
@@ -1096,9 +1681,21 @@ final class GameService
         // since $userIds isn't seated (shuffledSeatOrder()) until inside
         // the transaction below -- each of these count($userIds) pools is
         // statistically identical, so any pool may go to any seat.
-        $sealedDeckPlayerPools = $deckType === 'sealed_deck'
-            ? array_map(fn (): array => $this->buildSealedDeckPlayerPool(), $userIds)
+        //
+        // Sealed Pool of the Day (issue #520) inverts this: every seat
+        // gets the exact SAME array (not count($userIds) independent
+        // draws) -- getOrCreatePeriodicSealedPool()'s own pool, generated
+        // once per UTC-6 calendar day and persisted, not re-rolled here.
+        // array_fill() rather than array_map() makes that "identical, not
+        // independently random" intent explicit at the call site.
+        $periodicSealedPool = array_key_exists($deckType, self::PERIODIC_SEALED_POOL_DECK_TYPES)
+            ? $this->getOrCreatePeriodicSealedPool(self::PERIODIC_SEALED_POOL_DECK_TYPES[$deckType])
             : null;
+        $sealedDeckPlayerPools = match (true) {
+            $deckType === 'sealed_deck' => array_map(fn (): array => $this->buildSealedDeckPlayerPool(), $userIds),
+            $periodicSealedPool !== null => array_fill(0, count($userIds), $periodicSealedPool['pool_card_ids']),
+            default => null,
+        };
 
         // Built (and, for a 'custom' pool, fully validated) before the
         // transaction starts, same rationale as parseCustomDecklist()/
@@ -1118,7 +1715,12 @@ final class GameService
             // own docblock. Still routed through this same field (rather
             // than a bare literal at the insert site) so draft_matches.pool_source
             // reads the same as every other draft deck type's own row.
-            'sealed_deck' => 'structure',
+            // Sealed Pool of the Day (issue #520) reuses the same
+            // 'structure' value too -- games.deck_type is what actually
+            // distinguishes it (draft_matches.periodic_sealed_pool_id is
+            // the "was this dealt from a shared pool" signal, not
+            // pool_source), so a new ENUM value here would add nothing.
+            'sealed_deck', 'sealed_pool_of_the_day', 'weekly_sealed_pool' => 'structure',
             default => null,
         };
         $draftPoolCardIds = match ($deckType) {
@@ -1133,7 +1735,14 @@ final class GameService
             // then correctly lands on an empty list once the match
             // completes, since nothing here is ever left undrafted (the
             // whole pool is handed out whole, not drafted piece by piece).
-            'sealed_deck' => array_merge(...$sealedDeckPlayerPools),
+            // Sealed Pool of the Day's own $sealedDeckPlayerPools are all
+            // IDENTICAL (not independent), so this flattened union is just
+            // the shared pool repeated count($userIds) times -- redundant
+            // but harmless, since pool_card_ids is purely informational
+            // here (draftMatchPoolView()'s own undraftedCardIds still
+            // lands on [] the same way, and nothing else reads this
+            // column back for these two deck_types specifically).
+            'sealed_deck', 'sealed_pool_of_the_day', 'weekly_sealed_pool' => array_merge(...$sealedDeckPlayerPools),
             default => null,
         };
 
@@ -1150,9 +1759,17 @@ final class GameService
         // exactly 2 players (issue #90 follow-up, migration 0225) -- with
         // 3-4, "first to 2 game wins" no longer names a single opponent,
         // the same reason draftGamesToWin() itself falls back to a single
-        // game once more than 2 players share a draft match.
+        // game once more than 2 players share a draft match. 'duel' gets
+        // the identical count(...) === 2 restriction now too (issue #505,
+        // constructed Duel deck types supporting 3-4 players) -- for the
+        // exact same reason: gameMatchSummaryFor()'s own your_wins/
+        // opponent_wins is a two-SIDED comparison (aggregated per team for
+        // 'team'/'closed_team', which stays unrestricted here since a
+        // "side" there is always exactly 2 of the 4 seats regardless of
+        // format-level player count), with no single well-defined
+        // "opponent" once 'duel' itself seats 3-4 unpaired individuals.
         $createGameMatch = $bestOfThree && !in_array($deckType, self::DRAFT_DECK_TYPES, true)
-            && ($format === 'duel' || self::isTeamFormat($format) || ($format === 'standard' && count($userIds) === 2));
+            && (($format === 'duel' && count($userIds) === 2) || self::isTeamFormat($format) || ($format === 'standard' && count($userIds) === 2));
 
         // Power Duel sideboarding (see $allowSideboarding's own docblock
         // above) only ever actually applies to a 'duel'/'custom_duel'
@@ -1164,6 +1781,11 @@ final class GameService
             && $format === 'duel' && $deckType === 'custom_duel'
             && isset($duelRulesPreset) && $duelRulesPreset === 'power';
 
+        // Diagnostic mode (see $diagnosticMode's own docblock above) --
+        // only ever actually applies once $userIds seats at least one
+        // Tactical Bot; a harmless no-op otherwise.
+        $diagnosticModeForGame = $diagnosticMode && $this->includesATacticalBot($userIds);
+
         $pdo = Connection::get();
         $pdo->beginTransaction();
 
@@ -1171,13 +1793,14 @@ final class GameService
             $draftMatchId = null;
             if ($draftPoolCardIds !== null) {
                 $insertMatch = $pdo->prepare(
-                    'INSERT INTO draft_matches (created_by_user_id, pool_source, pool_card_ids)
-                     VALUES (:created_by, :pool_source, :pool_card_ids)'
+                    'INSERT INTO draft_matches (created_by_user_id, pool_source, pool_card_ids, periodic_sealed_pool_id)
+                     VALUES (:created_by, :pool_source, :pool_card_ids, :periodic_sealed_pool_id)'
                 );
                 $insertMatch->execute([
                     'created_by' => $createdByUserId,
                     'pool_source' => $draftPoolSource,
                     'pool_card_ids' => json_encode($draftPoolCardIds),
+                    'periodic_sealed_pool_id' => $periodicSealedPool['id'] ?? null,
                 ]);
                 $draftMatchId = (int) $pdo->lastInsertId();
             }
@@ -1200,12 +1823,12 @@ final class GameService
                     format, deck_type, custom_deck_name, custom_deck_card_ids,
                     custom_duel_rules_preset, custom_duel_min_cards, custom_duel_rarity_limits, custom_duel_duplicate_limits,
                     custom_duel_even_color_distribution_rarities, draft_match_id, game_match_id, match_game_number,
-                    status, created_by_user_id, wins_needed, default_selections_mode, bot_goes_first
+                    status, created_by_user_id, wins_needed, default_selections_mode, bot_goes_first, diagnostic_mode
                  ) VALUES (
                     :format, :deck_type, :custom_deck_name, :custom_deck_card_ids,
                     :duel_rules_preset, :duel_min_cards, :duel_rarity_limits, :duel_duplicate_limits,
                     :duel_even_color_distribution_rarities, :draft_match_id, :game_match_id, :match_game_number,
-                    'waiting', :created_by, :wins_needed, :default_selections_mode, :bot_goes_first
+                    'waiting', :created_by, :wins_needed, :default_selections_mode, :bot_goes_first, :diagnostic_mode
                  )"
             );
             $insertGame->execute([
@@ -1225,6 +1848,7 @@ final class GameService
                 'wins_needed' => $winsNeeded,
                 'default_selections_mode' => $defaultSelectionsMode ? 1 : 0,
                 'bot_goes_first' => $botGoesFirst ? 1 : 0,
+                'diagnostic_mode' => $diagnosticModeForGame ? 1 : 0,
             ]);
             $gameId = (int) $pdo->lastInsertId();
 
@@ -1237,7 +1861,7 @@ final class GameService
                 'draft' => $this->shuffledSeatOrder($userIds),
                 default => array_values($userIds),
             };
-            $botGamePlayerId = null;
+            $botGamePlayerIdsByUserId = [];
             foreach ($seatedUserIds as $seatOrder => $userId) {
                 $teamId = match ($format) {
                     'team' => (int) ($seatOrder >= 2),
@@ -1250,26 +1874,30 @@ final class GameService
                     'seat_order' => $seatOrder,
                     'team_id' => $teamId,
                 ]);
-                if ($userId === $botUserId) {
-                    $botGamePlayerId = (int) $pdo->lastInsertId();
+                if (in_array($userId, $botUserIds, true)) {
+                    $botGamePlayerIdsByUserId[$userId] = (int) $pdo->lastInsertId();
                 }
             }
 
             // Practice bots (issue #140) in a 'custom_duel' game: submit
-            // the bot's own decklist right here, on its behalf, the same
-            // validate-then-write submitCustomDuelDeck() its human
-            // opponent will separately call themselves (via
-            // POST /games/decklist) once this request returns --
-            // $createdByUserId is passed as the access-check override
-            // since a saved decklist has to be authorized against the
-            // human choosing it, not the bot's own (nonexistent) access.
-            // Still inside this same transaction: submitCustomDuelDeck()
-            // only issues plain SELECT/UPDATE statements of its own (no
-            // nested transaction), so it safely sees this call's
-            // just-inserted games/game_players rows and rolls back
-            // alongside everything else if its own validation throws.
-            if ($botGamePlayerId !== null && $deckType === 'custom_duel') {
-                $this->submitCustomDuelDeck($gameId, $botGamePlayerId, $botDecklistText, $botSavedDecklistId, $createdByUserId);
+            // each seated bot's own decklist (see $resolvedBotDecklists
+            // above) right here, on its behalf, the same validate-then-
+            // write submitCustomDuelDeck() its human opponent will
+            // separately call themselves (via POST /games/decklist) once
+            // this request returns -- $createdByUserId is passed as the
+            // access-check override since a saved decklist has to be
+            // authorized against the human choosing it, not the bot's own
+            // (nonexistent) access. Still inside this same transaction:
+            // submitCustomDuelDeck() only issues plain SELECT/UPDATE
+            // statements of its own (no nested transaction), so it safely
+            // sees this call's just-inserted games/game_players rows and
+            // rolls back alongside everything else if its own validation
+            // throws.
+            if ($deckType === 'custom_duel') {
+                foreach ($botGamePlayerIdsByUserId as $botUserId => $botGamePlayerId) {
+                    $botDecklist = $resolvedBotDecklists[$botUserId];
+                    $this->submitCustomDuelDeck($gameId, $botGamePlayerId, $botDecklist['decklist_text'], $botDecklist['saved_decklist_id'], $createdByUserId);
+                }
             }
 
             if ($draftMatchId !== null) {
@@ -1300,7 +1928,7 @@ final class GameService
                         // it all at once the way Quick Draft's own NULL
                         // start does either. Any pool may go to any seat
                         // (see $sealedDeckPlayerPools's own docblock).
-                        'drafted_card_ids' => $deckType === 'sealed_deck' ? json_encode($sealedDeckPlayerPools[$seatIndex]) : $initialDraftedCardIds,
+                        'drafted_card_ids' => in_array($deckType, ['sealed_deck', 'sealed_pool_of_the_day', 'weekly_sealed_pool'], true) ? json_encode($sealedDeckPlayerPools[$seatIndex]) : $initialDraftedCardIds,
                     ]);
                 }
 
@@ -1314,7 +1942,7 @@ final class GameService
                     $this->initializeRotisserieDraft($gameId, $draftMatchId, $draftPoolCardIds, array_values($seatedUserIds), $rotisserieDraftCutoffCount);
                 } elseif ($deckType === 'tiered_rotisserie_draft') {
                     $this->initializeTieredRotisserieDraft($gameId, $draftMatchId, $tieredRotisserieDraftTierPools, array_values($seatedUserIds), (string) $tieredRotisserieDraftMode);
-                } elseif ($deckType === 'sealed_deck') {
+                } elseif ($deckType === 'sealed_deck' || array_key_exists($deckType, self::PERIODIC_SEALED_POOL_DECK_TYPES)) {
                     $this->initializeSealedDeck($draftMatchId);
                 }
             }
@@ -1372,13 +2000,16 @@ final class GameService
     private const POWER_DUEL_SIDEBOARD_MAX_CARDS = 5;
 
     /**
-     * Every draft-based deck_type -- the same 5-item list already
-     * repeated inline throughout this file's own draft methods (each
-     * predating this constant), pulled out here purely for
+     * Every draft-based deck_type. Originally pulled out purely for
      * botsSupportedFor()/advanceBotDraftTurn() (issue #359) rather than
-     * as a wholesale refactor of every existing inline copy.
+     * as a wholesale refactor of the many inline copies that predated it
+     * elsewhere in this file -- issue #520's own 'sealed_pool_of_the_day'
+     * addition was the point every one of those remaining inline copies
+     * needed to change anyway (to recognize the new deck_type too), so
+     * they were finally consolidated onto this constant at the same time
+     * rather than adding yet another string to maintain in ten places.
      */
-    private const DRAFT_DECK_TYPES = ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck'];
+    private const DRAFT_DECK_TYPES = ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck', 'sealed_pool_of_the_day', 'weekly_sealed_pool'];
 
     /**
      * Whether a practice bot (issue #140) can be seated in a game with
@@ -1406,9 +2037,9 @@ final class GameService
      * 'custom_duel' needs PER-PLAYER setup (each duel player's own
      * decklist, built against $duelDeckRules) -- but rather than teach
      * BotPlayerService a sixth thing to decide (the same way it doesn't
-     * decide draft picks), createGame() lets the human supply the bot's
+     * decide draft picks), createGame() lets the human supply each bot's
      * own decklist directly at creation time (see its own
-     * $botDecklistText/$botSavedDecklistId params, and
+     * $botDecklistText/$botSavedDecklistId/$botDecklists params, and
      * submitCustomDuelDeck()'s own $accessCheckUserId), so the bot itself
      * never has to submit anything for this deck_type either. 'team'/
      * 'closed_team' can never combine with 'custom_duel' at all (it's
@@ -1419,6 +2050,30 @@ final class GameService
     {
         if ($format === 'duel' && $deckType === 'custom_duel') {
             return true;
+        }
+        // Weekly Sealed Pool (issue #520) is the one DRAFT_DECK_TYPES
+        // member still deliberately excluded here (issue #520 follow-up:
+        // "since we aren't tracking standings for sealed pool of the
+        // day, let's allow practice bots for those" -- Sealed Pool of
+        // the Day itself was the ORIGINAL reason both were excluded,
+        // since BotPlayerService::chooseDraftDeck() had no awareness of
+        // PERIODIC_SEALED_POOL_RARITY_DECK_CAPS and could hand back a
+        // deck submitDraftDeck() would reject as over-cap -- an uncaught
+        // GameStateException there being exactly the "silent, permanent
+        // stall" class of bug advanceBotDraftDeck()'s own docblock warns
+        // about for a different historical case. advanceBotDraftDeck()
+        // now passes those same caps straight into chooseDraftDeck(),
+        // which is guaranteed to build a legal deck from them, so Sealed
+        // Pool of the Day itself no longer needs this exclusion). Weekly
+        // Sealed Pool stays excluded regardless of that fix, though: its
+        // own weekly_sealed_pool_standings ladder has no way to represent
+        // "one side was a practice bot" and every real match is already
+        // created by the queue's own pairing of two real, already-queued
+        // players (WeeklySealedPoolQueueService never queues a bot) --
+        // this is purely the same direct-createGame()-call safety net
+        // every other bot-scope check here already is, not a real gap.
+        if ($deckType === 'weekly_sealed_pool') {
+            return false;
         }
         if (in_array($format, ['draft', 'team', 'closed_team'], true) && in_array($deckType, self::DRAFT_DECK_TYPES, true)) {
             // Issue #359: BotPlayerService now knows how to make a draft
@@ -1448,39 +2103,67 @@ final class GameService
      * already say enough about relative speed that the picker draws no
      * further distinction), for the New Game dialog's own bot picker.
      *
-     * @return array<int, array{user_id: int, username: string}>
+     * @return array<int, array{user_id: int, username: string, uses_tactical_ai: bool}>
      */
     public function listPracticeBots(): array
     {
-        $stmt = Connection::get()->query('SELECT id, username FROM users WHERE is_bot = 1 ORDER BY id ASC');
+        $stmt = Connection::get()->query('SELECT id, username, uses_tactical_ai FROM users WHERE is_bot = 1 ORDER BY id ASC');
 
         return array_map(
-            static fn (array $row) => ['user_id' => (int) $row['id'], 'username' => $row['username']],
+            static fn (array $row) => [
+                'user_id' => (int) $row['id'],
+                'username' => $row['username'],
+                'uses_tactical_ai' => (bool) $row['uses_tactical_ai'],
+            ],
             $stmt->fetchAll(),
         );
     }
 
     /**
-     * The one practice bot (users.is_bot) among $userIds, if any -- see
-     * botsSupportedFor(). At most one, never more: $userIds always
-     * includes $createdByUserId (a real human, the only kind of account
-     * that can call createGame() at all), and the only format a bot's
-     * own scope allows with a second opponent seat at all is 'duel',
-     * which is capped at exactly 2 players total -- so a duel is
-     * (human, bot) at most, never (bot, bot).
+     * Every practice bot (users.is_bot) among $userIds, if any -- see
+     * botsSupportedFor(). Usually at most one (a bot's own scope mostly
+     * allows seating alongside humans in Traditional/Team Play/Closed
+     * Team Play), but constructed Duel supports 3-4 players (issue #505)
+     * and, as of the custom_duel multi-bot follow-up, may seat 2 or even
+     * 3 practice bots alongside a single human creator -- so this returns
+     * every one of them, not just the first, unlike its own single-bot
+     * predecessor before that follow-up.
+     *
+     * @return int[]
      */
-    private function botUserIdAmong(array $userIds): ?int
+    private function botUserIdsAmong(array $userIds): array
     {
         if ($userIds === []) {
-            return null;
+            return [];
         }
 
         $placeholders = implode(',', array_fill(0, count($userIds), '?'));
-        $stmt = Connection::get()->prepare("SELECT id FROM users WHERE id IN ({$placeholders}) AND is_bot = 1 LIMIT 1");
+        $stmt = Connection::get()->prepare("SELECT id FROM users WHERE id IN ({$placeholders}) AND is_bot = 1");
         $stmt->execute(array_values($userIds));
-        $id = $stmt->fetchColumn();
 
-        return $id !== false ? (int) $id : null;
+        return array_map(static fn ($id): int => (int) $id, $stmt->fetchAll(\PDO::FETCH_COLUMN));
+    }
+
+    /**
+     * $diagnosticMode's own gate (see createGame()'s own docblock) -- a
+     * plain bool rather than botUserIdsAmong() above's own full list,
+     * since a Team Play/Traditional game can seat several bots at once
+     * and any single Tactical one among them is enough to make
+     * diagnostic mode meaningful.
+     *
+     * @param int[] $userIds
+     */
+    private function includesATacticalBot(array $userIds): bool
+    {
+        if ($userIds === []) {
+            return false;
+        }
+
+        $placeholders = implode(',', array_fill(0, count($userIds), '?'));
+        $stmt = Connection::get()->prepare("SELECT 1 FROM users WHERE id IN ({$placeholders}) AND is_bot = 1 AND uses_tactical_ai = 1 LIMIT 1");
+        $stmt->execute(array_values($userIds));
+
+        return $stmt->fetchColumn() !== false;
     }
 
     /**
@@ -1641,7 +2324,7 @@ final class GameService
      */
     private static function isSharedDeckType(string $deckType): bool
     {
-        return !in_array($deckType, ['custom_duel', 'quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck'], true);
+        return $deckType !== 'custom_duel' && !in_array($deckType, self::DRAFT_DECK_TYPES, true);
     }
 
     /**
@@ -2045,7 +2728,7 @@ final class GameService
         $customDuelDeckCardIds = $game['deck_type'] === 'custom_duel'
             ? $this->requireCustomDuelDecksSubmitted($gameId, $playerIds)
             : [];
-        $draftDeckCardIds = in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck'], true)
+        $draftDeckCardIds = in_array($game['deck_type'], self::DRAFT_DECK_TYPES, true)
             ? $this->requireDraftDecksSubmitted($gameId, $playerIds)
             : [];
 
@@ -2073,11 +2756,11 @@ final class GameService
             // formats support that ISN'T one shared/identical pool --
             // see BoardStateRepository::load()'s identical check.
             if (self::isDuelShapedFormat($game['format'])
-                || in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck'], true)) {
+                || in_array($game['deck_type'], self::DRAFT_DECK_TYPES, true)) {
                 foreach ($playerIds as $playerId) {
-                    $playerCardIds = match ($game['deck_type']) {
-                        'custom_duel' => $customDuelDeckCardIds[$playerId],
-                        'quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck' => $draftDeckCardIds[$playerId],
+                    $playerCardIds = match (true) {
+                        $game['deck_type'] === 'custom_duel' => $customDuelDeckCardIds[$playerId],
+                        in_array($game['deck_type'], self::DRAFT_DECK_TYPES, true) => $draftDeckCardIds[$playerId],
                         default => $this->deckCardIdsFor($game),
                     };
                     shuffle($playerCardIds);
@@ -2133,14 +2816,74 @@ final class GameService
             // exactly 2 of the 4 seats belong to each team, so an ordinary
             // uniform pick over all 4 already picks a team fairly without
             // needing its own separate randomization step. Games 2/3 of a
-            // best-of-three draft match are the one exception -- see
+            // best-of-three match are the one exception -- see
             // resolveFirstPlayerId()'s own docblock.
             $firstPlayerId = $this->resolveFirstPlayerId($game, $playerIds);
+            $matchGameNumber = $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null;
+            $isBestOfThreeRematch = $matchGameNumber !== null && $matchGameNumber > 1
+                && ($game['draft_match_id'] !== null || $game['game_match_id'] !== null);
 
-            if ($game['format'] === 'team') {
-                // Which specific teammate actually takes the real first
-                // turn is that team's own live choice (see "Open Team Play"
-                // in php-app/README.md), not decided yet -- current_turn_game_player_id
+            if ($isBestOfThreeRematch) {
+                // Games 2/3 of a best-of-three match start frozen too --
+                // same reasoning as closed_team's own pregame freeze
+                // below, but waiting on setPlayFirstNextMatchGame()
+                // instead: per the game's own rules, the previous game's
+                // losing side isn't required to decide who goes first
+                // until they can see this game's own opening hand
+                // (already dealt above), so nothing can be fixed yet at
+                // game-start time. $firstPlayerId here is
+                // resolveFirstPlayerId()'s own placeholder (the previous
+                // winner) -- overwritten if the loser opts to go first
+                // themselves instead. Checked BEFORE the 'team'/
+                // 'closed_team' branches below (which otherwise apply to
+                // every OTHER team/closed_team game, including game 1 of
+                // a match): this defers each of THEIR own next pregame
+                // steps -- 'team''s own turn_order decision, and
+                // 'closed_team''s own card-pass notification -- until
+                // setPlayFirstNextMatchGame() actually resolves, since
+                // which side is even eligible to go first isn't settled
+                // yet (see that method's own docblock).
+                $insertRound = $pdo->prepare(
+                    "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, pending_play_grants, status)
+                     VALUES (:game_id, 1, :first_player, NULL, 0, :pending_play_grants, 'in_progress')"
+                );
+                $insertRound->execute([
+                    'game_id' => $gameId,
+                    'first_player' => $firstPlayerId,
+                    'pending_play_grants' => json_encode([]),
+                ]);
+
+                // "It's your turn" push notification (issue #108) for
+                // every seat on the previous game's losing side -- the
+                // only player(s) setPlayFirstNextMatchGame() actually
+                // lets act (see that method's own docblock and
+                // isAwaitingFirstPlayerChoiceFrom()). Exactly one seat
+                // for an individual (2-seat) rematch; both of a losing
+                // team's members for 'team'/'closed_team'.
+                $previousWinnerUserId = $game['draft_match_id'] !== null
+                    ? $this->previousMatchGameWinnerUserId('draft_match_id', (int) $game['draft_match_id'], $matchGameNumber)
+                    : $this->previousMatchGameWinnerUserId('game_match_id', (int) $game['game_match_id'], $matchGameNumber);
+                if ($previousWinnerUserId !== null) {
+                    $loserUserIds = $this->previousMatchGameLoserUserIds($gameId, (string) $game['format'], $previousWinnerUserId);
+                    $placeholders = implode(',', array_fill(0, count($playerIds), '?'));
+                    $seatsStmt = $pdo->prepare("SELECT id, user_id FROM game_players WHERE id IN ({$placeholders})");
+                    $seatsStmt->execute($playerIds);
+                    foreach ($seatsStmt->fetchAll() as $seatRow) {
+                        if (in_array((int) $seatRow['user_id'], $loserUserIds, true)) {
+                            $this->notifyGamePlayersItsYourTurn($gameId, [(int) $seatRow['id']], "Game #{$gameId} needs you to choose who goes first.", 'first-player-choice');
+                        }
+                    }
+                }
+            } elseif ($game['format'] === 'team') {
+                // Reached for game 1 of a match (or any non-best-of-three
+                // Open Team Play game) -- a best-of-three rematch's own
+                // turn_order decision is instead created by
+                // setPlayFirstNextMatchGame(), once it's actually settled
+                // which team is even eligible to go first (see the
+                // $isBestOfThreeRematch branch above). Which specific
+                // teammate actually takes the real first turn is that
+                // team's own live choice (see "Open Team Play" in
+                // php-app/README.md), not decided yet -- current_turn_game_player_id
                 // stays NULL (freezing the round, same as any other
                 // outstanding decision) until applyTurnOrderDecision()
                 // resolves the game_team_decision created below.
@@ -2162,12 +2905,17 @@ final class GameService
                 $firstTeamId = $this->teamIdByGamePlayer($gameId)[$firstPlayerId];
                 $this->createTeamDecision($gameId, $roundId, $firstTeamId, 'turn_order', $this->teamMembers($gameId, $firstTeamId));
             } elseif ($game['format'] === 'closed_team') {
-                // Round 1's leader is simply randomized here -- no team
-                // decision needed for it (see "Closed Team Play" in
-                // php-app/README.md) -- but the round still starts frozen:
-                // nobody may play until every player has completed this
-                // format's own pregame blind card pass (see
-                // submitInitialCardPass()), which unfreezes it, to
+                // Reached for game 1 of a match (or any non-best-of-three
+                // Closed Team Play game) -- a best-of-three rematch's own
+                // card-pass notification is instead sent by
+                // setPlayFirstNextMatchGame(), once it's actually settled
+                // who's eligible to go first (see the $isBestOfThreeRematch
+                // branch above). Round 1's leader is simply randomized
+                // here -- no team decision needed for it (see "Closed Team
+                // Play" in php-app/README.md) -- but the round still
+                // starts frozen: nobody may play until every player has
+                // completed this format's own pregame blind card pass
+                // (see submitInitialCardPass()), which unfreezes it, to
                 // $firstPlayerId, once all 4 have.
                 $insertRound = $pdo->prepare(
                     "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, pending_play_grants, status)
@@ -2185,47 +2933,6 @@ final class GameService
                 // submitInitialCardPass()), unlike the other frozen-round
                 // cases below, which each wait on one specific player.
                 $this->notifyGamePlayersItsYourTurn($gameId, $playerIds, "Game #{$gameId} needs your card pass before it can start.", 'initial-pass');
-            } elseif (
-                $game['draft_match_id'] !== null
-                && $game['match_game_number'] !== null
-                && (int) $game['match_game_number'] > 1
-            ) {
-                // Games 2/3 of a best-of-three draft match start frozen too
-                // -- same reasoning as closed_team's own pregame freeze
-                // above, but waiting on setPlayFirstNextMatchGame() instead:
-                // per the game's own rules, the previous game's loser isn't
-                // required to decide who goes first until they can see this
-                // game's own opening hand (already dealt above), so nothing
-                // can be fixed yet at game-start time. $firstPlayerId here
-                // is resolveFirstPlayerId()'s own placeholder (the previous
-                // winner) -- overwritten if the loser opts to go first
-                // themselves instead.
-                $insertRound = $pdo->prepare(
-                    "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, pending_play_grants, status)
-                     VALUES (:game_id, 1, :first_player, NULL, 0, :pending_play_grants, 'in_progress')"
-                );
-                $insertRound->execute([
-                    'game_id' => $gameId,
-                    'first_player' => $firstPlayerId,
-                    'pending_play_grants' => json_encode([]),
-                ]);
-
-                // "It's your turn" push notification (issue #108) for
-                // whichever seat is the previous game's loser -- the only
-                // player setPlayFirstNextMatchGame() actually lets act
-                // (see that method's own docblock and
-                // isAwaitingFirstPlayerChoiceFrom()).
-                $previousWinnerUserId = $this->previousMatchGameWinnerUserId((int) $game['draft_match_id'], (int) $game['match_game_number']);
-                if ($previousWinnerUserId !== null) {
-                    $placeholders = implode(',', array_fill(0, count($playerIds), '?'));
-                    $seatsStmt = $pdo->prepare("SELECT id, user_id FROM game_players WHERE id IN ({$placeholders})");
-                    $seatsStmt->execute($playerIds);
-                    foreach ($seatsStmt->fetchAll() as $seatRow) {
-                        if ((int) $seatRow['user_id'] !== $previousWinnerUserId) {
-                            $this->notifyGamePlayersItsYourTurn($gameId, [(int) $seatRow['id']], "Game #{$gameId} needs you to choose who goes first.", 'first-player-choice');
-                        }
-                    }
-                }
             } else {
                 $insertRound = $pdo->prepare(
                     "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, pending_play_grants, status)
@@ -2258,13 +2965,16 @@ final class GameService
     /**
      * startGame()'s own first-player pick for round/game 1. Every game
      * still gets a uniform coin flip EXCEPT games 2/3 of a best-of-three
-     * draft match (games.draft_match_id set, match_game_number > 1),
-     * where it's instead the previous game's own winner -- purely a
-     * PLACEHOLDER for that case, though: the round itself starts frozen
-     * (see startGame()'s own 'else' branch) until the previous loser
-     * decides, per the game's own rules, who actually goes first --
-     * they don't have to decide until they can see this game's opening
-     * hand, so nothing is fixed yet at the moment this runs. See
+     * match -- the draft-family's own draft_match_id, or the non-draft
+     * game_matches wrapper for Duel/Traditional/Team/Closed Team
+     * (migration 0223, issue #90 follow-up) -- where it's instead the
+     * previous game's own winner (or, for a team format, a member of the
+     * winning TEAM) -- purely a PLACEHOLDER for that case, though: the
+     * round itself starts frozen (see startGame()'s own best-of-three
+     * rematch branch) until the previous loser (or losing team) decides,
+     * per the game's own rules, who actually goes first -- they don't
+     * have to decide until they can see this game's opening hand, so
+     * nothing is fixed yet at the moment this runs. See
      * setPlayFirstNextMatchGame() for how (and when) that's resolved.
      *
      * games.bot_goes_first (issue #417, migration 0171) -- see
@@ -2285,7 +2995,10 @@ final class GameService
     private function resolveFirstPlayerId(array $game, array $playerIds): int
     {
         $matchGameNumber = $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null;
-        if ($game['draft_match_id'] === null || $matchGameNumber === null || $matchGameNumber <= 1) {
+        $isBestOfThreeRematch = $matchGameNumber !== null && $matchGameNumber > 1
+            && ($game['draft_match_id'] !== null || $game['game_match_id'] !== null);
+
+        if (!$isBestOfThreeRematch) {
             if ((bool) $game['bot_goes_first'] && !self::isTeamFormat($game['format'])) {
                 $botPlayerIds = $this->botGamePlayerIds((int) $game['id']);
                 if ($botPlayerIds !== []) {
@@ -2296,7 +3009,9 @@ final class GameService
             return $playerIds[array_rand($playerIds)];
         }
 
-        $winnerUserId = $this->previousMatchGameWinnerUserId((int) $game['draft_match_id'], $matchGameNumber);
+        $winnerUserId = $game['draft_match_id'] !== null
+            ? $this->previousMatchGameWinnerUserId('draft_match_id', (int) $game['draft_match_id'], $matchGameNumber)
+            : $this->previousMatchGameWinnerUserId('game_match_id', (int) $game['game_match_id'], $matchGameNumber);
         if ($winnerUserId !== null) {
             $pdo = Connection::get();
             $placeholders = implode(',', array_fill(0, count($playerIds), '?'));
@@ -2317,25 +3032,79 @@ final class GameService
 
     /**
      * The user_id of match_game_number $matchGameNumber - 1's own winner
-     * within $draftMatchId, or null if that game can't be found (shouldn't
-     * happen once $matchGameNumber > 1 -- advanceDraftMatch() always
-     * creates the next game before the previous one's own winner is even
-     * returned to the caller). resolveFirstPlayerId()'s own placeholder,
+     * within $matchId ($matchIdColumn is always one of the two literal
+     * strings 'draft_match_id'/'game_match_id' -- an internal selector,
+     * never user input, so interpolating it directly into the query is
+     * safe), or null if that game can't be found (shouldn't happen once
+     * $matchGameNumber > 1 -- advanceDraftMatch()/advanceGameMatch()
+     * always create the next game before the previous one's own winner
+     * is even returned to the caller). For a team format, this is a
+     * representative seat on the winning TEAM (winner_game_player_id is
+     * always a member of whichever side actually won, even though it's
+     * not stable enough game-to-game for win-COUNTING -- see
+     * advanceGameMatch()'s own docblock), which is all a "who goes
+     * first" placeholder needs. resolveFirstPlayerId()'s own placeholder,
      * and setPlayFirstNextMatchGame()'s own default when the previous
-     * game's loser opts to let them go first again.
+     * game's loser (or losing team, either member) opts to let them go
+     * first again.
      */
-    private function previousMatchGameWinnerUserId(int $draftMatchId, int $matchGameNumber): ?int
+    private function previousMatchGameWinnerUserId(string $matchIdColumn, int $matchId, int $matchGameNumber): ?int
     {
         $pdo = Connection::get();
         $stmt = $pdo->prepare(
-            'SELECT gp.user_id FROM games g
+            "SELECT gp.user_id FROM games g
              JOIN game_players gp ON gp.id = g.winner_game_player_id
-             WHERE g.draft_match_id = :match_id AND g.match_game_number = :num'
+             WHERE g.{$matchIdColumn} = :match_id AND g.match_game_number = :num"
         );
-        $stmt->execute(['match_id' => $draftMatchId, 'num' => $matchGameNumber - 1]);
+        $stmt->execute(['match_id' => $matchId, 'num' => $matchGameNumber - 1]);
         $userId = $stmt->fetchColumn();
 
         return $userId !== false ? (int) $userId : null;
+    }
+
+    /**
+     * The user_id(s) eligible to answer setPlayFirstNextMatchGame() for
+     * $gameId's own round 1 -- everyone on the PREVIOUS game's losing
+     * side. Exactly one user_id for an individual (2-seat) rematch
+     * (Duel/Traditional/draft-family); both of the losing team's members
+     * for 'team'/'closed_team' (game_players.team_id carries forward
+     * unchanged game to game -- see advanceGameMatch()'s own docblock --
+     * so either teammate can speak for their shared side; whichever
+     * answers first settles it for both, the same "no need for a second
+     * teammate's confirmation" treatment a plain team-wide binary
+     * choice gets, unlike turn_order's own "which ONE of us" propose/
+     * confirm negotiation).
+     *
+     * @return int[]
+     */
+    private function previousMatchGameLoserUserIds(int $gameId, string $format, int $previousWinnerUserId): array
+    {
+        $isTeam = self::isTeamFormat($format);
+        $winningTeamId = null;
+        if ($isTeam) {
+            $winnerGamePlayerId = $this->gamePlayerIdFor($gameId, $previousWinnerUserId);
+            $winningTeamId = $winnerGamePlayerId !== null ? $this->teamIdByGamePlayer($gameId)[$winnerGamePlayerId] : null;
+        }
+
+        $seatsStmt = Connection::get()->prepare('SELECT user_id, team_id FROM game_players WHERE game_id = :game_id ORDER BY seat_order ASC');
+        $seatsStmt->execute(['game_id' => $gameId]);
+        $seats = $seatsStmt->fetchAll();
+
+        $loserUserIds = [];
+        foreach ($seats as $seat) {
+            $onWinningSide = $isTeam
+                ? ($winningTeamId !== null && (int) $seat['team_id'] === $winningTeamId)
+                : ((int) $seat['user_id'] === $previousWinnerUserId);
+            if (!$onWinningSide) {
+                $loserUserIds[] = (int) $seat['user_id'];
+            }
+        }
+
+        // Safety net (shouldn't happen -- every seat always carries over
+        // unchanged from the previous game): if every seat looks like
+        // it's on the winning side, fall back to the very first one
+        // rather than leaving nobody able to ever answer.
+        return $loserUserIds !== [] ? $loserUserIds : [(int) $seats[0]['user_id']];
     }
 
     /**
@@ -2344,51 +3113,60 @@ final class GameService
      * setPlayFirstNextMatchGame() (see that method and startGame()'s own
      * freeze for match games). 'you_are_previous_loser' gates whether
      * $viewerUserId's own client should offer the decision at all (only
-     * the loser may actually call it); 'default_user_id' is who goes
-     * first if they answer "no" (or never answer) -- the previous game's
-     * own winner, mirroring resolveFirstPlayerId()'s own placeholder.
-     * Both ids are user_ids -- matched against getState()'s own top-level
-     * 'players' list for display.
+     * the previous game's losing side may actually call it -- for a team
+     * format this is true for BOTH of the losing team's members, either
+     * of whom may answer for their shared side); 'default_user_id' is
+     * who goes first if they answer "no" (or never answer) -- the
+     * previous game's own winner, mirroring resolveFirstPlayerId()'s own
+     * placeholder. Both ids are user_ids -- matched against getState()'s
+     * own top-level 'players' list for display.
      */
     private function firstPlayerDecisionStateFor(array $game, int $matchGameNumber, int $viewerUserId): array
     {
-        $previousWinnerUserId = $this->previousMatchGameWinnerUserId((int) $game['draft_match_id'], $matchGameNumber);
+        $previousWinnerUserId = $game['draft_match_id'] !== null
+            ? $this->previousMatchGameWinnerUserId('draft_match_id', (int) $game['draft_match_id'], $matchGameNumber)
+            : $this->previousMatchGameWinnerUserId('game_match_id', (int) $game['game_match_id'], $matchGameNumber);
 
-        $seatsStmt = Connection::get()->prepare('SELECT user_id FROM game_players WHERE game_id = :game_id');
-        $seatsStmt->execute(['game_id' => $game['id']]);
-        $seatUserIds = array_map(intval(...), $seatsStmt->fetchAll(PDO::FETCH_COLUMN));
-
-        $previousLoserUserId = $previousWinnerUserId !== null
-            ? ($seatUserIds[0] === $previousWinnerUserId ? ($seatUserIds[1] ?? $seatUserIds[0]) : $seatUserIds[0])
-            : null;
+        $loserUserIds = $previousWinnerUserId !== null
+            ? $this->previousMatchGameLoserUserIds((int) $game['id'], (string) $game['format'], $previousWinnerUserId)
+            : [];
 
         return [
-            'you_are_previous_loser' => $previousLoserUserId === $viewerUserId,
+            'you_are_previous_loser' => in_array($viewerUserId, $loserUserIds, true),
             'default_user_id' => $previousWinnerUserId,
         ];
     }
 
     /**
      * Resolves the "who goes first" freeze startGame() leaves games 2/3 of
-     * a best-of-three draft match in (Quick Draft/Winston Draft/Grid
-     * Draft) -- per the game's own rules, the previous game's loser isn't
-     * required to decide before this game starts, only before anyone
-     * actually plays, so they get to see this game's own opening hand
-     * (already dealt by the time the round exists to freeze) before
-     * deciding. $playFirst true sends the loser out first themselves;
-     * false lets the previous winner go first again (the same result as
-     * never answering at all -- see resolveFirstPlayerId()'s own
-     * placeholder). Only the loser of the previous game may call this,
-     * and only once -- the round unfreezes for both players the moment
-     * either answer is given, so there's nothing left to change
-     * afterward.
+     * a best-of-three match in -- the draft-family's own draft_match_id
+     * (Quick Draft/Winston Draft/Grid Draft/etc.), or the non-draft
+     * game_matches wrapper for Duel/Traditional/Team/Closed Team
+     * (migration 0223, issue #90 follow-up) -- per the game's own rules,
+     * the previous game's loser (or losing TEAM) isn't required to decide
+     * before this game starts, only before anyone actually plays, so they
+     * get to see this game's own opening hand (already dealt by the time
+     * the round exists to freeze) before deciding. $playFirst true sends
+     * $userId's own side out first; false lets the previous winner('s
+     * side) go first again (the same result as never answering at all --
+     * see resolveFirstPlayerId()'s own placeholder). Only a member of the
+     * previous game's losing side may call this (either of a losing
+     * team's two members, for 'team'/'closed_team' -- see
+     * previousMatchGameLoserUserIds()'s own docblock for why no second
+     * teammate's confirmation is required here), and only once -- the
+     * round unfreezes (or, for 'team'/'closed_team', moves on to that
+     * format's own next pregame step) the moment either answer is given,
+     * so there's nothing left to change afterward.
      */
     public function setPlayFirstNextMatchGame(int $gameId, int $userId, bool $playFirst): void
     {
         $this->withGameLock($gameId, function () use ($gameId, $userId, $playFirst): void {
             $game = $this->fetchGame($gameId);
-            if (!in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck'], true) || $game['draft_match_id'] === null) {
-                throw new GameStateException("Game {$gameId} is not a draft match game");
+            $isDraftMatchGame = $game['draft_match_id'] !== null
+                && in_array($game['deck_type'], self::DRAFT_DECK_TYPES, true);
+            $isGameMatchGame = $game['game_match_id'] !== null;
+            if (!$isDraftMatchGame && !$isGameMatchGame) {
+                throw new GameStateException("Game {$gameId} is not part of a best-of-three match");
             }
             $matchGameNumber = $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null;
             if ($matchGameNumber === null || $matchGameNumber <= 1) {
@@ -2402,27 +3180,43 @@ final class GameService
             $roundStmt = $pdo->prepare("SELECT * FROM game_rounds WHERE game_id = :game_id AND round_number = 1");
             $roundStmt->execute(['game_id' => $gameId]);
             $round = $roundStmt->fetch();
-            if ($round === false || $round['current_turn_game_player_id'] !== null) {
+            // Rejects BOTH an already-unfrozen round (current_turn set --
+            // an individual format's own already-resolved choice, or a
+            // round that was never frozen to begin with) AND an
+            // already-recorded choice that hasn't unfrozen the round yet
+            // (games.first_player_choice_user_id set -- 'team'/
+            // 'closed_team' stay frozen even AFTER this resolves, pending
+            // that format's own next pregame step created/notified
+            // below). Checking current_turn alone would let this whole
+            // method run a SECOND time for a team-format rematch already
+            // decided, trying to create a second game_team_decisions row
+            // for the same round and violating its own "one open decision
+            // per round" constraint.
+            if ($round === false || $round['current_turn_game_player_id'] !== null || $game['first_player_choice_user_id'] !== null) {
                 throw new GameStateException('Who goes first in this game has already been decided');
             }
 
-            $seatsStmt = $pdo->prepare('SELECT user_id FROM game_players WHERE game_id = :game_id');
-            $seatsStmt->execute(['game_id' => $gameId]);
-            $seatUserIds = array_map(intval(...), $seatsStmt->fetchAll(PDO::FETCH_COLUMN));
+            $previousWinnerUserId = $isDraftMatchGame
+                ? $this->previousMatchGameWinnerUserId('draft_match_id', (int) $game['draft_match_id'], $matchGameNumber)
+                : $this->previousMatchGameWinnerUserId('game_match_id', (int) $game['game_match_id'], $matchGameNumber);
+            $loserUserIds = $previousWinnerUserId !== null
+                ? $this->previousMatchGameLoserUserIds($gameId, (string) $game['format'], $previousWinnerUserId)
+                : [];
 
-            $previousWinnerUserId = $this->previousMatchGameWinnerUserId((int) $game['draft_match_id'], $matchGameNumber);
-            $previousLoserUserId = $previousWinnerUserId !== null
-                ? ($seatUserIds[0] === $previousWinnerUserId ? ($seatUserIds[1] ?? $seatUserIds[0]) : $seatUserIds[0])
-                : null;
-
-            if ($previousLoserUserId === null || $userId !== $previousLoserUserId) {
+            if (!in_array($userId, $loserUserIds, true)) {
                 throw new GameStateException('Only the loser of the previous game can choose who goes first next');
             }
 
             // $round['first_game_player_id'] already holds resolveFirstPlayerId()'s
             // own placeholder -- the previous winner's seat in THIS game --
             // so a "false" answer needs no write there at all; only "true"
-            // overwrites it with the loser's own seat.
+            // overwrites it with the ANSWERING player's own seat. For a
+            // team format this seat is just a stand-in for its TEAM
+            // (exactly like resolveFirstPlayerId()'s own placeholder is)
+            // -- which specific teammate actually takes the real first
+            // turn is that team's own turn_order decision, created fresh
+            // below rather than at game creation, since which team was
+            // even eligible to go first wasn't settled until now.
             $chosenGamePlayerId = $playFirst
                 ? $this->gamePlayerIdFor($gameId, $userId)
                 : (int) $round['first_game_player_id'];
@@ -2435,13 +3229,29 @@ final class GameService
             $pdo->prepare('UPDATE games SET first_player_choice_user_id = :chosen WHERE id = :game_id')
                 ->execute(['chosen' => $playFirst ? $userId : $previousWinnerUserId, 'game_id' => $gameId]);
 
-            $state = $this->boardStates->load($gameId);
-            $freshGrants = $this->computeFreshGrants($state, $chosenGamePlayerId, 1);
-            $this->logFreshGrants($gameId, (int) $round['id'], $chosenGamePlayerId, $freshGrants);
-            $this->boardStates->save($gameId, $state);
-            $this->updateRoundTurnState((int) $round['id'], $chosenGamePlayerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId());
+            $loggedState = null;
+            if ($game['format'] === 'team') {
+                // Mirrors startGame()'s own 'team' branch for game 1,
+                // just deferred until now -- see this method's own
+                // docblock.
+                $firstTeamId = $this->teamIdByGamePlayer($gameId)[$chosenGamePlayerId];
+                $this->createTeamDecision($gameId, (int) $round['id'], $firstTeamId, 'turn_order', $this->teamMembers($gameId, $firstTeamId));
+            } elseif ($game['format'] === 'closed_team') {
+                // Mirrors startGame()'s own 'closed_team' branch for game
+                // 1 -- round 1 stays frozen for the pregame blind card
+                // pass instead (see submitInitialCardPass()), which is
+                // what actually unfreezes it to $chosenGamePlayerId once
+                // every seat has passed.
+                $this->notifyGamePlayersItsYourTurn($gameId, $this->seatOrder($gameId), "Game #{$gameId} needs your card pass before it can start.", 'initial-pass');
+            } else {
+                $loggedState = $this->boardStates->load($gameId);
+                $freshGrants = $this->computeFreshGrants($loggedState, $chosenGamePlayerId, 1);
+                $this->logFreshGrants($gameId, (int) $round['id'], $chosenGamePlayerId, $freshGrants);
+                $this->boardStates->save($gameId, $loggedState);
+                $this->updateRoundTurnState((int) $round['id'], $chosenGamePlayerId, $freshGrants, $loggedState->discardedThisRound(), $loggedState->skipScoringThisRound(), $loggedState->skipScoringFirstPlayerId(), $loggedState->skipScoringSourceCardId(), $loggedState->skipScoringOwnerId());
+            }
 
-            $this->logEvent($gameId, (int) $round['id'], $chosenGamePlayerId, 'draft_match_first_player_decided', null, ['game_player_id' => $chosenGamePlayerId], $state);
+            $this->logEvent($gameId, (int) $round['id'], $chosenGamePlayerId, 'match_first_player_decided', null, ['game_player_id' => $chosenGamePlayerId], $loggedState);
         });
 
         $this->touchLastMoveAt($gameId);
@@ -3589,22 +4399,35 @@ final class GameService
             // cutoffs are validated (createGame()) to sum to at least
             // this same floor already.
             'tiered_rotisserie_draft' => self::ROTISSERIE_DRAFT_MIN_DECK_SIZE,
-            'sealed_deck' => self::SEALED_DECK_MIN_DECK_SIZE,
+            // Sealed Pool of the Day/Weekly Sealed Pool (issue #520) share
+            // Sealed Deck's own 12-card floor -- their own pool is bigger
+            // (50 vs. 45 cards) but there's no format-specific reason for
+            // the floor itself to differ.
+            'sealed_deck', 'sealed_pool_of_the_day', 'weekly_sealed_pool' => self::SEALED_DECK_MIN_DECK_SIZE,
         };
     }
 
     public function submitDraftDeck(int $gameId, int $userId, array $deckCardIds): void
     {
         $game = $this->fetchGame($gameId);
-        if (!in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck'], true) || $game['draft_match_id'] === null) {
+        if (!in_array($game['deck_type'], self::DRAFT_DECK_TYPES, true) || $game['draft_match_id'] === null) {
             throw new GameStateException("Game {$gameId} is not a draft game");
         }
         $draftMatchId = (int) $game['draft_match_id'];
         $minDeckSize = self::draftMinDeckSizeFor($game['deck_type']);
         $maxDeckSize = null;
         $teammateUserId = $this->openTeamPlayTeammateUserId($gameId, $game['format'], $userId);
+        // Sealed Pool of the Day/Weekly Sealed Pool (issue #520): the
+        // shared pool's own per-rarity deck caps
+        // (PERIODIC_SEALED_POOL_RARITY_DECK_CAPS) -- checked below only for
+        // these two deck_types, via $game['deck_type'] rather than
+        // draft_matches.periodic_sealed_pool_id itself, since both are
+        // already available here with no extra query and always agree in
+        // practice (neither deck_type is ever seated without one -- see
+        // createGame()'s own $periodicSealedPool).
+        $enforceRarityCapsFor = array_key_exists($game['deck_type'], self::PERIODIC_SEALED_POOL_DECK_TYPES) ? $game['deck_type'] : null;
 
-        $this->withGameLock($gameId, function () use ($draftMatchId, $userId, $teammateUserId, $deckCardIds, $minDeckSize, $maxDeckSize): void {
+        $this->withGameLock($gameId, function () use ($draftMatchId, $userId, $teammateUserId, $deckCardIds, $minDeckSize, $maxDeckSize, $enforceRarityCapsFor): void {
             $match = $this->fetchDraftMatch($draftMatchId);
             if ($match['status'] !== 'deck_building') {
                 throw new GameStateException('This match is not currently building/sideboarding a deck');
@@ -3626,6 +4449,9 @@ final class GameService
             }
             if ($this->multisetSubtract($deckCardIds, $pickableCardIds) !== []) {
                 throw new GameStateException("Your deck can only contain cards {$errorNoun}");
+            }
+            if ($enforceRarityCapsFor !== null) {
+                $this->assertWithinPeriodicSealedPoolRarityCaps($deckCardIds);
             }
 
             Connection::get()->prepare(
@@ -4712,6 +5538,7 @@ final class GameService
             $round = $this->currentRound($gameId);
             $roundId = (int) $round['id'];
             $this->assertNoPendingDecision($roundId);
+            $this->assertTurnAcknowledged($round);
             $this->assertChaosDraftOfferResolved($gameId, $this->fetchGame($gameId), $round);
 
             $state = $this->boardStates->load($gameId);
@@ -4768,6 +5595,7 @@ final class GameService
         $result = $this->withGameLock($gameId, function () use ($gameId, $gamePlayerId, $automated): array {
             $round = $this->currentRound($gameId);
             $this->assertNoPendingDecision((int) $round['id']);
+            $this->assertTurnAcknowledged($round);
             $this->assertChaosDraftOfferResolved($gameId, $this->fetchGame($gameId), $round);
 
             if ((int) $round['current_turn_game_player_id'] !== $gamePlayerId) {
@@ -4786,12 +5614,82 @@ final class GameService
     }
 
     /**
+     * "Pause at the start of your turn" (users.pause_before_own_turn,
+     * reported live: "add a user setting to pause at the end of turn -
+     * if the user has this setting enabled, then a game should not
+     * advance to that user's turn, until they click an 'advance turn'
+     * button - this is to allow users to more clearly see what happened
+     * during a previous turn before/after scoring effects happen"). The
+     * only way to clear $gameId's own current round's
+     * turn_pending_acknowledgment flag (set by notifyItsYourTurn() the
+     * moment it became $gamePlayerId's turn) -- assertTurnAcknowledged()
+     * is what actually enforces the block on playMood()/pass() until
+     * this runs. Deliberately NOT named advanceTurn() -- the existing
+     * PRIVATE method by that name rotates the round to the NEXT player
+     * once the current one has finished acting; this method never
+     * changes whose turn it is, only whether the CURRENT turn holder's
+     * own client may act on it yet.
+     *
+     * Idempotent (a no-op if the flag is already clear, e.g. a
+     * double-clicked button or a stale poll racing a second request) and
+     * rejects anyone who isn't actually the round's current turn holder,
+     * the same as playMood()/pass() themselves.
+     *
+     * @return array{round_scored: bool, game_completed: bool}
+     */
+    public function acknowledgeTurnStart(int $gameId, int $gamePlayerId): array
+    {
+        return $this->withGameLock($gameId, function () use ($gameId, $gamePlayerId): array {
+            $round = $this->currentRound($gameId);
+
+            if ((int) $round['current_turn_game_player_id'] !== $gamePlayerId) {
+                throw new GameStateException("It is not player {$gamePlayerId}'s turn");
+            }
+
+            if ((bool) $round['turn_pending_acknowledgment']) {
+                Connection::get()
+                    ->prepare('UPDATE game_rounds SET turn_pending_acknowledgment = 0 WHERE id = :round_id')
+                    ->execute(['round_id' => (int) $round['id']]);
+            }
+
+            return ['round_scored' => false, 'game_completed' => false];
+        });
+    }
+
+    /**
      * Generous but bounded -- covers even a long chain of grant-fueled
      * bot/auto-pass turns/decisions in a row (advanceAutomatedTurns())
      * without risking a genuine engine bug (e.g. a mutually-triggering
      * pair of effects) looping forever.
      */
     private const MAX_AUTOMATED_ACTIONS_PER_REQUEST = 200;
+
+    /**
+     * scheduleAutomatedTurnRecheck()'s own hard ceiling on how many
+     * detached bin/recheck_automated_turn.php links may chain together
+     * for one game (see that method's own docblock) -- a safety net
+     * against a hypothetical future bug where advanceAutomatedTurns()
+     * keeps reporting genuine progress every single link without the
+     * game ever actually reaching a human's turn or completing, which
+     * would otherwise spawn a new detached OS process roughly every
+     * RECHECK_DELAY_SECONDS forever. 30 links at that delay is about 2.5
+     * minutes of self-driven rechecking -- generous relative to how long
+     * a real, healthy chain of automated turns should ever take, same
+     * "generous but bounded" reasoning as MAX_AUTOMATED_ACTIONS_PER_REQUEST
+     * above.
+     */
+    private const MAX_AUTOMATED_TURN_RECHECK_CHAIN_DEPTH = 30;
+
+    /**
+     * How long bin/recheck_automated_turn.php sleeps before its own
+     * advanceAutomatedTurns() call -- see scheduleAutomatedTurnRecheck()'s
+     * own docblock. Public (unlike every other constant on this class)
+     * purely so that standalone script, running as its own separate PHP
+     * process with no GameService instance of its own to call through,
+     * has one real source of truth to read the delay from instead of a
+     * second hardcoded literal that could silently drift out of sync.
+     */
+    public const AUTOMATED_TURN_RECHECK_DELAY_SECONDS = 2;
 
     /**
      * Issue #419's own Tactical Bot tier -- fallback default for how long
@@ -4865,6 +5763,32 @@ final class GameService
      * before offering its discard decision), so there's no "auto-pass
      * out of a decision" case to cover.
      *
+     * Reported live: "add a way for a bot finishing its turn to advance
+     * to the next turn without requiring a physical browser refresh
+     * somewhere - mostly this is so notifications can be generated when
+     * it is the human player's turn." Every call site below only ever
+     * runs as a side effect of some client's own HTTP request against
+     * this game -- with nobody's browser left polling (see `GET
+     * /games/state` below), nothing would otherwise ever call this again
+     * for a game that still has more automated turns/decisions pending
+     * after this call returns (either because it hit its own
+     * MAX_AUTOMATED_ACTIONS_PER_REQUEST cap, or -- the historical
+     * all-bot-team-decision bug this method's own docblock already
+     * describes fixing -- some other reason a single pass through this
+     * loop doesn't fully settle everything). Whenever this call actually
+     * drove SOMETHING ($lastResult !== null below), it schedules ONE
+     * follow-up recheck of itself via scheduleAutomatedTurnRecheck() --
+     * see that method's own docblock for how the resulting chain
+     * self-perpetuates for as long as there's genuinely more to advance,
+     * and stops the instant there isn't (a human's own turn, or the game
+     * completing), with no cron/external scheduler needed at all.
+     *
+     * @param int $recheckChainDepth ONLY ever passed by
+     *     bin/recheck_automated_turn.php's own re-invocation of this same
+     *     method -- see scheduleAutomatedTurnRecheck()'s own docblock for
+     *     why this needs a hard ceiling (MAX_AUTOMATED_TURN_RECHECK_CHAIN_DEPTH).
+     *     Every ordinary caller (an HTTP route, the cron sweep) leaves
+     *     this at its default, starting a fresh chain of its own.
      * @return array<string, mixed>|null the LAST automated action's own
      *     result (the same shape playMood()/pass()/respondToDecision()
      *     return), which the caller should use IN PLACE of the human's
@@ -4876,7 +5800,7 @@ final class GameService
      *     their turn), in which case the caller keeps the human's own
      *     original result.
      */
-    public function advanceAutomatedTurns(int $gameId): ?array
+    public function advanceAutomatedTurns(int $gameId, int $recheckChainDepth = 0): ?array
     {
         $botGamePlayerIds = $this->botGamePlayerIds($gameId);
         $tacticalBotGamePlayerIds = $this->tacticalBotGamePlayerIds($gameId);
@@ -4968,7 +5892,7 @@ final class GameService
 
                 if ($targetGamePlayerId !== null && in_array($targetGamePlayerId, $botGamePlayerIds, true)) {
                     $field = json_decode((string) $decision['field'], true);
-                    $answer = $this->bots->chooseDecisionAnswer($this->boardStates->load($gameId), $field, $targetGamePlayerId, (string) $decision['decision_type']);
+                    $answer = $this->bots->chooseDecisionAnswer($this->boardStates->load($gameId), $field, $targetGamePlayerId, (string) $decision['decision_type'], (int) $batch['played_card_id']);
                     $lastResult = $this->respondToDecision($gameId, $targetGamePlayerId, $answer);
                     continue;
                 }
@@ -5042,6 +5966,23 @@ final class GameService
                 break;
             }
 
+            // "Pause at the start of your turn" (reported live): a real
+            // player who opted into users.pause_before_own_turn has this
+            // set the instant notifyItsYourTurn() hands them the turn --
+            // assertTurnAcknowledged() blocks playMood()/pass() until
+            // they click "Advance Turn" (POST /games/advance-turn ->
+            // acknowledgeTurnStart()), so nothing automated may act for
+            // them either in the meantime. A bot's own users row can
+            // never have this preference on (see notifyItsYourTurn()'s
+            // own docblock), so this never actually fires for
+            // $tacticalBotGamePlayerIds/$botGamePlayerIds below -- it
+            // only ever stops a real, opted-in human's own turn from
+            // being silently auto-passed (see $autoPassGamePlayerIds
+            // further down) before they've had a chance to see it.
+            if ((bool) $round['turn_pending_acknowledgment']) {
+                break;
+            }
+
             if (in_array($currentTurnGamePlayerId, $tacticalBotGamePlayerIds, true)) {
                 // A Tactical Bot with no legal play AT ALL (candidatePlayCardIds()
                 // filtered through isPlayable(), the exact same check the
@@ -5105,7 +6046,10 @@ final class GameService
                     $this->candidatePlayCardIds($state, $currentTurnGamePlayerId),
                     fn (int $cardId) => $this->plays->isPlayable($state, $currentTurnGamePlayerId, $cardId),
                 ));
-                $action = $this->bots->chooseAction($state, $playableCardIds, $currentTurnGamePlayerId, $this->roundWinsStillNeededToWinGame($gameId, $currentTurnGamePlayerId));
+                $action = $this->bots->chooseAction($state, $playableCardIds, $currentTurnGamePlayerId, $this->roundWinsStillNeededToWinGame($gameId, $currentTurnGamePlayerId), $this->roundWinsNeededToWinGameForActivePlayers($gameId, $state));
+                if ((bool) $this->fetchGame($gameId)['diagnostic_mode']) {
+                    $this->logHeuristicBotReasoning($gameId, $state, $currentTurnGamePlayerId, $action);
+                }
                 try {
                     $lastResult = $action !== null
                         ? $this->playMood($gameId, $currentTurnGamePlayerId, $action['card_id'], $action['choices'])
@@ -5151,7 +6095,86 @@ final class GameService
             break; // waiting on a real player who actually has a legal play
         }
 
+        if ($lastResult !== null) {
+            $this->scheduleAutomatedTurnRecheck($gameId, $recheckChainDepth);
+        }
+
         return $lastResult;
+    }
+
+    /**
+     * advanceAutomatedTurns()'s own self-perpetuating, cron-free
+     * follow-up (reported live: "add a way for a bot finishing its turn
+     * to advance to the next turn without requiring a physical browser
+     * refresh somewhere - mostly this is so notifications can be
+     * generated when it is the human player's turn" -- and a direct
+     * follow-up asking for exactly this instead of a crontab entry).
+     * Spawns a detached `bin/recheck_automated_turn.php` process (via
+     * `exec(...)  &`, the exact same fire-and-forget pattern
+     * launchTacticalBotSearchJob() already uses for the Tactical Bot's
+     * own search) that sleeps AUTOMATED_TURN_RECHECK_DELAY_SECONDS, then
+     * calls advanceAutomatedTurns($gameId, $recheckChainDepth + 1) again
+     * on a fresh process/connection, independent of whatever HTTP
+     * request originally triggered the call this is scheduled from.
+     *
+     * The chain is entirely self-terminating with no bookkeeping of its
+     * own needed: that recheck's own advanceAutomatedTurns() call only
+     * schedules ANOTHER one if IT ALSO found something to drive
+     * ($lastResult !== null there too) -- so the chain naturally stops
+     * the instant the game reaches a real player's own turn (nothing
+     * left to advance) or completes, exactly mirroring how the
+     * in-process loop above already stops itself. $recheckChainDepth
+     * exists purely as a hard ceiling (MAX_AUTOMATED_TURN_RECHECK_CHAIN_DEPTH)
+     * against a hypothetical future bug where advanceAutomatedTurns()
+     * keeps reporting genuine progress forever without the game ever
+     * actually settling, which would otherwise spawn a new OS process
+     * roughly every AUTOMATED_TURN_RECHECK_DELAY_SECONDS with nothing to
+     * stop it.
+     *
+     * Deliberately scheduled unconditionally whenever this call drove
+     * anything at all, not just when the caller "might not be polling
+     * again" (there's no reliable way to tell from in here) -- the
+     * common case where a browser IS still actively polling this exact
+     * game just means this recheck's own eventual advanceAutomatedTurns()
+     * call finds nothing new (the poll already got there first) and
+     * quietly doesn't reschedule itself; a harmless, cheap no-op, the
+     * same "cheap even when nothing's actually stuck" reasoning `GET
+     * /games/state`'s own unconditional call already relies on. Multiple
+     * overlapping chains for the same game (e.g. a human's own request
+     * and an in-flight recheck both landing around the same time) are
+     * similarly harmless, not just cheap -- every actual mutation still
+     * goes through playMood()/pass()/etc., each independently serialized
+     * by its own per-game withGameLock() cycle, so redundant concurrent
+     * chains just do repeated no-op work rather than racing each other
+     * unsafely.
+     *
+     * `bin/advance_automated_turns.php` (a periodic cron sweep of every
+     * active game, unrelated to any specific triggering event) remains
+     * available as an optional extra safety net for anyone who wants
+     * one, but is no longer required for this feature to work at all --
+     * this method is what makes it work without any external scheduler.
+     * $spawnAutomatedTurnRecheckProcesses (default true, same shape as
+     * $spawnBotSearchProcesses) lets tests suppress the real subprocess
+     * spawn, since a real one would inherit the test's own environment
+     * and race its foreground assertions against the same DB rows.
+     */
+    private function scheduleAutomatedTurnRecheck(int $gameId, int $recheckChainDepth): void
+    {
+        if ($recheckChainDepth >= self::MAX_AUTOMATED_TURN_RECHECK_CHAIN_DEPTH) {
+            error_log("scheduleAutomatedTurnRecheck({$gameId}): hit MAX_AUTOMATED_TURN_RECHECK_CHAIN_DEPTH, giving up on this chain -- possible engine bug never reaching a settled state");
+
+            return;
+        }
+
+        if (!$this->spawnAutomatedTurnRecheckProcesses) {
+            return;
+        }
+
+        $script = escapeshellarg(dirname(__DIR__, 2) . '/bin/recheck_automated_turn.php');
+        $phpBinary = escapeshellarg(self::cliPhpBinary());
+        $gameIdArg = escapeshellarg((string) $gameId);
+        $depthArg = escapeshellarg((string) ($recheckChainDepth + 1));
+        exec("{$phpBinary} {$script} {$gameIdArg} {$depthArg} > /dev/null 2>&1 &");
     }
 
     /**
@@ -5197,19 +6220,21 @@ final class GameService
     /**
      * advanceAutomatedTurns()'s own helper for the "who goes first" freeze
      * setPlayFirstNextMatchGame() resolves -- games 2/3 of a best-of-three
-     * draft match only (round 1 of THAT game, not the match's very first
-     * game), a genuinely separate frozen-round state from
-     * advanceBotInitialCardPass() immediately above (Closed Team Play's
-     * own blind pregame pass, round 1 of the match's FIRST game) -- the
-     * two never overlap for the same game, but both are tried here
-     * unconditionally for the same reason advanceBotTeamDecision() is
-     * tried unconditionally at the top of the loop: cheap to check, and
-     * "waiting on a real player either way" already covers whichever one
-     * doesn't apply. Left unhandled entirely until this method existed --
-     * a bot-seated draft match's own game 2/3 would otherwise deadlock
-     * forever the instant the previous game's LOSER happened to be a bot,
-     * exactly the "no round exists yet to drive" class of bug issue #360
-     * already fixed once for Team Play's own frozen states (see
+     * match only (round 1 of THAT game, not the match's very first game)
+     * -- either the draft-family's own draft_match_id, or the non-draft
+     * game_matches wrapper (migration 0223, issue #90 follow-up) -- a
+     * genuinely separate frozen-round state from advanceBotInitialCardPass()
+     * immediately above (Closed Team Play's own blind pregame pass, round
+     * 1 of the match's FIRST game). The two never overlap for the same
+     * game, but both are tried here unconditionally for the same reason
+     * advanceBotTeamDecision() is tried unconditionally at the top of the
+     * loop: cheap to check, and "waiting on a real player either way"
+     * already covers whichever one doesn't apply. Left unhandled entirely
+     * until this method existed -- a bot-seated match's own game 2/3
+     * would otherwise deadlock forever the instant the previous game's
+     * LOSING side happened to be entirely bots, exactly the "no round
+     * exists yet to drive" class of bug issue #360 already fixed once for
+     * Team Play's own frozen states (see
      * advanceAutomatedTurns()'s own top-of-loop comment).
      *
      * Bot policy: never opts to go first itself ($playFirst = false) --
@@ -5218,6 +6243,10 @@ final class GameService
      * winner goes first again), deliberately arbitrary and deterministic,
      * matching chooseTeamDecisionProposal()'s own "legal, not strategic"
      * precedent for a decision with no clear strategic bias either way.
+     * For a team-format rematch, this only ever auto-declines once EVERY
+     * member of the losing team is a bot -- a human teammate must always
+     * get their own say, exactly like any other team decision (see
+     * proposeTeamDecision()'s own "either candidate may act").
      *
      * @param int[] $botGamePlayerIds
      * @return array<string, mixed>|null
@@ -5230,28 +6259,40 @@ final class GameService
 
         $game = $this->fetchGame($gameId);
         $matchGameNumber = $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null;
-        if ($game['draft_match_id'] === null || $matchGameNumber === null || $matchGameNumber <= 1) {
+        $isDraftMatchGame = $game['draft_match_id'] !== null;
+        $isGameMatchGame = $game['game_match_id'] !== null;
+        if (
+            $matchGameNumber === null || $matchGameNumber <= 1 || (!$isDraftMatchGame && !$isGameMatchGame)
+            // Already decided -- 'closed_team' keeps current_turn_game_player_id
+            // (and thus $round['round_number'] === 1's own frozen-round
+            // dispatch) NULL well past this point, pending its own
+            // pregame card pass (see advanceBotInitialCardPass(), tried
+            // just before this in the very same loop iteration) -- so
+            // this can otherwise be reached a second time while THAT'S
+            // still in progress, which would call setPlayFirstNextMatchGame()
+            // again and hit its own "already decided" exception instead
+            // of the plain "nothing to do here" this returns.
+            || $game['first_player_choice_user_id'] !== null
+        ) {
             return null;
         }
 
-        $seatsStmt = Connection::get()->prepare('SELECT user_id FROM game_players WHERE game_id = :game_id');
-        $seatsStmt->execute(['game_id' => $gameId]);
-        $seatUserIds = array_map(intval(...), $seatsStmt->fetchAll(PDO::FETCH_COLUMN));
-
-        $previousWinnerUserId = $this->previousMatchGameWinnerUserId((int) $game['draft_match_id'], $matchGameNumber);
-        $previousLoserUserId = $previousWinnerUserId !== null
-            ? ($seatUserIds[0] === $previousWinnerUserId ? ($seatUserIds[1] ?? $seatUserIds[0]) : $seatUserIds[0])
-            : null;
-        if ($previousLoserUserId === null) {
+        $previousWinnerUserId = $isDraftMatchGame
+            ? $this->previousMatchGameWinnerUserId('draft_match_id', (int) $game['draft_match_id'], $matchGameNumber)
+            : $this->previousMatchGameWinnerUserId('game_match_id', (int) $game['game_match_id'], $matchGameNumber);
+        if ($previousWinnerUserId === null) {
             return null; // shouldn't happen once $matchGameNumber > 1 -- see previousMatchGameWinnerUserId()'s own docblock
         }
 
-        $loserGamePlayerId = $this->gamePlayerIdFor($gameId, $previousLoserUserId);
-        if ($loserGamePlayerId === null || !in_array($loserGamePlayerId, $botGamePlayerIds, true)) {
-            return null; // the previous game's loser is a real player -- wait for them
+        $loserUserIds = $this->previousMatchGameLoserUserIds($gameId, (string) $game['format'], $previousWinnerUserId);
+        foreach ($loserUserIds as $loserUserId) {
+            $loserGamePlayerId = $this->gamePlayerIdFor($gameId, $loserUserId);
+            if ($loserGamePlayerId === null || !in_array($loserGamePlayerId, $botGamePlayerIds, true)) {
+                return null; // at least one seat on the losing side is a real player -- wait for them
+            }
         }
 
-        $this->setPlayFirstNextMatchGame($gameId, $previousLoserUserId, false);
+        $this->setPlayFirstNextMatchGame($gameId, $loserUserIds[0], false);
 
         return ['first_player_choice_user_id' => $previousWinnerUserId];
     }
@@ -5843,7 +6884,22 @@ final class GameService
             $teammateUserId = $this->openTeamPlayTeammateUserId($gameId, $format, $botUserId);
             $pickableCardIds = $this->pickableDraftPoolFor($draftMatchId, $botUserId, $teammateUserId);
             $minDeckSize = self::draftMinDeckSizeFor($deckType);
-            $deckCardIds = $this->bots->chooseDraftDeck($pickableCardIds, $minDeckSize, $this->draftBotScoringData());
+            // Sealed Pool of the Day (issue #520 follow-up: "since we
+            // aren't tracking standings for sealed pool of the day,
+            // let's allow practice bots for those") is the only
+            // PERIODIC_SEALED_POOL_DECK_TYPES member a bot can ever
+            // reach here (botsSupportedFor() still excludes Weekly
+            // Sealed Pool entirely, so $deckType is never
+            // 'weekly_sealed_pool' at this point) -- passing its own
+            // PERIODIC_SEALED_POOL_RARITY_DECK_CAPS makes
+            // chooseDraftDeck() build a deck that's guaranteed to clear
+            // submitDraftDeck()'s own rarity-cap check below, rather
+            // than risk the "silent, permanent stall" an uncaught
+            // over-cap rejection would cause.
+            $rarityCaps = array_key_exists($deckType, self::PERIODIC_SEALED_POOL_DECK_TYPES)
+                ? self::PERIODIC_SEALED_POOL_RARITY_DECK_CAPS
+                : null;
+            $deckCardIds = $this->bots->chooseDraftDeck($pickableCardIds, $minDeckSize, $this->draftBotScoringData(), $rarityCaps);
 
             $this->submitDraftDeck($gameId, $botUserId, $deckCardIds);
 
@@ -6059,10 +7115,18 @@ final class GameService
      *   request) will check back later exactly the same way.
      * - A job 'running' but past its own budget + grace -> presumed
      *   crashed (a dev-server restart, PHP-FPM recycling the worker that
-     *   spawned it, etc.) -- marked 'failed' here, and this method falls
-     *   back to playing immediately via the ordinary fast heuristic bot
+     *   spawned it, or -- per migration 0283's own docblock -- a shared
+     *   host's own process supervisor killing the detached search process
+     *   outright the moment the launching request ended, etc.) -- marked
+     *   'failed' here. If that job's own periodic checkpoint (see
+     *   SearchBotPlayerService::chooseActionWithReasoning()'s own
+     *   $onProgress) ever landed (best_action_recorded_at is non-null),
+     *   plays that recorded best-so-far action instead of discarding it
+     *   (playRecoveredPartialSearchResult()); otherwise -- no checkpoint
+     *   ever landed at all, so there's nothing to recover -- falls back
+     *   to playing immediately via the ordinary fast heuristic bot
      *   instead, so the game is never left stuck waiting on a dead
-     *   process. Also flips on $tacticalFallbackGamePlayerIds[$gamePlayerId]
+     *   process either way. Also flips on $tacticalFallbackGamePlayerIds[$gamePlayerId]
      *   (passed in BY REFERENCE from advanceAutomatedTurns()'s own local,
      *   per-call-only tracking, never persisted) -- a bot's own turn can
      *   span several plays (extra grants), and once one has been judged
@@ -6094,6 +7158,10 @@ final class GameService
             $this->botSearchJobs->markFailed($job['id'], 'stale (exceeded its own time budget + grace, presumed crashed)');
             $tacticalFallbackGamePlayerIds[$gamePlayerId] = true;
 
+            if ($job['best_action_recorded_at'] !== null) {
+                return $this->playRecoveredPartialSearchResult($gameId, $gamePlayerId, $job['best_action_card_id'], $job['best_action_choices']);
+            }
+
             return $this->playViaHeuristicBotFallback($gameId, $gamePlayerId);
         }
 
@@ -6110,11 +7178,87 @@ final class GameService
             $this->candidatePlayCardIds($state, $gamePlayerId),
             fn (int $cardId) => $this->plays->isPlayable($state, $gamePlayerId, $cardId),
         ));
-        $action = $this->bots->chooseAction($state, $playableCardIds, $gamePlayerId, $this->roundWinsStillNeededToWinGame($gameId, $gamePlayerId));
+        $action = $this->bots->chooseAction($state, $playableCardIds, $gamePlayerId, $this->roundWinsStillNeededToWinGame($gameId, $gamePlayerId), $this->roundWinsNeededToWinGameForActivePlayers($gameId, $state));
+        // A Tactical Bot's own turn landing here means its own search had
+        // nothing recoverable at all (see advanceTacticalBotSearch()'s
+        // own docblock) -- logging the heuristic fallback's OWN reasoning
+        // when diagnostic_mode is on means this turn is no longer a total
+        // blank in the reasoning dialog, just a different (coarser) kind
+        // of reasoning than a completed search would have logged.
+        if ((bool) $this->fetchGame($gameId)['diagnostic_mode']) {
+            $this->logHeuristicBotReasoning($gameId, $state, $gamePlayerId, $action);
+        }
 
-        return $action !== null
-            ? $this->playMood($gameId, $gamePlayerId, $action['card_id'], $action['choices'])
-            : $this->pass($gameId, $gamePlayerId, automated: true);
+        // Same "never let a bot's own broken play attempt permanently
+        // break a game" guard advanceAutomatedTurns() already has around
+        // its own identical playMood()/pass() call -- caught live: this
+        // exact call site is what's left running a broken play forever
+        // once a game leans on the Tactical Bot (advanceTacticalBotSearch()'s
+        // own stale-job fallback lands here), since it used to have no
+        // catch of its own at all. See advanceAutomatedTurns()'s own catch
+        // block for the full reasoning; identical here, just a different
+        // caller.
+        try {
+            return $action !== null
+                ? $this->playMood($gameId, $gamePlayerId, $action['card_id'], $action['choices'])
+                : $this->pass($gameId, $gamePlayerId, automated: true);
+        } catch (Throwable $e) {
+            error_log("playViaHeuristicBotFallback({$gameId}): bot {$gamePlayerId}'s own play attempt failed, passing instead -- " . $e);
+
+            return $this->pass($gameId, $gamePlayerId, automated: true);
+        }
+    }
+
+    /**
+     * A stale/crashed job's own last periodic checkpoint (migration
+     * 0283), applied in place of the plain heuristic bot -- see
+     * advanceTacticalBotSearch()'s own docblock for why this exists.
+     *
+     * Reported live: BotSage auto-passed at the start of a fresh turn
+     * despite Regret and Rationalization both sitting legally playable in
+     * its hand. Root cause: job 324's own background process HAD already
+     * played its recorded checkpoint (Creativity) successfully via its
+     * own playMood() call, but was killed by the shared host (see
+     * runTacticalBotSearchJob()'s own docblock) before it could reach its
+     * very next line, markDone() -- leaving the job row stuck at
+     * status='running' forever, since nothing else ever revisits a
+     * SPECIFIC job id again once its own turn has moved on. The next time
+     * this exact seat got a turn (a new round, hours later),
+     * advanceTacticalBotSearch() found that same orphaned row, correctly
+     * judged it long stale, and retried its checkpoint -- Creativity,
+     * already played hours earlier and nowhere to be found -- throwing
+     * the IllegalPlayException caught below. So the assumption this
+     * docblock used to state ("nothing else can have mutated the board
+     * since the checkpoint was taken, this seat's own turn is still open
+     * the entire time") does not actually hold: a checkpoint can outlive
+     * the very turn it was recorded for. A stale/already-applied
+     * checkpoint says nothing about whether the CURRENT board has a
+     * legal play, so falling back to a blind pass (as this used to)
+     * threw away Regret/Rationalization along with the bad checkpoint.
+     * Falling back to the ordinary heuristic bot instead -- exactly what
+     * runTacticalBotSearchJob()'s own catch block already does for an
+     * analogous failure -- makes a fresh decision from the board as it
+     * actually stands right now, and safely passes on its own if that
+     * really does turn out to have nothing playable.
+     *
+     * @param ?array<string, mixed> $choices
+     */
+    private function playRecoveredPartialSearchResult(int $gameId, int $gamePlayerId, ?int $cardId, ?array $choices): array
+    {
+        if ((bool) $this->fetchGame($gameId)['diagnostic_mode']) {
+            $action = $cardId !== null ? ['card_id' => $cardId, 'choices' => $choices ?? []] : null;
+            $this->logTacticalBotReasoning($gameId, $gamePlayerId, $action, ['excluded_by_heuristic' => [], 'candidates' => []], recoveredFromStalledSearch: true);
+        }
+
+        try {
+            return $cardId !== null
+                ? $this->playMood($gameId, $gamePlayerId, $cardId, $choices ?? [])
+                : $this->pass($gameId, $gamePlayerId, automated: true);
+        } catch (Throwable $e) {
+            error_log("playRecoveredPartialSearchResult({$gameId}): bot {$gamePlayerId}'s own recovered play attempt failed, falling back to the heuristic bot -- " . $e);
+
+            return $this->playViaHeuristicBotFallback($gameId, $gamePlayerId);
+        }
     }
 
     /**
@@ -6157,9 +7301,42 @@ final class GameService
         }
 
         $script = escapeshellarg(dirname(__DIR__, 2) . '/bin/run_bot_search.php');
-        $phpBinary = escapeshellarg(PHP_BINARY);
+        $phpBinary = escapeshellarg(self::cliPhpBinary());
         $jobIdArg = escapeshellarg((string) $jobId);
         exec("{$phpBinary} {$script} {$jobIdArg} > /dev/null 2>&1 &");
+    }
+
+    /**
+     * The CLI-capable `php` binary these two `exec()`-spawned background
+     * scripts are run with -- NOT unconditionally `PHP_BINARY`, despite
+     * that constant looking like exactly the right thing ("the binary
+     * currently running this same PHP version"). Reported live: once
+     * `bin/`'s own scripts were actually reaching the deployed server
+     * (migration 0287's own fix), `exec()`'s own spawned process started
+     * throwing "strict_types declaration must be the very first
+     * statement" -- on a file whose bytes are provably fine (a leading
+     * shebang line, then `<?php`, then `declare(strict_types=1);`,
+     * byte-for-byte identical to every other `bin/` script that already
+     * worked). `PHP_BINARY` is only guaranteed to be a real, directly-
+     * executable CLI binary under the CLI SAPI itself; under PHP-FPM
+     * (this app's own real request-serving SAPI, per `deploy.yml`'s own
+     * "Set up PHP" step and cPanel's MultiPHP Manager), it instead
+     * resolves to the FPM master's own binary path -- which is not a
+     * script runner at all, and evidently mishandles a leading shebang
+     * line when handed one directly, producing this exact confusing
+     * parse error rather than a clean "not a valid PHP CLI invocation"
+     * one. `PHP_CLI_BINARY` (optional, `.env`) lets a deployment point
+     * this at the ACTUAL CLI binary for its own PHP version (e.g. a
+     * cPanel EasyApache path like `/opt/cpanel/ea-php83/root/usr/bin/php`
+     * -- found via `php -v`/`which php` over SSH, or cPanel's own MultiPHP
+     * Manager) when `PHP_BINARY` alone doesn't already resolve to one;
+     * falling back to `PHP_BINARY` keeps every existing environment
+     * (local dev, CI, anywhere already invoking this from a genuine CLI
+     * context) working unchanged.
+     */
+    private static function cliPhpBinary(): string
+    {
+        return Config::get('PHP_CLI_BINARY', PHP_BINARY);
     }
 
     /**
@@ -6196,6 +7373,15 @@ final class GameService
             return;
         }
 
+        // Stamped immediately on boot, before the search itself even
+        // starts -- see migration 0283's own docblock. A stale job whose
+        // heartbeat_at is STILL null once advanceTacticalBotSearch()'s
+        // grace period elapses means this method's own process never got
+        // even this far (the shared-hosting exec()-survival theory that
+        // prompted this column), as opposed to one that started and then
+        // died partway through the search below.
+        $this->botSearchJobs->recordHeartbeat($jobId);
+
         try {
             $state = $this->boardStates->load($job['game_id']);
             if ($state->currentPlayerId() !== $job['game_player_id']) {
@@ -6208,7 +7394,31 @@ final class GameService
                 $this->candidatePlayCardIds($state, $job['game_player_id']),
                 fn (int $cardId) => $this->plays->isPlayable($state, $job['game_player_id'], $cardId),
             ));
-            $action = $this->tacticalBots->chooseAction($state, $playableCardIds, $job['game_player_id'], (float) $job['time_budget_seconds'], $this->roundWinsStillNeededToWinGame($job['game_id'], $job['game_player_id']));
+            $roundWinsNeeded = $this->roundWinsStillNeededToWinGame($job['game_id'], $job['game_player_id']);
+            $roundWinsNeededByPlayer = $this->roundWinsNeededToWinGameForActivePlayers($job['game_id'], $state);
+
+            // Periodic checkpoint (migration 0283) -- see
+            // SearchBotPlayerService::chooseActionWithReasoning()'s own
+            // $onProgress docblock. Refreshes heartbeat_at too, since a
+            // job still reaching this callback is proof the process is
+            // genuinely still alive, not just that it once booted.
+            $onProgress = function (?array $action) use ($jobId): void {
+                $this->botSearchJobs->recordHeartbeat($jobId);
+                $this->botSearchJobs->recordBestActionSoFar($jobId, $action['card_id'] ?? null, $action['choices'] ?? null);
+            };
+
+            // Diagnostic mode (reported live: "a button to show the
+            // 'reasoning' behind every play the bot has made") -- only
+            // ever pays for the extra reasoning bookkeeping (never an
+            // extra rollout/simulation, see chooseActionWithReasoning()'s
+            // own docblock) when this specific game opted in.
+            if ((bool) $this->fetchGame($job['game_id'])['diagnostic_mode']) {
+                $result = $this->tacticalBots->chooseActionWithReasoning($state, $playableCardIds, $job['game_player_id'], (float) $job['time_budget_seconds'], $roundWinsNeeded, $roundWinsNeededByPlayer, $onProgress);
+                $action = $result['action'];
+                $this->logTacticalBotReasoning($job['game_id'], $job['game_player_id'], $action, $result['reasoning']);
+            } else {
+                $action = $this->tacticalBots->chooseAction($state, $playableCardIds, $job['game_player_id'], (float) $job['time_budget_seconds'], $roundWinsNeeded, $roundWinsNeededByPlayer, $onProgress);
+            }
 
             if ($action !== null) {
                 $this->playMood($job['game_id'], $job['game_player_id'], $action['card_id'], $action['choices']);
@@ -6233,6 +7443,360 @@ final class GameService
                 error_log("runTacticalBotSearchJob({$jobId}): heuristic fallback ALSO failed -- " . $fallbackError);
             }
         }
+    }
+
+    /**
+     * The plain heuristic bot's own answer to "reasoning text for the
+     * default bots" (reported live, alongside the Tactical Bot partial-
+     * search recovery above -- see BotPlayerService::choicePolicyPathFor()'s
+     * own docblock for the "bespoke_rule"/"generic_resolver" distinction
+     * this records). Only ever called when diagnostic_mode is on for
+     * $gameId, so an ordinary game pays nothing extra -- same
+     * "diagnostic mode only" gate logTacticalBotReasoning()'s own callers
+     * already apply, just for the heuristic bot's own plays instead of
+     * the Tactical Bot's. A far coarser signal than tactical_bot_reasoning's
+     * own per-candidate scoring (there's no comparison of alternatives to
+     * report here, just which policy path fired), but still answers the
+     * two concrete things asked for: "using a specific card override
+     * rule" versus "randomly choosing something or choosing a safe
+     * target by default."
+     *
+     * @param ?array{card_id: int, choices: array<string, mixed>} $action
+     */
+    private function logHeuristicBotReasoning(int $gameId, BoardState $state, int $botGamePlayerId, ?array $action): void
+    {
+        $this->logEvent($gameId, null, $botGamePlayerId, 'heuristic_bot_reasoning', $action['card_id'] ?? null, [
+            'chosen_choices' => $action['choices'] ?? null,
+            'choice_policy_path' => $action !== null ? $this->bots->choicePolicyPathFor($state, $action['card_id']) : null,
+        ]);
+    }
+
+    /**
+     * Diagnostic mode's own "reasoning behind every play" (see
+     * createGame()'s own $diagnosticMode docblock) -- logged as an
+     * ordinary game_events row (event_type 'tactical_bot_reasoning')
+     * rather than a bespoke table, the same append-only JSON-details
+     * history every other action already goes through. Deliberately
+     * calls the private logEvent() helper with $state left at its default
+     * null: logEvent()'s own $state param exists purely to drain
+     * BoardState's pending card-history queues (consumeCardMoves() and
+     * friends) into the event's own details, which only makes sense for
+     * an event that actually MOVED/REVEALED something -- a reasoning
+     * snapshot is logged BEFORE playMood()/pass() ever runs, so passing
+     * the live $state here would risk draining history the REAL
+     * mood_played/turn_passed event (logged moments later, inside
+     * playMood()/pass() itself) still needs to capture.
+     *
+     * `$action`'s own card_id (null for a chosen pass) is stored on the
+     * event row's own `card_id` column, the same convention every other
+     * card-specific event already uses, purely so a future "recent
+     * events" style query could filter/join on it the same way; nothing
+     * currently reads it back that way.
+     *
+     * $recoveredFromStalledSearch (migration 0283) marks a reasoning row
+     * logged from advanceTacticalBotSearch()'s own stale-job fallback
+     * instead of a completed runTacticalBotSearchJob() -- $reasoning is
+     * necessarily empty in that case (just the one checkpointed action,
+     * not a full candidate comparison), so the dialog can tell "the
+     * search never got to finish, this is its own last checkpoint" apart
+     * from an ordinary completed search's own full reasoning.
+     *
+     * @param ?array{card_id: int, choices: array<string, mixed>} $action
+     * @param array{excluded_by_heuristic: int[], candidates: array<int, array{card_id: ?int, choices: ?array<string, mixed>, visits: int, average_reward: float}>} $reasoning
+     */
+    private function logTacticalBotReasoning(int $gameId, int $botGamePlayerId, ?array $action, array $reasoning, bool $recoveredFromStalledSearch = false): void
+    {
+        $this->logEvent($gameId, null, $botGamePlayerId, 'tactical_bot_reasoning', $action['card_id'] ?? null, [
+            'chosen_choices' => $action['choices'] ?? null,
+            'excluded_by_heuristic' => $reasoning['excluded_by_heuristic'],
+            'candidates' => $reasoning['candidates'],
+            'recovered_from_stalled_search' => $recoveredFromStalledSearch,
+        ]);
+    }
+
+    /**
+     * Diagnostic mode's own "a button to show the 'reasoning' behind
+     * every play the bot has made since the human player's previous
+     * play" -- fetched on demand (unlike getState()'s own live
+     * diagnostic_bot_hands) since a full candidate-list-per-decision log
+     * can grow sizable and $viewerUserId's own "since" boundary only
+     * changes once per turn anyway, not every 4-second poll.
+     *
+     * "Since the human player's previous play" is scoped PER VIEWER, not
+     * per game or per round: $viewerUserId's own most recent game_events
+     * row (of ANY type -- a play, a pass, a decision response) marks the
+     * boundary, so two humans watching the same Team Play game who've
+     * been away for different lengths of time each see exactly the bot
+     * turns THEY personally haven't caught up on yet, not a shared
+     * whole-round log. A viewer who hasn't acted at all yet this game
+     * (no own event exists) sees every logged decision from the start.
+     *
+     * Also includes 'heuristic_bot_reasoning' rows (reported live:
+     * "could we add some kind of reasoning text for the default bots?"
+     * -- see BotPlayerService::choicePolicyPathFor()'s own docblock and
+     * GameService::logHeuristicBotReasoning()'s own callers) merged in
+     * chronologically alongside the Tactical Bot's own entries, so a
+     * diagnostic-mode game with a mix of bot tiers shows one combined
+     * timeline rather than two separate dialogs -- `source` on each
+     * returned entry tells the two apart. `excluded_by_heuristic`/
+     * `candidates` are always empty for a 'heuristic' entry (there is no
+     * comparison of alternatives to report, just which policy path
+     * fired); `choice_policy_path` is always null for a 'tactical' entry
+     * that isn't itself a recovered partial search
+     * (`recovered_from_stalled_search`, see playRecoveredPartialSearchResult()'s
+     * own docblock).
+     *
+     * @return array<int, array{
+     *     source: 'tactical'|'heuristic',
+     *     game_player_id: int,
+     *     username: string,
+     *     card_id: ?int,
+     *     choices: ?array<string, mixed>,
+     *     excluded_by_heuristic: int[],
+     *     candidates: array<int, array{card_id: ?int, choices: ?array<string, mixed>, visits: int, average_reward: float}>,
+     *     choice_policy_path: ?string,
+     *     recovered_from_stalled_search: bool,
+     *     created_at: string,
+     * }>
+     */
+    public function tacticalBotReasoningSince(int $gameId, int $viewerUserId): array
+    {
+        $viewerGamePlayerId = $this->gamePlayerIdFor($gameId, $viewerUserId);
+        if ($viewerGamePlayerId === null) {
+            throw new GameStateException("User {$viewerUserId} is not seated in game {$gameId}");
+        }
+
+        $game = $this->fetchGame($gameId);
+        if (!(bool) $game['diagnostic_mode']) {
+            throw new GameStateException("Game {$gameId} does not have diagnostic mode enabled");
+        }
+
+        $pdo = Connection::get();
+        // Reported live, twice now: first "the reasoning dialog showed
+        // empty even right after a Tactical Bot's move was clearly
+        // visible in Recent plays" (fixed by excluding
+        // pending_decision_created from this boundary), then again --
+        // "it still seems to always show [empty] when I click it at the
+        // beginning of my turn... change it to show all reasoning since
+        // the end of my previous turn". A blocklist of "event types that
+        // don't really count as the viewer's own play" (round_grants_computed,
+        // then pending_decision_created too) kept needing a new entry
+        // every time some OTHER bookkeeping event turned out to log
+        // acting_game_player_id = the viewer without them actually having
+        // done anything -- round_grants_computed logs one row per player
+        // at every round's start regardless of whose turn it was;
+        // pending_decision_created's own acting_game_player_id is
+        // whoever now OWNS a scoring-time (Enthusiasm/Passion) or
+        // after-scoring order decision (writeScoringDecisionBatch()'s/
+        // writeAfterScoringOrderDecisionBatch()'s own `$nextDecision['ownerId']`/
+        // `$nextOrderDecision['ownerId']`), not whoever just acted;
+        // match_first_player_decided logs whoever a best-of-three match's
+        // loser chose to go first in the NEXT game, an announcement
+        // about them, not a decision BY them. Any of these landing after
+        // the viewer's own actual last turn (and, per the "beginning of
+        // my turn" report, apparently something along these lines keeps
+        // recurring) silently pushed this boundary past reasoning that
+        // was genuinely new to them.
+        //
+        // Inverted to an ALLOWLIST instead: only an event type that
+        // genuinely represents the viewer having just acted -- ending
+        // their own previous turn, answering a decision, or (Open/Closed
+        // Team Play) taking part in their team's own turn-order/draw-
+        // recipient/leader decision -- ever moves this boundary forward.
+        // Anything else attributed to the viewer's own seat (today's
+        // three blocklisted types above, and whatever else might log
+        // acting_game_player_id = them without it being their own doing
+        // in the future) is simply never consulted here at all, rather
+        // than needing yet another name added to a blocklist every time
+        // one more such type is caught live.
+        $sinceEventId = $this->viewerOwnLastTurnEventId($gameId, $viewerGamePlayerId);
+
+        $reasoningStmt = $pdo->prepare(
+            "SELECT ge.event_type, ge.acting_game_player_id, u.username, ge.card_id, ge.details, ge.created_at
+             FROM game_events ge
+             JOIN game_players gp ON gp.id = ge.acting_game_player_id
+             JOIN users u ON u.id = gp.user_id
+             WHERE ge.game_id = :game_id AND ge.event_type IN ('tactical_bot_reasoning', 'heuristic_bot_reasoning') AND ge.id > :since_id
+             ORDER BY ge.id ASC"
+        );
+        $reasoningStmt->execute(['game_id' => $gameId, 'since_id' => $sinceEventId]);
+        $rows = $reasoningStmt->fetchAll();
+
+        // Every card_id a reasoning event carries (its own, each
+        // candidate's, each heuristically-excluded one) is the PER-GAME
+        // INSTANCE id (game_cards.id) $action['card_id'] always means
+        // throughout BotPlayerService/SearchBotPlayerService -- never
+        // translated before being logged, since nothing about choosing or
+        // applying an action needs anything else. But the frontend
+        // deliberately receives a bare card_id to resolve against its own
+        // already-loaded catalog (deckBuilderCatalogById, keyed by the
+        // CATALOG's own cards.id -- see this method's own docblock on
+        // why candidates aren't fully re-serialized), which only works at
+        // all for the coincidental case where an instance id happens to
+        // also be a valid (if utterly wrong) catalog id. Reported live,
+        // twice, as a play with a real, obviously-not-inert card
+        // (Melancholy, then Awe) reading as "passed" in the dialog: once
+        // an instance id climbs past the catalog's own highest id (which
+        // it eventually always does, as a game accumulates played
+        // cards), cardFromCatalog() finds nothing and the summary line's
+        // own `chosenCard ? 'played '+name : 'passed'` falls to "passed"
+        // -- even though $row['card_id'] itself was never null. Translated
+        // here, once per returned row, via BoardState::catalogCardId()
+        // (the same instance -> catalog id mapping catalogRow() already
+        // uses for every other card lookup) rather than at LOG time,
+        // since the fix needs to reach rows already written before it
+        // shipped, not just new ones.
+        $catalogCardId = $rows !== [] ? $this->boardStates->load($gameId)->catalogCardId(...) : null;
+
+        return array_map(static function (array $row) use ($catalogCardId): array {
+            $details = json_decode((string) $row['details'], true) ?? [];
+            $isTactical = $row['event_type'] === 'tactical_bot_reasoning';
+
+            $candidates = $isTactical ? ($details['candidates'] ?? []) : [];
+            foreach ($candidates as &$candidate) {
+                if (($candidate['card_id'] ?? null) !== null) {
+                    $candidate['card_id'] = $catalogCardId($candidate['card_id']);
+                }
+            }
+            unset($candidate);
+
+            return [
+                'source' => $isTactical ? 'tactical' : 'heuristic',
+                'game_player_id' => (int) $row['acting_game_player_id'],
+                'username' => $row['username'],
+                'card_id' => $row['card_id'] !== null ? $catalogCardId((int) $row['card_id']) : null,
+                'choices' => $details['chosen_choices'] ?? null,
+                'excluded_by_heuristic' => $isTactical ? array_map($catalogCardId, $details['excluded_by_heuristic'] ?? []) : [],
+                'candidates' => $candidates,
+                'choice_policy_path' => $isTactical ? null : ($details['choice_policy_path'] ?? null),
+                'recovered_from_stalled_search' => $isTactical ? (bool) ($details['recovered_from_stalled_search'] ?? false) : false,
+                'created_at' => $row['created_at'],
+            ];
+        }, $rows);
+    }
+
+    /**
+     * The boundary id tacticalBotReasoningSince()/tacticalBotFallbackTurnsSince()
+     * both scope their own "since" queries to -- $viewerGamePlayerId's own
+     * most recent game_events row of a type that genuinely represents
+     * them having just acted (ending their own previous turn, answering a
+     * decision, or -- Open/Closed Team Play -- taking part in their
+     * team's own turn-order/draw-recipient/leader decision). See
+     * tacticalBotReasoningSince()'s own docblock for the full history of
+     * why this is an ALLOWLIST rather than excluding known-bad types one
+     * at a time. 0 (the start of the game) if no such event exists yet.
+     *
+     * Reported live: a full round's worth of Tactical Bot plays (several
+     * extra-play chained moods, ending in an automatic no-legal-play pass)
+     * went entirely missing from the dialog, even though none of the
+     * usual "not really the viewer's own play" culprits applied this
+     * time -- traced to the round's OWN Enthusiasm/Passion "take the
+     * bonus?" decision, resolved by the viewer immediately after those
+     * plays as part of scoring, which logs its own 'pending_decision_resolved'
+     * row (respondToDecision()'s own scoring-time branch) -- genuinely the
+     * viewer's own answer, but to a prompt that happens automatically
+     * right after a round's plays with no turn of the viewer's own in
+     * between, not something that means "I've caught up on watching the
+     * bot's reasoning for this round" the way ending an actual turn does.
+     * Letting it move the boundary hid that entire round's own reasoning
+     * permanently, since there's no later chance to see it uncovered
+     * again. A 'pending_decision_resolved' row tagged 'scoring_trigger'
+     * (mirroring the sibling 'pending_decision_created' event's own use of
+     * that same flag) is now skipped here -- an ordinary MID-TURN decision
+     * resolution (e.g. Intimidation's target revealing a card) has no such
+     * flag and still counts, same as before.
+     *
+     * @return int
+     */
+    private function viewerOwnLastTurnEventId(int $gameId, int $viewerGamePlayerId): int
+    {
+        $stmt = Connection::get()->prepare(
+            "SELECT id, event_type, details FROM game_events WHERE game_id = :game_id AND acting_game_player_id = :player_id
+             AND event_type IN ('mood_played', 'turn_passed', 'pending_decision_resolved', 'disillusionment_color_chosen', 'team_turn_order_decided', 'team_draw_recipient_decided', 'closed_team_leader_decided')
+             ORDER BY id DESC"
+        );
+        $stmt->execute(['game_id' => $gameId, 'player_id' => $viewerGamePlayerId]);
+
+        foreach ($stmt->fetchAll() as $row) {
+            if ($row['event_type'] === 'pending_decision_resolved') {
+                $details = json_decode((string) $row['details'], true) ?? [];
+                if ($details['scoring_trigger'] ?? false) {
+                    continue;
+                }
+            }
+
+            return (int) $row['id'];
+        }
+
+        return 0;
+    }
+
+    /**
+     * Reported live: a Tactical Bot's move was clearly visible in Recent
+     * plays, yet "View bot reasoning" showed empty even once
+     * tacticalBotReasoningSince() itself was already scoped correctly
+     * (see its own docblock for that history) -- suspected root cause: a
+     * stale/crashed search job (or one whose own PHP process threw) falls
+     * back to the ordinary heuristic bot for that turn
+     * (advanceTacticalBotSearch()'s/runTacticalBotSearchJob()'s own
+     * fallback paths), which never logs a tactical_bot_reasoning row at
+     * all -- there is genuinely nothing recorded to show, a materially
+     * different situation from "nothing has happened yet" that the
+     * dialog couldn't previously tell apart.
+     *
+     * Counts every Tactical Bot's own completed turn (a `mood_played`/
+     * `turn_passed` row attributed to one of tacticalBotGamePlayerIds())
+     * since the SAME boundary tacticalBotReasoningSince() uses, then
+     * subtracts however many `tactical_bot_reasoning` rows actually exist
+     * in that same window -- a real search-backed turn always logs
+     * exactly one of those immediately before its own resulting play (see
+     * runTacticalBotSearchJob()'s own docblock), so any turn beyond that
+     * count must have gone through the reasoning-less fallback instead.
+     * An approximation, not an exact per-turn correlation (a single
+     * Tactical Bot turn can itself span several plays via extra grants,
+     * each becoming its own `advanceTacticalBotSearch()` decision -- see
+     * that method's own docblock -- so this counts DECISIONS, the same
+     * granularity the search/fallback choice itself is actually made at,
+     * not "turns" in the everyday sense) -- but good enough to answer the
+     * one question the dialog needs: is there at least one Tactical Bot
+     * play since the viewer's own boundary that the dialog will never be
+     * able to explain, no matter how long they wait or how often they
+     * refresh?
+     *
+     * 0 whenever no Tactical Bot is seated at all (`tacticalBotGamePlayerIds()`
+     * empty) -- nothing here could ever apply to a plain heuristic bot,
+     * which never logs reasoning in the first place regardless of how it
+     * played.
+     */
+    public function tacticalBotFallbackTurnsSince(int $gameId, int $viewerUserId): int
+    {
+        $viewerGamePlayerId = $this->gamePlayerIdFor($gameId, $viewerUserId);
+        if ($viewerGamePlayerId === null) {
+            throw new GameStateException("User {$viewerUserId} is not seated in game {$gameId}");
+        }
+
+        $tacticalBotGamePlayerIds = $this->tacticalBotGamePlayerIds($gameId);
+        if ($tacticalBotGamePlayerIds === []) {
+            return 0;
+        }
+
+        $sinceEventId = $this->viewerOwnLastTurnEventId($gameId, $viewerGamePlayerId);
+        $pdo = Connection::get();
+
+        $placeholders = implode(',', array_fill(0, count($tacticalBotGamePlayerIds), '?'));
+        $turnsStmt = $pdo->prepare(
+            "SELECT COUNT(*) FROM game_events WHERE game_id = ? AND id > ? AND event_type IN ('mood_played', 'turn_passed') AND acting_game_player_id IN ({$placeholders})"
+        );
+        $turnsStmt->execute([$gameId, $sinceEventId, ...$tacticalBotGamePlayerIds]);
+        $tacticalBotTurns = (int) $turnsStmt->fetchColumn();
+
+        $reasoningCountStmt = $pdo->prepare(
+            'SELECT COUNT(*) FROM game_events WHERE game_id = :game_id AND id > :since_id AND event_type = \'tactical_bot_reasoning\''
+        );
+        $reasoningCountStmt->execute(['game_id' => $gameId, 'since_id' => $sinceEventId]);
+        $reasoningCount = (int) $reasoningCountStmt->fetchColumn();
+
+        return max(0, $tacticalBotTurns - $reasoningCount);
     }
 
     /**
@@ -6401,7 +7965,7 @@ final class GameService
 
             if (
                 $game['status'] === 'waiting'
-                && in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck'], true)
+                && in_array($game['deck_type'], self::DRAFT_DECK_TYPES, true)
                 && $game['draft_match_id'] !== null
             ) {
                 return $this->resignFromDraftMatch($gameId, $gamePlayerId, (int) $game['draft_match_id'], $game['format']);
@@ -6868,7 +8432,20 @@ final class GameService
                     // decisions, if any. None of these decision types moves
                     // a card, so this branch's own event has no BoardState
                     // to fold card history from.
-                    $this->logEvent($gameId, $roundId, $gamePlayerId, 'pending_decision_resolved', $playedCardId, $choices);
+                    //
+                    // 'scoring_trigger' (mirroring the sibling
+                    // pending_decision_created event a few lines below)
+                    // marks this as a SCORING-TIME resolution -- reported
+                    // live: answering Enthusiasm's/Passion's own "take the
+                    // bonus?" prompt was pushing viewerOwnLastTurnEventId()'s
+                    // boundary past that entire round's own Tactical Bot
+                    // plays, hiding reasoning for a round the viewer never
+                    // actually got a chance to review (this resolution
+                    // happens automatically right after the round's plays,
+                    // with no turn of the viewer's own in between) -- see
+                    // that method's own docblock for why this flag is what
+                    // excludes it there.
+                    $this->logEvent($gameId, $roundId, $gamePlayerId, 'pending_decision_resolved', $playedCardId, [...$choices, 'scoring_trigger' => true]);
 
                     $state = $this->boardStates->load($gameId);
                     $turnOrder = $this->turnOrderForRound($gameId, $round);
@@ -8545,9 +10122,12 @@ final class GameService
             return;
         }
 
-        $deckTypeStmt = Connection::get()->prepare('SELECT deck_type FROM games WHERE draft_match_id = :match_id LIMIT 1');
+        $deckTypeStmt = Connection::get()->prepare(
+            'SELECT g.deck_type, dm.periodic_sealed_pool_id FROM games g JOIN draft_matches dm ON dm.id = g.draft_match_id WHERE g.draft_match_id = :match_id LIMIT 1'
+        );
         $deckTypeStmt->execute(['match_id' => $draftMatchId]);
-        if ($deckTypeStmt->fetchColumn() === 'chaos_draft') {
+        $matchRow = $deckTypeStmt->fetch();
+        if ($matchRow !== false && $matchRow['deck_type'] === 'chaos_draft') {
             return;
         }
 
@@ -8555,6 +10135,14 @@ final class GameService
 
         $this->bumpLifetimeStats([$winnerUserId], 'match_wins');
         $this->bumpLifetimeStats(array_diff($userIds, [$winnerUserId]), 'match_losses');
+
+        // Weekly Sealed Pool's own persistent standings (issue #520) --
+        // see recordWeeklySealedPoolStandings()'s own docblock for why
+        // this is funneled through here rather than instrumented
+        // separately at each of this method's own 3 call sites.
+        if ($matchRow !== false && $matchRow['deck_type'] === 'weekly_sealed_pool' && $matchRow['periodic_sealed_pool_id'] !== null) {
+            $this->recordWeeklySealedPoolStandings((int) $matchRow['periodic_sealed_pool_id'], $winnerUserId, $userIds);
+        }
     }
 
     /** @param string $column one of user_lifetime_stats' own counter columns -- never user input, so safe to interpolate directly */
@@ -8931,6 +10519,22 @@ final class GameService
         $roundId = (int) $round['id'];
         $pdo = Connection::get();
 
+        // "Pause at the start of your turn" (migration 0275, reported
+        // live) -- captured before ANYTHING below runs (even the
+        // after-scoring order decision's own logEvent() call just below,
+        // which never moves a card so the exact boundary doesn't matter
+        // either way), so it names the last event that existed while the
+        // round that just ended was still actually being played. Carried
+        // onto the new round's own row further down; see
+        // buildGameState()'s own use of it for why. null (not 0) when no
+        // event exists yet at all -- round 1 always has at least one
+        // (its own plays/passes are what triggered scoring in the first
+        // place), so this is purely a defensive fallback, never expected
+        // to actually happen; the new round's own pre_after_scoring_event_id
+        // simply stays NULL in that case, same as it would for any other
+        // reason frozen-board mode doesn't apply.
+        $preAfterScoringEventId = $this->latestEventId($gameId);
+
         $scores = $this->applyScoreSwaps($state, $this->applyChaosScoringBonuses($state, $this->scorer->score($state, $scoringDecisions)));
 
         // Repentance/Scorn's own 'end_of_round' suppression (as opposed to
@@ -9011,8 +10615,10 @@ final class GameService
         }
 
         $resolvedOrders = $this->resolvedAfterScoringOrders($roundId);
+        $beforeAfterScoringHooks = $this->inPlayOwnershipSignature($state);
         $this->applyAfterScoringHooks($state, [$winnerId], $turnOrder, $resolvedOrders);
         $this->applyChaosAfterScoringHooks($state, $scores, [$winnerId], $this->scorer->hurtFeelings($activeScores, $turnOrder));
+        $afterScoringHooksChangedTheBoard = $beforeAfterScoringHooks !== $this->inPlayOwnershipSignature($state);
 
         // Hurt Feelings only exists in games of 3 or more (active) players.
         $hurtFeelingsHolder = count($turnOrder) >= 3 ? $this->scorer->hurtFeelings($activeScores, $turnOrder) : null;
@@ -9058,8 +10664,8 @@ final class GameService
         }
 
         $insertRound = $pdo->prepare(
-            "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, hurt_feelings_game_player_id, current_turn_game_player_id, plays_remaining, pending_play_grants, status)
-             VALUES (:game_id, :round_number, :first_player, :hurt_feelings, :first_player_turn, :plays_remaining, :pending_play_grants, 'in_progress')"
+            "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, hurt_feelings_game_player_id, current_turn_game_player_id, plays_remaining, pending_play_grants, status, pre_after_scoring_event_id)
+             VALUES (:game_id, :round_number, :first_player, :hurt_feelings, :first_player_turn, :plays_remaining, :pending_play_grants, 'in_progress', :pre_after_scoring_event_id)"
         );
         $insertRound->execute([
             'game_id' => $gameId,
@@ -9069,6 +10675,7 @@ final class GameService
             'first_player_turn' => $nextFirstPlayer,
             'plays_remaining' => count($nextRoundGrants),
             'pending_play_grants' => json_encode($nextRoundGrants),
+            'pre_after_scoring_event_id' => $preAfterScoringEventId,
         ]);
         $newRoundId = (int) $pdo->lastInsertId();
         $this->logFreshGrants($gameId, $newRoundId, $nextFirstPlayer, $nextRoundGrants);
@@ -9079,7 +10686,14 @@ final class GameService
         // "your turn" moment, and was missing its own notification entirely
         // until now -- the exact gap that made round-to-round handoffs go
         // silent even though same-round turn advances already worked.
-        $this->notifyItsYourTurn($newRoundId, $nextFirstPlayer);
+        // $afterScoringHooksChangedTheBoard (see inPlayOwnershipSignature()'s
+        // own docblock) is the only thing that can ever open the
+        // pause_before_own_turn gate -- see notifyItsYourTurn()'s own
+        // $worthPausingFor docblock: every other call site (an ordinary
+        // mid-round handoff via updateRoundTurnState(), a fresh game's own
+        // first turn, Awe's skip-scoring round creation) always leaves it
+        // at its default of false.
+        $this->notifyItsYourTurn($newRoundId, $nextFirstPlayer, $afterScoringHooksChangedTheBoard);
 
         return ['round_scored' => true, 'game_completed' => false];
     }
@@ -9147,8 +10761,8 @@ final class GameService
         $seats = $seatStmt->fetchAll();
 
         $insertGame = $pdo->prepare(
-            "INSERT INTO games (format, deck_type, draft_match_id, match_game_number, status, created_by_user_id, wins_needed, default_selections_mode)
-             VALUES (:format, :deck_type, :draft_match_id, :match_game_number, 'waiting', :created_by, :wins_needed, :default_selections_mode)"
+            "INSERT INTO games (format, deck_type, draft_match_id, match_game_number, status, created_by_user_id, wins_needed, default_selections_mode, diagnostic_mode)
+             VALUES (:format, :deck_type, :draft_match_id, :match_game_number, 'waiting', :created_by, :wins_needed, :default_selections_mode, :diagnostic_mode)"
         );
         $insertGame->execute([
             'format' => $game['format'],
@@ -9163,6 +10777,16 @@ final class GameService
             // at the match's own creation (issue #274's per-game, not
             // per-user, decision), not re-chosen game to game.
             'default_selections_mode' => (int) $game['default_selections_mode'],
+            // Reported live: "in best of three matches, the bot
+            // diagnostic mode should be carried forward through all of
+            // the match games" -- decided once at createGame() time
+            // (issue reported live: "add a 'diagnostic mode' checkbox
+            // when creating a game including one or more tactical
+            // bot(s)"), same "chosen once at match creation" reasoning
+            // as default_selections_mode just above, not left to reset
+            // to off (this INSERT's own implicit default) every time a
+            // fresh game row is created for the next game of the match.
+            'diagnostic_mode' => (int) $game['diagnostic_mode'],
         ]);
         $nextGameId = (int) $pdo->lastInsertId();
 
@@ -9316,12 +10940,12 @@ final class GameService
                 format, deck_type, custom_deck_name, custom_deck_card_ids,
                 custom_duel_rules_preset, custom_duel_min_cards, custom_duel_rarity_limits, custom_duel_duplicate_limits,
                 custom_duel_even_color_distribution_rarities, game_match_id, match_game_number,
-                status, created_by_user_id, wins_needed, default_selections_mode
+                status, created_by_user_id, wins_needed, default_selections_mode, diagnostic_mode
              ) VALUES (
                 :format, :deck_type, :custom_deck_name, :custom_deck_card_ids,
                 :duel_rules_preset, :duel_min_cards, :duel_rarity_limits, :duel_duplicate_limits,
                 :duel_even_color_distribution_rarities, :game_match_id, :match_game_number,
-                'waiting', :created_by, :wins_needed, :default_selections_mode
+                'waiting', :created_by, :wins_needed, :default_selections_mode, :diagnostic_mode
              )"
         );
         $insertGame->execute([
@@ -9342,6 +10966,14 @@ final class GameService
             'created_by' => (int) $game['created_by_user_id'],
             'wins_needed' => (int) $game['wins_needed'],
             'default_selections_mode' => (int) $game['default_selections_mode'],
+            // Reported live: "in best of three matches, the bot
+            // diagnostic mode should be carried forward through all of
+            // the match games" -- decided once at createGame() time, the
+            // same "chosen once at match creation" reasoning as
+            // default_selections_mode just above, not left to reset to
+            // off (this INSERT's own implicit default) every time a
+            // fresh game row is created for the next game of the match.
+            'diagnostic_mode' => (int) $game['diagnostic_mode'],
         ]);
         $nextGameId = (int) $pdo->lastInsertId();
 
@@ -9727,6 +11359,43 @@ final class GameService
     }
 
     /**
+     * A compact "did applyAfterScoringHooks()/applyChaosAfterScoringHooks()
+     * actually change anything visible" signature -- every mood cardId
+     * still in play mapped to its own owner, sorted by cardId so the
+     * exact same board always compares equal regardless of internal
+     * iteration order. Reported live: "Pause at the start of your turn"'s
+     * own frozen pre-after-scoring board (see that section's own
+     * docblock) isn't super useful when it's pixel-identical to the live
+     * board a click away -- Recklessness/Bashfulness/Gluttony/Insecurity's
+     * self-tags (discard/return-to-hand/bottom-and-draw) and
+     * "returnsToOwnerAfterScoring" foreign tags are the only ways
+     * applyAfterScoringHooks() ever mutates the board, and every one of
+     * them either removes a card from play or reassigns an in-play
+     * card's own owner -- both fully captured by this one cardId=>ownerId
+     * map. (A Chaos Draft effect that only flips a suppression flag
+     * without moving or reassigning any card -- rather than discarding
+     * or stealing one -- wouldn't register here; deliberately not chased
+     * further, since the reported case, and the overwhelming majority of
+     * real after-scoring effects, are exactly the move/reassign shape
+     * this already covers.) Compared before/after both hook calls in
+     * finishScoringAndAdvance() to decide whether the new round's first
+     * turn is even worth pausing on for a player who opted into
+     * pause_before_own_turn.
+     *
+     * @return array<int, int> cardId => ownerId, sorted by cardId
+     */
+    private function inPlayOwnershipSignature(BoardState $state): array
+    {
+        $signature = [];
+        foreach ($state->moodsInPlay() as $mood) {
+            $signature[$mood->cardId] = $mood->ownerId;
+        }
+        ksort($signature);
+
+        return $signature;
+    }
+
+    /**
      * Non-mutating peek at whether Corruption's "the winner of the
      * current round wins two rounds instead of one" marker is currently
      * set -- see consumeExtraWinMarker(), which clears it once actually
@@ -9832,6 +11501,30 @@ final class GameService
         }
 
         return $winsNeeded - $totalWins;
+    }
+
+    /**
+     * roundWinsStillNeededToWinGame() above, but for EVERY currently
+     * active game_player_id in the round rather than just one specific
+     * player -- BotPlayerService::rationalizationWouldPreventLosingTheGame()'s
+     * own defensive "would playing this deny a RIVAL the game outright"
+     * check (reported live: "strengthen the imperative to hold onto
+     * [Rationalization] until it is useful to rotate hands, or absolutely
+     * necessary not to lose a game") needs every rival's own value, not
+     * just the acting bot's -- unlike the offensive clinch checks
+     * (Rationalization's/Shock's own), which only ever cared about the
+     * acting bot's own side.
+     *
+     * @return array<int, int> game_player_id => round wins still needed
+     */
+    private function roundWinsNeededToWinGameForActivePlayers(int $gameId, BoardState $state): array
+    {
+        $result = [];
+        foreach ($state->activePlayerOrder() as $gamePlayerId) {
+            $result[$gamePlayerId] = $this->roundWinsStillNeededToWinGame($gameId, $gamePlayerId);
+        }
+
+        return $result;
     }
 
     /**
@@ -10776,17 +12469,27 @@ final class GameService
         // (last_move_at, falling back to started_at, then created_at for a
         // game nothing has happened in yet).
         //
-        // gp.resigned_at IS NULL excludes a game THIS caller has personally
-        // resigned from but that's still 'in_progress' for everyone else --
-        // only ever possible for 'standard' format's own 3-4 player
-        // "continue without them" resignation (resignGame()'s own
-        // skipTurnForResignedPlayer() path; every other format/player-count
-        // combination completes the whole game outright on resignation,
-        // already caught by the status check above). Once resigned, a
-        // player can never take another turn in that game (see
-        // advanceTurn()'s active-player filtering) or win it, so from
-        // their own perspective it's just as much history as a completed
-        // game -- listPastGamesForUser() picks it up via the same column.
+        // Reported live: "the completed game already got moved to the
+        // Past Games tab, even though the match is still in progress" --
+        // for a game the caller personally resigned from, this used to
+        // exclude it here UNCONDITIONALLY (gp.resigned_at IS NULL as its
+        // own top-level AND, regardless of the draft/game_match carve-outs
+        // just below), so a resigned game 1 of a still-undecided
+        // best-of-three match moved to Past games immediately even though
+        // the caller was still normally seated (no resignation of their
+        // own) in game 2, sitting right there in this same list. A
+        // resignation only ever completes THIS ONE game outright (or, for
+        // 'standard' format's own 3-4 player "continue without them" path
+        // -- resignGame()'s own skipTurnForResignedPlayer() -- leaves it
+        // 'in_progress' for everyone else); it says nothing about whether
+        // the caller can still act in a LATER game of the same match, so
+        // gp.resigned_at IS NULL now only gates the plain "still active"
+        // disjunct below, exactly like g.status NOT IN (...) already did,
+        // rather than blocking the draft/game_match carve-outs from ever
+        // applying to a resigned game at all. Once the whole match IS
+        // decided, a resigned game (like any other) correctly falls
+        // through to listPastGamesForUser() below, which mirrors this
+        // exact same change.
         //
         // The game_matches LEFT JOIN/OR-clause is issue #90's own
         // non-draft best-of-three match wrapper's exact analog of the
@@ -10800,9 +12503,8 @@ final class GameService
              LEFT JOIN draft_matches dm ON dm.id = g.draft_match_id
              LEFT JOIN game_matches gm ON gm.id = g.game_match_id
              WHERE gp.user_id = :user_id
-               AND gp.resigned_at IS NULL
                AND (
-                 g.status NOT IN ('completed', 'abandoned')
+                 (gp.resigned_at IS NULL AND g.status NOT IN ('completed', 'abandoned'))
                  OR (g.draft_match_id IS NOT NULL AND dm.status != 'completed')
                  OR (g.game_match_id IS NOT NULL AND gm.status != 'completed')
                )
@@ -10819,24 +12521,30 @@ final class GameService
 
     /**
      * The complement of listGamesForUser() above: every 'completed' or
-     * 'abandoned' game NOT still tied to an in-progress draft match (see
-     * that method's own docblock for exactly where the line falls, and
-     * why an 'abandoned' game never actually hits that carve-out in
+     * 'abandoned' game NOT still tied to an in-progress draft/game match
+     * (see that method's own docblock for exactly where the line falls,
+     * and why an 'abandoned' game never actually hits that carve-out in
      * practice), PLUS any game this caller has personally resigned from
-     * (gp.resigned_at IS NOT NULL) regardless of the game's own overall
-     * status -- the complement of listGamesForUser()'s own identical
-     * gp.resigned_at exclusion, for the one case (a 'standard' format 3-4
-     * player game the caller resigned from but that's still 'in_progress'
-     * for everyone else) where that status alone wouldn't already have
-     * routed it here. Sorted most-recently-completed first, the natural
-     * order for a "past games" archive (as opposed to listGamesForUser()'s
-     * own actionability-first ordering, which has no reason to apply once
-     * nothing here is actionable at all). An 'abandoned' game never gets
-     * its own completed_at set (only the draft_matches row it belonged to
-     * does -- see abandonDraftMatch()), and a resigned-but-still-
-     * 'in_progress' game never gets one at all until everyone else
-     * finishes it, so both naturally sort by last_move_at instead, same
-     * as they would anywhere else in the app.
+     * whose own match (if any) is ALSO already decided -- the complement
+     * of listGamesForUser()'s own identical treatment (see that method's
+     * own docblock for the live-reported bug this replaced: a resigned
+     * game used to land here unconditionally, even while a later game of
+     * the very same still-undecided match was sitting in the caller's
+     * main lobby). Still covers the one case status alone wouldn't --
+     * a 'standard' format 3-4 player game the caller resigned from but
+     * that's still 'in_progress' for everyone else -- exactly as before,
+     * just now equally subject to the match-undecided carve-out (moot in
+     * practice for that specific case, since a 3-4 player 'standard' game
+     * never gets a game_match_id at all -- see createGame()'s own
+     * $createGameMatch gate). Sorted most-recently-completed first, the
+     * natural order for a "past games" archive (as opposed to
+     * listGamesForUser()'s own actionability-first ordering, which has no
+     * reason to apply once nothing here is actionable at all). An
+     * 'abandoned' game never gets its own completed_at set (only the
+     * draft_matches row it belonged to does -- see abandonDraftMatch()),
+     * and a resigned-but-still-'in_progress' game never gets one at all
+     * until everyone else finishes it, so both naturally sort by
+     * last_move_at instead, same as they would anywhere else in the app.
      *
      * @return array<int, array{id:int,format:string,deck_type:string,status:string,wins_needed:int,created_at:string,started_at:?string,last_move_at:?string,completed_at:?string,players:array<int,array{user_id:int,username:string,seat_order:int}>,is_your_turn:bool,is_awaiting_your_response:bool,current_turn_username:?string,awaiting_response_usernames:array<int,string>,winner_usernames:array<int,string>,draft_match_id:?int,match_game_number:?int,draft_match:?array{status:string,your_wins:int,opponent_wins:int,games_to_win:int,winner_username:?string}}>
      */
@@ -10850,14 +12558,9 @@ final class GameService
              LEFT JOIN draft_matches dm ON dm.id = g.draft_match_id
              LEFT JOIN game_matches gm ON gm.id = g.game_match_id
              WHERE gp.user_id = :user_id
-               AND (
-                 gp.resigned_at IS NOT NULL
-                 OR (
-                   g.status IN ('completed', 'abandoned')
-                   AND (g.draft_match_id IS NULL OR dm.status = 'completed')
-                   AND (g.game_match_id IS NULL OR gm.status = 'completed')
-                 )
-               )
+               AND (gp.resigned_at IS NOT NULL OR g.status IN ('completed', 'abandoned'))
+               AND (g.draft_match_id IS NULL OR dm.status = 'completed')
+               AND (g.game_match_id IS NULL OR gm.status = 'completed')
              ORDER BY COALESCE(g.completed_at, g.last_move_at, g.started_at, g.created_at) DESC, g.id DESC"
         );
         $gameIdsStmt->execute(['user_id' => $userId]);
@@ -10988,6 +12691,82 @@ final class GameService
         }
 
         return $expiredCount;
+    }
+
+    /**
+     * bin/advance_automated_turns.php's own cron entry point (reported
+     * live: "add a way for a bot finishing its turn to advance to the
+     * next turn without requiring a physical browser refresh somewhere -
+     * mostly this is so notifications can be generated when it is the
+     * human player's turn"). Every OTHER call site for
+     * advanceAutomatedTurns() (see that method's own docblock, and "Driving
+     * a bot's turn" in this file's own top-of-file docblock) only ever
+     * runs as a side effect of some client's own HTTP request against
+     * that specific game -- a human's own play/pass/etc., or (for the
+     * all-bot-team-decision deadlock case) that game's own `GET
+     * /games/state` poll timer, which only ticks while a browser has that
+     * game's board open. A bot's turn (or an all-bot team decision, or an
+     * auto-pass/auto-apply-scoring-bonus opt-in) landing in a game NOBODY
+     * is currently looking at -- every human seat's own tab closed, no
+     * spectator polling it either -- has no such request left to ride
+     * along on, so it simply sits there, unresolved, until someone
+     * eventually reopens it; and since `NotificationService::notifyYourTurn()`
+     * only ever fires from INSIDE that resolution (see
+     * notifyGamePlayersItsYourTurn()), the human waiting on that bot never
+     * gets told their turn arrived until they just so happen to check back
+     * on their own.
+     *
+     * Run every active (non-terminal) game through advanceAutomatedTurns()
+     * directly, independent of any request -- a periodic sweep rather than
+     * a targeted one, since there's no cheap way to know in advance which
+     * games currently have something automated pending without loading
+     * each one anyway, and advanceAutomatedTurns() itself already early-outs
+     * fast (two lookups) for the common case of a game with nothing
+     * automated to do at all. `'waiting'` is included alongside
+     * `'in_progress'` for the exact same reason `GET /games/state`'s own
+     * call site is unconditional (see advanceBotDraftTurn()'s own
+     * docblock) -- a still-drafting/deck-building bot-seated game needs
+     * this too, before a round (or even `game_rounds`) exists at all.
+     * `'completed'`/`'abandoned'` games are skipped outright -- nothing
+     * left to advance.
+     *
+     * Each call is independently wrapped in the exact same
+     * `try`/`catch (GameStateException)` "best-effort, discard on failure"
+     * pattern every other advanceAutomatedTurns() call site already uses
+     * (most plausibly `withGameLock()`'s own "busy" timeout, e.g. this
+     * sweep racing a real player's own concurrent request against the
+     * same game) -- one game's own transient failure must never abort the
+     * sweep for every other game queued up behind it. Safe to run
+     * concurrently with any live request, or with a slower-than-expected
+     * previous run of this same script, purely because
+     * advanceAutomatedTurns() itself already drives every actual mutation
+     * through playMood()/pass()/etc., each independently serialized by its
+     * own per-game withGameLock() -- nothing here adds, or needs, any
+     * locking of its own.
+     *
+     * @return int how many games this sweep actually found something
+     *   automated to advance in (advanceAutomatedTurns() returned
+     *   non-null) -- purely informational, for the cron script's own
+     *   one-line log summary; not a count of every game examined.
+     */
+    public function advanceAutomatedTurnsForAllActiveGames(): int
+    {
+        $idsStmt = Connection::get()->query("SELECT id FROM games WHERE status IN ('waiting', 'in_progress')");
+        $gameIds = array_map(intval(...), $idsStmt->fetchAll(PDO::FETCH_COLUMN));
+
+        $advancedCount = 0;
+        foreach ($gameIds as $gameId) {
+            try {
+                if ($this->advanceAutomatedTurns($gameId) !== null) {
+                    $advancedCount++;
+                }
+            } catch (GameStateException) {
+                // Best-effort, same as every other advanceAutomatedTurns()
+                // call site -- see this method's own docblock.
+            }
+        }
+
+        return $advancedCount;
     }
 
     /**
@@ -11243,12 +13022,13 @@ final class GameService
      *    submitted yet -- see submitInitialCardPass()/"Closed Team Play"
      *    in php-app/README.md. Checked first and returns early since this
      *    blocks everything else in the game.
-     * 2. (format 'draft', match_game_number > 1 only) round 1 is still
-     *    frozen (current_turn_game_player_id NULL) awaiting your own
-     *    setPlayFirstNextMatchGame() call -- only true for the previous
-     *    game's loser, the one setPlayFirstNextMatchGame() actually lets
-     *    act; see that method's own docblock and "Quick Draft"/"Winston
-     *    Draft"/"Grid Draft" in php-app/README.md.
+     * 2. (any format, match_game_number > 1 only) round 1 is still frozen
+     *    (current_turn_game_player_id NULL) awaiting your own
+     *    setPlayFirstNextMatchGame() call -- only true for a member of
+     *    the previous game's losing side, the one(s)
+     *    setPlayFirstNextMatchGame() actually lets act; see that method's
+     *    own docblock and "Quick Draft"/"Winston Draft"/"Grid Draft"/
+     *    "Best of three" in php-app/README.md.
      * 3. (team/closed_team) your team has an open turn_order/draw_recipient
      *    decision (activeTeamDecision()) and you're one of its candidates
      *    -- either phase 'propose' (any candidate may act) or phase
@@ -11273,7 +13053,7 @@ final class GameService
             }
         }
 
-        if ($format === 'draft' && $this->isAwaitingFirstPlayerChoiceFrom($gameId, $gamePlayerId)) {
+        if ($this->isAwaitingFirstPlayerChoiceFrom($gameId, $gamePlayerId)) {
             return true;
         }
 
@@ -11313,17 +13093,24 @@ final class GameService
 
     /**
      * isAwaitingResponseFrom()'s own case 2 -- true only for $gamePlayerId
-     * if this is game 2/3 of a best-of-three draft match, its round 1 is
-     * still frozen (current_turn_game_player_id NULL, see startGame()'s
-     * own freeze), and $gamePlayerId belongs to the previous game's
-     * loser -- the only player setPlayFirstNextMatchGame() actually lets
-     * act. False for game 1 (nothing to freeze on) and once the choice
-     * has been made (round unfrozen).
+     * if this is game 2/3 of a best-of-three match (draft-family or the
+     * non-draft game_matches wrapper), its round 1's first-player choice
+     * genuinely hasn't been made yet, and $gamePlayerId belongs to the
+     * previous game's losing side -- the only player(s)
+     * setPlayFirstNextMatchGame() actually lets act. "Genuinely hasn't
+     * been made yet" needs BOTH current_turn_game_player_id AND
+     * games.first_player_choice_user_id still NULL, not either alone:
+     * current_turn stays NULL by itself once 'team'/'closed_team' has
+     * actually decided (pending that format's own next pregame step, see
+     * setPlayFirstNextMatchGame()'s own docblock), and first_player_choice_user_id
+     * alone can't distinguish "still frozen, awaiting an answer" from an
+     * already-unfrozen round that (for some other, unrelated reason) just
+     * never got one. False for game 1 (nothing to freeze on).
      */
     private function isAwaitingFirstPlayerChoiceFrom(int $gameId, int $gamePlayerId): bool
     {
         $stmt = Connection::get()->prepare(
-            'SELECT g.draft_match_id, g.match_game_number, gr.current_turn_game_player_id
+            'SELECT g.draft_match_id, g.game_match_id, g.format, g.match_game_number, g.first_player_choice_user_id, gr.current_turn_game_player_id
              FROM games g
              JOIN game_rounds gr ON gr.game_id = g.id AND gr.round_number = 1
              WHERE g.id = :game_id'
@@ -11334,23 +13121,28 @@ final class GameService
         if (
             $row === false
             || $row['current_turn_game_player_id'] !== null
-            || $row['draft_match_id'] === null
+            || $row['first_player_choice_user_id'] !== null
+            || ($row['draft_match_id'] === null && $row['game_match_id'] === null)
             || $row['match_game_number'] === null
             || (int) $row['match_game_number'] <= 1
         ) {
             return false;
         }
 
-        $previousWinnerUserId = $this->previousMatchGameWinnerUserId((int) $row['draft_match_id'], (int) $row['match_game_number']);
+        $previousWinnerUserId = $row['draft_match_id'] !== null
+            ? $this->previousMatchGameWinnerUserId('draft_match_id', (int) $row['draft_match_id'], (int) $row['match_game_number'])
+            : $this->previousMatchGameWinnerUserId('game_match_id', (int) $row['game_match_id'], (int) $row['match_game_number']);
         if ($previousWinnerUserId === null) {
             return false;
         }
+
+        $loserUserIds = $this->previousMatchGameLoserUserIds($gameId, (string) $row['format'], $previousWinnerUserId);
 
         $seatsStmt = Connection::get()->prepare('SELECT id, user_id FROM game_players WHERE game_id = :game_id');
         $seatsStmt->execute(['game_id' => $gameId]);
         foreach ($seatsStmt->fetchAll() as $seatRow) {
             if ((int) $seatRow['id'] === $gamePlayerId) {
-                return (int) $seatRow['user_id'] !== $previousWinnerUserId;
+                return in_array((int) $seatRow['user_id'], $loserUserIds, true);
             }
         }
 
@@ -11979,6 +13771,14 @@ final class GameService
      * deck_type's own analog does, rather than as a special case a reader
      * has to reconcile against those.
      *
+     * Also serves Sealed Pool of the Day (issue #520, `deck_type ===
+     * 'sealed_pool_of_the_day'`) -- deck-building there is mechanically
+     * identical (same draft_match_players columns, same deck_building
+     * status transition), so getState() routes both deck_types through
+     * this exact same method/response field rather than a parallel copy;
+     * the only difference (a per-rarity deck cap) is surfaced via this
+     * method's own 'rarity_caps' field, null for ordinary Sealed Deck.
+     *
      * @param array<string, mixed> $game
      */
     private function sealedDeckStateFor(array $game, int $viewerUserId): array
@@ -12052,6 +13852,22 @@ final class GameService
                 null,
                 $teammateUserId,
             );
+            // Sealed Pool of the Day/Weekly Sealed Pool (issue #520) only --
+            // omitted (not just null) for ordinary Sealed Deck, which has
+            // no per-rarity deck cap at all. Merged onto 'deck_building'
+            // itself (rather than living as a sibling field on $state)
+            // purely so renderDraftDeckBuilding() in game.js -- called
+            // with just this one sub-object, shared verbatim across
+            // every draft deck_type's own dispatch -- can read it
+            // without every caller needing a second parameter threaded
+            // through just for this. Lets the deck-building UI show/
+            // enforce the same PERIODIC_SEALED_POOL_RARITY_DECK_CAPS
+            // submitDraftDeck() itself validates against, rather than
+            // the player only finding out by having a submission
+            // rejected.
+            if (array_key_exists($game['deck_type'], self::PERIODIC_SEALED_POOL_DECK_TYPES)) {
+                $state['deck_building']['rarity_caps'] = self::PERIODIC_SEALED_POOL_RARITY_DECK_CAPS;
+            }
         }
 
         return $state;
@@ -13436,7 +15252,14 @@ final class GameService
                 $response['rotisserie_draft'] = $this->rotisserieDraftStateFor($game, $viewerUserId);
             } elseif ($game['deck_type'] === 'tiered_rotisserie_draft' && $game['draft_match_id'] !== null) {
                 $response['tiered_rotisserie_draft'] = $this->tieredRotisserieDraftStateFor($game, $viewerUserId);
-            } elseif ($game['deck_type'] === 'sealed_deck' && $game['draft_match_id'] !== null) {
+            } elseif (($game['deck_type'] === 'sealed_deck' || array_key_exists($game['deck_type'], self::PERIODIC_SEALED_POOL_DECK_TYPES)) && $game['draft_match_id'] !== null) {
+                // Sealed Pool of the Day (issue #520) reuses the exact
+                // same 'sealed_deck' response field/UI as ordinary Sealed
+                // Deck -- deck-building is mechanically identical (see
+                // sealedDeckStateFor()'s own docblock), the only
+                // differences (a shared rather than per-player pool, and
+                // a per-rarity deck cap) are already surfaced through
+                // that same state via its own 'rarity_caps' field.
                 $response['sealed_deck'] = $this->sealedDeckStateFor($game, $viewerUserId);
             } elseif ($game['game_match_id'] !== null) {
                 $response['game_match'] = $this->gameMatchStateFor($game, $viewerUserId);
@@ -13486,10 +15309,20 @@ final class GameService
         if (
             (int) $roundRow['round_number'] === 1
             && $roundRow['current_turn_game_player_id'] === null
-            && $game['draft_match_id'] !== null
+            && $game['first_player_choice_user_id'] === null
+            && ($game['draft_match_id'] !== null || $game['game_match_id'] !== null)
             && $game['match_game_number'] !== null
             && (int) $game['match_game_number'] > 1
         ) {
+            // Both current_turn_game_player_id AND first_player_choice_user_id
+            // have to still be NULL -- see isAwaitingFirstPlayerChoiceFrom()'s
+            // own docblock for why current_turn alone can't tell "still
+            // awaiting the choice" apart from "already decided, but
+            // 'team'/'closed_team' hasn't unfrozen the round yet either
+            // way" (pending that format's own next pregame step). Once
+            // decided, there's nothing left here for this panel to show,
+            // whether or not the round has genuinely unfrozen yet.
+            //
             // A non-null sentinel no real user_id can ever equal --
             // firstPlayerDecisionStateFor()'s own 'you_are_previous_loser'
             // comparison then correctly resolves false for a spectator
@@ -13498,7 +15331,46 @@ final class GameService
             $response['first_player_decision'] = $this->firstPlayerDecisionStateFor($game, (int) $game['match_game_number'], $viewerUserId ?? 0);
         }
 
-        $state = $this->boardStates->load($gameId);
+        // "Pause at the start of your turn" (migration 0275, reported
+        // live) -- a viewer who is THIS round's own current turn holder,
+        // with turn_pending_acknowledgment still set (see
+        // notifyItsYourTurn()) and a recorded pre_after_scoring_event_id
+        // (NULL for Team Play's own separate round-transition path and
+        // for Awe's skip-scoring path, both left unsupported for now --
+        // see that column's own migration comment), sees the board
+        // exactly as it stood right after the PREVIOUS round finished
+        // scoring but before any after-scoring effect (Recklessness's own
+        // "give it back"/bottom-and-draw, etc.) touched it, via
+        // ReplayStateBuilder::stateAsOf() -- the same historical-
+        // reconstruction machinery issue #240's "watch replay" already
+        // uses, reused here to freeze one viewer's own read of an
+        // otherwise perfectly live, in-progress game. Every OTHER seated
+        // player (and any bot) still sees, and can immediately act on,
+        // the real, already-advanced board regardless -- this only ever
+        // changes what THIS one paused viewer's own GET /games/state
+        // returns, the same personal-gate scope
+        // turn_pending_acknowledgment itself already has.
+        // Also requires nobody has actually played a card in the NEW
+        // round yet (roundHasAnyPlayedCard()) -- notifyItsYourTurn() fires
+        // on every turn handoff, not just a round's own first one, and a
+        // LATER handoff within the same round, once its own first player
+        // has genuinely taken a turn, must never replay this same stale
+        // watermark: whatever that first player played is real progress
+        // after the round already started, not more "after-scoring
+        // effects from the round that just ended" to hide. A player who
+        // only PASSED (no card moved) doesn't disqualify a later
+        // handoff this same round -- the frozen board is still exactly
+        // accurate for them too.
+        $isViewerAwaitingTurnAcknowledgment = $viewerGamePlayerId !== null
+            && $roundRow['current_turn_game_player_id'] !== null
+            && (int) $roundRow['current_turn_game_player_id'] === $viewerGamePlayerId
+            && (bool) $roundRow['turn_pending_acknowledgment']
+            && $roundRow['pre_after_scoring_event_id'] !== null
+            && !$this->roundHasAnyPlayedCard((int) $roundRow['id']);
+
+        $state = $isViewerAwaitingTurnAcknowledgment
+            ? $this->replay->stateAsOf($gameId, (int) $roundRow['pre_after_scoring_event_id'], requireCompleted: false)
+            : $this->boardStates->load($gameId);
         $names = $this->cardNamesFor($gameId);
         $playerNames = array_column($players, 'username', 'game_player_id');
 
@@ -13532,12 +15404,48 @@ final class GameService
         }
         unset($player);
 
+        // Diagnostic mode's own "view the bot(s) hand(s)" (see
+        // createGame()'s own $diagnosticMode docblock) -- live (rides
+        // along in this same getState() response, no separate on-demand
+        // fetch), so it stays current with the board's own 4-second poll
+        // like everything else here. Viewer-only ($viewerGamePlayerId !== null,
+        // the same "a legitimate seated human, not a spectator" gate every
+        // other viewer-specific field above already uses) and only when
+        // this game itself opted in -- every other game gets `null` here,
+        // the same "harmless, cheap no-op" shape power_duel_sideboard_pool
+        // above already establishes. reactingViewerId is each bot's OWN
+        // game_player_id (not the human viewer's) so is_playable reflects
+        // what that bot could legally play right now, not what the human
+        // could.
+        $response['diagnostic_bot_hands'] = null;
+        if ($viewerGamePlayerId !== null && (bool) $game['diagnostic_mode']) {
+            $response['diagnostic_bot_hands'] = array_values(array_map(
+                fn (array $botPlayer): array => [
+                    'game_player_id' => $botPlayer['game_player_id'],
+                    'username' => $botPlayer['username'],
+                    'hand' => array_map(
+                        fn (int $cardId): array => $this->serializeCard($state, $cardId, $names, $botPlayer['game_player_id']),
+                        $state->hand($botPlayer['game_player_id']),
+                    ),
+                ],
+                array_values(array_filter($response['players'], static fn (array $player): bool => $player['is_bot'])),
+            ));
+        }
+
         if ($roundRow !== false) {
             $currentTurnGamePlayerId = $roundRow['current_turn_game_player_id'] !== null ? (int) $roundRow['current_turn_game_player_id'] : null;
             $response['round'] = [
                 'round_number' => (int) $roundRow['round_number'],
                 'status' => $roundRow['status'],
                 'current_turn_game_player_id' => $currentTurnGamePlayerId,
+                // "Pause at the start of your turn" (reported live) --
+                // public (visible to spectators/other players too, same
+                // as current_turn_game_player_id above): whether
+                // $currentTurnGamePlayerId's own turn is currently gated
+                // behind their own "Advance Turn" click. See
+                // notifyItsYourTurn()/assertTurnAcknowledged()/
+                // acknowledgeTurnStart().
+                'turn_pending_acknowledgment' => (bool) $roundRow['turn_pending_acknowledgment'],
                 'plays_remaining' => (int) $roundRow['plays_remaining'],
                 'play_grants' => array_map(
                     fn (?array $restriction) => $this->describePlayGrant($restriction, $names),
@@ -13563,7 +15471,19 @@ final class GameService
                 'board_effects' => $this->boardEffectEntries($state, $names, $playerNames),
             ];
             if ($viewerGamePlayerId !== null) {
-                $response['you']['is_your_turn'] = $currentTurnGamePlayerId === $viewerGamePlayerId;
+                $isYourTurn = $currentTurnGamePlayerId === $viewerGamePlayerId;
+                $response['you']['is_your_turn'] = $isYourTurn;
+                // Deliberately kept separate from is_your_turn above
+                // (which still means exactly what it always has -- it
+                // genuinely IS this player's turn) rather than folding
+                // this gate into it, so every existing is_your_turn
+                // consumer keeps working unchanged; the client instead
+                // checks this ALONGSIDE is_your_turn to decide whether to
+                // show the ordinary play/pass UI or the "Advance Turn"
+                // prompt first. Only ever true for the actual current
+                // turn holder -- see 'turn_pending_acknowledgment' above
+                // for the same flag visible to every other viewer.
+                $response['you']['turn_pending_acknowledgment'] = $isYourTurn && (bool) $roundRow['turn_pending_acknowledgment'];
             }
         }
 
@@ -13809,6 +15729,36 @@ final class GameService
     }
 
     /**
+     * Reported live: with diagnostic_mode on, a long chain of Creativity
+     * copying an in-play Validation (each copy retriggers Validation's own
+     * "play another 0/1-value mood, get another extra play" reaction --
+     * confirmed as a legitimate, correctly-terminating combo, not an
+     * engine bug, by direct reproduction against the real engine) showed
+     * up in "Recent plays"/"View log" as a wall of bare, detail-free
+     * "BotSage played Creativity" lines with none of the usual "from
+     * hand"/"using an extra play from..."/grant wording -- indistinguishable
+     * from a genuinely stuck game, prompting a Resign that wasn't actually
+     * needed. Root cause: logHeuristicBotReasoning()/logTacticalBotReasoning()
+     * (see their own docblocks) log their own 'heuristic_bot_reasoning'/
+     * 'tactical_bot_reasoning' game_events row for EVERY action the bot
+     * even just *considers*, purely for the dedicated "Bot reasoning"
+     * dialog (tacticalBotReasoningSince()) -- these were never meant to
+     * be human-facing play-by-play, but neither fullEventLog() nor
+     * recentEvents() excluded them, so each one fell through
+     * describeEvent()'s unhandled-event-type default arm (the same bug
+     * class its own docblock already flags for closed_team_leader_decided/
+     * chaos_draft_effect_attached) and rendered as a misleading
+     * "{actor} played {cardName}" with every suffix/detail blank. Grouped
+     * here with round_grants_computed's own pre-existing exclusion, for
+     * the same reason: internal bookkeeping, not a play a human should
+     * ever see in these two feeds.
+     */
+    private const INTERNAL_ONLY_EVENT_TYPES_SQL = "'round_grants_computed', 'heuristic_bot_reasoning', 'tactical_bot_reasoning'";
+
+    /** Same three event types as INTERNAL_ONLY_EVENT_TYPES_SQL above, as a plain array -- for filtering an in-memory export's own game_events instead of a SQL WHERE clause (exportRecentEvents()/exportEventSteps()). */
+    private const INTERNAL_ONLY_EVENT_TYPES = ['round_grants_computed', 'heuristic_bot_reasoning', 'tactical_bot_reasoning'];
+
+    /**
      * The entire game_events log for $gameId, oldest first (issue #98) --
      * unlike recentEvents() below, this is deliberately unbounded and
      * unpaginated: a typical game's event count (rarely more than a few
@@ -13868,7 +15818,7 @@ final class GameService
             "SELECT e.id, e.event_type, e.acting_game_player_id, e.card_id, e.details, e.created_at, r.round_number
              FROM game_events e
              LEFT JOIN game_rounds r ON r.id = e.game_round_id
-             WHERE e.game_id = :game_id AND e.event_type != 'round_grants_computed' ORDER BY e.id ASC"
+             WHERE e.game_id = :game_id AND e.event_type NOT IN (" . self::INTERNAL_ONLY_EVENT_TYPES_SQL . ') ORDER BY e.id ASC'
         );
         $stmt->execute(['game_id' => $gameId]);
 
@@ -14317,6 +16267,415 @@ final class GameService
     }
 
     /**
+     * "Is there a way I can replay these in the dev site using the game
+     * export json files?" -- for a game played on a different
+     * environment's database (there's no $gameId here at all to look
+     * up), replayStateAsOf()/serializeReplaySnapshot()/fullEventLog()
+     * above can never reach it: every one of them queries THIS server's
+     * own `games`/`game_players`/`game_cards`/`game_events` tables by
+     * id. $export is exactly exportGameData()'s own output (the same
+     * file `GET /games/export` already hands the user, so nothing new
+     * needs exposing to make this possible) -- never written back to
+     * this database at all (importing raw rows would mean remapping
+     * every id, including ones buried inside game_events.details' own
+     * nested card_moves/draws/ownership_changes, with real risk of
+     * colliding with an unrelated game that already happens to reuse
+     * the same ids locally). Bundles the step list (the same shape `GET
+     * /games/log`'s own fullEventLog() returns) into this one response
+     * alongside the snapshot, since there's no per-game route to fetch
+     * it separately the way the live replay route reuses `GET
+     * /games/log` for that.
+     *
+     * @param array<string, mixed> $export
+     * @return array{snapshot: array<string, mixed>, steps: array<int, array<string, mixed>>}
+     */
+    public function replayFromExport(array $export, int $eventId): array
+    {
+        $state = $this->replay->stateAsOfFromExport($export, $eventId);
+
+        return [
+            'snapshot' => $this->serializeExportReplaySnapshot($export, $eventId, $state),
+            'steps' => $this->exportEventSteps($export),
+        ];
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $gameRounds
+     */
+    private function exportWinsFor(array $gameRounds, int $gamePlayerId): int
+    {
+        $total = 0;
+        foreach ($gameRounds as $round) {
+            if ($round['status'] === 'scored' && (int) ($round['winner_game_player_id'] ?? 0) === $gamePlayerId) {
+                $total += (int) $round['wins_awarded'];
+            }
+        }
+
+        return $total;
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $gameRounds
+     */
+    private function exportWinsForTeam(array $gameRounds, int $teamId): int
+    {
+        $total = 0;
+        foreach ($gameRounds as $round) {
+            if ($round['status'] === 'scored' && (int) ($round['winner_team_id'] ?? -1) === $teamId) {
+                $total += (int) $round['wins_awarded'];
+            }
+        }
+
+        return $total;
+    }
+
+    /**
+     * cardNamesFor()'s own exported-JSON sibling: game_card id => catalog
+     * name, resolved against THIS server's own `cards` table (card
+     * definitions are shared reference data, not a per-game fact --
+     * exportGameData() never includes them, so there'd be nothing to
+     * read from the export even if this preferred to).
+     *
+     * @param array<int, array<string, mixed>> $gameCards
+     * @return array<int, string>
+     */
+    private function exportCardNames(array $gameCards): array
+    {
+        $catalogIds = array_unique(array_map(static fn (array $row): int => (int) $row['card_id'], $gameCards));
+        if ($catalogIds === []) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($catalogIds), '?'));
+        $stmt = Connection::get()->prepare("SELECT id, name FROM cards WHERE id IN ({$placeholders})");
+        $stmt->execute(array_values($catalogIds));
+        $namesByCatalogId = array_column($stmt->fetchAll(), 'name', 'id');
+
+        $names = [];
+        foreach ($gameCards as $row) {
+            $names[(int) $row['id']] = $namesByCatalogId[(int) $row['card_id']] ?? 'a card';
+        }
+
+        return $names;
+    }
+
+    /**
+     * Best-effort game_player id => display name for an imported export:
+     * this server generally has no row for the export's own user_id at
+     * all (the whole point is replaying a game played on a DIFFERENT
+     * environment's database), so this is neither cardNamesFor() nor
+     * playerUsernamesFor()'s live "always a real join" guarantee. Tries
+     * a real username first (a genuine hit whenever the export happens
+     * to reference a user id THIS server also has -- e.g. the same
+     * account exporting its own game to replay locally), then each
+     * player's own custom_deck_name (already present in every export,
+     * regardless of environment), then a bare seat number.
+     *
+     * @param array<int, array<string, mixed>> $playerRows
+     * @return array{0: array<int, string>, 1: array<int, bool>} game_player id => display name, game_player id => is_bot
+     */
+    private function exportPlayerNames(array $playerRows): array
+    {
+        $userIds = array_unique(array_map(static fn (array $row): int => (int) $row['user_id'], $playerRows));
+        $localUsers = [];
+        if ($userIds !== []) {
+            $placeholders = implode(',', array_fill(0, count($userIds), '?'));
+            $stmt = Connection::get()->prepare("SELECT id, username, is_bot FROM users WHERE id IN ({$placeholders})");
+            $stmt->execute(array_values($userIds));
+            foreach ($stmt->fetchAll() as $row) {
+                $localUsers[(int) $row['id']] = $row;
+            }
+        }
+
+        $names = [];
+        $isBot = [];
+        foreach ($playerRows as $row) {
+            $gamePlayerId = (int) $row['id'];
+            $local = $localUsers[(int) $row['user_id']] ?? null;
+            $names[$gamePlayerId] = $local['username']
+                ?? $row['custom_deck_name']
+                ?? ('Seat ' . ((int) $row['seat_order'] + 1));
+            $isBot[$gamePlayerId] = $local !== null && (bool) $local['is_bot'];
+        }
+
+        return [$names, $isBot];
+    }
+
+    /**
+     * serializeReplaySnapshot()'s own exported-JSON sibling -- see
+     * replayFromExport()'s own docblock for why this can't just call
+     * that one directly. Reuses every $state-only serialization helper
+     * (serializeCard()/scoringEffectEntries()/boardEffectEntries()/
+     * suppressionFields()/affectingEntries()/temporaryOwnershipInfo()/
+     * boardPointTotalFor()) verbatim -- none of them ever touch this
+     * server's own per-game tables, only $state itself plus whichever
+     * name maps are handed in, so they work identically for a
+     * ReplayStateBuilder-from-export $state as for a live one. Only the
+     * pieces those helpers DON'T cover -- win counts, player display
+     * names/is_bot, round number, recent-events history -- get their own
+     * export-sourced computation here instead of the live SQL queries
+     * serializeReplaySnapshot() itself uses.
+     *
+     * @param array<string, mixed> $export
+     * @return array<string, mixed>
+     */
+    private function serializeExportReplaySnapshot(array $export, int $eventId, BoardState $state): array
+    {
+        $game = $export['game'];
+        $gameRounds = $export['game_rounds'];
+        $playerRows = $export['game_players'];
+        usort($playerRows, static fn (array $a, array $b): int => $a['seat_order'] <=> $b['seat_order']);
+
+        $names = $this->exportCardNames($export['game_cards']);
+        [$displayNames, $isBot] = $this->exportPlayerNames($playerRows);
+
+        $winnerUsernames = [];
+        $players = [];
+        foreach ($playerRows as $row) {
+            $gamePlayerId = (int) $row['id'];
+            $teamId = $row['team_id'] !== null ? (int) $row['team_id'] : null;
+            $players[] = [
+                'game_player_id' => $gamePlayerId,
+                'user_id' => (int) $row['user_id'],
+                'username' => $displayNames[$gamePlayerId],
+                'seat_order' => (int) $row['seat_order'],
+                'team_id' => $teamId,
+                'is_bot' => $isBot[$gamePlayerId],
+                'hand_count' => count($state->hand($gamePlayerId)),
+                'total_wins' => $this->exportWinsFor($gameRounds, $gamePlayerId),
+                'total_score' => $this->boardPointTotalFor($state, $gamePlayerId),
+                'deck_count' => $state->hasSeparateDecks() ? count($state->deck($gamePlayerId)) : count($state->deck()),
+                'custom_deck_name' => $row['custom_deck_name'],
+                'deck_submitted' => $row['custom_deck_card_ids'] !== null,
+                'resigned' => $row['resigned_at'] !== null,
+                'hand' => array_map(
+                    fn (int $cardId) => $this->serializeCard($state, $cardId, $names, null),
+                    $state->hand($gamePlayerId),
+                ),
+            ];
+            if ($game['winner_team_id'] !== null && $teamId === (int) $game['winner_team_id']) {
+                $winnerUsernames[] = $displayNames[$gamePlayerId];
+            } elseif ($game['winner_game_player_id'] !== null && $gamePlayerId === (int) $game['winner_game_player_id']) {
+                $winnerUsernames[] = $displayNames[$gamePlayerId];
+            }
+        }
+        $playerNames = array_column($players, 'username', 'game_player_id');
+
+        $roundNumber = null;
+        foreach ($export['game_events'] as $eventRow) {
+            if ((int) $eventRow['id'] === $eventId) {
+                foreach ($gameRounds as $round) {
+                    if ((int) $round['id'] === (int) $eventRow['game_round_id']) {
+                        $roundNumber = (int) $round['round_number'];
+                    }
+                }
+                break;
+            }
+        }
+
+        $teams = null;
+        if (self::isTeamFormat($game['format'])) {
+            $teamTotals = [
+                0 => ['team_id' => 0, 'game_player_ids' => [], 'total_score' => 0, 'total_wins' => $this->exportWinsForTeam($gameRounds, 0)],
+                1 => ['team_id' => 1, 'game_player_ids' => [], 'total_score' => 0, 'total_wins' => $this->exportWinsForTeam($gameRounds, 1)],
+            ];
+            foreach ($players as $player) {
+                if ($player['team_id'] === null) {
+                    continue;
+                }
+                $teamTotals[$player['team_id']]['game_player_ids'][] = $player['game_player_id'];
+                $teamTotals[$player['team_id']]['total_score'] += $player['total_score'];
+            }
+            $teams = array_values($teamTotals);
+        }
+
+        return [
+            'game' => [
+                'id' => (int) $game['id'],
+                'format' => $game['format'],
+                'deck_type' => $game['deck_type'],
+                'custom_deck_name' => $game['custom_deck_name'],
+                'duel_deck_rules' => $game['deck_type'] === 'custom_duel' ? [
+                    'preset' => $game['custom_duel_rules_preset'],
+                    'min_cards' => (int) $game['custom_duel_min_cards'],
+                    'rarity_limits' => (array) ($game['custom_duel_rarity_limits'] ?? []),
+                    'duplicate_limits' => (array) ($game['custom_duel_duplicate_limits'] ?? []),
+                    'even_color_distribution_rarities' => (array) ($game['custom_duel_even_color_distribution_rarities'] ?? []),
+                ] : null,
+                'status' => $game['status'],
+                'wins_needed' => (int) $game['wins_needed'],
+                'winner_game_player_id' => $game['winner_game_player_id'] !== null ? (int) $game['winner_game_player_id'] : null,
+                'winner_usernames' => $winnerUsernames,
+                'winner_team_id' => $game['winner_team_id'] !== null ? (int) $game['winner_team_id'] : null,
+                'match_game_number' => $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null,
+            ],
+            'players' => $players,
+            'you' => ['game_player_id' => null],
+            'round' => [
+                'round_number' => $roundNumber,
+                'status' => null,
+                'current_turn_game_player_id' => null,
+                'plays_remaining' => 0,
+                'play_grants' => [],
+                'first_game_player_id' => null,
+                'went_first_game_player_id' => null,
+                'hurt_feelings_game_player_id' => null,
+                'banned_colors' => [],
+                'discarded_this_round' => false,
+                'pending_decision' => null,
+                'scoring_preview' => null,
+                'scoring_effects' => $this->scoringEffectEntries($state, $names, $playerNames),
+                'board_effects' => $this->boardEffectEntries($state, $names, $playerNames),
+            ],
+            'in_play' => array_map(
+                function (int $cardId) use ($state, $names, $playerNames): array {
+                    $mood = $state->moodsInPlay()[$cardId];
+                    $serialized = $this->serializeCard($state, $cardId, $names, null);
+                    $boosterCardId = $serialized['has_dice_value'] ? $state->diceValueBoosterCardId($cardId) : null;
+
+                    return [
+                        ...$serialized,
+                        'owner_game_player_id' => $mood->ownerId,
+                        'has_unused_play_grant' => false,
+                        'value_locked' => array_key_exists('valueOverride', $mood->effectState),
+                        'chaos_value_delta' => $state->chaosValueDeltaOf($cardId),
+                        'chaos_value_override' => $state->chaosValueOverrideOf($cardId),
+                        ...$this->suppressionFields($state, $cardId, $names),
+                        'boosted_by_card_id' => $boosterCardId,
+                        'boosted_by_name' => $boosterCardId !== null ? ($names[$boosterCardId] ?? null) : null,
+                        'affecting' => $this->affectingEntries($state, $cardId, $names),
+                        'temporary_ownership' => $this->temporaryOwnershipInfo($state, $cardId, $names, $playerNames),
+                        'bliss_discard_color' => $serialized['effect_key'] === 'bliss' ? $state->effectState($cardId, 'blissColor') : null,
+                    ];
+                },
+                array_keys($state->moodsInPlay()),
+            ),
+            'discard_pile' => array_map(
+                function (int $cardId) use ($state, $names, $playerNames): array {
+                    $lastOwnerId = $state->discardOwnerOf($cardId);
+
+                    return [
+                        ...$this->serializeCard($state, $cardId, $names, null),
+                        'last_owner_game_player_id' => $lastOwnerId,
+                        'last_owner_name' => $lastOwnerId !== null ? ($playerNames[$lastOwnerId] ?? null) : null,
+                    ];
+                },
+                $state->discardPile(),
+            ),
+            'deck_count' => 0,
+            'recent_events' => $this->exportRecentEvents($export, $playerNames, $names, $players, $eventId),
+            'teams' => $teams,
+            'team_decision' => null,
+            'initial_card_pass' => null,
+            'first_player_decision' => null,
+            'quick_draft' => null,
+            'winston_draft' => null,
+            'grid_draft' => null,
+            'rotisserie_draft' => null,
+            'tiered_rotisserie_draft' => null,
+        ];
+    }
+
+    /**
+     * recentEvents()'s own exported-JSON sibling.
+     *
+     * @param array<string, mixed> $export
+     * @param array<int, string> $playerNames
+     * @param array<int, string> $cardNames
+     * @param array<int, array<string, mixed>> $players
+     * @return array<int, array<string, mixed>>
+     */
+    private function exportRecentEvents(array $export, array $playerNames, array $cardNames, array $players, int $upToEventId, int $limit = 15): array
+    {
+        $teamMembersByTeamId = [];
+        foreach ($players as $player) {
+            if ($player['team_id'] !== null) {
+                $teamMembersByTeamId[$player['team_id']][] = $player['username'];
+            }
+        }
+
+        $rows = array_values(array_filter(
+            $export['game_events'],
+            static fn (array $row): bool => (int) $row['id'] <= $upToEventId && !in_array($row['event_type'], self::INTERNAL_ONLY_EVENT_TYPES, true),
+        ));
+        usort($rows, static fn (array $a, array $b): int => $b['id'] <=> $a['id']);
+        $rows = array_slice($rows, 0, $limit);
+
+        return array_map(
+            fn (array $row) => [
+                'id' => (int) $row['id'],
+                'created_at' => $row['created_at'],
+                'description' => $this->describeEvent(
+                    ['event_type' => $row['event_type'], 'acting_game_player_id' => $row['acting_game_player_id'], 'card_id' => $row['card_id'], 'details' => json_encode($row['details'])],
+                    $playerNames,
+                    $cardNames,
+                    $teamMembersByTeamId,
+                ),
+            ],
+            $rows,
+        );
+    }
+
+    /**
+     * fullEventLog()'s own exported-JSON sibling -- the step dropdown's
+     * data source for an imported replay, same shape fullEventLog()
+     * itself returns (minus the frontend's own synthetic "Step 1" (id 0)
+     * entry, which it already prepends client-side regardless of
+     * source -- see "Watch replay" in php-app/README.md). Every export
+     * is already a completed game's own data (exportGameData()/
+     * ReplayStateBuilder::contextFromExport() both refuse otherwise), so
+     * unlike fullEventLog()'s own live $isCompleted branch, draws'
+     * card_id is never redacted here.
+     *
+     * @param array<string, mixed> $export
+     * @return array<int, array<string, mixed>>
+     */
+    private function exportEventSteps(array $export): array
+    {
+        $playerRows = $export['game_players'];
+        [$displayNames] = $this->exportPlayerNames($playerRows);
+        $cardNames = $this->exportCardNames($export['game_cards']);
+
+        $teamMembersByTeamId = [];
+        foreach ($playerRows as $row) {
+            if (($row['team_id'] ?? null) !== null) {
+                $teamMembersByTeamId[(int) $row['team_id']][] = $displayNames[(int) $row['id']];
+            }
+        }
+
+        $roundNumberByRoundId = array_column($export['game_rounds'], 'round_number', 'id');
+
+        $rows = array_values(array_filter(
+            $export['game_events'],
+            static fn (array $row): bool => !in_array($row['event_type'], self::INTERNAL_ONLY_EVENT_TYPES, true),
+        ));
+        usort($rows, static fn (array $a, array $b): int => $a['id'] <=> $b['id']);
+
+        return array_map(
+            function (array $row) use ($displayNames, $cardNames, $teamMembersByTeamId, $roundNumberByRoundId): array {
+                $actingId = $row['acting_game_player_id'] !== null ? (int) $row['acting_game_player_id'] : null;
+                $cardId = $row['card_id'] !== null ? (int) $row['card_id'] : null;
+                $roundId = $row['game_round_id'] !== null ? (int) $row['game_round_id'] : null;
+                $rawRow = ['event_type' => $row['event_type'], 'acting_game_player_id' => $actingId, 'card_id' => $cardId, 'details' => json_encode($row['details'])];
+
+                return [
+                    'id' => (int) $row['id'],
+                    'created_at' => $row['created_at'],
+                    'round_number' => $roundId !== null ? ($roundNumberByRoundId[$roundId] ?? null) : null,
+                    'event_type' => $row['event_type'],
+                    'acting_game_player_id' => $actingId,
+                    'acting_username' => $actingId !== null ? ($displayNames[$actingId] ?? null) : null,
+                    'card_id' => $cardId,
+                    'card_name' => $cardId !== null ? ($cardNames[$cardId] ?? null) : null,
+                    'details' => $row['details'],
+                    'description' => $this->describeEvent($rawRow, $displayNames, $cardNames, $teamMembersByTeamId),
+                ];
+            },
+            $rows,
+        );
+    }
+
+    /**
      * Every card in a shared-deck game's single deck (issue #197) --
      * every deck_type where the whole table draws from one pool rather
      * than each player having their own, see isSharedDeckType(). Read
@@ -14401,7 +16760,7 @@ final class GameService
     private function recentEvents(int $gameId, array $players, int $limit = 15, ?int $upToEventId = null): array
     {
         $sql = "SELECT id, event_type, acting_game_player_id, card_id, details, created_at
-                 FROM game_events WHERE game_id = :game_id AND event_type != 'round_grants_computed'";
+                 FROM game_events WHERE game_id = :game_id AND event_type NOT IN (" . self::INTERNAL_ONLY_EVENT_TYPES_SQL . ')';
         if ($upToEventId !== null) {
             $sql .= ' AND id <= :up_to_event_id';
         }
@@ -14523,7 +16882,7 @@ final class GameService
                 ? "{$actor} goes first this round"
                 : "{$actor} was chosen by their team to go first this round",
             $row['event_type'] === 'team_draw_recipient_decided' => "The losing team chose {$actor} to draw their shared card",
-            $row['event_type'] === 'draft_match_first_player_decided' => "{$actor} will go first this game",
+            $row['event_type'] === 'match_first_player_decided' => "{$actor} will go first this game",
             // Issue #84's cleanup cron (expireStaleActiveGames()) --
             // acting_game_player_id/card_id are both null for this event,
             // so it needs its own phrasing rather than falling through to
@@ -15824,6 +18183,14 @@ final class GameService
      * that check, a same-player extra play (a banked Generosity/Joy grant,
      * a Duplicity repeat) would re-notify the player already mid-turn for
      * no reason.
+     *
+     * An ordinary same-round handoff never pauses the new turn holder,
+     * regardless of who they are or what triggered it -- see
+     * notifyItsYourTurn()'s own $worthPausingFor docblock: only
+     * finishScoringAndAdvance()'s round-transition path can ever prove an
+     * after-scoring hook actually moved something, so this is the one
+     * notifyItsYourTurn() call site that never even offers a
+     * $worthPausingFor argument, relying on its default of false.
      */
     private function updateRoundTurnState(int $roundId, int $playerId, array $playGrants, bool $discardedThisRound, bool $skipScoringThisRound, ?int $skipScoringFirstPlayerId, ?int $skipScoringSourceCardId, ?int $skipScoringOwnerId): void
     {
@@ -15854,21 +18221,64 @@ final class GameService
         }
     }
 
-    private function notifyItsYourTurn(int $roundId, int $gamePlayerId): void
+    /**
+     * The single existing "it just became $gamePlayerId's turn" hook --
+     * every one of this class's own call sites reaches here exactly once
+     * per genuine turn handoff (an ordinary mid-round pass-the-turn via
+     * updateRoundTurnState()'s own $previousPlayerId !== $playerId gate,
+     * or a brand new round's own current_turn_game_player_id set fresh
+     * at INSERT time), never for a same-player re-save. That makes this
+     * the correct, single place to also drive "pause at the start of
+     * your turn" (reported live: "a game should not advance to that
+     * user's turn, until they click an 'advance turn' button... to
+     * allow users to more clearly see what happened during a previous
+     * turn before/after scoring effects happen") -- see
+     * assertTurnAcknowledged()/acknowledgeTurnStart() for the other half
+     * of this feature. A bot's own users row can never actually have
+     * pause_before_own_turn set (no UI a bot could use to turn it on),
+     * so this never needs to special-case a bot seat the way the
+     * automated-turn-advancing loop elsewhere in this class does.
+     *
+     * $worthPausingFor (reported live, across three successive follow-ups
+     * -- "not super useful when the board State snapshot is identical to
+     * the actual board state"; answering a decision that hands you your
+     * own next turn needs no fresh reveal; and finally, plainly: "we
+     * really want to *only* show the pause when there is an
+     * after-scoring effect that moves cards from one zone to another" --
+     * only ever true for the one call site that can actually prove that
+     * happened: finishScoringAndAdvance()'s own
+     * $afterScoringHooksChangedTheBoard, computed from
+     * inPlayOwnershipSignature()'s before/after comparison around
+     * applyAfterScoringHooks()/applyChaosAfterScoringHooks(). Defaults
+     * false for every other call site -- an ordinary mid-round
+     * pass-the-turn, a fresh game's very first turn, and Awe's own
+     * skip-scoring round creation all hand off the turn without any
+     * after-scoring hook ever running, so there's never anything for a
+     * frozen snapshot to reveal that the live board doesn't already
+     * show.
+     */
+    private function notifyItsYourTurn(int $roundId, int $gamePlayerId, bool $worthPausingFor = false): void
     {
-        if ($this->notifications === null) {
-            return;
-        }
-
         $stmt = Connection::get()->prepare(
-            'SELECT gr.game_id, gp.user_id
+            'SELECT gr.game_id, gp.user_id, u.pause_before_own_turn
              FROM game_rounds gr
              JOIN game_players gp ON gp.id = :game_player_id
+             JOIN users u ON u.id = gp.user_id
              WHERE gr.id = :round_id'
         );
         $stmt->execute(['game_player_id' => $gamePlayerId, 'round_id' => $roundId]);
         $row = $stmt->fetch();
         if ($row === false) {
+            return;
+        }
+
+        if ((bool) $row['pause_before_own_turn'] && $worthPausingFor) {
+            Connection::get()
+                ->prepare('UPDATE game_rounds SET turn_pending_acknowledgment = 1 WHERE id = :round_id')
+                ->execute(['round_id' => $roundId]);
+        }
+
+        if ($this->notifications === null) {
             return;
         }
 
@@ -15909,6 +18319,24 @@ final class GameService
 
         if ($stmt->fetchColumn() !== false) {
             throw new GameStateException("Round {$roundId} has a decision still pending -- no one can play or pass until it's answered");
+        }
+    }
+
+    /**
+     * "Pause at the start of your turn" (reported live) -- $round's own
+     * turn_pending_acknowledgment (set by notifyItsYourTurn() the moment
+     * it became the current turn holder's turn, for anyone who opted
+     * into users.pause_before_own_turn) blocks playMood()/pass() the
+     * same way assertNoPendingDecision() above blocks them for an
+     * unrelated reason, until acknowledgeTurnStart() clears it. A
+     * well-behaved client never actually reaches this: it only ever
+     * shows the play/pass UI once GET /games/state's own
+     * you.turn_pending_acknowledgment says the gate is already open.
+     */
+    private function assertTurnAcknowledged(array $round): void
+    {
+        if ((bool) $round['turn_pending_acknowledgment']) {
+            throw new GameStateException("Player {$round['current_turn_game_player_id']} must acknowledge their turn (POST /games/advance-turn) before playing or passing");
         }
     }
 
@@ -16539,6 +18967,19 @@ final class GameService
     {
         $details = $this->withCardHistory($state, $details);
 
+        // Caught live: a tactical-bot reasoning payload containing a
+        // non-finite float (INF/NAN, presumably from some edge-case
+        // search evaluation) made json_encode() return false rather than
+        // throw -- PDO then bound that false as an empty string, and
+        // MySQL's own JSON column validation rejected it with "Invalid
+        // JSON text: The document is empty", surfacing as an uncaught
+        // PDOException instead of the graceful "couldn't log reasoning"
+        // this obviously should have been. Never let a failed encode
+        // reach the query at all -- an empty/absent details column is
+        // always valid (every reader here already treats NULL/'[]' as
+        // "no extra details"), unlike a guaranteed-invalid empty string.
+        $encodedDetails = $details !== [] ? json_encode($details) : null;
+
         $stmt = Connection::get()->prepare(
             'INSERT INTO game_events (game_id, game_round_id, acting_game_player_id, event_type, card_id, details)
              VALUES (:game_id, :round_id, :acting_player_id, :event_type, :card_id, :details)'
@@ -16549,7 +18990,55 @@ final class GameService
             'acting_player_id' => $actingPlayerId,
             'event_type' => $eventType,
             'card_id' => $cardId,
-            'details' => $details === [] ? null : json_encode($details),
+            'details' => $encodedDetails !== false ? $encodedDetails : null,
         ]);
+    }
+
+    /**
+     * The id of the most recent game_events row logged for $gameId so
+     * far, or null if none exist yet -- used by finishScoringAndAdvance()
+     * (migration 0275, "pause at the start of your turn" reported live)
+     * as a replay watermark: ReplayStateBuilder::stateAsOf($gameId, ...)
+     * reconstructs the exact board as it stood right after this event,
+     * i.e. right before that round's own scoring/after-scoring
+     * mutations began. Deliberately not (int) with a 0 sentinel the way
+     * ReplayStateBuilder::stateAsOf()'s own $eventId argument overloads 0
+     * to mean "genesis" -- game_rounds.pre_after_scoring_event_id has a
+     * real foreign key to game_events.id, where 0 is never a valid row,
+     * so the caller needs a genuine null to know "don't populate this
+     * column" rather than a 0 it would otherwise have to remember to
+     * special-case itself.
+     */
+    private function latestEventId(int $gameId): ?int
+    {
+        $stmt = Connection::get()->prepare('SELECT MAX(id) FROM game_events WHERE game_id = :game_id');
+        $stmt->execute(['game_id' => $gameId]);
+        $id = $stmt->fetchColumn();
+
+        return $id !== null ? (int) $id : null;
+    }
+
+    /**
+     * Whether any card has actually been played yet during $roundId --
+     * buildGameState()'s own frozen-board check (migration 0275) uses
+     * this to know whether its round's pre_after_scoring_event_id
+     * watermark is still trustworthy for whichever player's turn it
+     * currently is: true the moment the round's own first player (or
+     * anyone else who's since acted) has played a single card, since
+     * that's real progress after the round already started, not more of
+     * whatever the PREVIOUS round's own after-scoring effects were.
+     * event_type 'mood_played' is the only event type that ever actually
+     * moves a card into play -- a plain 'turn_passed' doesn't disqualify
+     * anything, so a first player who only passed still leaves the
+     * frozen board accurate for whoever's turn comes next this round.
+     */
+    private function roundHasAnyPlayedCard(int $roundId): bool
+    {
+        $stmt = Connection::get()->prepare(
+            "SELECT 1 FROM game_events WHERE game_round_id = :round_id AND event_type = 'mood_played' LIMIT 1"
+        );
+        $stmt->execute(['round_id' => $roundId]);
+
+        return $stmt->fetchColumn() !== false;
     }
 }

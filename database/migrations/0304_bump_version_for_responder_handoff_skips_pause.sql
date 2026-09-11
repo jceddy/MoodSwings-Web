@@ -1,0 +1,23 @@
+-- Reported live, a further follow-up to the "skip the pause when
+-- nothing after-scoring changed" fix: "BotSage played Suspicion from
+-- hand, waiting on a response (player: jceddy) ... A response to
+-- Suspicion was resolved (discarded card: Shock) ... I don't think I
+-- need to see the 'Advance turn' button at this point because nothing
+-- is changing between the end of the opponent's turn and the
+-- beginning of mine."
+--
+-- Answering someone else's card's decision as its target (Suspicion,
+-- Intimidation, etc.) can immediately end the acting player's own turn
+-- and hand it straight to the responder -- always true in a 2-player
+-- game, and true in 3-4 whenever seat order puts the responder next.
+-- GameService::updateRoundTurnState() gained a fourth param,
+-- $requestingGamePlayerId (default null, unchanged everywhere else),
+-- and advanceTurn() is the one call site that passes the real
+-- responder through: when the new turn's own player matches it,
+-- notifyItsYourTurn() skips the pause_before_own_turn gate the same
+-- way the earlier after-scoring fix does -- the responder just
+-- personally chose the outcome, so there's nothing left to reveal.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.39.31' WHERE id = 1;

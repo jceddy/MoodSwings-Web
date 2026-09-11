@@ -90,6 +90,7 @@ final class BotGameplayIntegrationTest extends TestCase
             new RoundScorer(),
             $userDecklists,
             new ReplayStateBuilder($registry),
+            spawnAutomatedTurnRecheckProcesses: false,
         );
     }
 
@@ -638,6 +639,55 @@ final class BotGameplayIntegrationTest extends TestCase
     }
 
     /**
+     * scheduleAutomatedTurnRecheck()'s own MAX_AUTOMATED_TURN_RECHECK_CHAIN_DEPTH
+     * ceiling (reported live: "is there a way to implement this without
+     * requiring a cron job? can whatever is in the CRON script just run
+     * when the bot gets to the end of its turn?" -- advanceAutomatedTurns()
+     * now schedules a detached bin/recheck_automated_turn.php follow-up
+     * of itself whenever it drives something, see that method's own
+     * docblock) -- a real spawn would call exec() and fork a genuine OS
+     * process, which this test (like every other one in this file) must
+     * never do, so $recheckChainDepth is passed already AT the ceiling
+     * here specifically to prove the ceiling's own early-return (logging
+     * and skipping the exec() call entirely) doesn't otherwise change
+     * advanceAutomatedTurns()'s own ordinary return value/game-state
+     * effect -- a caller passing an already-maxed-out depth (only ever
+     * bin/recheck_automated_turn.php itself, in the pathological case
+     * this ceiling exists to guard against) still gets the bot's own
+     * move applied correctly, it just doesn't schedule yet another link.
+     */
+    public function testAdvanceAutomatedTurnsStillWorksNormallyAtTheRecheckChainDepthCeiling(): void
+    {
+        $u1 = $this->insertUser('depth-ceiling-human1');
+        $botUserId = $this->insertBotUser('depth-ceiling-bot1');
+        $gameId = $this->insertGame('standard', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+
+        $this->insertGameCard($gameId, 55, 'hand', $botPlayerId); // Apathy, value 4
+        $this->insertGameCard($gameId, 8, 'hand', $p1);
+        $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
+
+        // Deliberately NOT $this->games (spawnAutomatedTurnRecheckProcesses:
+        // false there) -- this one leaves it at its real default (true) to
+        // prove the ceiling itself, not just the disabled-spawn flag, is
+        // what prevents a real exec() call at/above the max depth.
+        $registry = DefaultEffectRegistry::build();
+        $games = new GameService(
+            new BoardStateRepository($registry),
+            new MoodPlayService($registry),
+            new RoundScorer(),
+            new UserDecklistService(new UserDecklistRepository(), new FriendshipService(new UserRepository(), new FriendshipRepository())),
+            new ReplayStateBuilder($registry),
+        );
+
+        $result = $games->advanceAutomatedTurns($gameId, recheckChainDepth: 30);
+
+        self::assertNotNull($result);
+        self::assertTrue($this->cardIsInPlay($gameId, 55));
+    }
+
+    /**
      * EARLY_PRIORITY_EFFECT_KEYS' own flat priority bonus (see
      * BotPlayerServiceTest for the policy itself in isolation), proven
      * end to end through the FULL advanceAutomatedTurns() ->
@@ -669,6 +719,121 @@ final class BotGameplayIntegrationTest extends TestCase
 
         $round = $this->fetchRound($gameId);
         self::assertSame($p1, (int) $round['current_turn_game_player_id'], 'the turn should only pass back to the human once both plays are spent');
+    }
+
+    /**
+     * End-to-end coverage of BotPlayerService::thrillHandMoodIds() (see
+     * BotPlayerServiceTest for the policy itself in isolation) through the
+     * FULL advanceAutomatedTurns() -> playMood() -> ThrillEffect::afterPlaying()
+     * -> playMood() -> NostalgiaEffect::afterPlaying() request lifecycle --
+     * reported live: a bot with Nostalgia already in play and Compulsion
+     * sitting in the discard pile played Thrill with no targets at all,
+     * missing the free combo. Thrill (103) should bounce the already-in-play
+     * Nostalgia (128) back to the bot's own hand, granting one extra play;
+     * the bot then replays Nostalgia with that extra play, picking
+     * Compulsion (86) back up from the discard pile and using Nostalgia's
+     * own separate unconditional extra play to actually play it too.
+     */
+    public function testBotBouncesNostalgiaWithThrillThenReplaysItToRetrieveCompulsionFromDiscard(): void
+    {
+        $u1 = $this->insertUser('human9');
+        $botUserId = $this->insertBotUser('bot9');
+        $gameId = $this->insertGame('standard', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+
+        $this->insertGameCard($gameId, 103, 'hand', $botPlayerId); // Thrill
+        $this->insertGameCard($gameId, 128, 'in_play', $botPlayerId); // Nostalgia, already in play
+        $this->insertGameCard($gameId, 86, 'discard'); // Compulsion, sitting in the discard pile
+        $this->insertGameCard($gameId, 8, 'hand', $p1); // human needs a non-empty hand too
+        $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
+
+        self::assertNotNull($this->games->advanceAutomatedTurns($gameId));
+
+        self::assertTrue($this->cardIsInPlay($gameId, 103), 'Thrill itself should be in play');
+        self::assertTrue($this->cardIsInPlay($gameId, 128), 'Nostalgia should be back in play after being bounced and replayed, not left sitting in hand');
+        self::assertTrue($this->cardIsInPlay($gameId, 86), "Compulsion should have been picked up from discard and played too, using Nostalgia's own extra play");
+    }
+
+    /**
+     * Reported live, from a game where Validation was already in play:
+     * "when the bot played Panic, it should have targeted its own
+     * Compulsion or Suspicion so it could re-play it to take another card
+     * from my hand." End-to-end proof (see panicTargetMoodIds()'s own
+     * docblock for the policy in isolation): Panic bounces the bot's own
+     * in-play Compulsion back to its hand, playing Panic (value 1)
+     * guarantees Validation grants another extra play, and the bot then
+     * replays Compulsion with that extra play -- ending on a fresh
+     * pending decision waiting on the human to give up a card, exactly
+     * the same shape as Compulsion's very first play.
+     */
+    public function testBotBouncesItsOwnCompulsionWithPanicThenReplaysItForAnotherSteal(): void
+    {
+        $u1 = $this->insertUser('human_panic_combo');
+        $botUserId = $this->insertBotUser('bot_panic_combo');
+        $gameId = $this->insertGame('standard', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+
+        $this->insertGameCard($gameId, 26, 'in_play', $botPlayerId); // Validation, already in play
+        $compulsionId = $this->insertGameCard($gameId, 86, 'in_play', $botPlayerId); // Compulsion, already in play
+        $this->insertGameCard($gameId, 48, 'hand', $botPlayerId); // Panic -- the bot's only hand card
+        $this->insertGameCard($gameId, 8, 'hand', $p1); // human needs a hand card, both to keep the round going and for the replayed Compulsion to actually have something to take
+        $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
+
+        self::assertNotNull($this->games->advanceAutomatedTurns($gameId));
+
+        self::assertTrue($this->cardIsInPlay($gameId, 48), 'Panic itself should be in play');
+        self::assertTrue($this->cardIsInPlay($gameId, 26), 'Validation should still be in play, unaffected');
+        self::assertFalse($this->cardIsInHand($gameId, 86), 'Compulsion should already be back in play via its own guaranteed replay, not just sitting bounced in hand');
+        self::assertTrue($this->cardIsInPlay($gameId, 86), 'Compulsion should be back in play, replayed using the extra play Panic guaranteed from Validation');
+
+        $log = $this->games->fullEventLog($gameId);
+        $entry = $log[array_key_last($log)];
+        self::assertSame('pending_decision_created', $entry['event_type'], "the replayed Compulsion should be waiting on the human's own response, same as any other Compulsion play");
+        self::assertSame($compulsionId, $entry['card_id']);
+        self::assertSame($botPlayerId, $entry['acting_game_player_id'], 'the bot is the one who played this replayed Compulsion');
+        self::assertStringContainsString('waiting on a response', $entry['description']);
+    }
+
+    /**
+     * The exact scenario reported live -- a bot ("stuck in a Creativity
+     * loop") repeatedly played Creativity as a copy of the human's own
+     * in-play Compulsion, crashing with "Missing required choice
+     * 'target_player_id'" every single retry and never advancing the
+     * turn at all, since nothing about the board state ever changed
+     * between attempts. End-to-end proof (see BotPlayerServiceTest for
+     * the choice-building fix in isolation) that the bot's own play now
+     * actually completes through the FULL advanceAutomatedTurns() ->
+     * chooseAction() -> playMood() -> MoodPlayService::
+     * resolveAfterPlayingChain() -> CompulsionEffect::pendingDecisionsFor()
+     * request lifecycle, landing on a genuine pending decision -- the
+     * same shape any other Compulsion play reaches -- rather than
+     * throwing.
+     */
+    public function testBotPlaysCreativityAsACopyOfTheHumansCompulsionWithoutCrashing(): void
+    {
+        $u1 = $this->insertUser('human_creativity_compulsion');
+        $botUserId = $this->insertBotUser('bot_creativity_compulsion');
+        $gameId = $this->insertGame('standard', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+
+        $compulsionId = $this->insertGameCard($gameId, 86, 'in_play', $p1); // Compulsion, already in play (the human's own)
+        $this->insertGameCard($gameId, 32, 'hand', $botPlayerId); // Creativity -- the bot's only hand card
+        $this->insertGameCard($gameId, 8, 'hand', $p1); // human needs a hand card, both to keep the round going and for Compulsion's own copy to actually have something to take
+        $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
+
+        self::assertNotNull($this->games->advanceAutomatedTurns($gameId));
+
+        self::assertTrue($this->cardIsInPlay($gameId, 32), "Creativity itself should be in play, copying the human's Compulsion");
+        self::assertTrue($this->cardIsInPlay($gameId, 86), "the human's own Compulsion should still be untouched in play");
+
+        $log = $this->games->fullEventLog($gameId);
+        $entry = $log[array_key_last($log)];
+        self::assertSame('pending_decision_created', $entry['event_type'], "Creativity-as-Compulsion should be waiting on the human's own response, same as any other Compulsion play, not crashed");
+        self::assertSame($botPlayerId, $entry['acting_game_player_id']);
+        self::assertStringContainsString('waiting on a response', $entry['description']);
     }
 
     /**
@@ -825,6 +990,123 @@ final class BotGameplayIntegrationTest extends TestCase
         // Its only hand card is now the human's (moved over as Compulsion's
         // own effect), and nothing is left pending.
         self::assertTrue($this->cardIsInHand($gameId, 8, ownerUserId: $u1));
+    }
+
+    /**
+     * Reported live: "when bots choose cards to give up for hand
+     * disruption moods, they should give them up the worst card they
+     * have, using the same metrics they use to evaluate cards for
+     * drafting order." Confusion (id 31, base value 4, but only a
+     * mediocre draft_priority_score) and Intimidation (id 67, base value
+     * 1, but a top-tier draft_priority_score, per migration 0143) give
+     * opposite answers depending on which metric is used -- the OLD
+     * baseValue-only policy would give up the far stronger Intimidation
+     * for saving a single point, purely because its printed value
+     * happens to be lower. Confirms the fix end to end, through the real
+     * pending-decision/advanceAutomatedTurns() plumbing, not just
+     * BotChoiceResolver in isolation.
+     */
+    public function testBotGivesUpItsWorstCardByDraftPriorityNotJustLowestValue(): void
+    {
+        $u1 = $this->insertUser('human-worst-card');
+        $botUserId = $this->insertBotUser('bot-worst-card');
+        $gameId = $this->insertGame('standard', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+
+        $compulsionId = $this->insertGameCard($gameId, 86, 'hand', $p1);
+        $this->insertGameCard($gameId, 31, 'hand', $botPlayerId); // Confusion
+        $this->insertGameCard($gameId, 67, 'hand', $botPlayerId); // Intimidation
+        // 2 plays remaining for the human's own turn -- Compulsion is only
+        // the first of them, so the round doesn't hand the turn onward to
+        // the bot (and thus play its own remaining hand card) within this
+        // same advanceAutomatedTurns() call, which would otherwise move
+        // Intimidation out of the bot's hand for an unrelated reason and
+        // make this assertion moot.
+        $this->insertGameRound($gameId, 1, $p1, $p1, 2);
+
+        $this->games->playMood($gameId, $p1, $compulsionId, ['target_player_id' => $botPlayerId]);
+        $this->games->advanceAutomatedTurns($gameId);
+
+        self::assertTrue($this->cardIsInHand($gameId, 67, ownerUserId: $botUserId), 'Intimidation is the stronger draft pick -- the bot must keep it');
+        self::assertTrue($this->cardIsInHand($gameId, 31, ownerUserId: $u1), 'Confusion is the worse card by draft priority -- it should be the one given up');
+    }
+
+    // -- advanceAutomatedTurnsForAllActiveGames() --------------------------
+
+    /**
+     * Reported live: "add a way for a bot finishing its turn to advance
+     * to the next turn without requiring a physical browser refresh
+     * somewhere - mostly this is so notifications can be generated when
+     * it is the human player's turn." advanceAutomatedTurnsForAllActiveGames()
+     * is bin/advance_automated_turns.php's own cron entry point -- a
+     * periodic sweep of every 'waiting'/'in_progress' game, calling
+     * advanceAutomatedTurns() on each independent of any request. Mirrors
+     * testBotPlaysItsHighestValuePlayableCardOnItsOwnTurn() above, but
+     * through the sweep instead of a single targeted advanceAutomatedTurns()
+     * call, across TWO separate games at once to prove it doesn't stop
+     * after the first.
+     */
+    public function testAdvanceAutomatedTurnsForAllActiveGamesDrivesEveryGamesBotTurn(): void
+    {
+        $u1 = $this->insertUser('sweep-human1');
+        $bot1 = $this->insertBotUser('sweep-bot1');
+        $gameId1 = $this->insertGame('standard', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId1, $u1, 0);
+        $botPlayerId1 = $this->insertGamePlayer($gameId1, $bot1, 1);
+        $this->insertGameCard($gameId1, 55, 'hand', $botPlayerId1); // Apathy, value 4
+        $this->insertGameCard($gameId1, 8, 'hand', $p1);
+        $this->insertGameRound($gameId1, 1, $botPlayerId1, $botPlayerId1, 1);
+
+        $u2 = $this->insertUser('sweep-human2');
+        $bot2 = $this->insertBotUser('sweep-bot2');
+        $gameId2 = $this->insertGame('standard', 'structure', $u2);
+        $p2 = $this->insertGamePlayer($gameId2, $u2, 0);
+        $botPlayerId2 = $this->insertGamePlayer($gameId2, $bot2, 1);
+        $this->insertGameCard($gameId2, 55, 'hand', $botPlayerId2);
+        $this->insertGameCard($gameId2, 8, 'hand', $p2);
+        $this->insertGameRound($gameId2, 1, $botPlayerId2, $botPlayerId2, 1);
+
+        $advancedCount = $this->games->advanceAutomatedTurnsForAllActiveGames();
+
+        self::assertSame(2, $advancedCount);
+        self::assertTrue($this->cardIsInPlay($gameId1, 55));
+        self::assertTrue($this->cardIsInPlay($gameId2, 55));
+        self::assertSame($p1, (int) $this->fetchRound($gameId1)['current_turn_game_player_id']);
+        self::assertSame($p2, (int) $this->fetchRound($gameId2)['current_turn_game_player_id']);
+    }
+
+    /**
+     * A game with nothing automated pending (no bots, no auto-pass/
+     * auto-scoring-bonus opt-in -- mirrors testAdvanceBotTurnsReturnsNullWhenNoBotsAreSeated())
+     * isn't counted, and a 'completed' game is never even examined in the
+     * first place (excluded from the sweep's own status filter) -- proven
+     * here by giving the completed game an otherwise-eligible bot turn
+     * (Apathy, still in hand) that would have been played had the status
+     * filter not excluded it.
+     */
+    public function testAdvanceAutomatedTurnsForAllActiveGamesSkipsGamesWithNothingToAdvance(): void
+    {
+        $u1 = $this->insertUser('sweep-idle-human1');
+        $u2 = $this->insertUser('sweep-idle-human2');
+        $idleGameId = $this->insertGame('standard', 'structure', $u1);
+        $idleP1 = $this->insertGamePlayer($idleGameId, $u1, 0);
+        $this->insertGamePlayer($idleGameId, $u2, 1);
+        $this->insertGameCard($idleGameId, 8, 'hand', $idleP1);
+        $this->insertGameRound($idleGameId, 1, $idleP1, $idleP1, 1);
+
+        $u3 = $this->insertUser('sweep-completed-human');
+        $bot3 = $this->insertBotUser('sweep-completed-bot');
+        $completedGameId = $this->insertGame('standard', 'structure', $u3);
+        $completedP1 = $this->insertGamePlayer($completedGameId, $u3, 0);
+        $completedBotPlayerId = $this->insertGamePlayer($completedGameId, $bot3, 1);
+        $this->insertGameCard($completedGameId, 55, 'hand', $completedBotPlayerId);
+        $this->insertGameCard($completedGameId, 8, 'hand', $completedP1);
+        $this->insertGameRound($completedGameId, 1, $completedBotPlayerId, $completedBotPlayerId, 1);
+        $this->pdo->prepare("UPDATE games SET status = 'completed' WHERE id = :id")->execute(['id' => $completedGameId]);
+
+        self::assertSame(0, $this->games->advanceAutomatedTurnsForAllActiveGames());
+        self::assertTrue($this->cardIsInHand($completedGameId, 55), 'a completed game must never be swept, even with an otherwise-eligible bot turn');
     }
 
     // -- Team Play (issue #360) --------------------------------------------
@@ -1201,9 +1483,23 @@ final class BotGameplayIntegrationTest extends TestCase
      * validation mismatch even though BotPlayerServiceTest's own
      * isolated checks pass, the same class of bug
      * testBotDiscardsToDelightWithFourOrMoreSpareCards() above already
-     * caught once for a different card. Hate/Fickleness (both base value
-     * 0) make the bot's own remaining hand unambiguously "low value", so
-     * 'refresh' is the only legal outcome here.
+     * caught once for a different card. Guile (40, base value 0) needs to
+     * discard TWO other hand cards just to be playable at all -- with
+     * only Rationalization alongside it, that cost can never be paid, so
+     * Guile is the "remaining hand" for RATIONALIZATION_LOW_VALUE_HAND_AVERAGE's
+     * own averaging (making 'refresh' the only legal outcome once
+     * Rationalization is played) without ALSO being a competing candidate
+     * `chooseAction()` could ever pick instead -- Rationalization is the
+     * only PLAYABLE card here, so it gets played regardless of
+     * sortPriorityValue()'s own demotion (BotPlayerServiceTest's own
+     * testChooseActionStillPlaysRationalizationAloneEvenWithoutATrigger),
+     * the same way a genuinely low-value BUT UNPLAYABLE remaining hand
+     * doesn't create a competing alternative to prefer over it (reported
+     * live, twice now, that a merely WEAK -- but playable -- remaining
+     * hand alone should no longer be enough on its own; see
+     * BotPlayerServiceTest's own
+     * testChooseActionNoLongerVoluntarilyPrefersRationalizationForAMerelyWeakHand
+     * for that policy in isolation).
      */
     public function testBotRefreshesItsHandWithRationalizationWhenItsRemainingHandIsWeak(): void
     {
@@ -1214,26 +1510,19 @@ final class BotGameplayIntegrationTest extends TestCase
         $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
 
         $this->insertGameCard($gameId, 49, 'hand', $botPlayerId); // Rationalization, base value 3
-        // Hate/Fickleness (not Fear -- see EARLY_PRIORITY_EFFECT_KEYS,
-        // which would otherwise outrank Rationalization here regardless
-        // of its own weak-hand trigger, defeating the point of this test)
-        $this->insertGameCard($gameId, 66, 'hand', $botPlayerId); // Hate, value 0
-        $this->insertGameCard($gameId, 39, 'hand', $botPlayerId); // Fickleness, value 0
-        // A real shared deck to actually draw the refreshed cards from --
+        $this->insertGameCard($gameId, 40, 'hand', $botPlayerId); // Guile, value 0 -- unplayable here, needs 2 other cards to discard
+        // A real shared deck to actually draw the refreshed card(s) from --
         // refreshHand() bottoms the old hand then draws that many, so
-        // without at least 2 cards here the draw would come up short.
+        // without at least 1 card here the draw would come up short.
         $this->insertGameCard($gameId, 5, 'deck', deckPosition: 0);
-        $this->insertGameCard($gameId, 6, 'deck', deckPosition: 1);
         $this->insertGameCard($gameId, 8, 'hand', $p1); // human needs a non-empty hand too
         $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
 
         self::assertNotNull($this->games->advanceAutomatedTurns($gameId));
 
         self::assertTrue($this->cardIsInPlay($gameId, 49));
-        self::assertFalse($this->cardIsInHand($gameId, 66, $botUserId), 'Hate should have been bottomed, not kept');
-        self::assertFalse($this->cardIsInHand($gameId, 39, $botUserId), 'Fickleness should have been bottomed, not kept');
+        self::assertFalse($this->cardIsInHand($gameId, 40, $botUserId), 'Guile should have been bottomed, not kept');
         self::assertTrue($this->cardIsInHand($gameId, 5, $botUserId), 'the bot should have drawn a fresh card off the deck');
-        self::assertTrue($this->cardIsInHand($gameId, 6, $botUserId), 'the bot should have drawn a fresh card off the deck');
     }
 
     /**
@@ -1263,8 +1552,10 @@ final class BotGameplayIntegrationTest extends TestCase
         $this->insertGameCard($gameId, 49, 'hand', $botPlayerId); // Rationalization, base value 3
         $this->insertGameCard($gameId, 4, 'hand', $botPlayerId); // Chivalry, value 3 -- keeps the remaining hand from reading as "low value"
         // Seat 1 (the bot's own left neighbor) holds 5 cards against the
-        // bot's own 2 -- exactly RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE
-        // (3) worth of edge.
+        // bot's own REMAINING hand of 1 (Chivalry -- Rationalization
+        // itself is excluded, see rationalizationStealDirection()'s own
+        // docblock) -- comfortably past RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE
+        // (3).
         $overstuffedHand = [38, 39, 20, 7, 3];
         foreach ($overstuffedHand as $cardId) {
             $this->insertGameCard($gameId, $cardId, 'hand', $p1);
@@ -1727,6 +2018,54 @@ final class BotGameplayIntegrationTest extends TestCase
     }
 
     /**
+     * Reported live ("it seemed to get into a loop with Creativity at the
+     * end, and I had to Resign from the game to break the loop"): a real
+     * game log showed BotSage playing Creativity 7 times in a row with no
+     * detail at all. Direct reproduction against the real engine (this
+     * test) shows the underlying combo is legitimate and correctly
+     * terminating, not an engine bug -- each Creativity copying the
+     * in-play Validation delegates to Validation's own afterPlaying()
+     * (its own unconditional "play an additional mood" grant) AND
+     * retriggers every other in-play Validation-effective card's own
+     * reactToAnotherPlay() (the printed "0 or 1 in its top right corner"
+     * reaction) including every EARLIER Creativity-as-Validation copy,
+     * which is why the grant count grows with each successive copy --
+     * but it's still strictly bounded by how many physical low-value
+     * cards the bot actually holds, so it burns through them all and
+     * then passes once its hand is empty, same as any other turn. The
+     * actual bug (fixed alongside this test -- see
+     * testFullEventLogAndRecentEventsExcludeHeuristicBotReasoning() in
+     * BotSearchIntegrationTest) was that diagnostic mode's own internal
+     * reasoning bookkeeping leaked into the human-facing log as
+     * misleading, detail-free "played Creativity" lines that made this
+     * harmless (if flashy) combo look exactly like a stuck game.
+     */
+    public function testBotExhaustsItsCreativitySupplyAgainstAnInPlayValidationWithoutHanging(): void
+    {
+        $u1 = $this->insertUser('human_creativity_loop');
+        $botUserId = $this->insertBotUser('bot_creativity_loop');
+        $gameId = $this->insertGame('standard', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+
+        $this->insertGameCard($gameId, 26, 'in_play', $botPlayerId); // Validation, already in play
+        for ($i = 0; $i < 5; $i++) {
+            $this->insertGameCard($gameId, 32, 'hand', $botPlayerId); // Creativity x5 -- the bot's entire hand
+        }
+        $this->insertGameCard($gameId, 8, 'hand', $p1); // human needs a non-empty hand
+        $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
+
+        self::assertNotNull($this->games->advanceAutomatedTurns($gameId));
+
+        $round = $this->fetchRound($gameId);
+        self::assertSame($p1, (int) $round['current_turn_game_player_id'], 'the turn must settle on the human once the bot genuinely has nothing left to play, not hang mid-combo');
+
+        $inPlay = $this->games->getState($gameId, $u1)['in_play'];
+        $creativityCopiesInPlay = array_filter($inPlay, fn (array $mood) => $mood['is_creativity_copy'] && $mood['catalog_card_id'] === 26);
+        self::assertCount(5, $creativityCopiesInPlay, 'all 5 Creativity cards should have been played as copies of Validation');
+    }
+
+    /**
      * End-to-end coverage of BotPlayerService::cynicismHasAGoodReasonToPlayNow()/
      * cynicismChoices() (see BotPlayerServiceTest for the policy itself
      * in isolation) through the FULL advanceAutomatedTurns() -> playMood()
@@ -2033,6 +2372,142 @@ final class BotGameplayIntegrationTest extends TestCase
         $round = $this->fetchRound($game2Id);
         self::assertNotNull($round['current_turn_game_player_id'], 'the round should have unfrozen');
         self::assertSame($humanGame2PlayerId, (int) $round['current_turn_game_player_id'], 'the previous winner (human) should go first again -- the bot never opts to go first itself');
+    }
+
+    /**
+     * Same deadlock, non-draft counterpart (reported live: "in non-draft
+     * best of 3 formats, the loser should choose who plays first in the
+     * next game") -- game_matches (migration 0223) now gets the exact
+     * same setPlayFirstNextMatchGame() freeze/bot-handling the draft
+     * family already had, so this mirrors
+     * testBotAutomaticallyDecidesWhoGoesFirstWhenItLostThePreviousGame()
+     * exactly, just keyed off games.game_match_id/game_matches instead of
+     * draft_match_id/draft_matches.
+     */
+    public function testBotAutomaticallyDecidesWhoGoesFirstInNonDraftMatchWhenItLostThePreviousGame(): void
+    {
+        $humanUserId = $this->insertUser('human7');
+        $botUserId = $this->insertBotUser('bot6');
+
+        $gameMatchStmt = $this->pdo->prepare(
+            "INSERT INTO game_matches (format, created_by_user_id, status) VALUES ('duel', :creator, 'in_progress')"
+        );
+        $gameMatchStmt->execute(['creator' => $humanUserId]);
+        $gameMatchId = (int) $this->pdo->lastInsertId();
+
+        // Game 1: already completed -- the bot lost.
+        $game1Id = $this->insertGame('duel', 'structure', $humanUserId);
+        $this->pdo->prepare("UPDATE games SET game_match_id = :match_id, match_game_number = 1, status = 'completed' WHERE id = :game_id")
+            ->execute(['match_id' => $gameMatchId, 'game_id' => $game1Id]);
+        $humanGame1PlayerId = $this->insertGamePlayer($game1Id, $humanUserId, 0);
+        $this->insertGamePlayer($game1Id, $botUserId, 1);
+        $this->pdo->prepare('UPDATE games SET winner_game_player_id = :winner WHERE id = :game_id')
+            ->execute(['winner' => $humanGame1PlayerId, 'game_id' => $game1Id]);
+
+        // Game 2: in progress, round 1 frozen awaiting the loser's (the
+        // bot's) decision -- same shape startGame() itself leaves it in.
+        $game2Id = $this->insertGame('duel', 'structure', $humanUserId);
+        $this->pdo->prepare("UPDATE games SET game_match_id = :match_id, match_game_number = 2, status = 'in_progress' WHERE id = :game_id")
+            ->execute(['match_id' => $gameMatchId, 'game_id' => $game2Id]);
+        $humanGame2PlayerId = $this->insertGamePlayer($game2Id, $humanUserId, 0);
+        $botGame2PlayerId = $this->insertGamePlayer($game2Id, $botUserId, 1);
+        $this->pdo->prepare(
+            "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, status)
+             VALUES (:game_id, 1, :first_player, NULL, 1, 'in_progress')"
+        )->execute(['game_id' => $game2Id, 'first_player' => $humanGame2PlayerId]);
+        $this->insertGameCard($game2Id, 8, 'hand', $humanGame2PlayerId);
+        $this->insertGameCard($game2Id, 3, 'hand', $botGame2PlayerId);
+
+        $result = $this->games->advanceAutomatedTurns($game2Id);
+
+        self::assertNotNull($result, 'the bot should have automatically resolved the frozen "who goes first" decision instead of deadlocking');
+        $round = $this->fetchRound($game2Id);
+        self::assertNotNull($round['current_turn_game_player_id'], 'the round should have unfrozen');
+        self::assertSame($humanGame2PlayerId, (int) $round['current_turn_game_player_id'], 'the previous winner (human) should go first again -- the bot never opts to go first itself');
+    }
+
+    /**
+     * Team format's own losing side is TWO seats, not one -- a bot only
+     * ever auto-declines once EVERY member of the losing team is a bot
+     * (see advanceBotFirstPlayerDecision()'s own docblock); a human
+     * teammate must always get their own say first, exactly like any
+     * other team decision.
+     */
+    public function testBotDoesNotAutoDecideFirstPlayerChoiceForALosingTeamWithAHumanMember(): void
+    {
+        [$game2Id, $humanLoserGamePlayerId] = $this->buildTeamGameMatchAtGameTwoRematchFreeze(
+            losingTeamIsAllBots: false,
+        );
+
+        $result = $this->games->advanceAutomatedTurns($game2Id);
+
+        self::assertNull($result, 'a human teammate on the losing side must get their own say -- the bot must not preempt it');
+        $round = $this->fetchRound($game2Id);
+        self::assertNull($round['current_turn_game_player_id'], 'still frozen, waiting on the human');
+    }
+
+    /** The mirror case: once BOTH of the losing team's members are bots, either one may resolve the choice automatically. */
+    public function testBotAutoDecidesFirstPlayerChoiceWhenBothLosingTeamMembersAreBots(): void
+    {
+        [$game2Id] = $this->buildTeamGameMatchAtGameTwoRematchFreeze(losingTeamIsAllBots: true);
+
+        $result = $this->games->advanceAutomatedTurns($game2Id);
+
+        self::assertNotNull($result, 'both members of the losing team are bots -- the freeze must resolve automatically');
+        $round = $this->fetchRound($game2Id);
+        self::assertNull($round['current_turn_game_player_id'], 'still frozen -- declining leaves the winning team\'s own turn_order decision still to resolve');
+        $decision = $this->pdo->query("SELECT * FROM game_team_decisions WHERE game_id = {$game2Id} AND resolved_at IS NULL")->fetch();
+        self::assertNotFalse($decision, 'the previous winning team\'s own turn_order decision must have been created');
+    }
+
+    /**
+     * Raw-SQL team-format fixture (same rationale as
+     * testBotAutomaticallyDecidesWhoGoesFirstWhenItLostThePreviousGame()'s
+     * own docblock -- advanceBotFirstPlayerDecision() only ever reads
+     * games/game_players/game_rounds) for a 4-seat game_matches rematch
+     * whose round 1 is frozen awaiting the losing team's first-player
+     * choice. Team A (seats 0/1) lost game 1; team B (seats 2/3) won.
+     *
+     * @return array{0: int, 1: int} [game2Id, one of team A's own game_player_ids]
+     */
+    private function buildTeamGameMatchAtGameTwoRematchFreeze(bool $losingTeamIsAllBots): array
+    {
+        $winnerUserId = $this->insertUser('bo3-team-bot-winner-' . uniqid());
+        $loserUserId1 = $losingTeamIsAllBots ? $this->insertBotUser('bo3-team-bot-loser1-' . uniqid()) : $this->insertUser('bo3-team-bot-loser1-' . uniqid());
+        $loserUserId2 = $this->insertBotUser('bo3-team-bot-loser2-' . uniqid());
+        $winnerTeammateUserId = $this->insertUser('bo3-team-bot-winnermate-' . uniqid());
+
+        $gameMatchStmt = $this->pdo->prepare(
+            "INSERT INTO game_matches (format, created_by_user_id, status) VALUES ('team', :creator, 'in_progress')"
+        );
+        $gameMatchStmt->execute(['creator' => $winnerUserId]);
+        $gameMatchId = (int) $this->pdo->lastInsertId();
+
+        // Game 1: already completed -- team A (the losers) lost.
+        $game1Id = $this->insertGame('team', 'structure', $winnerUserId);
+        $this->pdo->prepare("UPDATE games SET game_match_id = :match_id, match_game_number = 1, status = 'completed' WHERE id = :game_id")
+            ->execute(['match_id' => $gameMatchId, 'game_id' => $game1Id]);
+        $this->insertGamePlayer($game1Id, $loserUserId1, 0, teamId: 0);
+        $this->insertGamePlayer($game1Id, $loserUserId2, 1, teamId: 0);
+        $winnerGame1PlayerId = $this->insertGamePlayer($game1Id, $winnerUserId, 2, teamId: 1);
+        $this->insertGamePlayer($game1Id, $winnerTeammateUserId, 3, teamId: 1);
+        $this->pdo->prepare('UPDATE games SET winner_game_player_id = :winner, winner_team_id = 1 WHERE id = :game_id')
+            ->execute(['winner' => $winnerGame1PlayerId, 'game_id' => $game1Id]);
+
+        // Game 2: in progress, round 1 frozen awaiting team A's own choice.
+        $game2Id = $this->insertGame('team', 'structure', $winnerUserId);
+        $this->pdo->prepare("UPDATE games SET game_match_id = :match_id, match_game_number = 2, status = 'in_progress' WHERE id = :game_id")
+            ->execute(['match_id' => $gameMatchId, 'game_id' => $game2Id]);
+        $loserGame2PlayerId1 = $this->insertGamePlayer($game2Id, $loserUserId1, 0, teamId: 0);
+        $this->insertGamePlayer($game2Id, $loserUserId2, 1, teamId: 0);
+        $winnerGame2PlayerId = $this->insertGamePlayer($game2Id, $winnerUserId, 2, teamId: 1);
+        $this->insertGamePlayer($game2Id, $winnerTeammateUserId, 3, teamId: 1);
+        $this->pdo->prepare(
+            "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, status)
+             VALUES (:game_id, 1, :first_player, NULL, 0, 'in_progress')"
+        )->execute(['game_id' => $game2Id, 'first_player' => $winnerGame2PlayerId]);
+
+        return [$game2Id, $loserGame2PlayerId1];
     }
 
     // -- helpers ------------------------------------------------------

@@ -1,0 +1,24 @@
+-- Bot policy fix (reported live: "bots should always choose their worst
+-- card in draft pick order to discard to Zeal").
+--
+-- BotChoiceResolver's own generic 'hand_card' field policy already
+-- picked WHICH card Zeal gives up by cards.draft_priority_score
+-- (migration 0259), but BotPlayerService::shouldAttemptZealCycle() --
+-- the separate "is this even worth attempting" gate -- still judged
+-- that by plain printed base_value, a real mismatch: a card like
+-- Intimidation (printed value 1, but a top-tier draft_priority_score of
+-- 40) could trigger the gate purely on its own low printed value,
+-- risking a genuinely strong card for a random replacement it never
+-- deserved to lose, while a card like Dignity (printed value 3, but the
+-- catalog's own default tier-1 draft_priority_score) would NOT trigger
+-- it despite being exactly the kind of replaceable filler this policy
+-- exists to cycle away.
+--
+-- shouldAttemptZealCycle() now judges the bot's own worst OTHER hand
+-- card by the same draft_priority_score metric the field policy itself
+-- acts on, via a new ZEAL_LOW_DRAFT_PRIORITY_THRESHOLD (replacing
+-- ZEAL_LOW_VALUE_HAND_CARD_THRESHOLD).
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.36.2' WHERE id = 1;

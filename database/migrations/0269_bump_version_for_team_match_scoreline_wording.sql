@@ -1,0 +1,22 @@
+-- UI fix (reported live: "for best of 3 team games, the match win
+-- tracker at the top of the game display" was naming a specific
+-- opponent teammate instead of the whole opposing side; follow-up:
+-- "let's change to just say 'you' or 'opponents' (right now when it is
+-- the opponent's team it shows one of the opponent teammate's names)").
+--
+-- renderDraftMatchScoreline() in web-static/js/game.js named the
+-- trailing side of a Team/Closed Team best-of-three match by grabbing
+-- the first state.players entry whose game_player_id didn't match the
+-- viewer's own, with no team_id check at all -- even though
+-- your_wins/opponent_wins are already aggregated per TEAM
+-- (GameService::gameMatchSummaryFor()), this could name just one of
+-- the two opponents, or even the viewer's OWN teammate.
+--
+-- The trailing side is now named "opponents" (no specific username)
+-- for any format where the viewer's own team_id isn't null, matching
+-- "you"'s own already-generic, whole-side meaning for the viewer's
+-- side. Every non-team format (Duel, 2-player standard) is unaffected.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.36.5' WHERE id = 1;

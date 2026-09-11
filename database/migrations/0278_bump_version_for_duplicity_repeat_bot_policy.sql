@@ -1,0 +1,27 @@
+-- Bot policy fix (reported live: "bots should always take extra 'after
+-- playing this mood' triggers from Duplicity, if they have targets for
+-- them - especially for moods like Pacifism (suppressing additional
+-- opponent moods), Shock (putting additional opponent moods in
+-- discard), Joy (getting additional extra turns)").
+--
+-- Duplicity's own "repeat this mood's own effect?" offer
+-- (duplicity_repeat_offer) is a top-level 'nested' pending-decision
+-- field, which BotPlayerService::chooseDecisionAnswer() previously fell
+-- through to the generic resolver for -- never filled in (not one of
+-- BotChoiceResolver::resolve()'s handled field types, and never in its
+-- own ALWAYS_FILLED_OPTIONAL_FIELDS allowlist), so a bot always
+-- declined, no matter how good the repeat would have been.
+--
+-- New BotPlayerService::duplicityRepeatChoices() answers it by reusing
+-- buildChoicesForCard() for the mood being repeated exactly as if it
+-- were being played fresh -- every existing targeting policy
+-- (pacifismTargetMoodIds(), shockTargetMoodIds(), ...) decides the
+-- repeat's own choices too. Takes the repeat whenever that comes back
+-- non-empty (a genuine target found) or the mood has no after-playing
+-- fields at all (an unconditional grant like Joy, nothing to "target"
+-- to begin with); declines otherwise (no legal target, or a required
+-- field that can't be filled).
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.39.5' WHERE id = 1;

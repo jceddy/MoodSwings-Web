@@ -1,0 +1,31 @@
+-- Bug fix (reported live, a second time: "the View bot reasoning button
+-- still seems to always show 'No tactical bot plays since your own last
+-- play.' when I click it at the beginning of my turn - can we change it
+-- to show all reasoning since the end of my previous turn?").
+--
+-- GameService::tacticalBotReasoningSince() finds its "since" boundary
+-- via the viewer's own most recent game_events row. Migration 0277
+-- already excluded pending_decision_created from that search (a
+-- scoring-time/after-scoring order decision logs it as whoever now OWNS
+-- the decision, not whoever acted) via a blocklist alongside the
+-- pre-existing round_grants_computed exclusion. A second bookkeeping
+-- event, match_first_player_decided (a best-of-three match's loser
+-- choosing who goes first in the NEXT game, logged as whoever was
+-- CHOSEN -- an announcement about them, not a decision they made),
+-- turned out to cause the exact same problem right at the start of that
+-- chosen player's own next turn -- matching "at the beginning of my
+-- turn" exactly.
+--
+-- Rather than adding a third blocklisted name, tacticalBotReasoningSince()
+-- now uses an ALLOWLIST instead: only mood_played, turn_passed,
+-- pending_decision_resolved, and Open/Closed Team Play's own
+-- team_turn_order_decided/team_draw_recipient_decided/
+-- closed_team_leader_decided -- event types that genuinely represent the
+-- viewer having just acted -- ever move the boundary forward. Any other
+-- event type attributed to the viewer's own seat (today's blocklisted
+-- two included, and whatever else might log it without representing a
+-- real action in the future) is simply never consulted.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.39.7' WHERE id = 1;

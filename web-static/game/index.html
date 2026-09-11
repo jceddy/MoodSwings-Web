@@ -100,7 +100,17 @@
                 <h2>Your games</h2>
                 <button id="new-game-button" type="button">New game</button>
                 <button id="open-games-button" type="button">Open games</button>
+                <button id="weekly-sealed-pool-button" type="button">Weekly Sealed Pool</button>
                 <button id="past-games-button" type="button">Past games</button>
+                <!-- "Is there a way I can replay these in the dev site using
+                     the game export json files?" -- a completed game's own
+                     exported data (GET /games/export, downloaded from
+                     wherever it was actually played) fed straight into the
+                     same step-through replay viewer "Watch replay" already
+                     uses, without needing a row for it in this database at
+                     all -- see showImportedReplayBoard() in game.js. -->
+                <button id="import-replay-button" type="button">Import replay</button>
+                <input type="file" id="import-replay-file-input" accept=".json,application/json" hidden>
                 <ul id="games-list"></ul>
                 <p id="games-empty" hidden>No games yet &mdash; start one!</p>
             </div>
@@ -158,6 +168,23 @@
 
             <p id="board-message" class="success" hidden></p>
             <p id="board-error" class="error" hidden></p>
+            <!-- "Pause at the start of your turn" (reported live) --
+                 shown only for the viewer's own gated turn (see
+                 renderBoard()'s own state.you.turn_pending_acknowledgment
+                 check); everyone else sees no equivalent banner, the same
+                 way an ordinary in-progress turn is silent for onlookers
+                 too. Placed BEFORE #pending-decision-banner (not after)
+                 specifically so applyBoardLayoutPreference()'s own
+                 pendingDecisionBanner.insertAdjacentElement('afterend',
+                 boardStatusGroup) call keeps anchoring #board-status-group
+                 to #pending-decision-banner's own position -- putting
+                 this banner between them would otherwise get it relocated
+                 along with that group instead of staying with the other
+                 fixed-at-the-top banners. -->
+            <div id="turn-pending-acknowledgment-banner" hidden>
+                <p>It's your turn. Review what just happened, then continue when you're ready.</p>
+                <button id="advance-turn-button" type="button">Advance Turn</button>
+            </div>
             <p id="pending-decision-banner" hidden></p>
 
             <!-- Board layout preference (issue #417, migration 0174) --
@@ -174,10 +201,11 @@
                  instead of four -- #board-round-status itself can't join
                  this wrapper, since the banners between it and this group
                  (draft-match-scoreline, rematch-button, replay-controls,
-                 board-message/error, pending-decision-banner) must stay
-                 at the top in EITHER layout, so this group's own original
-                 position has to stay anchored to pending-decision-banner
-                 specifically, not to board-round-status. -->
+                 board-message/error, turn-pending-acknowledgment-banner,
+                 pending-decision-banner) must stay at the top in EITHER
+                 layout, so this group's own original position has to stay
+                 anchored to pending-decision-banner specifically, not to
+                 board-round-status. -->
             <div id="board-status-group">
                 <div id="scoring-preview" hidden>
                     <h4>Scores so far this round</h4>
@@ -403,11 +431,6 @@
                      GameService::buildGameState()'s own $revealAllHands. -->
                 <div id="spectator-final-hands-section" hidden></div>
 
-                <div id="teammate-hand-section" hidden>
-                    <h3 id="teammate-hand-title">Teammate's hand</h3>
-                    <ul id="teammate-hand-list"></ul>
-                </div>
-
                 <div id="team-decision-panel" hidden>
                     <h4 id="team-decision-title"></h4>
                     <p id="team-decision-status"></p>
@@ -447,10 +470,28 @@
                     <button id="cancel-choice-button" type="button">Close</button>
                 </div>
 
+                <!-- Open Team Play (issue #360): moved to sit right after
+                     #choices-panel (reported live: "in open team games,
+                     can we move teammate's hand under the card to play
+                     div that opens when you click a playable card?") --
+                     previously came before every other pending-
+                     decision-style panel, ahead of the card-to-play panel
+                     it now follows. renderTeammateHand() (game.js) only
+                     ever looks this up by id, so moving it here needed no
+                     JS changes of its own. #pending-decision-panel was
+                     then moved above this section too (reported live:
+                     "let's move the pending decisions panel above the
+                     teammate's hand panel, as well"), for the same
+                     "pure DOM reorder, no JS changes" reason. -->
                 <div id="pending-decision-panel" hidden>
                     <h4 id="pending-decision-title"></h4>
                     <div id="pending-decision-field"></div>
                     <button id="respond-decision-button" type="button">Respond</button>
+                </div>
+
+                <div id="teammate-hand-section" hidden>
+                    <h3 id="teammate-hand-title">Teammate's hand</h3>
+                    <ul id="teammate-hand-list"></ul>
                 </div>
 
                 <details id="play-grants-details" hidden>
@@ -464,11 +505,16 @@
                     <button id="view-log-button" type="button">View log</button>
                     <button id="view-shared-deck-button" type="button" hidden>View decklist</button>
                 </div>
-                <details id="recent-events-details" open>
-                    <summary>Recent plays</summary>
-                    <ul id="recent-events-list"></ul>
-                    <p id="recent-events-empty" hidden>Nothing has happened yet.</p>
-                </details>
+                <!-- Split out from #recent-plays-actions above so diagnostic
+                     mode's two buttons get their own line rather than
+                     crowding onto View log/View decklist's -- both toggle
+                     together (see renderBoard()'s diagnosticModeOn in
+                     game.js, which also hides this whole div when neither
+                     applies so it doesn't leave a bare gap). -->
+                <div id="bot-insight-actions" hidden>
+                    <button id="view-bot-hands-button" type="button" hidden>View bot hand(s)</button>
+                    <button id="view-bot-reasoning-button" type="button" hidden>View bot reasoning</button>
+                </div>
             </div>
 
             <!-- Outside #in-progress-area so it stays reachable while a
@@ -493,6 +539,18 @@
                  regardless of its own .hidden). -->
             <button id="view-chat-button" type="button" hidden>Chat</button>
             <button id="view-notes-button" type="button" hidden>Notes</button>
+
+            <!-- Moved out here, below Resign/Chat/Notes, so those buttons
+                 sit above the recent-plays list rather than below it
+                 (reported live). Still needs its own explicit .hidden
+                 toggle in renderBoard() (mirroring inProgressArea.hidden)
+                 now that it's no longer a descendant of #in-progress-area
+                 to inherit that from. -->
+            <details id="recent-events-details" open>
+                <summary>Recent plays</summary>
+                <ul id="recent-events-list"></ul>
+                <p id="recent-events-empty" hidden>Nothing has happened yet.</p>
+            </details>
         </section>
     </main>
 
@@ -539,6 +597,7 @@
                 </select>
             </label>
             <label class="new-game-field" id="new-game-bot-goes-first-label" hidden><input type="checkbox" id="new-game-bot-goes-first"> Let the bot go first</label>
+            <label class="new-game-field" id="new-game-diagnostic-mode-label" hidden><input type="checkbox" id="new-game-diagnostic-mode"> Diagnostic mode (view the tactical bot's hand and its reasoning behind each play)</label>
 
             <label class="new-game-field">Format
                 <select id="new-game-format">
@@ -546,6 +605,7 @@
                     <option value="duel">Duel</option>
                     <option value="draft">Draft</option>
                     <option value="sealed_deck">Sealed Deck</option>
+                    <option value="sealed_pool_of_the_day">Sealed Pool of the Day</option>
                     <option value="team">Open Team Play</option>
                     <option value="closed_team">Closed Team Play</option>
                 </select>
@@ -577,6 +637,7 @@
                     <option value="tiered_rotisserie_draft">Tiered Rotisserie Draft</option>
                     <option value="chaos_draft">Chaos Draft</option>
                     <option value="sealed_deck">Sealed Deck</option>
+                    <option value="sealed_pool_of_the_day">Sealed Pool of the Day</option>
                     <option value="one_of_each">One of Each Card</option>
                 </select>
             </label>
@@ -649,20 +710,8 @@
             </div>
 
             <div id="new-game-bot-decklist-fields" hidden>
-                <p>Choose the practice bot's own deck (it can't submit one itself):</p>
-                <label>Use a saved deck
-                    <select id="new-game-bot-saved-decklist">
-                        <option value="">Paste/upload a decklist instead</option>
-                    </select>
-                </label>
-                <div id="new-game-bot-decklist-paste-fields">
-                    <label>Upload a decklist file
-                        <input type="file" id="new-game-bot-decklist-file" accept=".txt,text/plain">
-                    </label>
-                    <label>Or paste the bot's decklist
-                        <textarea id="new-game-bot-decklist-text" class="decklist-textarea" rows="10"></textarea>
-                    </label>
-                </div>
+                <p>Choose each practice bot's own deck (it can't submit one itself):</p>
+                <div id="new-game-bot-decklist-groups"></div>
             </div>
 
             <div id="new-game-quick-draft-fields" hidden>
@@ -951,6 +1000,35 @@
         <button id="open-games-close-button" type="button">Close</button>
     </dialog>
 
+    <!-- Weekly Sealed Pool (issue #520): a FIFO auto-pairing queue, not
+         another open-lobby listing -- clicking "Join Queue" immediately
+         pairs you against the next eligible already-queued player (or
+         just waits, if none), rather than posting/browsing a listing the
+         way #open-games-dialog above does. Also hosts the event's own
+         persistent standings, toggleable between this week's still-live
+         numbers and last week's now-final ones -- see
+         GameService::weeklySealedPoolStandings()'s own docblock for why
+         only players who've completed at least one match are listed. -->
+    <dialog id="weekly-sealed-pool-dialog">
+        <h2>Weekly Sealed Pool</h2>
+        <section>
+            <p id="weekly-sealed-pool-queue-status"></p>
+            <button id="weekly-sealed-pool-join-button" type="button">Join Queue</button>
+            <button id="weekly-sealed-pool-leave-button" type="button" hidden>Leave Queue</button>
+            <p id="weekly-sealed-pool-queue-error" class="error" hidden></p>
+        </section>
+        <section>
+            <h3>Standings</h3>
+            <div>
+                <button id="weekly-sealed-pool-standings-current-button" type="button" aria-pressed="true">This week</button>
+                <button id="weekly-sealed-pool-standings-prior-button" type="button" aria-pressed="false">Last week</button>
+            </div>
+            <ul id="weekly-sealed-pool-standings-list"></ul>
+            <p id="weekly-sealed-pool-standings-empty" hidden>No standings yet -- be the first to finish a match this week!</p>
+        </section>
+        <button id="weekly-sealed-pool-close-button" type="button">Close</button>
+    </dialog>
+
     <dialog id="card-detail-dialog">
         <img id="card-detail-art" class="card-detail-art">
         <div id="card-detail-deck-builder-actions" hidden></div>
@@ -1035,6 +1113,31 @@
         <button id="shared-deck-close-button" type="button">Close</button>
     </dialog>
 
+    <!-- Diagnostic mode (games.diagnostic_mode) -- a Tactical Bot's own
+         live hand, read straight off state.diagnostic_bot_hands (already
+         part of the ordinary getState() poll, see
+         GameService::buildGameState()'s own docblock) rather than a
+         separate request. See #view-bot-hands-button above and
+         openBotHandsView() in game.js. -->
+    <dialog id="bot-hands-dialog">
+        <h2>Bot hand(s)</h2>
+        <div id="bot-hands-sections"></div>
+        <button id="bot-hands-close-button" type="button">Close</button>
+    </dialog>
+
+    <!-- Diagnostic mode (games.diagnostic_mode) -- every Tactical Bot
+         play logged (as a 'tactical_bot_reasoning' game_events row) since
+         this viewer's own last play, fetched on demand from
+         GET /games/bot-reasoning -- see #view-bot-reasoning-button above
+         and openBotReasoningView() in game.js. -->
+    <dialog id="bot-reasoning-dialog">
+        <h2>Bot reasoning</h2>
+        <p id="bot-reasoning-meta"></p>
+        <div id="bot-reasoning-turns"></div>
+        <p id="bot-reasoning-empty" hidden>No tactical bot plays since your own last play.</p>
+        <button id="bot-reasoning-close-button" type="button">Close</button>
+    </dialog>
+
     <!-- A completed Quick/Winston/Grid Draft match's full shared pool
          (issue #314), sectioned by which player drafted each card plus
          whatever nobody kept -- see openDraftPoolView() in game.js and
@@ -1091,11 +1194,11 @@
         <div id="game-chat-quick-buttons">
             <button type="button" data-quick-chat-text="GL;HF">GL;HF</button>
             <button type="button" data-quick-chat-text="GG">GG</button>
-            <button type="button" data-quick-chat-text="💀">💀</button>
-            <button type="button" data-quick-chat-text="🗿">🗿</button>
-            <button type="button" data-quick-chat-text="🤡">🤡</button>
-            <button type="button" data-quick-chat-text="😭">😭</button>
-            <button type="button" data-quick-chat-text="👑">👑</button>
+            <button type="button" class="quick-chat-emoji" data-quick-chat-text="💀">💀</button>
+            <button type="button" class="quick-chat-emoji" data-quick-chat-text="🗿">🗿</button>
+            <button type="button" class="quick-chat-emoji" data-quick-chat-text="🤡">🤡</button>
+            <button type="button" class="quick-chat-emoji" data-quick-chat-text="😭">😭</button>
+            <button type="button" class="quick-chat-emoji" data-quick-chat-text="👑">👑</button>
         </div>
         <button id="game-chat-close-button" type="button">Close</button>
     </dialog>
@@ -1158,6 +1261,19 @@
                  turning this off does not hide listings already posted
                  while it was on; cancel those separately if wanted. -->
             <label><input type="checkbox" id="settings-matchmaking-discoverable-checkbox"> Discoverable for open games (let strangers see and join games you post to the open lobby)</label>
+            <!-- "Pause at the start of your turn" (reported live: "...to
+                 allow users to more clearly see what happened during a
+                 previous turn before/after scoring effects happen...")
+                 -- unlike auto-pass/auto-apply above, this one starts
+                 UNCHECKED, matching users.pause_before_own_turn's own
+                 DEFAULT 0: it deliberately ADDS a click before every one
+                 of this player's own turns rather than saving one, so
+                 it's an explicit opt-in. Once on, GameService::
+                 notifyItsYourTurn() gates every turn handoff into this
+                 player (an ordinary mid-round pass, or a new round
+                 starting after scoring) behind their own "Advance Turn"
+                 click -- see #turn-pending-acknowledgment-banner below. -->
+            <label><input type="checkbox" id="settings-pause-before-turn-checkbox"> Pause at the start of your turn (requires clicking "Advance Turn" before you can act, so you have a chance to review what just happened first)</label>
         </section>
 
         <hr>

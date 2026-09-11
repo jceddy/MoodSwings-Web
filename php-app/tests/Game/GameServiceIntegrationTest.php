@@ -66,6 +66,18 @@ final class GameServiceIntegrationTest extends TestCase
         $pdo->exec('TRUNCATE TABLE draft_tiered_rotisserie_state');
         $pdo->exec('TRUNCATE TABLE draft_match_players');
         $pdo->exec('TRUNCATE TABLE draft_matches');
+        // Issue #520: not referenced BY draft_matches (periodic_sealed_pool_id
+        // is a nullable FK the OTHER way), so truncating draft_matches
+        // above never cleans these up on its own -- without this, a
+        // periodic_sealed_pools row created by an earlier test run stays
+        // in the table (its own (period_type, period_start) unique key is
+        // keyed off the real current date/week, not anything a test can
+        // reset) and gets silently reused by every later test's own
+        // getOrCreatePeriodicSealedPool() call for the rest of that
+        // calendar day/week, rather than each test seeing a clean slate.
+        $pdo->exec('TRUNCATE TABLE weekly_sealed_pool_standings');
+        $pdo->exec('TRUNCATE TABLE weekly_sealed_pool_queue');
+        $pdo->exec('TRUNCATE TABLE periodic_sealed_pools');
         $pdo->exec('TRUNCATE TABLE game_notes');
         $pdo->exec('TRUNCATE TABLE game_chat_messages');
         $pdo->exec('TRUNCATE TABLE game_initial_card_passes');
@@ -103,6 +115,7 @@ final class GameServiceIntegrationTest extends TestCase
             new RoundScorer(),
             $userDecklists,
             new ReplayStateBuilder($registry),
+            spawnAutomatedTurnRecheckProcesses: false,
         );
     }
 
@@ -264,6 +277,7 @@ final class GameServiceIntegrationTest extends TestCase
                 new NotificationCooldownRepository(),
                 [new PushNotificationChannel(new PushSubscriptionRepository())],
             ),
+            spawnAutomatedTurnRecheckProcesses: false,
         );
     }
 
@@ -1145,14 +1159,29 @@ final class GameServiceIntegrationTest extends TestCase
         return ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2, 'u1' => $u1, 'u2' => $u2];
     }
 
-    public function testCreateGameRejectsADuelWithMoreThanTwoPlayers(): void
+    /**
+     * Constructed Duel (custom_duel/power/structure/jceddys_75) now
+     * supports 3-4 players (issue #505), the same 2-4 gate every 'draft'
+     * deck_type already got in issue #189 -- only 5+ players (which trips
+     * the game-wide MAX_PLAYERS check before ever reaching this one) or
+     * fewer than 2 are rejected now.
+     */
+    public function testCreateGameAcceptsADuelWithThreeOrFourPlayers(): void
     {
-        $u1 = $this->insertUser('dueltoomany1');
-        $u2 = $this->insertUser('dueltoomany2');
-        $u3 = $this->insertUser('dueltoomany3');
+        foreach ([3, 4] as $playerCount) {
+            $userIds = $this->insertUsers('duelmulti-' . uniqid() . '-', $playerCount);
+            $gameId = $this->games->createGame($userIds[0], $userIds, format: 'duel');
+            self::assertIsInt($gameId, "{$playerCount} players should be accepted");
+        }
+    }
+
+    public function testCreateGameRejectsADuelWithMoreThanFourPlayers(): void
+    {
+        $userIds = $this->insertUsers('dueltoomany-' . uniqid() . '-', 5);
 
         $this->expectException(GameStateException::class);
-        $this->games->createGame($u1, [$u1, $u2, $u3], format: 'duel');
+        $this->expectExceptionMessage('cannot have more than 4 players');
+        $this->games->createGame($userIds[0], $userIds, format: 'duel');
     }
 
     public function testCreateGameRejectsADuelWithFewerThanTwoPlayers(): void
@@ -1171,6 +1200,204 @@ final class GameServiceIntegrationTest extends TestCase
         $gameId = $this->games->createGame($u1, [$u1, $u2], format: 'duel');
 
         self::assertSame('duel', $this->fetchGame($gameId)['format']);
+    }
+
+    /**
+     * Every constructed Duel player gets their own independently-built
+     * deck the same way 'one_of_each' already does for 2 players (see
+     * testStartGameGivesEachDuelPlayerTheirOwnIndependentOneOfEachDeck()
+     * below) -- BoardState's own per-player deck keying (hasSeparateDecks)
+     * already generalizes past 2 seats (it's the same mechanism 'draft'
+     * has used for 3-4 players since issue #189), so this just confirms
+     * startGame() itself doesn't choke on a 3rd/4th constructed Duel seat.
+     */
+    public function testStartGameGivesEachThreePlayerDuelTheirOwnIndependentOneOfEachDeck(): void
+    {
+        $userIds = $this->insertUsers('duel3p-' . uniqid() . '-', 3);
+        $gameId = $this->games->createGame($userIds[0], $userIds, format: 'duel', deckType: 'one_of_each');
+
+        $this->games->startGame($gameId);
+
+        $gamePlayerIds = array_map(fn (int $userId) => $this->games->gamePlayerIdFor($gameId, $userId), $userIds);
+
+        $nullOwnerStmt = $this->pdo->prepare(
+            "SELECT COUNT(*) FROM game_cards WHERE game_id = :game_id AND zone = 'deck' AND owner_game_player_id IS NULL"
+        );
+        $nullOwnerStmt->execute(['game_id' => $gameId]);
+        self::assertSame(0, (int) $nullOwnerStmt->fetchColumn()); // no shared/ownerless deck rows in a duel
+
+        $deckStmt = $this->pdo->prepare(
+            "SELECT owner_game_player_id, COUNT(*) AS n FROM game_cards WHERE game_id = :game_id AND zone = 'deck' GROUP BY owner_game_player_id"
+        );
+        $deckStmt->execute(['game_id' => $gameId]);
+        $counts = array_column($deckStmt->fetchAll(), 'n', 'owner_game_player_id');
+
+        // Each of the 3 players gets their OWN complete deck (133 total,
+        // 5 dealt to hand), not a shared pool split three ways.
+        foreach ($gamePlayerIds as $gamePlayerId) {
+            self::assertSame(133 - 5, (int) $counts[$gamePlayerId]);
+        }
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
+    }
+
+    /**
+     * Best-of-three (issue #90) stays 2-player-only for constructed Duel
+     * even now that 3-4p is supported (issue #505's own suggested scope)
+     * -- gameMatchSummaryFor()'s own your_wins/opponent_wins is a two-
+     * SIDED comparison with no well-defined "opponent" once 'duel' seats
+     * 3-4 unpaired individuals, the same reason Traditional's own
+     * best-of-three is 2-player-only (see
+     * testCreateGameBestOfThreeForStandardWithThreePlayersIsIgnored()).
+     * $bestOfThree is silently ignored (not thrown), the same "the New
+     * Game dialog's own checkbox is hidden for this combination" harmless
+     * no-op convention every other creation-time opt-in here follows.
+     */
+    public function testCreateGameBestOfThreeForDuelWithThreePlayersIsIgnored(): void
+    {
+        $userIds = $this->insertUsers('bo3-duel-3p-' . uniqid(), 3);
+
+        $gameId = $this->games->createGame($userIds[0], $userIds, format: 'duel', deckType: 'structure', bestOfThree: true);
+
+        $game = $this->fetchGame($gameId);
+        self::assertNull($game['game_match_id']);
+        self::assertNull($game['match_game_number']);
+    }
+
+    /**
+     * The mirror-image 2-player case still creates a real match, proving
+     * the fix above didn't accidentally disable best-of-three for Duel
+     * altogether.
+     */
+    public function testCreateGameBestOfThreeForDuelWithTwoPlayersCreatesAGameMatch(): void
+    {
+        $alice = $this->insertUser('bo3-duel-2p-alice');
+        $bob = $this->insertUser('bo3-duel-2p-bob');
+
+        $gameId = $this->games->createGame($alice, [$alice, $bob], format: 'duel', deckType: 'structure', bestOfThree: true);
+
+        $game = $this->fetchGame($gameId);
+        self::assertNotNull($game['game_match_id']);
+        self::assertSame(1, (int) $game['match_game_number']);
+    }
+
+    /**
+     * Issue #505 follow-up: custom_duel now supports seating 2+ bots,
+     * each supplying its OWN decklist via $botDecklists (keyed by that
+     * bot's own user id) rather than createGame() rejecting 2+ bots
+     * outright the way it used to -- $botDecklistText/$botSavedDecklistId
+     * alone only ever had room for one. Bot1 uses plain pasted text,
+     * bot2 a saved decklist (authorized against the creator, same as the
+     * single-bot $botSavedDecklistId path always was) -- two distinct
+     * decks prove each bot's own game_players row gets its own submitted
+     * deck, not one copied onto the other or a shared pool.
+     */
+    public function testCreateGameAcceptsACustomDuelGameWithTwoBotsEachSuppliedTheirOwnDecklist(): void
+    {
+        $human = $this->insertUser('duel-2bots-own-human');
+        $bot1 = $this->insertBotUser('duel-2bots-own-bot1');
+        $bot2 = $this->insertBotUser('duel-2bots-own-bot2');
+        $bot2DecklistId = $this->insertSavedDecklist($human, "Bot2's deck", [3, 4, 5, 2, 6, 11, 12]);
+
+        $gameId = $this->games->createGame(
+            $human,
+            [$human, $bot1, $bot2],
+            format: 'duel',
+            deckType: 'custom_duel',
+            duelDeckRules: ['preset' => 'user_defined', 'min_cards' => 7],
+            botDecklists: [
+                $bot1 => ['decklist_text' => "1 Charity\n1 Chivalry\n1 Complacency\n1 Benevolence\n1 Conviction\n1 Encouragement\n1 Faith"],
+                $bot2 => ['saved_decklist_id' => $bot2DecklistId],
+            ],
+        );
+
+        $bot1PlayerId = $this->games->gamePlayerIdFor($gameId, $bot1);
+        $bot2PlayerId = $this->games->gamePlayerIdFor($gameId, $bot2);
+        $bot1CardIds = json_decode((string) $this->fetchGamePlayer($bot1PlayerId)['custom_deck_card_ids'], true);
+        $bot2CardIds = json_decode((string) $this->fetchGamePlayer($bot2PlayerId)['custom_deck_card_ids'], true);
+
+        self::assertCount(7, $bot1CardIds);
+        self::assertEqualsCanonicalizing([3, 4, 5, 2, 6, 11, 12], $bot2CardIds);
+    }
+
+    /**
+     * Every seated bot needs its OWN decklist -- a $botDecklists missing
+     * an entry for one of them would otherwise leave that bot silently
+     * deckless (a bot can never call submitCustomDuelDeck() itself the
+     * way its human opponent does), stuck 'waiting' forever with no way
+     * for its creator to supply one after the fact. Rejected outright at
+     * creation time instead, the same "fail fast" precedent the old
+     * single-bot-only rejection this test replaces already established.
+     */
+    public function testCreateGameRejectsACustomDuelGameWhenASeatedBotHasNoDecklistOfItsOwn(): void
+    {
+        $human = $this->insertUser('duel-2bots-missing-human');
+        $bot1 = $this->insertBotUser('duel-2bots-missing-bot1');
+        $bot2 = $this->insertBotUser('duel-2bots-missing-bot2');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('A decklist for each seated practice bot is required');
+        $this->games->createGame(
+            $human,
+            [$human, $bot1, $bot2],
+            format: 'duel',
+            deckType: 'custom_duel',
+            duelDeckRules: ['preset' => 'user_defined', 'min_cards' => 7],
+            botDecklists: [
+                $bot1 => ['decklist_text' => "1 Charity\n1 Chivalry\n1 Complacency\n1 Benevolence\n1 Conviction\n1 Encouragement\n1 Faith"],
+            ],
+        );
+    }
+
+    /**
+     * The single-bot case may use $botDecklists too (a one-entry map
+     * keyed by that bot's own user id), not just the legacy singular
+     * $botDecklistText/$botSavedDecklistId params -- proving the two
+     * input shapes are genuinely interchangeable for one bot, not just
+     * $botDecklists being multi-bot-only.
+     */
+    public function testCreateGameAcceptsACustomDuelGameWithOneBotUsingTheKeyedBotDecklistsParam(): void
+    {
+        $human = $this->insertUser('duel-1bot-keyed-human');
+        $bot = $this->insertBotUser('duel-1bot-keyed-bot');
+
+        $gameId = $this->games->createGame(
+            $human,
+            [$human, $bot],
+            format: 'duel',
+            deckType: 'custom_duel',
+            duelDeckRules: ['preset' => 'user_defined', 'min_cards' => 7],
+            botDecklists: [
+                $bot => ['decklist_text' => "1 Charity\n1 Chivalry\n1 Complacency\n1 Benevolence\n1 Conviction\n1 Encouragement\n1 Faith"],
+            ],
+        );
+
+        $botPlayerId = $this->games->gamePlayerIdFor($gameId, $bot);
+        $cardIds = json_decode((string) $this->fetchGamePlayer($botPlayerId)['custom_deck_card_ids'], true);
+        self::assertCount(7, $cardIds);
+    }
+
+    /**
+     * The mirror-image case -- exactly one bot alongside 2 humans (3
+     * players total) -- still works, proving the rejection above is
+     * scoped to 2+ bots specifically, not constructed Duel with a bot at
+     * all.
+     */
+    public function testCreateGameAcceptsACustomDuelGameWithOneBotAndThreePlayers(): void
+    {
+        $human1 = $this->insertUser('duel-1bot-human1');
+        $human2 = $this->insertUser('duel-1bot-human2');
+        $bot = $this->insertBotUser('duel-1bot-bot');
+
+        $gameId = $this->games->createGame(
+            $human1,
+            [$human1, $human2, $bot],
+            format: 'duel',
+            deckType: 'custom_duel',
+            duelDeckRules: ['preset' => 'user_defined', 'min_cards' => 7],
+            botDecklistText: "1 Charity\n1 Chivalry\n1 Complacency\n1 Benevolence\n1 Conviction\n1 Encouragement\n1 Faith",
+        );
+
+        self::assertIsInt($gameId);
     }
 
     public function testStartGameGivesEachDuelPlayerTheirOwnIndependentOneOfEachDeck(): void
@@ -1804,6 +2031,86 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertNotContains($game2Id, array_column($this->games->listGamesForUser($bob), 'id'), 'game 2 moves out of the main lobby too');
         self::assertContains($gameId, array_column($this->games->listPastGamesForUser($bob), 'id'), 'game 1 now appears in Past games');
         self::assertContains($game2Id, array_column($this->games->listPastGamesForUser($bob), 'id'), 'as does game 2');
+    }
+
+    /**
+     * Reported live (a follow-up to the report above -- the maintainer's
+     * own game was a Sealed Pool of the Day match against a bot, where
+     * THEY were the one who resigned game 1): "the completed game already
+     * got moved to the Past Games tab, even though the match is still in
+     * progress." The two tests just above only ever check the OTHER
+     * player's own view, never the RESIGNER's -- and it's specifically
+     * the resigner's own gp.resigned_at row that used to bypass the
+     * draft/game_match "wait for the whole match to decide" carve-out
+     * entirely (see listGamesForUser()'s own docblock), moving game 1 to
+     * their own Past games immediately even though they're still
+     * perfectly normally seated (no resignation of their own) in game 2,
+     * sitting right there in what should be their main lobby. Quick Draft
+     * here (not Sealed Pool of the Day) since the underlying bug is in
+     * the shared draft_matches carve-out, deck_type-agnostic.
+     */
+    public function testListGamesForUserKeepsAResignedDraftMatchGameVisibleForTheResignerWhileASiblingGameIsStillInProgress(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture(winsNeeded: 1);
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+        $this->submitFullQuickDraftDeck($gameId, $u1);
+        $this->submitFullQuickDraftDeck($gameId, $u2);
+        $this->games->startGame($gameId);
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $u1));
+
+        self::assertSame('completed', $this->fetchGame($gameId)['status']);
+        self::assertSame('deck_building', $this->fetchDraftMatch($draftMatchId)['status'], 'one game loss (even by resignation) is not enough to decide a best-of-three match');
+
+        self::assertContains($gameId, array_column($this->games->listGamesForUser($u1), 'id'), "the RESIGNER's own view must still show completed game 1 while the match is undecided, not just their opponent's");
+        self::assertNotContains($gameId, array_column($this->games->listPastGamesForUser($u1), 'id'), 'and must NOT yet appear in the resigner\'s own Past games');
+
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE draft_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $draftMatchId]);
+        $game2Id = (int) $nextGameStmt->fetchColumn();
+        self::assertContains($game2Id, array_column($this->games->listGamesForUser($u1), 'id'), 'game 2 (which the resigner has NOT resigned from) must also be in their own main lobby');
+
+        // Deciding the match (2-0 against the resigner) should THEN move
+        // both games to their own Past games, same as the non-resignation
+        // case already does.
+        $this->submitFullQuickDraftDeck($game2Id, $u1);
+        $this->submitFullQuickDraftDeck($game2Id, $u2);
+        $this->games->startGame($game2Id);
+        $this->games->resignGame($game2Id, $this->games->gamePlayerIdFor($game2Id, $u1));
+
+        self::assertSame('completed', $this->fetchDraftMatch($draftMatchId)['status'], 'the match is now decided 2-0 against the resigner');
+        self::assertNotContains($gameId, array_column($this->games->listGamesForUser($u1), 'id'), 'game 1 moves out of the resigner\'s own main lobby once the whole match is decided');
+        self::assertNotContains($game2Id, array_column($this->games->listGamesForUser($u1), 'id'), 'game 2 moves out too');
+        self::assertContains($gameId, array_column($this->games->listPastGamesForUser($u1), 'id'), 'game 1 now appears in the resigner\'s own Past games');
+        self::assertContains($game2Id, array_column($this->games->listPastGamesForUser($u1), 'id'), 'as does game 2');
+    }
+
+    /** Same fix, for the game_matches (Duel/Team/Closed Team Play/Traditional) wrapper -- see the draft_matches version just above. */
+    public function testListGamesForUserKeepsAResignedGameMatchGameVisibleForTheResignerWhileASiblingGameIsStillInProgress(): void
+    {
+        $alice = $this->insertUser('bo3-resigner-alice');
+        $bob = $this->insertUser('bo3-resigner-bob');
+
+        $gameId = $this->games->createGame($alice, [$alice, $bob], format: 'duel', deckType: 'structure', bestOfThree: true);
+        $this->games->startGame($gameId);
+
+        $gameMatchId = (int) $this->fetchGame($gameId)['game_match_id'];
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $alice));
+
+        self::assertSame('in_progress', $this->fetchGameMatch($gameMatchId)['status'], 'one game loss is not enough to decide a best-of-three match');
+
+        self::assertContains($gameId, array_column($this->games->listGamesForUser($alice), 'id'), "the RESIGNER's own view must still show completed game 1 while the match is undecided");
+        self::assertNotContains($gameId, array_column($this->games->listPastGamesForUser($alice), 'id'), 'and must NOT yet appear in the resigner\'s own Past games');
+
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE game_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $gameMatchId]);
+        $game2Id = (int) $nextGameStmt->fetchColumn();
+        self::assertContains($game2Id, array_column($this->games->listGamesForUser($alice), 'id'), 'game 2 must also be in the resigner\'s own main lobby');
     }
 
     // -- Cleanup cron (issue #84) --------------------------------------------
@@ -2952,6 +3259,68 @@ final class GameServiceIntegrationTest extends TestCase
         $registry = DefaultEffectRegistry::build();
         $state = (new BoardStateRepository($registry))->load($gameId);
         self::assertSame([$angerId], $state->discardPile()); // Anger's own repeat had nothing left to target -- no-op, not an error
+    }
+
+    /**
+     * Reported live: "bots should always take extra 'after playing this
+     * mood' triggers from Duplicity, if they have targets for them -
+     * especially for moods like Pacifism ... Shock ... Joy." Exercises
+     * the real round trip through advanceAutomatedTurns() -- not just
+     * BotPlayerService::chooseDecisionAnswer() in isolation (see
+     * BotPlayerServiceTest's own unit coverage for the policy itself) --
+     * a bot's own duplicity_repeat_offer is routed back to
+     * chooseDecisionAnswer() the exact same way any other pending
+     * decision targeting a bot seat already is
+     * (advanceAutomatedTurns()'s own dispatch loop).
+     *
+     * The original play manually targets only opponent 1's Courage
+     * (simulating whatever the bot's own initial targeting happened to
+     * pick), deliberately leaving opponent 2's Complacency untouched --
+     * a genuine target still available once Duplicity's own repeat
+     * offer comes up, which the fix must actually take.
+     */
+    public function testAdvanceAutomatedTurnsHasABotTakeDuplicitysRepeatOfferForPacifismWithATarget(): void
+    {
+        $bot = $this->insertBotUser('pacifismdup-bot');
+        $u2 = $this->insertUser('pacifismdup-opp1');
+        $u3 = $this->insertUser('pacifismdup-opp2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $bot]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $bot, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $p3 = $this->insertGamePlayer($gameId, $u3, 2);
+
+        $this->insertGameCard($gameId, 37, 'in_play', $p1); // Duplicity
+        $pacifismId = $this->insertGameCard($gameId, 20, 'hand', $p1); // Pacifism
+        $courageId = $this->insertGameCard($gameId, 7, 'in_play', $p2); // opponent 1's Courage, value 1
+        $complacencyId = $this->insertGameCard($gameId, 5, 'in_play', $p3); // opponent 2's Complacency, value 4 -- left for the repeat
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $playResult = $this->games->playMood($gameId, $p1, $pacifismId, ['target_mood_ids' => [$courageId]]);
+        self::assertTrue($playResult['pending_decision'] ?? false);
+
+        $pending = $this->games->getState($gameId, $bot)['round']['pending_decision'];
+        self::assertSame('duplicity_repeat_offer', $pending['decision_type']);
+        self::assertSame($p1, $pending['target_game_player_id']);
+
+        $this->games->advanceAutomatedTurns($gameId);
+
+        // getState()'s own round summary always carries a 'pending_decision'
+        // key (null when nothing's pending) rather than omitting it.
+        self::assertNull($this->games->getState($gameId, $bot)['round']['pending_decision']);
+
+        $registry = DefaultEffectRegistry::build();
+        $state = (new BoardStateRepository($registry))->load($gameId);
+        $suppressedByPacifism = $state->suppressedByCardId($pacifismId);
+        sort($suppressedByPacifism);
+        $expected = [$courageId, $complacencyId];
+        sort($expected);
+        self::assertSame($expected, $suppressedByPacifism);
     }
 
     /**
@@ -7828,6 +8197,48 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame("Enthusiasm's scoring effect triggered, waiting on a response from enthlog1", $description);
     }
 
+    /**
+     * Reported live: a full round's worth of Tactical Bot reasoning went
+     * missing from the "View bot reasoning" dialog, traced to
+     * GameService::viewerOwnLastTurnEventId() treating the viewer's own
+     * answer to Enthusiasm's/Passion's scoring-time "take the bonus?"
+     * prompt as "their own last play," pushing the boundary past that
+     * entire round's own bot plays. respondToDecision()'s own scoring-time
+     * branch now tags its 'pending_decision_resolved' event
+     * 'scoring_trigger' (mirroring the sibling 'pending_decision_created'
+     * event's own use of that flag) specifically so that method can tell
+     * it apart from an ordinary mid-turn decision response.
+     */
+    public function testEnthusiasmsScoringDecisionResolutionIsTaggedAsAScoringTrigger(): void
+    {
+        $u1 = $this->insertUser('enthtag1');
+        $u2 = $this->insertUser('enthtag2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 116, 'in_play', $p1); // Enthusiasm
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->pass($gameId, $p1);
+        $this->games->pass($gameId, $p2);
+        $this->games->respondToDecision($gameId, $p1, ['take_bonus' => true]);
+
+        $stmt = $this->pdo->prepare(
+            "SELECT details FROM game_events WHERE game_id = :game_id AND event_type = 'pending_decision_resolved' ORDER BY id DESC LIMIT 1"
+        );
+        $stmt->execute(['game_id' => $gameId]);
+        $details = json_decode((string) $stmt->fetchColumn(), true);
+
+        self::assertTrue($details['scoring_trigger'] ?? false, 'a scoring-time decision resolution must be tagged so it can be excluded from "the viewer\'s own last play" boundary elsewhere');
+    }
+
     public function testEnthusiasmAddsNoBonusWhenDeclined(): void
     {
         $u1 = $this->insertUser('enth3');
@@ -9613,7 +10024,7 @@ final class GameServiceIntegrationTest extends TestCase
         $bob = $this->insertUser('draft-nonquickdraft-bob');
 
         $this->expectException(GameStateException::class);
-        $this->expectExceptionMessage('only supports the "quick_draft"/"winston_draft"/"grid_draft"/"rotisserie_draft"/"tiered_rotisserie_draft"/"sealed_deck" deck types');
+        $this->expectExceptionMessage('only supports the "quick_draft"/"winston_draft"/"grid_draft"/"rotisserie_draft"/"tiered_rotisserie_draft"/"sealed_deck"/"sealed_pool_of_the_day"/"weekly_sealed_pool" deck types');
 
         $this->games->createGame($creator, [$creator, $bob], format: 'draft', deckType: 'structure');
     }
@@ -10234,6 +10645,39 @@ final class GameServiceIntegrationTest extends TestCase
 
             $currentGameId = (int) $nextGame['id'];
         }
+    }
+
+    /**
+     * Reported live: "in best of three matches, the bot diagnostic mode
+     * should be carried forward through all of the match games."
+     * advanceDraftMatch()'s own INSERT for the next game never included
+     * diagnostic_mode at all, so it silently reset to off (the column's
+     * own default) every time -- diagnostic mode manually flipped on here
+     * (rather than seating a real Tactical Bot) since this test only
+     * cares whether the CARRY-FORWARD itself works, not the separate
+     * "diagnostic mode requires a Tactical Bot" gate createGame() already
+     * enforces and other tests already cover.
+     */
+    public function testQuickDraftMatchCarriesDiagnosticModeForwardIntoGameTwo(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture(winsNeeded: 1);
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+        $this->submitFullQuickDraftDeck($gameId, $u1);
+        $this->submitFullQuickDraftDeck($gameId, $u2);
+        $this->games->startGame($gameId);
+
+        $this->pdo->prepare('UPDATE games SET diagnostic_mode = 1 WHERE id = :id')->execute(['id' => $gameId]);
+
+        $this->completeQuickDraftGameByPassing($gameId);
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE draft_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $draftMatchId]);
+        $game2Id = (int) $nextGameStmt->fetchColumn();
+
+        self::assertSame(1, (int) $this->fetchGame($game2Id)['diagnostic_mode'], 'diagnostic mode must carry forward into game 2 of a best-of-three draft match');
     }
 
     /** @return array{gameId: int, u1: int, u2: int, nextGameId: int, winnerUserId: int, loserUserId: int} */
@@ -17163,6 +17607,574 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame(2, $this->games->getState($gameId, $alice)['sealed_deck']['games_to_win'], 'A 2-player Sealed Deck match should be best-of-three, same as every other draft deck_type (issue #189)');
     }
 
+    // -- Sealed Pool of the Day (issue #520) -----------------------------
+
+    public function testCreateGameRejectsSealedPoolOfTheDayForNonDraftFormat(): void
+    {
+        $creator = $this->insertUser('sealedpool-nondraft-alice');
+        $bob = $this->insertUser('sealedpool-nondraft-bob');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('only supported for the "draft" format');
+
+        $this->games->createGame($creator, [$creator, $bob], format: 'standard', deckType: 'sealed_pool_of_the_day');
+    }
+
+    /**
+     * Reported live: "let's limit sealed pool of the day/week to only
+     * two players" -- unlike every other DRAFT_DECK_TYPES member (2-4
+     * players), createGame() rejects a 3rd (or 4th) seat outright for
+     * this deck type.
+     */
+    public function testCreateGameRejectsSealedPoolOfTheDayWithMoreThanTwoPlayers(): void
+    {
+        $alice = $this->insertUser('sealedpool-3p-alice');
+        $bob = $this->insertUser('sealedpool-3p-bob');
+        $carol = $this->insertUser('sealedpool-3p-carol');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('must have exactly 2 players');
+
+        $this->games->createGame($alice, [$alice, $bob, $carol], format: 'draft', deckType: 'sealed_pool_of_the_day');
+    }
+
+    /**
+     * The same restriction blocks Team Play/Closed Team Play outright
+     * too, even at their own required 4 players -- every OTHER
+     * DRAFT_DECK_TYPES member supports both team formats (see "Duel:
+     * separate per-player decks"), but Weekly Sealed Pool's own 1v1
+     * standings ladder (and Sealed Pool of the Day sharing the same
+     * restriction for consistency) has no equivalent team-vs-team
+     * scoring concept.
+     */
+    public function testCreateGameRejectsSealedPoolOfTheDayForTeamPlay(): void
+    {
+        $alice = $this->insertUser('sealedpool-team-alice');
+        $bob = $this->insertUser('sealedpool-team-bob');
+        $carol = $this->insertUser('sealedpool-team-carol');
+        $dave = $this->insertUser('sealedpool-team-dave');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage("doesn't support Team Play or Closed Team Play");
+
+        $this->games->createGame($alice, [$alice, $bob, $carol, $dave], format: 'team', partnerUserId: $bob, deckType: 'sealed_pool_of_the_day');
+    }
+
+    /**
+     * The mirror-image case -- exactly 2 players -- still works, proving
+     * the rejection above is scoped to 3+ specifically, not 'draft'
+     * format Sealed Pool of the Day in general.
+     */
+    public function testCreateGameAcceptsSealedPoolOfTheDayWithExactlyTwoPlayers(): void
+    {
+        $alice = $this->insertUser('sealedpool-2p-alice');
+        $bob = $this->insertUser('sealedpool-2p-bob');
+
+        $gameId = $this->games->createGame($alice, [$alice, $bob], format: 'draft', deckType: 'sealed_pool_of_the_day');
+
+        self::assertIsInt($gameId);
+    }
+
+    /**
+     * The defining difference from ordinary Sealed Deck (see
+     * testCreateGameSealedDeckPoolsAreIndependentAcrossPlayers() above,
+     * which asserts the exact opposite for that deck_type): every seated
+     * player gets the IDENTICAL 50-card pool, not an independently
+     * randomized one.
+     */
+    public function testCreateGameSealedPoolOfTheDayDealsTheIdenticalFiftyCardPoolToEveryPlayer(): void
+    {
+        $alice = $this->insertUser('sealedpool-identical-alice');
+        $bob = $this->insertUser('sealedpool-identical-bob');
+
+        $gameId = $this->games->createGame(
+            $alice,
+            [$alice, $bob],
+            format: 'draft',
+            deckType: 'sealed_pool_of_the_day',
+        );
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $match = $this->fetchDraftMatch($draftMatchId);
+        self::assertSame('deck_building', $match['status'], 'Sealed Pool of the Day has no live drafting phase either, same as ordinary Sealed Deck');
+
+        $aliceCardIds = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $alice)['drafted_card_ids'], true);
+        $bobCardIds = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $bob)['drafted_card_ids'], true);
+        self::assertCount(50, $aliceCardIds);
+        self::assertSame($aliceCardIds, $bobCardIds, 'Every seated player should be dealt the exact same shared pool, not independently randomized ones');
+
+        self::assertSame(
+            ['rare' => 4, 'mythic' => 2],
+            $this->games->getState($gameId, $alice)['sealed_deck']['deck_building']['rarity_caps'],
+            'The deck-building state should surface the per-rarity caps so the UI can show/enforce them'
+        );
+    }
+
+    /**
+     * The shared pool is generated ONCE per UTC-6 calendar day and
+     * persisted (periodic_sealed_pools), not re-rolled per game -- a
+     * second game created the same day should reuse the exact same pool
+     * (and the exact same periodic_sealed_pools row) as the first,
+     * rather than each game getting its own fresh 50 cards.
+     */
+    public function testCreateGameSealedPoolOfTheDayReusesTheSamePoolForASecondGameTheSameDay(): void
+    {
+        $alice = $this->insertUser('sealedpool-reuse-alice');
+        $bob = $this->insertUser('sealedpool-reuse-bob');
+        $carol = $this->insertUser('sealedpool-reuse-carol');
+        $dave = $this->insertUser('sealedpool-reuse-dave');
+
+        $firstGameId = $this->games->createGame($alice, [$alice, $bob], format: 'draft', deckType: 'sealed_pool_of_the_day');
+        $secondGameId = $this->games->createGame($carol, [$carol, $dave], format: 'draft', deckType: 'sealed_pool_of_the_day');
+
+        $firstDraftMatchId = (int) $this->fetchGame($firstGameId)['draft_match_id'];
+        $secondDraftMatchId = (int) $this->fetchGame($secondGameId)['draft_match_id'];
+
+        $firstPoolId = $this->fetchDraftMatch($firstDraftMatchId)['periodic_sealed_pool_id'];
+        $secondPoolId = $this->fetchDraftMatch($secondDraftMatchId)['periodic_sealed_pool_id'];
+        self::assertNotNull($firstPoolId);
+        self::assertSame($firstPoolId, $secondPoolId, 'Both games were created the same day, so they should share the exact same periodic_sealed_pools row');
+
+        $aliceCardIds = json_decode((string) $this->fetchDraftMatchPlayer($firstDraftMatchId, $alice)['drafted_card_ids'], true);
+        $carolCardIds = json_decode((string) $this->fetchDraftMatchPlayer($secondDraftMatchId, $carol)['drafted_card_ids'], true);
+        self::assertSame($aliceCardIds, $carolCardIds, 'Both games should have been dealt the exact same 50 cards');
+
+        $poolRowCount = (int) $this->pdo->query('SELECT COUNT(*) FROM periodic_sealed_pools')->fetchColumn();
+        self::assertSame(1, $poolRowCount, 'Only one pool row should exist for the day, regardless of how many games read it');
+    }
+
+    /**
+     * Reported live: "since we aren't tracking standings for sealed pool
+     * of the day, let's allow practice bots for those" -- previously
+     * rejected outright (botsSupportedFor()) because
+     * BotPlayerService::chooseDraftDeck() had no awareness of
+     * PERIODIC_SEALED_POOL_RARITY_DECK_CAPS; see
+     * testAdvanceAutomatedTurnsBuildsARarityCappedDeckForABotInSealedPoolOfTheDay()
+     * below for proof the bot's own eventual deck actually stays legal,
+     * now that advanceBotDraftDeck() passes those caps through.
+     */
+    public function testCreateGameAcceptsABotForSealedPoolOfTheDay(): void
+    {
+        $human = $this->insertUser('sealedpool-bot-human');
+        $bot = $this->insertBotUser('sealedpool-bot-bot');
+
+        $gameId = $this->games->createGame($human, [$human, $bot], format: 'draft', deckType: 'sealed_pool_of_the_day');
+
+        self::assertIsInt($gameId);
+    }
+
+    /**
+     * Weekly Sealed Pool stays bot-excluded even after the fix above --
+     * its own standings ladder has no way to represent a practice bot,
+     * and WeeklySealedPoolQueueService never queues one anyway, but
+     * createGame() itself still refuses to seat one directly.
+     */
+    public function testCreateGameRejectsABotForWeeklySealedPool(): void
+    {
+        $human = $this->insertUser('weeklypool-bot-human');
+        $bot = $this->insertBotUser('weeklypool-bot-bot');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('Practice bots are only supported for');
+
+        $this->games->createGame($human, [$human, $bot], format: 'draft', deckType: 'weekly_sealed_pool');
+    }
+
+    /**
+     * End-to-end proof that a bot seated in Sealed Pool of the Day
+     * builds a LEGAL deck once drafting/deck-building resolves --
+     * advanceBotDraftDeck() now passes PERIODIC_SEALED_POOL_RARITY_DECK_CAPS
+     * into chooseDraftDeck(), so the bot's own submitDraftDeck() call
+     * should never hit the "silent, permanent stall" an over-cap
+     * rejection would otherwise cause.
+     */
+    public function testAdvanceAutomatedTurnsBuildsARarityCappedDeckForABotInSealedPoolOfTheDay(): void
+    {
+        $human = $this->insertUser('sealedpool-botdeck-human');
+        $botUserId = $this->insertBotUser('sealedpool-botdeck-bot');
+
+        $gameId = $this->games->createGame($human, [$human, $botUserId], format: 'draft', deckType: 'sealed_pool_of_the_day');
+
+        self::assertNotNull($this->games->advanceAutomatedTurns($gameId), 'the bot should have built and submitted its own deck');
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $botDeckCardIds = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $botUserId)['deck_card_ids'], true);
+        self::assertNotNull($botDeckCardIds, 'the bot should not still be sitting deckless');
+        self::assertGreaterThanOrEqual(12, count($botDeckCardIds));
+
+        $catalog = $this->pdo->query('SELECT id, rarity FROM cards')->fetchAll();
+        $rarityById = array_column($catalog, 'rarity', 'id');
+        $rarityCounts = array_count_values(array_map(fn (int $id) => $rarityById[$id], array_map(intval(...), $botDeckCardIds)));
+        self::assertLessThanOrEqual(4, $rarityCounts['rare'] ?? 0, "the bot's own deck should never exceed the rare cap");
+        self::assertLessThanOrEqual(2, $rarityCounts['mythic'] ?? 0, "the bot's own deck should never exceed the mythic cap");
+    }
+
+    /**
+     * Reported live: "on the game lobby view, the completed game already
+     * got moved to the Past Games tab, even though the match is still in
+     * progress -- please fix this to make it behave like the regular
+     * Sealed Deck matches." Investigated at length against a Sealed Pool
+     * of the Day match against a bot (the only PERIODIC_SEALED_POOL_DECK_TYPES
+     * member bots are ever seated for -- Weekly Sealed Pool stays
+     * bot-excluded), the deck_type the maintainer confirmed the reported
+     * game actually used. This end-to-end reproduction -- human + bot,
+     * game 1 decided by a round win, game 2 already created and waiting
+     * -- could NOT reproduce the reported bug: listGamesForUser()/
+     * listPastGamesForUser()'s own draft_matches carve-out (see
+     * listGamesForUser()'s own docblock) is deck_type-agnostic, already
+     * covered for Quick Draft by
+     * testListGamesForUserKeepsACompletedDraftMatchGameVisibleWhileASiblingGameIsStillInProgress(),
+     * and behaves identically here. Kept as a permanent regression test
+     * for this exact human+bot Sealed Pool of the Day shape either way.
+     */
+    public function testListGamesForUserKeepsACompletedSealedPoolOfTheDayGameVisibleAgainstABotWhileTheMatchContinues(): void
+    {
+        $human = $this->insertUser('sealedpool-lobby-human');
+        $botUserId = $this->insertBotUser('sealedpool-lobby-bot');
+
+        $gameId = $this->games->createGame($human, [$human, $botUserId], format: 'draft', winsNeeded: 1, deckType: 'sealed_pool_of_the_day');
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        $catalog = $this->pdo->query('SELECT id, rarity FROM cards')->fetchAll();
+        $rarityById = array_column($catalog, 'rarity', 'id');
+        $deckCardIdsFor = function (int $userId) use ($draftMatchId, $rarityById): array {
+            $pooledCardIds = array_map(intval(...), json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userId)['drafted_card_ids'], true));
+            $mythicIds = array_values(array_filter($pooledCardIds, fn (int $id) => $rarityById[$id] === 'mythic'));
+            $nonMythicIds = array_values(array_filter($pooledCardIds, fn (int $id) => $rarityById[$id] !== 'mythic'));
+
+            return [...array_slice($mythicIds, 0, 2), ...array_slice($nonMythicIds, 0, 10)];
+        };
+        $this->games->submitDraftDeck($gameId, $human, $deckCardIdsFor($human));
+        // The bot's own deck is submitted directly here (not via
+        // advanceAutomatedTurns()) deliberately -- that call would also
+        // drive the bot straight into playing its own first turn the
+        // instant round 1 starts with the bot going first (a coin flip),
+        // leaving an unresolved pending decision behind that
+        // resignGame() below correctly refuses to resign through
+        // (assertNoPendingDecision(), same gate playMood()/pass() use).
+        // Submitting directly here starts the game without ever letting
+        // either side actually move, so the immediate resign below is
+        // always legal regardless of who the coin flip picked.
+        $this->games->submitDraftDeck($gameId, $botUserId, $deckCardIdsFor($botUserId));
+        $this->games->startGame($gameId);
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
+
+        // The bot resigns -- the simplest way to end game 1 deterministically
+        // without wading into round-by-round play (mirrors the identical
+        // shortcut testListGamesForUserKeepsAnInProgressGameMatchsFinishedGameVisibleWhileMatchContinues
+        // uses for the game_matches carve-out). Checked from the HUMAN's
+        // own perspective below specifically because THEY are the winner
+        // here, not the resigner -- gp.resigned_at routes a resigner
+        // straight to their own Past games regardless of match status, a
+        // separate and already-tested mechanism this test isn't targeting.
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $botUserId));
+
+        self::assertSame('completed', $this->fetchGame($gameId)['status'], 'sanity check: game 1 must have actually finished');
+        self::assertSame('deck_building', $this->fetchDraftMatch($draftMatchId)['status'], 'the match itself is not decided yet -- winsNeeded: 1 games still need 2 of them per draftGamesToWin()');
+
+        self::assertContains($gameId, array_column($this->games->listGamesForUser($human), 'id'), 'completed game 1 must stay in the main lobby while the Sealed Pool of the Day match is undecided');
+        self::assertNotContains($gameId, array_column($this->games->listPastGamesForUser($human), 'id'), 'and must NOT yet appear in Past games');
+
+        $nextGameStmt = $this->pdo->prepare("SELECT id FROM games WHERE draft_match_id = :match_id AND id != :game_id");
+        $nextGameStmt->execute(['match_id' => $draftMatchId, 'game_id' => $gameId]);
+        $game2Id = (int) $nextGameStmt->fetchColumn();
+        self::assertNotSame(0, $game2Id, 'game 2 of the match should already exist');
+        self::assertContains($game2Id, array_column($this->games->listGamesForUser($human), 'id'), 'game 2 (waiting on deck submission) must also be in the main lobby');
+    }
+
+    public function testSubmitDraftDeckRejectsExceedingTheMythicCapForSealedPoolOfTheDay(): void
+    {
+        $alice = $this->insertUser('sealedpool-mythiccap-alice');
+        $bob = $this->insertUser('sealedpool-mythiccap-bob');
+
+        $gameId = $this->games->createGame($alice, [$alice, $bob], format: 'draft', deckType: 'sealed_pool_of_the_day');
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $pooledCardIds = array_map(intval(...), json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $alice)['drafted_card_ids'], true));
+
+        $catalog = $this->pdo->query('SELECT id, rarity FROM cards')->fetchAll();
+        $rarityById = array_column($catalog, 'rarity', 'id');
+        $mythicIds = array_values(array_filter($pooledCardIds, fn (int $id) => $rarityById[$id] === 'mythic'));
+        $nonMythicIds = array_values(array_filter($pooledCardIds, fn (int $id) => $rarityById[$id] !== 'mythic'));
+        self::assertGreaterThan(2, count($mythicIds), 'The pool should contain more than the 2-card cap worth of Mythics (5, per PERIODIC_SEALED_POOL_RARITY_COUNTS)');
+
+        // 3 Mythics (one over the cap of 2) plus enough filler to clear
+        // the 12-card minimum.
+        $deckCardIds = [...array_slice($mythicIds, 0, 3), ...array_slice($nonMythicIds, 0, 9)];
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('at most 2 mythic card(s)');
+
+        $this->games->submitDraftDeck($gameId, $alice, $deckCardIds);
+    }
+
+    public function testSubmitDraftDeckAcceptsADeckWithinTheRarityCapsForSealedPoolOfTheDay(): void
+    {
+        $alice = $this->insertUser('sealedpool-withincap-alice');
+        $bob = $this->insertUser('sealedpool-withincap-bob');
+
+        $gameId = $this->games->createGame($alice, [$alice, $bob], format: 'draft', deckType: 'sealed_pool_of_the_day');
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $pooledCardIds = array_map(intval(...), json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $alice)['drafted_card_ids'], true));
+
+        $catalog = $this->pdo->query('SELECT id, rarity FROM cards')->fetchAll();
+        $rarityById = array_column($catalog, 'rarity', 'id');
+        $mythicIds = array_values(array_filter($pooledCardIds, fn (int $id) => $rarityById[$id] === 'mythic'));
+        $nonMythicIds = array_values(array_filter($pooledCardIds, fn (int $id) => $rarityById[$id] !== 'mythic'));
+
+        // Exactly 2 Mythics (right at the cap) plus filler -- should be
+        // accepted without throwing.
+        $deckCardIds = [...array_slice($mythicIds, 0, 2), ...array_slice($nonMythicIds, 0, 10)];
+        $this->games->submitDraftDeck($gameId, $alice, $deckCardIds);
+
+        self::assertSame(
+            $deckCardIds,
+            array_map(intval(...), json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $alice)['deck_card_ids'], true))
+        );
+    }
+
+    // -- Weekly Sealed Pool (issue #520) ---------------------------------
+
+    private function weeklyQueue(): \MoodSwings\Matchmaking\WeeklySealedPoolQueueService
+    {
+        return new \MoodSwings\Matchmaking\WeeklySealedPoolQueueService($this->games);
+    }
+
+    /**
+     * The same "exactly 2 players" restriction Sealed Pool of the Day
+     * gets (both deck types share PERIODIC_SEALED_POOL_DECK_TYPES/the
+     * same createGame() validation) -- WeeklySealedPoolQueueService's own
+     * FIFO pairing only ever calls createGame() with exactly 2 players
+     * anyway, but this is the direct createGame()-level guarantee, not
+     * just an incidental property of how the queue happens to call it.
+     */
+    public function testCreateGameRejectsWeeklySealedPoolWithMoreThanTwoPlayers(): void
+    {
+        $alice = $this->insertUser('weeklypool-3p-alice');
+        $bob = $this->insertUser('weeklypool-3p-bob');
+        $carol = $this->insertUser('weeklypool-3p-carol');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('must have exactly 2 players');
+
+        $this->games->createGame($alice, [$alice, $bob, $carol], format: 'draft', deckType: 'weekly_sealed_pool');
+    }
+
+    public function testCreateGameRejectsWeeklySealedPoolForTeamPlay(): void
+    {
+        $alice = $this->insertUser('weeklypool-team-alice');
+        $bob = $this->insertUser('weeklypool-team-bob');
+        $carol = $this->insertUser('weeklypool-team-carol');
+        $dave = $this->insertUser('weeklypool-team-dave');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage("doesn't support Team Play or Closed Team Play");
+
+        $this->games->createGame($alice, [$alice, $bob, $carol, $dave], format: 'closed_team', partnerUserId: $bob, deckType: 'weekly_sealed_pool');
+    }
+
+    public function testJoinQueuePairsTwoWaitingPlayers(): void
+    {
+        $alice = $this->insertUser('weeklypool-pair-alice');
+        $bob = $this->insertUser('weeklypool-pair-bob');
+        $queue = $this->weeklyQueue();
+
+        $first = $queue->joinQueue($alice);
+        self::assertSame(['status' => 'waiting'], $first, 'nobody else is queued yet, so the first joiner just waits');
+
+        $second = $queue->joinQueue($bob);
+        self::assertSame('paired', $second['status']);
+        self::assertSame('weeklypool-pair-alice', $second['opponent_username']);
+
+        $game = $this->fetchGame($second['game_id']);
+        self::assertSame('weekly_sealed_pool', $game['deck_type']);
+        self::assertSame('draft', $game['format']);
+
+        $draftMatchId = (int) $game['draft_match_id'];
+        self::assertNotNull($draftMatchId);
+        $aliceCardIds = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $alice)['drafted_card_ids'], true);
+        $bobCardIds = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $bob)['drafted_card_ids'], true);
+        self::assertCount(50, $aliceCardIds);
+        self::assertSame($aliceCardIds, $bobCardIds, 'a Weekly Sealed Pool match reuses the same shared-pool mechanism as Sealed Pool of the Day');
+
+        // The joiner (bob) was paired immediately -- neither player
+        // should still have a row in the queue.
+        $queueCount = (int) $this->pdo->query('SELECT COUNT(*) FROM weekly_sealed_pool_queue')->fetchColumn();
+        self::assertSame(0, $queueCount);
+    }
+
+    public function testJoinQueueWaitsWhenNoEligibleOpponentIsQueued(): void
+    {
+        $alice = $this->insertUser('weeklypool-wait-alice');
+        $queue = $this->weeklyQueue();
+
+        $result = $queue->joinQueue($alice);
+
+        self::assertSame(['status' => 'waiting'], $result);
+        $queueCount = (int) $this->pdo->query('SELECT COUNT(*) FROM weekly_sealed_pool_queue')->fetchColumn();
+        self::assertSame(1, $queueCount);
+    }
+
+    public function testJoinQueueRejectsJoiningTwice(): void
+    {
+        $alice = $this->insertUser('weeklypool-twice-alice');
+        $queue = $this->weeklyQueue();
+        $queue->joinQueue($alice);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('already in the Weekly Sealed Pool queue');
+
+        $queue->joinQueue($alice);
+    }
+
+    public function testLeaveQueueRemovesAWaitingPlayerAndIsIdempotent(): void
+    {
+        $alice = $this->insertUser('weeklypool-leave-alice');
+        $queue = $this->weeklyQueue();
+        $queue->joinQueue($alice);
+
+        $queue->leaveQueue($alice);
+        self::assertSame(0, (int) $this->pdo->query('SELECT COUNT(*) FROM weekly_sealed_pool_queue')->fetchColumn());
+
+        // Leaving again (already not queued) must not throw.
+        $queue->leaveQueue($alice);
+    }
+
+    /**
+     * The pairing rule's own "haven't already faced this week" half --
+     * see GameService::haveWeeklySealedPoolOpponentsAlreadyPlayed(). Alice
+     * and Bob already share a Weekly Sealed Pool match this week (created
+     * directly here, bypassing the queue, to set up the precondition);
+     * Carol joining after both are queued should pair with whichever of
+     * them she reaches, but a THIRD join from whichever of Alice/Bob is
+     * left must keep waiting rather than being re-paired with the other.
+     */
+    public function testJoinQueueSkipsAnOpponentAlreadyPlayedThisWeek(): void
+    {
+        $alice = $this->insertUser('weeklypool-rematch-alice');
+        $bob = $this->insertUser('weeklypool-rematch-bob');
+        $queue = $this->weeklyQueue();
+
+        // Alice and Bob already played each other this week.
+        $this->games->createGame($alice, [$alice, $bob], format: 'draft', deckType: 'weekly_sealed_pool');
+
+        $queue->joinQueue($alice);
+        $result = $queue->joinQueue($bob);
+
+        self::assertSame('waiting', $result['status'], 'Bob must not be re-paired against Alice again this same week');
+        self::assertSame(2, (int) $this->pdo->query('SELECT COUNT(*) FROM weekly_sealed_pool_queue')->fetchColumn(), 'both Alice and Bob should now be waiting, since neither is an eligible opponent for the other');
+    }
+
+    public function testJoinQueueEnforcesTheConcurrentMatchCap(): void
+    {
+        $alice = $this->insertUser('weeklypool-cap-alice');
+        $bob = $this->insertUser('weeklypool-cap-bob');
+        $carol = $this->insertUser('weeklypool-cap-carol');
+        $dave = $this->insertUser('weeklypool-cap-dave');
+        $queue = $this->weeklyQueue();
+
+        // Alice already has 2 Weekly Sealed Pool matches in progress this
+        // week (the maintainer's own suggested cap) -- both left
+        // unresolved (status stays 'waiting'/'deck_building', never
+        // completed) so they still count as "in progress".
+        $this->games->createGame($alice, [$alice, $bob], format: 'draft', deckType: 'weekly_sealed_pool');
+        $this->games->createGame($alice, [$alice, $carol], format: 'draft', deckType: 'weekly_sealed_pool');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('2 Weekly Sealed Pool matches in progress');
+
+        $queue->joinQueue($alice);
+    }
+
+    /**
+     * Drives a Weekly Sealed Pool match to completion the simplest way
+     * available -- resigning while the match is still in its
+     * deck_building 'waiting' phase, which resignFromDraftMatch() turns
+     * into an immediate single-survivor win (see that method's own
+     * docblock) without needing to submit decks or actually play a game
+     * out. This exercises the exact same recordMatchCompletionStats()
+     * path an ordinary best-of-three finish would.
+     */
+    public function testCompletingAWeeklySealedPoolMatchRecordsStandings(): void
+    {
+        $alice = $this->insertUser('weeklypool-standings-alice');
+        $bob = $this->insertUser('weeklypool-standings-bob');
+
+        $gameId = $this->games->createGame($alice, [$alice, $bob], format: 'draft', deckType: 'weekly_sealed_pool');
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $bob));
+
+        $poolId = $this->games->currentWeeklySealedPoolId();
+        $standings = $this->games->weeklySealedPoolStandings($poolId);
+        $byUser = array_column($standings, null, 'user_id');
+
+        self::assertSame(1, $byUser[$alice]['wins']);
+        self::assertSame(0, $byUser[$alice]['losses']);
+        self::assertSame(0, $byUser[$bob]['wins']);
+        self::assertSame(1, $byUser[$bob]['losses']);
+        self::assertSame(1, $byUser[$alice]['rank'], 'the winner should rank ahead of the loser');
+    }
+
+    /**
+     * The whole point of ranking by a hidden score rather than plain win
+     * count (the maintainer's own asymmetric win +3/loss -2 choice):
+     * Alice's 2-1 record (score 6 - 2 = 4) outranks Bob's perfect-but-
+     * smaller 1-0 record (score 3) despite having a loss on it -- playing
+     * (and mostly winning) more matches beats turtling on one clean win,
+     * exactly the shape the formula is meant to produce.
+     */
+    public function testWeeklySealedPoolStandingsRankByHiddenScoreNotRawWinCount(): void
+    {
+        $alice = $this->insertUser('weeklypool-rank-alice');
+        $bob = $this->insertUser('weeklypool-rank-bob');
+        $carol = $this->insertUser('weeklypool-rank-carol');
+        $dave = $this->insertUser('weeklypool-rank-dave');
+
+        // Alice: 2-1 (score 4). Bob: 1-0 (score 3). Carol: 1-1 (score 1). Dave: 0-2 (score -4).
+        $game1 = $this->games->createGame($alice, [$alice, $carol], format: 'draft', deckType: 'weekly_sealed_pool');
+        $this->games->resignGame($game1, $this->games->gamePlayerIdFor($game1, $carol));
+        $game2 = $this->games->createGame($alice, [$alice, $dave], format: 'draft', deckType: 'weekly_sealed_pool');
+        $this->games->resignGame($game2, $this->games->gamePlayerIdFor($game2, $dave));
+        $game3 = $this->games->createGame($carol, [$carol, $alice], format: 'draft', deckType: 'weekly_sealed_pool');
+        $this->games->resignGame($game3, $this->games->gamePlayerIdFor($game3, $alice));
+        $game4 = $this->games->createGame($bob, [$bob, $dave], format: 'draft', deckType: 'weekly_sealed_pool');
+        $this->games->resignGame($game4, $this->games->gamePlayerIdFor($game4, $dave));
+
+        $poolId = $this->games->currentWeeklySealedPoolId();
+        $standings = $this->games->weeklySealedPoolStandings($poolId);
+        $rankedUserIds = array_column($standings, 'user_id');
+
+        self::assertSame([$alice, $bob, $carol, $dave], $rankedUserIds, 'Alice (score 4) > Bob (score 3) > Carol (score 1) > Dave (score -4)');
+
+        $byUser = array_column($standings, null, 'user_id');
+        self::assertSame(2, $byUser[$alice]['wins']);
+        self::assertSame(1, $byUser[$alice]['losses']);
+        self::assertSame(1, $byUser[$bob]['wins']);
+        self::assertSame(0, $byUser[$bob]['losses']);
+        self::assertSame(25, $byUser[$alice]['percentile'], '1st of 4 -> ceil(1/4 * 100) = 25%');
+        self::assertSame(100, $byUser[$dave]['percentile'], 'last of 4 -> 100%');
+    }
+
+    /**
+     * A player who has only queued/is still mid-match (nothing completed
+     * yet) has no standings row at all, so they're correctly absent
+     * rather than cluttering the list with an untested 0-0 entry.
+     */
+    public function testWeeklySealedPoolStandingsOmitsPlayersWithNoCompletedMatch(): void
+    {
+        $alice = $this->insertUser('weeklypool-unranked-alice');
+        $bob = $this->insertUser('weeklypool-unranked-bob');
+        $this->games->createGame($alice, [$alice, $bob], format: 'draft', deckType: 'weekly_sealed_pool');
+
+        $poolId = $this->games->currentWeeklySealedPoolId();
+        $standings = $this->games->weeklySealedPoolStandings($poolId);
+
+        self::assertSame([], $standings, 'neither player has completed a match yet, so neither is ranked');
+    }
+
+    public function testPriorWeeklySealedPoolIdIsNullWithNoPriorEvent(): void
+    {
+        self::assertNull($this->games->priorWeeklySealedPoolId());
+    }
+
     // Issue #90: Duel/Open Team Play/Closed Team Play's own best-of-three
     // match wrapper (game_matches, migration 0223) for non-draft deck
     // types -- the following tests mirror testQuickDraftMatchProgressesGamesAndCompletesAtTwoWins()'s
@@ -17317,6 +18329,35 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertFalse($nextGameStmt->fetchColumn(), 'a best-of-three match can never need a 4th game');
     }
 
+    /**
+     * Reported live: "in best of three matches, the bot diagnostic mode
+     * should be carried forward through all of the match games."
+     * advanceGameMatch()'s own INSERT for the next game never included
+     * diagnostic_mode at all, so it silently reset to off (the column's
+     * own default) every time.
+     */
+    public function testBestOfThreeDuelMatchCarriesDiagnosticModeForwardIntoGameTwo(): void
+    {
+        $human = $this->insertUser('bo3-diag-human');
+        $bot = $this->insertBotUser('bo3-diag-bot');
+        $this->pdo->prepare('UPDATE users SET uses_tactical_ai = 1 WHERE id = :id')->execute(['id' => $bot]);
+
+        $gameId = $this->games->createGame($human, [$human, $bot], format: 'duel', deckType: 'structure', bestOfThree: true, diagnosticMode: true);
+        self::assertSame(1, (int) $this->fetchGame($gameId)['diagnostic_mode'], 'game 1 itself should have diagnostic mode on, per createGame()\'s own gate');
+
+        $this->games->startGame($gameId);
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $human));
+
+        $gameMatchId = (int) $this->fetchGame($gameId)['game_match_id'];
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE game_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $gameMatchId]);
+        $game2Id = (int) $nextGameStmt->fetchColumn();
+
+        self::assertSame(1, (int) $this->fetchGame($game2Id)['diagnostic_mode'], 'diagnostic mode must carry forward into game 2 of the match');
+    }
+
     // getState()'s own top-level 'game_match' field (GameService::
     // gameMatchStateFor()) is what drives the board's "Go to next game"
     // button once a non-draft best-of-three game finishes but the match
@@ -17357,6 +18398,265 @@ final class GameServiceIntegrationTest extends TestCase
         $completedState = $this->games->getState($gameId, $bob);
         self::assertSame('completed', $completedState['game_match']['status'], 'the match is now decided 2-0');
         self::assertNull($completedState['game_match']['next_game_id'], 'a completed match has no next game to route to');
+    }
+
+    // Issue #90 follow-up (reported live: "in non-draft best of 3 formats,
+    // the loser should choose who plays first in the next game") --
+    // extends the draft-family's own setPlayFirstNextMatchGame() fairness
+    // rule to the game_matches wrapper. The following tests mirror
+    // buildQuickDraftMatchAtGameTwoStart()'s own shape and the
+    // testLoserOfPreviousGameCanOptToPlayFirstInNextGame()-style tests
+    // built on it, but for Duel/Traditional (an individual, 2-seat
+    // rematch, driven to completion via resignGame() same as every other
+    // non-draft best-of-three test above) and Team/Closed Team (a
+    // TEAM-scoped rematch -- either losing teammate may answer).
+
+    /** @return array{gameId: int, u1: int, u2: int, nextGameId: int, winnerUserId: int, loserUserId: int} */
+    private function buildDuelBestOfThreeMatchAtGameTwoStart(): array
+    {
+        $u1 = $this->insertUser('bo3-duel-fp-' . uniqid());
+        $u2 = $this->insertUser('bo3-duel-fp-' . uniqid());
+        $gameId = $this->games->createGame($u1, [$u1, $u2], format: 'duel', deckType: 'structure', bestOfThree: true);
+        $this->games->startGame($gameId);
+
+        $gameMatchId = (int) $this->fetchGame($gameId)['game_match_id'];
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $u1)); // u1 resigns -- u2 wins game 1
+
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE game_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $gameMatchId]);
+        $nextGameId = (int) $nextGameStmt->fetchColumn();
+        $this->games->startGame($nextGameId);
+
+        return ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2, 'nextGameId' => $nextGameId, 'winnerUserId' => $u2, 'loserUserId' => $u1];
+    }
+
+    public function testLoserOfNonDraftDuelMatchCanOptToPlayFirstInNextGame(): void
+    {
+        [
+            'nextGameId' => $nextGameId,
+            'winnerUserId' => $winnerUserId, 'loserUserId' => $loserUserId,
+        ] = $this->buildDuelBestOfThreeMatchAtGameTwoStart();
+
+        $frozenRound = $this->fetchRound($nextGameId);
+        self::assertNull($frozenRound['current_turn_game_player_id'], 'round 1 must stay frozen until the loser decides');
+
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $loserUserId, true);
+
+        $round = $this->fetchRound($nextGameId);
+        $firstPlayerUserId = (int) $this->pdo->query(
+            'SELECT user_id FROM game_players WHERE id = ' . (int) $round['first_game_player_id']
+        )->fetchColumn();
+        self::assertSame($loserUserId, $firstPlayerUserId);
+        self::assertNotSame($winnerUserId, $firstPlayerUserId);
+        self::assertSame($round['first_game_player_id'], $round['current_turn_game_player_id'], 'the round unfreezes once decided');
+    }
+
+    public function testLoserOfNonDraftDuelMatchCanLetPreviousWinnerGoFirstAgain(): void
+    {
+        [
+            'nextGameId' => $nextGameId,
+            'winnerUserId' => $winnerUserId, 'loserUserId' => $loserUserId,
+        ] = $this->buildDuelBestOfThreeMatchAtGameTwoStart();
+
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $loserUserId, false);
+
+        $round = $this->fetchRound($nextGameId);
+        $firstPlayerUserId = (int) $this->pdo->query(
+            'SELECT user_id FROM game_players WHERE id = ' . (int) $round['first_game_player_id']
+        )->fetchColumn();
+        self::assertSame($winnerUserId, $firstPlayerUserId);
+        self::assertSame($round['first_game_player_id'], $round['current_turn_game_player_id'], 'the round unfreezes once decided');
+    }
+
+    public function testOnlyTheLoserOfThePreviousNonDraftGameCanSetWhoGoesFirst(): void
+    {
+        ['nextGameId' => $nextGameId, 'winnerUserId' => $winnerUserId] = $this->buildDuelBestOfThreeMatchAtGameTwoStart();
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('Only the loser');
+
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $winnerUserId, true);
+    }
+
+    public function testGetStateExposesFirstPlayerDecisionForNonDraftBestOfThree(): void
+    {
+        [
+            'nextGameId' => $nextGameId,
+            'winnerUserId' => $winnerUserId, 'loserUserId' => $loserUserId,
+        ] = $this->buildDuelBestOfThreeMatchAtGameTwoStart();
+
+        $loserDecision = $this->games->getState($nextGameId, $loserUserId)['first_player_decision'];
+        self::assertTrue($loserDecision['you_are_previous_loser']);
+        self::assertSame($winnerUserId, $loserDecision['default_user_id']);
+
+        $winnerDecision = $this->games->getState($nextGameId, $winnerUserId)['first_player_decision'];
+        self::assertFalse($winnerDecision['you_are_previous_loser']);
+        self::assertSame($winnerUserId, $winnerDecision['default_user_id']);
+
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $loserUserId, true);
+
+        self::assertNull($this->games->getState($nextGameId, $loserUserId)['first_player_decision'], 'no longer frozen, so there is nothing left to decide');
+    }
+
+    /** @return array{gameId: int, winningTeamUserIds: int[], losingTeamUserIds: int[], nextGameId: int} */
+    private function buildTeamBestOfThreeMatchAtGameTwoStart(string $format): array
+    {
+        $userIds = $this->insertUsers('bo3-team-fp-' . uniqid() . '-', 4);
+        [$a1, $a2, $b1, $b2] = $userIds;
+        $gameId = $this->games->createGame($a1, $userIds, format: $format, deckType: 'structure', partnerUserId: $a2, bestOfThree: true);
+        $this->games->startGame($gameId);
+
+        $gameMatchId = (int) $this->fetchGame($gameId)['game_match_id'];
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $a1)); // team A resigns -- team B wins game 1
+
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE game_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $gameMatchId]);
+        $nextGameId = (int) $nextGameStmt->fetchColumn();
+        $this->games->startGame($nextGameId);
+
+        return ['gameId' => $gameId, 'winningTeamUserIds' => [$b1, $b2], 'losingTeamUserIds' => [$a1, $a2], 'nextGameId' => $nextGameId];
+    }
+
+    /**
+     * Team-scoped rematch: EITHER member of the losing team may answer
+     * for their shared side (no propose/confirm negotiation needed, since
+     * "should our team go first" is a plain team-wide binary, unlike
+     * turn_order's own "which ONE of us" choice) -- deliberately answered
+     * here by $losingTeamUserIds[1], not [0], to prove it's not secretly
+     * restricted to whichever teammate has the lower seat_order.
+     */
+    public function testEitherLosingTeamMemberCanOptTheirTeamToPlayFirstInNextGame(): void
+    {
+        [
+            'nextGameId' => $nextGameId,
+            'winningTeamUserIds' => $winningTeamUserIds, 'losingTeamUserIds' => $losingTeamUserIds,
+        ] = $this->buildTeamBestOfThreeMatchAtGameTwoStart('team');
+
+        $frozenRound = $this->fetchRound($nextGameId);
+        self::assertNull($frozenRound['current_turn_game_player_id'], 'round 1 must stay frozen until the losing team decides');
+        self::assertNull($this->games->getState($nextGameId, $winningTeamUserIds[0])['team_decision'], 'the turn_order decision is deferred until the first-player choice resolves');
+
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $losingTeamUserIds[1], true);
+
+        $round = $this->fetchRound($nextGameId);
+        self::assertNull($round['current_turn_game_player_id'], 'still frozen -- the chosen team\'s own turn_order decision must resolve first');
+        $firstPlayerTeamId = $this->teamIdByGamePlayer($nextGameId)[(int) $round['first_game_player_id']];
+        $losingTeamId = $this->teamIdByGamePlayer($nextGameId)[$this->games->gamePlayerIdFor($nextGameId, $losingTeamUserIds[0])];
+        self::assertSame($losingTeamId, $firstPlayerTeamId, 'the losing team opted to go first themselves');
+    }
+
+    /** @return array<int,int> game_player_id => team_id */
+    private function teamIdByGamePlayer(int $gameId): array
+    {
+        $stmt = $this->pdo->prepare('SELECT id, team_id FROM game_players WHERE game_id = :game_id');
+        $stmt->execute(['game_id' => $gameId]);
+        $map = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $map[(int) $row['id']] = (int) $row['team_id'];
+        }
+
+        return $map;
+    }
+
+    public function testChoosingToPlayFirstCreatesTheTurnOrderDecisionForTheChosenTeam(): void
+    {
+        [
+            'nextGameId' => $nextGameId,
+            'losingTeamUserIds' => $losingTeamUserIds,
+        ] = $this->buildTeamBestOfThreeMatchAtGameTwoStart('team');
+
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $losingTeamUserIds[0], true);
+
+        $decision = $this->games->getState($nextGameId, $losingTeamUserIds[0])['team_decision'];
+        self::assertNotNull($decision, 'the losing team\'s own turn_order decision must exist now that they opted to go first');
+        self::assertSame('turn_order', $decision['decision_type']);
+        $candidateUserIds = array_map(
+            fn (int $gamePlayerId) => $this->pdo->query('SELECT user_id FROM game_players WHERE id = ' . $gamePlayerId)->fetchColumn(),
+            $decision['candidate_game_player_ids'],
+        );
+        sort($candidateUserIds);
+        $expected = $losingTeamUserIds;
+        sort($expected);
+        self::assertSame($expected, array_map(intval(...), $candidateUserIds));
+    }
+
+    public function testDecliningKeepsTheTurnOrderDecisionOnThePreviousWinningTeam(): void
+    {
+        [
+            'nextGameId' => $nextGameId,
+            'winningTeamUserIds' => $winningTeamUserIds, 'losingTeamUserIds' => $losingTeamUserIds,
+        ] = $this->buildTeamBestOfThreeMatchAtGameTwoStart('team');
+
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $losingTeamUserIds[0], false);
+
+        $decision = $this->games->getState($nextGameId, $winningTeamUserIds[0])['team_decision'];
+        self::assertNotNull($decision);
+        $candidateUserIds = array_map(
+            fn (int $gamePlayerId) => (int) $this->pdo->query('SELECT user_id FROM game_players WHERE id = ' . $gamePlayerId)->fetchColumn(),
+            $decision['candidate_game_player_ids'],
+        );
+        sort($candidateUserIds);
+        $expected = $winningTeamUserIds;
+        sort($expected);
+        self::assertSame($expected, $candidateUserIds, 'declining leaves the previous winning team first, same as never answering at all');
+    }
+
+    public function testWinningTeamMemberCannotSetWhoGoesFirstInTeamMatch(): void
+    {
+        [
+            'nextGameId' => $nextGameId,
+            'winningTeamUserIds' => $winningTeamUserIds,
+        ] = $this->buildTeamBestOfThreeMatchAtGameTwoStart('team');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('Only the loser');
+
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $winningTeamUserIds[0], true);
+    }
+
+    public function testClosedTeamBestOfThreeRoundStaysFrozenUntilLosingTeamDecides(): void
+    {
+        ['nextGameId' => $nextGameId] = $this->buildTeamBestOfThreeMatchAtGameTwoStart('closed_team');
+
+        $round = $this->fetchRound($nextGameId);
+        self::assertNull($round['current_turn_game_player_id'], 'round 1 must stay frozen until the losing team decides, even before the pregame card pass');
+    }
+
+    /**
+     * Choosing to go first for Closed Team Play (unlike 'team', which
+     * still needs its own turn_order decision afterward) directly names
+     * the real first-turn player -- the pregame blind card pass, deferred
+     * from startGame() until this resolves, is what finally unfreezes the
+     * round to $chosenGamePlayerId once every seat has passed.
+     */
+    public function testClosedTeamFirstPlayerChoiceThenPregameCardPassUnfreezesToTheChosenPlayer(): void
+    {
+        [
+            'nextGameId' => $nextGameId,
+            'losingTeamUserIds' => $losingTeamUserIds,
+        ] = $this->buildTeamBestOfThreeMatchAtGameTwoStart('closed_team');
+
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $losingTeamUserIds[1], true);
+
+        $chosenGamePlayerId = $this->games->gamePlayerIdFor($nextGameId, $losingTeamUserIds[1]);
+        $round = $this->fetchRound($nextGameId);
+        self::assertSame($chosenGamePlayerId, (int) $round['first_game_player_id']);
+        self::assertNull($round['current_turn_game_player_id'], 'still frozen -- the pregame card pass has to complete first');
+
+        $seatIds = array_map(intval(...), $this->pdo->query("SELECT id FROM game_players WHERE game_id = {$nextGameId}")->fetchAll(PDO::FETCH_COLUMN));
+        foreach ($seatIds as $gamePlayerId) {
+            $hand = array_map(intval(...), $this->pdo->query(
+                "SELECT id FROM game_cards WHERE game_id = {$nextGameId} AND zone = 'hand' AND owner_game_player_id = {$gamePlayerId} LIMIT 2"
+            )->fetchAll(PDO::FETCH_COLUMN));
+            $this->games->submitInitialCardPass($nextGameId, $gamePlayerId, $hand);
+        }
+
+        $unfrozenRound = $this->fetchRound($nextGameId);
+        self::assertSame($chosenGamePlayerId, (int) $unfrozenRound['current_turn_game_player_id'], 'the chosen player takes the real first turn once the pregame pass completes');
     }
 
     public function testBestOfThreeCustomDuelResetsTheDecklistForTheNextGame(): void

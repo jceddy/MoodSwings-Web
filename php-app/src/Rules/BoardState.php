@@ -478,7 +478,7 @@ final class BoardState
             && $this->teamIdByPlayer[$a] === $this->teamIdByPlayer[$b];
     }
 
-    /** @return array{color:string,rarity:string,baseValue:int,altValue:?int,effectKey:string,hasToPlay:bool,hasWhileInPlay:bool,hasAfterPlaying:bool,rulesText:string} */
+    /** @return array{color:string,rarity:string,baseValue:int,altValue:?int,effectKey:string,hasToPlay:bool,hasWhileInPlay:bool,hasAfterPlaying:bool,rulesText:string,draftPriorityScore:int} */
     public function catalogRow(int $cardId): array
     {
         $catalogId = $this->catalogCardId($cardId);

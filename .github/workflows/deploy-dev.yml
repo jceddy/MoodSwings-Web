@@ -65,6 +65,13 @@ jobs:
           DB_PASSWORD: ${{ secrets.DEV_DB_PASSWORD }}
           APP_URL: ${{ vars.DEV_APP_URL }}
           SITE_URL: ${{ vars.DEV_SITE_URL }}
+          # Not DEV_-prefixed, same reasoning as the plain SMTP_* secrets
+          # below: the CLI-capable php binary's own path (see
+          # GameService::cliPhpBinary()'s own docblock) is a property of
+          # the HOSTING ACCOUNT's own PHP version configuration, not
+          # something that differs between this dev subdomain and
+          # production -- both share the same cPanel account.
+          PHP_CLI_BINARY: ${{ vars.PHP_CLI_BINARY }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
@@ -115,6 +122,22 @@ jobs:
           cp -R php-app/src dist/src
           cp -R php-app/vendor dist/vendor
 
+          # Standalone CLI scripts (bin/run_bot_search.php,
+          # bin/recheck_automated_turn.php, the cron sweeps, etc.) --
+          # GameService::launchTacticalBotSearchJob()/
+          # scheduleAutomatedTurnRecheck() locate these via
+          # dirname(__DIR__, 2) . '/bin/...' from src/Game/GameService.php,
+          # i.e. a sibling of dist/src, same as dist/database below.
+          # Missing entirely before this: every exec()'d background search
+          # job failed to even start (no such file), which read exactly
+          # like the search process crashing or a hosting/exec()
+          # restriction -- reported live: "based on the results I'm seeing
+          # when I test this process must be crashing basically all the
+          # time" -- confirmed via bot_search_jobs.heartbeat_at (migration
+          # 0283) staying NULL on every stale job, meaning the spawned
+          # process never got far enough to even boot its own autoloader.
+          cp -R php-app/bin dist/bin
+
           # Migration files, so the "Run database migrations" step below
           # (a POST /migrate call against the just-deployed app, which has
           # no shell access of its own) can find them via
@@ -143,6 +166,7 @@ jobs:
           write_env_var DB_PASSWORD "$DB_PASSWORD"
           write_env_var APP_URL "$APP_URL"
           write_env_var SITE_URL "$SITE_URL"
+          write_env_var PHP_CLI_BINARY "$PHP_CLI_BINARY"
           write_env_var SMTP_HOST "$SMTP_HOST"
           write_env_var SMTP_PORT "$SMTP_PORT"
           write_env_var SMTP_USERNAME "$SMTP_USERNAME"

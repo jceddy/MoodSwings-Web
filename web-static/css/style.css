@@ -1068,20 +1068,40 @@ body.game-page {
 
 /* #resign-button sits outside #in-progress-area (see its own comment in
    game/index.html) so it stays reachable even while a draft match is
-   still 'waiting' -- what's directly above it varies (the recent-events
-   list, a drafting/deck-building panel, ...), so margin-top here is more
+   still 'waiting' -- what's directly above it varies (#bot-insight-actions,
+   a drafting/deck-building panel, ...), so margin-top here is more
    reliable than trying to add margin-bottom to whichever of those happens
    to be visible. */
 #resign-button {
     margin-top: 1rem;
 }
 
-/* Breathing room between the "View log"/"View decklist" buttons and the
-   collapsible recent-plays list right below them (#recent-events-details)
-   -- without this the list's own <summary> sat flush against the buttons
-   above it. */
+/* Breathing room above the "View log"/"View decklist" row -- without this
+   it sat flush against #pass-button right above it (reported live). */
 #recent-plays-actions {
+    margin-top: 0.75rem;
     margin-bottom: 0.75rem;
+}
+
+/* #bot-insight-actions (View bot hand(s)/View bot reasoning, diagnostic
+   mode only) sits on its own line below #recent-plays-actions -- reuses
+   that div's own margin-bottom above as its top gap, so it only needs a
+   bottom margin of its own here to keep #in-progress-area's own end (and
+   #resign-button beyond it, via that button's margin-top above) from
+   sitting flush against it too. */
+#bot-insight-actions {
+    margin-bottom: 0.75rem;
+}
+
+/* #recent-events-details moved outside #in-progress-area, below
+   #resign-button/#view-chat-button/#view-notes-button, so those buttons
+   read as sitting above the recent-plays list rather than below it
+   (reported live; see its own comment in game/index.html). Needs its own
+   gap the same way #resign-button above gets one from margin-top, since
+   it no longer shares #recent-plays-actions's old margin-bottom now that
+   they're not adjacent siblings any more. */
+#recent-events-details {
+    margin-top: 1rem;
 }
 
 #lobby-view li button {
@@ -1175,10 +1195,48 @@ body.game-page {
 .deck-builder-card-grid,
 .spectator-final-hand ul,
 .draft-pool-cards,
-.team-drafted-cards-list {
+.team-drafted-cards-list,
+#bot-hands-sections > div,
+.bot-reasoning-candidates,
+.bot-reasoning-excluded {
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
+}
+
+/* Diagnostic mode (games.diagnostic_mode) -- see #bot-reasoning-dialog and
+   buildBotReasoningTurn() in game.js. Each candidate pairs a card thumb
+   with its own visits/average_reward, the chosen one highlighted; excluded
+   cards get their own row underneath since they never reached the search. */
+.bot-reasoning-turn {
+    margin-bottom: 1rem;
+}
+
+.bot-reasoning-candidate {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.bot-reasoning-candidate--chosen {
+    outline: 2px solid var(--color-info);
+    border-radius: 4px;
+}
+
+.bot-reasoning-candidate__stats {
+    font-size: 0.8em;
+    text-align: center;
+}
+
+/* A 'heuristic'-source entry (Part A: "reasoning text for the default
+   bots") or a 'tactical' entry recovered from a stalled search (Part B) --
+   see buildBotReasoningTurn() in game.js -- neither has a candidate
+   comparison to show, just this one explanatory line instead. */
+.bot-reasoning-note {
+    font-size: 0.9em;
+    font-style: italic;
+    margin: 0.25rem 0 0;
 }
 
 #hand-list li,
@@ -1576,6 +1634,33 @@ body.game-page {
     #draft-pool-sections .card-thumb,
     #draft-pool-sections .card-thumb__art {
         width: calc(3.75rem * var(--card-scale, 1));
+    }
+
+    /* Quick chat's emoji-only buttons (reported live: one of the seven
+       #game-chat-quick-buttons buttons -- GL;HF/GG plus five single-emoji
+       ones -- was still wrapping to a second row on a narrow phone).
+       #game-chat-quick-buttons button's own 0.5rem side padding above is
+       sized for GL;HF/GG's multi-character labels; a single emoji glyph
+       needs far less breathing room on each side, so .quick-chat-emoji
+       (see game/index.html) tightens just those five buttons rather than
+       shrinking GL;HF/GG's own padding too, which is already close to
+       their text's own width. Measured against a real 375px-wide phone
+       (dialog padding leaves 287.5px for this row): all 7 buttons'
+       combined width plus #game-chat-quick-buttons' own 0.4rem gaps
+       (6 of them) totaled ~305px before this, 18px over -- enough to
+       force the 7th button onto its own row. 0.15rem side padding here
+       (down from 0.3rem) plus a tighter 0.25rem gap between every
+       button (both text and emoji -- narrower gaps cost GL;HF/GG
+       nothing readability-wise) together claw back over 30px, comfortably
+       fitting all 7 on one row with room to spare on an even narrower
+       320px phone. */
+    #game-chat-quick-buttons {
+        gap: 0.25rem;
+    }
+
+    #game-chat-quick-buttons button.quick-chat-emoji {
+        padding-left: 0.15rem;
+        padding-right: 0.15rem;
     }
 }
 

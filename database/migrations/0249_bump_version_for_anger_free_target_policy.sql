@@ -1,0 +1,17 @@
+-- Bot policy fix (reported live: "by default when a bot plays Anger, it
+-- should target as many opponent cards as possible, or at least
+-- consider that option first - for example, it is almost always the
+-- right play to target an opponent's Hope when playing Anger, and as a
+-- 0 point card, hope can *always* be targeted").
+--
+-- angerSwingMaximizingTargets()'s own knapsack over opponent moods
+-- previously skipped any ZERO-value candidate outright (a 0-value item
+-- can never improve a "maximize total value" search), so a 0-point mood
+-- like Hope was never targeted even though it costs nothing against
+-- Anger's own 5-point combined-value ceiling. Every zero-value opponent
+-- mood is now always included on top of the budget-constrained,
+-- strictly-positive-value subset, rather than competing against it.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.33.13' WHERE id = 1;

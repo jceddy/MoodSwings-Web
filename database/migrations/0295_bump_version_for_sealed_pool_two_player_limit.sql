@@ -1,0 +1,25 @@
+-- Reported live: "let's limit sealed pool of the day/week to only two
+-- players."
+--
+-- Both 'sealed_pool_of_the_day' and 'weekly_sealed_pool' were, until now,
+-- ordinary DRAFT_DECK_TYPES members supporting 2-4 players and every one
+-- of Team Play/Closed Team Play the same as any other draft deck_type --
+-- Weekly Sealed Pool's own standings (weekly_sealed_pool_standings.
+-- wins/losses) are a straightforward 1v1 win/loss ladder with no notion
+-- of a 3-4-player free-for-all's own scoring, though, and
+-- WeeklySealedPoolQueueService's own FIFO pairing already only ever
+-- matched exactly 2 players at a time in practice -- this was never
+-- actually reachable at 3-4 players for Weekly Sealed Pool, but Sealed
+-- Pool of the Day's own New Game dialog path genuinely was.
+--
+-- GameService::createGame() now rejects any player count other than 2,
+-- and 'team'/'closed_team' entirely, for both deck types --
+-- MatchmakingService::postOpenGame() forces target_player_count to 2 for
+-- them the same way it already does for 'duel'. The New Game dialog's
+-- own opponentSelectionMax() caps friend/bot selection at 1 for Sealed
+-- Pool of the Day (its only reachable New Game dialog path) to match,
+-- and hides the open-lobby player-count selector for it.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.39.22' WHERE id = 1;

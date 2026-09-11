@@ -1,0 +1,21 @@
+-- Bot policy fix (reported live: "bots should avoid playing Cruelty with
+-- no targets").
+--
+-- Cruelty's own "choose any number of opponents [who each have 2+
+-- moods]" field was already handled by
+-- BotChoiceResolver::ALWAYS_FILLED_OPTIONAL_FIELDS the way Suspicion's
+-- own analogous field is -- once forced, every eligible opponent is
+-- targeted automatically, since there's no cost/tradeoff to targeting
+-- more of them. But nothing previously stopped a bot from PLAYING
+-- Cruelty in the first place when no opponent actually qualified, which
+-- wastes the play for nothing.
+--
+-- BotPlayerService::hasGoodReasonToPlayNow() now vetoes Cruelty (the
+-- same PHP_INT_MIN "deprioritized WHEN, never skipped outright"
+-- treatment Anger/Pacifism/Disillusionment already get) whenever the new
+-- crueltyTargetPlayerIds() helper -- every non-teammate opponent with 2
+-- or more moods currently in play -- comes back empty.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.34.5' WHERE id = 1;

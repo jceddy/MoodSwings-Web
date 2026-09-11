@@ -31,9 +31,10 @@ use MoodSwings\Rules\RoundScorer;
  * maintainer), which both decide WHICH of Rationalization's two optional
  * modes to commit to (never leaving it unchosen -- a no-op play the way
  * every other unforced-optional-field card here would default to) and
- * deprioritize playing it at all except when doing so pays off (a weak
- * remaining hand, or an overstuffed seat neighbor worth taking cards
- * from), rather than leading with it purely by printed value;
+ * deprioritize playing it at all except when doing so pays off (an
+ * overstuffed seat neighbor worth taking cards from, or playing it for
+ * its own plain value would clinch the whole game or stop a rival from
+ * clinching it), rather than leading with it purely by printed value;
  * cynicismChoices()/sortPriorityValue() again (confirmed by the
  * maintainer), which similarly deprioritize Cynicism unless a cheap
  * discard-pile card is available to boost it for free, the round's own
@@ -67,7 +68,19 @@ use MoodSwings\Rules\RoundScorer;
  * distinct_owners constraint forbids anyway) when playing Pacifism, and
  * deprioritizes it (the same PHP_INT_MIN treatment) whenever no
  * non-teammate opponent currently has any mood in play -- see that
- * method's own docblock; and disillusionmentSafeColor()/
+ * method's own docblock; isWorthPlaying() once more for Pacifism
+ * (reported live: "I still have bots occasionally playing Pacifism with
+ * no target in the first turn of the game - there is no reason to do
+ * that, it would be better to pass and wait for a target"), which skips
+ * it OUTRIGHT under that same no-target condition (the same treatment
+ * Fury/Avoidance/Sneakiness already get) rather than merely
+ * deprioritizing it -- unlike a PHP_INT_MIN demotion (still played as
+ * an eventual last resort), a genuinely wasted Pacifism has nothing to
+ * gain from that fallback and a real cost to it: scoring only happens
+ * at round end, so passing costs nothing (the same printed value gets
+ * banked whenever it's eventually played instead) while playing it now
+ * permanently forfeits this instance's own ability for the round; see
+ * isWorthPlaying()'s own docblock; and disillusionmentSafeColor()/
  * chooseDecisionAnswer() (confirmed by the maintainer), which picks the
  * first color that matches none of the responding bot's own (or a
  * teammate's) moods currently in play when answering Disillusionment's
@@ -83,11 +96,14 @@ use MoodSwings\Rules\RoundScorer;
  * whenever the discard pile is completely empty -- its own extra-play
  * grant is restricted to a card FROM the discard pile, so with nothing
  * there to take advantage of, playing it accomplishes nothing; and
- * angerTargetMoodIds() (confirmed by the maintainer), which targets the
- * highest-total-value subset of non-teammate opponents' own in-play
- * moods that still fits Anger's own 5-point combined-value ceiling
- * (angerSwingMaximizingTargets()/maxValueSubsetWithinBudget()), PLUS
- * Anger's own just-played card id whenever the bot's own deck has more
+ * angerTargetMoodIds() (confirmed by the maintainer), which targets
+ * EVERY zero-value non-teammate opponent mood outright (e.g. Hope --
+ * reported live: "as a 0 point card, hope can *always* be targeted",
+ * since it costs nothing against Anger's own 5-point combined-value
+ * ceiling) PLUS the highest-total-value subset of the REMAINING
+ * (strictly positive-value) non-teammate opponent moods that still fits
+ * that same ceiling (angerSwingMaximizingTargets()/maxValueSubsetWithinBudget()),
+ * PLUS Anger's own just-played card id whenever the bot's own deck has more
  * discard-recursion capacity than every active non-teammate opponent's
  * own deck AND none of them currently has Grace in play
  * (angerShouldAlsoTargetItself()/recursionCardCount()) -- since Anger's
@@ -248,7 +264,20 @@ use MoodSwings\Rules\RoundScorer;
  * value alone (2, no target) would both take the round's lead AND win
  * the entire game outright, the exact same
  * rationalizationWouldClinchTheGame()-shaped check (duplicated, not
- * shared) Rationalization's own game-win carve-out above already uses.
+ * shared) Rationalization's own game-win carve-out above already uses;
+ * and duplicityRepeatChoices() (reported live: "bots should always take
+ * extra 'after playing this mood' triggers from Duplicity, if they have
+ * targets for them - especially for moods like Pacifism (suppressing
+ * additional opponent moods), Shock (putting additional opponent moods
+ * in discard), Joy (getting additional extra turns)"), which answers
+ * Duplicity's own "repeat this mood's own effect?" offer by reusing
+ * buildChoicesForCard() for the mood being repeated exactly as if it
+ * were being played fresh, taking the repeat whenever that comes back
+ * non-empty (a genuine target/choice found) or the mood has no
+ * after-playing fields at all (an unconditional grant like Joy, nothing
+ * to "target" to begin with), and declining otherwise (no legal target,
+ * or a required field that can't be filled at all) -- see that method's
+ * own docblock for the full policy.
  * GameService is the only caller
  * (see its own "Practice bots" section in php-app/README.md for how this
  * fits into the request lifecycle) -- legality itself
@@ -361,6 +390,9 @@ final class BotPlayerService
      */
     private const DENIAL_SIGNIFICANT_SWING_THRESHOLD = 4;
 
+    /** @see disillusionmentBestColor()'s own docblock -- mirrors DisillusionmentEffect::COLORS. */
+    private const DISILLUSIONMENT_COLORS = ['white', 'blue', 'black', 'red', 'green'];
+
     public function __construct(
         private readonly BotChoiceResolver $resolver,
     ) {
@@ -398,13 +430,26 @@ final class BotPlayerService
      *     shockHasAGoodReasonToPlayNow()'s own docblock for the other
      *     place it's since been reused (reported live: Shock "except for
      *     when they just need 2 points to win a game").
+     * @param array<int, int> $roundWinsNeededToWinGameByPlayerId the exact
+     *     same "MORE round wins needed to win the whole game" value
+     *     $roundWinsNeededToWinGame above carries for the ACTING bot
+     *     alone, but for every currently active game_player_id in the
+     *     round (teammates share their team's own value, same as
+     *     roundWinsStillNeededToWinGame() itself already returns per
+     *     player) -- see rationalizationWouldPreventLosingTheGame()'s own
+     *     docblock for why Rationalization's defensive "would playing
+     *     this deny a RIVAL the game outright" check needs every rival's
+     *     own value, not just the acting bot's. Empty (the default) means
+     *     "unknown/not applicable," same as $roundWinsNeededToWinGame's
+     *     own null default -- a caller that hasn't been updated to
+     *     compute this simply never triggers that defensive check.
      * @return ?array{card_id: int, choices: array<string, mixed>} null means pass.
      */
-    public function chooseAction(BoardState $state, array $playableCardIds, int $botGamePlayerId, ?int $roundWinsNeededToWinGame = null): ?array
+    public function chooseAction(BoardState $state, array $playableCardIds, int $botGamePlayerId, ?int $roundWinsNeededToWinGame = null, array $roundWinsNeededToWinGameByPlayerId = []): ?array
     {
         usort(
             $playableCardIds,
-            fn (int $a, int $b) => $this->sortPriorityValue($state, $b, $botGamePlayerId, $playableCardIds, $roundWinsNeededToWinGame) <=> $this->sortPriorityValue($state, $a, $botGamePlayerId, $playableCardIds, $roundWinsNeededToWinGame),
+            fn (int $a, int $b) => $this->sortPriorityValue($state, $b, $botGamePlayerId, $playableCardIds, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId) <=> $this->sortPriorityValue($state, $a, $botGamePlayerId, $playableCardIds, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId),
         );
 
         foreach ($playableCardIds as $cardId) {
@@ -439,9 +484,25 @@ final class BotPlayerService
      * how that one gets chosen), but "is this worth playing AT ALL"
      * depends on every seated player's own moods, not just which
      * direction ends up picked, so it needs the same whole-board view
-     * Fury's veto does. Keyed by effect key; everything not listed here
-     * is always worth playing (the default, unconditional "yes" every
-     * other effect already got before this method existed).
+     * Fury's veto does; and for Pacifism (reported live: "I still have
+     * bots occasionally playing Pacifism with no target in the first
+     * turn of the game - there is no reason to do that, it would be
+     * better to pass and wait for a target"), which gets this method's
+     * stronger "skip it entirely, fall through to the next candidate or
+     * an outright pass" treatment -- unlike sortPriorityValue()'s own
+     * PHP_INT_MIN `hasGoodReasonToPlayNow()` veto elsewhere in this class
+     * (Rationalization/Denial/Rejection/Shock and others -- "deprioritized
+     * WHEN, never skipped outright," still played as an eventual last
+     * resort), a genuinely wasted Pacifism has nothing to gain from that
+     * fallback and a real cost to it: scoring only happens at round end,
+     * so passing and simply playing Pacifism on a LATER turn instead
+     * banks the exact same printed value with no penalty for the delay,
+     * while playing it now with no target PERMANENTLY forfeits this
+     * instance's own "put an opponent's mood back in their hand" ability
+     * for the rest of the round, for no compensating benefit. Keyed by
+     * effect key; everything not listed here is always
+     * worth playing (the default, unconditional "yes" every other
+     * effect already got before this method existed).
      */
     private function isWorthPlaying(BoardState $state, string $effectKey, int $botGamePlayerId): bool
     {
@@ -449,6 +510,7 @@ final class BotPlayerService
             'fury' => $this->furyIsWorthPlaying($state, $botGamePlayerId),
             'avoidance' => $this->avoidanceHasAGoodReasonToPlay($state, $botGamePlayerId),
             'sneakiness' => $this->sneakinessTargetPlayerId($state, $botGamePlayerId) !== null,
+            'pacifism' => $this->pacifismTargetMoodIds($state, $botGamePlayerId) !== [],
             default => true,
         };
     }
@@ -604,20 +666,44 @@ final class BotPlayerService
         return $this->lowestMoodValueOwnedBy($state, $giverId);
     }
 
-    /** @return array<string, mixed> */
-    public function chooseDecisionAnswer(BoardState $state, array $field, int $botGamePlayerId, string $decisionType = ''): array
+    /**
+     * @param ?int $sourceCardId the mood whose effect is asking this --
+     *     for Disillusionment/chaos_010 specifically, excluded from its
+     *     own color's swing total, since DisillusionmentEffect::resolveDecisions()
+     *     never discards the card that triggered it regardless of which
+     *     color(s) get chosen (see disillusionmentBestColor()'s own
+     *     docblock). Every other caller (the generic resolver branch
+     *     below) ignores this entirely -- optional purely because most
+     *     existing callers (tests, and any decision type that never
+     *     needs it) have no reason to plumb a source card id through at
+     *     all.
+     * @return array<string, mixed>
+     */
+    public function chooseDecisionAnswer(BoardState $state, array $field, int $botGamePlayerId, string $decisionType = '', ?int $sourceCardId = null): array
     {
         // chaos_010 (issue #405 follow-up) is Disillusionment's own chaos
         // analog -- identical printed text, identical field shape (an
         // optional 'mode' color pick) -- so it reuses the exact same
-        // safe-color policy rather than falling through to the generic
-        // resolver, which would never fill an optional field at all (see
-        // BotChoiceResolver's own docblock) and so never participate,
-        // safe but strictly worse than picking a color that can't backfire.
+        // swing-maximizing policy rather than falling through to the
+        // generic resolver, which would never fill an optional field at
+        // all (see BotChoiceResolver's own docblock) and so never
+        // participate, safe but strictly worse than picking a color that
+        // actually profits.
         if ($decisionType === 'disillusionment_choose_color' || $decisionType === 'chaos_010_choose_color') {
-            $color = $this->disillusionmentSafeColor($state, $field, $botGamePlayerId);
+            $color = $this->disillusionmentBestColor($state, $field, $botGamePlayerId, $sourceCardId);
 
             return $color === null ? [] : [$field['key'] => $color];
+        }
+
+        // Duplicity's own "repeat this mood's own effect?" offer --
+        // $field itself is a top-level 'nested' field (repeat/choices),
+        // which the generic resolver below would never fill in (it's
+        // optional, and 'nested' isn't one of its handled field types
+        // anyway) -- see duplicityRepeatChoices()'s own docblock.
+        if ($decisionType === 'duplicity_repeat_offer' && $sourceCardId !== null) {
+            $repeatChoices = $this->duplicityRepeatChoices($state, $sourceCardId, $botGamePlayerId);
+
+            return $repeatChoices === null ? [] : [$field['key'] => ['repeat' => true, 'choices' => $repeatChoices]];
         }
 
         $value = $this->resolver->resolve($state, $field, $botGamePlayerId, 0, '');
@@ -626,46 +712,145 @@ final class BotPlayerService
     }
 
     /**
-     * Disillusionment's own "which color, if any" policy (confirmed by
-     * the maintainer) -- every seated player, not just whoever played
-     * Disillusionment, gets asked this once it resolves (see
-     * DisillusionmentEffect::pendingDecisionsFor()'s own queueOrder()), so
-     * $botGamePlayerId here is whichever bot is currently being asked, not
-     * necessarily the one who played the mood. A "safe" color is one that
-     * matches none of the responding bot's own moods currently in play,
-     * nor any teammate's -- DisillusionmentEffect::resolveDecisions()
-     * moves EVERY other mood of a chosen color to the discard pile
-     * regardless of owner, so picking an unsafe color would gladly thin
-     * out opponents' boards while blowing up the bot's own (or its
-     * teammate's) at the same time. The first such safe color in
-     * $field['options']' own order wins ties -- this class has no finer
-     * basis to prefer one safe color over another over the others (unlike
-     * avoidanceBestDirection()'s own value-driven tiebreak, nothing here
-     * distinguishes an opponent's mood from another's), matching
-     * BotChoiceResolver's own "first option" default for every other
-     * non-strategic mode field. Null (decline, this field's own pre-
-     * existing default before this policy existed) whenever every color
-     * matches something the bot or a teammate owns -- there's no way to
-     * participate here without also hurting yourself/your team, so this
-     * falls back to never volunteering for it at all, the same as any
-     * other optional field with a real cost attached.
+     * Duplicity's own "repeat this mood's own effect with a fresh set of
+     * choices" offer (reported live: "bots should always take extra
+     * 'after playing this mood' triggers from Duplicity, if they have
+     * targets for them - especially for moods like Pacifism (suppressing
+     * additional opponent moods), Shock (putting additional opponent
+     * moods in discard), Joy (getting additional extra turns)") --
+     * $sourceCardId is the mood being REPEATED (e.g. Pacifism), not
+     * Duplicity itself. Reuses buildChoicesForCard()'s own already-tested
+     * policy for it exactly as if it were being played fresh, so every
+     * existing bespoke/generic targeting policy above
+     * (pacifismTargetMoodIds(), shockTargetMoodIds(), ...) decides the
+     * repeat's own choices too, with no separate logic to keep in sync.
+     *
+     * Null return means "decline" (chooseDecisionAnswer()'s own caller
+     * treats a missing answer the same way as every other unfilled
+     * optional decision): either buildChoicesForCard() itself found the
+     * mood unplayable this way (a required field, base or attached
+     * chaos, with no legal value -- repeating would be illegal), or --
+     * for a mood whose after-playing effect actually targets something
+     * (CardChoiceSchema::afterPlayingFields() non-empty) -- it came back
+     * completely empty, meaning that mood's own targeting policy already
+     * decided there's nothing worth doing right now (no legal target for
+     * Pacifism/Shock, or -- Creativity/Malice-style -- no target worth
+     * the tradeoff): declining leaves that judgment intact rather than
+     * blindly repeating a no-op. A mood with NO after-playing fields at
+     * all (Joy, Charity, Duplicity itself, every other unconditional
+     * "you may play an additional mood" grant) has nothing to "target"
+     * in the first place, so it's always worth repeating regardless of
+     * $choices' own (necessarily empty) contents.
+     *
+     * @return ?array<string, mixed>
      */
-    private function disillusionmentSafeColor(BoardState $state, array $field, int $botGamePlayerId): ?string
+    private function duplicityRepeatChoices(BoardState $state, int $sourceCardId, int $botGamePlayerId): ?array
     {
-        $unsafeColors = [];
-        foreach ($state->moodsInPlay() as $mood) {
-            if ($mood->ownerId === $botGamePlayerId || $state->isTeammate($botGamePlayerId, $mood->ownerId)) {
-                $unsafeColors[] = $state->colorOf($mood->cardId);
-            }
+        $choices = $this->buildChoicesForCard($state, $sourceCardId, $botGamePlayerId);
+        if ($choices === null) {
+            return null;
         }
 
+        $effectKey = $state->catalogRow($state->effectiveCardId($sourceCardId))['effectKey'];
+
+        return $choices !== [] || CardChoiceSchema::afterPlayingFields($effectKey) === [] ? $choices : null;
+    }
+
+    /**
+     * Disillusionment's own "which color, if any" policy (reported live:
+     * "bots should pick a color for disillusionment that will result in
+     * the largest point swing in their favor - if no color is
+     * advantageous to them they should not pick a color") -- every
+     * seated player, not just whoever played Disillusionment, gets asked
+     * this once it resolves (see DisillusionmentEffect::pendingDecisionsFor()'s
+     * own queueOrder()), so $botGamePlayerId here is whichever bot is
+     * currently being asked, not necessarily the one who played the
+     * mood. DisillusionmentEffect::resolveDecisions() moves EVERY other
+     * mood of the union of every player's own chosen color(s) to the
+     * discard pile regardless of owner, so this mirrors
+     * guiltSwingContribution()'s own signed-swing shape (Guilt's 'all'
+     * mode has the exact same "hits every owner, not just opponents"
+     * property) rather than Anger's/Pacifism's own opponent-only
+     * targeting: for each candidate color, sum +value for every
+     * non-teammate opponent's mood of that color (a genuine gain) and
+     * -value for every one of the bot's own or a teammate's (a
+     * self-inflicted loss this "may" choice can't avoid once made), then
+     * pick whichever color's total is the highest -- but only if that
+     * total is actually positive; a merely-zero-or-negative best color
+     * would mean the same as declining, plus at least one color would
+     * still need to gladly hurt the bot's own side or accomplish
+     * literally nothing, so this only ever returns a color that's
+     * genuinely worth choosing at all. $sourceCardId (the currently-
+     * resolving Disillusionment/chaos_010 mood itself) is excluded from
+     * every color's total, since it's the one mood its own effect can
+     * never discard (`resolveDecisions()`'s own `$mood->cardId ===
+     * $cardId` skip) regardless of which color(s) end up chosen -- left
+     * uncounted rather than mistakenly read as a free opponent kill (or
+     * self-inflicted loss) that will never actually happen.
+     */
+    private function disillusionmentBestColor(BoardState $state, array $field, int $botGamePlayerId, ?int $sourceCardId): ?string
+    {
+        $bestColor = null;
+        $bestSwing = 0;
         foreach ($field['options'] ?? [] as $color) {
-            if (!in_array($color, $unsafeColors, true)) {
-                return $color;
+            $swing = $this->disillusionmentColorSwing($state, $botGamePlayerId, $color, $sourceCardId);
+            if ($swing > $bestSwing) {
+                $bestSwing = $swing;
+                $bestColor = $color;
             }
         }
 
-        return null;
+        return $bestColor;
+    }
+
+    /** @see disillusionmentBestColor()'s own docblock for the swing computation itself. */
+    private function disillusionmentColorSwing(BoardState $state, int $botGamePlayerId, string $color, ?int $sourceCardId): int
+    {
+        $swing = 0;
+        foreach ($state->moodsInPlay() as $mood) {
+            if ($mood->cardId === $sourceCardId || $state->colorOf($mood->cardId) !== $color) {
+                continue;
+            }
+            $value = $state->valueOf($mood->cardId);
+            $swing += ($mood->ownerId === $botGamePlayerId || $state->isTeammate($botGamePlayerId, $mood->ownerId)) ? -$value : $value;
+        }
+
+        return $swing;
+    }
+
+    /**
+     * Disillusionment's own "should this even be played" veto (reported
+     * live, same message as disillusionmentBestColor()'s own docblock:
+     * "should not play disillusionment, unless the total point swing in
+     * their favor ... regardless of which color(s) are chosen by
+     * opponents [is positive]") -- reuses the EXACT same per-color swing
+     * this bot's own eventual chooseDecisionAnswer() call will use to
+     * pick a color, evaluated from $botGamePlayerId's own perspective
+     * against the board as it stands right now (Disillusionment itself
+     * hasn't been played yet at this point, so there's no source card id
+     * to exclude -- nothing else on the board changes color/value just
+     * because it's about to be played, so this is exactly the same
+     * calculation `disillusionmentBestColor()` will make once it
+     * actually resolves). "Regardless of which color(s) are chosen by
+     * opponents" means this deliberately does NOT bank on some OTHER
+     * player also choosing a color that happens to help the bot too --
+     * only a color the bot itself could profitably choose counts, the
+     * same guaranteed-in-the-bot's-own-hands swing
+     * disillusionmentBestColor() would actually deliver regardless of
+     * what anyone else at the table decides. No color being genuinely
+     * profitable this way means playing Disillusionment right now would
+     * be a wasted "may" choice for every seated player -- not worth
+     * leading with over some other candidate.
+     */
+    private function disillusionmentHasAGoodReasonToPlayNow(BoardState $state, int $botGamePlayerId): bool
+    {
+        foreach (self::DISILLUSIONMENT_COLORS as $color) {
+            if ($this->disillusionmentColorSwing($state, $botGamePlayerId, $color, null) > 0) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -747,9 +932,11 @@ final class BotPlayerService
      * rationalizationHasAGoodReasonToPlayNow() says otherwise -- "save it
      * to play last" per the maintainer, so it only actually gets chosen
      * ahead of something else once nothing higher-value is left to play,
-     * UNLESS refreshing a weak hand or stealing an overstuffed neighbor's
-     * hand is worth doing right away. Never a reason to skip playing it
-     * outright, only to deprioritize WHEN -- buildChoicesForCard()'s own
+     * UNLESS stealing an overstuffed neighbor's hand is worth doing right
+     * away, or playing it now for its own plain printed value would
+     * either clinch the whole game or stop a rival from clinching it.
+     * Never a reason to skip playing it outright, only to deprioritize
+     * WHEN -- buildChoicesForCard()'s own
      * rationalizationChoices() always commits to a mode regardless of
      * this ordering.
      *
@@ -811,9 +998,23 @@ final class BotPlayerService
      * opponent has any mood in play at all right now, so playing it
      * would suppress nothing. Also absent from EARLY_PRIORITY_EFFECT_KEYS
      * -- it denies an opponent's mood rather than stealing a card,
-     * forcing a discard, or granting the acting player an extra play --
-     * so it too reverts to plain baseValue() once at least one valid
-     * target exists.
+     * forcing a discard, or granting the acting player an extra play.
+     *
+     * Unlike every other card here, though, Pacifism's own printed value
+     * (1) is a poor stand-in for what it's actually worth: reported live
+     * (bots losing a game they could have won by suppressing an 11-point
+     * Euphoria with a Pacifism sitting right there in the discard pile,
+     * playable via Melancholy) -- with only plain baseValue() to sort by,
+     * a wasted low-value filler card always outranked Pacifism regardless
+     * of how much it would have denied an opponent, since 1 loses to
+     * almost anything. pacifismSwing() below adds the total value of
+     * whatever pacifismTargetMoodIds() would actually suppress right now
+     * on TOP of baseValue() -- unlike EARLY_PRIORITY_EFFECT_KEYS' own flat
+     * bonus (which always outranks an unboosted card regardless of
+     * magnitude), this is a genuine value comparison: a Pacifism that
+     * would only deny a couple of points still fairly loses to a
+     * healthier plain card, but one that would deny an Euphoria-sized
+     * mood now correctly outranks nearly everything.
      *
      * Harmony (confirmed by the maintainer) gets the same PHP_INT_MIN
      * treatment whenever the discard pile is completely empty --
@@ -895,16 +1096,21 @@ final class BotPlayerService
      * otherwise too marginal to lead with blind, unlike most cards'
      * plain-baseValue() default.
      */
-    private function sortPriorityValue(BoardState $state, int $cardId, int $botGamePlayerId, array $playableCardIds, ?int $roundWinsNeededToWinGame = null): int
+    private function sortPriorityValue(BoardState $state, int $cardId, int $botGamePlayerId, array $playableCardIds, ?int $roundWinsNeededToWinGame = null, array $roundWinsNeededToWinGameByPlayerId = []): int
     {
-        if (!$this->hasGoodReasonToPlayNow($state, $cardId, $botGamePlayerId, $playableCardIds, $roundWinsNeededToWinGame)) {
+        if (!$this->hasGoodReasonToPlayNow($state, $cardId, $botGamePlayerId, $playableCardIds, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId)) {
             return PHP_INT_MIN;
         }
 
         $effectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
         $priority = $this->baseValue($state, $cardId);
-        if (in_array($effectKey, self::EARLY_PRIORITY_EFFECT_KEYS, true)) {
+        if ($effectKey === 'hope') {
+            $priority += self::HOPE_PRIORITY_BONUS;
+        } elseif (in_array($effectKey, self::EARLY_PRIORITY_EFFECT_KEYS, true)) {
             $priority += self::EARLY_PRIORITY_BONUS;
+        }
+        if ($effectKey === 'pacifism') {
+            $priority += $this->pacifismSwing($state, $botGamePlayerId);
         }
 
         return $priority;
@@ -928,12 +1134,13 @@ final class BotPlayerService
      * card listed here too.
      *
      * @param int[] $playableCardIds
-     * @see chooseAction()'s own docblock for $roundWinsNeededToWinGame.
+     * @see chooseAction()'s own docblock for $roundWinsNeededToWinGame/
+     *     $roundWinsNeededToWinGameByPlayerId.
      */
-    public function hasGoodReasonToPlayNow(BoardState $state, int $cardId, int $botGamePlayerId, array $playableCardIds, ?int $roundWinsNeededToWinGame = null): bool
+    public function hasGoodReasonToPlayNow(BoardState $state, int $cardId, int $botGamePlayerId, array $playableCardIds, ?int $roundWinsNeededToWinGame = null, array $roundWinsNeededToWinGameByPlayerId = []): bool
     {
         $effectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
-        if ($effectKey === 'rationalization' && !$this->rationalizationHasAGoodReasonToPlayNow($state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame)) {
+        if ($effectKey === 'rationalization' && !$this->rationalizationHasAGoodReasonToPlayNow($state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId)) {
             return false;
         }
         if ($effectKey === 'cynicism' && !$this->cynicismHasAGoodReasonToPlayNow($state, $cardId, $botGamePlayerId, $playableCardIds)) {
@@ -960,7 +1167,31 @@ final class BotPlayerService
         if ($effectKey === 'anger' && $this->angerTargetMoodIds($state, $cardId, $botGamePlayerId) === []) {
             return false;
         }
+        // Reported live: "bots should avoid playing Cruelty with no
+        // targets" (and, by the same reasoning, Indecisiveness -- an
+        // identically-shaped card, see twoOrMoreMoodOpponentIds()'s own
+        // docblock). Both cards' own "choose any number of opponents
+        // [with 2+ moods]" field is one of the ALWAYS_FILLED_OPTIONAL_FIELDS
+        // BotChoiceResolver forces a bot to fill despite being optional
+        // (see that class's own docblock) -- but forcing the FIELD only
+        // matters once there's at least one opponent who legally
+        // qualifies (2+ moods in play) to put into it.
+        if (($effectKey === 'cruelty' || $effectKey === 'indecisiveness') && $this->twoOrMoreMoodOpponentIds($state, $botGamePlayerId) === []) {
+            return false;
+        }
         if ($effectKey === 'harmony' && $state->discardPile() === []) {
+            return false;
+        }
+        if ($effectKey === 'disillusionment' && !$this->disillusionmentHasAGoodReasonToPlayNow($state, $botGamePlayerId)) {
+            return false;
+        }
+        // Reported live: "bots shouldn't play Thrill as an opener." Its
+        // own "if you do" clause (put any number of other moods already
+        // IN PLAY into hand, granting one extra play per mood returned)
+        // can only ever trigger once the bot already has another mood of
+        // its own on the board -- playing it first, with nothing else in
+        // play yet, is just a 1-value mythic with no effect that turn.
+        if ($effectKey === 'thrill' && $state->moodsOwnedBy($botGamePlayerId) === []) {
             return false;
         }
         if ($effectKey === 'grief' && $state->discardPile() === []) {
@@ -1006,15 +1237,23 @@ final class BotPlayerService
      * player. Every extra-play grant here is listed regardless of
      * whether it's unconditional (Charity, Duplicity, Idealism,
      * Validation, Ambition, Bravado, Fear, Nostalgia, Gluttony,
-     * Insecurity, Angst, Harmony, Grief, Thrill, Joy) or conditional on
-     * the NEXT play meeting some restriction (Benevolence, Eagerness,
+     * Insecurity, Angst, Harmony, Grief, Joy) or conditional on the NEXT
+     * play meeting some restriction (Benevolence, Eagerness,
      * Friendliness, Kindness, Pride, Intimidation's own restriction to
      * the one card just taken) or an ongoing while-in-play grant instead
-     * of a one-time one (Hope, Grace, Stubbornness) -- "legal, not
-     * strategic" stops short of predicting whether a conditional grant
-     * will actually be used. Generosity deliberately excluded: it grants
-     * its own extra play to a chosen OPPONENT, not the acting player, so
-     * leading with it would help whoever's targeted, not the bot itself.
+     * of a one-time one (Grace, Stubbornness -- Hope belongs to this same
+     * family too, but gets its own even-higher HOPE_PRIORITY_BONUS below
+     * instead of sharing this one, see that constant's own docblock for
+     * why) -- "legal, not strategic" stops short of predicting whether a
+     * conditional grant will actually be used. Generosity deliberately
+     * excluded: it grants its own extra play to a chosen OPPONENT, not
+     * the acting player, so leading with it would help whoever's
+     * targeted, not the bot itself. Thrill is the one exception actually
+     * vetoed above (hasGoodReasonToPlayNow()) rather than just left to
+     * this blanket boost -- unlike Fear/Ambition, Thrill's own "if you
+     * do" grant needs another of the bot's own moods ALREADY in play to
+     * put back, so it's dead on an opening play with nothing else on the
+     * board yet.
      *
      * @var string[]
      */
@@ -1026,7 +1265,7 @@ final class BotPlayerService
         // grants the acting player an extra play
         'charity', 'duplicity', 'idealism', 'validation', 'ambition', 'bravado', 'fear', 'nostalgia',
         'gluttony', 'insecurity', 'angst', 'harmony', 'grief', 'thrill', 'benevolence', 'eagerness',
-        'friendliness', 'kindness', 'pride', 'hope', 'grace', 'stubbornness', 'joy',
+        'friendliness', 'kindness', 'pride', 'grace', 'stubbornness', 'joy',
     ];
 
     /**
@@ -1036,6 +1275,31 @@ final class BotPlayerService
      * of either one's own printed value.
      */
     private const EARLY_PRIORITY_BONUS = 10;
+
+    /**
+     * Reported live: "bots should always play Hope first if they have it
+     * ... " -- Hope's own printed value is 0, so
+     * EARLY_PRIORITY_EFFECT_KEYS' shared +10 bonus alone (its own
+     * previous treatment) could still be outranked by another
+     * early-priority card with a high enough baseValue() (the catalog's
+     * own values top out around 6, i.e. up to 16 combined) -- exactly
+     * backwards from what actually matters here: unlike a one-time
+     * grant (Charity, Duplicity, ...) or a CONDITIONAL ongoing one
+     * (Grace needs a color-matching discard-pile card each turn;
+     * Stubbornness needs an opponent with more moods, and never even
+     * applies the turn it's played itself -- see their own effect
+     * classes' docblocks), Hope's own "an additional mood during each of
+     * your turns, including the turn you play this mood" is both
+     * UNCONDITIONAL and applies starting the very turn it's played --
+     * so delaying it by even a single turn (to lead with some other,
+     * merely higher-printed-value card instead) permanently forfeits
+     * that turn's own extra play, with nothing later ever making up the
+     * difference. Comfortably above EARLY_PRIORITY_BONUS plus the
+     * catalog's own highest baseValue() combined, so Hope always
+     * outranks every other early-priority card too, not just an
+     * un-boosted one.
+     */
+    private const HOPE_PRIORITY_BONUS = 20;
 
     /**
      * Just the "grants the acting player an extra play" third of
@@ -1329,10 +1593,26 @@ final class BotPlayerService
      * "no sideboarding" note for bots.
      *
      * @param int[] $draftedCardIds
-     * @param array{rowsById: array<int, array{draftPriorityScore: int}>, synergyPartnersByMythicId: array<int, int[]>, deckWinRatesByCardId: array<int, array{times_in_deck: int, deck_win_rate: ?float}>} $draftScoringData
+     * @param array{rowsById: array<int, array{draftPriorityScore: int, rarity?: string}>, synergyPartnersByMythicId: array<int, int[]>, deckWinRatesByCardId: array<int, array{times_in_deck: int, deck_win_rate: ?float}>} $draftScoringData
+     * @param ?array<string, int> $rarityCaps Sealed Pool of the Day's own
+     *        PERIODIC_SEALED_POOL_RARITY_DECK_CAPS (issue #520 follow-up:
+     *        "since we aren't tracking standings for sealed pool of the
+     *        day, let's allow practice bots for those") -- null for every
+     *        OTHER draft deck_type (no cap at all, the original greedy
+     *        top-N trim below). When given, the top-N trim instead walks
+     *        $sorted in score order and SKIPS any card whose own rarity
+     *        has already hit its cap, continuing to the next-best card
+     *        rather than stopping -- greedy in score, not in raw
+     *        position, so the deck is still the best-scoring LEGAL deck
+     *        this ordering can build. Sealed Pool of the Day's own pool
+     *        (20 common/15 uncommon/10 rare/5 mythic, only rare/mythic
+     *        capped at 4/2) always has far more uncapped filler than
+     *        SEALED_DECK_MIN_DECK_SIZE (12) needs, so this can never run
+     *        out of legal candidates before reaching $minDeckSize the way
+     *        an aggressively-capped format theoretically could.
      * @return int[]
      */
-    public function chooseDraftDeck(array $draftedCardIds, int $minDeckSize, array $draftScoringData): array
+    public function chooseDraftDeck(array $draftedCardIds, int $minDeckSize, array $draftScoringData, ?array $rarityCaps = null): array
     {
         $sorted = $draftedCardIds;
         usort($sorted, fn (int $a, int $b) => $this->draftCardScore(
@@ -1349,7 +1629,30 @@ final class BotPlayerService
             $draftScoringData['deckWinRatesByCardId'],
         ));
 
-        return array_slice($sorted, 0, $minDeckSize);
+        if ($rarityCaps === null) {
+            return array_slice($sorted, 0, $minDeckSize);
+        }
+
+        $deck = [];
+        $countByRarity = [];
+        foreach ($sorted as $cardId) {
+            if (count($deck) >= $minDeckSize) {
+                break;
+            }
+
+            $rarity = $draftScoringData['rowsById'][$cardId]['rarity'] ?? null;
+            $cap = $rarityCaps[$rarity] ?? null;
+            if ($cap !== null && ($countByRarity[$rarity] ?? 0) >= $cap) {
+                continue;
+            }
+
+            $deck[] = $cardId;
+            if ($rarity !== null) {
+                $countByRarity[$rarity] = ($countByRarity[$rarity] ?? 0) + 1;
+            }
+        }
+
+        return $deck;
     }
 
     /**
@@ -1424,7 +1727,7 @@ final class BotPlayerService
         'rationalization', 'avoidance', 'cynicism', 'intimidation', 'paranoia',
         'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
         'nostalgia', 'contempt', 'sneakiness', 'shock', 'exhilaration',
-        'rejection', 'guilt', 'scorn',
+        'rejection', 'guilt', 'scorn', 'recklessness', 'thrill', 'panic',
     ];
 
     /**
@@ -1443,11 +1746,53 @@ final class BotPlayerService
         return in_array($effectKey, self::BESPOKE_CHOICE_EFFECT_KEYS, true);
     }
 
+    /**
+     * A lightweight classification of which policy path buildChoicesForCard()
+     * took for $cardId -- reported live: "could we add some kind of
+     * reasoning text for the default bots? like if they're using a
+     * specific card override rule or something like that when making
+     * their decisions? or even just like if they are randomly choosing
+     * something or choosing a safe target by default." usesBespokeChoiceBuilding()'s
+     * own effect-key list already draws exactly this line -- a
+     * hand-tuned per-card rule (Pacifism's own value swing calculation,
+     * Rationalization's own steal-vs-refresh policy, etc.) versus the
+     * generic, schema-driven `CardChoiceSchema`/`BotChoiceResolver` field
+     * loop every other card falls through to -- so this just names that
+     * existing distinction rather than computing a new one. Exposed
+     * purely for GameService's own diagnostic-mode reasoning log; has no
+     * effect on buildChoicesForCard()'s own decision, just describes
+     * which path it already took.
+     */
+    public function choicePolicyPathFor(BoardState $state, int $cardId): string
+    {
+        $effectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
+
+        return $this->usesBespokeChoiceBuilding($effectKey) ? 'bespoke_rule' : 'generic_resolver';
+    }
+
     /** @return ?array<string, mixed> */
     private function buildBaseChoicesForCard(BoardState $state, int $cardId, int $botGamePlayerId): ?array
     {
         $effectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
 
+        return $this->choicesForEffectKey($effectKey, $state, $cardId, $botGamePlayerId);
+    }
+
+    /**
+     * The actual per-effect-key dispatch, pulled out of
+     * buildBaseChoicesForCard() above into its own method so the
+     * 'creativity' branch below can recurse into it for whatever mood
+     * Creativity is actually copying -- reusing every OTHER effect key's
+     * own choice-building logic (bespoke per-card rules AND the generic
+     * CardChoiceSchema field loop alike) exactly as if that mood had
+     * been played directly, rather than only ever building Creativity's
+     * own 'copy_card_id' field. See the 'creativity' branch's own
+     * comment below for the reported production bug this fixes.
+     *
+     * @return ?array<string, mixed>
+     */
+    private function choicesForEffectKey(string $effectKey, BoardState $state, int $cardId, int $botGamePlayerId): ?array
+    {
         if ($effectKey === 'rationalization') {
             return $this->rationalizationChoices($state, $cardId, $botGamePlayerId);
         }
@@ -1478,6 +1823,18 @@ final class BotPlayerService
             return $targetMoodIds !== [] ? ['target_mood_ids' => $targetMoodIds] : [];
         }
 
+        if ($effectKey === 'thrill') {
+            $handMoodIds = $this->thrillHandMoodIds($state, $cardId, $botGamePlayerId);
+
+            return $handMoodIds !== [] ? ['hand_mood_ids' => $handMoodIds] : [];
+        }
+
+        if ($effectKey === 'panic') {
+            $targetMoodIds = $this->panicTargetMoodIds($state, $botGamePlayerId);
+
+            return $targetMoodIds !== [] ? ['target_mood_ids' => $targetMoodIds] : [];
+        }
+
         if ($effectKey === 'shock') {
             $targetMoodIds = $this->shockTargetMoodIds($state, $botGamePlayerId);
 
@@ -1486,8 +1843,48 @@ final class BotPlayerService
 
         if ($effectKey === 'creativity') {
             $copyTargetCardId = $this->creativityBestCopyTargetId($state);
+            if ($copyTargetCardId === null) {
+                return [];
+            }
 
-            return $copyTargetCardId !== null ? ['copy_card_id' => $copyTargetCardId] : [];
+            // Reported live: a bot playing Creativity as a copy of
+            // Compulsion crashed with "Missing required choice
+            // 'target_player_id'" (MoodPlayService::resolveAfterPlayingChain()
+            // -> CompulsionEffect::pendingDecisionsFor()) and then retried
+            // the identical broken play forever, since nothing about the
+            // board state ever changes between attempts -- the classic
+            // "stuck in a Creativity loop" shape. The choices built here
+            // used to stop at 'copy_card_id' and never asked what the
+            // COPIED card's own effective effect key needs, unlike a human
+            // player's own client (game.js's handleCreativityCopyChange()
+            // already merges the copied mood's own choice_fields in) or
+            // the server's own MoodPlayService::playMood(), which resolves
+            // the whole copy chain via effectiveCardId() before anything
+            // cost/effect-related ever runs. Recursing back into this same
+            // dispatch for the copied card's own effect key reuses
+            // whatever choice-building it would normally get played
+            // directly -- a bespoke per-card rule (Panic/Recklessness/
+            // Conviction/etc.) or the generic schema loop alike -- rather
+            // than only ever covering the generic case.
+            $copiedEffectKey = $state->catalogRow($state->effectiveCardId($copyTargetCardId))['effectKey'];
+            // A blank in-play Creativity (played copying nothing) is its
+            // own effective effect key -- recursing into this same branch
+            // again would just re-pick the identical "best" target and
+            // loop forever. There's nothing useful to copy from an empty
+            // Creativity anyway, so this is the one effect key
+            // deliberately left unmerged.
+            $copiedChoices = $copiedEffectKey !== 'creativity'
+                ? $this->choicesForEffectKey($copiedEffectKey, $state, $cardId, $botGamePlayerId)
+                : [];
+            if ($copiedChoices === null) {
+                // The copied mood's own required choice had no legal
+                // answer (Compulsion with no legal opponent to target,
+                // say) -- play Creativity uncopied rather than submitting
+                // an incomplete play or leaving the whole card unplayable.
+                return [];
+            }
+
+            return ['copy_card_id' => $copyTargetCardId, ...$copiedChoices];
         }
 
         if ($effectKey === 'anger') {
@@ -1513,7 +1910,7 @@ final class BotPlayerService
         }
 
         if ($effectKey === 'nostalgia') {
-            $discardCardId = $this->nostalgiaDiscardCardId($state, $botGamePlayerId);
+            $discardCardId = $this->nostalgiaDiscardCardId($state, $cardId, $botGamePlayerId);
 
             return $discardCardId !== null ? ['discard_card_id' => $discardCardId] : [];
         }
@@ -1522,6 +1919,12 @@ final class BotPlayerService
             $targetMoodId = $this->contemptTargetMoodId($state, $botGamePlayerId);
 
             return $targetMoodId !== null ? ['mode' => 'single', 'target_mood_id' => $targetMoodId] : [];
+        }
+
+        if ($effectKey === 'recklessness') {
+            $targetMoodId = $this->recklessnessTargetMoodId($state, $botGamePlayerId);
+
+            return $targetMoodId !== null ? ['target_mood_id' => $targetMoodId] : [];
         }
 
         if ($effectKey === 'sneakiness') {
@@ -1620,12 +2023,18 @@ final class BotPlayerService
 
     /**
      * How many MORE cards a seat neighbor needs over the bot's own
-     * current hand size before 'rotate' toward them is worth it --
-     * below this, giving away the bot's own whole hand (rotate moves
-     * EVERY seated player's hand, not just a private trade with one
-     * opponent -- see RationalizationEffect's own docblock) isn't
-     * clearly a net gain once the bot's own cards are considered lost
-     * too.
+     * REMAINING hand size (after playing Rationalization -- it's already
+     * out of hand and sitting in play by the time 'rotate' actually
+     * exchanges hands, see rationalizationStealDirection()'s own
+     * docblock for the "reported live" bug this fixed) before 'rotate'
+     * toward them is worth it -- below this, giving away the bot's own
+     * whole remaining hand (rotate moves EVERY seated player's hand, not
+     * just a private trade with one opponent -- see RationalizationEffect's
+     * own docblock) isn't clearly a net gain once the bot's own cards are
+     * considered lost too. Skipped entirely (treated as 0) once the
+     * REMAINING hand is itself empty -- see rationalizationStealDirection()'s
+     * own docblock for why there's nothing left to weigh against in that
+     * case.
      */
     private const RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE = 3;
 
@@ -1650,33 +2059,41 @@ final class BotPlayerService
      *   wins over a merely-weak hand once both apply at once.
      * - Otherwise 'refresh' (bottom the whole hand, then redraw that
      *   many) once the bot's own remaining hand is weak enough to gamble
-     *   on a fresh draw (rationalizationLowValueHand()).
+     *   on a fresh draw (rationalizationLowValueHand()). Note that a weak
+     *   remaining hand is no longer, by itself, a reason to CHOOSE to
+     *   play Rationalization at all (see rationalizationHasAGoodReasonToPlayNow()'s
+     *   own docblock) -- it only ever decides which MODE to use once the
+     *   bot is playing the card anyway for some other reason (a live
+     *   steal opportunity, a clinch/prevent-losing play for its own
+     *   printed value, or being forced as the last legal card), where a
+     *   free hand-quality upgrade costs nothing extra either way.
      * - Otherwise, decline both modes entirely (an empty choice set --
      *   RationalizationEffect::afterPlaying()'s own `if ($mode === null)
      *   return;` treats this exactly like Guile-style genuine
      *   optionality, no different from any other unforced field
      *   BotChoiceResolver leaves unfilled). This branch is ONLY reached
      *   when the bot is playing Rationalization anyway despite neither
-     *   trigger applying -- forced as the last playable card, or (see
-     *   rationalizationWouldClinchTheGame()) purely for its own printed
-     *   value to close out the game -- and in that situation the bot's
-     *   own remaining hand is, by construction, NOT weak
-     *   (rationalizationLowValueHand() already said so, or it would have
-     *   taken the 'refresh' branch above instead). Reported live: bots
-     *   were "playing it to refresh hands when they have a good hand" --
-     *   this used to unconditionally fall back to 'refresh' here on the
-     *   theory that refresh is "always safe," but that's only true
-     *   because HAND SIZE never changes, not hand QUALITY: bottoming a
-     *   hand that's already above average and redrawing randomly is a
+     *   the steal trigger nor a weak hand applying -- forced as the last
+     *   playable card, or (see rationalizationWouldClinchTheGame()/
+     *   rationalizationWouldPreventLosingTheGame()) purely for its own
+     *   printed value to close out (or avoid losing) the game -- and in
+     *   that situation the bot's own remaining hand is, by construction,
+     *   NOT weak (rationalizationLowValueHand() already said so, or it
+     *   would have taken the 'refresh' branch above instead). Reported
+     *   live: bots were "playing it to refresh hands when they have a
+     *   good hand" -- this used to unconditionally fall back to 'refresh'
+     *   here on the theory that refresh is "always safe," but that's only
+     *   true because HAND SIZE never changes, not hand QUALITY: bottoming
+     *   a hand that's already above average and redrawing randomly is a
      *   pure gamble with negative expected value, not a free action, so
-     *   there is no safe default to fall back to here at all once both
-     *   real triggers have already said no.
+     *   there is no safe default to fall back to here at all once
+     *   nothing above has already said yes.
      *
      * @return array{mode: string}|array{mode: string, direction: string}|array{}
      */
     private function rationalizationChoices(BoardState $state, int $cardId, int $botGamePlayerId): array
     {
-        $direction = $this->rationalizationStealDirection($state, $botGamePlayerId);
+        $direction = $this->rationalizationStealDirection($state, $cardId, $botGamePlayerId);
         if ($direction !== null) {
             return ['mode' => 'rotate', 'direction' => $direction];
         }
@@ -1713,14 +2130,46 @@ final class BotPlayerService
      * makes THAT neighbor's own 'left' pass land on the bot, and vice
      * versa). Returns whichever of the two qualifies (at least
      * RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE more cards than the
-     * bot's own current hand) and holds the larger hand, if both do; null
-     * if neither seat neighbor currently qualifies (a heads-up duel has
-     * only one "neighbor" either direction resolves to the same single
-     * opponent, so both checks simply agree there).
+     * bot's own REMAINING hand, see $cardId below) and holds the larger
+     * hand, if both do; null if neither seat neighbor currently qualifies
+     * (a heads-up duel has only one "neighbor" either direction resolves
+     * to the same single opponent, so both checks simply agree there).
+     *
+     * @param int $cardId Rationalization's own card id, EXCLUDED from the
+     *        bot's own hand-size count the same way rationalizationLowValueHand()
+     *        already excludes it -- by the time 'rotate' actually swaps
+     *        hands, Rationalization itself is no longer in the bot's hand
+     *        (already played, sitting in play), so it's the REMAINING
+     *        hand that's actually given away, not the pre-play total.
+     *        Reported live (jceddy): with Rationalization as the bot's
+     *        ONLY card (a remaining hand of zero once it's played) and an
+     *        opponent holding 3, the bot refreshed instead of rotating --
+     *        the pre-play total of 1 required the opponent to hold 4+ to
+     *        qualify, even though the bot was really about to trade an
+     *        EMPTY hand for the opponent's 3-card one, a pure win with
+     *        nothing at all lost. Counting the card still queued to be
+     *        played as part of what's "given away" overstated the actual
+     *        cost by exactly one card in every case, hardest to notice
+     *        when Rationalization was the bot's whole hand (a 1-card
+     *        overcount is the entire hand at that point).
+     *
+     *        Reported live, follow-up (jceddy): once $ownHandSize is
+     *        actually zero -- Rationalization really was the bot's ONLY
+     *        card -- RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE is skipped
+     *        entirely rather than still requiring a neighbor to hold 3+:
+     *        with nothing left to give away, 'rotate' can never do worse
+     *        than 'refresh' (which is itself a total no-op against an
+     *        empty hand -- bottoming and redrawing zero cards), and it's
+     *        strictly better the moment ANY neighbor holds even a single
+     *        card. There's no "not worth the risk" case left to guard
+     *        against once the bot's own side of the trade is empty, so
+     *        the maintainer confirmed this should always fire rather than
+     *        only past the usual 3-card margin.
      */
-    private function rationalizationStealDirection(BoardState $state, int $botGamePlayerId): ?string
+    private function rationalizationStealDirection(BoardState $state, int $cardId, int $botGamePlayerId): ?string
     {
-        $ownHandSize = count($state->hand($botGamePlayerId));
+        $ownHandSize = count(array_diff($state->hand($botGamePlayerId), [$cardId]));
+        $requiredAdvantage = $ownHandSize === 0 ? 0 : self::RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE;
 
         $bestDirection = null;
         $bestGiverHandSize = -1;
@@ -1732,7 +2181,7 @@ final class BotPlayerService
             }
 
             $giverHandSize = count($state->hand($giverId));
-            if ($giverHandSize >= $ownHandSize + self::RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE && $giverHandSize > $bestGiverHandSize) {
+            if ($giverHandSize >= $ownHandSize + $requiredAdvantage && $giverHandSize > $bestGiverHandSize) {
                 $bestDirection = $direction;
                 $bestGiverHandSize = $giverHandSize;
             }
@@ -1743,19 +2192,37 @@ final class BotPlayerService
 
     /**
      * @see hasGoodReasonToPlayNow()'s own docblock for how this is used.
-     * Reported live: "Rationalization should be saved until it can be
-     * used to rotate hands and get the bot at least a 3 card increase in
-     * hand size, it should not be played for points to win a round
-     * unless it's going to win the entire game" -- the first two clauses
-     * are exactly rationalizationLowValueHand()/rationalizationStealDirection()
-     * above (already existing, unchanged); rationalizationWouldClinchTheGame()
-     * below is the third, new clause.
+     * Reported live, twice now: first "Rationalization should be saved
+     * until it can be used to rotate hands and get the bot at least a 3
+     * card increase in hand size, it should not be played for points to
+     * win a round unless it's going to win the entire game" (the steal
+     * clause below, and rationalizationWouldClinchTheGame()); then,
+     * bots still "playing rationalization badly," reworded as
+     * "strengthen the imperative to hold onto it until it is useful to
+     * rotate hands, or absolutely necessary not to lose a game" -- taken
+     * literally as an exhaustive list of the only two acceptable reasons
+     * to play it at all, this DROPS rationalizationLowValueHand() from
+     * this OR-chain entirely: a merely mediocre remaining hand is no
+     * longer, by itself, a green light to voluntarily lead with playing
+     * Rationalization over some other candidate (that's exactly what
+     * "played badly" looked like -- cashing it in early for a marginal
+     * hand-quality gamble instead of holding it for the steal, or for the
+     * new defensive case below). rationalizationLowValueHand() itself is
+     * untouched and still consulted -- just no longer HERE: see
+     * rationalizationChoices()'s own docblock for why it's still exactly
+     * the right signal for MODE selection once the bot is going to play
+     * Rationalization anyway for some other reason (or is simply forced
+     * to, as the last legal card), where a free hand-quality upgrade
+     * costs nothing extra either way.
+     *
+     * @param array<int, int> $roundWinsNeededToWinGameByPlayerId see
+     *     rationalizationWouldPreventLosingTheGame()'s own docblock.
      */
-    private function rationalizationHasAGoodReasonToPlayNow(BoardState $state, int $cardId, int $botGamePlayerId, ?int $roundWinsNeededToWinGame = null): bool
+    private function rationalizationHasAGoodReasonToPlayNow(BoardState $state, int $cardId, int $botGamePlayerId, ?int $roundWinsNeededToWinGame = null, array $roundWinsNeededToWinGameByPlayerId = []): bool
     {
-        return $this->rationalizationLowValueHand($state, $cardId, $botGamePlayerId)
-            || $this->rationalizationStealDirection($state, $botGamePlayerId) !== null
-            || $this->rationalizationWouldClinchTheGame($state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame);
+        return $this->rationalizationStealDirection($state, $cardId, $botGamePlayerId) !== null
+            || $this->rationalizationWouldClinchTheGame($state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame)
+            || $this->rationalizationWouldPreventLosingTheGame($state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGameByPlayerId);
     }
 
     /**
@@ -1796,6 +2263,93 @@ final class BotPlayerService
         }
 
         return $this->wouldBecomeHighestScore($state, $botGamePlayerId, 0, $this->baseValue($state, $cardId));
+    }
+
+    /**
+     * "Absolutely necessary not to lose a game" -- the defensive mirror
+     * of rationalizationWouldClinchTheGame() above: true only when SOME
+     * non-teammate rival group is BOTH (a) one round win (accounting for
+     * Corruption's own double-win marker, identically to the offensive
+     * check above) away from winning the whole GAME outright, AND (b)
+     * currently on track to take sole highest score THIS round unless the
+     * bot intervenes -- i.e. playing Rationalization purely for its own
+     * plain printed value (no mode, same reasoning as the offensive
+     * check: refresh's hand-swap doesn't change what counts toward this
+     * round's score either way) would deny that SPECIFIC rival the round
+     * lead it would otherwise have. Every other rival group is irrelevant
+     * here even if some of them are also individually ahead of the
+     * bot's own total -- only a rival who is BOTH the round's actual
+     * threat AND one win from ending the whole game creates the "lose
+     * the game THIS round" risk this exists to prevent; the bot's own
+     * intervention against a rival who isn't actually in contention for
+     * the round win gains nothing.
+     *
+     * Deliberately checked PER RIVAL GROUP rather than reusing
+     * wouldBecomeHighestScore()'s own single "best rival" figure the
+     * offensive check above gets away with -- that figure can be driven
+     * by a DIFFERENT, non-clinching rival in a 3+ player game, which
+     * would wrongly treat "some other player merely has more points" as
+     * "I'm about to lose the whole game" even when the actually-clinching
+     * rival isn't the round's real threat at all.
+     *
+     * @param array<int, int> $roundWinsNeededToWinGameByPlayerId
+     *     roundWinsStillNeededToWinGame()'s own per-player value, for
+     *     every currently active game_player_id in the round (not just
+     *     the acting bot's own -- see chooseAction()'s own docblock).
+     *     Empty means "unknown/not applicable," e.g. a caller that
+     *     hasn't been updated to compute every active player's own
+     *     value -- this check simply never fires then, the same
+     *     "behaves exactly as it always did before this parameter
+     *     existed" contract $roundWinsNeededToWinGame's own null default
+     *     already established for the offensive check.
+     */
+    private function rationalizationWouldPreventLosingTheGame(BoardState $state, int $cardId, int $botGamePlayerId, array $roundWinsNeededToWinGameByPlayerId): bool
+    {
+        if ($roundWinsNeededToWinGameByPlayerId === []) {
+            return false;
+        }
+
+        $predictedRoundWinsAwarded = 1;
+        foreach ($state->moodsInPlay() as $mood) {
+            if ($state->effectState($mood->cardId, 'awardsExtraWin')) {
+                $predictedRoundWinsAwarded = 2;
+                break;
+            }
+        }
+
+        $scores = (new RoundScorer())->score($state);
+        $activeIds = $state->activePlayerOrder();
+        $myGroupIds = array_values(array_filter(
+            $activeIds,
+            fn (int $id): bool => $id === $botGamePlayerId || $state->isTeammate($botGamePlayerId, $id),
+        ));
+        $myTotal = array_sum(array_map(fn (int $id) => $scores[$id] ?? 0, $myGroupIds));
+        $myBoostedTotal = $myTotal + $this->baseValue($state, $cardId);
+
+        $groupedRivalIds = [];
+        foreach ($activeIds as $id) {
+            if (in_array($id, $myGroupIds, true) || in_array($id, $groupedRivalIds, true)) {
+                continue;
+            }
+
+            $group = array_values(array_filter(
+                $activeIds,
+                fn (int $other): bool => $other === $id || $state->isTeammate($id, $other),
+            ));
+            $groupedRivalIds = array_merge($groupedRivalIds, $group);
+
+            $groupWinsNeeded = $roundWinsNeededToWinGameByPlayerId[$id] ?? null;
+            if ($groupWinsNeeded === null || $groupWinsNeeded > $predictedRoundWinsAwarded) {
+                continue; // this rival isn't one round win from finishing the whole game
+            }
+
+            $groupTotal = array_sum(array_map(fn (int $gid) => $scores[$gid] ?? 0, $group));
+            if ($myTotal < $groupTotal && $myBoostedTotal >= $groupTotal) {
+                return true; // this specific clinching rival would otherwise take the round (and the game) outright
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -1843,32 +2397,54 @@ final class BotPlayerService
     }
 
     /**
-     * How cheap a hand card needs to be before Zeal is worth spending it
-     * on ("After playing this mood, you may put a card from your hand on
-     * the bottom of the deck. If you do, draw a card.") -- a genuinely
-     * low-value card is worth gambling on a random replacement for; a
-     * merely mediocre one isn't worth the guaranteed loss of a known
-     * quantity for an unknown one. Same threshold, same reasoning, as
-     * RATIONALIZATION_LOW_VALUE_HAND_AVERAGE/AVOIDANCE_LOW_VALUE_MOOD_THRESHOLD/
-     * CYNICISM_LOW_VALUE_DISCARD_THRESHOLD above.
+     * How weak a hand card needs to be, by the SAME curated
+     * cards.draft_priority_score ranking BotChoiceResolver::
+     * resolveOwnResourceField() already uses to pick WHICH card Zeal
+     * actually gives up (see that method's own docblock), before Zeal is
+     * worth spending it on ("After playing this mood, you may put a card
+     * from your hand on the bottom of the deck. If you do, draw a
+     * card.") -- a genuinely replaceable card is worth gambling on a
+     * random one instead; a card the curated ranking treats as
+     * genuinely strong isn't worth the guaranteed loss of a known
+     * quantity for an unknown one, no matter how low its own printed
+     * value happens to be. Tier 2 covers both the catalog's own default
+     * "most cards" tier (1) and the next tier up (Ambition/Bravado/
+     * Determination/Joy/Pacifism/Shock) -- the same "genuinely low,
+     * not merely mediocre" cutoff ZEAL_LOW_VALUE_HAND_CARD_THRESHOLD
+     * (baseValue 2) used to draw, just on this method's own scale
+     * instead now.
      */
-    private const ZEAL_LOW_VALUE_HAND_CARD_THRESHOLD = 2;
+    private const ZEAL_LOW_DRAFT_PRIORITY_THRESHOLD = 2;
 
     /**
      * Zeal's own "should this optional field be attempted" policy
-     * (confirmed by the maintainer) -- feeds buildChoicesForCard()'s own
-     * `$forced` the same way shouldAttemptValueBoostDiscard() does,
-     * rather than a bespoke buildChoicesForCard() special case: once
-     * forced, BotChoiceResolver's own generic 'hand_card' field policy
-     * already picks the LOWEST-value legal candidate on its own (the
-     * same "minimize what's given up" bias resolveOwnResourceField()
+     * (reported live: "bots should always choose their worst card in
+     * draft pick order to discard to Zeal") -- feeds
+     * buildChoicesForCard()'s own `$forced` the same way
+     * shouldAttemptValueBoostDiscard() does, rather than a bespoke
+     * buildChoicesForCard() special case: once forced,
+     * BotChoiceResolver's own generic 'hand_card' field policy already
+     * picks the WORST legal candidate by draft_priority_score on its own
+     * (the same "give up the worst card" policy resolveOwnResourceField()
      * documents), so there's no need to separately pick WHICH card here
-     * -- only WHETHER to bother at all. True only if the bot's own
-     * cheapest OTHER hand card (excluding $cardId, Zeal itself) is
-     * cheap enough (ZEAL_LOW_VALUE_HAND_CARD_THRESHOLD) to be worth
-     * cycling for a random replacement; an empty remaining hand (Zeal
-     * was the bot's only card) has nothing to cycle at all, so it stays
-     * false -- "if it has one to cycle" per the maintainer.
+     * -- only WHETHER to bother at all.
+     *
+     * This method used to judge that by plain printed baseValue instead
+     * -- a real mismatch with the field policy above once that switched
+     * to draft_priority_score (migration 0259): a card like Intimidation
+     * (printed value 1, but a top-tier draft_priority_score of 40) would
+     * trigger this gate purely on its own low printed value, risking a
+     * genuinely strong card for a random replacement it never deserved
+     * to lose, while a card like Dignity (printed value 3, but the
+     * catalog's own default tier-1 draft_priority_score) would NOT
+     * trigger it despite being exactly the kind of replaceable filler
+     * this policy exists to cycle away. Now judged by the SAME metric
+     * the field policy actually acts on: true only if the bot's own
+     * WORST OTHER hand card (excluding $cardId, Zeal itself), by
+     * draft_priority_score, is weak enough (ZEAL_LOW_DRAFT_PRIORITY_THRESHOLD)
+     * to be worth cycling for a random replacement; an empty remaining
+     * hand (Zeal was the bot's only card) has nothing to cycle at all,
+     * so it stays false -- "if it has one to cycle" per the maintainer.
      */
     private function shouldAttemptZealCycle(BoardState $state, string $effectKey, string $fieldKey, int $cardId, int $botGamePlayerId): bool
     {
@@ -1876,14 +2452,17 @@ final class BotPlayerService
             return false;
         }
 
-        $cheapestOtherHandCardValue = PHP_INT_MAX;
+        $worstOtherHandCardDraftPriorityScore = PHP_INT_MAX;
         foreach ($state->hand($botGamePlayerId) as $handCardId) {
             if ($handCardId !== $cardId) {
-                $cheapestOtherHandCardValue = min($cheapestOtherHandCardValue, $this->baseValue($state, $handCardId));
+                $worstOtherHandCardDraftPriorityScore = min(
+                    $worstOtherHandCardDraftPriorityScore,
+                    $state->catalogRow($state->effectiveCardId($handCardId))['draftPriorityScore'],
+                );
             }
         }
 
-        return $cheapestOtherHandCardValue <= self::ZEAL_LOW_VALUE_HAND_CARD_THRESHOLD;
+        return $worstOtherHandCardDraftPriorityScore <= self::ZEAL_LOW_DRAFT_PRIORITY_THRESHOLD;
     }
 
     /**
@@ -1906,23 +2485,42 @@ final class BotPlayerService
      * points -- this is especially important in the last round of the
      * game when it can make the difference between winning and losing
      * the game"). Feeds resolveSchemaFields()'s own $forced the same way
-     * shouldAttemptZealCycle() does: once forced, BotChoiceResolver's
-     * own generic 'hand_card' field policy already picks the LOWEST-
-     * value legal candidate to discard on its own (the same "minimize
-     * what's given up" bias resolveOwnResourceField() documents), so
-     * there's no need to separately pick WHICH card here -- only WHETHER
-     * to bother at all.
+     * shouldAttemptZealCycle() does: once forced, BotChoiceResolver's own
+     * generic 'hand_card' field policy picks the worst legal candidate to
+     * discard on its own (`ownResourceCandidateValue()`'s own
+     * `cards.draft_priority_score`-based metric, not this method's own
+     * plain `baseValue` -- see that method's own docblock), so there's no
+     * need to separately pick WHICH card here -- only WHETHER to bother
+     * at all.
      *
-     * True only once AMBITION_MIN_HAND_SIZE_TO_DISCARD is met AND, after
-     * setting aside the cheapest OTHER hand card as the discard cost, at
-     * least one hand card still remains with a positive base value -- a
-     * genuine scoring play worth unlocking the extra play for, not just
-     * "some card to burn it on." This same rule already covers "make the
-     * difference between winning and losing the game" in the last round
-     * without any separate last-round-specific logic: a positive-value
-     * card the bot couldn't otherwise fit into this turn is exactly the
-     * kind of play that can flip a round's (and so the game's) outcome,
-     * every round this condition holds, last round included.
+     * The one card excluded from consideration ENTIRELY here, on both
+     * sides of that "should I bother" question: Hope. Reported live:
+     * "bots should not discard Hope to Ambition" -- see
+     * BotChoiceResolver::ambitionSafeHandCardIds()'s own docblock for why
+     * it's never actually offered as a candidate to the resolver above.
+     * This method has to know that too, not just assume it: Hope's own
+     * `baseValue` is always 0, the lowest any card can have, so without
+     * this exclusion it would always look like "the cheapest card to
+     * sacrifice" here -- right up until the resolver above, which
+     * actually decides what gets discarded, refuses to ever pick it,
+     * silently sacrificing some OTHER (possibly the only good remaining)
+     * card instead. Excluding it here keeps this method's own prediction
+     * of "what will actually get discarded" in sync with the resolver's
+     * own real behavior.
+     *
+     * True only once AMBITION_MIN_HAND_SIZE_TO_DISCARD is met (Hope
+     * counts toward the hand for this part -- it's still a real card
+     * sitting there, just not an eligible sacrifice) AND, after setting
+     * aside the cheapest OTHER *non-Hope* hand card as the discard cost,
+     * at least one hand card still remains with a positive base value --
+     * a genuine scoring play worth unlocking the extra play for, not
+     * just "some card to burn it on." This same rule already covers
+     * "make the difference between winning and losing the game" in the
+     * last round without any separate last-round-specific logic: a
+     * positive-value card the bot couldn't otherwise fit into this turn
+     * is exactly the kind of play that can flip a round's (and so the
+     * game's) outcome, every round this condition holds, last round
+     * included.
      */
     private function shouldAttemptAmbitionDiscard(BoardState $state, string $effectKey, string $fieldKey, int $cardId, int $botGamePlayerId): bool
     {
@@ -1930,21 +2528,26 @@ final class BotPlayerService
             return false;
         }
 
-        $otherCardValues = [];
+        $otherCardCount = 0;
+        $safeOtherCardValues = [];
         foreach ($state->hand($botGamePlayerId) as $handCardId) {
-            if ($handCardId !== $cardId) {
-                $otherCardValues[] = $this->baseValue($state, $handCardId);
+            if ($handCardId === $cardId) {
+                continue;
+            }
+            $otherCardCount++;
+            if ($state->catalogRow($state->effectiveCardId($handCardId))['effectKey'] !== 'hope') {
+                $safeOtherCardValues[] = $this->baseValue($state, $handCardId);
             }
         }
 
-        if (count($otherCardValues) + 1 < self::AMBITION_MIN_HAND_SIZE_TO_DISCARD) {
+        if ($otherCardCount + 1 < self::AMBITION_MIN_HAND_SIZE_TO_DISCARD) {
             return false;
         }
 
-        sort($otherCardValues);
-        array_shift($otherCardValues);
+        sort($safeOtherCardValues);
+        array_shift($safeOtherCardValues);
 
-        return $otherCardValues !== [] && max($otherCardValues) > 0;
+        return $safeOtherCardValues !== [] && max($safeOtherCardValues) > 0;
     }
 
     /**
@@ -2348,32 +2951,68 @@ final class BotPlayerService
     }
 
     /**
-     * Nostalgia's own "what to pick up" policy (confirmed by the
-     * maintainer): always take the highest-baseValue() card currently in
-     * the discard pile, UNLESS the bot itself already has a
-     * DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS mood (Sadness, Wonder) in
-     * play right now, in which case null is returned instead -- shrinking
-     * the discard pile it depends on would undo part of the value that
-     * mood is already contributing, so the pickup is skipped entirely
-     * and the discard pile is left alone (Nostalgia's own separate
-     * extra-play grant is unaffected either way -- see
-     * NostalgiaEffect::afterPlaying()). This is purely a TARGETING
-     * policy, distinct from sortPriorityValue()'s own "deprioritize
-     * Nostalgia when the discard pile is completely empty" check above
-     * -- that decides WHETHER/WHEN to lead with playing Nostalgia at
-     * all; this decides what to do with the optional discard_card_id
-     * field once it's actually being played. A Sadness/Wonder-holding
-     * bot can still legally play Nostalgia (e.g. purely for the extra
-     * play), it just never volunteers to empty the discard pile while
-     * doing so.
+     * Nostalgia's own "what to pick up" policy (reported live: "bots
+     * should always choose cards to get back with Nostalgia in draft
+     * pick order"): always take the highest cards.draft_priority_score
+     * card currently in the discard pile -- the same curated ranking
+     * draftCardScore() uses for drafting, and the same metric
+     * BotChoiceResolver::ownResourceCandidateValue() already uses for
+     * the mirror-image "give up your worst card" decisions (Guile/Bliss/
+     * Ambition/Zeal/Dignity-family discards, migration 0259) -- rather
+     * than plain printed baseValue(), which previously let a low-tier
+     * filler card with a merely higher printed value (almost anything)
+     * outrank a genuinely strong recursion target like Intimidation
+     * (printed value 1, but a top-tier draft_priority_score) for the
+     * pickup. Ties within the same draft_priority_score still fall back
+     * to baseValue(), via the shared draftPriorityRank() helper.
+     *
+     * UNLESS the bot itself already has a DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS
+     * mood (Sadness, Wonder) in play right now, in which case null is
+     * returned instead -- shrinking the discard pile it depends on would
+     * undo part of the value that mood is already contributing, so the
+     * pickup is skipped entirely and the discard pile is left alone
+     * (Nostalgia's own separate extra-play grant is unaffected either
+     * way -- see NostalgiaEffect::afterPlaying()). This is purely a
+     * TARGETING policy, distinct from sortPriorityValue()'s own
+     * "deprioritize Nostalgia when the discard pile is completely empty"
+     * check above -- that decides WHETHER/WHEN to lead with playing
+     * Nostalgia at all; this decides what to do with the optional
+     * discard_card_id field once it's actually being played. A
+     * Sadness/Wonder-holding bot can still legally play Nostalgia (e.g.
+     * purely for the extra play), it just never volunteers to empty the
+     * discard pile while doing so.
      *
      * Returns null both when there's a Sadness/Wonder-family mood in
      * play (don't pick up at all) and when the discard pile is simply
      * empty (nothing legal to pick up) -- buildChoicesForCard() treats
      * either the same way, an empty choices array rather than a filled
      * discard_card_id.
+     *
+     * $cardId (this specific Nostalgia instance being played) is always
+     * excluded from its own candidate pool -- a real bug caught live: a
+     * bot playing Harmony/Grief/Angst/Grace's own discard-sourced extra
+     * play (or benefiting from Melancholy's "treat the whole discard
+     * pile as hand" grant) can play Nostalgia FROM the discard pile
+     * itself, and buildBaseChoicesForCard() computes this choice against
+     * the board as it stood *before* that play -- i.e. while Nostalgia's
+     * own card is still physically sitting in the discard pile it's
+     * about to leave. With no other card in the pile, Nostalgia was the
+     * only ("best") candidate and picked itself; by the time
+     * NostalgiaEffect::afterPlaying() actually validates the choice,
+     * MoodPlayService::playMood() has already moved it into play (see
+     * that class's own docblock on why the move always happens before
+     * afterPlaying()), so the pile it just left no longer contains it,
+     * and the self-targeted choice was rejected as
+     * InvalidChoiceException("Card {$discardCardId} is not in the
+     * discard pile") -- reported live as the bot appearing stuck
+     * repeatedly failing to play Harmony whenever Nostalgia was the only
+     * card in the discard pile. A card can never legally end up
+     * targeting the very instance of itself that's resolving this
+     * effect, so excluding $cardId here is correct regardless of how
+     * Nostalgia got played -- it's simply never present in the OTHER
+     * candidates when played from hand, the ordinary case.
      */
-    private function nostalgiaDiscardCardId(BoardState $state, int $botGamePlayerId): ?int
+    private function nostalgiaDiscardCardId(BoardState $state, int $cardId, int $botGamePlayerId): ?int
     {
         foreach ($state->moodsOwnedBy($botGamePlayerId) as $mood) {
             $effectKey = $state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'];
@@ -2384,7 +3023,10 @@ final class BotPlayerService
 
         $bestCardId = null;
         foreach ($state->discardPile() as $discardCardId) {
-            if ($bestCardId === null || $this->baseValue($state, $discardCardId) > $this->baseValue($state, $bestCardId)) {
+            if ($discardCardId === $cardId) {
+                continue;
+            }
+            if ($bestCardId === null || $this->draftPriorityRank($state, $discardCardId) > $this->draftPriorityRank($state, $bestCardId)) {
                 $bestCardId = $discardCardId;
             }
         }
@@ -2393,52 +3035,80 @@ final class BotPlayerService
     }
 
     /**
+     * A single sortable rank combining cards.draft_priority_score (the
+     * primary key) with baseValue() (a tiebreaker among cards the
+     * curated draft ranking treats as equally replaceable) -- the same
+     * shape as BotChoiceResolver::ownResourceCandidateValue(), which
+     * ranks candidates the bot is giving UP (lowest wins). This is used
+     * for the mirror-image case, ranking candidates the bot is taking
+     * BACK (highest wins) -- currently just nostalgiaDiscardCardId()
+     * above.
+     */
+    private function draftPriorityRank(BoardState $state, int $cardId): int
+    {
+        $catalogRow = $state->catalogRow($state->effectiveCardId($cardId));
+
+        return $catalogRow['draftPriorityScore'] * 1000 + $catalogRow['baseValue'];
+    }
+
+    /**
      * Every effect key whose value scales up with the sheer COUNT of
      * moods in play (own and opponents' alike) -- currently just
      * Euphoria ("this mood's value increases by 1 for each mood in
      * play, including itself and other players' moods"). Bottoming ANY
      * mood via Hate (even Hate itself) shrinks that count by one and so
-     * costs the bot a point of Euphoria's own value regardless of WHICH
-     * mood gets targeted -- see hateTargetMoodId()'s own docblock for
-     * why that makes the whole play not worth it whenever one of these
-     * is in play, rather than just picking a "safer" target.
+     * costs a mood like that exactly one point of its own value for the
+     * rest of the round -- see hateTargetMoodId()'s own docblock for how
+     * that factors into its own targeting math.
      */
     private const MOOD_COUNT_VALUE_BOOST_EFFECT_KEYS = ['euphoria'];
+
+    /**
+     * The minimum CURRENT value an opponent's mood must have for
+     * hateTargetMoodId() to still target it while the acting player has
+     * a MOOD_COUNT_VALUE_BOOST_EFFECT_KEYS mood (Euphoria) in play --
+     * bottoming that opponent mood costs exactly 1 point of Euphoria's
+     * own value (its own docblock), so the play is only a net POSITIVE
+     * point swing once the opponent's mood is worth strictly more than
+     * that 1-point cost, i.e. 2 or more.
+     */
+    private const HATE_MIN_OPPONENT_VALUE_WORTH_EUPHORIAS_COST = 2;
 
     /**
      * Hate's own "what to target" policy (confirmed by the maintainer):
      * "After playing this mood, you may put any mood on the bottom of
      * the deck. If you do, draw a card." Hate's own printed base value
      * is 0, so leaving it untargeted wastes the play entirely -- a
-     * random card draw is strictly better than nothing whenever there's
-     * truly no better target, so this never returns null the way an
-     * ordinary "should we bother" policy would. Prefers the
-     * highest-CURRENT-value mood owned by a non-teammate opponent (the
-     * draw AND denies them that scored value this round -- strictly
-     * better than targeting anything of the acting player's own, which
-     * would only ever cost the same draw for less benefit); falls back
-     * to Hate itself (its own $cardId, always a legal target --
-     * HateEffect's own field has `includes_self`) only once no
-     * qualifying opponent mood exists, since removing a 0-value mood
-     * that was never going to score anyway is the one target that never
-     * costs the acting player anything.
+     * random card draw is strictly better than nothing, so this always
+     * returns a real target UNLESS the Euphoria carve-out below applies.
+     * Prefers the highest-CURRENT-value mood owned by a non-teammate
+     * opponent (the one that nets the biggest swing: the draw AND
+     * denying them that scored value this round -- strictly better than
+     * targeting anything of the acting player's own, which would only
+     * ever cost the same draw for less benefit); falls back to Hate
+     * itself (its own $cardId, always a legal target -- HateEffect's
+     * own field has `includes_self`) only once no qualifying opponent
+     * mood exists, since removing a 0-value mood that was never going
+     * to score anyway is the one target that never costs the acting
+     * player anything.
      *
-     * Returns null instead -- skipping the target field, and so the
-     * card draw, entirely -- whenever the acting player has a mood in
-     * play from MOOD_COUNT_VALUE_BOOST_EFFECT_KEYS (Euphoria): ANY
-     * target (including self) shrinks the in-play mood count by one,
-     * permanently costing that mood a point of its own value for as
-     * long as it stays in play, a real ongoing cost a one-time random
-     * draw isn't worth trading away.
+     * Reported live, then refined live a second time: "bots should not
+     * play hate without a target" was initially fixed by dropping the
+     * Euphoria carve-out entirely, but "we should keep the euphoria
+     * carve out, but change it -- if an opponent had a mood with value 2
+     * or higher, it should be targeted regardless of the bot having
+     * euphoria (there is still a net positive point swing)." Whenever
+     * the acting player has a MOOD_COUNT_VALUE_BOOST_EFFECT_KEYS mood in
+     * play, this now targets the best opponent mood ONLY if it's worth
+     * at least HATE_MIN_OPPONENT_VALUE_WORTH_EUPHORIAS_COST (2) -- enough
+     * to net a positive swing even after paying Euphoria's own 1-point
+     * cost -- and returns null (skipping the target field, and so the
+     * card draw, entirely -- not even Hate's own generic self-target
+     * fallback, which would ALSO cost that same point for nothing but a
+     * card draw) otherwise.
      */
     private function hateTargetMoodId(BoardState $state, int $cardId, int $botGamePlayerId): ?int
     {
-        foreach (self::MOOD_COUNT_VALUE_BOOST_EFFECT_KEYS as $effectKey) {
-            if ($state->playerHasMoodInPlay($botGamePlayerId, $effectKey)) {
-                return null;
-            }
-        }
-
         $bestOpponentMoodId = null;
         foreach ($state->activePlayerOrder() as $playerId) {
             if ($playerId === $botGamePlayerId || $state->isTeammate($botGamePlayerId, $playerId)) {
@@ -2448,6 +3118,14 @@ final class BotPlayerService
                 if ($bestOpponentMoodId === null || $state->valueOf($mood->cardId) > $state->valueOf($bestOpponentMoodId)) {
                     $bestOpponentMoodId = $mood->cardId;
                 }
+            }
+        }
+
+        foreach (self::MOOD_COUNT_VALUE_BOOST_EFFECT_KEYS as $effectKey) {
+            if ($state->playerHasMoodInPlay($botGamePlayerId, $effectKey)) {
+                return $bestOpponentMoodId !== null && $state->valueOf($bestOpponentMoodId) >= self::HATE_MIN_OPPONENT_VALUE_WORTH_EUPHORIAS_COST
+                    ? $bestOpponentMoodId
+                    : null;
             }
         }
 
@@ -2564,7 +3242,12 @@ final class BotPlayerService
      * Play, whichever happens to be cheapest), so the forced target
      * costs the acting side as little as possible, rather than the
      * generic "highest-value 'any' scope" default BotChoiceResolver
-     * would otherwise apply.
+     * would otherwise apply. $cardId itself is never actually a
+     * candidate here in practice -- chooseAction() always calls
+     * buildChoicesForCard() on the pre-play board, before $cardId has
+     * entered play, so it can never show up in $state->moodsInPlay()
+     * for this loop to encounter in the first place; unlike the schema
+     * fix below, there's no reachable bot-side gap to fix.
      */
     private function convictionTargetMoodId(BoardState $state, int $cardId, int $botGamePlayerId): ?int
     {
@@ -2609,6 +3292,45 @@ final class BotPlayerService
         }
 
         return $this->wouldBecomeHighestScore($state, $botGamePlayerId, 0, $this->baseValue($state, $cardId));
+    }
+
+    /**
+     * Recklessness's own "who to target" policy (confirmed by the
+     * maintainer): an opponent's Hope or Grace always comes first, ahead
+     * of everything else regardless of value -- both sit at baseValue 0
+     * (their real power is the ongoing "extra play every turn"/"extra
+     * play from the discard pile" ability, not printed value), so the
+     * plain highest-valueOf() fallback below would never surface either
+     * one even though taking it away permanently disables that
+     * opponent's own extra play for as long as the bot holds it (and, in
+     * the meantime, hands the bot itself that same extra play -- see
+     * RecklessnessEffect's own "give the mood you took back to them
+     * after scoring" text). The same "a 0-baseValue mood can still be
+     * the single best target on the board" reasoning is already applied
+     * to Hope specifically by angerSwingMaximizingTargets()/
+     * ambitionSafeHandCardIds() elsewhere in this file. With no
+     * opponent Hope/Grace available, falls back to
+     * convictionBestOpponentMoodId()'s own highest-CURRENT-value
+     * non-teammate-opponent-mood policy; null (skip the "you may" field
+     * entirely) only once no non-teammate opponent has any mood in play
+     * at all.
+     */
+    private function recklessnessTargetMoodId(BoardState $state, int $botGamePlayerId): ?int
+    {
+        $bestHopeOrGraceMoodId = null;
+        foreach ($state->activePlayerOrder() as $playerId) {
+            if ($playerId === $botGamePlayerId || $state->isTeammate($botGamePlayerId, $playerId)) {
+                continue;
+            }
+            foreach ($state->moodsOwnedBy($playerId) as $mood) {
+                $effectKey = $state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'];
+                if (in_array($effectKey, ['hope', 'grace'], true)) {
+                    $bestHopeOrGraceMoodId ??= $mood->cardId;
+                }
+            }
+        }
+
+        return $bestHopeOrGraceMoodId ?? $this->convictionBestOpponentMoodId($state, $botGamePlayerId);
     }
 
     /**
@@ -2659,6 +3381,137 @@ final class BotPlayerService
         usort($bestMoodIdByOpponent, fn (int $a, int $b) => $state->valueOf($b) <=> $state->valueOf($a));
 
         return array_slice($bestMoodIdByOpponent, 0, 2);
+    }
+
+    /**
+     * Thrill's own "which of my other in-play moods to return to hand"
+     * policy (reported live: a bot with Nostalgia in play, and Compulsion
+     * sitting in the discard pile, played Thrill with no targets at all
+     * instead of bouncing Nostalgia to replay it and pick Compulsion back
+     * up). Scoped to exactly one case for now, the only one confirmed
+     * genuinely free: an in-play Nostalgia whose OWN nostalgiaDiscardCardId()
+     * would find something worth taking (that method already excludes an
+     * empty discard pile, and skips the pickup entirely while a
+     * DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS mood -- Sadness/Wonder -- is
+     * in play, both reused verbatim here). Bouncing such a Nostalgia and
+     * replaying it this same turn (via Thrill's own unconditional
+     * one-extra-play-per-returned-mood grant) can never net LESS than
+     * leaving it alone: NostalgiaEffect::afterPlaying()'s own extra play
+     * is unconditional and unrestricted, so the replayed copy lands back
+     * in play at its own unchanged printed value (nothing lost) while
+     * ALSO picking up whatever nostalgiaDiscardCardId() already judged
+     * worth having and granting one more extra play to spend on it (or
+     * anything else already playable) -- a strict gain, never a cost, so
+     * there's no real "should I?" judgment call left the way there would
+     * be for bouncing a mood whose own value might not come back.
+     * Every OTHER in-play mood is left untouched -- bouncing anything
+     * else genuinely does cost that mood's own value for the rest of this
+     * round unless something specific is already known to make up for
+     * it, and no other such guaranteed-free combo is confirmed yet.
+     *
+     * @return int[]
+     */
+    private function thrillHandMoodIds(BoardState $state, int $cardId, int $botGamePlayerId): array
+    {
+        $targets = [];
+        foreach ($state->moodsOwnedBy($botGamePlayerId) as $mood) {
+            if ($mood->cardId === $cardId) {
+                continue;
+            }
+
+            $effectKey = $state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'];
+            if ($effectKey === 'nostalgia' && $this->nostalgiaDiscardCardId($state, $mood->cardId, $botGamePlayerId) !== null) {
+                $targets[] = $mood->cardId;
+            }
+        }
+
+        return $targets;
+    }
+
+    /**
+     * Panic's own "which of my own in-play moods to bounce back to my own
+     * hand" policy (reported live, from a game where Validation was
+     * already in play: "when the bot played Panic, it should have
+     * targeted its own Compulsion or Suspicion so it could re-play it to
+     * take another card from my hand" -- Panic had zero bot targeting
+     * logic at all, so target_mood_ids (optional, up to 2, one per
+     * distinct owner) was always left empty). Scoped exactly as narrowly
+     * as thrillHandMoodIds() above, for the same reason: PROVABLY
+     * risk-free, not merely plausible. Panic's own printed value is a
+     * fixed 1 (id 48, base_value 1, no alt_value), so playing it AT ALL
+     * is guaranteed to satisfy ValidationEffect::reactToAnotherPlay()'s
+     * own "0 or 1" check -- an in-play Validation the bot still owns
+     * therefore guarantees an extra play lands the instant Panic
+     * resolves, regardless of anything else on the board (this is
+     * exactly what happened in the reported game: Validation had already
+     * granted the play Panic itself was cast with, and was about to grant
+     * another the moment Panic finished). That guaranteed extra play is
+     * what makes bouncing the bot's own highest-value "steal a card from
+     * an opponent's hand" mood (Compulsion or Suspicion -- see
+     * EARLY_PRIORITY_EFFECT_KEYS' own "steals from an opponent's hand"
+     * pair) a strict gain: it comes right back into play via that
+     * guaranteed replay (auto-targeted correctly by the generic
+     * resolver/BotChoiceResolver::ALWAYS_FILLED_OPTIONAL_FIELDS the same
+     * as any other Compulsion/Suspicion play), stealing ANOTHER card in
+     * the process. Without a confirmed extra play waiting, bouncing
+     * either one would just forfeit its current round-scoring value for
+     * nothing, so this stays silent (no target at all) whenever
+     * Validation isn't in play, exactly as thrillHandMoodIds() stays
+     * silent without a worthwhile Nostalgia pickup waiting. Only ever
+     * fills ONE of Panic's own up-to-two target slots -- there's no
+     * confirmed-safe policy yet for the other (an opponent's mood would
+     * need its own denial-vs-tempo judgment call this doesn't attempt).
+     *
+     * @return int[]
+     */
+    private function panicTargetMoodIds(BoardState $state, int $botGamePlayerId): array
+    {
+        $ownsInPlayValidation = false;
+        foreach ($state->moodsOwnedBy($botGamePlayerId) as $mood) {
+            if ($state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'] === 'validation') {
+                $ownsInPlayValidation = true;
+                break;
+            }
+        }
+        if (!$ownsInPlayValidation) {
+            return [];
+        }
+
+        $bestStealMoodId = null;
+        foreach ($state->moodsOwnedBy($botGamePlayerId) as $mood) {
+            $effectKey = $state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'];
+            if (!in_array($effectKey, ['compulsion', 'suspicion'], true)) {
+                continue;
+            }
+            if ($bestStealMoodId === null || $state->valueOf($mood->cardId) > $state->valueOf($bestStealMoodId)) {
+                $bestStealMoodId = $mood->cardId;
+            }
+        }
+
+        return $bestStealMoodId !== null ? [$bestStealMoodId] : [];
+    }
+
+    /**
+     * Reported live: a bot with an 11-point Euphoria opponent and a
+     * Pacifism sitting in the discard pile (playable via Melancholy)
+     * played some other, far weaker card instead, missing a win --
+     * sortPriorityValue()'s own plain baseValue() (1) gave Pacifism no
+     * credit at all for the value it would actually deny. This is the
+     * total value of whatever pacifismTargetMoodIds() would suppress
+     * right now -- the exact same targets the bot's own eventual
+     * buildChoicesForCard() call would pick if this card is chosen --
+     * added on top of baseValue() there. 0 whenever pacifismTargetMoodIds()
+     * is empty, but hasGoodReasonToPlayNow()'s own PHP_INT_MIN veto
+     * already keeps this method from ever being asked in that case.
+     */
+    private function pacifismSwing(BoardState $state, int $botGamePlayerId): int
+    {
+        $swing = 0;
+        foreach ($this->pacifismTargetMoodIds($state, $botGamePlayerId) as $moodId) {
+            $swing += $state->valueOf($moodId);
+        }
+
+        return $swing;
     }
 
     /**
@@ -3626,6 +4479,43 @@ final class BotPlayerService
     }
 
     /**
+     * Every non-teammate opponent who legally qualifies as a target for
+     * Cruelty OR Indecisiveness (CrueltyEffect::MINIMUM_MOODS /
+     * IndecisivenessEffect::MINIMUM_MOODS -- both share the identical
+     * `CardChoiceSchema` filter: 2 or more moods currently in play; see
+     * IndecisivenessEffect's own docblock, "same shape as Cruelty, but
+     * returning the mood to its owner's hand instead of discarding it"),
+     * mirroring Suspicion's own "target every eligible opponent" policy
+     * in BotChoiceResolver::ALWAYS_FILLED_OPTIONAL_FIELDS -- both cards
+     * force a random one of EACH chosen opponent's own moods OUT of play
+     * (to the discard pile for Cruelty, back to hand for Indecisiveness)
+     * with no cost or downside to the acting player either way, so
+     * there's never a reason to target fewer than every eligible
+     * opponent.
+     *
+     * Also used by hasGoodReasonToPlayNow() above for both effect keys:
+     * an empty return means no opponent qualifies, so the card is
+     * deprioritized (the same PHP_INT_MIN treatment Anger/Pacifism get)
+     * rather than played for nothing.
+     *
+     * @return int[]
+     */
+    private function twoOrMoreMoodOpponentIds(BoardState $state, int $botGamePlayerId): array
+    {
+        $targets = [];
+        foreach ($state->activePlayerOrder() as $playerId) {
+            if ($playerId === $botGamePlayerId || $state->isTeammate($botGamePlayerId, $playerId)) {
+                continue;
+            }
+            if (count($state->moodsOwnedBy($playerId)) >= 2) {
+                $targets[] = $playerId;
+            }
+        }
+
+        return $targets;
+    }
+
+    /**
      * Anger's own after-playing targets (confirmed by the maintainer): the
      * subset of every non-teammate opponent's own in-play moods that
      * maximizes total value discarded without exceeding
@@ -3663,9 +4553,22 @@ final class BotPlayerService
      * in-play mood is a candidate (the acting player's own moods, and any
      * teammate's, are deliberately excluded -- discarding either would
      * only ever REDUCE the swing, the same "an opponent means neither"
-     * policy pacifismTargetMoodIds() already applies), scored by
-     * maxValueSubsetWithinBudget() to find the highest-total-value subset
-     * that still fits Anger's own 5-point combined-value ceiling.
+     * policy pacifismTargetMoodIds() already applies).
+     *
+     * A ZERO-value opponent mood (e.g. Hope) is always included outright
+     * (reported live: "as a 0 point card, hope can *always* be
+     * targeted") -- it costs nothing against Anger's own 5-point combined
+     * value ceiling (AngerEffect::MAX_TOTAL_VALUE), so there's never a
+     * budget trade-off to weigh, and discarding it still denies the
+     * opponent whatever non-scoring ability made it worth playing in the
+     * first place. A NEGATIVE-value candidate (a dynamic value can dip
+     * below 0, e.g. a Chaos Draft custom effect) is the opposite case --
+     * it's already actively hurting its own owner, so discarding it would
+     * only help them -- and stays excluded entirely, same as before.
+     * Every strictly-positive-value candidate still competes for the
+     * budget via maxValueSubsetWithinBudget(), maximizing total value
+     * discarded among them; zero-value targets are additive on top of
+     * that result, never counted against it.
      *
      * Each candidate's value is computed via
      * BoardState::valueOfAsIfAlsoInPlay() rather than plain valueOf() --
@@ -3683,16 +4586,22 @@ final class BotPlayerService
      */
     private function angerSwingMaximizingTargets(BoardState $state, int $cardId, int $botGamePlayerId): array
     {
-        $opponentMoodValues = [];
+        $freeTargets = [];
+        $paidOpponentMoodValues = [];
         foreach ($state->moodsInPlay() as $mood) {
             if ($mood->ownerId === $botGamePlayerId || $state->isTeammate($botGamePlayerId, $mood->ownerId)) {
                 continue;
             }
 
-            $opponentMoodValues[$mood->cardId] = $state->valueOfAsIfAlsoInPlay($mood->cardId, $cardId, $botGamePlayerId);
+            $value = $state->valueOfAsIfAlsoInPlay($mood->cardId, $cardId, $botGamePlayerId);
+            if ($value === 0) {
+                $freeTargets[] = $mood->cardId;
+            } else {
+                $paidOpponentMoodValues[$mood->cardId] = $value;
+            }
         }
 
-        return $this->maxValueSubsetWithinBudget($opponentMoodValues, self::ANGER_DISCARD_BUDGET);
+        return [...$freeTargets, ...$this->maxValueSubsetWithinBudget($paidOpponentMoodValues, self::ANGER_DISCARD_BUDGET)];
     }
 
     /**

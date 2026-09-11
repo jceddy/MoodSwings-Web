@@ -1,0 +1,18 @@
+-- Bug fix (reported live: "in best of three matches, the bot diagnostic
+-- mode should be carried forward through all of the match games").
+--
+-- Both of GameService's best-of-three "create the next game" methods --
+-- advanceGameMatch() (Duel/Open Team Play/Closed Team Play/Traditional)
+-- and advanceDraftMatch() (Quick/Winston/Grid/Rotisserie/Tiered
+-- Rotisserie Draft, Sealed Deck) -- INSERT a fresh games row for game 2/3
+-- of the match, explicitly carrying forward settings like wins_needed
+-- and default_selections_mode. Neither one's own column/value list
+-- included diagnostic_mode at all, so it silently reset to off (the
+-- column's own default) every time, even though a Tactical Bot stays
+-- seated for the whole match. Both now carry it forward explicitly, the
+-- same "decided once at match creation" treatment default_selections_mode
+-- already gets.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.39.8' WHERE id = 1;
