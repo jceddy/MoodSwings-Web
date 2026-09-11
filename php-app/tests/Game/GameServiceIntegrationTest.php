@@ -13502,6 +13502,76 @@ final class GameServiceIntegrationTest extends TestCase
         $this->games->resignGame($gameId, $p2);
     }
 
+    /**
+     * Reported live: "can we allow players to resign from a game while a
+     * choice (like from Compulsion/Suspicion) is waiting on them?" When
+     * the pending decision targets the RESIGNING player specifically --
+     * Compulsion's own target here, choosing a hand card to give up --
+     * there's no one else who could ever answer it, so
+     * autoAnswerOwnPendingDecisionBeforeResigning() answers it with the
+     * same legal-default machinery BotPlayerService already uses on a
+     * bot's behalf, and the resignation proceeds normally. Covers the
+     * real playMood()/resignGame() pipeline end to end, confirming the
+     * card actually moved rather than the decision being silently
+     * dropped.
+     */
+    public function testResignAutoAnswersAPendingDecisionTargetingTheResigningPlayer(): void
+    {
+        $initiator = $this->insertUser('resign-autoanswer-initiator');
+        $resigner = $this->insertUser('resign-autoanswer-resigner');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $initiator]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $initiatorPlayerId = $this->insertGamePlayer($gameId, $initiator, 0);
+        $resignerPlayerId = $this->insertGamePlayer($gameId, $resigner, 1);
+
+        $compulsionId = $this->insertGameCard($gameId, 86, 'hand', $initiatorPlayerId); // Compulsion
+        $givenCardId = $this->insertGameCard($gameId, 3, 'hand', $resignerPlayerId); // Charity, the target's only hand card
+        $this->insertGameRound($gameId, 1, $initiatorPlayerId, $initiatorPlayerId, 2);
+
+        $this->games->playMood($gameId, $initiatorPlayerId, $compulsionId, ['target_player_id' => $resignerPlayerId]);
+
+        $pendingStmt = $this->pdo->prepare('SELECT 1 FROM game_pending_decision_batches WHERE game_id = :game_id AND resolved_at IS NULL');
+        $pendingStmt->execute(['game_id' => $gameId]);
+        self::assertNotFalse($pendingStmt->fetchColumn(), 'sanity check: a decision must actually be pending on the resigner');
+
+        $result = $this->games->resignGame($gameId, $resignerPlayerId);
+
+        self::assertTrue($result['game_completed']);
+        self::assertSame($initiatorPlayerId, $result['winner_game_player_id']);
+        self::assertSame('completed', $this->fetchGame($gameId)['status']);
+
+        $movedCardStmt = $this->pdo->prepare('SELECT owner_game_player_id FROM game_cards WHERE id = :id');
+        $movedCardStmt->execute(['id' => $givenCardId]);
+        self::assertSame($initiatorPlayerId, (int) $movedCardStmt->fetchColumn(), 'the pending Compulsion decision must have actually been auto-answered for real, not just bypassed');
+    }
+
+    /**
+     * The other half of the fix above: a decision pending against a
+     * DIFFERENT player must still block everyone else's resignation
+     * exactly as before -- there's no one but that player who could
+     * legally answer it, and forcing a turn to advance (or a game to
+     * complete) out from under someone else's still-open decision isn't
+     * attempted (see resignGame()'s own docblock). p3 here is neither the
+     * initiator nor Compulsion's target, so this confirms the relief only
+     * ever applies to the resigning player's OWN pending decision.
+     */
+    public function testResignStaysBlockedByADecisionPendingForADifferentPlayer(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2, 'p3' => $p3] = $this->buildThreePlayerFixture();
+
+        $compulsionId = $this->insertGameCard($gameId, 86, 'hand', $p1); // Compulsion
+        $this->games->playMood($gameId, $p1, $compulsionId, ['target_player_id' => $p2]);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('decision still pending');
+        $this->games->resignGame($gameId, $p3);
+    }
+
     // -- Resigning from a draft match (issue #144) -----------------------
 
     public function testResignDuringDraftingAbandonsWholeQuickDraftMatchTwoPlayer(): void

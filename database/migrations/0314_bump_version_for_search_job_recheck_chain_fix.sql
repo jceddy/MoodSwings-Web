@@ -1,0 +1,24 @@
+-- Reported live: "is there a way to get the tactical bot to move on to
+-- its next turn if it plays first on a round following one where it
+-- played last, without the player having the game window open?"
+--
+-- Root cause: runTacticalBotSearchJob() calls playMood()/pass() directly
+-- once its search finishes, entirely outside advanceAutomatedTurns()'s
+-- own loop, so it never called scheduleAutomatedTurnRecheck() either.
+-- That self-triggering chain only ever gets (re-)armed from inside
+-- advanceAutomatedTurns() itself, and only when THAT call actually drove
+-- something -- the exact call that originally launched the search job
+-- returns early with nothing to apply yet ("now thinking"), so no
+-- recheck was ever scheduled for what happens once the job actually
+-- finishes. With nobody polling the game, the job's own completed play
+-- (most visibly the same seat, freshly dealt a new round and going first
+-- again) just sat there forever with no trigger left to continue it.
+--
+-- Fixed: runTacticalBotSearchJob() now calls scheduleAutomatedTurnRecheck()
+-- itself immediately after applying its own play/pass (both the
+-- successful search path and the heuristic-fallback path), closing the
+-- gap -- a harmless no-op once some client's own poll gets there first.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.40.7' WHERE id = 1;
