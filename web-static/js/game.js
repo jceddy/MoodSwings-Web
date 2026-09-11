@@ -9956,6 +9956,26 @@
         return fieldKey !== undefined && !choices[fieldKey];
     }
 
+    // Reported live: a player chose Contempt's own target_mood_id but
+    // never touched its separate, optional 'mode' dropdown -- the whole
+    // play submitted as "legal", but ContemptEffect::afterPlaying()
+    // returns immediately once mode is null, before ever reading
+    // target_mood_id, so the chosen mood was never actually discarded and
+    // nothing told the player why. A schema field marked 'requires_mode'
+    // (see CardChoiceSchema's own docblock -- currently Contempt's and
+    // Hesitation's target_mood_id; Guilt has the same single-vs-all shape
+    // but its own 'mode' field is 'required' => true, so this can never
+    // happen there) having a value while 'mode' is missing ENTIRELY is
+    // never an intentional submission: choosing 'all' needs no target at
+    // all, and declining the whole optional effect needs neither -- so
+    // this is always either a missed click on the mode selector or a
+    // genuine "submit and do nothing" choice, the same unambiguous shape
+    // cardHasNoTargetSelected()/cardHasAnUncheckedConfirmBox() above
+    // already guard other cards against.
+    function cardHasATargetWithoutItsRequiredMode(card, choices) {
+        return card.choice_fields.some((field) => field.requires_mode !== undefined && field.key in choices) && !('mode' in choices);
+    }
+
     document.getElementById('play-card-button').addEventListener('click', async () => {
         const choices = buildChoicesFromFields(selectedCard.choice_fields);
         if (cardHasNoTargetSelected(selectedCard, choices)
@@ -9973,6 +9993,10 @@
             if (!(await showConfirmDialog(`You haven't checked "${field.label}" -- ${selectedCard.name}'s ability won't do anything. Play it anyway?`))) {
                 return;
             }
+        }
+        if (cardHasATargetWithoutItsRequiredMode(selectedCard, choices)
+            && !(await showConfirmDialog(`You've chosen a target for ${selectedCard.name}, but haven't chosen a mode -- as submitted, its ability won't do anything. Play it anyway?`))) {
+            return;
         }
         const playButton = document.getElementById('play-card-button');
         // Disabled + relabeled immediately (not after the request settles)

@@ -422,6 +422,49 @@ final class CardChoiceSchemaTest extends TestCase
         self::assertTrue($fields[1]['includes_self']);
     }
 
+    /**
+     * Reported live: a player chose Contempt's own target_mood_id but
+     * never touched its separate, optional 'mode' field -- the play
+     * submitted as legal, but ContemptEffect::afterPlaying() returns
+     * immediately once mode is null, before ever reading target_mood_id,
+     * so the chosen mood was never actually discarded. requires_mode
+     * lets game.js's own cardHasATargetWithoutItsRequiredMode() catch
+     * this exact case with a confirmation prompt before submitting.
+     */
+    public function testContemptTargetRequiresSingleMode(): void
+    {
+        $fields = CardChoiceSchema::forEffectKey('contempt');
+
+        self::assertFalse($fields[0]['required'], "Contempt's own mode field must stay optional for this bug to be reachable");
+        self::assertSame('single', $fields[1]['requires_mode']);
+    }
+
+    /** Hesitation shares Contempt's exact optional-mode-plus-single-target shape -- see that test's own docblock. */
+    public function testHesitationTargetRequiresSingleMode(): void
+    {
+        $fields = CardChoiceSchema::forEffectKey('hesitation');
+
+        self::assertFalse($fields[0]['required']);
+        self::assertSame('single', $fields[1]['requires_mode']);
+    }
+
+    /**
+     * Reported live: "Guilt should actually have the same pattern as
+     * Hesitation and Contempt" -- the 0003 catalog seed had dropped "you
+     * may" from Guilt's own rules_text (the same transcription mistake
+     * already caught and fixed for Rationalization/Hesitation in
+     * migrations 0030/0055), wrongly making its 'mode' field 'required'
+     * instead of sharing Contempt's/Hesitation's optional shape. Now
+     * corrected to match exactly -- see GuiltEffect's own docblock.
+     */
+    public function testGuiltTargetRequiresSingleMode(): void
+    {
+        $fields = CardChoiceSchema::forEffectKey('guilt');
+
+        self::assertFalse($fields[0]['required']);
+        self::assertSame('single', $fields[1]['requires_mode']);
+    }
+
     public function testCrueltyIndecisivenessAndSuspicionHaveNoCountOrConstraintSinceTheyAllowAnyNumber(): void
     {
         foreach (['cruelty', 'indecisiveness', 'suspicion', 'doubt', 'thrill'] as $effectKey) {
