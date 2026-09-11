@@ -7189,9 +7189,24 @@ final class GameService
             $this->logHeuristicBotReasoning($gameId, $state, $gamePlayerId, $action);
         }
 
-        return $action !== null
-            ? $this->playMood($gameId, $gamePlayerId, $action['card_id'], $action['choices'])
-            : $this->pass($gameId, $gamePlayerId, automated: true);
+        // Same "never let a bot's own broken play attempt permanently
+        // break a game" guard advanceAutomatedTurns() already has around
+        // its own identical playMood()/pass() call -- caught live: this
+        // exact call site is what's left running a broken play forever
+        // once a game leans on the Tactical Bot (advanceTacticalBotSearch()'s
+        // own stale-job fallback lands here), since it used to have no
+        // catch of its own at all. See advanceAutomatedTurns()'s own catch
+        // block for the full reasoning; identical here, just a different
+        // caller.
+        try {
+            return $action !== null
+                ? $this->playMood($gameId, $gamePlayerId, $action['card_id'], $action['choices'])
+                : $this->pass($gameId, $gamePlayerId, automated: true);
+        } catch (Throwable $e) {
+            error_log("playViaHeuristicBotFallback({$gameId}): bot {$gamePlayerId}'s own play attempt failed, passing instead -- " . $e);
+
+            return $this->pass($gameId, $gamePlayerId, automated: true);
+        }
     }
 
     /**
@@ -7214,9 +7229,23 @@ final class GameService
             $this->logTacticalBotReasoning($gameId, $gamePlayerId, $action, ['excluded_by_heuristic' => [], 'candidates' => []], recoveredFromStalledSearch: true);
         }
 
-        return $cardId !== null
-            ? $this->playMood($gameId, $gamePlayerId, $cardId, $choices ?? [])
-            : $this->pass($gameId, $gamePlayerId, automated: true);
+        // Same "never let a bot's own broken play attempt permanently
+        // break a game" guard advanceAutomatedTurns() already has around
+        // its own identical playMood()/pass() call -- a checkpointed
+        // action recorded mid-search is just as capable of tripping a
+        // choice-building bug as a fresh heuristic one is, and this call
+        // site used to have no catch of its own at all. See
+        // advanceAutomatedTurns()'s own catch block for the full
+        // reasoning; identical here, just a different caller.
+        try {
+            return $cardId !== null
+                ? $this->playMood($gameId, $gamePlayerId, $cardId, $choices ?? [])
+                : $this->pass($gameId, $gamePlayerId, automated: true);
+        } catch (Throwable $e) {
+            error_log("playRecoveredPartialSearchResult({$gameId}): bot {$gamePlayerId}'s own recovered play attempt failed, passing instead -- " . $e);
+
+            return $this->pass($gameId, $gamePlayerId, automated: true);
+        }
     }
 
     /**
@@ -18925,6 +18954,19 @@ final class GameService
     {
         $details = $this->withCardHistory($state, $details);
 
+        // Caught live: a tactical-bot reasoning payload containing a
+        // non-finite float (INF/NAN, presumably from some edge-case
+        // search evaluation) made json_encode() return false rather than
+        // throw -- PDO then bound that false as an empty string, and
+        // MySQL's own JSON column validation rejected it with "Invalid
+        // JSON text: The document is empty", surfacing as an uncaught
+        // PDOException instead of the graceful "couldn't log reasoning"
+        // this obviously should have been. Never let a failed encode
+        // reach the query at all -- an empty/absent details column is
+        // always valid (every reader here already treats NULL/'[]' as
+        // "no extra details"), unlike a guaranteed-invalid empty string.
+        $encodedDetails = $details !== [] ? json_encode($details) : null;
+
         $stmt = Connection::get()->prepare(
             'INSERT INTO game_events (game_id, game_round_id, acting_game_player_id, event_type, card_id, details)
              VALUES (:game_id, :round_id, :acting_player_id, :event_type, :card_id, :details)'
@@ -18935,7 +18977,7 @@ final class GameService
             'acting_player_id' => $actingPlayerId,
             'event_type' => $eventType,
             'card_id' => $cardId,
-            'details' => $details === [] ? null : json_encode($details),
+            'details' => $encodedDetails !== false ? $encodedDetails : null,
         ]);
     }
 

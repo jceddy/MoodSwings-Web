@@ -8619,12 +8619,81 @@ current or future), logs it (`error_log()`, the same pattern
 to an automated `pass()` for that one seat instead of letting the
 exception propagate -- keeping the round, and the whole game, moving for
 every other seated player at the cost of skipping whatever that one
-bot's turn would have done. The underlying "why did Compulsion's own
-choices come back incomplete" question is still open (no fixture yet
-reproduces it in isolation -- every other seat's own targeting works
-correctly in tests, see `testChooseActionTargetsAPlayerWhenPlayingCompulsionInTeamPlay`)
-but can no longer break a game either way: a recurrence now logs instead
-of costing a human their ability to load their own game.
+bot's turn would have done. At the time, the underlying "why did
+Compulsion's own choices come back incomplete" question was left open --
+no fixture reproduced it in isolation, since every other seat's own
+direct targeting already worked correctly in tests (see
+`testChooseActionTargetsAPlayerWhenPlayingCompulsionInTeamPlay`).
+
+**That question's own answer, found later, reported live: a bot "stuck
+in a Creativity loop"** -- not broken Compulsion targeting at all, but
+Creativity COPYING Compulsion. `BotPlayerService::buildBaseChoicesForCard()`'s
+own `'creativity'` branch, once it picked a copy target via
+`creativityBestCopyTargetId()`, returned `['copy_card_id' => ...]` and
+stopped -- it never asked what the COPIED card's own effective effect
+key needs once it actually resolves as that copy, unlike a human
+player's own client (`game.js`'s `handleCreativityCopyChange()` already
+merges the copied mood's own `choice_fields` into the panel) or the
+server's own `MoodPlayService::playMood()`, which resolves the whole
+copy chain via `effectiveCardId()` before anything cost/effect-related
+ever runs. A bot electing to copy an in-play Compulsion this way built
+`{copy_card_id: ...}` with no `target_player_id` at all, `resolveAfterPlayingChain()`
+threw the exact same `InvalidChoiceException` this section's own fix
+above was written to survive -- and did, falling back to an automated
+`pass()` -- but Creativity never actually left the bot's hand (the play
+failed before entering play), so its next turn reproduced the identical
+failure. Worse, the Tactical Bot's own stale-job fallback path
+(`playViaHeuristicBotFallback()`/`playRecoveredPartialSearchResult()`,
+see "Tactical Bot" below) had no `catch` of its own at all, so a game
+leaning on tree search hit this with no automated `pass()` to fall back
+on -- genuinely stuck, a fresh multi-minute search launching, failing
+the same way, and repeating forever, exactly the reported "loop."
+
+Fixed at the actual source this time: `buildBaseChoicesForCard()` was
+split into a `choicesForEffectKey()` it can recurse into, so the
+`'creativity'` branch now resolves the copied card's own effective
+effect key and merges in whatever `choicesForEffectKey()` builds for
+THAT key -- a bespoke per-card rule (Panic/Recklessness/Conviction/
+etc.) or the generic `CardChoiceSchema`/`resolveSchemaFields()` loop
+alike, not just the generic case. A copied card whose own required
+field has no legal answer falls back to playing Creativity uncopied
+(`[]`) rather than submitting an incomplete play; copying another BLANK
+in-play Creativity (itself `'creativity'`, copying nothing) is
+deliberately left unmerged rather than recursed into, since it would
+just re-pick the identical "best" target and loop forever with nothing
+useful to actually copy. `LegalChoiceEnumerator`'s own
+`usesBespokeChoiceBuilding('creativity')` classification (see its own
+docblock) is unaffected -- Creativity's own effect key never changes,
+only what choices its bespoke branch now builds.
+
+`playViaHeuristicBotFallback()`/`playRecoveredPartialSearchResult()`
+(see "Tactical Bot" below) also each gained the identical
+`catch (Throwable)`-and-`pass()` guard `advanceAutomatedTurns()`'s own
+bot-turn branch already had, as defense in depth: whatever future bug
+might slip past `buildChoicesForCard()` next should degrade to a skipped
+turn on EVERY path a bot's own play can be driven from, not just the
+one this section originally covered.
+
+**A second, unrelated failure surfaced in the same incident's own error
+log**: `tactical_bot_reasoning` logging itself threw a `PDOException`
+("Invalid JSON text: The document is empty") often enough to make the
+tactical search look like it kept failing outright. A reasoning payload
+containing a non-finite float (`INF`/`NAN`, presumably from some
+edge-case search evaluation) made `json_encode()` return `false` rather
+than throw; `GameService::logEvent()` bound that `false` straight into
+the query, PDO cast it to an empty string, and MySQL's own JSON column
+validation rejected it -- an empty string is never valid JSON, not even
+`null`. `logEvent()` now checks `json_encode()`'s own return value and
+stores `NULL` instead whenever it's `false`, the same as it already does
+for a genuinely empty `$details` array -- every reader here already
+treats a `NULL`/absent `details` column as "no extra details," so this
+is a pure hardening fix with no behavior change for the success case.
+`testChooseActionFillsTheCopiedCardsOwnRequiredChoiceWhenCreativityCopiesCompulsion`/
+`testChooseActionDoesNotRecurseWhenCreativityWouldCopyAnotherBlankCreativity`
+(`BotPlayerServiceTest`) and
+`testBotPlaysCreativityAsACopyOfTheHumansCompulsionWithoutCrashing`
+(`BotGameplayIntegrationTest`, full `advanceAutomatedTurns()` ->
+`chooseAction()` -> `playMood()` end to end) cover the actual fix.
 
 **Hand visibility.** Needs no new rule at all -- a bot's hand is exactly
 as hidden from every other seated player as any other player's is
