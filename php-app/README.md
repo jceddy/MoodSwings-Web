@@ -5333,6 +5333,38 @@ reverse walk uses a precomputed "first `played_from` event id per card"
 map so only that exact event id triggers the "eject from in-play" undo
 step.
 
+**Reported live, a real bug this time**: "Anger was weirdly duplicated
+after it was played, still showed in hand after play, as well as in the
+discard pile" (plus a sibling report, a separately exported game, of an
+opening hand replaying with one card silently missing). `details['played_from']`
+above is written by `GameService::withPlayedFrom()`, a LIVE re-read of
+the just-played card's own `effectState('playedFromZone')` -- fine for
+the overwhelming majority of plays, but a card whose own `afterPlaying()`
+can legally target/discard/move ITSELF (Anger's "any number of moods,"
+`CardChoiceSchema`'s own `'includes_self' => true`; Conviction targeting
+itself; Rejection's own two-target variant) has already left
+`BoardState::$moodsInPlay` by the time that live read runs, since
+`effectState()` only ever looks there -- so `withPlayedFrom()` silently
+never attaches the top-level key at all for that event, even though the
+SAME event's own `effect_state_changes` already, unconditionally,
+recorded the mood's `playedFromZone` tag the instant it entered play
+(queued via `consumeEffectStateChanges()`, which -- unlike the live
+`effectState()` read -- survives the mood leaving play again within the
+same request). Both `applyEventForward()` and `deriveGenesis()`/
+`unapplyEvent()` keyed strictly off the (sometimes-missing) top-level
+key: the forward walk left the card sitting in hand while its own
+`card_moves` entry pushed it into the discard pile too (the reported
+duplicate), and the reverse walk left it stranded in a local scratch
+bucket that's never returned, silently dropping it from the
+reconstructed round-1 starting hand (the sibling report's missing
+card). Fixed with a new `ReplayStateBuilder::playedFromFor()`, used
+everywhere `details['played_from']` used to be read directly: falls
+back to scanning that same event's own `effect_state_changes` for a
+`playedFromZone` entry on the card in question whenever the top-level
+key is absent -- a strictly more reliable source than the live read
+`withPlayedFrom()` takes, since it's captured at the moment the card
+actually entered play rather than re-derived afterward.
+
 Out of scope, documented rather than silently dropped: **draft-phase
 pick-by-pick replay** (`quick_draft`'s `draft_round_picks` table actually
 has enough data for this already; `winston_draft`/`grid_draft` delete

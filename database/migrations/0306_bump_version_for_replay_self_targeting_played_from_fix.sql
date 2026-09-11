@@ -1,0 +1,33 @@
+-- Reported live: "Anger was weirdly duplicated after it was played,
+-- still showed in hand after play, as well as in the discard pile" --
+-- plus a sibling report, from a separately exported game, of a replayed
+-- opening hand silently missing one card.
+--
+-- ReplayStateBuilder's forward/reverse walk decides whether a
+-- game_events row represents a card entering play by checking a
+-- top-level details['played_from'] key, written by GameService::
+-- withPlayedFrom() via a LIVE re-read of the just-played card's own
+-- effectState('playedFromZone'). That live read comes back empty
+-- (BoardState::effectState() only ever looks at $moodsInPlay) whenever
+-- the played card's own afterPlaying() legally targets/discards/moves
+-- ITSELF (Anger's "any number of moods" -- CardChoiceSchema's own
+-- 'includes_self' => true; Conviction and Rejection can too), since the
+-- card has already left play again by the time that live read runs --
+-- even though the SAME event's own effect_state_changes already,
+-- unconditionally recorded the mood's playedFromZone tag the instant it
+-- entered play. The forward walk then left such a card sitting in hand
+-- while its own card_moves entry pushed it into the discard pile too
+-- (the reported duplicate); the reverse walk (genesis) left it stranded
+-- in a local scratch bucket that's never returned, silently dropping it
+-- from the reconstructed round-1 starting hand.
+--
+-- New ReplayStateBuilder::playedFromFor() replaces every direct
+-- details['played_from'] read: falls back to scanning that event's own
+-- effect_state_changes for a playedFromZone entry on the card in
+-- question whenever the top-level key is missing -- a strictly more
+-- reliable source, captured at the moment the card actually entered
+-- play rather than re-derived from live state afterward.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.39.33' WHERE id = 1;

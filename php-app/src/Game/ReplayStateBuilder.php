@@ -227,7 +227,7 @@ final class ReplayStateBuilder
         // second, brand-new entering-play moment that would wipe out
         // whatever suppression/effectState the card had already
         // accumulated in play since the original event.
-        $playedFrom = $details['played_from'] ?? null;
+        $playedFrom = self::playedFromFor($details, $event['card_id']);
         if ($playedFrom !== null && $event['card_id'] !== null && !isset($inPlay[$event['card_id']])) {
             $cardId = $event['card_id'];
             $ownerId = $event['acting_game_player_id'];
@@ -382,7 +382,7 @@ final class ReplayStateBuilder
         $firstPlayedFromEventId = [];
         foreach ($events as $event) {
             $cardId = $event['card_id'];
-            if ($cardId !== null && ($event['details']['played_from'] ?? null) !== null && !isset($firstPlayedFromEventId[$cardId])) {
+            if ($cardId !== null && self::playedFromFor($event['details'], $cardId) !== null && !isset($firstPlayedFromEventId[$cardId])) {
                 $firstPlayedFromEventId[$cardId] = $event['id'];
             }
         }
@@ -416,7 +416,7 @@ final class ReplayStateBuilder
             $this->unapplyCardMove($move, $hasSeparateDecks, $hands, $decks, $discard, $inPlay);
         }
 
-        $playedFrom = $details['played_from'] ?? null;
+        $playedFrom = self::playedFromFor($details, $event['card_id']);
         if ($playedFrom !== null && $event['card_id'] !== null && $firstPlayedFromEventId[$event['card_id']] === $event['id']) {
             $cardId = $event['card_id'];
             $ownerId = $event['acting_game_player_id'];
@@ -455,6 +455,51 @@ final class ReplayStateBuilder
         } elseif ($move['from_zone'] === 'discard') {
             $discard[] = $cardId;
         }
+    }
+
+    /**
+     * Reported live: "Anger was weirdly duplicated after it was played,
+     * still showed in hand after play, as well as in the discard pile."
+     * $details['played_from'] is normally set by GameService::
+     * withPlayedFrom() right after a card enters play -- but that's a
+     * LIVE re-read of the mood's own current effectState
+     * (BoardState::effectState() only ever looks at $moodsInPlay), taken
+     * AFTER the same event's own afterPlaying() has already fully run.
+     * For an effect that can legally target/discard/move ITSELF as one
+     * of its own targets (Anger's "any number of moods" with
+     * CardChoiceSchema's own 'includes_self' => true, Conviction
+     * targeting itself, etc.), the just-played card has already left
+     * $moodsInPlay by the time that live read happens, so
+     * withPlayedFrom() silently never attaches the top-level key at all
+     * -- even though the SAME event's own 'effect_state_changes' always,
+     * unconditionally records the mood's 'playedFromZone' tag the
+     * instant it enters play (BoardState::initialEffectState(), queued
+     * via consumeEffectStateChanges() rather than re-derived from live
+     * state, so it survives the mood leaving play again within the same
+     * request). Without this fallback, both applyEventForward() and
+     * deriveGenesis()/unapplyEvent() below never recognize such an event
+     * as "this card just left hand/discard", so the forward walk leaves
+     * the card sitting in hand AND lets its own card_moves entry push it
+     * into the discard pile too (the reported duplicate), while the
+     * reverse walk (genesis) leaves it stranded in a local scratch
+     * bucket that's never returned, silently dropping it from the
+     * reconstructed round-1 starting hand entirely.
+     */
+    private static function playedFromFor(array $details, ?int $cardId): ?string
+    {
+        if (isset($details['played_from'])) {
+            return $details['played_from'];
+        }
+        if ($cardId === null) {
+            return null;
+        }
+        foreach ($details['effect_state_changes'] ?? [] as $change) {
+            if ($change['card_id'] === $cardId && $change['key'] === 'playedFromZone' && !$change['cleared']) {
+                return $change['value'];
+            }
+        }
+
+        return null;
     }
 
     /** @param int[] $list @return int[] */
