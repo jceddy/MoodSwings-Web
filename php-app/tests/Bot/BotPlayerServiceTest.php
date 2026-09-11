@@ -959,6 +959,30 @@ final class BotPlayerServiceTest extends TestCase
     }
 
     /**
+     * Confirmed by the maintainer: suppressing Hope doesn't do anything
+     * at all (its extra-play ability isn't gated by suppression, only its
+     * already-permanently-0 value would be), so it should lose to ANY
+     * other option, not merely one with Sadness/Wonder's own specific
+     * growth potential. Duplicity (id 37) is also a flat 0 forever with
+     * no growth potential of its own -- an ordinary "equally worthless on
+     * paper" mood by valueOf() alone -- yet Hope (id 124) still must lose
+     * to it, since suppressing Duplicity at least denies whatever its own
+     * "while in play" ability is for as long as it stays suppressed,
+     * while suppressing Hope denies nothing whatsoever.
+     */
+    public function testChooseActionPrefersAnOrdinaryZeroValueMoodOverHopeEvenWithoutGrowthPotential(): void
+    {
+        $state = $this->boardState(hands: [1 => [20], 2 => [124, 37]]);
+        $state->moveHandToInPlay(2, 124);
+        $state->moveHandToInPlay(2, 37);
+
+        $action = $this->bot->chooseAction($state, [20], 1);
+
+        self::assertSame(20, $action['card_id']);
+        self::assertSame(['target_mood_ids' => [37]], $action['choices']);
+    }
+
+    /**
      * With no non-teammate opponent holding any mood in play at all,
      * suppressing nothing would be the only outcome, so Pacifism is
      * deprioritized behind Spite (id 76, value 1, plain filler) --

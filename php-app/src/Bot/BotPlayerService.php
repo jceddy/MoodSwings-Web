@@ -344,11 +344,46 @@ final class BotPlayerService
      * (Vulnerability), or PUTS cards into the discard pile as part of
      * its own effect rather than reading from it (Altruism, Courage,
      * Cynicism, Rejection, Anger, Fury, Hostility, Infatuation, Rage,
-     * Rebellion, Shock, Spite), so none of those belong here.
+     * Rebellion, Shock, Spite), so none of those belong here. Also used
+     * by pacifismTargetPriority() below, as the "this mood can still grow"
+     * tie-break signal.
      *
      * @var string[]
      */
     private const DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS = ['sadness', 'wonder'];
+
+    /**
+     * Every effect key whose whole printed ability is a play-grant
+     * ("while in play, you may play an additional mood...") implemented
+     * entirely outside the standard MoodEffect pipeline, in
+     * GameService::computeFreshGrants() -- Hope (HopeEffect) and Grace
+     * (GraceEffect), both explicitly documented as having "no after-
+     * playing ability of its own" and no computeValue() override, so
+     * their printed base value is a permanent, unconditional 0.
+     *
+     * Reported live: "bots should not target Hope with Pacifism," then
+     * confirmed by the maintainer once traced to its root cause:
+     * suppression, as implemented anywhere in this engine, only ever
+     * zeroes a mood's own valueOf() (see that method's own docblock --
+     * `isSuppressed()` has no OTHER call site in the whole codebase). For
+     * every other suppressible whileInPlay card, that's a full
+     * neutralization, since the printed ability IS the value computation
+     * (Sadness, Discipline, Ambivalence, ...). Hope/Grace are the
+     * confirmed exception: their ability is a play-grant, not a value
+     * computation, so BoardState::grantIsActive()'s own
+     * `requiresSourceInPlay` check (isInPlay(), never isSuppressed())
+     * keeps honoring it every turn regardless -- suppressing either one
+     * is a complete no-op, denying nothing at all, not even the (already
+     * permanently zero) value suppression would otherwise zero. Used by
+     * pacifismTargetPriority() below to rank both strictly below every
+     * OTHER in-play mood, not merely tie-broken against one with growth
+     * potential -- a real value difference already wins outright, and any
+     * other mood at least loses ITS OWN value (current or potential) to
+     * being suppressed, which is more than Hope/Grace ever lose.
+     *
+     * @var string[]
+     */
+    private const SUPPRESSION_IMMUNE_EFFECT_KEYS = ['hope', 'grace'];
 
     /**
      * Every effect key whose own printed value scales with a mood COUNT
@@ -3361,18 +3396,21 @@ final class BotPlayerService
      * Hope]. Sadness has an effect that can increase its points, though,
      * and that should be treated as a tie-breaker -- even though both
      * cards have the same points value, Sadness has a much higher
-     * *potential* points value." Both were tied on current valueOf() (a
-     * fresh Sadness, discard pile still small, is genuinely worth exactly
-     * as little as Hope right now), so the per-opponent "highest-value
-     * mood" comparison below fell through to iteration order --
-     * incidental, not a deliberate power-level judgment. Root-caused via
-     * pacifismTargetPriority(), which breaks a tied valueOf() by
-     * preferring a DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS mood (Sadness/
-     * Wonder, the same "can only grow from here" family
-     * nostalgiaDiscardCardId()/thrillHandMoodIds() already treat
-     * specially) over one that can't grow at all -- never overriding an
-     * actual value difference, since the tie-break's own contribution is
-     * always smaller than a single point of real value.
+     * *potential* points value." Confirmed by the maintainer once traced
+     * further: suppressing Hope (or Grace) doesn't do ANYTHING, which is
+     * precisely why it should never be targeted, not merely tie-broken
+     * against a stronger candidate -- see SUPPRESSION_IMMUNE_EFFECT_KEYS'
+     * own docblock for the full root cause. pacifismTargetPriority() below
+     * ranks a SUPPRESSION_IMMUNE_EFFECT_KEYS mood beneath every other
+     * option outright (PHP_INT_MIN), and separately breaks a genuine
+     * valueOf() tie between two otherwise-ordinary moods by preferring a
+     * DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS one (Sadness/Wonder, "can
+     * still grow from here") -- never overriding an actual value
+     * difference, since the tie-break's own contribution is always
+     * smaller than a single point of real value. Hope/Grace still get
+     * chosen when they're truly an opponent's ONLY in-play mood -- there's
+     * no better option to fall back to, and naming them costs nothing
+     * beyond the wasted target slot Pacifism already had no use for.
      *
      * @return int[]
      */
@@ -3402,17 +3440,24 @@ final class BotPlayerService
     }
 
     /**
-     * pacifismTargetMoodIds()'s own per-candidate ranking -- current
+     * pacifismTargetMoodIds()'s own per-candidate ranking (see that
+     * method's own docblock) -- a SUPPRESSION_IMMUNE_EFFECT_KEYS mood
+     * (Hope/Grace) always ranks beneath every other option outright,
+     * since suppressing one denies nothing at all; otherwise current
      * valueOf(), tie-broken by whether the mood can still grow from here
-     * (see that method's own docblock). Doubling valueOf() before adding
-     * the tie-break bit guarantees the bit can never flip an actual value
-     * difference (the smallest possible real gap, 1 point, is worth 2
-     * here) -- it only ever decides between two candidates already tied
-     * on real value.
+     * (DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS). Doubling valueOf() before
+     * adding the tie-break bit guarantees the bit can never flip an
+     * actual value difference (the smallest possible real gap, 1 point,
+     * is worth 2 here) -- it only ever decides between two candidates
+     * already tied on real value.
      */
     private function pacifismTargetPriority(BoardState $state, int $cardId): int
     {
         $effectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
+        if (in_array($effectKey, self::SUPPRESSION_IMMUNE_EFFECT_KEYS, true)) {
+            return PHP_INT_MIN;
+        }
+
         $canStillGrow = in_array($effectKey, self::DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS, true) ? 1 : 0;
 
         return $state->valueOf($cardId) * 2 + $canStillGrow;
