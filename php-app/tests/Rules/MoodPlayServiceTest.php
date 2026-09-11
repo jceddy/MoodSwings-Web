@@ -1240,6 +1240,27 @@ final class MoodPlayServiceTest extends TestCase
         self::assertTrue($state->isSuppressed(80));
     }
 
+    /**
+     * Reported live: "Guilt should actually have the same pattern as
+     * Hesitation and Contempt" -- the 0003 catalog seed had dropped "you
+     * may" from Guilt's own rules_text (the same transcription mistake
+     * already caught and fixed for Rationalization/Hesitation in
+     * migrations 0030/0055), so GuiltEffect used to require a 'mode'
+     * choice on every play instead of letting the player decline the
+     * whole optional effect -- see testContemptDoesNothingWhenDeclined()
+     * for the identical shape this now matches.
+     */
+    public function testGuiltDoesNothingWhenDeclined(): void
+    {
+        $state = $this->boardState(hands: [1 => [14], 2 => [56]]); // Betrayal (black)
+        $state->moveHandToInPlay(2, 56);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 14, new PlayerChoices([]));
+
+        self::assertFalse($state->isSuppressed(56));
+    }
+
     public function testShameSuppressesMoodsSharingTheDiscardedCardsColor(): void
     {
         $state = $this->boardState(hands: [1 => [25, 9], 2 => [8]]); // Discipline (white) to discard, Dignity (white) target

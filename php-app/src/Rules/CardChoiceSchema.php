@@ -101,17 +101,16 @@ namespace MoodSwings\Rules;
  *                            // only ever re-invokes afterPlaying(), never the cost again.
  *     requires_mode?: string, // this field only does anything once the card's own OPTIONAL 'mode'
  *                            // field (a separate entry in this same array) is actually set to this
- *                            // exact value -- e.g. Contempt/Hesitation's own target_mood_id, whose
+ *                            // exact value -- Contempt/Hesitation/Guilt's own target_mood_id, whose
  *                            // label already says "required if mode is single" in prose. Only
  *                            // meaningful for a card whose 'mode' field is itself 'required' =>
- *                            // false (Guilt's near-identical shape has 'required' => true on its
- *                            // own 'mode' field instead, so a value can never reach the server
- *                            // there without 'mode' already being set to something). Reported live:
- *                            // a player chose Contempt's own target_mood_id but never touched its
- *                            // separate 'mode' dropdown, submitting a legal but entirely inert play
- *                            // -- ContemptEffect::afterPlaying() returns immediately once $mode is
- *                            // null, before ever reading target_mood_id, so the chosen mood was
- *                            // never actually discarded and nothing told the player why. Used by
+ *                            // false -- a card with a genuinely mandatory 'mode' field can never
+ *                            // reach the server with this field set before 'mode' already is.
+ *                            // Reported live: a player chose Contempt's own target_mood_id but never
+ *                            // touched its separate 'mode' dropdown, submitting a legal but entirely
+ *                            // inert play -- ContemptEffect::afterPlaying() returns immediately once
+ *                            // $mode is null, before ever reading target_mood_id, so the chosen mood
+ *                            // was never actually discarded and nothing told the player why. Used by
  *                            // game.js's own cardHasATargetWithoutItsRequiredMode() to catch exactly
  *                            // this one unambiguous case (a value present for this field with no
  *                            // 'mode' answer at all) with a confirmation prompt before submitting,
@@ -228,8 +227,8 @@ final class CardChoiceSchema
             ['key' => 'target_mood_ids', 'type' => 'mood', 'scope' => 'any', 'multi' => true, 'required' => false, 'label' => 'Odd-valued moods to return to hand (up to 2, one per player)', 'filter' => ['parity' => 'odd'], 'count' => ['max' => 2], 'constraint' => ['type' => 'distinct_owners']],
         ],
         'guilt' => [
-            ['key' => 'mode', 'type' => 'mode', 'required' => true, 'options' => ['single', 'all'], 'label' => 'Suppress one qualifying mood, or all of them'],
-            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'any', 'required' => false, 'label' => 'Mood to suppress (black or red; required if mode is single)', 'filter' => ['colors' => ['black', 'red']]],
+            ['key' => 'mode', 'type' => 'mode', 'required' => false, 'options' => ['single', 'all'], 'label' => 'Suppress one qualifying mood, or all of them'],
+            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'any', 'required' => false, 'label' => 'Mood to suppress (black or red; required if mode is single)', 'filter' => ['colors' => ['black', 'red']], 'requires_mode' => 'single'],
         ],
         'shame' => [
             ['key' => 'discard_card_id', 'type' => 'hand_card', 'required' => false, 'label' => "Card to discard (suppresses other moods sharing its color)"],

@@ -429,9 +429,7 @@ final class CardChoiceSchemaTest extends TestCase
      * immediately once mode is null, before ever reading target_mood_id,
      * so the chosen mood was never actually discarded. requires_mode
      * lets game.js's own cardHasATargetWithoutItsRequiredMode() catch
-     * this exact case with a confirmation prompt before submitting --
-     * see this flag's own docblock above for why Guilt's near-identical
-     * shape doesn't need it (its own 'mode' field is required).
+     * this exact case with a confirmation prompt before submitting.
      */
     public function testContemptTargetRequiresSingleMode(): void
     {
@@ -450,13 +448,21 @@ final class CardChoiceSchemaTest extends TestCase
         self::assertSame('single', $fields[1]['requires_mode']);
     }
 
-    /** Guilt's own 'mode' field is required, unlike Contempt's/Hesitation's, so it never needs requires_mode -- see that flag's own docblock. */
-    public function testGuiltDoesNotNeedARequiresModeFlag(): void
+    /**
+     * Reported live: "Guilt should actually have the same pattern as
+     * Hesitation and Contempt" -- the 0003 catalog seed had dropped "you
+     * may" from Guilt's own rules_text (the same transcription mistake
+     * already caught and fixed for Rationalization/Hesitation in
+     * migrations 0030/0055), wrongly making its 'mode' field 'required'
+     * instead of sharing Contempt's/Hesitation's optional shape. Now
+     * corrected to match exactly -- see GuiltEffect's own docblock.
+     */
+    public function testGuiltTargetRequiresSingleMode(): void
     {
         $fields = CardChoiceSchema::forEffectKey('guilt');
 
-        self::assertTrue($fields[0]['required']);
-        self::assertArrayNotHasKey('requires_mode', $fields[1]);
+        self::assertFalse($fields[0]['required']);
+        self::assertSame('single', $fields[1]['requires_mode']);
     }
 
     public function testCrueltyIndecisivenessAndSuspicionHaveNoCountOrConstraintSinceTheyAllowAnyNumber(): void
