@@ -6157,6 +6157,17 @@ final class GameService
      * $spawnBotSearchProcesses) lets tests suppress the real subprocess
      * spawn, since a real one would inherit the test's own environment
      * and race its foreground assertions against the same DB rows.
+     *
+     * Also called directly from runTacticalBotSearchJob() (reported live:
+     * "is there a way to get the tactical bot to move on to its next turn
+     * if it plays first on a round following one where it played last,
+     * without the player having the game window open?") -- that method
+     * calls playMood()/pass() on its own, entirely outside
+     * advanceAutomatedTurns()'s own loop, so without this the chain would
+     * never get (re-)armed the instant a Tactical Bot's own search
+     * finishes, leaving whatever it just handed the turn to next (most
+     * visibly this exact same seat, freshly dealt a new round and going
+     * first again) stranded until some unrelated trigger touched the game.
      */
     private function scheduleAutomatedTurnRecheck(int $gameId, int $recheckChainDepth): void
     {
@@ -7427,12 +7438,32 @@ final class GameService
             }
 
             $this->botSearchJobs->markDone($jobId);
+            // Reported live: "is there a way to get the tactical bot to
+            // move on to its next turn if it plays first on a round
+            // following one where it played last, without the player
+            // having the game window open?" This method calls playMood()/
+            // pass() directly rather than through advanceAutomatedTurns(),
+            // so it never used to arm scheduleAutomatedTurnRecheck()'s own
+            // self-perpetuating chain (see that method's own docblock) --
+            // meaning whatever this search just handed the turn to next
+            // (most visibly this exact same seat, freshly dealt a new
+            // round and going first again) just sat there forever unless
+            // some UNRELATED trigger (a live client poll, or the optional
+            // cron sweep) happened to touch this game afterward. Arming it
+            // here closes that gap: a harmless no-op once some client's
+            // own poll gets there first, the same "cheap even when nothing
+            // is actually stuck" reasoning every other call site already
+            // relies on.
+            $this->scheduleAutomatedTurnRecheck((int) $job['game_id'], 0);
         } catch (Throwable $e) {
             error_log("runTacticalBotSearchJob({$jobId}): search failed, falling back to the heuristic bot -- " . $e);
             $this->botSearchJobs->markFailed($jobId, $e->getMessage());
 
             try {
                 $this->playViaHeuristicBotFallback($job['game_id'], $job['game_player_id']);
+                // Same gap, same fix, for the fallback's own mutation --
+                // see the comment on the success path's own call above.
+                $this->scheduleAutomatedTurnRecheck((int) $job['game_id'], 0);
             } catch (Throwable $fallbackError) {
                 // Mirrors advanceAutomatedTurns()'s own catch-all: even the
                 // fallback failing must never leave this uncaught (the

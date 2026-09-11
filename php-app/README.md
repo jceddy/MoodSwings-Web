@@ -9233,6 +9233,41 @@ what `runTacticalBotSearchJob()`'s own catch block already does for an
 analogous failure), which makes a fresh decision from the current board
 and only passes if that genuinely turns out to have nothing playable.
 
+**A search job's own completion never re-armed the self-triggering
+recheck chain.** Reported live: "is there a way to get the tactical bot
+to move on to its next turn if it plays first on a round following one
+where it played last, without the player having the game window open?"
+`runTacticalBotSearchJob()` calls `playMood()`/`pass()` directly once its
+search finishes -- entirely outside `advanceAutomatedTurns()`'s own loop
+-- so it never used to call `scheduleAutomatedTurnRecheck()` (see "Self-
+triggering instead of cron" above) either. That chain only ever gets
+(re-)armed from inside `advanceAutomatedTurns()` itself, and only when
+that specific call actually drove something (`$lastResult !== null`) --
+the exact call that originally launched a job returns early with
+`$lastResult` still `null` (nothing to apply yet, just "now thinking"),
+so no recheck was ever scheduled for what happens once that job actually
+finishes. In practice: as long as some client kept polling `GET
+/games/state` throughout the search, that poll's own
+`advanceAutomatedTurns()` call would notice the job was done and continue
+driving the game -- but with nobody watching, the job's own completed
+play (most visibly this exact same seat, freshly dealt a new round and
+going first again) just sat there forever, waiting on a trigger that was
+never coming, unless the optional cron sweep happened to be configured.
+`runTacticalBotSearchJob()` now calls `scheduleAutomatedTurnRecheck()`
+itself immediately after applying its own play/pass (both the successful
+search path and the heuristic-fallback path in its own `catch` block),
+closing the gap: a harmless no-op once some client's own poll gets there
+first, the same "cheap even when nothing's actually stuck" reasoning
+every other call site already relies on. Verified live rather than via
+an automated test (consistent with this suite's own existing "never
+spawn a real recheck subprocess in a test" rule -- see
+`testAdvanceAutomatedTurnsStillWorksNormallyAtTheRecheckChainDepthCeiling()`'s
+own docblock): a two-tactical-bot game, with `spawnAutomatedTurnRecheckProcesses`
+genuinely enabled, reproducibly left the second bot's own turn
+un-launched forever on the pre-fix code, and correctly auto-launched it a
+few seconds later (via the real, detached `bin/recheck_automated_turn.php`
+process) on the fix.
+
 ### Diagnostic mode
 
 An opt-in, creation-time flag (`games.diagnostic_mode`, migration `0255`)
