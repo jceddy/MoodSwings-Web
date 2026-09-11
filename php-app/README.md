@@ -10585,6 +10585,35 @@ the board itself (`!pendingDecision`, target-agnostic there too).
 game_player_id` match) since other consumers rely on that -- only the
 lobby's own highlight decision changes.
 
+### Contempt silently doing nothing when only its target was chosen
+
+Reported live (with a game export attached): a player played Contempt
+targeting Euphoria, and Euphoria was never put into the discard pile.
+Contempt's own choice_fields are both optional -- an independent `mode`
+dropdown (`single`/`all`) alongside a `target_mood_id` dropdown, matching
+its printed "you may choose one" text -- and nothing tied the two
+together: a player could pick a target from the `target_mood_id` dropdown
+without ever touching the separate `mode` dropdown, and the Play button's
+own client-side check only ever verified each field marked `required`
+individually satisfied, which neither of Contempt's own fields are.
+`ContemptEffect::afterPlaying()` returns immediately once `$mode` is
+`null`, before ever reading `target_mood_id`, so the play submitted as
+entirely legal and did nothing beyond entering play -- the targeted mood
+was never actually read, let alone discarded.
+
+`CardChoiceSchema` gained a new `requires_mode` flag (see its own
+docblock), set on Contempt's and Hesitation's `target_mood_id` fields --
+the only two cards sharing this exact optional-`mode`-plus-optional-
+single-target shape (Guilt has the identical modal choice, but its own
+`mode` field is `required`, so a value can never reach the server there
+without `mode` already being set). `game.js`'s own
+`cardHasATargetWithoutItsRequiredMode()` uses it to catch exactly this
+one unambiguous case -- a `requires_mode` field with a value while `mode`
+is missing entirely -- with the same "you're about to submit something
+that does nothing, play it anyway?" confirmation prompt
+`cardHasNoTargetSelected()`/`cardHasAnUncheckedConfirmBox()` already give
+other targetless-play shapes, rather than letting it through silently.
+
 ## Tests
 
 Unit tests run without a database. The `AuthIntegrationTest` suite exercises

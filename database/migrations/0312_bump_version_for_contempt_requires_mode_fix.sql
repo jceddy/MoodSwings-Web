@@ -1,0 +1,23 @@
+-- Reported live (with a game export attached): a player played Contempt
+-- targeting Euphoria, and Euphoria was never put into the discard pile.
+--
+-- Root cause: Contempt's own choice_fields are both optional (an
+-- independent 'mode' dropdown alongside 'target_mood_id'), and nothing
+-- tied the two together -- a player could pick a target without ever
+-- touching the separate 'mode' dropdown. ContemptEffect::afterPlaying()
+-- returns immediately once $mode is null, before ever reading
+-- target_mood_id, so the play submitted as entirely legal and did
+-- nothing beyond entering play.
+--
+-- Fixed: CardChoiceSchema gained a new 'requires_mode' flag, set on
+-- Contempt's and Hesitation's target_mood_id fields (the only two cards
+-- sharing this exact optional-mode-plus-optional-single-target shape --
+-- Guilt has the identical modal choice, but its own 'mode' field is
+-- required, so this can never happen there). game.js's own
+-- cardHasATargetWithoutItsRequiredMode() uses it to catch exactly this
+-- case with a confirmation prompt before submitting, the same treatment
+-- other "this will submit but do nothing" shapes already get.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.40.5' WHERE id = 1;

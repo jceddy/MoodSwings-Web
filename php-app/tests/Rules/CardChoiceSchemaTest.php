@@ -422,6 +422,43 @@ final class CardChoiceSchemaTest extends TestCase
         self::assertTrue($fields[1]['includes_self']);
     }
 
+    /**
+     * Reported live: a player chose Contempt's own target_mood_id but
+     * never touched its separate, optional 'mode' field -- the play
+     * submitted as legal, but ContemptEffect::afterPlaying() returns
+     * immediately once mode is null, before ever reading target_mood_id,
+     * so the chosen mood was never actually discarded. requires_mode
+     * lets game.js's own cardHasATargetWithoutItsRequiredMode() catch
+     * this exact case with a confirmation prompt before submitting --
+     * see this flag's own docblock above for why Guilt's near-identical
+     * shape doesn't need it (its own 'mode' field is required).
+     */
+    public function testContemptTargetRequiresSingleMode(): void
+    {
+        $fields = CardChoiceSchema::forEffectKey('contempt');
+
+        self::assertFalse($fields[0]['required'], "Contempt's own mode field must stay optional for this bug to be reachable");
+        self::assertSame('single', $fields[1]['requires_mode']);
+    }
+
+    /** Hesitation shares Contempt's exact optional-mode-plus-single-target shape -- see that test's own docblock. */
+    public function testHesitationTargetRequiresSingleMode(): void
+    {
+        $fields = CardChoiceSchema::forEffectKey('hesitation');
+
+        self::assertFalse($fields[0]['required']);
+        self::assertSame('single', $fields[1]['requires_mode']);
+    }
+
+    /** Guilt's own 'mode' field is required, unlike Contempt's/Hesitation's, so it never needs requires_mode -- see that flag's own docblock. */
+    public function testGuiltDoesNotNeedARequiresModeFlag(): void
+    {
+        $fields = CardChoiceSchema::forEffectKey('guilt');
+
+        self::assertTrue($fields[0]['required']);
+        self::assertArrayNotHasKey('requires_mode', $fields[1]);
+    }
+
     public function testCrueltyIndecisivenessAndSuspicionHaveNoCountOrConstraintSinceTheyAllowAnyNumber(): void
     {
         foreach (['cruelty', 'indecisiveness', 'suspicion', 'doubt', 'thrill'] as $effectKey) {

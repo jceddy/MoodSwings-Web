@@ -99,6 +99,25 @@ namespace MoodSwings\Rules;
  *                            // hand_mood_ids mix the two; afterPlayingFields() below excludes
  *                            // these when building Duplicity's repeat sub-form, since a repeat
  *                            // only ever re-invokes afterPlaying(), never the cost again.
+ *     requires_mode?: string, // this field only does anything once the card's own OPTIONAL 'mode'
+ *                            // field (a separate entry in this same array) is actually set to this
+ *                            // exact value -- e.g. Contempt/Hesitation's own target_mood_id, whose
+ *                            // label already says "required if mode is single" in prose. Only
+ *                            // meaningful for a card whose 'mode' field is itself 'required' =>
+ *                            // false (Guilt's near-identical shape has 'required' => true on its
+ *                            // own 'mode' field instead, so a value can never reach the server
+ *                            // there without 'mode' already being set to something). Reported live:
+ *                            // a player chose Contempt's own target_mood_id but never touched its
+ *                            // separate 'mode' dropdown, submitting a legal but entirely inert play
+ *                            // -- ContemptEffect::afterPlaying() returns immediately once $mode is
+ *                            // null, before ever reading target_mood_id, so the chosen mood was
+ *                            // never actually discarded and nothing told the player why. Used by
+ *                            // game.js's own cardHasATargetWithoutItsRequiredMode() to catch exactly
+ *                            // this one unambiguous case (a value present for this field with no
+ *                            // 'mode' answer at all) with a confirmation prompt before submitting,
+ *                            // the same treatment cardHasNoTargetSelected()/
+ *                            // cardHasAnUncheckedConfirmBox() already give other "this will submit
+ *                            // but do nothing" shapes.
  * }
  *
  * Scorn's reactToAnotherPlay() choice doesn't fit the per-effect_key
@@ -258,7 +277,7 @@ final class CardChoiceSchema
         ],
         'contempt' => [
             ['key' => 'mode', 'type' => 'mode', 'required' => false, 'options' => ['single', 'all'], 'label' => 'Put one qualifying mood into the discard pile, or all of them'],
-            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'any', 'required' => false, 'label' => 'Mood to put into the discard pile (green or white; required if mode is single)', 'filter' => ['colors' => ['green', 'white']]],
+            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'any', 'required' => false, 'label' => 'Mood to put into the discard pile (green or white; required if mode is single)', 'filter' => ['colors' => ['green', 'white']], 'requires_mode' => 'single'],
         ],
         'ambition' => [
             ['key' => 'discard_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Card to discard (unlocks an extra play)'],
@@ -298,7 +317,7 @@ final class CardChoiceSchema
         ],
         'hesitation' => [
             ['key' => 'mode', 'type' => 'mode', 'required' => false, 'options' => ['single', 'all'], 'label' => "Return one qualifying mood to its player's hand, or all of them"],
-            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'any', 'required' => false, 'label' => "Mood to return to its player's hand (red or green; required if mode is single)", 'filter' => ['colors' => ['red', 'green']]],
+            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'any', 'required' => false, 'label' => "Mood to return to its player's hand (red or green; required if mode is single)", 'filter' => ['colors' => ['red', 'green']], 'requires_mode' => 'single'],
         ],
         'nostalgia' => [
             ['key' => 'discard_card_id', 'type' => 'discard_card', 'required' => false, 'label' => 'Discard-pile card to take into your hand'],
