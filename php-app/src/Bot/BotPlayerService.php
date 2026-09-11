@@ -345,7 +345,7 @@ final class BotPlayerService
      * its own effect rather than reading from it (Altruism, Courage,
      * Cynicism, Rejection, Anger, Fury, Hostility, Infatuation, Rage,
      * Rebellion, Shock, Spite), so none of those belong here. Also used
-     * by pacifismTargetPriority() below, as the "this mood can still grow"
+     * by suppressionTargetPriority() below, as the "this mood can still grow"
      * tie-break signal.
      *
      * @var string[]
@@ -375,7 +375,7 @@ final class BotPlayerService
      * keeps honoring it every turn regardless -- suppressing either one
      * is a complete no-op, denying nothing at all, not even the (already
      * permanently zero) value suppression would otherwise zero. Used by
-     * pacifismTargetPriority() below to rank both strictly below every
+     * suppressionTargetPriority() below to rank both strictly below every
      * OTHER in-play mood, not merely tie-broken against one with growth
      * potential -- a real value difference already wins outright, and any
      * other mood at least loses ITS OWN value (current or potential) to
@@ -3400,7 +3400,7 @@ final class BotPlayerService
      * further: suppressing Hope (or Grace) doesn't do ANYTHING, which is
      * precisely why it should never be targeted, not merely tie-broken
      * against a stronger candidate -- see SUPPRESSION_IMMUNE_EFFECT_KEYS'
-     * own docblock for the full root cause. pacifismTargetPriority() below
+     * own docblock for the full root cause. suppressionTargetPriority() below
      * ranks a SUPPRESSION_IMMUNE_EFFECT_KEYS mood beneath every other
      * option outright (PHP_INT_MIN), and separately breaks a genuine
      * valueOf() tie between two otherwise-ordinary moods by preferring a
@@ -3424,7 +3424,7 @@ final class BotPlayerService
 
             $bestMoodId = null;
             foreach ($state->moodsOwnedBy($playerId) as $mood) {
-                if ($bestMoodId === null || $this->pacifismTargetPriority($state, $mood->cardId) > $this->pacifismTargetPriority($state, $bestMoodId)) {
+                if ($bestMoodId === null || $this->suppressionTargetPriority($state, $mood->cardId) > $this->suppressionTargetPriority($state, $bestMoodId)) {
                     $bestMoodId = $mood->cardId;
                 }
             }
@@ -3434,15 +3434,17 @@ final class BotPlayerService
             }
         }
 
-        usort($bestMoodIdByOpponent, fn (int $a, int $b) => $this->pacifismTargetPriority($state, $b) <=> $this->pacifismTargetPriority($state, $a));
+        usort($bestMoodIdByOpponent, fn (int $a, int $b) => $this->suppressionTargetPriority($state, $b) <=> $this->suppressionTargetPriority($state, $a));
 
         return array_slice($bestMoodIdByOpponent, 0, 2);
     }
 
     /**
-     * pacifismTargetMoodIds()'s own per-candidate ranking (see that
-     * method's own docblock) -- a SUPPRESSION_IMMUNE_EFFECT_KEYS mood
-     * (Hope/Grace) always ranks beneath every other option outright,
+     * Shared "how good a suppression target is this mood" ranking for
+     * every effect that lets the bot freely choose which in-play mood to
+     * suppress -- pacifismTargetMoodIds() (see that method's own
+     * docblock) and scornTargetMoodId() below. A SUPPRESSION_IMMUNE_EFFECT_KEYS
+     * mood (Hope/Grace) always ranks beneath every other option outright,
      * since suppressing one denies nothing at all; otherwise current
      * valueOf(), tie-broken by whether the mood can still grow from here
      * (DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS). Doubling valueOf() before
@@ -3451,7 +3453,7 @@ final class BotPlayerService
      * is worth 2 here) -- it only ever decides between two candidates
      * already tied on real value.
      */
-    private function pacifismTargetPriority(BoardState $state, int $cardId): int
+    private function suppressionTargetPriority(BoardState $state, int $cardId): int
     {
         $effectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
         if (in_array($effectKey, self::SUPPRESSION_IMMUNE_EFFECT_KEYS, true)) {
@@ -4485,12 +4487,19 @@ final class BotPlayerService
      * target existing at all (Scorn itself the only mood in play), the
      * exact same corner case the generic resolver would already fail on
      * too.
+     *
+     * Both "highest value" comparisons go through suppressionTargetPriority()
+     * (see that method's own docblock, and pacifismTargetMoodIds()'s for
+     * the reported-live root cause) rather than plain valueOf() -- this
+     * field has the identical gap Pacifism did, and could just as easily
+     * have picked an opponent's (or, in the fallback, even the bot's OWN)
+     * Hope/Grace, suppressing it for no actual effect whatsoever.
      */
     private function scornTargetMoodId(BoardState $state, int $cardId, int $botGamePlayerId): ?int
     {
         $bestOpponentId = null;
         foreach ($this->nonTeammateOpponentMoodIds($state, $botGamePlayerId) as $candidateId) {
-            if ($bestOpponentId === null || $state->valueOf($candidateId) > $state->valueOf($bestOpponentId)) {
+            if ($bestOpponentId === null || $this->suppressionTargetPriority($state, $candidateId) > $this->suppressionTargetPriority($state, $bestOpponentId)) {
                 $bestOpponentId = $candidateId;
             }
         }
@@ -4503,7 +4512,7 @@ final class BotPlayerService
             if ($mood->cardId === $cardId) {
                 continue;
             }
-            if ($bestAnyId === null || $state->valueOf($mood->cardId) > $state->valueOf($bestAnyId)) {
+            if ($bestAnyId === null || $this->suppressionTargetPriority($state, $mood->cardId) > $this->suppressionTargetPriority($state, $bestAnyId)) {
                 $bestAnyId = $mood->cardId;
             }
         }

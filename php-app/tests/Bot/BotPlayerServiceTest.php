@@ -4217,6 +4217,54 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame(['target_mood_id' => 4], $action['choices']);
     }
 
+    /**
+     * Follow-up to the Pacifism fix above, confirmed by the maintainer to
+     * apply here too: suppressing Hope doesn't do anything at all, so
+     * Scorn's own mandatory "suppress any mood" target must not tie-break
+     * toward it by iteration order either. Player 2 has Hope (124) and
+     * Sadness (74) in play, both worth a plain 0 -- the old plain
+     * valueOf() comparison tied and fell through to iteration order;
+     * scornTargetMoodId() now goes through the same shared
+     * suppressionTargetPriority() Pacifism uses, so Sadness (which can
+     * still grow, unlike Hope) wins.
+     */
+    public function testChooseActionPrefersSadnessOverHopeWhenPlayingScorn(): void
+    {
+        $state = $this->boardState(hands: [1 => [24], 2 => [124, 74]]);
+        $state->moveHandToInPlay(2, 124);
+        $state->moveHandToInPlay(2, 74);
+
+        $action = $this->bot->chooseAction($state, [24], 1);
+
+        self::assertSame(24, $action['card_id']);
+        self::assertSame(['target_mood_id' => 74], $action['choices']);
+    }
+
+    /**
+     * The same fix, exercised through Scorn's OTHER tier -- no non-
+     * teammate opponent has any mood in play, so this falls back to the
+     * bot's own highest-priority mood overall (excluding Scorn itself).
+     * The bot's own board has Hope (124) and Duplicity (37), both a flat
+     * 0 forever -- suppressing either denies nothing scoring-wise, but
+     * suppressing Hope denies literally nothing at all (not even its own
+     * ability), while Duplicity's own "while in play" ability actually
+     * gets shut off for as long as it stays suppressed. Duplicity must
+     * win even though it has no growth potential of its own either -- the
+     * same generalization testChooseActionPrefersAnOrdinaryZeroValueMoodOverHopeEvenWithoutGrowthPotential()
+     * above proves for Pacifism.
+     */
+    public function testChooseActionPrefersAnOrdinaryZeroValueMoodOverItsOwnHopeWhenPlayingScornWithNoOpponentTarget(): void
+    {
+        $state = $this->boardState(hands: [1 => [24, 124, 37]]);
+        $state->moveHandToInPlay(1, 124);
+        $state->moveHandToInPlay(1, 37);
+
+        $action = $this->bot->chooseAction($state, [24], 1);
+
+        self::assertSame(24, $action['card_id']);
+        self::assertSame(['target_mood_id' => 37], $action['choices']);
+    }
+
     // -- Duplicity's "repeat this mood's own effect?" offer (reported live) ----
 
     /**

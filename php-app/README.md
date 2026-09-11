@@ -7723,11 +7723,11 @@ since it already holds that dependency):
   elsewhere in this file), doubling `valueOf()` first so the tie-break bit
   can never override an actual value difference. Used for both the
   per-opponent selection and the cross-opponent `usort()` that picks which
-  two opponents' own best moods to fill Pacifism's two slots with.
-  Deliberately scoped to Pacifism here -- `scornTargetMoodId()`'s own
-  mandatory "suppress any mood" target has the identical plain-`valueOf()`
-  gap and could in principle pick an opponent's Hope/Grace the same way,
-  but wasn't reported and is left alone for now.
+  two opponents' own best moods to fill Pacifism's two slots with. The
+  ranking function itself, `suppressionTargetPriority()`, is shared --
+  `scornTargetMoodId()` has the identical fix applied to it below, since
+  its own mandatory "suppress any mood" target had the exact same
+  plain-`valueOf()` gap.
 
   **Shock** (reported live: "bots should choose an opponent's mood to
   target with shock when playing it") gets its own targeting exception
@@ -8276,6 +8276,19 @@ since it already holds that dependency):
   REQUIRED (unlike Contempt/Hate's own optional one), so it must still
   supply SOME legal target even then, the same reasoning
   `convictionTargetMoodId()` already documents.
+
+  **Follow-up: Scorn shares Pacifism's own Hope/Grace fix** (see
+  "Pacifism now never targets Hope or Grace ahead of any real option"
+  above for the root cause -- suppressing either does nothing at all).
+  Both of `scornTargetMoodId()`'s "highest value" comparisons went
+  through plain `valueOf()`, the identical gap Pacifism had: an opponent
+  holding a tied Hope and Sadness could see Hope picked by iteration
+  order, and with no opponent mood at all, the bot's own fallback could
+  even suppress its OWN Hope/Grace for zero effect. Both comparisons now
+  go through the same shared `suppressionTargetPriority()` Pacifism
+  uses, so a `SUPPRESSION_IMMUNE_EFFECT_KEYS` mood only ever gets chosen
+  when it's truly the only legal target left -- required by this field
+  even then, unlike Pacifism's own optional one.
 - **Nostalgia's own discard-pickup targeting** (reported live: "bots
   should always choose cards to get back with Nostalgia in draft pick
   order"), via `nostalgiaDiscardCardId()`: always takes the
