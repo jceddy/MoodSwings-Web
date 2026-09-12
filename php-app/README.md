@@ -3915,6 +3915,27 @@ reads "top 100%", never "top 0%"), deliberately not a raw rank number, so
 it stays comparable across weeks that draw very different numbers of
 players.
 
+**Ties share one rank** (reported live: "ties should be treated as the
+same standing, so if the top two players are tied 1-0 and the bottom
+player is 0-2, then the top two players should both be ranked #1 and the
+bottom player should be ranked #3"). `rankedStandingsRows()` used to
+assign a plain sequential `rank` (`index + 1`) regardless of ties, so two
+players with an identical record ended up one rank apart for no real
+reason. Fixed with standard "competition ranking" (1224, not 1223): a row
+whose `wins`/`losses` exactly match the row before it keeps that SAME
+rank rather than its own 1-based position, so the next distinct row's
+rank still reflects its true position -- a value is skipped for every row
+absorbed into the tie above it. Ties are read off `wins`/`losses` (the
+plain record a player actually sees), not the hidden `score` this list is
+sorted by: two different records can coincidentally land on the same
+score (the asymmetric win +3/loss -2 formula has no floor preventing
+that -- a 3-3 record and a 1-0 record both score 3), and those should
+still rank as the visibly different records they are rather than
+silently collapsing into one tied entry. Two rows with a genuinely
+identical record always DO share a score (score is a pure function of
+the two), so they already sort adjacent to each other regardless --
+comparing each row to only the one immediately before it is enough.
+
 **Reading standings.** `currentWeeklySealedPoolId()` always get-or-creates
 (same as Sealed Pool of the Day's own daily pool) -- the current week
 always "exists" the moment anyone asks. `priorWeeklySealedPoolId()`

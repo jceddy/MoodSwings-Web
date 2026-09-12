@@ -18224,6 +18224,37 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * Reported live: "for the weekly sealed pool standings, ties should be
+     * treated as the same standing, so if the top two players are tied
+     * 1-0 and the bottom player is 0-2, then the top two players should
+     * both be ranked #1 and the bottom player should be ranked #3."
+     * Alice and Carol each finish 1-0 (beating Dave in separate matches,
+     * never playing each other) -- same wins/losses, so the same hidden
+     * score, so the same rank -- while Dave's own 0-2 sits at rank 3, not
+     * 2: standard competition ranking skips a rank for every row absorbed
+     * into the tie above it.
+     */
+    public function testWeeklySealedPoolStandingsGivesTiedRecordsTheSameRank(): void
+    {
+        $alice = $this->insertUser('weeklypool-tie-alice');
+        $carol = $this->insertUser('weeklypool-tie-carol');
+        $dave = $this->insertUser('weeklypool-tie-dave');
+
+        $game1 = $this->games->createGame($alice, [$alice, $dave], format: 'draft', deckType: 'weekly_sealed_pool');
+        $this->games->resignGame($game1, $this->games->gamePlayerIdFor($game1, $dave));
+        $game2 = $this->games->createGame($carol, [$carol, $dave], format: 'draft', deckType: 'weekly_sealed_pool');
+        $this->games->resignGame($game2, $this->games->gamePlayerIdFor($game2, $dave));
+
+        $poolId = $this->games->currentWeeklySealedPoolId();
+        $standings = $this->games->weeklySealedPoolStandings($poolId);
+        $byUser = array_column($standings, null, 'user_id');
+
+        self::assertSame(1, $byUser[$alice]['rank']);
+        self::assertSame(1, $byUser[$carol]['rank'], 'tied with Alice on the same 1-0 record -- same rank, not the next one');
+        self::assertSame(3, $byUser[$dave]['rank'], 'rank 3, not 2 -- skipped past the two-way tie above');
+    }
+
+    /**
      * A player who has only queued/is still mid-match (nothing completed
      * yet) has no standings row at all, so they're correctly absent
      * rather than cluttering the list with an untested 0-0 entry.

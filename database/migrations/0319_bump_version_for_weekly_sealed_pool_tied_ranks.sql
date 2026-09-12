@@ -1,0 +1,19 @@
+-- Reported live: "for the weekly sealed pool standings, ties should be
+-- treated as the same standing, so if the top two players are tied 1-0
+-- and the bottom player is 0-2, then the top two players should both be
+-- ranked #1 and the bottom player should be ranked #3."
+--
+-- Root cause: GameService::rankedStandingsRows() assigned a plain
+-- sequential rank (index + 1) regardless of ties, so two players with an
+-- identical win/loss record still ended up one rank apart.
+--
+-- Fixed: standard "competition ranking" (1224, not 1223) -- a row whose
+-- wins/losses exactly match the row before it keeps that SAME rank, so
+-- the next distinct row's rank still reflects its true position (a rank
+-- value is skipped for every row absorbed into the tie above it). See
+-- php-app/README.md for the full writeup, including why ties are read
+-- off wins/losses rather than the hidden score this list sorts by.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.40.12' WHERE id = 1;
