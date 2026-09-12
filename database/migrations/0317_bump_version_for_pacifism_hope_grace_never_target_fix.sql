@@ -1,0 +1,23 @@
+-- Follow-up to migration 0316: confirmed by the maintainer that
+-- suppressing Hope (or Grace) doesn't do anything at all -- their whole
+-- printed ability is a play-grant implemented outside the standard
+-- effect pipeline (GameService::computeFreshGrants()), and
+-- BoardState::grantIsActive() only ever checks isInPlay(), never
+-- isSuppressed(), so a suppressed Hope/Grace keeps granting its extra
+-- play every turn regardless. Suppression's only implemented effect
+-- anywhere in this engine is zeroing valueOf() (see that method's own
+-- docblock), which is why this matters for every OTHER suppressible
+-- card (their printed ability IS the value computation) but does
+-- nothing at all against Hope/Grace, both a permanent 0 already.
+--
+-- 0316's fix only broke a TIED valueOf() in Sadness/Wonder's favor,
+-- which still let Hope/Grace win against an ordinary mood that also
+-- can't grow. Fixed further: new SUPPRESSION_IMMUNE_EFFECT_KEYS
+-- (['hope', 'grace']) ranks either one beneath every other option
+-- outright in BotPlayerService::pacifismTargetPriority(), falling back
+-- to one only when it's truly an opponent's only in-play mood. See
+-- php-app/README.md for the full writeup.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.40.10' WHERE id = 1;

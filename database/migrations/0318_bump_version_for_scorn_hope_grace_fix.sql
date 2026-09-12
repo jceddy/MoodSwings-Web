@@ -1,0 +1,19 @@
+-- Follow-up to migrations 0316/0317's Pacifism fix, addressed at the
+-- user's own request ("please address that one, too"): scornTargetMoodId()
+-- had the identical plain-valueOf() gap -- an opponent holding a tied
+-- Hope and Sadness could see Hope picked by iteration order, and with no
+-- opponent mood at all, the fallback could even suppress the bot's OWN
+-- Hope/Grace for zero effect (Scorn's own target_mood_id field is
+-- REQUIRED, unlike Pacifism's optional one, so it must always return
+-- something).
+--
+-- Fixed: both of scornTargetMoodId()'s "highest value" comparisons now go
+-- through the same shared suppressionTargetPriority() Pacifism uses
+-- (renamed from pacifismTargetPriority() since it's no longer Pacifism-
+-- specific), so a SUPPRESSION_IMMUNE_EFFECT_KEYS mood (Hope/Grace) only
+-- ever gets chosen when it's truly the only legal target left. See
+-- php-app/README.md for the full writeup.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.40.11' WHERE id = 1;

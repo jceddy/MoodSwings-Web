@@ -935,6 +935,54 @@ final class BotPlayerServiceTest extends TestCase
     }
 
     /**
+     * Reported live: "bots should not target Hope with Pacifism -- I had
+     * Hope and Sadness in play, both 0-point cards... Sadness has an
+     * effect that can increase its points, though, and that should be
+     * treated as a tie-breaker -- even though both cards have the same
+     * points value, Sadness has a much higher *potential* points value."
+     * Hope (id 124) and Sadness (id 74) are both worth a plain 0 with an
+     * empty discard pile, so the old comparison tied and fell through to
+     * iteration order, incidentally letting Hope win. pacifismTargetPriority()'s
+     * tie-break now prefers Sadness whenever current value ties, since it
+     * can still grow from here and Hope never will.
+     */
+    public function testChooseActionPrefersSadnessOverHopeWhenTiedOnCurrentValue(): void
+    {
+        $state = $this->boardState(hands: [1 => [20], 2 => [124, 74]]);
+        $state->moveHandToInPlay(2, 124);
+        $state->moveHandToInPlay(2, 74);
+
+        $action = $this->bot->chooseAction($state, [20], 1);
+
+        self::assertSame(20, $action['card_id']);
+        self::assertSame(['target_mood_ids' => [74]], $action['choices']);
+    }
+
+    /**
+     * Confirmed by the maintainer: suppressing Hope doesn't do anything
+     * at all (its extra-play ability isn't gated by suppression, only its
+     * already-permanently-0 value would be), so it should lose to ANY
+     * other option, not merely one with Sadness/Wonder's own specific
+     * growth potential. Duplicity (id 37) is also a flat 0 forever with
+     * no growth potential of its own -- an ordinary "equally worthless on
+     * paper" mood by valueOf() alone -- yet Hope (id 124) still must lose
+     * to it, since suppressing Duplicity at least denies whatever its own
+     * "while in play" ability is for as long as it stays suppressed,
+     * while suppressing Hope denies nothing whatsoever.
+     */
+    public function testChooseActionPrefersAnOrdinaryZeroValueMoodOverHopeEvenWithoutGrowthPotential(): void
+    {
+        $state = $this->boardState(hands: [1 => [20], 2 => [124, 37]]);
+        $state->moveHandToInPlay(2, 124);
+        $state->moveHandToInPlay(2, 37);
+
+        $action = $this->bot->chooseAction($state, [20], 1);
+
+        self::assertSame(20, $action['card_id']);
+        self::assertSame(['target_mood_ids' => [37]], $action['choices']);
+    }
+
+    /**
      * With no non-teammate opponent holding any mood in play at all,
      * suppressing nothing would be the only outcome, so Pacifism is
      * deprioritized behind Spite (id 76, value 1, plain filler) --
@@ -4167,6 +4215,54 @@ final class BotPlayerServiceTest extends TestCase
 
         self::assertSame(24, $action['card_id']);
         self::assertSame(['target_mood_id' => 4], $action['choices']);
+    }
+
+    /**
+     * Follow-up to the Pacifism fix above, confirmed by the maintainer to
+     * apply here too: suppressing Hope doesn't do anything at all, so
+     * Scorn's own mandatory "suppress any mood" target must not tie-break
+     * toward it by iteration order either. Player 2 has Hope (124) and
+     * Sadness (74) in play, both worth a plain 0 -- the old plain
+     * valueOf() comparison tied and fell through to iteration order;
+     * scornTargetMoodId() now goes through the same shared
+     * suppressionTargetPriority() Pacifism uses, so Sadness (which can
+     * still grow, unlike Hope) wins.
+     */
+    public function testChooseActionPrefersSadnessOverHopeWhenPlayingScorn(): void
+    {
+        $state = $this->boardState(hands: [1 => [24], 2 => [124, 74]]);
+        $state->moveHandToInPlay(2, 124);
+        $state->moveHandToInPlay(2, 74);
+
+        $action = $this->bot->chooseAction($state, [24], 1);
+
+        self::assertSame(24, $action['card_id']);
+        self::assertSame(['target_mood_id' => 74], $action['choices']);
+    }
+
+    /**
+     * The same fix, exercised through Scorn's OTHER tier -- no non-
+     * teammate opponent has any mood in play, so this falls back to the
+     * bot's own highest-priority mood overall (excluding Scorn itself).
+     * The bot's own board has Hope (124) and Duplicity (37), both a flat
+     * 0 forever -- suppressing either denies nothing scoring-wise, but
+     * suppressing Hope denies literally nothing at all (not even its own
+     * ability), while Duplicity's own "while in play" ability actually
+     * gets shut off for as long as it stays suppressed. Duplicity must
+     * win even though it has no growth potential of its own either -- the
+     * same generalization testChooseActionPrefersAnOrdinaryZeroValueMoodOverHopeEvenWithoutGrowthPotential()
+     * above proves for Pacifism.
+     */
+    public function testChooseActionPrefersAnOrdinaryZeroValueMoodOverItsOwnHopeWhenPlayingScornWithNoOpponentTarget(): void
+    {
+        $state = $this->boardState(hands: [1 => [24, 124, 37]]);
+        $state->moveHandToInPlay(1, 124);
+        $state->moveHandToInPlay(1, 37);
+
+        $action = $this->bot->chooseAction($state, [24], 1);
+
+        self::assertSame(24, $action['card_id']);
+        self::assertSame(['target_mood_id' => 37], $action['choices']);
     }
 
     // -- Duplicity's "repeat this mood's own effect?" offer (reported live) ----

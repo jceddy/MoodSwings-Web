@@ -951,6 +951,26 @@ final class GameService
      * own reasoning: "top 10%" means the same thing at 6 players or 600,
      * "3rd place" does not).
      *
+     * Reported live: "for the weekly sealed pool standings, ties should be
+     * treated as the same standing, so if the top two players are tied 1-0
+     * and the bottom player is 0-2, then the top two players should both
+     * be ranked #1 and the bottom player should be ranked #3." Standard
+     * "competition ranking" (1224, not 1223): a tied row keeps the SAME
+     * rank as the row before it rather than its own 1-based position, and
+     * the next distinct row's rank is still that position -- so a rank
+     * value is skipped for every row absorbed into the tie above it,
+     * rather than the tied group compressing the ranks below it. Ties are
+     * read off wins/losses (what a standings row actually shows), not the
+     * hidden score this list is sorted by -- two different (wins, losses)
+     * records can coincidentally share a score (this class's own
+     * WEEKLY_SEALED_POOL_RANKING_POINTS formula has no floor stopping
+     * that), and those should still rank as the visibly different records
+     * they are, not silently collapse into one tied entry. Two rows with
+     * genuinely identical wins AND losses always DO share a score (score
+     * is a pure function of the two), so they already sort adjacently
+     * here regardless -- comparing to only the immediately preceding row
+     * is enough.
+     *
      * @param list<array{user_id: int, username: string, wins: int, losses: int}> $scoreOrderedRows
      * @return list<array{user_id: int, username: string, wins: int, losses: int, rank: int, percentile: int}>
      */
@@ -958,16 +978,28 @@ final class GameService
     {
         $total = count($scoreOrderedRows);
         $ranked = [];
+        $previousRank = null;
+        $previousWins = null;
+        $previousLosses = null;
         foreach (array_values($scoreOrderedRows) as $index => $row) {
-            $rank = $index + 1;
+            $wins = (int) $row['wins'];
+            $losses = (int) $row['losses'];
+            $rank = ($previousRank !== null && $wins === $previousWins && $losses === $previousLosses)
+                ? $previousRank
+                : $index + 1;
+
             $ranked[] = [
                 'user_id' => (int) $row['user_id'],
                 'username' => $row['username'],
-                'wins' => (int) $row['wins'],
-                'losses' => (int) $row['losses'],
+                'wins' => $wins,
+                'losses' => $losses,
                 'rank' => $rank,
                 'percentile' => (int) ceil(($rank / $total) * 100),
             ];
+
+            $previousRank = $rank;
+            $previousWins = $wins;
+            $previousLosses = $losses;
         }
 
         return $ranked;

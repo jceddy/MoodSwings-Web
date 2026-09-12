@@ -1,0 +1,24 @@
+-- Reported live: "bots should not target Hope with Pacifism -- I had
+-- Hope and Sadness in play, both 0-point cards... Sadness has an effect
+-- that can increase its points, though, and that should be treated as a
+-- tie-breaker -- even though both cards have the same points value,
+-- Sadness has a much higher *potential* points value."
+--
+-- Root cause: BotPlayerService::pacifismTargetMoodIds()'s per-opponent
+-- "highest-value mood" comparison used a plain valueOf(), so a genuine
+-- tie (a fresh Sadness, discard pile still small, is worth exactly as
+-- little as Hope right now) fell through to whichever mood happened to
+-- come first in moodsOwnedBy()'s own iteration order -- incidental, not
+-- a deliberate read of either card's actual threat level.
+--
+-- Fixed: new pacifismTargetPriority() breaks a tied valueOf() by
+-- preferring a DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS mood (Sadness/
+-- Wonder, the same "can only grow from here" family this codebase
+-- already treats specially elsewhere) over one that can't grow at all --
+-- never overriding an actual value difference, only ever deciding
+-- between two candidates already tied on real value. See php-app/README.md
+-- for the full writeup.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.40.9' WHERE id = 1;

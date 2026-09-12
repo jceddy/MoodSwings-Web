@@ -3915,6 +3915,27 @@ reads "top 100%", never "top 0%"), deliberately not a raw rank number, so
 it stays comparable across weeks that draw very different numbers of
 players.
 
+**Ties share one rank** (reported live: "ties should be treated as the
+same standing, so if the top two players are tied 1-0 and the bottom
+player is 0-2, then the top two players should both be ranked #1 and the
+bottom player should be ranked #3"). `rankedStandingsRows()` used to
+assign a plain sequential `rank` (`index + 1`) regardless of ties, so two
+players with an identical record ended up one rank apart for no real
+reason. Fixed with standard "competition ranking" (1224, not 1223): a row
+whose `wins`/`losses` exactly match the row before it keeps that SAME
+rank rather than its own 1-based position, so the next distinct row's
+rank still reflects its true position -- a value is skipped for every row
+absorbed into the tie above it. Ties are read off `wins`/`losses` (the
+plain record a player actually sees), not the hidden `score` this list is
+sorted by: two different records can coincidentally land on the same
+score (the asymmetric win +3/loss -2 formula has no floor preventing
+that -- a 3-3 record and a 1-0 record both score 3), and those should
+still rank as the visibly different records they are rather than
+silently collapsing into one tied entry. Two rows with a genuinely
+identical record always DO share a score (score is a pure function of
+the two), so they already sort adjacent to each other regardless --
+comparing each row to only the one immediately before it is enough.
+
 **Reading standings.** `currentWeeklySealedPoolId()` always get-or-creates
 (same as Sealed Pool of the Day's own daily pool) -- the current week
 always "exists" the moment anyone asks. `priorWeeklySealedPoolId()`
@@ -7679,6 +7700,56 @@ since it already holds that dependency):
   (only its own targeting is swing-aware), a similar latent gap flagged
   but not fixed here since it wasn't what was reported.
 
+  **Pacifism now never targets Hope or Grace ahead of any real option,
+  not merely tie-broken against one** (reported live: "bots should not
+  target Hope with Pacifism -- I had Hope and Sadness in play, both
+  0-point cards... Sadness has an effect that can increase its points,
+  though, and that should be treated as a tie-breaker -- even though both
+  cards have the same points value, Sadness has a much higher *potential*
+  points value"). `pacifismTargetMoodIds()`'s per-opponent "highest-value
+  mood" comparison used plain `valueOf()`, so a genuine tie (a fresh
+  Sadness, discard pile still small, is worth exactly as little as Hope
+  right now) fell through to whichever mood happened to come first in
+  `moodsOwnedBy()`'s own iteration order -- incidental, not a deliberate
+  read of either card's actual threat level.
+
+  Traced further and confirmed by the maintainer: suppressing Hope (or
+  Grace) doesn't do anything *at all*. Suppression, as implemented
+  anywhere in this engine, only ever zeroes a mood's own `valueOf()`
+  (`isSuppressed()` has no other call site in the whole codebase) -- a
+  full neutralization for every other suppressible card, since the
+  printed ability IS the value computation (Sadness, Discipline,
+  Ambivalence, ...). Hope and Grace are the confirmed exception: both are
+  a permanent, unconditional 0 (no `computeValue()` override at all --
+  their whole ability is a play-grant, implemented entirely outside the
+  standard effect pipeline in `GameService::computeFreshGrants()`), and
+  `BoardState::grantIsActive()`'s own `requiresSourceInPlay` check only
+  ever looks at `isInPlay()`, never `isSuppressed()` -- so a suppressed
+  Hope/Grace keeps granting its extra play every turn exactly as if
+  nothing had happened. This is why they shouldn't merely lose ties, they
+  should lose to *everything*: any other mood, even one that can't grow
+  either, at least loses something (its own current or potential value)
+  to being suppressed.
+
+  New `SUPPRESSION_IMMUNE_EFFECT_KEYS` (`['hope', 'grace']`) and
+  `pacifismTargetPriority()` encode exactly that: a
+  `SUPPRESSION_IMMUNE_EFFECT_KEYS` mood ranks beneath every other option
+  outright (`PHP_INT_MIN`), falling back to one only when it's truly an
+  opponent's only in-play mood -- there's nothing better to name, and
+  naming it costs nothing beyond a target slot Pacifism already had no
+  use for. Otherwise, current `valueOf()` decides, tied `valueOf()`
+  broken by whether the mood can still grow (`DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS`
+  -- Sadness/Wonder, the same "can only grow from here" family
+  `nostalgiaDiscardCardId()`/`thrillHandMoodIds()` already treat specially
+  elsewhere in this file), doubling `valueOf()` first so the tie-break bit
+  can never override an actual value difference. Used for both the
+  per-opponent selection and the cross-opponent `usort()` that picks which
+  two opponents' own best moods to fill Pacifism's two slots with. The
+  ranking function itself, `suppressionTargetPriority()`, is shared --
+  `scornTargetMoodId()` has the identical fix applied to it below, since
+  its own mandatory "suppress any mood" target had the exact same
+  plain-`valueOf()` gap.
+
   **Shock** (reported live: "bots should choose an opponent's mood to
   target with shock when playing it") gets its own targeting exception
   too, via `shockTargetMoodIds()`: `buildChoicesForCard()` special-cases
@@ -8226,6 +8297,19 @@ since it already holds that dependency):
   REQUIRED (unlike Contempt/Hate's own optional one), so it must still
   supply SOME legal target even then, the same reasoning
   `convictionTargetMoodId()` already documents.
+
+  **Follow-up: Scorn shares Pacifism's own Hope/Grace fix** (see
+  "Pacifism now never targets Hope or Grace ahead of any real option"
+  above for the root cause -- suppressing either does nothing at all).
+  Both of `scornTargetMoodId()`'s "highest value" comparisons went
+  through plain `valueOf()`, the identical gap Pacifism had: an opponent
+  holding a tied Hope and Sadness could see Hope picked by iteration
+  order, and with no opponent mood at all, the bot's own fallback could
+  even suppress its OWN Hope/Grace for zero effect. Both comparisons now
+  go through the same shared `suppressionTargetPriority()` Pacifism
+  uses, so a `SUPPRESSION_IMMUNE_EFFECT_KEYS` mood only ever gets chosen
+  when it's truly the only legal target left -- required by this field
+  even then, unlike Pacifism's own optional one.
 - **Nostalgia's own discard-pickup targeting** (reported live: "bots
   should always choose cards to get back with Nostalgia in draft pick
   order"), via `nostalgiaDiscardCardId()`: always takes the
