@@ -29,6 +29,7 @@ use MoodSwings\Rules\PlayerChoices;
 use MoodSwings\Rules\PlayResult;
 use MoodSwings\Rules\RoundScorer;
 use MoodSwings\Stats\CardStatsService;
+use MoodSwings\Tournament\TournamentMatchObserver;
 use PDO;
 use PDOException;
 use Throwable;
@@ -1349,6 +1350,9 @@ final class GameService
     /** Issue #419's own Tactical Bot tier -- see advanceTacticalBotSearch()'s own docblock. Set in the constructor body (not a promoted property default), since its own default construction needs $this->plays/$this->scorer/$this->bots, which a promoted property's default value expression can't reference (those are sibling parameters, not yet $this at that point). */
     private readonly SearchBotPlayerService $tacticalBots;
 
+    /** Issue #91 -- see setTournamentObserver()'s own docblock for why this is a settable property rather than a constructor parameter. */
+    private ?TournamentMatchObserver $tournamentObserver = null;
+
     public function __construct(
         private readonly BoardStateRepository $boardStates,
         private readonly MoodPlayService $plays,
@@ -1409,6 +1413,19 @@ final class GameService
             $this->bots,
             SearchBotPlayerService::defaultEnumeratorFor($this->bots),
         );
+    }
+
+    /**
+     * Issue #91's own tournament system hooks in here, set once at
+     * bootstrap -- see TournamentMatchObserver's own docblock for why
+     * this is a setter rather than a constructor dependency
+     * (TournamentService needs a GameService of its own to create each
+     * matchup's underlying game, so a constructor dependency in the
+     * other direction here would be circular).
+     */
+    public function setTournamentObserver(TournamentMatchObserver $observer): void
+    {
+        $this->tournamentObserver = $observer;
     }
 
     /**
@@ -8871,6 +8888,7 @@ final class GameService
         // A no-op for every non-draft game -- see its own docblock.
         $this->advanceDraftMatch($gameId, $winnerGamePlayerId);
         $this->advanceGameMatch($gameId, $winnerGamePlayerId);
+        $this->advanceTournamentMatch($gameId, $winnerGamePlayerId);
 
         return ['round_scored' => false, 'game_completed' => true, 'winner_game_player_id' => $winnerGamePlayerId];
     }
@@ -11302,6 +11320,7 @@ final class GameService
             // is only ever set for that deck_type) -- see its own docblock.
             $this->advanceDraftMatch($gameId, $winnerId);
             $this->advanceGameMatch($gameId, $winnerId);
+            $this->advanceTournamentMatch($gameId, $winnerId);
 
             return ['round_scored' => true, 'game_completed' => true, 'winner_game_player_id' => $winnerId];
         }
@@ -11731,6 +11750,66 @@ final class GameService
     }
 
     /**
+     * Issue #91's own hook into every game/match completion path,
+     * called alongside advanceDraftMatch()/advanceGameMatch() above at
+     * every one of their call sites -- deliberately a separate method
+     * rather than folded into either of those (which already have their
+     * own hands full deciding whether THIS game finishes the match),
+     * re-reading whichever of the three wrapper tables the result
+     * landed in rather than threading a return value back through them.
+     * A no-op with no tournament observer registered at all (the common
+     * case for every request outside index.php's own bootstrap), and
+     * still a no-op once one is registered unless $gameId turns out to
+     * be linked to a tournament_matches row AND the whole underlying
+     * match -- not just this one game of a still-ongoing best-of-three/
+     * draft match -- now has a final winner.
+     */
+    private function advanceTournamentMatch(int $gameId, int $winnerGamePlayerId): void
+    {
+        if ($this->tournamentObserver === null) {
+            return;
+        }
+
+        $game = $this->fetchGame($gameId);
+        $pdo = Connection::get();
+
+        if ($game['draft_match_id'] !== null) {
+            $stmt = $pdo->prepare('SELECT status, winner_user_id FROM draft_matches WHERE id = :id');
+            $stmt->execute(['id' => $game['draft_match_id']]);
+            $match = $stmt->fetch();
+            if ($match === false || $match['status'] !== 'completed' || $match['winner_user_id'] === null) {
+                return;
+            }
+            $winnerUserId = (int) $match['winner_user_id'];
+        } elseif ($game['game_match_id'] !== null) {
+            $stmt = $pdo->prepare('SELECT status, winner_user_id FROM game_matches WHERE id = :id');
+            $stmt->execute(['id' => $game['game_match_id']]);
+            $match = $stmt->fetch();
+            if ($match === false || $match['status'] !== 'completed' || $match['winner_user_id'] === null) {
+                return;
+            }
+            $winnerUserId = (int) $match['winner_user_id'];
+        } else {
+            // A bare single game (no best-of-three, no draft) -- the
+            // game that just finished IS the whole match.
+            $winnerUserStmt = $pdo->prepare('SELECT user_id FROM game_players WHERE id = :id');
+            $winnerUserStmt->execute(['id' => $winnerGamePlayerId]);
+            $winnerUserIdRaw = $winnerUserStmt->fetchColumn();
+            if ($winnerUserIdRaw === false) {
+                return;
+            }
+            $winnerUserId = (int) $winnerUserIdRaw;
+        }
+
+        $this->tournamentObserver->onMatchConcluded(
+            $gameId,
+            $game['game_match_id'] !== null ? (int) $game['game_match_id'] : null,
+            $game['draft_match_id'] !== null ? (int) $game['draft_match_id'] : null,
+            $winnerUserId,
+        );
+    }
+
+    /**
      * Team-format counterpart to the rest of finishScoringAndAdvance() --
      * $scores is already computed exactly like every other format
      * (Sneakiness's swap, Enthusiasm's/Passion's bonus, etc. all already
@@ -11830,6 +11909,10 @@ final class GameService
             // format's match wins off games.winner_team_id rather than off
             // this representative's own user_id.
             $this->advanceGameMatch($gameId, $winnerRepresentative);
+            // Tournament matches are 1v1-only in v1 (see TournamentService's
+            // own docblock) so this is always a no-op here, kept only for
+            // uniformity with every other completion path.
+            $this->advanceTournamentMatch($gameId, $winnerRepresentative);
 
             return ['round_scored' => true, 'game_completed' => true, 'winner_game_player_id' => $winnerRepresentative];
         }
@@ -13091,6 +13174,25 @@ final class GameService
         $id = $stmt->fetchColumn();
 
         return $id !== false ? (int) $id : null;
+    }
+
+    /**
+     * Issue #91's own tournament system uses this right after
+     * createGame() to learn which (if either) of the two match-wrapper
+     * tables the new game landed in -- see
+     * TournamentMatchRepository/tournament_matches' own game_id/
+     * game_match_id/draft_match_id split.
+     *
+     * @return array{game_match_id: ?int, draft_match_id: ?int}
+     */
+    public function gameMatchWrapperIds(int $gameId): array
+    {
+        $game = $this->fetchGame($gameId);
+
+        return [
+            'game_match_id' => $game['game_match_id'] !== null ? (int) $game['game_match_id'] : null,
+            'draft_match_id' => $game['draft_match_id'] !== null ? (int) $game['draft_match_id'] : null,
+        ];
     }
 
     /** @return int[] every seated player's user_id, in seat order */
