@@ -3397,13 +3397,14 @@
     // Reported live: "synchronous" mode -- see GameService::createGame()'s
     // own $synchronousMode docblock. SYNCHRONOUS_MODE_ALLOWED_FORMATS
     // mirrors GameService::SYNCHRONOUS_MODE_ALLOWED_FORMATS exactly
-    // (increment 1: 2-player Traditional/Duel only), narrowing as later
-    // increments add Draft/Sealed Deck support -- also requires exactly
-    // 2 total players (currentNewGamePlayerCount()), the one restriction
-    // that isn't itself a format/deck_type check. Same "unchecked, not
-    // just hidden, whenever it goes out of view" treatment as the two
-    // async timeout checkboxes above.
-    const SYNCHRONOUS_MODE_ALLOWED_FORMATS = ['standard', 'duel'];
+    // (2-player Traditional/Duel/Draft -- Draft covers all five
+    // draft-family deck_types plus Sealed Deck/Sealed Pool of the Day,
+    // both mapped to 'draft' by effectiveNewGameFormat()) -- also
+    // requires exactly 2 total players (currentNewGamePlayerCount()),
+    // the one restriction that isn't itself a format/deck_type check.
+    // Same "unchecked, not just hidden, whenever it goes out of view"
+    // treatment as the two async timeout checkboxes above.
+    const SYNCHRONOUS_MODE_ALLOWED_FORMATS = ['standard', 'duel', 'draft'];
     function updateSynchronousFieldVisibility() {
         const format = effectiveNewGameFormat();
         const show = SYNCHRONOUS_MODE_ALLOWED_FORMATS.includes(format) && currentNewGamePlayerCount() === 2;
