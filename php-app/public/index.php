@@ -1516,6 +1516,11 @@ if ($path === '/games/state' && $method === 'GET') {
     // Throwable itself (see its own docblock), so this is purely a
     // no-op for a non-synchronous game and never risks this read.
     $games->enforceSynchronousActionDeadline($gameId);
+    // Synchronous mode's own real-time draft-pick timer (increment 3) --
+    // enforceSynchronousDraftPickDeadline() swallows every Throwable
+    // itself too, so this is purely a no-op for a non-synchronous or
+    // non-draft game and never risks this read.
+    $games->enforceSynchronousDraftPickDeadline($gameId);
     respond(200, ['status' => 'ok', ...$games->getState($gameId, (int) $currentUser['id'])]);
 }
 

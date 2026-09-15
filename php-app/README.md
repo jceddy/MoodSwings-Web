@@ -4507,14 +4507,16 @@ scope mismatch).
 **Landing in increments**, the same way issue #85 itself shipped team-
 decision coverage and the full-game time-limit mode as separate follow-
 ups rather than all at once. Shipped so far: the mode flag and pre-game
-"ready check" (increment 1), and the 30-second live action timer with
-timeout-extension banking (increment 2, below) -- both for 2-player
-Traditional/Duel (`self::SYNCHRONOUS_MODE_ALLOWED_FORMATS = ['standard', 'duel']`).
-Planned follow-ups (not yet built): Draft/Sealed Deck support, including
-a 60-second-per-pick timer for the five draft-family deck_types and an
-untimed-but-clock-ticking deck-building/sideboard phase; and a
-match-wide (not per-game) 30-minute chess clock covering the whole
-best-of-three match, including time spent deck-building.
+"ready check" (increment 1); the 30-second live action timer with
+timeout-extension banking (increment 2); and Draft/Sealed Deck support,
+including a 60-second-per-pick timer for the five draft-family
+deck_types and a ready check that gates drafting itself, not just the
+eventual hand deal (increment 3, below) -- covering 2-player
+Traditional/Duel/Draft (`self::SYNCHRONOUS_MODE_ALLOWED_FORMATS = ['standard', 'duel', 'draft']`).
+Planned follow-up (not yet built): a match-wide (not per-game)
+30-minute chess clock covering the whole best-of-three match, including
+time spent deck-building/sideboarding (untimed for now -- see increment
+3's own "what's still untimed" note below).
 
 **The ready check** (`game_players.ready_at`, migration 0329) -- "each
 player needs to be seated/looking at the game before it starts." Every
@@ -4548,9 +4550,12 @@ of three" above) -- `advanceGameMatch()`'s own next-game `INSERT` copies
 check itself still starts fresh every match game, though: a new set of
 `game_players` rows means everyone's own `ready_at` resets to NULL by
 that column's own default, so both seats confirm they're still there for
-game 2/3 too. (Draft-family deck types don't support synchronous mode
-yet -- see the roadmap above -- so `advanceDraftMatch()` needs no
-analogous carry-forward until that follow-up lands.)
+game 2/3 too. A draft-family match's own best-of-three games 2/3 never
+need an analogous ready check of their own, though -- `advanceDraftMatch()`
+carries `synchronous_mode` forward exactly like every other opt-in, but
+there's no fresh *drafting* phase to gate on game 2/3 the way game 1's
+own `markReady()` gates it (only deck-building/sideboarding, which
+increment 3 leaves untimed -- see below).
 
 **Surfaced via `getState()`** -- `game.synchronous_mode` (top-level,
 always present, `false` for every other game) and a `ready` boolean on
@@ -4680,6 +4685,137 @@ and a `timeout_extensions_banked` int on each entry in `players[]`
 `ready` already gets). See "Synchronous mode" in `web-static/README.md`
 for the board's own live countdown and extension-count display these
 drive.
+
+**Increment 3: Draft/Sealed Deck support** (migration 0331) -- "for
+draft, players are allowed 60 seconds for each pick... there is no time
+limit on deck building/sideboarding, but the time spent... counts
+against your 30 minutes total match time" (the match-wide chess clock
+itself is still the one planned-but-unbuilt follow-up -- see the
+roadmap paragraph above -- so today deck-building/sideboarding stays
+genuinely untimed for a synchronous match, exactly like an async one).
+`self::SYNCHRONOUS_MODE_ALLOWED_FORMATS` gained `'draft'`, which covers
+all five draft-family deck_types plus Sealed Deck/Sealed Pool of the
+Day/Weekly Sealed Pool -- every one of them already 2-player-only or
+2-4-player, and the general synchronous-mode gate still hard-requires
+exactly 2 either way, so `'team'`/`'closed_team'` drafts remain out of
+scope for now.
+
+**The ready check gates drafting itself, not just the eventual hand
+deal** -- "each player needs to be seated/looking at the game before it
+starts" applies just as much to a live draft as to an ordinary turn.
+Unlike every other synchronous opt-in, this couldn't be a pure
+validation/enforcement addition: `createGame()` has always dealt a
+draft-family match's first round/pile/pool immediately, in the same
+transaction that seats the players, with no later "start drafting"
+request for a human to make at all. For a synchronous match, that
+dealing is deferred instead -- `draft_matches.pending_draft_init`
+(`JSON`, non-`NULL` from creation until every seat has clicked Ready)
+holds whatever deck_type-specific config
+`initializeDeferredSynchronousDraft()` will still need once it finally
+runs (Rotisserie Draft's own cutoff count; Tiered Rotisserie Draft's own
+tier pools/mode -- everything else is already recoverable from
+`draft_matches.pool_card_ids`/`draftMatchUserIds()` alone). `markReady()`
+itself is what actually deals the first round once `allPlayersReady()`
+turns true, wrapped in `withGameLock()` so two players' own ready
+clicks landing back to back can't deal it twice. `draftHasBeenInitialized()`
+(`pending_draft_init IS NULL`) guards `buildGameState()`'s own
+per-deck_type dispatch, so a still-waiting viewer's `GET /games/state`
+simply omits `quick_draft`/`winston_draft`/etc. entirely rather than
+trying to read state tables that don't exist yet -- the frontend shows
+the same ready-check panel an ordinary synchronous game does until then
+(see `web-static/README.md`). Sealed Deck has no live drafting phase at
+all (`initializeSealedDeck()` just flips `draft_matches.status` straight
+to `'deck_building'`), but gets the exact same deferral treatment for
+consistency -- a synchronous Sealed Deck match's already-built pools
+stay unread until both seats are in. A best-of-three draft match's own
+game 2/3 needs no analogous re-deferral: `advanceDraftMatch()` carries
+`synchronous_mode` forward exactly like `timeout_minutes`/
+`total_time_limit_minutes` already were, and stamps a practice bot seat
+ready immediately (mirroring `createGame()`'s own identical treatment),
+but there's no fresh *drafting* to gate for a later match game -- only
+the ordinary hand deal, which `startGame()`'s existing ready-check gate
+already covers generically once `game_players.ready_at` resets to NULL
+for the new game's own fresh seats.
+
+**The 60-second pick timer** -- `draft_matches.pick_deadline_at`
+(`TIMESTAMP`) is `action_deadline_at`'s own analogue, scoped to the
+whole match rather than one `games` row (a draft match's drafting phase
+happens entirely before any of its up to 3 `games` rows ever reaches
+`'in_progress'`). Set to `NOW() + 60s` by `resetSynchronousDraftPickDeadlineIfNeeded()`
+-- called once when `initializeDeferredSynchronousDraft()` deals the
+first round, and again after every successful
+`submitQuickDraftPick()`/`submitWinstonDraftPick()`/`submitGridDraftPick()`/
+`submitRotisserieDraftPick()`/`submitTieredRotisserieDraftPick()` --
+and cleared back to `NULL` once `draft_matches.status` leaves
+`'drafting'` (a complete no-op outside synchronous mode throughout,
+same as every other opt-in field here). `currentDraftPickUserIds()`
+resolves "who's actually on the clock right now" per deck_type: Winston/
+Grid/Rotisserie/Tiered Rotisserie Draft each have one single
+`current_player_user_id`/`current_turn_user_id` column to read directly,
+but Quick Draft/Chaos Draft's own SIMULTANEOUS per-stage picks (every
+seated player picks independently within a stage -- see
+`submitQuickDraftPick()`'s own docblock) mean potentially every seated
+player is still on the clock for the current stage at once, not just
+one.
+
+**`enforceSynchronousDraftPickDeadline()`** is the real-time enforcement
+-- called from `GET /games/state` right alongside
+`enforceSynchronousActionDeadline()`, same "cheap early-out, best-effort,
+never blocks the read" treatment. Rather than inventing a new "auto-pick
+for an idle human" mechanism, it reuses the exact same machinery a
+practice bot's own idle turn already resolves through --
+`advanceBotQuickDraftPick()`/`advanceBotWinstonDraftPick()`/
+`advanceBotGridDraftPick()`/`advanceBotRotisserieDraftPick()`/
+`advanceBotTieredRotisserieDraftPick()` -- simply passing every seated
+user id in place of a real bot user id list; none of those five methods
+actually check anything bot-specific beyond "is this user id in the
+list I was given," so a timed-out human is indistinguishable to them
+from an idle bot, and each already no-ops (or resolves whichever seat
+is still pending) when everyone it's handed has already acted. Unlike
+`enforceSynchronousActionDeadline()`'s own extension-banking/auto-resign
+escalation, a skipped draft pick has no notion of "forfeiting" anything
+-- the same heuristic a bot would use just picks FOR the idle player,
+so there's deliberately no extension bank or auto-concession here (a
+separate constant, `SYNCHRONOUS_DRAFT_PICK_TIMEOUT_SECONDS`, rather than
+reusing `SYNCHRONOUS_ACTION_TIMEOUT_SECONDS`, reflects that this is a
+different KIND of timeout, not just a different duration). Each call
+resolves at most one pick, the same "one action, let the loop call back
+around" convention `advanceBotDraftTurn()` itself follows -- Quick
+Draft/Chaos Draft's own simultaneous model can leave a second seat still
+overdue after one call returns, but the pick that call DID just submit
+already reset the deadline for whatever's next, handing that second seat
+a fresh window on the next poll.
+
+**Abandonment backstop** -- `applySynchronousAbandonment()` now branches
+on the underlying `games.status`: an ordinary in_progress synchronous
+game still uses `action_deadline_at`/`action_deadline_game_player_id`
+exactly as increment 2 built it, but a synchronous draft-family match
+can be abandoned entirely while its own `games` row is still `'waiting'`
+-- mid-draft, or even before the ready check ever completes -- so a
+`'waiting'` game defers to `applySynchronousDraftAbandonment()`'s own
+equivalent check against `draft_matches.pick_deadline_at` instead.
+`applyTimeoutsForAllActiveGames()`'s own candidate `SELECT` gained a
+second branch (`status = 'waiting' AND synchronous_mode = 1 AND
+draft_match_id IS NOT NULL`) to actually reach these. Once
+`pick_deadline_at` has sat `SYNCHRONOUS_ABANDONMENT_GRACE_SECONDS` past
+due with nobody polling to trip the real-time enforcement above, the
+match is resigned outright (`resignFromDraftMatch()`, same as a human's
+own deliberate resignation mid-draft) on behalf of whichever seat is a
+real human, rather than repeatedly auto-picking through an entire draft
+nobody is left to watch. Not-yet-initialized (`pending_draft_init` still
+set -- nobody's clicked Ready) and `'deck_building'` (drafting already
+finished) both fall through as a no-op -- the former has no deadline to
+compare against yet, and the latter's own untimed deck-building/
+sideboard abandonment is deferred to the match-wide chess clock, still
+unbuilt.
+
+**Surfaced via `getState()`** -- `game.draft_pick_deadline_at`/
+`draft_pick_deadline_usernames` (`null`/empty outside synchronous mode,
+before the ready check clears, or once drafting itself has finished) --
+`action_deadline_at`'s own analogue, just usernames rather than a single
+`game_player_id` since Quick Draft/Chaos Draft can put more than one
+player on the clock at once. See "Synchronous mode" in
+`web-static/README.md` for the board's own countdown reused for this.
 
 ### Power Duel sideboarding
 

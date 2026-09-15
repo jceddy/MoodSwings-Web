@@ -1703,17 +1703,20 @@ time-limit checkbox) opts into a THIRD, mutually exclusive mode --
 checking it unchecks (and re-hides the sub-fields of) both async
 checkboxes above, and vice versa (`enforceSynchronousExclusivityFromSynchronousCheckbox()`/
 `enforceSynchronousExclusivityFromAsyncCheckboxes()`), matching
-`createGame()`'s own validation that a game never combines them. Only
-shown for exactly 2 players in Traditional/Duel so far
+`createGame()`'s own validation that a game never combines them. Shown
+for exactly 2 players in Traditional/Duel/Draft
 (`SYNCHRONOUS_MODE_ALLOWED_FORMATS`, mirroring `GameService::SYNCHRONOUS_MODE_ALLOWED_FORMATS`
-exactly) -- `updateSynchronousFieldVisibility()` re-runs on every format/
+exactly -- Draft covers all five draft-family deck_types plus Sealed
+Deck/Sealed Pool of the Day/Weekly Sealed Pool) --
+`updateSynchronousFieldVisibility()` re-runs on every format/
 deck-type/opponent-checkbox change `updateBestOfThreeFieldVisibility()`
 already does, since "exactly 2 total players" depends on the same
-`currentNewGamePlayerCount()` that one already reads. Draft/Sealed Deck
-support and a match-wide chess clock are still planned follow-ups -- see
-`php-app/README.md`'s own "Synchronous mode" roadmap; the live
-30-second action timer and timeout-extension banking below shipped as
-increment 2.
+`currentNewGamePlayerCount()` that one already reads. A match-wide chess
+clock is still a planned follow-up -- see `php-app/README.md`'s own
+"Synchronous mode" roadmap; the live 30-second action timer and
+timeout-extension banking shipped as increment 2, and Draft/Sealed Deck
+support (a 60-second-per-pick timer, plus the ready check gating
+drafting itself) as increment 3, both below.
 
 **Ready-check panel** (`#ready-check-panel`, shown in place of the
 ordinary "Waiting for the game to start" text once `state.game.status
@@ -1769,6 +1772,35 @@ action-timeout warning icon (a transient alert), this stays visible the
 whole game at whatever count it's at, the same "always-shown running
 total" treatment `hand_count`/`points`/`wins` already get, so a player
 can see at a glance how much slack they've banked.
+
+**Increment 3: Draft/Sealed Deck, and the ready check gating drafting
+itself** -- for a synchronous draft-family match, the board's own
+`'waiting'`-status branch (`DRAFT_DECK_TYPES.includes(state.game.deck_type)`)
+now checks `state.players.every((p) => p.ready)` FIRST, before ever
+touching `state.quick_draft`/`state.winston_draft`/etc.: the server
+hasn't dealt this match's first round/pile/pool at all until every seat
+clicks Ready (see `php-app/README.md`'s own `GameService::markReady()`
+writeup), so there's nothing for the usual draft panel
+(`renderDraftPanel()`) to read yet. While any seat is still unready, the
+exact same `renderReadyCheckPanel()`/`#ready-check-panel` an ordinary
+synchronous game shows takes over instead -- a synchronous draft match
+never shows its own drafting UI at all until both players are actually
+there.
+
+Once drafting begins, `#synchronous-action-timer` gets reused
+essentially unchanged for the 60-second pick timer: `renderBoard()`'s
+draft branch wires the same `tickSynchronousActionTimer()`/
+`synchronousDeadlineInfo` machinery increment 2 built, just fed from
+`state.game.draft_pick_deadline_at`/`draft_pick_deadline_usernames`
+instead of `action_deadline_at`/`action_deadline_game_player_id` --
+`draft_pick_deadline_usernames` can hold MORE than one name at once for
+Quick Draft/Chaos Draft's own simultaneous-per-stage picks (every seated
+player picks independently within a stage), joined with `" & "` for
+display (e.g. "alice & bob's action timer: 12s") rather than picking
+just one arbitrarily. Both fields go `null`/empty the moment drafting
+finishes, so the countdown naturally disappears again once deck-building
+begins (still untimed, same as an async draft) with no extra branching
+needed here.
 
 ## Pages
 

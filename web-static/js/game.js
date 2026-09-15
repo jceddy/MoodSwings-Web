@@ -6722,6 +6722,24 @@
                 document.getElementById('draft-deck-building').hidden = true;
                 renderDuelDeckSubmission(state);
                 autoStartGameIfReady(state.players.every((p) => p.deck_submitted));
+            } else if (DRAFT_DECK_TYPES.includes(state.game.deck_type) && state.game.synchronous_mode && !state.players.every((p) => p.ready)) {
+                // Synchronous mode's own ready check gates drafting
+                // itself, not just the eventual hand deal (increment 3,
+                // reported live) -- the server hasn't even dealt this
+                // match's first round/pile/pool yet (see
+                // GameService::markReady()'s own docblock), so there's
+                // no state.quick_draft/winston_draft/etc. to read at all
+                // until every seat clicks Ready.
+                document.getElementById('quick-draft-panel').hidden = true;
+                document.getElementById('winston-draft-panel').hidden = true;
+                document.getElementById('grid-draft-panel').hidden = true;
+                document.getElementById('rotisserie-draft-panel').hidden = true;
+                document.getElementById('tiered-rotisserie-draft-panel').hidden = true;
+                document.getElementById('draft-deck-building').hidden = true;
+                document.getElementById('duel-deck-submission').hidden = true;
+                document.getElementById('board-round-status').textContent = '';
+                renderReadyCheckPanel(state);
+                autoStartGameIfReady(false);
             } else if (DRAFT_DECK_TYPES.includes(state.game.deck_type)) {
                 document.getElementById('ready-check-panel').hidden = true;
                 document.getElementById('duel-deck-submission').hidden = true;
@@ -6734,6 +6752,26 @@
                 document.getElementById('board-round-status').textContent =
                     draftState.status === 'drafting' ? 'Drafting your deck.' : 'Building your deck.';
                 renderDraftPanel(state);
+                // Synchronous mode's own draft-pick timer (increment 3)
+                // -- same live countdown the in-progress branch further
+                // down wires from action_deadline_at/
+                // action_deadline_game_player_id, just driven from
+                // draft_pick_deadline_at/draft_pick_deadline_usernames
+                // instead (both null/empty once drafting finishes -- see
+                // GameService::buildGameState()'s own docblock -- so this
+                // naturally stops itself once deck-building begins).
+                if (state.game.synchronous_mode && state.game.draft_pick_deadline_at !== null && state.game.draft_pick_deadline_usernames.length > 0) {
+                    synchronousDeadlineInfo = {
+                        deadlineAtMs: new Date(state.game.draft_pick_deadline_at).getTime(),
+                        username: state.game.draft_pick_deadline_usernames.join(' & '),
+                    };
+                    tickSynchronousActionTimer();
+                    if (synchronousActionTimerInterval === null) {
+                        synchronousActionTimerInterval = setInterval(tickSynchronousActionTimer, 1000);
+                    }
+                } else {
+                    stopSynchronousActionTimer();
+                }
                 // other_players (issue #189) covers every OTHER seated
                 // player -- for a 3-4 player Quick Draft match,
                 // opponent_submitted alone only reflects the first of them,

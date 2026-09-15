@@ -196,14 +196,21 @@ final class GameService
      *
      * Landing in increments, the same way issue #85 itself shipped team-
      * decision coverage and the full-game time-limit mode as separate
-     * follow-ups rather than all at once: this first increment is just
+     * follow-ups rather than all at once: the first increment was just
      * the mode flag and the pre-game "ready check" (games.synchronous_mode,
      * game_players.ready_at, migration 0329) for 2-player Traditional/
-     * Duel. $SYNCHRONOUS_MODE_ALLOWED_FORMATS narrows as later increments
-     * add Draft/Sealed Deck support -- see php-app/README.md's
-     * "Synchronous mode" section for the full roadmap.
+     * Duel; increment 3 (migration 0331) adds 'draft' -- every draft-
+     * family deck_type (DRAFT_DECK_TYPES), always 2 players here (the
+     * general synchronous-mode player-count check just below still
+     * applies) -- with its own 60-second-per-pick timer
+     * (SYNCHRONOUS_DRAFT_PICK_TIMEOUT_SECONDS) instead of the ordinary
+     * action timer, since a draft pick isn't a "turn" in the sense
+     * SYNCHRONOUS_ACTION_TIMEOUT_SECONDS/updateSynchronousActionClock()
+     * mean. 'team'/'closed_team' remain out of scope for now -- see
+     * php-app/README.md's "Synchronous mode" section for the full
+     * roadmap.
      */
-    private const SYNCHRONOUS_MODE_ALLOWED_FORMATS = ['standard', 'duel'];
+    private const SYNCHRONOUS_MODE_ALLOWED_FORMATS = ['standard', 'duel', 'draft'];
 
     /**
      * Synchronous mode's own live action timer (increment 2 -- see
@@ -242,6 +249,20 @@ final class GameService
     private const SYNCHRONOUS_MAX_BANKED_EXTENSIONS = 5;
     private const SYNCHRONOUS_AUTO_LOSS_AFTER_CONSECUTIVE_TIMEOUTS = 2;
     private const SYNCHRONOUS_ABANDONMENT_GRACE_SECONDS = 300;
+
+    /**
+     * Synchronous mode's own draft-pick timer (increment 3, migration
+     * 0331) -- "for draft, players are allowed 60 seconds for each
+     * pick," reported live. Deliberately its own separate timeout, not
+     * SYNCHRONOUS_ACTION_TIMEOUT_SECONDS reused: a draft pick has no
+     * extension bank or auto-concession the way an ordinary turn does
+     * (see enforceSynchronousDraftPickDeadline()'s own docblock for why)
+     * -- expiring just auto-picks FOR the idle player, via the exact
+     * same heuristic a practice bot's own idle turn already resolves
+     * through, so there's nothing here to escalate the way two
+     * consecutive real action-timer timeouts do.
+     */
+    private const SYNCHRONOUS_DRAFT_PICK_TIMEOUT_SECONDS = 60;
 
     /**
      * The 'power' deck_type's own non-Mythic card count -- see
@@ -1687,7 +1708,7 @@ final class GameService
                 throw new GameStateException('Synchronous mode cannot be combined with the async timeout_minutes/total_time_limit_minutes settings');
             }
             if (!in_array($format, self::SYNCHRONOUS_MODE_ALLOWED_FORMATS, true)) {
-                throw new GameStateException("Synchronous mode doesn't support the \"{$format}\" format yet -- only Traditional and Duel are supported so far");
+                throw new GameStateException("Synchronous mode doesn't support the \"{$format}\" format yet -- only Traditional, Duel, and Draft are supported so far");
             }
             if (count($userIds) !== 2) {
                 throw new GameStateException('Synchronous mode requires exactly 2 players');
@@ -2160,7 +2181,27 @@ final class GameService
                     ]);
                 }
 
-                if ($deckType === 'quick_draft' || $deckType === 'chaos_draft') {
+                if ($synchronousMode) {
+                    // Synchronous mode's own ready check (increment 3)
+                    // gates drafting itself, not just the eventual hand
+                    // deal -- unlike every other opt-in handled inline
+                    // right here, actually dealing this match's first
+                    // round/pile/pool has to wait for a later request
+                    // (GameService::markReady(), once every seat has
+                    // clicked Ready), so nothing below runs yet. All
+                    // that later call needs which isn't already
+                    // recoverable from draft_matches.pool_card_ids/
+                    // draftMatchUserIds() alone is persisted here -- see
+                    // initializeDeferredSynchronousDraft() and migration
+                    // 0331's own docblock for pending_draft_init.
+                    $pendingDraftInit = match ($deckType) {
+                        'rotisserie_draft' => ['rotisserie_draft_cutoff_count' => $rotisserieDraftCutoffCount],
+                        'tiered_rotisserie_draft' => ['tiered_rotisserie_draft_tier_pools' => $tieredRotisserieDraftTierPools, 'tiered_rotisserie_draft_mode' => $tieredRotisserieDraftMode],
+                        default => [],
+                    };
+                    $pdo->prepare('UPDATE draft_matches SET pending_draft_init = :pending WHERE id = :id')
+                        ->execute(['pending' => json_encode($pendingDraftInit), 'id' => $draftMatchId]);
+                } elseif ($deckType === 'quick_draft' || $deckType === 'chaos_draft') {
                     $this->dealQuickDraftRound($gameId, $draftMatchId, 1, $draftPoolCardIds, array_values($seatedUserIds));
                 } elseif ($deckType === 'winston_draft') {
                     $this->initializeWinstonDraft($gameId, $draftMatchId, $draftPoolCardIds, array_values($seatedUserIds));
@@ -3268,7 +3309,80 @@ final class GameService
             ->prepare('UPDATE game_players SET ready_at = COALESCE(ready_at, NOW()) WHERE id = :id')
             ->execute(['id' => $gamePlayerId]);
 
-        return ['all_ready' => $this->allPlayersReady($playerIds)];
+        $allReady = $this->allPlayersReady($playerIds);
+
+        // Increment 3: for a draft-family match, THIS is what actually
+        // kicks off drafting -- unlike an ordinary game (where readiness
+        // just unblocks a later startGame() request a human/the client's
+        // own autoStartGameIfReady() still has to make), there's no
+        // separate "start drafting" request at all; createGame() itself
+        // deferred it here (see the docblock beside its own
+        // pending_draft_init write) specifically so this is the one
+        // place it happens.
+        if ($allReady && $game['draft_match_id'] !== null) {
+            $this->initializeDeferredSynchronousDraft($gameId, (string) $game['deck_type'], (int) $game['draft_match_id']);
+        }
+
+        return ['all_ready' => $allReady];
+    }
+
+    /**
+     * markReady()'s own draft-family follow-through (increment 3) --
+     * deals Quick/Winston/Grid/Rotisserie/Tiered Rotisserie Draft's own
+     * first round/pile/pool, or moves Sealed Deck straight to
+     * 'deck_building' (see initializeSealedDeck()'s own docblock for why
+     * that one has no live drafting phase to speak of), exactly the way
+     * createGame() always has for an async draft -- just deferred until
+     * now. withGameLock() makes this idempotent against two markReady()
+     * calls racing each other right at the moment both seats become
+     * ready (the client's own is-everyone-ready poll can easily fire
+     * from both players' tabs within the same few seconds): whichever
+     * request gets the lock first sees pending_draft_init still set,
+     * clears it, and deals; the other sees it already NULL and returns
+     * having done nothing.
+     */
+    private function initializeDeferredSynchronousDraft(int $gameId, string $deckType, int $draftMatchId): void
+    {
+        $this->withGameLock($gameId, function () use ($gameId, $deckType, $draftMatchId): void {
+            $match = $this->fetchDraftMatch($draftMatchId);
+            if ($match['pending_draft_init'] === null) {
+                return;
+            }
+            $pendingInit = json_decode((string) $match['pending_draft_init'], true);
+            $poolCardIds = array_map(intval(...), json_decode((string) $match['pool_card_ids'], true));
+            $userIds = $this->draftMatchUserIds($draftMatchId);
+
+            Connection::get()->prepare('UPDATE draft_matches SET pending_draft_init = NULL WHERE id = :id')
+                ->execute(['id' => $draftMatchId]);
+
+            match ($deckType) {
+                'quick_draft', 'chaos_draft' => $this->dealQuickDraftRound($gameId, $draftMatchId, 1, $poolCardIds, $userIds),
+                'winston_draft' => $this->initializeWinstonDraft($gameId, $draftMatchId, $poolCardIds, $userIds),
+                'grid_draft' => $this->initializeGridDraft($gameId, $draftMatchId, $poolCardIds, $userIds),
+                'rotisserie_draft' => $this->initializeRotisserieDraft($gameId, $draftMatchId, $poolCardIds, $userIds, (int) $pendingInit['rotisserie_draft_cutoff_count']),
+                'tiered_rotisserie_draft' => $this->initializeTieredRotisserieDraft($gameId, $draftMatchId, $pendingInit['tiered_rotisserie_draft_tier_pools'], $userIds, (string) $pendingInit['tiered_rotisserie_draft_mode']),
+                default => $this->initializeSealedDeck($draftMatchId), // 'sealed_deck'/PERIODIC_SEALED_POOL_DECK_TYPES -- see createGame()'s own identical fallback
+            };
+
+            $this->resetSynchronousDraftPickDeadlineIfNeeded($gameId, $draftMatchId);
+        });
+    }
+
+    /**
+     * Whether a draft-family match's own live drafting has actually
+     * begun yet -- true immediately for every match this feature
+     * predates (pending_draft_init is only ever written for a
+     * synchronous match, see createGame()'s own docblock), false for a
+     * synchronous one still waiting on markReady() to clear it. Guards
+     * buildGameState()'s own draft-state dispatch (a not-yet-dealt
+     * match has no draft_winston_state/draft_grid_state/etc. row, or
+     * dealt draft_round_picks, for those per-type ...StateFor() methods
+     * to read yet) the same way the ready-check panel itself gates the
+     * client's own drafting UI.
+     */
+    private function draftHasBeenInitialized(int $draftMatchId): bool
+    {
+        return $this->fetchDraftMatch($draftMatchId)['pending_draft_init'] === null;
     }
 
     /** @param int[] $playerIds every seated game_players.id to check, per seatOrder() */
@@ -4667,6 +4781,7 @@ final class GameService
         });
 
         $this->touchLastMoveAt($gameId);
+        $this->resetSynchronousDraftPickDeadlineIfNeeded($gameId, $draftMatchId);
 
         return $result;
     }
@@ -5079,6 +5194,7 @@ final class GameService
         });
 
         $this->touchLastMoveAt($gameId);
+        $this->resetSynchronousDraftPickDeadlineIfNeeded($gameId, $draftMatchId);
 
         return $result;
     }
@@ -5478,6 +5594,7 @@ final class GameService
         });
 
         $this->touchLastMoveAt($gameId);
+        $this->resetSynchronousDraftPickDeadlineIfNeeded($gameId, $draftMatchId);
 
         return $result;
     }
@@ -5625,6 +5742,7 @@ final class GameService
         });
 
         $this->touchLastMoveAt($gameId);
+        $this->resetSynchronousDraftPickDeadlineIfNeeded($gameId, $draftMatchId);
 
         return $result;
     }
@@ -5803,6 +5921,7 @@ final class GameService
         });
 
         $this->touchLastMoveAt($gameId);
+        $this->resetSynchronousDraftPickDeadlineIfNeeded($gameId, $draftMatchId);
 
         return $result;
     }
@@ -11232,14 +11351,14 @@ final class GameService
         }
 
         $seatStmt = $pdo->prepare(
-            'SELECT user_id, seat_order FROM game_players WHERE game_id = :game_id ORDER BY seat_order ASC'
+            'SELECT gp.user_id, gp.seat_order, u.is_bot FROM game_players gp JOIN users u ON u.id = gp.user_id WHERE gp.game_id = :game_id ORDER BY gp.seat_order ASC'
         );
         $seatStmt->execute(['game_id' => $gameId]);
         $seats = $seatStmt->fetchAll();
 
         $insertGame = $pdo->prepare(
-            "INSERT INTO games (format, deck_type, draft_match_id, match_game_number, status, created_by_user_id, wins_needed, default_selections_mode, diagnostic_mode, timeout_minutes, timeout_action, total_time_limit_minutes)
-             VALUES (:format, :deck_type, :draft_match_id, :match_game_number, 'waiting', :created_by, :wins_needed, :default_selections_mode, :diagnostic_mode, :timeout_minutes, :timeout_action, :total_time_limit_minutes)"
+            "INSERT INTO games (format, deck_type, draft_match_id, match_game_number, status, created_by_user_id, wins_needed, default_selections_mode, diagnostic_mode, timeout_minutes, timeout_action, total_time_limit_minutes, synchronous_mode)
+             VALUES (:format, :deck_type, :draft_match_id, :match_game_number, 'waiting', :created_by, :wins_needed, :default_selections_mode, :diagnostic_mode, :timeout_minutes, :timeout_action, :total_time_limit_minutes, :synchronous_mode)"
         );
         $insertGame->execute([
             'format' => $game['format'],
@@ -11282,18 +11401,35 @@ final class GameService
             // whole match (the setting's own docblock is explicit that
             // this is a per-GAME limit).
             'total_time_limit_minutes' => $game['total_time_limit_minutes'],
+            // Synchronous mode (increment 3) -- same "chosen once at
+            // match creation, carried through every match game"
+            // treatment as timeout_minutes/total_time_limit_minutes
+            // just above. Game 2/3 of a synchronous draft-family match
+            // still gets its own fresh ready check (game_players.ready_at
+            // resets to NULL below, same as every other match game) even
+            // though there's no drafting phase left to gate -- only the
+            // ordinary startGame() hand-deal, which synchronous_mode's
+            // own gate already covers generically.
+            'synchronous_mode' => (int) $game['synchronous_mode'],
         ]);
         $nextGameId = (int) $pdo->lastInsertId();
 
         $insertPlayer = $pdo->prepare(
             'INSERT INTO game_players (game_id, user_id, seat_order) VALUES (:game_id, :user_id, :seat_order)'
         );
+        // Synchronous mode's own ready check -- see createGame()'s own
+        // identical bot-auto-ready comment; a harmless no-op outside a
+        // synchronous-mode match.
+        $markBotReady = $pdo->prepare('UPDATE game_players SET ready_at = NOW() WHERE id = :id');
         foreach ($seats as $seat) {
             $insertPlayer->execute([
                 'game_id' => $nextGameId,
                 'user_id' => (int) $seat['user_id'],
                 'seat_order' => (int) $seat['seat_order'],
             ]);
+            if ((bool) $seat['is_bot']) {
+                $markBotReady->execute(['id' => (int) $pdo->lastInsertId()]);
+            }
         }
 
         $pdo->prepare(
@@ -13282,9 +13418,15 @@ final class GameService
     {
         $idsStmt = Connection::get()->query(
             "SELECT id FROM games
-             WHERE status = 'in_progress'
-               AND (timeout_minutes IS NOT NULL OR total_time_limit_minutes IS NOT NULL OR synchronous_mode = 1)
-               AND last_move_at IS NOT NULL"
+             WHERE (status = 'in_progress'
+                    AND (timeout_minutes IS NOT NULL OR total_time_limit_minutes IS NOT NULL OR synchronous_mode = 1)
+                    AND last_move_at IS NOT NULL)
+                -- Increment 3: a synchronous draft-family match can be
+                -- abandoned entirely while its own `games` row is still
+                -- 'waiting' (mid-draft/ready-check, well before
+                -- startGame() itself ever runs) -- see
+                -- applySynchronousDraftAbandonment()'s own docblock.
+                OR (status = 'waiting' AND synchronous_mode = 1 AND draft_match_id IS NOT NULL)"
         );
         $gameIds = array_map(intval(...), $idsStmt->fetchAll(PDO::FETCH_COLUMN));
 
@@ -13368,21 +13510,26 @@ final class GameService
     {
         try {
             $game = $this->fetchGame($gameId);
+
+            // Synchronous mode (increment 2/3) has its own, wholly
+            // different enforcement -- see applySynchronousAbandonment()'s
+            // own docblock for why this cron only ever acts as an
+            // abandonment-only backstop for it, never the ordinary
+            // per-turn timeout_minutes/timeout_action dispatch below.
+            // Checked before the 'in_progress'-only early return just
+            // below (unlike every other timeout mode here, a
+            // synchronous DRAFT match's own abandonment can strike while
+            // the underlying `games` row is still 'waiting').
+            if ((bool) $game['synchronous_mode']) {
+                return $this->applySynchronousAbandonment($gameId, $game);
+            }
+
             if ($game['status'] !== 'in_progress' || $game['last_move_at'] === null) {
                 return false; // already resolved/changed since applyTimeoutsForAllActiveGames()'s own SELECT
             }
             $secondsSinceLastMove = time() - strtotime((string) $game['last_move_at']);
             if ($secondsSinceLastMove < 0) {
                 return false; // clock skew or a move that landed between the SELECT and here -- nothing to do yet
-            }
-
-            // Synchronous mode (increment 2) has its own, wholly
-            // different enforcement -- see applySynchronousAbandonment()'s
-            // own docblock for why this cron only ever acts as an
-            // abandonment-only backstop for it, never the ordinary
-            // per-turn timeout_minutes/timeout_action dispatch below.
-            if ((bool) $game['synchronous_mode']) {
-                return $this->applySynchronousAbandonment($gameId, $game);
             }
 
             // Checked before currentRound() below -- a team decision can
@@ -16173,6 +16320,43 @@ final class GameService
             }
         }
 
+        // draftHasBeenInitialized() (increment 3) -- a synchronous draft
+        // match still waiting on its own ready check has no
+        // draft_winston_state/draft_grid_state/etc. row, or dealt
+        // draft_round_picks, for any of the per-type ...StateFor()
+        // methods below to read yet (createGame() deferred all of that
+        // to markReady()) -- always true for a non-synchronous match
+        // (see that method's own docblock), so this changes nothing for
+        // one of those.
+        $draftInitialized = $game['draft_match_id'] === null || $this->draftHasBeenInitialized((int) $game['draft_match_id']);
+
+        // Synchronous mode's own 60-second draft-pick timer (increment
+        // 3) -- the same "who's on the clock and when their window
+        // expires" shape action_deadline_at/action_deadline_game_player_id
+        // give an ordinary in_progress game, just scoped to the whole
+        // draft_matches row (see migration 0331's own docblock) and
+        // named usernames rather than a single game_player_id, since
+        // Quick Draft/Chaos Draft's own simultaneous per-stage picks can
+        // leave more than one player on the clock at once (see
+        // currentDraftPickUserIds()'s own docblock). Both empty/null
+        // outside synchronous mode, before the ready check clears, or
+        // once drafting itself has finished.
+        $draftPickDeadlineAt = null;
+        $draftPickDeadlineUsernames = [];
+        if ((bool) $game['synchronous_mode'] && $game['draft_match_id'] !== null && $draftInitialized) {
+            $draftMatchIdForDeadline = (int) $game['draft_match_id'];
+            $draftMatchForDeadline = $this->fetchDraftMatch($draftMatchIdForDeadline);
+            if ($draftMatchForDeadline['status'] === 'drafting' && $draftMatchForDeadline['pick_deadline_at'] !== null) {
+                $draftPickDeadlineAt = $draftMatchForDeadline['pick_deadline_at'];
+                $pickUserIds = $this->currentDraftPickUserIds($draftMatchIdForDeadline, (string) $game['deck_type']);
+                foreach ($players as $player) {
+                    if (in_array($player['user_id'], $pickUserIds, true)) {
+                        $draftPickDeadlineUsernames[] = $player['username'];
+                    }
+                }
+            }
+        }
+
         $response = [
             'game' => [
                 'id' => $gameId,
@@ -16250,6 +16434,17 @@ final class GameService
                 // drives.
                 'action_deadline_at' => $game['action_deadline_at'],
                 'action_deadline_game_player_id' => $game['action_deadline_game_player_id'] !== null ? (int) $game['action_deadline_game_player_id'] : null,
+                // Synchronous mode's own draft-pick timer (increment 3)
+                // -- action_deadline_at/action_deadline_game_player_id's
+                // own analogue for a draft-family match's drafting phase
+                // (see migration 0331's own docblock); usernames rather
+                // than a single game_player_id since Quick Draft/Chaos
+                // Draft's own simultaneous per-stage picks can leave more
+                // than one player on the clock at once. Both null/empty
+                // outside synchronous mode, before the ready check
+                // clears, or once drafting itself has finished.
+                'draft_pick_deadline_at' => $draftPickDeadlineAt,
+                'draft_pick_deadline_usernames' => $draftPickDeadlineUsernames,
                 'winner_game_player_id' => $game['winner_game_player_id'] !== null ? (int) $game['winner_game_player_id'] : null,
                 // Every winning username -- both teammates' for a
                 // team-format win, just the one player's otherwise. Empty
@@ -16354,17 +16549,17 @@ final class GameService
         }
 
         if ($viewerUserId !== null) {
-            if (($game['deck_type'] === 'quick_draft' || $game['deck_type'] === 'chaos_draft') && $game['draft_match_id'] !== null) {
+            if (($game['deck_type'] === 'quick_draft' || $game['deck_type'] === 'chaos_draft') && $game['draft_match_id'] !== null && $draftInitialized) {
                 $response['quick_draft'] = $this->quickDraftStateFor($game, $viewerUserId);
-            } elseif ($game['deck_type'] === 'winston_draft' && $game['draft_match_id'] !== null) {
+            } elseif ($game['deck_type'] === 'winston_draft' && $game['draft_match_id'] !== null && $draftInitialized) {
                 $response['winston_draft'] = $this->winstonDraftStateFor($game, $viewerUserId);
-            } elseif ($game['deck_type'] === 'grid_draft' && $game['draft_match_id'] !== null) {
+            } elseif ($game['deck_type'] === 'grid_draft' && $game['draft_match_id'] !== null && $draftInitialized) {
                 $response['grid_draft'] = $this->gridDraftStateFor($game, $viewerUserId);
-            } elseif ($game['deck_type'] === 'rotisserie_draft' && $game['draft_match_id'] !== null) {
+            } elseif ($game['deck_type'] === 'rotisserie_draft' && $game['draft_match_id'] !== null && $draftInitialized) {
                 $response['rotisserie_draft'] = $this->rotisserieDraftStateFor($game, $viewerUserId);
-            } elseif ($game['deck_type'] === 'tiered_rotisserie_draft' && $game['draft_match_id'] !== null) {
+            } elseif ($game['deck_type'] === 'tiered_rotisserie_draft' && $game['draft_match_id'] !== null && $draftInitialized) {
                 $response['tiered_rotisserie_draft'] = $this->tieredRotisserieDraftStateFor($game, $viewerUserId);
-            } elseif (($game['deck_type'] === 'sealed_deck' || array_key_exists($game['deck_type'], self::PERIODIC_SEALED_POOL_DECK_TYPES)) && $game['draft_match_id'] !== null) {
+            } elseif (($game['deck_type'] === 'sealed_deck' || array_key_exists($game['deck_type'], self::PERIODIC_SEALED_POOL_DECK_TYPES)) && $game['draft_match_id'] !== null && $draftInitialized) {
                 // Sealed Pool of the Day (issue #520) reuses the exact
                 // same 'sealed_deck' response field/UI as ordinary Sealed
                 // Deck -- deck-building is mechanically identical (see
@@ -19575,6 +19770,184 @@ final class GameService
     }
 
     /**
+     * Draft-family analogue of enforceSynchronousActionDeadline() above
+     * (increment 3) -- a 60-second-per-pick clock for all 5 draft-family
+     * deck_types, active only while draft_matches.status is 'drafting'
+     * (deck-building/sideboarding has no timer of its own yet; see
+     * php-app/README.md's own Synchronous mode roadmap for the
+     * match-wide chess clock that will eventually meter it).
+     *
+     * Deliberately reuses the exact same auto-pick machinery a practice
+     * bot's own idle turn already resolves through --
+     * advanceBotQuickDraftPick()/advanceBotWinstonDraftPick()/
+     * advanceBotGridDraftPick()/advanceBotRotisserieDraftPick()/
+     * advanceBotTieredRotisserieDraftPick() -- by simply passing every
+     * seated user id in place of a real bot user id list; none of those
+     * five methods check anything bot-specific beyond "is this user id
+     * in the list I was given," so a timed-out human is indistinguishable
+     * to them from an idle bot, and each already no-ops (or resolves the
+     * NEXT still-pending seat) when the one it's handed has already
+     * submitted. Unlike enforceSynchronousActionDeadline()'s own
+     * extension-banking/auto-resign escalation, a skipped draft pick has
+     * no notion of "forfeiting" anything -- the same heuristic a bot
+     * would use just picks FOR the idle player, so there's no extension
+     * bank or auto-concession here.
+     *
+     * Each call resolves at most one pick (the same "one action, let the
+     * loop call back around" convention advanceBotDraftTurn() itself
+     * follows) -- Quick Draft/Chaos Draft's own simultaneous-per-stage
+     * model can leave a second seat still overdue after this returns,
+     * resetSynchronousDraftPickDeadlineIfNeeded()'s own reset (fired by
+     * the pick this call just submitted) hands them a fresh window; a
+     * genuinely abandoned match (both seats gone) is instead caught by
+     * applySynchronousDraftAbandonment()'s own much coarser backstop.
+     */
+    public function enforceSynchronousDraftPickDeadline(int $gameId): void
+    {
+        try {
+            $game = $this->fetchGame($gameId);
+            if (!(bool) $game['synchronous_mode'] || $game['draft_match_id'] === null) {
+                return;
+            }
+
+            $draftMatchId = (int) $game['draft_match_id'];
+            $match = $this->fetchDraftMatch($draftMatchId);
+            if (
+                $match['pending_draft_init'] !== null
+                || $match['status'] !== 'drafting'
+                || $match['pick_deadline_at'] === null
+                || strtotime((string) $match['pick_deadline_at']) >= time()
+            ) {
+                return;
+            }
+
+            $userIds = $this->draftMatchUserIds($draftMatchId);
+            $resolved = match ($game['deck_type']) {
+                'quick_draft', 'chaos_draft' => $this->advanceBotQuickDraftPick($gameId, $draftMatchId, $match, $userIds),
+                'winston_draft' => $this->advanceBotWinstonDraftPick($gameId, $draftMatchId, $userIds),
+                'grid_draft' => $this->advanceBotGridDraftPick($gameId, $draftMatchId, $userIds),
+                'rotisserie_draft' => $this->advanceBotRotisserieDraftPick($gameId, $draftMatchId, $userIds),
+                'tiered_rotisserie_draft' => $this->advanceBotTieredRotisserieDraftPick($gameId, $draftMatchId, $userIds),
+                default => null,
+            };
+
+            if ($resolved !== null) {
+                $this->logEvent($gameId, null, null, 'timeout_applied', null, ['timeout_action' => 'auto_pick', 'synchronous' => true, 'draft_pick' => true]);
+            }
+        } catch (Throwable $e) {
+            error_log("enforceSynchronousDraftPickDeadline({$gameId}): timeout action failed -- " . $e);
+        }
+    }
+
+    /**
+     * (Re)sets draft_matches.pick_deadline_at to
+     * SYNCHRONOUS_DRAFT_PICK_TIMEOUT_SECONDS from now, or clears it once
+     * nothing is left to time -- called after every successful pick
+     * submission (submitQuickDraftPick()/submitWinstonDraftPick()/
+     * submitGridDraftPick()/submitRotisserieDraftPick()/
+     * submitTieredRotisserieDraftPick()) and once more from
+     * initializeDeferredSynchronousDraft() itself (for the very first
+     * pick, which has no earlier submission to reset from). A complete
+     * no-op outside synchronous mode -- pick_deadline_at is never read
+     * at all for a non-synchronous match, the same "inert unless the
+     * feature's own opt-in is set" convention every other
+     * synchronous-mode field follows.
+     */
+    private function resetSynchronousDraftPickDeadlineIfNeeded(int $gameId, int $draftMatchId): void
+    {
+        $game = $this->fetchGame($gameId);
+        if (!(bool) $game['synchronous_mode']) {
+            return;
+        }
+
+        $match = $this->fetchDraftMatch($draftMatchId);
+        $deadline = $match['status'] === 'drafting'
+            ? date('Y-m-d H:i:s', time() + self::SYNCHRONOUS_DRAFT_PICK_TIMEOUT_SECONDS)
+            : null;
+
+        Connection::get()->prepare('UPDATE draft_matches SET pick_deadline_at = :deadline WHERE id = :id')
+            ->execute(['deadline' => $deadline, 'id' => $draftMatchId]);
+    }
+
+    /**
+     * Synchronous mode's own 60-second draft-pick timer (increment 3):
+     * every draft-family deck_type BUT Quick Draft/Chaos Draft has one
+     * single "whose turn" column (current_player_user_id/
+     * current_turn_user_id) to read directly; Quick Draft/Chaos Draft's
+     * own simultaneous per-stage picks (see submitQuickDraftPick()'s own
+     * docblock) mean potentially EVERY seated player is still "on the
+     * clock" for the current stage at once, not just one -- this returns
+     * whichever of those two shapes actually applies, purely for
+     * surfacing to the client (see buildGameState()'s own
+     * 'draft_pick_deadline_usernames').
+     *
+     * @return int[] user ids currently expected to submit a pick
+     */
+    private function currentDraftPickUserIds(int $draftMatchId, string $deckType): array
+    {
+        $pdo = Connection::get();
+
+        $singleTurnColumnByDeckType = [
+            'winston_draft' => ['draft_winston_state', 'current_player_user_id'],
+            'grid_draft' => ['draft_grid_state', 'current_turn_user_id'],
+            'rotisserie_draft' => ['draft_rotisserie_state', 'current_turn_user_id'],
+            'tiered_rotisserie_draft' => ['draft_tiered_rotisserie_state', 'current_turn_user_id'],
+        ];
+        if (array_key_exists($deckType, $singleTurnColumnByDeckType)) {
+            [$table, $column] = $singleTurnColumnByDeckType[$deckType];
+            $stmt = $pdo->prepare("SELECT {$column} FROM {$table} WHERE draft_match_id = :id");
+            $stmt->execute(['id' => $draftMatchId]);
+            $userId = $stmt->fetchColumn();
+
+            return $userId === false ? [] : [(int) $userId];
+        }
+
+        if ($deckType !== 'quick_draft' && $deckType !== 'chaos_draft') {
+            return [];
+        }
+
+        $match = $this->fetchDraftMatch($draftMatchId);
+        $userIds = $this->draftMatchUserIds($draftMatchId);
+        $playerCount = count($userIds);
+        $roundNumber = (int) $match['current_round'];
+
+        $stageCountStmt = $pdo->prepare(
+            'SELECT COUNT(*) FROM draft_pile_stage_picks WHERE draft_match_id = :match_id AND round_number = :round AND stage_number = :stage'
+        );
+        $currentStage = null;
+        for ($stage = 1; $stage <= $playerCount; $stage++) {
+            $stageCountStmt->execute(['match_id' => $draftMatchId, 'round' => $roundNumber, 'stage' => $stage]);
+            if ((int) $stageCountStmt->fetchColumn() < $playerCount) {
+                $currentStage = $stage;
+                break;
+            }
+        }
+        if ($currentStage === null) {
+            return [];
+        }
+
+        $holdersStmt = $pdo->prepare(
+            'SELECT holder_user_id FROM draft_pile_stage_picks WHERE draft_match_id = :match_id AND round_number = :round AND stage_number = :stage'
+        );
+        $holdersStmt->execute(['match_id' => $draftMatchId, 'round' => $roundNumber, 'stage' => $currentStage]);
+        $alreadySubmittedHolderUserIds = array_map(intval(...), $holdersStmt->fetchAll(PDO::FETCH_COLUMN));
+
+        return array_values(array_diff($userIds, $alreadySubmittedHolderUserIds));
+    }
+
+    private function gamePlayerIdForUser(int $gameId, int $userId): int
+    {
+        $stmt = Connection::get()->prepare('SELECT id FROM game_players WHERE game_id = :game_id AND user_id = :user_id');
+        $stmt->execute(['game_id' => $gameId, 'user_id' => $userId]);
+        $id = $stmt->fetchColumn();
+        if ($id === false) {
+            throw new GameStateException("User {$userId} is not seated in game {$gameId}");
+        }
+
+        return (int) $id;
+    }
+
+    /**
      * applyTimeoutsForAllActiveGames()'s own abandonment-only backstop
      * for a synchronous-mode game (increment 2) -- see
      * self::SYNCHRONOUS_ABANDONMENT_GRACE_SECONDS' own docblock for why
@@ -19590,9 +19963,22 @@ final class GameService
      * enforceSynchronousActionDeadline()'s own auto-loss path logs,
      * just tagged 'abandoned' instead of 'consecutive' in the details so
      * the game log reads accurately either way.
+     *
+     * A synchronous draft-family match (increment 3) can be abandoned
+     * well before the underlying `games` row ever reaches 'in_progress'
+     * at all -- that only happens once drafting AND deck-building both
+     * finish and startGame() itself runs -- so a 'waiting' game defers
+     * to applySynchronousDraftAbandonment()'s own equivalent check
+     * against draft_matches.pick_deadline_at instead of the
+     * action_deadline_at/action_deadline_game_player_id pair below,
+     * which only ever apply to an in_progress game's own turn.
      */
     private function applySynchronousAbandonment(int $gameId, array $game): bool
     {
+        if ($game['status'] === 'waiting') {
+            return $this->applySynchronousDraftAbandonment($gameId, $game);
+        }
+
         if ($game['action_deadline_at'] === null || $game['action_deadline_game_player_id'] === null) {
             return false;
         }
@@ -19610,6 +19996,55 @@ final class GameService
         $round = $this->currentRound($gameId);
         $this->logEvent($gameId, (int) $round['id'], $idleGamePlayerId, 'timeout_applied', null, ['timeout_action' => 'resign', 'synchronous' => true, 'abandoned' => true]);
         $this->resignGame($gameId, $idleGamePlayerId);
+
+        return true;
+    }
+
+    /**
+     * applySynchronousAbandonment()'s own 'waiting' branch (increment
+     * 3) -- draft_matches.pick_deadline_at (the same 60-second-per-pick
+     * clock enforceSynchronousDraftPickDeadline() already ticks on every
+     * poll) doubles as this backstop's own signal -- once it's sat
+     * SYNCHRONOUS_ABANDONMENT_GRACE_SECONDS past due with nobody polling
+     * to trip that real-time enforcement, the match is resigned outright
+     * on behalf of whichever seat is a real human, rather than
+     * repeatedly auto-picking through an entire draft nobody is left to
+     * watch.
+     *
+     * Not yet initialized (pending_draft_init still set -- nobody's
+     * clicked Ready) and 'deck_building' (drafting already finished)
+     * both fall through as a no-op here -- the former has no deadline to
+     * compare against yet, and the latter's own untimed deck-building/
+     * sideboard abandonment is deferred to the match-wide chess clock
+     * (still unbuilt -- see php-app/README.md's own Synchronous mode
+     * roadmap).
+     */
+    private function applySynchronousDraftAbandonment(int $gameId, array $game): bool
+    {
+        if ($game['draft_match_id'] === null) {
+            return false;
+        }
+
+        $draftMatchId = (int) $game['draft_match_id'];
+        $match = $this->fetchDraftMatch($draftMatchId);
+        if ($match['pending_draft_init'] !== null || $match['status'] !== 'drafting' || $match['pick_deadline_at'] === null) {
+            return false;
+        }
+
+        $secondsPastDeadline = time() - strtotime((string) $match['pick_deadline_at']);
+        if ($secondsPastDeadline < self::SYNCHRONOUS_ABANDONMENT_GRACE_SECONDS) {
+            return false;
+        }
+
+        $botUserIds = $this->draftMatchBotUserIds($draftMatchId);
+        $humanUserIds = array_values(array_diff($this->draftMatchUserIds($draftMatchId), $botUserIds));
+        if ($humanUserIds === []) {
+            return false; // shouldn't happen -- a bot-only match never needed a ready check at all
+        }
+
+        $idleGamePlayerId = $this->gamePlayerIdForUser($gameId, $humanUserIds[0]);
+        $this->logEvent($gameId, null, $idleGamePlayerId, 'timeout_applied', null, ['timeout_action' => 'resign', 'synchronous' => true, 'abandoned' => true, 'draft_pick' => true]);
+        $this->resignFromDraftMatch($gameId, $idleGamePlayerId, $draftMatchId, (string) $game['format']);
 
         return true;
     }

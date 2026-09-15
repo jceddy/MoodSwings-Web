@@ -20516,4 +20516,268 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame(2, $extByPlayer[$p1]);
         self::assertSame(2, $extByPlayer[$p2]);
     }
+
+    // -- Synchronous mode, increment 3: 60s draft-pick timer --
+
+    public function testCreateGameAcceptsSynchronousModeForTwoPlayerDraft(): void
+    {
+        $userIds = [$this->insertUser('sync-draft-ok-p1'), $this->insertUser('sync-draft-ok-p2')];
+
+        $gameId = $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'winston_draft', winstonDraftPoolSource: 'random_48', synchronousMode: true);
+
+        self::assertSame(1, (int) $this->fetchGame($gameId)['synchronous_mode']);
+    }
+
+    // createGame() no longer deals a synchronous draft's first pile at
+    // all (see GameService::markReady()'s own docblock) -- confirmed
+    // here both by draft_matches.pending_draft_init still being set and
+    // by draft_winston_state simply not existing yet.
+    public function testCreateGameDefersDraftDealingForASynchronousMatchUntilBothPlayersAreReady(): void
+    {
+        $userIds = [$this->insertUser('sync-draft-defer-p1'), $this->insertUser('sync-draft-defer-p2')];
+        $gameId = $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'winston_draft', winstonDraftPoolSource: 'random_48', synchronousMode: true);
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        self::assertNotNull($this->fetchDraftMatch($draftMatchId)['pending_draft_init']);
+        $stmt = $this->pdo->prepare('SELECT COUNT(*) FROM draft_winston_state WHERE draft_match_id = :id');
+        $stmt->execute(['id' => $draftMatchId]);
+        self::assertSame(0, (int) $stmt->fetchColumn());
+    }
+
+    public function testGetStateWithholdsDraftStateUntilBothPlayersAreReadyForASynchronousDraft(): void
+    {
+        $userIds = [$this->insertUser('sync-draft-withhold-p1'), $this->insertUser('sync-draft-withhold-p2')];
+        $gameId = $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'winston_draft', winstonDraftPoolSource: 'random_48', synchronousMode: true);
+        $p1 = $this->games->gamePlayerIdFor($gameId, $userIds[0]);
+        $this->games->markReady($gameId, $p1); // only one seat ready -- drafting must not have started yet
+
+        $state = $this->games->getState($gameId, $userIds[0]);
+
+        self::assertNull($state['winston_draft']);
+        $readyByUserId = array_column($state['players'], 'ready', 'user_id');
+        self::assertFalse($readyByUserId[$userIds[1]]);
+    }
+
+    public function testMarkReadyDealsWinstonDraftsFirstPileAndSetsThePickDeadlineOnceBothPlayersAreReady(): void
+    {
+        $userIds = [$this->insertUser('sync-draft-deal-p1'), $this->insertUser('sync-draft-deal-p2')];
+        $gameId = $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'winston_draft', winstonDraftPoolSource: 'random_48', synchronousMode: true);
+        $p1 = $this->games->gamePlayerIdFor($gameId, $userIds[0]);
+        $p2 = $this->games->gamePlayerIdFor($gameId, $userIds[1]);
+
+        $this->games->markReady($gameId, $p1);
+        $result = $this->games->markReady($gameId, $p2);
+
+        self::assertTrue($result['all_ready']);
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        self::assertNull($this->fetchDraftMatch($draftMatchId)['pending_draft_init']);
+        $stateStmt = $this->pdo->prepare('SELECT current_player_user_id FROM draft_winston_state WHERE draft_match_id = :id');
+        $stateStmt->execute(['id' => $draftMatchId]);
+        self::assertNotFalse($stateStmt->fetchColumn(), 'the first pile must actually be dealt');
+        self::assertNotNull($this->fetchDraftMatch($draftMatchId)['pick_deadline_at']);
+    }
+
+    public function testGetStateExposesDraftPickDeadlineAndTheUsernameOnTheClockForAWinstonDraft(): void
+    {
+        $userIds = [$this->insertUser('sync-draft-state-p1'), $this->insertUser('sync-draft-state-p2')];
+        $usernames = ['sync-draft-state-p1', 'sync-draft-state-p2'];
+        $gameId = $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'winston_draft', winstonDraftPoolSource: 'random_48', synchronousMode: true);
+        $this->games->markReady($gameId, $this->games->gamePlayerIdFor($gameId, $userIds[0]));
+        $this->games->markReady($gameId, $this->games->gamePlayerIdFor($gameId, $userIds[1]));
+
+        $state = $this->games->getState($gameId, $userIds[0]);
+
+        self::assertNotNull($state['game']['draft_pick_deadline_at']);
+        self::assertCount(1, $state['game']['draft_pick_deadline_usernames']);
+        self::assertContains($state['game']['draft_pick_deadline_usernames'][0], $usernames);
+    }
+
+    // Quick Draft's own simultaneous-per-stage model (unlike Winston/
+    // Grid/Rotisserie/Tiered Rotisserie Draft's single current-turn
+    // column) can leave BOTH seats on the clock for the same stage at
+    // once -- see currentDraftPickUserIds()'s own docblock.
+    public function testGetStateExposesBothUsernamesOnTheClockForASynchronousQuickDraftStage(): void
+    {
+        $userIds = [$this->insertUser('sync-qdraft-both-p1'), $this->insertUser('sync-qdraft-both-p2')];
+        $gameId = $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'quick_draft', quickDraftPoolSource: 'random_48', synchronousMode: true);
+        $this->games->markReady($gameId, $this->games->gamePlayerIdFor($gameId, $userIds[0]));
+        $this->games->markReady($gameId, $this->games->gamePlayerIdFor($gameId, $userIds[1]));
+
+        $state = $this->games->getState($gameId, $userIds[0]);
+
+        self::assertNotNull($state['game']['draft_pick_deadline_at']);
+        self::assertCount(2, $state['game']['draft_pick_deadline_usernames']);
+    }
+
+    public function testSubmitWinstonDraftPickResetsThePickDeadline(): void
+    {
+        $userIds = [$this->insertUser('sync-draft-reset-p1'), $this->insertUser('sync-draft-reset-p2')];
+        $gameId = $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'winston_draft', winstonDraftPoolSource: 'random_48', synchronousMode: true);
+        $this->games->markReady($gameId, $this->games->gamePlayerIdFor($gameId, $userIds[0]));
+        $this->games->markReady($gameId, $this->games->gamePlayerIdFor($gameId, $userIds[1]));
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $originalDeadline = $this->fetchDraftMatch($draftMatchId)['pick_deadline_at'];
+        // Back-date the deadline so the reset after a real pick is
+        // unambiguously later, not just coincidentally close.
+        $this->pdo->prepare('UPDATE draft_matches SET pick_deadline_at = :deadline WHERE id = :id')
+            ->execute(['deadline' => date('Y-m-d H:i:s', time() - 30), 'id' => $draftMatchId]);
+        $stateStmt = $this->pdo->prepare('SELECT current_player_user_id FROM draft_winston_state WHERE draft_match_id = :id');
+        $stateStmt->execute(['id' => $draftMatchId]);
+        $currentPlayerUserId = (int) $stateStmt->fetchColumn();
+
+        $this->games->submitWinstonDraftPick($gameId, $currentPlayerUserId, 'pass');
+
+        $newDeadline = $this->fetchDraftMatch($draftMatchId)['pick_deadline_at'];
+        self::assertNotNull($newDeadline);
+        self::assertGreaterThan(strtotime((string) $originalDeadline) - 60, strtotime((string) $newDeadline));
+        self::assertGreaterThan(time(), strtotime((string) $newDeadline));
+    }
+
+    public function testEnforceSynchronousDraftPickDeadlineIsANoOpBeforeTheDeadline(): void
+    {
+        $userIds = [$this->insertUser('sync-draft-early-p1'), $this->insertUser('sync-draft-early-p2')];
+        $gameId = $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'winston_draft', winstonDraftPoolSource: 'random_48', synchronousMode: true);
+        $this->games->markReady($gameId, $this->games->gamePlayerIdFor($gameId, $userIds[0]));
+        $this->games->markReady($gameId, $this->games->gamePlayerIdFor($gameId, $userIds[1]));
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        $this->games->enforceSynchronousDraftPickDeadline($gameId);
+
+        $eventStmt = $this->pdo->prepare("SELECT COUNT(*) FROM game_events WHERE game_id = :game_id AND event_type = 'timeout_applied'");
+        $eventStmt->execute(['game_id' => $gameId]);
+        self::assertSame(0, (int) $eventStmt->fetchColumn());
+    }
+
+    public function testEnforceSynchronousDraftPickDeadlineAutoResolvesAnOverdueWinstonDraftPick(): void
+    {
+        $userIds = [$this->insertUser('sync-draft-auto-p1'), $this->insertUser('sync-draft-auto-p2')];
+        $gameId = $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'winston_draft', winstonDraftPoolSource: 'random_48', synchronousMode: true);
+        $this->games->markReady($gameId, $this->games->gamePlayerIdFor($gameId, $userIds[0]));
+        $this->games->markReady($gameId, $this->games->gamePlayerIdFor($gameId, $userIds[1]));
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $stateStmt = $this->pdo->prepare('SELECT current_player_user_id FROM draft_winston_state WHERE draft_match_id = :id');
+        $stateStmt->execute(['id' => $draftMatchId]);
+        $idleUserId = (int) $stateStmt->fetchColumn();
+        $this->pdo->prepare('UPDATE draft_matches SET pick_deadline_at = :deadline WHERE id = :id')
+            ->execute(['deadline' => date('Y-m-d H:i:s', time() - 5), 'id' => $draftMatchId]);
+
+        $this->games->enforceSynchronousDraftPickDeadline($gameId);
+
+        $eventStmt = $this->pdo->prepare("SELECT details FROM game_events WHERE game_id = :game_id AND event_type = 'timeout_applied' ORDER BY id DESC LIMIT 1");
+        $eventStmt->execute(['game_id' => $gameId]);
+        $details = json_decode((string) $eventStmt->fetchColumn(), true);
+        self::assertNotNull($details, 'the overdue pick must have been auto-resolved and logged');
+        self::assertTrue($details['draft_pick']);
+        self::assertSame('auto_pick', $details['timeout_action']);
+        // Either this player's drafted pool grew (a 'take') or the
+        // active pile/turn moved on (a 'pass') -- either way, the pick
+        // deadline itself must have been reset for whatever comes next.
+        self::assertNotNull($this->fetchDraftMatch($draftMatchId)['pick_deadline_at']);
+    }
+
+    public function testEnforceSynchronousDraftPickDeadlineAutoResolvesOnlyOneOverdueQuickDraftStagePick(): void
+    {
+        $userIds = [$this->insertUser('sync-qdraft-auto-p1'), $this->insertUser('sync-qdraft-auto-p2')];
+        $gameId = $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'quick_draft', quickDraftPoolSource: 'random_48', synchronousMode: true);
+        $this->games->markReady($gameId, $this->games->gamePlayerIdFor($gameId, $userIds[0]));
+        $this->games->markReady($gameId, $this->games->gamePlayerIdFor($gameId, $userIds[1]));
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $this->pdo->prepare('UPDATE draft_matches SET pick_deadline_at = :deadline WHERE id = :id')
+            ->execute(['deadline' => date('Y-m-d H:i:s', time() - 5), 'id' => $draftMatchId]);
+
+        $this->games->enforceSynchronousDraftPickDeadline($gameId);
+
+        $countStmt = $this->pdo->prepare(
+            'SELECT COUNT(*) FROM draft_pile_stage_picks WHERE draft_match_id = :id AND round_number = 1 AND stage_number = 1'
+        );
+        $countStmt->execute(['id' => $draftMatchId]);
+        self::assertSame(1, (int) $countStmt->fetchColumn(), 'one call resolves at most one overdue pick, mirroring a bot\'s own idle-turn advance');
+    }
+
+    public function testApplyTimeoutsForAllActiveGamesIgnoresASynchronousDraftMatchOnlyRecentlyPastDeadline(): void
+    {
+        $userIds = [$this->insertUser('sync-draft-recent-p1'), $this->insertUser('sync-draft-recent-p2')];
+        $gameId = $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'winston_draft', winstonDraftPoolSource: 'random_48', synchronousMode: true);
+        $this->games->markReady($gameId, $this->games->gamePlayerIdFor($gameId, $userIds[0]));
+        $this->games->markReady($gameId, $this->games->gamePlayerIdFor($gameId, $userIds[1]));
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $this->pdo->prepare('UPDATE draft_matches SET pick_deadline_at = :deadline WHERE id = :id')
+            ->execute(['deadline' => date('Y-m-d H:i:s', time() - 10), 'id' => $draftMatchId]);
+
+        self::assertSame(0, $this->games->applyTimeoutsForAllActiveGames());
+        self::assertSame('waiting', $this->fetchGame($gameId)['status']);
+    }
+
+    public function testApplyTimeoutsForAllActiveGamesResignsAnAbandonedSynchronousDraftMatchAfterTheGraceThreshold(): void
+    {
+        $userIds = [$this->insertUser('sync-draft-abandon-p1'), $this->insertUser('sync-draft-abandon-p2')];
+        $gameId = $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'winston_draft', winstonDraftPoolSource: 'random_48', synchronousMode: true);
+        $this->games->markReady($gameId, $this->games->gamePlayerIdFor($gameId, $userIds[0]));
+        $this->games->markReady($gameId, $this->games->gamePlayerIdFor($gameId, $userIds[1]));
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $this->pdo->prepare('UPDATE draft_matches SET pick_deadline_at = :deadline WHERE id = :id')
+            ->execute(['deadline' => date('Y-m-d H:i:s', time() - 301), 'id' => $draftMatchId]);
+
+        self::assertSame(1, $this->games->applyTimeoutsForAllActiveGames());
+
+        self::assertSame('abandoned', $this->fetchGame($gameId)['status']);
+        self::assertSame('completed', $this->fetchDraftMatch($draftMatchId)['status']);
+    }
+
+    // Sealed Deck has no live drafting phase of its own (initializeSealedDeck()
+    // just flips draft_matches straight to 'deck_building') -- confirmed
+    // here that the ready check still gates that transition for a
+    // synchronous match, the same as every other draft-family deck_type.
+    public function testMarkReadyMovesASynchronousSealedDeckMatchStraightToDeckBuildingOnceBothPlayersAreReady(): void
+    {
+        $userIds = [$this->insertUser('sync-sealed-p1'), $this->insertUser('sync-sealed-p2')];
+        $gameId = $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'sealed_deck', synchronousMode: true);
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        self::assertSame('drafting', $this->fetchDraftMatch($draftMatchId)['status'], 'still gated on the ready check');
+
+        $this->games->markReady($gameId, $this->games->gamePlayerIdFor($gameId, $userIds[0]));
+        $this->games->markReady($gameId, $this->games->gamePlayerIdFor($gameId, $userIds[1]));
+
+        self::assertSame('deck_building', $this->fetchDraftMatch($draftMatchId)['status']);
+        self::assertNull($this->fetchDraftMatch($draftMatchId)['pending_draft_init']);
+    }
+
+    // advanceDraftMatch()'s own next-game INSERT didn't originally carry
+    // synchronous_mode forward at all (drafting under synchronous mode
+    // didn't exist yet when it was written) -- confirmed fixed here:
+    // game 2 of a best-of-three synchronous Quick Draft match is itself
+    // synchronous, and gets its own fresh (unready) game_players rows,
+    // exactly the way every other match-carried opt-in already works.
+    public function testSynchronousModeCarriesForwardToGame2OfABestOfThreeDraftMatch(): void
+    {
+        $u1 = $this->insertUser('sync-qdraft-match-p1');
+        $u2 = $this->insertUser('sync-qdraft-match-p2');
+        $gameId = $this->games->createGame(
+            $u1,
+            [$u1, $u2],
+            format: 'draft',
+            winsNeeded: 1,
+            deckType: 'quick_draft',
+            quickDraftPoolSource: 'random_48',
+            synchronousMode: true,
+        );
+        $this->games->markReady($gameId, $this->games->gamePlayerIdFor($gameId, $u1));
+        $this->games->markReady($gameId, $this->games->gamePlayerIdFor($gameId, $u2));
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+        $this->submitFullQuickDraftDeck($gameId, $u1);
+        $this->submitFullQuickDraftDeck($gameId, $u2);
+        $this->games->startGame($gameId);
+
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $u1));
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $nextGameStmt = $this->pdo->prepare('SELECT id FROM games WHERE draft_match_id = :match_id AND match_game_number = 2');
+        $nextGameStmt->execute(['match_id' => $draftMatchId]);
+        $nextGameId = (int) $nextGameStmt->fetchColumn();
+
+        self::assertSame(1, (int) $this->fetchGame($nextGameId)['synchronous_mode']);
+        $readyStmt = $this->pdo->prepare('SELECT COUNT(*) FROM game_players WHERE game_id = :game_id AND ready_at IS NOT NULL');
+        $readyStmt->execute(['game_id' => $nextGameId]);
+        self::assertSame(0, (int) $readyStmt->fetchColumn(), 'game 2 needs its own fresh ready check');
+    }
 }
