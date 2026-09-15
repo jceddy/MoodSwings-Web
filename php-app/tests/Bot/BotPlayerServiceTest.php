@@ -4388,6 +4388,55 @@ final class BotPlayerServiceTest extends TestCase
     }
 
     /**
+     * Reported live via a real game's own crash log: a bug caught for
+     * Denial (id 34) specifically -- unlike every other repeat above,
+     * Denial's own after-playing effect is being asked to repeat ITSELF
+     * (source card id 34), which -- unlike a fresh play -- means Denial
+     * is already among the bot's own in-play moods by this point (see
+     * resolveAfterPlayingChain()'s own docblock). Denial's own printed
+     * value (1) and hasAfterPlaying make it satisfy
+     * qualifiesForDenialReplay() itself, and it shares the same value (1)
+     * as Charity (id 3, also in play, also value 1) -- with no opponent
+     * mood in play to satisfy priorities 1/2 instead, denialReplayTargetMoodIds()
+     * used to pair Denial with Charity as its own two "replay" targets,
+     * which DenialEffect itself then rejected outright (its own
+     * `$targetCardId === $cardId` guard) with an InvalidChoiceException,
+     * stalling the whole game. With only one OTHER qualifying own mood in
+     * play, excluding Denial itself leaves no legal second target to pair
+     * Charity with, so the repeat is correctly declined instead.
+     */
+    public function testChooseDecisionAnswerRepeatingDenialNeverTargetsItself(): void
+    {
+        $state = $this->boardState(hands: [1 => [34, 3]]);
+        $state->moveHandToInPlay(1, 34);
+        $state->moveHandToInPlay(1, 3);
+
+        $answer = $this->bot->chooseDecisionAnswer($state, ['key' => 'duplicity_repeat'], 1, 'duplicity_repeat_offer', 34);
+
+        self::assertSame([], $answer);
+    }
+
+    /**
+     * Same setup as testChooseActionTargetsOwnLowValueAfterPlayingPairWhenPlayingDenialWithNoWinningOpponentPair()
+     * above, except Denial (id 34) is ALSO already in play here (repeating
+     * itself, not a fresh play) -- confirms Denial being among the bot's
+     * own in-play moods doesn't change Charity (id 3)/Kindness (id 17)
+     * still correctly pairing with EACH OTHER, and that Denial itself is
+     * never a third option considered.
+     */
+    public function testChooseDecisionAnswerRepeatingDenialStillPairsTwoOtherOwnMoods(): void
+    {
+        $state = $this->boardState(hands: [1 => [34, 3, 17]]);
+        $state->moveHandToInPlay(1, 34);
+        $state->moveHandToInPlay(1, 3);
+        $state->moveHandToInPlay(1, 17);
+
+        $answer = $this->bot->chooseDecisionAnswer($state, ['key' => 'duplicity_repeat'], 1, 'duplicity_repeat_offer', 34);
+
+        self::assertSame(['duplicity_repeat' => ['repeat' => true, 'choices' => ['target_mood_ids' => [3, 17]]]], $answer);
+    }
+
+    /**
      * Reported live: "could we add some kind of reasoning text for the
      * default bots? like if they're using a specific card override rule
      * or something like that when making their decisions?" --

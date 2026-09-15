@@ -1,0 +1,17 @@
+-- Reported live via a real game's own crash log: BotPlayerService's own
+-- Denial-targeting policy (denialReplayTargetMoodIds()/
+-- bestDenialReplayPartner()) could choose Denial's own currently-
+-- resolving instance as one of its own two "replay" targets once it was
+-- the only "cheap own mood with an after-playing ability" left in play --
+-- normally masked by an opponent pair satisfying an earlier priority
+-- first, but reachable via a Duplicity-granted repeat of Denial's own
+-- effect immediately after its first resolution already moved the only
+-- qualifying opponent moods off the board. DenialEffect's own
+-- `$targetCardId === $cardId` guard then threw InvalidChoiceException,
+-- stalling the game -- advanceAutomatedTurns() re-threw on every request
+-- that touched it. See php-app/README.md's "Denial"/"Rejection" bot
+-- targeting section for the full writeup.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.42.3' WHERE id = 1;

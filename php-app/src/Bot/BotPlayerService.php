@@ -3876,7 +3876,7 @@ final class BotPlayerService
             return $significantSwingTargetMoodIds;
         }
 
-        return $this->denialReplayTargetMoodIds($state, $botGamePlayerId) ?? [];
+        return $this->denialReplayTargetMoodIds($state, $cardId, $botGamePlayerId) ?? [];
     }
 
     /**
@@ -4053,13 +4053,30 @@ final class BotPlayerService
      * denialWinningTargetMoodIds()'s own identical convention only by
      * which caller consults it.
      *
+     * $cardId (Denial's own currently-resolving instance) is excluded
+     * from both the initial candidate pool and bestDenialReplayPartner()'s
+     * own partner search below -- Denial's printed text targets "two
+     * OTHER moods" (DenialEffect's own `$targetCardId === $cardId` guard
+     * rejects it outright), but by the time this runs $cardId is already
+     * among the bot's own in-play moods (see resolveAfterPlayingChain()'s
+     * own docblock), and -- at printed value 1 with its own
+     * hasAfterPlaying ability -- happens to satisfy
+     * qualifiesForDenialReplay() itself. A bug caught live: normally some
+     * other opponent pair already satisfies priority 1/2 first, but once
+     * this priority is actually reached with few candidates left (e.g. a
+     * Duplicity-granted repeat of this same Denial, immediately after its
+     * own first resolution already returned the only qualifying opponent
+     * moods to hand), Denial ended up choosing itself as one of its own
+     * two targets, which DenialEffect then rejected as an
+     * InvalidChoiceException.
+     *
      * @return ?int[]
      */
-    private function denialReplayTargetMoodIds(BoardState $state, int $botGamePlayerId): ?array
+    private function denialReplayTargetMoodIds(BoardState $state, int $cardId, int $botGamePlayerId): ?array
     {
         $replayCandidateIds = [];
         foreach ($state->moodsOwnedBy($botGamePlayerId) as $mood) {
-            if ($this->qualifiesForDenialReplay($state, $mood->cardId)) {
+            if ($mood->cardId !== $cardId && $this->qualifiesForDenialReplay($state, $mood->cardId)) {
                 $replayCandidateIds[] = $mood->cardId;
             }
         }
@@ -4069,7 +4086,7 @@ final class BotPlayerService
         }
 
         foreach ($replayCandidateIds as $candidateId) {
-            $partnerId = $this->bestDenialReplayPartner($state, $botGamePlayerId, $candidateId);
+            $partnerId = $this->bestDenialReplayPartner($state, $cardId, $botGamePlayerId, $candidateId);
             if ($partnerId !== null) {
                 return [$candidateId, $partnerId];
             }
@@ -4095,8 +4112,15 @@ final class BotPlayerService
      * more it's worth knocking back to their hand) over any other one of
      * the bot's own moods, so the "filler" second target never costs the
      * bot a second good card just to enable one cheap replay.
+     *
+     * $cardId (Denial's own currently-resolving instance, excluded from
+     * denialReplayTargetMoodIds()'s own $forCardId candidates already --
+     * see that method's docblock) is excluded here too: without this, a
+     * DIFFERENT cheap own mood searching for a partner could still land
+     * on Denial itself as its own "fallback own mood" pick, the same
+     * illegal self-target DenialEffect rejects.
      */
-    private function bestDenialReplayPartner(BoardState $state, int $botGamePlayerId, int $forCardId): ?int
+    private function bestDenialReplayPartner(BoardState $state, int $cardId, int $botGamePlayerId, int $forCardId): ?int
     {
         $bestOpponentId = null;
         $bestOpponentValue = -1;
@@ -4104,7 +4128,7 @@ final class BotPlayerService
 
         foreach ($state->moodsInPlay() as $mood) {
             $candidateId = $mood->cardId;
-            if ($candidateId === $forCardId || !$this->sameColorOrValue($state, $forCardId, $candidateId)) {
+            if ($candidateId === $forCardId || $candidateId === $cardId || !$this->sameColorOrValue($state, $forCardId, $candidateId)) {
                 continue;
             }
 

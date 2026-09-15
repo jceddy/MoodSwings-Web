@@ -8543,7 +8543,23 @@ since it already holds that dependency):
     (preferring their highest-value one, since the bot loses nothing by
     touching it) over a SECOND one of the bot's own moods, so the
     "filler" second target never costs the bot a good card of its own
-    just to enable one cheap replay.
+    just to enable one cheap replay. Both `denialReplayTargetMoodIds()`
+    and `bestDenialReplayPartner()` explicitly exclude Denial's own
+    currently-resolving `$cardId` from every candidate pool they build
+    -- a bug caught live via a crash log: Denial is itself blue, value 1,
+    with its own `hasAfterPlaying` ability, so it qualifies as one of its
+    own "cheap own mood" replay candidates the moment it's in play (see
+    `resolveAfterPlayingChain()`'s own docblock for why `$cardId` is
+    already among the bot's own in-play moods by this point) -- normally
+    masked by priority 1/2 finding a real opponent pair first, but a
+    Duplicity-granted repeat of Denial's own effect, immediately after
+    its first resolution already moved the only qualifying opponent
+    moods off the board, could reach priority 3 with Denial as its only
+    remaining "candidate," pairing it with itself and crashing
+    `DenialEffect`'s own `$targetCardId === $cardId` guard
+    (`InvalidChoiceException`), stalling the game (`advanceAutomatedTurns()`
+    throwing on every subsequent request that touched it, per
+    `app/index.php`'s own unconditional call).
 
   Returns `[]` (Denial still legally playable as a plain 1-point blue
   mood, per `DenialEffect`'s own `if ($targets === []) { return; }`)
