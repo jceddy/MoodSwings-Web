@@ -1652,6 +1652,50 @@ still-blue icon can legitimately jump straight to being auto-resigned
 between two refreshes if that player's own turn runs very long; the
 point is an early warning at a glance, not a precise real-time clock.
 
+**Follow-up: action-timeout warning icon + notification preference**
+(reported live: "add some kind of indicator for action timeout if it's
+close (like within 15 minutes)... also send a notification if either the
+action timeout or full game chess clock timeout becomes less than 15
+minutes left") -- a second, DIFFERENT stat icon from the chess-clock one
+above: `state.game.action_timeout_warning`
+(`{"game_player_id", "seconds_remaining"} | null`, backed by
+`GameService::buildActionTimeoutWarning()`) is only ever non-null while
+someone's currently idle turn/decision under `timeout_minutes` has 15
+minutes or less left before it fires, so the frontend never needs its
+own "is this close" threshold check -- it just renders whenever the
+field isn't null, on whichever single Players-list row matches
+`game_player_id`.
+
+`buildActionTimeoutWarningStat()` builds it via the same
+`buildPlayerStat()` icon+badge convention as every other stat on this
+row, with its own icon (`PLAYER_STAT_ICON_PATHS.actionTimeoutWarning`, a
+plain alarm bell) deliberately a different SILHOUETTE from both
+`timeUsed`'s clock face just above it (the full-game time BUDGET,
+always shown once configured) and `pendingDecision`'s hourglass flag
+(a delayed CHOICE awaiting an answer, not a countdown to an automatic
+one) -- so a row showing more than one of these at once still reads as
+three different things at a glance, not the same icon recolored three
+ways. Badge text is whole minutes (`"12m"`, `"<1m"` under one), with the
+full "About N minute(s) left before this turn times out."/"Less than a
+minute left..." wording in the tooltip/aria-label. Unlike the chess-clock
+stat, there's no "comfortable" default color here -- `.player-stat--actionTimeoutWarning`
+(amber, `--color-pending`) is the base state (since this icon only ever
+appears once it's already a warning), escalating to
+`.player-stat--actionTimeoutWarning-danger` (red, `--color-error`) under
+5 minutes remaining.
+
+**Notification preference**: a new `#notify-timeout-warning-checkbox` in
+the Settings dialog's "Notify me when..." fieldset ("A turn or full-game
+timeout is less than 15 minutes away"), wired exactly like the four
+existing `notify_*` checkboxes (`notify_timeout_warning`, migration 0327
+in `php-app/README.md`, defaults on) -- backs
+`NotificationService::notifyTimeoutWarning()`, sent from
+`GameService::sendTimeoutWarningIfClose()` (part of the same 15-minute
+`applyTimeoutsForAllActiveGames()` sweep the visual indicator's own data
+comes from) for either the per-turn timeout OR the full-game total-time
+limit crossing under 15 minutes remaining, whichever seated player it's
+actually about.
+
 ## Pages
 
 - `index.html` (`/`) — Login form. If the visitor already has an active

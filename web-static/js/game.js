@@ -228,6 +228,7 @@
         const friendRequestCheckbox = document.getElementById('notify-friend-request-checkbox');
         const gameFinishedCheckbox = document.getElementById('notify-game-finished-checkbox');
         const chatMessageCheckbox = document.getElementById('notify-chat-message-checkbox');
+        const timeoutWarningCheckbox = document.getElementById('notify-timeout-warning-checkbox');
         const disableCooldownCheckbox = document.getElementById('disable-cooldown-checkbox');
 
         const supported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
@@ -255,6 +256,7 @@
                     friendRequestCheckbox.checked = body.preferences.notify_friend_request;
                     gameFinishedCheckbox.checked = body.preferences.notify_game_finished;
                     chatMessageCheckbox.checked = body.preferences.notify_chat_message;
+                    timeoutWarningCheckbox.checked = body.preferences.notify_timeout_warning;
                     disableCooldownCheckbox.checked = body.preferences.disable_cooldown;
                 }
             }
@@ -504,6 +506,7 @@
                 notify_friend_request: friendRequestCheckbox.checked,
                 notify_game_finished: gameFinishedCheckbox.checked,
                 notify_chat_message: chatMessageCheckbox.checked,
+                notify_timeout_warning: timeoutWarningCheckbox.checked,
                 disable_cooldown: disableCooldownCheckbox.checked,
             });
         }
@@ -511,6 +514,7 @@
         friendRequestCheckbox.addEventListener('change', savePreferences);
         gameFinishedCheckbox.addEventListener('change', savePreferences);
         chatMessageCheckbox.addEventListener('change', savePreferences);
+        timeoutWarningCheckbox.addEventListener('change', savePreferences);
         disableCooldownCheckbox.addEventListener('change', savePreferences);
     }
 
@@ -5908,6 +5912,17 @@
         // than another solid dot/blob among the filled icons above.
         timeUsed: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/>'
             + '<path d="M12 7 V12 L16 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
+        // Issue #85 follow-up's own "indicator for action timeout if it's
+        // close" -- a plain alarm bell, deliberately a different SILHOUETTE
+        // from both timeUsed's clock face just above (that one's the
+        // optional full-game time budget, always shown once configured)
+        // and pendingDecision's hourglass below (a delayed CHOICE awaiting
+        // an answer, not a countdown to an automatic one) -- distinct
+        // shapes so a row showing more than one of these at once still
+        // reads as three different things at a glance, not the same icon
+        // recolored three ways.
+        actionTimeoutWarning: '<path d="M12 2a1 1 0 0 1 1 1v.6c3.4.9 5.8 4 5.8 7.6v3.4l1.7 2.6a1 1 0 0 1-.84 1.55H4.34a1 1 0 0 1-.84-1.55l1.7-2.6V11.2c0-3.6 2.4-6.7 5.8-7.6V3a1 1 0 0 1 1-1Z"/>'
+            + '<path d="M9.2 20.2a2.8 2.8 0 0 0 5.6 0Z"/>',
         // Team affiliation (Open/Closed Team Play only, player.team_id !==
         // null): a heraldic shield, reported live as hard to distinguish
         // for colorblind users when the two teams were told apart by color
@@ -6186,6 +6201,25 @@
         const label = formatDurationLong(activeSecondsUsed) + ' used of a ' + (totalTimeLimitMinutes / 60) + '-hour total time limit';
 
         return buildPlayerStat('timeUsed', formatDurationCompact(activeSecondsUsed), label, severityClass);
+    }
+
+    // Issue #85 follow-up: "add some kind of indicator for action timeout
+    // if it's close (like within 15 minutes)" -- $secondsRemaining only
+    // ever arrives here already inside that 15-minute window (see
+    // state.game.action_timeout_warning/buildActionTimeoutWarning() on the
+    // backend), so this is purely a display formatter, not another
+    // threshold check. Escalates to --color-error under 5 minutes left,
+    // the same --color-pending -> --color-error severity language
+    // buildPlayerTimeUsedStat() just above already established, just with
+    // only one step (there's no "comfortable" state to render here at all
+    // -- if this is showing, it's already a warning).
+    function buildActionTimeoutWarningStat(secondsRemaining) {
+        const minutes = Math.floor(secondsRemaining / 60);
+        const badge = minutes < 1 ? '<1m' : minutes + 'm';
+        const label = (minutes < 1 ? 'Less than a minute' : 'About ' + minutes + ' minute(s)') + ' left before this turn times out.';
+        const severityClass = secondsRemaining <= 300 ? 'player-stat--actionTimeoutWarning-danger' : null;
+
+        return buildPlayerStat('actionTimeoutWarning', badge, label, severityClass);
     }
 
     function renderBoard(state) {
@@ -6479,6 +6513,16 @@
                 // game? Kind of like a chess clock display."
                 if (state.game.total_time_limit_minutes !== null) {
                     iconsEl.appendChild(buildPlayerTimeUsedStat(player.active_seconds_used, state.game.total_time_limit_minutes));
+                }
+                // Issue #85 follow-up's own action-timeout warning --
+                // state.game.action_timeout_warning is null except on
+                // whichever single row is both currently idle and within
+                // 15 minutes of its own timeout_minutes clock firing (see
+                // buildActionTimeoutWarning() on the backend), so this
+                // never needs its own "is it this player's turn" check
+                // here -- the game_player_id match already is one.
+                if (state.game.action_timeout_warning !== null && state.game.action_timeout_warning.game_player_id === player.game_player_id) {
+                    iconsEl.appendChild(buildActionTimeoutWarningStat(state.game.action_timeout_warning.seconds_remaining));
                 }
                 if (wentFirst) {
                     iconsEl.appendChild(buildPlayerFlag('wentFirst', 'Went first this round'));

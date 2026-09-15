@@ -162,4 +162,33 @@ final class NotificationServiceMultiChannelTest extends TestCase
         self::addToAssertionCount(1); // reaching this line without throwing is the assertion
         self::assertFalse($this->cooldowns->wasNotifiedRecently($userId, NotificationScope::forGame(4), 300));
     }
+
+    // Issue #85 follow-up's own notifyTimeoutWarning() -- same fan-out/
+    // cooldown machinery every other notifyXxx() method already shares
+    // via notify(), just confirmed here for this one specific method
+    // rather than assuming it purely by inspection.
+    public function testNotifyTimeoutWarningDeliversAndMarksTheGameScopeCooldown(): void
+    {
+        $userId = $this->insertUser('timeout-warning-delivers');
+        $liveChannel = $this->stubChannel(true);
+
+        $this->service([$liveChannel])->notifyTimeoutWarning($userId, 5, 'Your turn will time out soon.');
+
+        self::assertSame(1, $liveChannel->calls);
+        self::assertTrue($this->cooldowns->wasNotifiedRecently($userId, NotificationScope::forGame(5), 300));
+    }
+
+    // Its own notify_timeout_warning preference (migration 0327) gates it
+    // independently of notify_your_turn/etc, the same way notify_chat_message
+    // already does for notifyNewChatMessage().
+    public function testNotifyTimeoutWarningRespectsItsOwnOffPreference(): void
+    {
+        $userId = $this->insertUser('timeout-warning-off');
+        $this->preferences->save($userId, true, true, true, false, true, notifyTimeoutWarning: false);
+        $liveChannel = $this->stubChannel(true);
+
+        $this->service([$liveChannel])->notifyTimeoutWarning($userId, 6, 'Your turn will time out soon.');
+
+        self::assertSame(0, $liveChannel->calls);
+    }
 }

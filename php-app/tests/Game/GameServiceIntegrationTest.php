@@ -20005,4 +20005,111 @@ final class GameServiceIntegrationTest extends TestCase
 
         self::assertSame('completed', $this->fetchGame($gameId)['status']);
     }
+
+    private function userIdForGamePlayerInTest(int $gamePlayerId): int
+    {
+        $stmt = $this->pdo->prepare('SELECT user_id FROM game_players WHERE id = :id');
+        $stmt->execute(['id' => $gamePlayerId]);
+
+        return (int) $stmt->fetchColumn();
+    }
+
+    // Issue #85 follow-up: "add some kind of indicator for action timeout
+    // if it's close (like within 15 minutes)" -- game.action_timeout_warning,
+    // backed by GameService::buildActionTimeoutWarning(). 30-minute timeout,
+    // 20 minutes elapsed -- 10 minutes (600s) remain, inside the 15-minute
+    // window.
+    public function testGetStateExposesActionTimeoutWarningWithin15MinutesOfTheOrdinaryTimeout(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1] = $this->buildTimeoutTurnFixture(30, 'skip');
+        $this->pdo->prepare('UPDATE games SET last_move_at = NOW() - INTERVAL 20 MINUTE WHERE id = :id')->execute(['id' => $gameId]);
+
+        $state = $this->games->getState($gameId, $this->userIdForGamePlayerInTest($p1));
+
+        self::assertNotNull($state['game']['action_timeout_warning']);
+        self::assertSame($p1, $state['game']['action_timeout_warning']['game_player_id']);
+        self::assertGreaterThan(0, $state['game']['action_timeout_warning']['seconds_remaining']);
+        self::assertLessThanOrEqual(900, $state['game']['action_timeout_warning']['seconds_remaining']);
+    }
+
+    // Same 30-minute timeout, only 5 minutes elapsed -- 25 minutes still
+    // remain, well outside the 15-minute window, so nothing should show.
+    public function testGetStateHidesActionTimeoutWarningWhenNotYetClose(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1] = $this->buildTimeoutTurnFixture(30, 'skip');
+        $this->pdo->prepare('UPDATE games SET last_move_at = NOW() - INTERVAL 5 MINUTE WHERE id = :id')->execute(['id' => $gameId]);
+
+        $state = $this->games->getState($gameId, $this->userIdForGamePlayerInTest($p1));
+
+        self::assertNull($state['game']['action_timeout_warning']);
+    }
+
+    public function testGetStateHidesActionTimeoutWarningWhenTimeoutsAreOff(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1] = $this->buildThreePlayerFixture();
+
+        $state = $this->games->getState($gameId, $u1);
+
+        self::assertNull($state['game']['action_timeout_warning']);
+    }
+
+    // Bots are never left idle long enough for this to mean anything (see
+    // applyTimeoutToGame()'s own docblock) -- the indicator must stay
+    // hidden the same way real timeout enforcement stays a no-op for one.
+    public function testGetStateHidesActionTimeoutWarningWhenTheIdlePlayerIsABot(): void
+    {
+        $u1 = $this->insertUser('timeout-warning-bot-human-' . uniqid());
+        $botUserId = $this->insertBotUser('timeout-warning-bot-' . uniqid());
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed, timeout_minutes, timeout_action, last_move_at)
+             VALUES ('standard', 'in_progress', :created_by, 3, 30, 'resign', NOW() - INTERVAL 20 MINUTE)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+        $this->insertGameCard($gameId, 55, 'hand', $botPlayerId);
+        $this->insertGameRound($gameId, 1, $p1, $botPlayerId, 1);
+
+        $state = $this->games->getState($gameId, $u1);
+
+        self::assertNull($state['game']['action_timeout_warning']);
+    }
+
+    // applyTimeoutsForAllActiveGames()'s other half: "send a notification
+    // if either the action timeout or the full game chess clock timeout
+    // becomes less than 15 minutes left" (GameService::sendTimeoutWarningIfClose()).
+    // Wired with a real NotificationService the same way
+    // testPlayMoodStillAdvancesTurnWhenPushNotificationsAreWired() is --
+    // no push_subscriptions/Discord accounts exist for this fixture's
+    // users, so notify() never touches the network; what's under test is
+    // that the sweep itself neither acts on the idle player nor throws
+    // while a game merely sits inside the warning window.
+    public function testApplyTimeoutsSendsAWarningWithoutActingWhenWithin15MinutesOfTheOrdinaryTimeout(): void
+    {
+        ['gameId' => $gameId, 'handCardId' => $handCardId] = $this->buildTimeoutTurnFixture(30, 'skip');
+        $this->pdo->prepare('UPDATE games SET last_move_at = NOW() - INTERVAL 20 MINUTE WHERE id = :id')->execute(['id' => $gameId]);
+
+        $games = $this->gamesWithNotificationsWired();
+        self::assertSame(0, $games->applyTimeoutsForAllActiveGames(), 'still inside the warning window, not yet due for the ordinary timeout_action itself');
+
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
+        $cardStmt = $this->pdo->prepare('SELECT zone FROM game_cards WHERE id = :id');
+        $cardStmt->execute(['id' => $handCardId]);
+        self::assertSame('hand', $cardStmt->fetchColumn(), 'a warning must never itself act on the idle player\'s behalf');
+    }
+
+    // 60-minute limit, used 50 of it, idle 5 more minutes -- 55 projected
+    // minutes is within 15 minutes of (but not past) the 60-minute cap.
+    public function testApplyTimeoutsSendsAWarningWithoutActingWhenWithin15MinutesOfTheTotalTimeLimit(): void
+    {
+        ['gameId' => $gameId] = $this->buildTotalTimeLimitFixture(60, 50 * 60, 5);
+
+        $games = $this->gamesWithNotificationsWired();
+        self::assertSame(0, $games->applyTimeoutsForAllActiveGames());
+
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
+    }
 }

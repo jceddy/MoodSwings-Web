@@ -659,7 +659,8 @@ if ($path === '/notifications/preferences' && $method === 'POST') {
         (bool) ($body['notify_friend_request'] ?? true),
         (bool) ($body['notify_game_finished'] ?? true),
         (bool) ($body['disable_cooldown'] ?? false),
-        (bool) ($body['notify_chat_message'] ?? true)
+        (bool) ($body['notify_chat_message'] ?? true),
+        (bool) ($body['notify_timeout_warning'] ?? true)
     );
     respond(200, ['status' => 'ok', 'preferences' => $notificationPreferences->forUser((int) $currentUser['id'])]);
 }

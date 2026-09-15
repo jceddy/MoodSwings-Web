@@ -16,12 +16,12 @@ final class NotificationPreferenceRepository
      * on) -- see migration 0051's own docblock for what turning it on
      * does.
      *
-     * @return array{notify_your_turn: bool, notify_friend_request: bool, notify_game_finished: bool, notify_chat_message: bool, disable_cooldown: bool}
+     * @return array{notify_your_turn: bool, notify_friend_request: bool, notify_game_finished: bool, notify_chat_message: bool, notify_timeout_warning: bool, disable_cooldown: bool}
      */
     public function forUser(int $userId): array
     {
         $stmt = Connection::get()->prepare(
-            'SELECT notify_your_turn, notify_friend_request, notify_game_finished, notify_chat_message, disable_cooldown
+            'SELECT notify_your_turn, notify_friend_request, notify_game_finished, notify_chat_message, notify_timeout_warning, disable_cooldown
              FROM notification_preferences WHERE user_id = :user_id'
         );
         $stmt->execute(['user_id' => $userId]);
@@ -33,6 +33,7 @@ final class NotificationPreferenceRepository
                 'notify_friend_request' => true,
                 'notify_game_finished' => true,
                 'notify_chat_message' => true,
+                'notify_timeout_warning' => true,
                 'disable_cooldown' => false,
             ];
         }
@@ -42,6 +43,7 @@ final class NotificationPreferenceRepository
             'notify_friend_request' => (bool) $row['notify_friend_request'],
             'notify_game_finished' => (bool) $row['notify_game_finished'],
             'notify_chat_message' => (bool) $row['notify_chat_message'],
+            'notify_timeout_warning' => (bool) $row['notify_timeout_warning'],
             'disable_cooldown' => (bool) $row['disable_cooldown'],
         ];
     }
@@ -53,15 +55,17 @@ final class NotificationPreferenceRepository
         bool $notifyGameFinished,
         bool $disableCooldown = false,
         bool $notifyChatMessage = true,
+        bool $notifyTimeoutWarning = true,
     ): void {
         $stmt = Connection::get()->prepare(
-            'INSERT INTO notification_preferences (user_id, notify_your_turn, notify_friend_request, notify_game_finished, notify_chat_message, disable_cooldown)
-             VALUES (:user_id, :your_turn, :friend_request, :game_finished, :chat_message, :disable_cooldown)
+            'INSERT INTO notification_preferences (user_id, notify_your_turn, notify_friend_request, notify_game_finished, notify_chat_message, notify_timeout_warning, disable_cooldown)
+             VALUES (:user_id, :your_turn, :friend_request, :game_finished, :chat_message, :timeout_warning, :disable_cooldown)
              ON DUPLICATE KEY UPDATE
                 notify_your_turn = VALUES(notify_your_turn),
                 notify_friend_request = VALUES(notify_friend_request),
                 notify_game_finished = VALUES(notify_game_finished),
                 notify_chat_message = VALUES(notify_chat_message),
+                notify_timeout_warning = VALUES(notify_timeout_warning),
                 disable_cooldown = VALUES(disable_cooldown)'
         );
         $stmt->execute([
@@ -70,6 +74,7 @@ final class NotificationPreferenceRepository
             'friend_request' => $notifyFriendRequest ? 1 : 0,
             'game_finished' => $notifyGameFinished ? 1 : 0,
             'chat_message' => $notifyChatMessage ? 1 : 0,
+            'timeout_warning' => $notifyTimeoutWarning ? 1 : 0,
             'disable_cooldown' => $disableCooldown ? 1 : 0,
         ]);
     }

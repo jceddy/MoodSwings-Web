@@ -117,8 +117,8 @@ HTML maintenance page) — see "Maintenance mode" below.
 | GET    | `/notifications/vapid-public-key` | —                                                | No auth required -- the VAPID public key isn't secret (that's the point of asymmetric VAPID auth), same reasoning as `/cards/catalog` being public. Returns `{"public_key"}` (empty string if the server has none configured). See "Browser push notifications" below. |
 | POST   | `/notifications/subscribe` | `{"endpoint", "keys": {"p256dh", "auth"}}`                | Requires auth. Stores (or updates, if the endpoint's already known) a `PushSubscription` for the current user. `400` if `endpoint`/`keys.p256dh`/`keys.auth` are missing. See "Browser push notifications" below. |
 | POST   | `/notifications/unsubscribe` | `{"endpoint"}`                                          | Requires auth. Removes the current user's subscription for that endpoint, if any (silently a no-op otherwise). |
-| GET    | `/notifications/preferences` | —                                                        | Requires auth. Returns `{"preferences": {"notify_your_turn", "notify_friend_request", "notify_game_finished", "notify_chat_message", "disable_cooldown"}}` -- the four `notify_*` toggles default `true`, `disable_cooldown` defaults `false`, for a user who's never changed them. |
-| POST   | `/notifications/preferences` | `{"notify_your_turn"?, "notify_friend_request"?, "notify_game_finished"?, "notify_chat_message"?, "disable_cooldown"?}` | Requires auth. Upserts the current user's preferences (each `notify_*` field defaults to `true` if omitted, `disable_cooldown` defaults to `false`); returns the saved `{"preferences"}`. See "Browser push notifications" below for what `disable_cooldown` does, "In-game chat" above for `notify_chat_message`. |
+| GET    | `/notifications/preferences` | —                                                        | Requires auth. Returns `{"preferences": {"notify_your_turn", "notify_friend_request", "notify_game_finished", "notify_chat_message", "notify_timeout_warning", "disable_cooldown"}}` -- the five `notify_*` toggles default `true`, `disable_cooldown` defaults `false`, for a user who's never changed them. |
+| POST   | `/notifications/preferences` | `{"notify_your_turn"?, "notify_friend_request"?, "notify_game_finished"?, "notify_chat_message"?, "notify_timeout_warning"?, "disable_cooldown"?}` | Requires auth. Upserts the current user's preferences (each `notify_*` field defaults to `true` if omitted, `disable_cooldown` defaults to `false`); returns the saved `{"preferences"}`. See "Browser push notifications" below for what `disable_cooldown` does, "In-game chat" above for `notify_chat_message`, "Turn and decision timeouts" above for `notify_timeout_warning`. |
 | GET    | `/discord/status` | —                                                             | Requires auth. Returns `{"linked", "discord_username"}` (the latter `null` if unlinked). See "Discord" below. |
 | GET    | `/discord/oauth/start` | —                                                        | Requires auth. Not a JSON endpoint -- a `302` straight to Discord's own OAuth2 consent screen. Meant for browser navigation (a link/button), not `fetch()`. See "Discord" below. |
 | GET    | `/discord/oauth/callback` | `code`, `state` (query params, set by Discord's own redirect) | Requires auth. Not a JSON endpoint -- a `302` back to the lobby, `?discord_linked=1` on success or `?discord_link_error=<message>` on failure. See "Discord" below. |
@@ -4433,6 +4433,64 @@ gap: Open/Closed Team Play's own pregame initial-card-pass window
 yet -- a slow drafter, or a Closed Team Play player who never submits
 their opening 2-card pass, isn't currently caught by this sweep.
 
+**Follow-up (issue #85 follow-up): "close to timing out" indicator +
+notification** -- reported live: "add some kind of indicator for action
+timeout if it's close (like within 15 minutes)... also send a
+notification if either the action timeout or full game chess clock
+timeout becomes less than 15 minutes left." Two independent additions,
+both built on the same read-only idle-player resolution:
+
+- `GameService::resolveIdleGamePlayerAndSecondsSinceLastMove()` -- a
+  read-only counterpart to `applyTimeoutToGame()`'s own "who is this game
+  actually waiting on" resolution documented above, deliberately
+  duplicated rather than shared: that method and
+  `applyTimeoutToTeamDecision()` go on to actually mutate game state once
+  they've resolved an idle player, while this is called from
+  `buildGameState()` (on every board poll) and `sendTimeoutWarningIfClose()`
+  below (every 15-minute cron tick), neither of which may ever throw or
+  change anything -- wrapped in its own `try`/`catch` for exactly that
+  reason, so a transient race against a player's own concurrent action
+  never breaks an ordinary `getState()` call the way it's fine for
+  `applyTimeoutToGame()` to simply catch, log, and skip that same race on
+  its own next cron tick.
+- **Visual indicator** -- `GameService::buildActionTimeoutWarning()`
+  backs a new `getState()` field, `game.action_timeout_warning`: `null`
+  unless `timeout_minutes` is on, someone's currently idle (and not a
+  bot), AND that player's own `timeout_minutes` clock has 15 minutes or
+  less left to run, in which case it's
+  `{"game_player_id", "seconds_remaining"}`. Kept this narrow (rather
+  than always exposing a raw countdown) so the frontend only ever needs
+  to check "is this non-null" -- see "Turn and decision timeouts" in
+  `web-static/README.md` for the board-side icon this drives. Only ever
+  covers the ordinary per-turn/decision timeout, not the full-game time
+  limit -- that one already has its own always-on chess-clock indicator
+  (`active_seconds_used`/`buildPlayerTimeUsedStat()`, see the follow-up
+  above), so it needs no separate "getting close" flag.
+- **Notification** -- `GameService::sendTimeoutWarningIfClose()`, called
+  from `applyTimeoutsForAllActiveGames()`'s own sweep loop for every game
+  `applyTimeoutToGame()` did NOT itself resolve on that same tick (a game
+  that just timed out -- resigned/skipped/auto-played, or the
+  total-time-limit resignation -- has nothing left to warn its idle
+  player about; the thing this would have warned about already
+  happened). Reuses the same resolved idle player to check BOTH timeout
+  modes independently (a game may have either, both, or neither): only
+  that one player's clock can possibly be running right now for either
+  mode (`touchLastMoveAt()` only ever credits `active_seconds_used` to
+  whoever is currently being waited on, so a player merely waiting for
+  their OWN next turn isn't "at risk" of the total-time-limit this
+  moment even if their own accumulated total is already close). Calls
+  `NotificationService::notifyTimeoutWarning()` (new, mirrors
+  `notifyYourTurn()`'s shape; own preference `notify_timeout_warning`,
+  migration 0327, defaults on like every other `notify_*` toggle;
+  shares `NotificationScope::forGame()` with `notifyYourTurn()`/
+  `notifyGameFinished()`/`notifyNewChatMessage()`, so it's still just one
+  5-minute cooldown/queue bucket per game, not a separate one per kind of
+  event). No "just crossed under 15 minutes" edge-detection -- the
+  cooldown already prevents spamming a still-idle player on back-to-back
+  ticks, and in practice a game sits in either warning window for at most
+  one 15-minute tick before the idle player acts or the timeout itself
+  fires.
+
 ### Power Duel sideboarding
 
 A second, narrower opt-in on top of best-of-three (migration 0228):
@@ -6065,9 +6123,10 @@ now keeps from ever reaching the triggering request.
 `auth_key`, exactly what `PushSubscription.toJSON()` returns; uniqueness is
 enforced on a SHA-256 `endpoint_hash` rather than the raw `endpoint` column,
 since push-service endpoint URLs can run past reasonable index key-length
-limits); `notification_preferences` (one row per user, four boolean
+limits); `notification_preferences` (one row per user, five boolean
 columns -- `notify_your_turn`/`notify_friend_request`/`notify_game_finished`/
-`notify_chat_message` (migration `0079`, issue #109) -- created lazily the
+`notify_chat_message` (migration `0079`, issue #109)/`notify_timeout_warning`
+(migration `0327`, issue #85 follow-up) -- created lazily the
 first time a user changes a setting; a user with no row yet gets all-`true`
 defaults from `NotificationPreferenceRepository::forUser()`);
 `notification_cooldowns` (one row per `(user_id, scope)` pair, `last_notified_at`

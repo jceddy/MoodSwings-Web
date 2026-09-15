@@ -13087,6 +13087,13 @@ final class GameService
         foreach ($gameIds as $gameId) {
             if ($this->applyTimeoutToGame($gameId)) {
                 $appliedCount++;
+                continue;
+            }
+
+            try {
+                $this->sendTimeoutWarningIfClose($gameId, $this->fetchGame($gameId));
+            } catch (Throwable $e) {
+                error_log("sendTimeoutWarningIfClose({$gameId}): failed -- " . $e);
             }
         }
 
@@ -13341,6 +13348,173 @@ final class GameService
         $this->resignGame($gameId, $idleGamePlayerId);
 
         return true;
+    }
+
+    /**
+     * Read-only counterpart to applyTimeoutToGame()'s own "who is
+     * currently idle" resolution -- deliberately duplicated rather than
+     * shared, since applyTimeoutToGame() and applyTimeoutToTeamDecision()
+     * both go on to actually mutate game state once they've resolved an
+     * idle player, while this is called from buildGameState() (issue
+     * #85 follow-up's own action-timeout indicator, on every board poll)
+     * and sendTimeoutWarningIfClose() below (every 15-minute cron tick)
+     * -- neither of which may ever throw or change anything. Wrapped in
+     * its own try/catch for exactly that reason: a transient race against
+     * a player's own concurrent action (the round/decision having moved
+     * on between fetchGame() and here) must never break an ordinary
+     * getState() call, the way it's fine for applyTimeoutToGame() to
+     * simply catch, log, and skip that same race on its own next cron
+     * tick.
+     *
+     * "Idle" and its bot-exclusion carry the exact same meaning
+     * applyTimeoutToGame() documents on its own -- see that method's
+     * docblock.
+     *
+     * @return ?array{game_player_id: int, seconds_since_last_move: int}
+     */
+    private function resolveIdleGamePlayerAndSecondsSinceLastMove(int $gameId, array $game): ?array
+    {
+        try {
+            if ($game['status'] !== 'in_progress' || $game['last_move_at'] === null) {
+                return null;
+            }
+
+            $secondsSinceLastMove = time() - strtotime((string) $game['last_move_at']);
+            if ($secondsSinceLastMove < 0) {
+                return null;
+            }
+
+            $teamDecision = $this->activeTeamDecision($gameId);
+            if ($teamDecision !== null) {
+                $candidateIds = array_map(intval(...), json_decode((string) $teamDecision['candidate_game_player_ids'], true));
+                $idleGamePlayerId = $teamDecision['phase'] === 'propose'
+                    ? $candidateIds[0]
+                    : ($candidateIds[0] === (int) $teamDecision['proposer_game_player_id'] ? $candidateIds[1] : $candidateIds[0]);
+            } else {
+                $round = $this->currentRound($gameId);
+                $pendingDecisionTargetId = $this->currentPendingDecisionTargetId((int) $round['id']);
+                $idleGamePlayerId = $pendingDecisionTargetId
+                    ?? ($round['current_turn_game_player_id'] !== null ? (int) $round['current_turn_game_player_id'] : null);
+            }
+
+            if ($idleGamePlayerId === null || in_array($idleGamePlayerId, $this->botGamePlayerIds($gameId), true)) {
+                return null;
+            }
+
+            return ['game_player_id' => $idleGamePlayerId, 'seconds_since_last_move' => $secondsSinceLastMove];
+        } catch (Throwable $e) {
+            return null;
+        }
+    }
+
+    /**
+     * Issue #85 follow-up: "add some kind of indicator for action
+     * timeout if it's close (like within 15 minutes)" -- backs
+     * getState()'s game.action_timeout_warning. Null whenever
+     * timeout_minutes itself is off, nobody's currently idle (or the
+     * idle player is a bot), or the currently-idle player's own
+     * timeout_minutes clock still has more than 15 minutes left --
+     * kept this narrow (rather than always exposing a raw seconds-
+     * remaining count) so the frontend only ever has to check "is this
+     * non-null", matching the "if it's close" framing of the request
+     * that asked for it.
+     *
+     * @return ?array{game_player_id: int, seconds_remaining: int}
+     */
+    private function buildActionTimeoutWarning(int $gameId, array $game): ?array
+    {
+        if ($game['timeout_minutes'] === null) {
+            return null;
+        }
+
+        $idle = $this->resolveIdleGamePlayerAndSecondsSinceLastMove($gameId, $game);
+        if ($idle === null) {
+            return null;
+        }
+
+        $secondsRemaining = (int) $game['timeout_minutes'] * 60 - $idle['seconds_since_last_move'];
+        if ($secondsRemaining > 900) {
+            return null;
+        }
+
+        return [
+            'game_player_id' => $idle['game_player_id'],
+            'seconds_remaining' => max(0, $secondsRemaining),
+        ];
+    }
+
+    /**
+     * applyTimeoutsForAllActiveGames()'s own other half: "send a
+     * notification if either the action timeout or the full game chess
+     * clock timeout becomes less than 15 minutes left." Only ever called
+     * for a game applyTimeoutToGame() did NOT itself resolve this same
+     * tick -- one that just timed out (resigned/skipped/auto-played, or
+     * the total-time-limit resignation) has nothing left to warn its
+     * idle player about; the thing this would have warned about already
+     * happened.
+     *
+     * Checks both timeout modes independently (a game may have either,
+     * both, or neither) against the SAME resolved idle player -- see
+     * resolveIdleGamePlayerAndSecondsSinceLastMove()'s own docblock for
+     * why only that one player's clock can possibly be running right
+     * now for either mode. No "just crossed under 15 minutes" edge
+     * detection: NotificationService's own 5-minute cooldown per (user,
+     * game) scope already prevents this from spamming a still-idle
+     * player on back-to-back cron ticks, and in practice a game sits in
+     * either warning window for at most one 15-minute tick before the
+     * idle player acts or the timeout itself fires.
+     */
+    private function sendTimeoutWarningIfClose(int $gameId, array $game): void
+    {
+        if ($this->notifications === null) {
+            return;
+        }
+
+        if ($game['timeout_minutes'] === null && $game['total_time_limit_minutes'] === null) {
+            return;
+        }
+
+        $idle = $this->resolveIdleGamePlayerAndSecondsSinceLastMove($gameId, $game);
+        if ($idle === null) {
+            return;
+        }
+
+        $userId = $this->userIdForGamePlayer($idle['game_player_id']);
+
+        if ($game['timeout_minutes'] !== null) {
+            $remaining = (int) $game['timeout_minutes'] * 60 - $idle['seconds_since_last_move'];
+            if ($remaining > 0 && $remaining <= 900) {
+                $this->notifications->notifyTimeoutWarning(
+                    $userId,
+                    $gameId,
+                    "Your turn in game #{$gameId} will time out in about " . $this->formatMinutesRoundedUp($remaining) . " unless you act.",
+                );
+            }
+        }
+
+        if ($game['total_time_limit_minutes'] !== null) {
+            $usedStmt = Connection::get()->prepare('SELECT active_seconds_used FROM game_players WHERE id = :id');
+            $usedStmt->execute(['id' => $idle['game_player_id']]);
+            $activeSecondsUsed = $usedStmt->fetchColumn();
+            if ($activeSecondsUsed !== false) {
+                $remaining = (int) $game['total_time_limit_minutes'] * 60 - ((int) $activeSecondsUsed + $idle['seconds_since_last_move']);
+                if ($remaining > 0 && $remaining <= 900) {
+                    $this->notifications->notifyTimeoutWarning(
+                        $userId,
+                        $gameId,
+                        "You have about " . $this->formatMinutesRoundedUp($remaining) . " of total game time left in game #{$gameId} before you're automatically resigned.",
+                    );
+                }
+            }
+        }
+    }
+
+    /** "About 1 minute"/"about 12 minutes" -- always at least 1, for a $seconds value already known to be > 0. */
+    private function formatMinutesRoundedUp(int $seconds): string
+    {
+        $minutes = max(1, (int) ceil($seconds / 60));
+
+        return $minutes === 1 ? '1 minute' : "{$minutes} minutes";
     }
 
     /** @return ?int the game_player_id the round's one still-open pending decision (if any) is currently waiting on */
@@ -15817,6 +15991,14 @@ final class GameService
                 // default_selections_mode gets just above.
                 'timeout_minutes' => $game['timeout_minutes'] !== null ? (int) $game['timeout_minutes'] : null,
                 'timeout_action' => $game['timeout_action'],
+                // Issue #85 follow-up's own "add some kind of indicator
+                // for action timeout if it's close" -- null unless
+                // timeout_minutes is on AND someone's currently idle AND
+                // that player's own clock has 15 minutes or less left to
+                // run; see buildActionTimeoutWarning()'s own docblock for
+                // why it's this narrow rather than always exposing a raw
+                // countdown.
+                'action_timeout_warning' => $this->buildActionTimeoutWarning($gameId, $game),
                 // Issue #85 follow-up's own full-game time-limit mode --
                 // same "visible to the players playing it" treatment,
                 // independent of timeout_minutes/timeout_action above.

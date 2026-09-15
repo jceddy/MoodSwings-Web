@@ -2125,6 +2125,19 @@ body.game-page {
     color: var(--color-error);
 }
 
+/* Issue #85 follow-up's own action-timeout warning icon -- only ever
+   rendered while it's already inside the 15-minute warning window (see
+   buildActionTimeoutWarningStat()), so there's no "comfortable" default
+   the way .player-stat--timeUsed has -- --color-pending (amber) is the
+   base state here, escalating to --color-error under 5 minutes left. */
+.player-stat--actionTimeoutWarning {
+    color: var(--color-pending);
+}
+
+.player-stat--actionTimeoutWarning-danger {
+    color: var(--color-error);
+}
+
 .player-flag--wentFirst {
     color: var(--color-error);
 }
