@@ -139,7 +139,7 @@ function getCardStats() {
     return apiRequest('/stats/cards');
 }
 
-function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId, defaultSelectionsMode, botDecklistText, botSavedDecklistId, randomTeams, rotisserieDraftPoolSource, rotisserieDraftCustomPoolText, rotisserieDraftCutoffCount, tieredRotisserieDraftMode, tieredRotisserieDraftTiers, botGoesFirst, bestOfThree, allowSideboarding, diagnosticMode, botDecklists, timeoutMinutes, timeoutAction, totalTimeLimitMinutes) {
+function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId, defaultSelectionsMode, botDecklistText, botSavedDecklistId, randomTeams, rotisserieDraftPoolSource, rotisserieDraftCustomPoolText, rotisserieDraftCutoffCount, tieredRotisserieDraftMode, tieredRotisserieDraftTiers, botGoesFirst, bestOfThree, allowSideboarding, diagnosticMode, botDecklists, timeoutMinutes, timeoutAction, totalTimeLimitMinutes, synchronousMode) {
     return apiRequest('/games', {
         method: 'POST',
         body: JSON.stringify({
@@ -233,6 +233,11 @@ function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText,
             // timeout_action above. See "Turn and decision timeouts" in
             // web-static/README.md.
             total_time_limit_minutes: totalTimeLimitMinutes,
+            // Reported live: "synchronous" mode -- undefined means off;
+            // mutually exclusive with timeout_minutes/
+            // total_time_limit_minutes above. See "Synchronous mode" in
+            // web-static/README.md.
+            synchronous_mode: synchronousMode,
         }),
     });
 }
@@ -745,6 +750,17 @@ function getSpectatorGameState(gameId, code) {
 
 function startGame(gameId) {
     return apiRequest('/games/start', {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId }),
+    });
+}
+
+// Reported live: synchronous mode's own pre-game ready check -- see
+// "Synchronous mode" in web-static/README.md. Idempotent; the caller
+// keeps polling GET /games/state the same way it already does for
+// decklist submission.
+function markReady(gameId) {
+    return apiRequest('/games/ready', {
         method: 'POST',
         body: JSON.stringify({ game_id: gameId }),
     });

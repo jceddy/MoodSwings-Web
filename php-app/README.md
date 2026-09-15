@@ -89,7 +89,8 @@ HTML maintenance page) — see "Maintenance mode" below.
 | GET    | `/games/log`    | query params `game_id`, `code`?                                   | Requires auth; `403` unless you're seated in that game OR authorized to spectate it (issue #128 -- same `canSpectateGame()` check `GET /games/spectate/state`/`GET /games/deck` use). The entire `game_events` log for this game, oldest first, unbounded (issue #98) -- unlike `/games/state`'s own `recent_events`, which is newest-first and capped at 15. Each entry is `{"id", "created_at", "round_number", "event_type", "acting_game_player_id", "acting_username", "card_id", "card_name", "details", "description"}` -- `description` is the same `describeEvent()`-rendered text `recent_events` itself uses; the rest is raw enough for a genuine offline export (see "Game log" below). No per-viewer filtering -- every event is already visible to every seated player (and now every spectator) regardless of who triggered it. See `GameService::fullEventLog()`. |
 | GET    | `/games/deck`   | query params `game_id`, `code`?                                   | Requires auth; `403` unless you're seated in that game OR authorized to spectate it (issue #128 -- friends with a seated player, or `code` matches the game's own spectate code; same `canSpectateGame()` check `GET /games/spectate/state` uses). A shared-deck game's entire deck (issue #197) -- every `deck_type` except `custom_duel`/`quick_draft`/`winston_draft`/`grid_draft`, where each player has their own deck rather than one shared pool (see `GameService::isSharedDeckType()`). Returns `{"cards": [...]}`, hydrated the same way `/decklists/view` hydrates a saved decklist's cards, sorted white/blue/black/red/green then alphabetically by name within a color. `409` if the game's `deck_type` has no single shared deck, or the game is still `waiting` (nothing dealt yet). See "Shared deck view" below. |
 | GET    | `/games/export` | query param `game_id`                                             | Requires auth; `403` if you're not seated in that game -- deliberately narrower than `/games/log` above (no spectator path), since this is a personal offline archive rather than a shareable view. A raw, complete dump of every row related to this game (issue #99), across every table with any FK relationship to `games.id` -- not the curated, human-readable view `/games/log` already provides. Returns `{"export": {...}}`; see `GameService::exportGameData()` and "Download complete game data" below for the full shape. |
-| POST   | `/games/start`  | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. Deals hands and begins round 1. `409` if the game isn't `waiting` or has fewer than 2 seated players. |
+| POST   | `/games/start`  | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. Deals hands and begins round 1. `409` if the game isn't `waiting`, has fewer than 2 seated players, or (a `synchronous_mode` game) not every seat is ready yet. |
+| POST   | `/games/ready`  | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. Synchronous mode's own pre-game ready check -- idempotent. `409` if the game isn't a `synchronous_mode` game. Returns `{"all_ready"}`. See "Synchronous mode" above. |
 | POST   | `/games/play`   | `{"game_id", "card_id", "choices"?}`                              | Requires auth; `403` if you're not seated in that game. `choices` is an opaque object passed straight through to the rules engine — its shape (a target player id, a discard, a mode string, etc.) is entirely card-specific; see `src/Rules/PlayerChoices.php` and `CardChoiceSchema` below. `400` on an invalid/missing choice for that card, `409` if it's not your turn, a decision is already pending, this round's own Chaos Draft offer is still unresolved for ANY seated player (see "Chaos Draft" below), or the play is otherwise illegal. Returns `{"round_scored", "game_completed", "winner_game_player_id"?}`, or `{"pending_decision": true}` if the play now needs another player's own answer before it can finish — see `RequiresOpponentDecision` below. |
 | POST   | `/games/pass`   | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. `409` if it's not your turn, a decision is pending, this round's own Chaos Draft offer is still unresolved for ANY seated player (see "Chaos Draft" below), or your own turn is still gated behind "Pause at the start of your turn" below. Same return shape as `/games/play`. |
 | POST   | `/games/advance-turn` | `{"game_id"}`                                               | Requires auth; `403` if you're not seated in that game. `409` if it's not your turn. Clears `round.turn_pending_acknowledgment` for your own current turn (a no-op if it's already clear) -- the only way to unlock `/games/play`/`/games/pass` once "Pause at the start of your turn" has gated them. Same return shape as `/games/pass`. See "Pause at the start of your turn" below. |
@@ -4490,6 +4491,79 @@ both built on the same read-only idle-player resolution:
   ticks, and in practice a game sits in either warning window for at most
   one 15-minute tick before the idle player acts or the timeout itself
   fires.
+
+### Synchronous mode
+
+Reported live: a mode for two players who are both actually sitting down
+to play live, right now -- distinct from everything in "Turn and
+decision timeouts" above, which is entirely about tolerating a
+slow/disconnected player over minutes-to-days. `games.synchronous_mode`
+(`BOOLEAN`, migration 0329) is a third, mutually exclusive choice
+alongside "off" and the async `timeout_minutes`/`total_time_limit_minutes`
+opt-ins -- `createGame()` rejects combining it with either
+(`GameStateException`, direct misuse rather than a silently-ignored
+scope mismatch).
+
+**Landing in increments**, the same way issue #85 itself shipped team-
+decision coverage and the full-game time-limit mode as separate follow-
+ups rather than all at once. This first increment is just the mode flag
+and the pre-game "ready check" for 2-player Traditional/Duel
+(`self::SYNCHRONOUS_MODE_ALLOWED_FORMATS = ['standard', 'duel']`).
+Planned follow-ups (not yet built): a 30-second action timer with
+timeout-extension banking (2 granted at game start, +1 per 3 clean
+turns, capped at 5; consuming a banked extension grants +30 seconds
+instead of auto-resolving; two consecutive auto-resolves with no
+extensions left auto-resigns the offending player) enforced
+opportunistically on every request touching the game (the same pattern
+`advanceAutomatedTurns()` already uses, not a new fast cron -- the
+15-minute sweep can't enforce a 30-second deadline); Draft/Sealed Deck
+support, including a 60-second-per-pick timer for the five draft-family
+deck_types and an untimed-but-clock-ticking deck-building/sideboard
+phase; and a match-wide (not per-game) 30-minute chess clock covering
+the whole best-of-three match, including time spent deck-building.
+
+**The ready check** (`game_players.ready_at`, migration 0329) -- "each
+player needs to be seated/looking at the game before it starts." Every
+seated human must call `markReady()` (idempotent -- a second call from
+the same seat is a harmless no-op, matching `acknowledgeTurnStart()`'s
+own convention, see that method's docblock for the closest existing
+analog this was modeled on) before `startGame()` will proceed; a
+practice bot seat is stamped ready immediately at seating time (both in
+`createGame()` and `advanceGameMatch()`'s own next-match-game seating
+loop), since there's no one to click anything on its behalf. `markReady()`
+itself never starts the game -- like every other "waiting" precondition
+in this class (a `custom_duel`/draft deck submission), the frontend's
+own poll-and-retry (`autoStartGameIfReady()`) is what actually calls
+`startGame()` once it notices every seat is ready, so no new server-push
+mechanism was needed: `GET /games/state` already gets polled every 4
+seconds while the board is open (see "Browser push notifications"
+above's own presence docblock for that same cadence).
+
+`allPlayersReady()` checks every seated `game_players.id` for a non-NULL
+`ready_at` in one query. `startGame()` throws
+`"Game {id} cannot start until every player is ready"` when the check
+fails for a `synchronous_mode` game -- a no-op check for every other
+game, the same "only ever consulted once its own opt-in is set"
+treatment `timeout_minutes`/`total_time_limit_minutes` already get
+elsewhere in this class.
+
+**Carried forward across match games** the same "chosen once at match
+creation" way `diagnostic_mode`/`timeout_minutes` already are (see "Best
+of three" above) -- `advanceGameMatch()`'s own next-game `INSERT` copies
+`synchronous_mode` straight from the game that just finished. The ready
+check itself still starts fresh every match game, though: a new set of
+`game_players` rows means everyone's own `ready_at` resets to NULL by
+that column's own default, so both seats confirm they're still there for
+game 2/3 too. (Draft-family deck types don't support synchronous mode
+yet -- see the roadmap above -- so `advanceDraftMatch()` needs no
+analogous carry-forward until that follow-up lands.)
+
+**Surfaced via `getState()`** -- `game.synchronous_mode` (top-level,
+always present, `false` for every other game) and a `ready` boolean on
+each entry in `players[]` (per-player, since readiness is genuinely
+per-seat, not per-game). See "Synchronous mode" in `web-static/README.md`
+for the New Game dialog checkbox and the board's own ready-check panel
+this drives.
 
 ### Power Duel sideboarding
 

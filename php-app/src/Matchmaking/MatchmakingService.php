@@ -276,6 +276,7 @@ final class MatchmakingService
                     isset($params['timeout_minutes']) ? (int) $params['timeout_minutes'] : null,
                     isset($params['timeout_action']) ? (string) $params['timeout_action'] : null,
                     isset($params['total_time_limit_minutes']) ? (int) $params['total_time_limit_minutes'] : null,
+                    (bool) ($params['synchronous_mode'] ?? false),
                 );
             } catch (GameStateException $e) {
                 // The creator's own choices turned out not to be valid

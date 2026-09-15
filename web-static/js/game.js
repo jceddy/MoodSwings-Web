@@ -2473,6 +2473,7 @@
             updateOpponentSelectionLimit();
             updateTimeoutFieldVisibility();
             updateTotalTimeLimitFieldVisibility();
+            updateSynchronousFieldVisibility();
             return;
         }
 
@@ -2502,6 +2503,7 @@
         updateOpponentSelectionLimit();
         updateTimeoutFieldVisibility();
         updateTotalTimeLimitFieldVisibility();
+        updateSynchronousFieldVisibility();
     }
 
     // Shows the partner picker only for Open Team Play, populated from
@@ -3380,6 +3382,49 @@
             !show || !document.getElementById('new-game-total-time-limit-enabled').checked;
     }
 
+    // Reported live: "synchronous" mode -- see GameService::createGame()'s
+    // own $synchronousMode docblock. SYNCHRONOUS_MODE_ALLOWED_FORMATS
+    // mirrors GameService::SYNCHRONOUS_MODE_ALLOWED_FORMATS exactly
+    // (increment 1: 2-player Traditional/Duel only), narrowing as later
+    // increments add Draft/Sealed Deck support -- also requires exactly
+    // 2 total players (currentNewGamePlayerCount()), the one restriction
+    // that isn't itself a format/deck_type check. Same "unchecked, not
+    // just hidden, whenever it goes out of view" treatment as the two
+    // async timeout checkboxes above.
+    const SYNCHRONOUS_MODE_ALLOWED_FORMATS = ['standard', 'duel'];
+    function updateSynchronousFieldVisibility() {
+        const format = effectiveNewGameFormat();
+        const show = SYNCHRONOUS_MODE_ALLOWED_FORMATS.includes(format) && currentNewGamePlayerCount() === 2;
+        const checkboxLabel = document.getElementById('new-game-synchronous-enabled-label');
+        checkboxLabel.hidden = !show;
+        const checkbox = document.getElementById('new-game-synchronous-enabled');
+        if (!show) {
+            checkbox.checked = false;
+        }
+        document.getElementById('new-game-synchronous-description').hidden = !show || !checkbox.checked;
+    }
+
+    // Synchronous mode is mutually exclusive with the idle time-out/
+    // total-time-limit checkboxes above (see createGame()'s own
+    // validation) -- checking any one of the three unchecks the other
+    // two, wired as an extra 'change' listener on each of the three
+    // checkboxes (registered below, after each checkbox's own primary
+    // visibility-update listener).
+    function enforceSynchronousExclusivityFromSynchronousCheckbox() {
+        if (document.getElementById('new-game-synchronous-enabled').checked) {
+            document.getElementById('new-game-timeout-enabled').checked = false;
+            document.getElementById('new-game-total-time-limit-enabled').checked = false;
+            updateTimeoutFieldVisibility();
+            updateTotalTimeLimitFieldVisibility();
+        }
+    }
+    function enforceSynchronousExclusivityFromAsyncCheckboxes() {
+        if (document.getElementById('new-game-timeout-enabled').checked || document.getElementById('new-game-total-time-limit-enabled').checked) {
+            document.getElementById('new-game-synchronous-enabled').checked = false;
+            updateSynchronousFieldVisibility();
+        }
+    }
+
     // Hides (and, if checked, unchecks) every bot checkbox -- and their
     // own "Practice bots" heading -- whenever the current format/deck_type
     // combination doesn't support seating one (see botsSupportedFor()).
@@ -3434,6 +3479,10 @@
         // best-of-three checkbox depends on the current player count too
         // (see currentNewGamePlayerCount()).
         updateBestOfThreeFieldVisibility();
+        // Synchronous mode also depends on the current player count
+        // (exactly 2, see updateSynchronousFieldVisibility()'s own
+        // docblock).
+        updateSynchronousFieldVisibility();
     }
 
     // Order matters for the two bot-related listeners here: a bot
@@ -3516,6 +3565,15 @@
     document.getElementById('new-game-format').addEventListener('change', updateTotalTimeLimitFieldVisibility);
     document.getElementById('new-game-deck-type').addEventListener('change', updateTotalTimeLimitFieldVisibility);
     document.getElementById('new-game-total-time-limit-enabled').addEventListener('change', updateTotalTimeLimitFieldVisibility);
+    document.getElementById('new-game-format').addEventListener('change', updateSynchronousFieldVisibility);
+    document.getElementById('new-game-deck-type').addEventListener('change', updateSynchronousFieldVisibility);
+    document.getElementById('new-game-synchronous-enabled').addEventListener('change', updateSynchronousFieldVisibility);
+    // Mutual exclusivity (see createGame()'s own validation) -- registered
+    // after each checkbox's own primary visibility-update listener above,
+    // so this always runs last.
+    document.getElementById('new-game-synchronous-enabled').addEventListener('change', enforceSynchronousExclusivityFromSynchronousCheckbox);
+    document.getElementById('new-game-timeout-enabled').addEventListener('change', enforceSynchronousExclusivityFromAsyncCheckboxes);
+    document.getElementById('new-game-total-time-limit-enabled').addEventListener('change', enforceSynchronousExclusivityFromAsyncCheckboxes);
     document.getElementById('new-game-saved-decklist').addEventListener('change', updateDeckTypeDescription);
     document.getElementById('new-game-duel-rules-preset').addEventListener('change', updateDuelRulesPresetVisibility);
     // Power Duel sideboarding's own checkbox depends on both the current
@@ -4247,6 +4305,13 @@
         // timeoutMinutes/timeoutAction above; fully independent of them.
         const totalTimeLimitEnabled = document.getElementById('new-game-total-time-limit-enabled').checked;
         const totalTimeLimitMinutes = totalTimeLimitEnabled ? Number(document.getElementById('new-game-total-time-limit-minutes').value) : undefined;
+        // Reported live: "synchronous" mode -- mutually exclusive with
+        // timeoutEnabled/totalTimeLimitEnabled above (enforced both by
+        // the checkboxes' own mutual exclusivity and, ultimately,
+        // createGame()'s own validation). undefined (not false) when
+        // unchecked, same "don't send this at all" convention as every
+        // other optional field on this form.
+        const synchronousMode = document.getElementById('new-game-synchronous-enabled').checked ? true : undefined;
 
         // Issue #116: post to the open lobby instead of creating the game
         // directly -- mirrors createGame()'s own params (see above) minus
@@ -4286,6 +4351,7 @@
                 timeout_minutes: timeoutMinutes,
                 timeout_action: timeoutAction,
                 total_time_limit_minutes: totalTimeLimitMinutes,
+                synchronous_mode: synchronousMode,
             });
 
             if (!ok) {
@@ -4333,6 +4399,7 @@
             timeoutMinutes,
             timeoutAction,
             totalTimeLimitMinutes,
+            synchronousMode,
         );
 
         if (!ok) {
@@ -6266,11 +6333,16 @@
         const totalTimeLimitDescription = state.game.total_time_limit_minutes !== null
             ? ', ' + timeoutDurationLabel(state.game.total_time_limit_minutes) + ' total time limit'
             : '';
+        // Reported live: "synchronous" mode -- mutually exclusive with
+        // both descriptions above (a game has one of the three, never a
+        // combination -- see createGame()'s own validation).
+        const synchronousDescription = state.game.synchronous_mode ? ', synchronous' : '';
         document.getElementById('board-title').textContent =
             'Game #' + state.game.id + ' (' + formatAndDeckDescription +
             (state.game.default_selections_mode ? ', default selections' : '') +
             totalTimeLimitDescription +
-            timeoutDescription + ')';
+            timeoutDescription +
+            synchronousDescription + ')';
 
         // Spectator mode (issue #128)/Watch game replay (issue #240) --
         // only a real seated player can mint/share this game's own code,
@@ -6600,6 +6672,7 @@
 
             if (state.game.deck_type === 'custom_duel') {
                 document.getElementById('board-round-status').textContent = 'Waiting for the game to start.';
+                document.getElementById('ready-check-panel').hidden = true;
                 document.getElementById('quick-draft-panel').hidden = true;
                 document.getElementById('winston-draft-panel').hidden = true;
                 document.getElementById('grid-draft-panel').hidden = true;
@@ -6609,6 +6682,7 @@
                 renderDuelDeckSubmission(state);
                 autoStartGameIfReady(state.players.every((p) => p.deck_submitted));
             } else if (DRAFT_DECK_TYPES.includes(state.game.deck_type)) {
+                document.getElementById('ready-check-panel').hidden = true;
                 document.getElementById('duel-deck-submission').hidden = true;
                 const draftState = state.game.deck_type === 'quick_draft' || state.game.deck_type === 'chaos_draft' ? state.quick_draft
                     : state.game.deck_type === 'winston_draft' ? state.winston_draft
@@ -6634,7 +6708,6 @@
                     && everyOtherDeckSubmitted
                 );
             } else {
-                document.getElementById('board-round-status').textContent = 'Waiting for the game to start.';
                 document.getElementById('duel-deck-submission').hidden = true;
                 document.getElementById('quick-draft-panel').hidden = true;
                 document.getElementById('winston-draft-panel').hidden = true;
@@ -6642,12 +6715,21 @@
                 document.getElementById('rotisserie-draft-panel').hidden = true;
                 document.getElementById('tiered-rotisserie-draft-panel').hidden = true;
                 document.getElementById('draft-deck-building').hidden = true;
-                autoStartGameIfReady(true);
+                if (state.game.synchronous_mode) {
+                    document.getElementById('board-round-status').textContent = '';
+                    renderReadyCheckPanel(state);
+                    autoStartGameIfReady(state.players.every((p) => p.ready));
+                } else {
+                    document.getElementById('board-round-status').textContent = 'Waiting for the game to start.';
+                    document.getElementById('ready-check-panel').hidden = true;
+                    autoStartGameIfReady(true);
+                }
             }
 
             return;
         }
 
+        document.getElementById('ready-check-panel').hidden = true;
         document.getElementById('duel-deck-submission').hidden = true;
         document.getElementById('quick-draft-panel').hidden = true;
         document.getElementById('winston-draft-panel').hidden = true;
@@ -8750,6 +8832,32 @@
         }
     }
 
+    // Synchronous mode's own pre-game ready check (reported live) --
+    // lists each seat's own ready/not-ready status and, if the viewer
+    // hasn't clicked Ready yet, the button to do so. Mirrors
+    // renderDuelDeckSubmission()'s own "never lets you re-submit once
+    // you already have" treatment: #ready-check-button hides itself the
+    // moment the viewer's own row reads ready, the same way that
+    // function's submission form disappears once deck_submitted is
+    // true. Start game itself stays hidden/gated until every seat is
+    // ready -- see renderBoard()'s own caller (autoStartGameIfReady()).
+    function renderReadyCheckPanel(state) {
+        const panel = document.getElementById('ready-check-panel');
+        panel.hidden = false;
+
+        const list = document.getElementById('ready-check-status');
+        list.innerHTML = '';
+        for (const player of state.players) {
+            const item = document.createElement('li');
+            item.textContent = player.username + ': ' + (player.ready ? 'Ready' : 'Not ready yet');
+            list.appendChild(item);
+        }
+
+        const you = state.players.find((p) => p.game_player_id === state.you.game_player_id);
+        const button = document.getElementById('ready-check-button');
+        button.hidden = !you || you.ready;
+    }
+
     // The 'custom_duel' waiting-room view: shows the creator's own locked-
     // in deck-building rules, both players' submission status (never the
     // decklist contents themselves -- see deck_submitted's own docblock in
@@ -9019,6 +9127,21 @@
         selectedCard = null;
         choicesPanel.hidden = true;
         announceOutcome(body);
+        await refreshBoard();
+    });
+
+    // Synchronous mode's own ready check (reported live) -- idempotent
+    // server-side (see GameService::markReady()), so no confirmation
+    // dialog the way resigning gets; the button itself hides once the
+    // viewer's own row reads ready (see renderReadyCheckPanel()).
+    document.getElementById('ready-check-button').addEventListener('click', async () => {
+        boardError.hidden = true;
+        const { ok, body } = await markReady(currentGameId);
+        if (!ok) {
+            boardError.textContent = body.message || 'Could not confirm ready.';
+            boardError.hidden = false;
+            return;
+        }
         await refreshBoard();
     });
 

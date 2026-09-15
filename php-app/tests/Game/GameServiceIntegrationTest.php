@@ -20112,4 +20112,162 @@ final class GameServiceIntegrationTest extends TestCase
 
         self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
     }
+
+    // -- Synchronous mode (reported live), increment 1: mode flag + ready check --
+
+    public function testCreateGameRejectsSynchronousModeCombinedWithTimeoutMinutes(): void
+    {
+        $userIds = [$this->insertUser('sync-combo-p1'), $this->insertUser('sync-combo-p2')];
+
+        $this->expectException(GameStateException::class);
+        $this->games->createGame($userIds[0], $userIds, synchronousMode: true, timeoutMinutes: 30, timeoutAction: 'skip');
+    }
+
+    public function testCreateGameRejectsSynchronousModeCombinedWithTotalTimeLimitMinutes(): void
+    {
+        $userIds = [$this->insertUser('sync-combo2-p1'), $this->insertUser('sync-combo2-p2')];
+
+        $this->expectException(GameStateException::class);
+        $this->games->createGame($userIds[0], $userIds, synchronousMode: true, totalTimeLimitMinutes: 60);
+    }
+
+    public function testCreateGameRejectsSynchronousModeForAnUnsupportedFormat(): void
+    {
+        $creator = $this->insertUser('sync-team-p1');
+        $partner = $this->insertUser('sync-team-p2');
+        $opp1 = $this->insertUser('sync-team-p3');
+        $opp2 = $this->insertUser('sync-team-p4');
+
+        $this->expectException(GameStateException::class);
+        $this->games->createGame($creator, [$creator, $partner, $opp1, $opp2], format: 'team', partnerUserId: $partner, synchronousMode: true);
+    }
+
+    public function testCreateGameRejectsSynchronousModeWithMoreThanTwoPlayers(): void
+    {
+        $userIds = [$this->insertUser('sync-3p-a'), $this->insertUser('sync-3p-b'), $this->insertUser('sync-3p-c')];
+
+        $this->expectException(GameStateException::class);
+        $this->games->createGame($userIds[0], $userIds, synchronousMode: true);
+    }
+
+    public function testCreateGameAcceptsSynchronousModeForTwoPlayerTraditional(): void
+    {
+        $userIds = [$this->insertUser('sync-ok-p1'), $this->insertUser('sync-ok-p2')];
+
+        $gameId = $this->games->createGame($userIds[0], $userIds, synchronousMode: true);
+
+        self::assertSame(1, (int) $this->fetchGame($gameId)['synchronous_mode']);
+    }
+
+    // A synchronous-mode game's status stays 'waiting' -- and startGame()
+    // keeps rejecting it -- until every human seat has clicked Ready;
+    // a practice bot seat is stamped ready at seating time (see
+    // createGame()'s own docblock), so a human-vs-bot synchronous game
+    // only ever needs the human's own markReady() call.
+    public function testStartGameRejectsASynchronousGameUntilBothPlayersAreReady(): void
+    {
+        $userIds = [$this->insertUser('sync-ready-p1'), $this->insertUser('sync-ready-p2')];
+        $gameId = $this->games->createGame($userIds[0], $userIds, synchronousMode: true);
+
+        $this->expectException(GameStateException::class);
+        $this->games->startGame($gameId);
+    }
+
+    public function testMarkReadyLetsTheGameStartOnceEveryoneHasClickedReady(): void
+    {
+        $userIds = [$this->insertUser('sync-ready2-p1'), $this->insertUser('sync-ready2-p2')];
+        $gameId = $this->games->createGame($userIds[0], $userIds, synchronousMode: true);
+        $p1 = $this->games->gamePlayerIdFor($gameId, $userIds[0]);
+        $p2 = $this->games->gamePlayerIdFor($gameId, $userIds[1]);
+
+        $firstResult = $this->games->markReady($gameId, $p1);
+        self::assertFalse($firstResult['all_ready']);
+        self::assertSame('waiting', $this->fetchGame($gameId)['status'], 'still waiting on the second seat');
+
+        $secondResult = $this->games->markReady($gameId, $p2);
+        self::assertTrue($secondResult['all_ready']);
+
+        $this->games->startGame($gameId);
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
+    }
+
+    public function testMarkReadyIsIdempotent(): void
+    {
+        $userIds = [$this->insertUser('sync-ready3-p1'), $this->insertUser('sync-ready3-p2')];
+        $gameId = $this->games->createGame($userIds[0], $userIds, synchronousMode: true);
+        $p1 = $this->games->gamePlayerIdFor($gameId, $userIds[0]);
+
+        $this->games->markReady($gameId, $p1);
+        $result = $this->games->markReady($gameId, $p1);
+
+        self::assertFalse($result['all_ready']);
+    }
+
+    public function testMarkReadyRejectsAPlayerNotSeatedInTheGame(): void
+    {
+        $userIds = [$this->insertUser('sync-ready4-p1'), $this->insertUser('sync-ready4-p2')];
+        $gameId = $this->games->createGame($userIds[0], $userIds, synchronousMode: true);
+        $outsiderUserId = $this->insertUser('sync-ready4-outsider');
+        $otherGameId = $this->games->createGame($outsiderUserId, [$outsiderUserId, $this->insertUser('sync-ready4-outsider-opp')]);
+        $outsiderGamePlayerId = $this->games->gamePlayerIdFor($otherGameId, $outsiderUserId);
+
+        $this->expectException(GameStateException::class);
+        $this->games->markReady($gameId, $outsiderGamePlayerId);
+    }
+
+    public function testMarkReadyRejectsANonSynchronousGame(): void
+    {
+        $userIds = [$this->insertUser('sync-ready5-p1'), $this->insertUser('sync-ready5-p2')];
+        $gameId = $this->games->createGame($userIds[0], $userIds);
+        $p1 = $this->games->gamePlayerIdFor($gameId, $userIds[0]);
+
+        $this->expectException(GameStateException::class);
+        $this->games->markReady($gameId, $p1);
+    }
+
+    // A practice bot has no one to click Ready on its own behalf --
+    // stamped ready at seating time so a human-vs-bot synchronous game
+    // only ever needs the human's own markReady() call.
+    public function testSynchronousGameStartsOnceTheOnlyHumanIsReadyWhenTheOpponentIsABot(): void
+    {
+        $human = $this->insertUser('sync-bot-human');
+        $botUserId = $this->insertBotUser('sync-bot-opp');
+        $gameId = $this->games->createGame($human, [$human, $botUserId], synchronousMode: true);
+        $humanGamePlayerId = $this->games->gamePlayerIdFor($gameId, $human);
+
+        $result = $this->games->markReady($gameId, $humanGamePlayerId);
+
+        self::assertTrue($result['all_ready']);
+        $this->games->startGame($gameId);
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
+    }
+
+    public function testGetStateExposesSynchronousModeAndPerPlayerReadyFlags(): void
+    {
+        $userIds = [$this->insertUser('sync-state-p1'), $this->insertUser('sync-state-p2')];
+        $gameId = $this->games->createGame($userIds[0], $userIds, synchronousMode: true);
+        $p1 = $this->games->gamePlayerIdFor($gameId, $userIds[0]);
+        $this->games->markReady($gameId, $p1);
+
+        $state = $this->games->getState($gameId, $userIds[0]);
+
+        self::assertTrue($state['game']['synchronous_mode']);
+        $readyByGamePlayerId = array_column($state['players'], 'ready', 'game_player_id');
+        self::assertTrue($readyByGamePlayerId[$p1]);
+        self::assertFalse($readyByGamePlayerId[$this->games->gamePlayerIdFor($gameId, $userIds[1])]);
+    }
+
+    // ready_at is simply never touched for a human seat outside
+    // synchronous mode -- 'ready' reads false for every human player of
+    // an ordinary game, but nothing anywhere ever checks it, matching
+    // every other opt-in field's "inert unless its own feature is on"
+    // treatment.
+    public function testGetStateExposesSynchronousModeFalseForAnOrdinaryGame(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1] = $this->buildThreePlayerFixture();
+
+        $state = $this->games->getState($gameId, $u1);
+
+        self::assertFalse($state['game']['synchronous_mode']);
+    }
 }

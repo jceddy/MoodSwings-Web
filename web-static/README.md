@@ -1696,6 +1696,45 @@ comes from) for either the per-turn timeout OR the full-game total-time
 limit crossing under 15 minutes remaining, whichever seated player it's
 actually about.
 
+### Synchronous mode (reported live)
+
+`#new-game-synchronous-enabled-label` (right after the full-game
+time-limit checkbox) opts into a THIRD, mutually exclusive mode --
+checking it unchecks (and re-hides the sub-fields of) both async
+checkboxes above, and vice versa (`enforceSynchronousExclusivityFromSynchronousCheckbox()`/
+`enforceSynchronousExclusivityFromAsyncCheckboxes()`), matching
+`createGame()`'s own validation that a game never combines them. Only
+shown for exactly 2 players in Traditional/Duel so far
+(`SYNCHRONOUS_MODE_ALLOWED_FORMATS`, mirroring `GameService::SYNCHRONOUS_MODE_ALLOWED_FORMATS`
+exactly) -- `updateSynchronousFieldVisibility()` re-runs on every format/
+deck-type/opponent-checkbox change `updateBestOfThreeFieldVisibility()`
+already does, since "exactly 2 total players" depends on the same
+`currentNewGamePlayerCount()` that one already reads. Draft/Sealed Deck
+support (and the rest of the mechanic: a live 30-second action timer,
+timeout-extension banking, and a match-wide chess clock) are planned
+follow-ups -- see `php-app/README.md`'s own "Synchronous mode" roadmap;
+this increment is just the mode flag and the pre-game ready check.
+
+**Ready-check panel** (`#ready-check-panel`, shown in place of the
+ordinary "Waiting for the game to start" text once `state.game.status
+=== 'waiting'` for a `synchronous_mode` game) -- `renderReadyCheckPanel()`
+lists every seated player's own `players[].ready` flag and shows an "I'm
+ready" button (`#ready-check-button`) that calls `POST /games/ready`
+(`markReady()` in `app.js`), hiding itself the moment the viewer's own
+row reads ready (mirrors how `renderDuelDeckSubmission()`'s own
+submission form disappears once `deck_submitted` is true). No new
+push/polling infrastructure needed: the board's own existing 4-second
+`GET /games/state` poll (see "Browser push notifications"'s own presence
+docblock in `php-app/README.md`) is what notices every seat has readied
+up, at which point `renderBoard()` calls the same `autoStartGameIfReady()`
+every other "waiting" precondition on this page already uses (decklist
+submission, draft decks) -- just gated on `state.players.every((p) =>
+p.ready)` instead of that precondition's own check.
+
+The board title's own parenthetical gets a fourth, mutually-exclusive
+clause for this mode (`", synchronous"`), alongside the existing
+per-turn-timeout/total-time-limit descriptions.
+
 ## Pages
 
 - `index.html` (`/`) — Login form. If the visitor already has an active

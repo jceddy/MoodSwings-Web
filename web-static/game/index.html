@@ -139,6 +139,19 @@
             <button id="spectate-share-button" type="button" hidden>Share spectate code</button>
             <h2 id="board-title"></h2>
             <p id="board-round-status"></p>
+            <!-- Synchronous mode's own pre-game ready check (reported
+                 live) -- shown only while state.game.status === 'waiting'
+                 AND state.game.synchronous_mode is true, replacing the
+                 ordinary "Waiting for the game to start" text for that
+                 one case. #ready-check-status lists each seat's own
+                 ready/not-ready state; #ready-check-button calls
+                 markReady() for the viewer's own seat and hides itself
+                 once they've clicked it. See renderBoard() in game.js. -->
+            <div id="ready-check-panel" hidden>
+                <p>Both players must confirm they're ready before this game deals.</p>
+                <ul id="ready-check-status"></ul>
+                <button id="ready-check-button" type="button">I'm ready</button>
+            </div>
             <p id="draft-match-scoreline" hidden></p>
             <button id="draft-match-next-game-button" type="button" hidden>Go to next game &rarr;</button>
             <!-- Rematch (issue #398): offered only to this game's own
@@ -684,6 +697,9 @@
                 </label>
                 <p>A hard cap, separate from the idle time-out above: however long each player has spent actually taking their own turns and responses, added up over the whole game, before they're automatically resigned. Also checked at most every 15 minutes.</p>
             </div>
+
+            <label class="new-game-field" id="new-game-synchronous-enabled-label"><input type="checkbox" id="new-game-synchronous-enabled"> Synchronous mode (play live, right now)</label>
+            <p id="new-game-synchronous-description" hidden>Both players must be ready before the game deals -- mutually exclusive with the idle time-out/total-time-limit options above.</p>
 
             <div id="new-game-decklist-fields" hidden>
                 <label>Use a saved deck

@@ -187,6 +187,25 @@ final class GameService
     private const TOTAL_TIME_LIMIT_MAX_MINUTES = 4320;
 
     /**
+     * Reported live: "synchronous" mode -- two players who are both
+     * actually sitting down to play live, right now, as opposed to issue
+     * #85's own ASYNC opt-ins above (a slow/disconnected player is
+     * resolved on their behalf after minutes to days of idle time).
+     * Mutually exclusive with $timeoutMinutes/$totalTimeLimitMinutes --
+     * see createGame()'s own validation.
+     *
+     * Landing in increments, the same way issue #85 itself shipped team-
+     * decision coverage and the full-game time-limit mode as separate
+     * follow-ups rather than all at once: this first increment is just
+     * the mode flag and the pre-game "ready check" (games.synchronous_mode,
+     * game_players.ready_at, migration 0329) for 2-player Traditional/
+     * Duel. $SYNCHRONOUS_MODE_ALLOWED_FORMATS narrows as later increments
+     * add Draft/Sealed Deck support -- see php-app/README.md's
+     * "Synchronous mode" section for the full roadmap.
+     */
+    private const SYNCHRONOUS_MODE_ALLOWED_FORMATS = ['standard', 'duel'];
+
+    /**
      * The 'power' deck_type's own non-Mythic card count -- see
      * buildPowerDeckCardIds(), which pairs this many random non-Mythic
      * cards with exactly one random Mythic (15 total).
@@ -1535,6 +1554,19 @@ final class GameService
         // error); a value outside self::TOTAL_TIME_LIMIT_MIN_MINUTES..
         // self::TOTAL_TIME_LIMIT_MAX_MINUTES IS an error.
         ?int $totalTimeLimitMinutes = null,
+        // Reported live: "synchronous" mode -- see
+        // self::SYNCHRONOUS_MODE_ALLOWED_FORMATS' own docblock for the
+        // full picture and roadmap. Mutually exclusive with
+        // $timeoutMinutes/$totalTimeLimitMinutes above (an error to
+        // combine, direct misuse rather than a deck_type this feature
+        // was never meant to reach); restricted to exactly 2 players in
+        // one of self::SYNCHRONOUS_MODE_ALLOWED_FORMATS for now (also an
+        // error otherwise -- unlike Sealed Pool of the Day's own silent
+        // no-op exclusion from $timeoutMinutes, "team play" or "draft"
+        // aren't a permanent design exclusion here, just not built yet,
+        // so a clear rejection is more honest than quietly dropping the
+        // flag).
+        bool $synchronousMode = false,
     ): int {
         if (count($userIds) > self::MAX_PLAYERS) {
             throw new GameStateException('A game cannot have more than ' . self::MAX_PLAYERS . ' players');
@@ -1611,6 +1643,17 @@ final class GameService
                 'A full-game time limit must be between ' . (self::TOTAL_TIME_LIMIT_MIN_MINUTES / 60)
                 . ' and ' . (self::TOTAL_TIME_LIMIT_MAX_MINUTES / 60) . ' hours'
             );
+        }
+        if ($synchronousMode) {
+            if ($timeoutMinutes !== null || $totalTimeLimitMinutes !== null) {
+                throw new GameStateException('Synchronous mode cannot be combined with the async timeout_minutes/total_time_limit_minutes settings');
+            }
+            if (!in_array($format, self::SYNCHRONOUS_MODE_ALLOWED_FORMATS, true)) {
+                throw new GameStateException("Synchronous mode doesn't support the \"{$format}\" format yet -- only Traditional and Duel are supported so far");
+            }
+            if (count($userIds) !== 2) {
+                throw new GameStateException('Synchronous mode requires exactly 2 players');
+            }
         }
         if ($deckType === 'rotisserie_draft' && ($rotisserieDraftCutoffCount < self::ROTISSERIE_DRAFT_MIN_CUTOFF || $rotisserieDraftCutoffCount > self::ROTISSERIE_DRAFT_MAX_CUTOFF)) {
             throw new GameStateException(
@@ -1950,13 +1993,13 @@ final class GameService
                     custom_duel_rules_preset, custom_duel_min_cards, custom_duel_rarity_limits, custom_duel_duplicate_limits,
                     custom_duel_even_color_distribution_rarities, draft_match_id, game_match_id, match_game_number,
                     status, created_by_user_id, wins_needed, default_selections_mode, bot_goes_first, diagnostic_mode,
-                    timeout_minutes, timeout_action, total_time_limit_minutes
+                    timeout_minutes, timeout_action, total_time_limit_minutes, synchronous_mode
                  ) VALUES (
                     :format, :deck_type, :custom_deck_name, :custom_deck_card_ids,
                     :duel_rules_preset, :duel_min_cards, :duel_rarity_limits, :duel_duplicate_limits,
                     :duel_even_color_distribution_rarities, :draft_match_id, :game_match_id, :match_game_number,
                     'waiting', :created_by, :wins_needed, :default_selections_mode, :bot_goes_first, :diagnostic_mode,
-                    :timeout_minutes, :timeout_action, :total_time_limit_minutes
+                    :timeout_minutes, :timeout_action, :total_time_limit_minutes, :synchronous_mode
                  )"
             );
             $insertGame->execute([
@@ -1980,6 +2023,7 @@ final class GameService
                 'timeout_minutes' => $timeoutMinutesForGame,
                 'timeout_action' => $timeoutActionForGame,
                 'total_time_limit_minutes' => $totalTimeLimitMinutesForGame,
+                'synchronous_mode' => $synchronousMode ? 1 : 0,
             ]);
             $gameId = (int) $pdo->lastInsertId();
 
@@ -2007,6 +2051,21 @@ final class GameService
                 ]);
                 if (in_array($userId, $botUserIds, true)) {
                     $botGamePlayerIdsByUserId[$userId] = (int) $pdo->lastInsertId();
+                }
+            }
+
+            // Synchronous mode's own ready check (see
+            // self::SYNCHRONOUS_MODE_ALLOWED_FORMATS' own docblock):
+            // there's no one to click Ready on a practice bot's behalf,
+            // so every bot seat is stamped ready immediately -- a
+            // harmless no-op for a non-synchronous game, the same
+            // "inert unless the feature's own opt-in is set" convention
+            // every other creation-time flag here already follows, since
+            // nothing reads game_players.ready_at otherwise.
+            if ($botGamePlayerIdsByUserId !== []) {
+                $markBotReady = $pdo->prepare('UPDATE game_players SET ready_at = NOW() WHERE id = :id');
+                foreach ($botGamePlayerIdsByUserId as $botGamePlayerId) {
+                    $markBotReady->execute(['id' => $botGamePlayerId]);
                 }
             }
 
@@ -2856,6 +2915,15 @@ final class GameService
             throw new GameStateException("Game {$gameId} needs at least " . self::MIN_PLAYERS . ' players to start');
         }
 
+        // Synchronous mode's own ready check -- see
+        // self::SYNCHRONOUS_MODE_ALLOWED_FORMATS' own docblock. A no-op
+        // for every other game, the same "only ever consulted once its
+        // own opt-in is set" treatment $timeoutMinutes/
+        // $totalTimeLimitMinutes already get elsewhere in this class.
+        if ((bool) $game['synchronous_mode'] && !$this->allPlayersReady($playerIds)) {
+            throw new GameStateException("Game {$gameId} cannot start until every player is ready");
+        }
+
         $customDuelDeckCardIds = $game['deck_type'] === 'custom_duel'
             ? $this->requireCustomDuelDecksSubmitted($gameId, $playerIds)
             : [];
@@ -3091,6 +3159,53 @@ final class GameService
             $pdo->rollBack();
             throw $e;
         }
+    }
+
+    /**
+     * Synchronous mode's own pre-game "I'm actually here, deal me in"
+     * confirmation (see self::SYNCHRONOUS_MODE_ALLOWED_FORMATS' own
+     * docblock) -- idempotent (a second call from the same seat is a
+     * harmless no-op, matching acknowledgeTurnStart()'s own convention),
+     * rejects a seat that isn't actually in this game, and rejects
+     * calling it at all on a non-synchronous game (there's nothing to
+     * ready up for). Once every seat's own ready_at is non-NULL, the
+     * game is eligible to start -- see startGame()'s own gate -- but
+     * this method itself never starts anything; like every other
+     * "waiting" precondition in this class (decklist submission, draft
+     * decks), the frontend's own poll-and-retry (autoStartGameIfReady())
+     * is what actually calls startGame() once it notices readiness.
+     *
+     * @return array{all_ready: bool}
+     */
+    public function markReady(int $gameId, int $gamePlayerId): array
+    {
+        $game = $this->fetchGame($gameId);
+        if (!(bool) $game['synchronous_mode']) {
+            throw new GameStateException("Game {$gameId} isn't a synchronous-mode game -- there's no ready check to answer");
+        }
+
+        $playerIds = $this->seatOrder($gameId);
+        if (!in_array($gamePlayerId, $playerIds, true)) {
+            throw new GameStateException("Player {$gamePlayerId} isn't seated in game {$gameId}");
+        }
+
+        Connection::get()
+            ->prepare('UPDATE game_players SET ready_at = COALESCE(ready_at, NOW()) WHERE id = :id')
+            ->execute(['id' => $gamePlayerId]);
+
+        return ['all_ready' => $this->allPlayersReady($playerIds)];
+    }
+
+    /** @param int[] $playerIds every seated game_players.id to check, per seatOrder() */
+    private function allPlayersReady(array $playerIds): bool
+    {
+        $placeholders = implode(',', array_fill(0, count($playerIds), '?'));
+        $stmt = Connection::get()->prepare(
+            "SELECT COUNT(*) FROM game_players WHERE id IN ({$placeholders}) AND ready_at IS NOT NULL"
+        );
+        $stmt->execute($playerIds);
+
+        return (int) $stmt->fetchColumn() === count($playerIds);
     }
 
     /**
@@ -11246,13 +11361,13 @@ final class GameService
                 custom_duel_rules_preset, custom_duel_min_cards, custom_duel_rarity_limits, custom_duel_duplicate_limits,
                 custom_duel_even_color_distribution_rarities, game_match_id, match_game_number,
                 status, created_by_user_id, wins_needed, default_selections_mode, diagnostic_mode,
-                timeout_minutes, timeout_action, total_time_limit_minutes
+                timeout_minutes, timeout_action, total_time_limit_minutes, synchronous_mode
              ) VALUES (
                 :format, :deck_type, :custom_deck_name, :custom_deck_card_ids,
                 :duel_rules_preset, :duel_min_cards, :duel_rarity_limits, :duel_duplicate_limits,
                 :duel_even_color_distribution_rarities, :game_match_id, :match_game_number,
                 'waiting', :created_by, :wins_needed, :default_selections_mode, :diagnostic_mode,
-                :timeout_minutes, :timeout_action, :total_time_limit_minutes
+                :timeout_minutes, :timeout_action, :total_time_limit_minutes, :synchronous_mode
              )"
         );
         $insertGame->execute([
@@ -11291,6 +11406,14 @@ final class GameService
             // own identical comment for why active_seconds_used itself
             // needs no analogous carry-forward).
             'total_time_limit_minutes' => $game['total_time_limit_minutes'],
+            // Synchronous mode -- same "chosen once at match creation,
+            // carried through every match game" treatment as
+            // timeout_minutes/total_time_limit_minutes above; each match
+            // game's own ready check still starts fresh (see the
+            // bot-auto-ready loop just below) since a new set of
+            // game_players rows means everyone's own ready_at resets to
+            // NULL by that column's own default.
+            'synchronous_mode' => (int) $game['synchronous_mode'],
         ]);
         $nextGameId = (int) $pdo->lastInsertId();
 
@@ -11299,6 +11422,7 @@ final class GameService
              VALUES (:game_id, :user_id, :seat_order, :team_id, :custom_deck_name, :custom_deck_card_ids, :custom_deck_sideboard_card_ids)'
         );
         $humanCustomDuelSeatUserIds = [];
+        $markBotReady = $pdo->prepare('UPDATE game_players SET ready_at = NOW() WHERE id = :id');
         foreach ($seats as $seat) {
             $isBotCustomDuel = $game['deck_type'] === 'custom_duel' && (bool) $seat['is_bot'];
             $carryForwardCustomDeck = $isBotCustomDuel || $isLockedPowerDuelMatch;
@@ -11313,6 +11437,12 @@ final class GameService
             ]);
             if ($game['deck_type'] === 'custom_duel' && !$seat['is_bot'] && !$isLockedPowerDuelMatch) {
                 $humanCustomDuelSeatUserIds[] = (int) $seat['user_id'];
+            }
+            // Synchronous mode's own ready check -- see createGame()'s
+            // own identical bot-auto-ready comment; a harmless no-op
+            // outside a synchronous-mode match.
+            if ((bool) $seat['is_bot']) {
+                $markBotReady->execute(['id' => (int) $pdo->lastInsertId()]);
             }
         }
 
@@ -15730,7 +15860,7 @@ final class GameService
         $pdo = Connection::get();
 
         $playersStmt = $pdo->prepare(
-            'SELECT gp.id, gp.user_id, gp.seat_order, gp.team_id, gp.custom_deck_name, gp.custom_deck_card_ids, gp.resigned_at, gp.active_seconds_used, u.username, u.share_presence, u.is_bot FROM game_players gp
+            'SELECT gp.id, gp.user_id, gp.seat_order, gp.team_id, gp.custom_deck_name, gp.custom_deck_card_ids, gp.resigned_at, gp.active_seconds_used, gp.ready_at, u.username, u.share_presence, u.is_bot FROM game_players gp
              JOIN users u ON u.id = gp.user_id
              WHERE gp.game_id = :game_id ORDER BY gp.seat_order ASC'
         );
@@ -15876,6 +16006,14 @@ final class GameService
                 // Practice bot (issue #140) -- see "Practice bots" in
                 // php-app/README.md.
                 'is_bot' => (bool) $row['is_bot'],
+                // Synchronous mode's own ready check -- always present
+                // (not just when games.synchronous_mode is on) for the
+                // same reason active_seconds_used already is: harmless
+                // to expose, and this way the frontend never needs a
+                // separate "does this game even have a ready check"
+                // branch just to read one field. See markReady()'s own
+                // docblock.
+                'ready' => $row['ready_at'] !== null,
                 'hand_count' => $handCounts[(int) $row['id']] ?? 0,
                 'total_wins' => $this->totalWinsFor($gameId, (int) $row['id']),
                 // Overwritten below with the live sum of this player's
@@ -16003,6 +16141,13 @@ final class GameService
                 // same "visible to the players playing it" treatment,
                 // independent of timeout_minutes/timeout_action above.
                 'total_time_limit_minutes' => $game['total_time_limit_minutes'] !== null ? (int) $game['total_time_limit_minutes'] : null,
+                // Reported live: "synchronous" mode -- see
+                // self::SYNCHRONOUS_MODE_ALLOWED_FORMATS' own docblock.
+                // The per-seat "ready" flag itself lives on each entry
+                // in players[] (see the loop above) rather than here,
+                // since this is the one setting that's genuinely
+                // per-player, not per-game.
+                'synchronous_mode' => (bool) $game['synchronous_mode'],
                 'winner_game_player_id' => $game['winner_game_player_id'] !== null ? (int) $game['winner_game_player_id'] : null,
                 // Every winning username -- both teammates' for a
                 // team-format win, just the one player's otherwise. Empty

@@ -1131,6 +1131,11 @@ if ($path === '/games' && $method === 'POST') {
     // of timeout_minutes/timeout_action above. See createGame()'s own
     // $totalTimeLimitMinutes docblock.
     $totalTimeLimitMinutes = isset($body['total_time_limit_minutes']) ? (int) $body['total_time_limit_minutes'] : null;
+    // Reported live: "synchronous" mode -- mutually exclusive with
+    // timeout_minutes/total_time_limit_minutes above, left for
+    // createGame()'s own validation to reject if combined. See
+    // createGame()'s own $synchronousMode docblock.
+    $synchronousMode = (bool) ($body['synchronous_mode'] ?? false);
     // Only meaningful for deck_type 'rotisserie_draft' -- see createGame()'s own docblock.
     $rotisserieDraftPoolSource = isset($body['rotisserie_draft_pool_source']) ? (string) $body['rotisserie_draft_pool_source'] : null;
     $rotisserieDraftCustomPoolText = isset($body['rotisserie_draft_custom_pool_text']) ? (string) $body['rotisserie_draft_custom_pool_text'] : null;
@@ -1194,6 +1199,7 @@ if ($path === '/games' && $method === 'POST') {
             $timeoutMinutes,
             $timeoutAction,
             $totalTimeLimitMinutes,
+            $synchronousMode,
         );
         respond(201, ['status' => 'ok', 'game_id' => $gameId]);
     } catch (GameStateException $e) {
@@ -1267,6 +1273,9 @@ function openGameCreateParamsFromRequestBody(array $body): array
         // Issue #85 follow-up's own full-game time-limit mode -- see
         // createGame()'s own $totalTimeLimitMinutes docblock.
         'total_time_limit_minutes' => isset($body['total_time_limit_minutes']) ? (int) $body['total_time_limit_minutes'] : null,
+        // Reported live: "synchronous" mode -- see createGame()'s own
+        // $synchronousMode docblock.
+        'synchronous_mode' => (bool) ($body['synchronous_mode'] ?? false),
     ];
 }
 
@@ -1761,6 +1770,24 @@ if ($path === '/games/start' && $method === 'POST') {
         // comment on POST /games/play above.
         $autoResult = $games->advanceAutomatedTurns($gameId);
         respond(200, ['status' => 'ok', ...($autoResult ?? [])]);
+    } catch (GameStateException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+// Reported live: "synchronous" mode's own pre-game ready check -- see
+// GameService::markReady()'s own docblock. Idempotent; the frontend
+// keeps polling GET /games/state the same way it already does for
+// decklist submission until autoStartGameIfReady() notices every seat
+// is ready and calls POST /games/start itself.
+if ($path === '/games/ready' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $gameId = (int) ($body['game_id'] ?? 0);
+    $gamePlayerId = requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    try {
+        respond(200, ['status' => 'ok', ...$games->markReady($gameId, $gamePlayerId)]);
     } catch (GameStateException $e) {
         respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
     }
