@@ -20270,4 +20270,250 @@ final class GameServiceIntegrationTest extends TestCase
 
         self::assertFalse($state['game']['synchronous_mode']);
     }
+
+    // -- Synchronous mode, increment 2: 30s action timer + extension banking --
+
+    /**
+     * A hand-built in_progress synchronous game (mirrors
+     * buildTimeoutTurnFixture()'s own style) -- p1 has a single always-
+     * legal hand card (Apathy) and is on the clock, both seats start
+     * with 2 banked extensions (matching SYNCHRONOUS_STARTING_EXTENSIONS),
+     * and action_deadline_at/action_deadline_game_player_id are set
+     * directly to whatever the caller needs rather than going through
+     * createGame()/startGame()/markReady() -- this file's own
+     * established shortcut for exercising the sweep/enforcement logic in
+     * isolation from the ready-check/dealing machinery increment 1
+     * already covers elsewhere.
+     */
+    private function buildSynchronousFixture(int $deadlineSecondsFromNow = 30): array
+    {
+        $u1 = $this->insertUser('sync-timer-p1-' . uniqid());
+        $u2 = $this->insertUser('sync-timer-p2-' . uniqid());
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed, synchronous_mode, last_move_at)
+             VALUES ('standard', 'in_progress', :created_by, 3, 1, NOW())"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $this->pdo->prepare('UPDATE game_players SET timeout_extensions_banked = 2 WHERE game_id = :g')->execute(['g' => $gameId]);
+
+        $handCardId = $this->insertGameCard($gameId, 55, 'hand', $p1); // Apathy -- a plain, always-legal play
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->pdo->prepare('UPDATE games SET action_deadline_at = :deadline, action_deadline_game_player_id = :p1 WHERE id = :g')->execute([
+            'deadline' => date('Y-m-d H:i:s', time() + $deadlineSecondsFromNow),
+            'p1' => $p1,
+            'g' => $gameId,
+        ]);
+
+        return ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2, 'p1' => $p1, 'p2' => $p2, 'handCardId' => $handCardId];
+    }
+
+    public function testStartGameGrantsStartingExtensionsAndSetsTheInitialActionDeadline(): void
+    {
+        $userIds = [$this->insertUser('sync-start-p1'), $this->insertUser('sync-start-p2')];
+        $gameId = $this->games->createGame($userIds[0], $userIds, synchronousMode: true);
+        $p1 = $this->games->gamePlayerIdFor($gameId, $userIds[0]);
+        $p2 = $this->games->gamePlayerIdFor($gameId, $userIds[1]);
+        $this->games->markReady($gameId, $p1);
+        $this->games->markReady($gameId, $p2);
+
+        $this->games->startGame($gameId);
+
+        $extStmt = $this->pdo->prepare('SELECT timeout_extensions_banked FROM game_players WHERE id = :id');
+        $extStmt->execute(['id' => $p1]);
+        self::assertSame(2, (int) $extStmt->fetchColumn());
+        $extStmt->execute(['id' => $p2]);
+        self::assertSame(2, (int) $extStmt->fetchColumn());
+
+        $game = $this->fetchGame($gameId);
+        self::assertNotNull($game['action_deadline_at']);
+        $round = $this->fetchRound($gameId);
+        self::assertSame((int) $round['current_turn_game_player_id'], (int) $game['action_deadline_game_player_id']);
+    }
+
+    public function testACleanActionResetsConsecutiveTimeoutsAndAdvancesTheDeadline(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1] = $this->buildSynchronousFixture();
+        $this->pdo->prepare('UPDATE game_players SET consecutive_timed_out_actions = 1 WHERE id = :id')->execute(['id' => $p1]);
+
+        $this->games->pass($gameId, $p1);
+
+        $rowStmt = $this->pdo->prepare('SELECT consecutive_timed_out_actions, clean_turn_streak FROM game_players WHERE id = :id');
+        $rowStmt->execute(['id' => $p1]);
+        $row = $rowStmt->fetch();
+        self::assertSame(0, (int) $row['consecutive_timed_out_actions'], 'a real, on-time action must clear any timeout streak');
+        self::assertSame(1, (int) $row['clean_turn_streak']);
+
+        $game = $this->fetchGame($gameId);
+        $round = $this->fetchRound($gameId);
+        $expectedIdle = $round['current_turn_game_player_id'] !== null ? (int) $round['current_turn_game_player_id'] : null;
+        self::assertSame($expectedIdle, $game['action_deadline_game_player_id'] !== null ? (int) $game['action_deadline_game_player_id'] : null);
+        self::assertNotNull($game['action_deadline_at']);
+    }
+
+    public function testThreeCleanTurnsInARowBankOneMoreExtension(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1] = $this->buildSynchronousFixture();
+        $this->pdo->prepare('UPDATE game_players SET clean_turn_streak = 2, timeout_extensions_banked = 2 WHERE id = :id')->execute(['id' => $p1]);
+
+        $this->games->pass($gameId, $p1);
+
+        $rowStmt = $this->pdo->prepare('SELECT clean_turn_streak, timeout_extensions_banked FROM game_players WHERE id = :id');
+        $rowStmt->execute(['id' => $p1]);
+        $row = $rowStmt->fetch();
+        self::assertSame(0, (int) $row['clean_turn_streak'], 'the streak resets once it pays out');
+        self::assertSame(3, (int) $row['timeout_extensions_banked']);
+    }
+
+    public function testBankedExtensionsAreCappedAtFive(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1] = $this->buildSynchronousFixture();
+        $this->pdo->prepare('UPDATE game_players SET clean_turn_streak = 2, timeout_extensions_banked = 5 WHERE id = :id')->execute(['id' => $p1]);
+
+        $this->games->pass($gameId, $p1);
+
+        $extStmt = $this->pdo->prepare('SELECT timeout_extensions_banked FROM game_players WHERE id = :id');
+        $extStmt->execute(['id' => $p1]);
+        self::assertSame(5, (int) $extStmt->fetchColumn());
+    }
+
+    public function testEnforceSynchronousActionDeadlineIsANoOpBeforeTheDeadline(): void
+    {
+        ['gameId' => $gameId, 'handCardId' => $handCardId] = $this->buildSynchronousFixture(30);
+
+        $this->games->enforceSynchronousActionDeadline($gameId);
+
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
+        $cardStmt = $this->pdo->prepare('SELECT zone FROM game_cards WHERE id = :id');
+        $cardStmt->execute(['id' => $handCardId]);
+        self::assertSame('hand', $cardStmt->fetchColumn());
+    }
+
+    public function testEnforceSynchronousActionDeadlineConsumesABankedExtensionInsteadOfActing(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'handCardId' => $handCardId] = $this->buildSynchronousFixture(-5);
+        $beforeDeadline = $this->fetchGame($gameId)['action_deadline_at'];
+
+        $this->games->enforceSynchronousActionDeadline($gameId);
+
+        $rowStmt = $this->pdo->prepare('SELECT timeout_extensions_banked, consecutive_timed_out_actions FROM game_players WHERE id = :id');
+        $rowStmt->execute(['id' => $p1]);
+        $row = $rowStmt->fetch();
+        self::assertSame(1, (int) $row['timeout_extensions_banked'], 'one extension consumed');
+        self::assertSame(0, (int) $row['consecutive_timed_out_actions'], 'covered by an extension is not a real lapse');
+
+        $game = $this->fetchGame($gameId);
+        self::assertGreaterThan(strtotime($beforeDeadline), strtotime($game['action_deadline_at']), 'the deadline moves back into the future');
+        self::assertSame($p1, (int) $game['action_deadline_game_player_id'], 'still the same idle player -- nothing was actually resolved');
+
+        $cardStmt = $this->pdo->prepare('SELECT zone FROM game_cards WHERE id = :id');
+        $cardStmt->execute(['id' => $handCardId]);
+        self::assertSame('hand', $cardStmt->fetchColumn(), 'an extension must never itself resolve the turn');
+
+        $eventStmt = $this->pdo->prepare("SELECT event_type FROM game_events WHERE game_id = :game_id ORDER BY id ASC");
+        $eventStmt->execute(['game_id' => $gameId]);
+        self::assertSame(['timeout_extension_used'], $eventStmt->fetchAll(PDO::FETCH_COLUMN));
+    }
+
+    public function testEnforceSynchronousActionDeadlineAutoPassesOnAFirstTimeoutWithNoExtensionsLeft(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'handCardId' => $handCardId] = $this->buildSynchronousFixture(-5);
+        $this->pdo->prepare('UPDATE game_players SET timeout_extensions_banked = 0 WHERE id = :id')->execute(['id' => $p1]);
+
+        $this->games->enforceSynchronousActionDeadline($gameId);
+
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
+        $cardStmt = $this->pdo->prepare('SELECT zone FROM game_cards WHERE id = :id');
+        $cardStmt->execute(['id' => $handCardId]);
+        self::assertSame('hand', $cardStmt->fetchColumn(), 'skip must pass, never play the legal card sitting in hand');
+
+        $consecutiveStmt = $this->pdo->prepare('SELECT consecutive_timed_out_actions FROM game_players WHERE id = :id');
+        $consecutiveStmt->execute(['id' => $p1]);
+        self::assertSame(1, (int) $consecutiveStmt->fetchColumn());
+
+        $eventStmt = $this->pdo->prepare("SELECT event_type FROM game_events WHERE game_id = :game_id ORDER BY id ASC");
+        $eventStmt->execute(['game_id' => $gameId]);
+        self::assertSame(['timeout_applied', 'turn_passed'], array_slice($eventStmt->fetchAll(PDO::FETCH_COLUMN), 0, 2));
+    }
+
+    public function testEnforceSynchronousActionDeadlineResignsOnASecondConsecutiveTimeout(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1] = $this->buildSynchronousFixture(-5);
+        $this->pdo->prepare('UPDATE game_players SET timeout_extensions_banked = 0, consecutive_timed_out_actions = 1 WHERE id = :id')->execute(['id' => $p1]);
+
+        $this->games->enforceSynchronousActionDeadline($gameId);
+
+        self::assertSame('completed', $this->fetchGame($gameId)['status']);
+        $resignedStmt = $this->pdo->prepare('SELECT resigned_at FROM game_players WHERE id = :id');
+        $resignedStmt->execute(['id' => $p1]);
+        self::assertNotNull($resignedStmt->fetchColumn());
+    }
+
+    public function testEnforceSynchronousActionDeadlineNeverActsOnABotsIdleTurn(): void
+    {
+        $u1 = $this->insertUser('sync-timer-bot-human-' . uniqid());
+        $botUserId = $this->insertBotUser('sync-timer-bot-' . uniqid());
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed, synchronous_mode, last_move_at)
+             VALUES ('standard', 'in_progress', :created_by, 3, 1, NOW())"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+        $this->insertGameCard($gameId, 55, 'hand', $botPlayerId);
+        $this->insertGameRound($gameId, 1, $p1, $botPlayerId, 1);
+        $this->pdo->prepare('UPDATE games SET action_deadline_at = :deadline, action_deadline_game_player_id = :bot WHERE id = :g')->execute([
+            'deadline' => date('Y-m-d H:i:s', time() - 5),
+            'bot' => $botPlayerId,
+            'g' => $gameId,
+        ]);
+
+        $this->games->enforceSynchronousActionDeadline($gameId);
+
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
+        $resignedStmt = $this->pdo->prepare('SELECT resigned_at FROM game_players WHERE id = :id');
+        $resignedStmt->execute(['id' => $botPlayerId]);
+        self::assertNull($resignedStmt->fetchColumn());
+    }
+
+    public function testApplyTimeoutsForAllActiveGamesIgnoresASynchronousGameOnlyRecentlyPastDeadline(): void
+    {
+        ['gameId' => $gameId] = $this->buildSynchronousFixture(-10);
+
+        self::assertSame(0, $this->games->applyTimeoutsForAllActiveGames());
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
+    }
+
+    public function testApplyTimeoutsForAllActiveGamesResignsAnAbandonedSynchronousGameAfterTheGraceThreshold(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1] = $this->buildSynchronousFixture(-301);
+
+        self::assertSame(1, $this->games->applyTimeoutsForAllActiveGames());
+
+        self::assertSame('completed', $this->fetchGame($gameId)['status']);
+        $resignedStmt = $this->pdo->prepare('SELECT resigned_at FROM game_players WHERE id = :id');
+        $resignedStmt->execute(['id' => $p1]);
+        self::assertNotNull($resignedStmt->fetchColumn());
+    }
+
+    public function testGetStateExposesActionDeadlineAndExtensionsBanked(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'p1' => $p1, 'p2' => $p2] = $this->buildSynchronousFixture();
+
+        $state = $this->games->getState($gameId, $u1);
+
+        self::assertNotNull($state['game']['action_deadline_at']);
+        self::assertSame($p1, $state['game']['action_deadline_game_player_id']);
+        $extByPlayer = array_column($state['players'], 'timeout_extensions_banked', 'game_player_id');
+        self::assertSame(2, $extByPlayer[$p1]);
+        self::assertSame(2, $extByPlayer[$p2]);
+    }
 }

@@ -4506,21 +4506,15 @@ scope mismatch).
 
 **Landing in increments**, the same way issue #85 itself shipped team-
 decision coverage and the full-game time-limit mode as separate follow-
-ups rather than all at once. This first increment is just the mode flag
-and the pre-game "ready check" for 2-player Traditional/Duel
-(`self::SYNCHRONOUS_MODE_ALLOWED_FORMATS = ['standard', 'duel']`).
-Planned follow-ups (not yet built): a 30-second action timer with
-timeout-extension banking (2 granted at game start, +1 per 3 clean
-turns, capped at 5; consuming a banked extension grants +30 seconds
-instead of auto-resolving; two consecutive auto-resolves with no
-extensions left auto-resigns the offending player) enforced
-opportunistically on every request touching the game (the same pattern
-`advanceAutomatedTurns()` already uses, not a new fast cron -- the
-15-minute sweep can't enforce a 30-second deadline); Draft/Sealed Deck
-support, including a 60-second-per-pick timer for the five draft-family
-deck_types and an untimed-but-clock-ticking deck-building/sideboard
-phase; and a match-wide (not per-game) 30-minute chess clock covering
-the whole best-of-three match, including time spent deck-building.
+ups rather than all at once. Shipped so far: the mode flag and pre-game
+"ready check" (increment 1), and the 30-second live action timer with
+timeout-extension banking (increment 2, below) -- both for 2-player
+Traditional/Duel (`self::SYNCHRONOUS_MODE_ALLOWED_FORMATS = ['standard', 'duel']`).
+Planned follow-ups (not yet built): Draft/Sealed Deck support, including
+a 60-second-per-pick timer for the five draft-family deck_types and an
+untimed-but-clock-ticking deck-building/sideboard phase; and a
+match-wide (not per-game) 30-minute chess clock covering the whole
+best-of-three match, including time spent deck-building.
 
 **The ready check** (`game_players.ready_at`, migration 0329) -- "each
 player needs to be seated/looking at the game before it starts." Every
@@ -4564,6 +4558,128 @@ each entry in `players[]` (per-player, since readiness is genuinely
 per-seat, not per-game). See "Synchronous mode" in `web-static/README.md`
 for the New Game dialog checkbox and the board's own ready-check panel
 this drives.
+
+**Increment 2: the live action timer** (migration 0330) -- "each player
+has 30 seconds to make a play/respond to a decision before a 30-second
+timer starts... if the timer expires, the player's action is
+skipped/auto-resolved." Two new columns on `games` --
+`action_deadline_at`/`action_deadline_game_player_id` -- track who's
+currently on the clock and when their window expires; three new columns
+on `game_players` -- `timeout_extensions_banked`/`clean_turn_streak`/
+`consecutive_timed_out_actions` -- track that player's own bank, streak,
+and how many times in a row their own window has lapsed with nothing
+left to cover it.
+
+`action_deadline_at` is deliberately its own new column, not a repurposed
+`last_move_at`: the two are different SHAPES of value (a hard, forward-
+looking deadline vs. a backward-looking "when did the clock last
+reset"), and `last_move_at` already has other consumers (the lobby's own
+sort order, `total_time_limit_minutes`' own `active_seconds_used`
+interval math) that assume it always means exactly the latter -- see
+`resetSynchronousActionDeadline()`'s own docblock for the full reasoning,
+mirroring `total_time_limit_minutes` (migration 0325) itself landing as
+an independent column beside `timeout_minutes`/`timeout_action` rather
+than folding into them.
+
+**Granting/earning/spending extensions** -- "players start a match with
+0 timeout extensions and are granted 2 once the game starts" is
+`self::SYNCHRONOUS_STARTING_EXTENSIONS`, granted inside `startGame()`'s
+own transaction for a `synchronous_mode` game (which also has to stamp
+`last_move_at = NOW()` there, for the same reason: it's otherwise left
+NULL until the first real move, which `resolveIdleGamePlayerAndSecondsSinceLastMove()`
+-- reused here to resolve round 1's own first-turn player -- requires to
+resolve anyone as idle at all; synchronous mode is mutually exclusive
+with `total_time_limit_minutes`, so this never disturbs that other
+feature's own reliance on the same gap). "Earn 1 additional extension
+for every 3 full turns played without triggering the countdown" is
+`self::SYNCHRONOUS_EXTENSION_EVERY_N_CLEAN_TURNS`, capped at
+`self::SYNCHRONOUS_MAX_BANKED_EXTENSIONS` (5) so a long clean streak
+can't stockpile an unbounded pile late-game. "When a countdown timer
+runs out, a banked timeout extension is automatically consumed to grant
+you an extra 30 seconds" is `enforceSynchronousActionDeadline()`'s own
+first check once a deadline has passed -- consuming one via a single
+guarded `UPDATE ... WHERE timeout_extensions_banked > 0` (atomic, immune
+to a double-decrement race even without an app-level lock) and logging a
+`timeout_extension_used` game-log event, without touching
+`consecutive_timed_out_actions` at all -- covering an expired window
+with a banked extension was never a lapse worth charging against the
+player.
+
+**`updateSynchronousActionClock()`** is `touchLastMoveAt()`'s own new
+synchronous-mode hook (fires for every credited action -- `playMood()`/
+`pass()`/`respondToDecision()`/`proposeTeamDecision()`/
+`confirmTeamDecision()` -- a no-op for every other game), and is the one
+piece of this whole mechanism worth reading closely: it judges "did this
+action land within its own 30-second window" purely by comparing NOW()
+against `action_deadline_at`/`action_deadline_game_player_id` as they
+stood BEFORE this action (read here, only overwritten at the very end).
+That same rule applies whether the acting player is a real human who
+submitted an ordinary action a little late, OR
+`enforceSynchronousActionDeadline()`'s own auto-resolved `pass()`/
+`respondToDecision()` call (which, by the time it runs, is by definition
+already past that same deadline) -- deliberately unified, so
+`enforceSynchronousActionDeadline()` never has to separately track "was
+this a timeout" before calling into either: this method works it out
+fresh, from the same timestamps either caller would have seen. On time:
+`consecutive_timed_out_actions` resets to 0 and `clean_turn_streak`
+increments (paying out an extension every 3rd). Late: `clean_turn_streak`
+resets to 0 and `consecutive_timed_out_actions` increments --
+`enforceSynchronousActionDeadline()`'s own cue for whether the NEXT
+lapse is the second in a row. Either way, ends by calling
+`resetSynchronousActionDeadline()` (also `startGame()`'s own means of
+setting the very first deadline) to compute a fresh one for whoever's
+actually on the clock now, reusing
+`resolveIdleGamePlayerAndSecondsSinceLastMove()` -- the exact same
+"who is this game actually waiting on" resolution the action-timeout
+warning indicator above already uses.
+
+**`enforceSynchronousActionDeadline()`** is the real-time enforcement
+itself -- called from `GET /games/state` on every ~4-second poll while
+the board is open (the same "cheap early-out, best-effort, never blocks
+the read that follows" treatment `advanceAutomatedTurns()` already gets
+there), NOT a cron: a 30-second deadline can't wait for the 15-minute
+sweep. With no extension left to consume, it's a real timeout: "two in a
+row" (`self::SYNCHRONOUS_AUTO_LOSS_AFTER_CONSECUTIVE_TIMEOUTS`) checks
+the idle player's own CURRENT `consecutive_timed_out_actions` (before
+this one) -- already at least 1 means resolving this one the same way
+would make it the second in a row, so this resigns them outright instead
+(`timeout_applied` event, `{"timeout_action": "resign", "synchronous": true, "consecutive": true}`).
+Otherwise (their first lapse), auto-resolves whatever they're idle on --
+a pending decision via the exact same `BotPlayerService::chooseDecisionAnswer()`
+default-answer machinery `applyTimeoutToGame()` itself uses, or an
+ordinary turn via a plain automated `pass()` -- always the "skip"
+behavior; synchronous mode has no configurable `timeout_action` the way
+the async opt-in does. Bot exclusion and the try/catch-and-log
+resilience (a stale read racing a real concurrent action just means this
+tick is skipped, same as the next poll gets another try) both mirror
+`applyTimeoutToGame()`'s own identical concerns.
+
+**`applySynchronousAbandonment()`** is the 15-minute cron's own
+abandonment-ONLY backstop -- "requires at least one player to have the
+game open/polling, if both players abandon the game, the 15-minute cron
+job... should detect and resolve it." `applyTimeoutsForAllActiveGames()`'s
+own candidate `SELECT` now also matches `synchronous_mode = 1` games, and
+`applyTimeoutToGame()` dispatches a synchronous game here immediately
+instead of the ordinary per-turn `timeout_minutes`/`timeout_action` logic
+below it. Only fires once a deadline has sat unresolved for
+`self::SYNCHRONOUS_ABANDONMENT_GRACE_SECONDS` (5 minutes) -- comfortably
+longer than any real gap between two ordinary ~4-second polls during
+actual live play, but short enough that the very first cron tick to see
+a genuinely abandoned game already clears the bar, rather than needing a
+threshold that risks missing it for another full 15-minute cycle. Always
+resigns outright (no extension/consecutive-timeout bookkeeping -- there's
+no live player here to charge a "first lapse" against, only an abandoned
+game to close out), the same `timeout_applied`/`resign` shape as the
+real-time auto-loss path, tagged `"abandoned"` instead of `"consecutive"`
+so the game log reads accurately either way.
+
+**Surfaced via `getState()`** -- `game.action_deadline_at`/
+`action_deadline_game_player_id` (both `null` outside synchronous mode)
+and a `timeout_extensions_banked` int on each entry in `players[]`
+(always present, harmless outside synchronous mode, the same treatment
+`ready` already gets). See "Synchronous mode" in `web-static/README.md`
+for the board's own live countdown and extension-count display these
+drive.
 
 ### Power Duel sideboarding
 

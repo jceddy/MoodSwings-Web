@@ -1710,10 +1710,10 @@ exactly) -- `updateSynchronousFieldVisibility()` re-runs on every format/
 deck-type/opponent-checkbox change `updateBestOfThreeFieldVisibility()`
 already does, since "exactly 2 total players" depends on the same
 `currentNewGamePlayerCount()` that one already reads. Draft/Sealed Deck
-support (and the rest of the mechanic: a live 30-second action timer,
-timeout-extension banking, and a match-wide chess clock) are planned
-follow-ups -- see `php-app/README.md`'s own "Synchronous mode" roadmap;
-this increment is just the mode flag and the pre-game ready check.
+support and a match-wide chess clock are still planned follow-ups -- see
+`php-app/README.md`'s own "Synchronous mode" roadmap; the live
+30-second action timer and timeout-extension banking below shipped as
+increment 2.
 
 **Ready-check panel** (`#ready-check-panel`, shown in place of the
 ordinary "Waiting for the game to start" text once `state.game.status
@@ -1734,6 +1734,41 @@ p.ready)` instead of that precondition's own check.
 The board title's own parenthetical gets a fourth, mutually-exclusive
 clause for this mode (`", synchronous"`), alongside the existing
 per-turn-timeout/total-time-limit descriptions.
+
+**Increment 2: the live action timer** (reported live: "which should be
+visible in the game display") -- `#synchronous-action-timer`, a plain
+countdown line ("Username's action timer: 12s") shown whenever
+`state.game.status === 'in_progress'` and `state.game.synchronous_mode`
+with a non-null `action_deadline_at`/`action_deadline_game_player_id`.
+Unlike every other "live" value on this page (deliberately refresh-only,
+no client-side ticking -- see the chess-clock indicator's own "Follow-up"
+writeup above), a 30-second window genuinely needs to visibly tick
+between the board's own ~4-second polls, so `tickSynchronousActionTimer()`
+runs on its OWN separate 1-second `setInterval` (`synchronousActionTimerInterval`),
+purely recomputing "seconds remaining" from `Date.now()` against the
+last server-reported `action_deadline_at` (`synchronousDeadlineInfo`,
+refreshed by `renderBoard()` every poll) -- it never itself decides
+anything expired, that's still entirely server-side
+(`GameService::enforceSynchronousActionDeadline()`, called from the very
+same poll), so a client with a slow/paused tab can't game the timer by
+not ticking. Turns red under 10 seconds remaining
+(`.synchronous-action-timer--danger`), the same escalating-severity
+language the async action-timeout warning icon already established.
+`stopSynchronousActionTimer()` clears the interval and hides the line
+whenever there's nothing to show it for (a 'waiting' game -- the
+ready-check panel owns that state instead -- or leaving the board
+entirely via `showLobby()`).
+
+**Extensions-banked stat** -- `buildExtensionsBankedStat()`, a new
+stopwatch-with-a-plus icon (`PLAYER_STAT_ICON_PATHS.extensionsBanked`,
+deliberately a different silhouette from `timeUsed`'s plain clock face,
+since this represents extra time available rather than time already
+spent) in the Players list, showing `players[].timeout_extensions_banked`
+for every seat once `state.game.synchronous_mode` is true -- unlike the
+action-timeout warning icon (a transient alert), this stays visible the
+whole game at whatever count it's at, the same "always-shown running
+total" treatment `hand_count`/`points`/`wins` already get, so a player
+can see at a glance how much slack they've banked.
 
 ## Pages
 

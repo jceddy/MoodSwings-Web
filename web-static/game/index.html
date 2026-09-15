@@ -139,6 +139,15 @@
             <button id="spectate-share-button" type="button" hidden>Share spectate code</button>
             <h2 id="board-title"></h2>
             <p id="board-round-status"></p>
+            <!-- Synchronous mode's own live 30-second action timer
+                 (reported live: "which should be visible in the game
+                 display") -- a client-side ticking countdown (see
+                 tickSynchronousActionTimer() in game.js), corrected
+                 every ~4 seconds by the ordinary state poll the way
+                 every other live value on this page already is. Only
+                 shown while state.game.synchronous_mode is true AND the
+                 game is in_progress. -->
+            <p id="synchronous-action-timer" hidden></p>
             <!-- Synchronous mode's own pre-game ready check (reported
                  live) -- shown only while state.game.status === 'waiting'
                  AND state.game.synchronous_mode is true, replacing the

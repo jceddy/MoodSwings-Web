@@ -1477,6 +1477,17 @@
     let currentGameId = null;
     let currentState = null;
     let pollTimer = null;
+    // Synchronous mode's own live action timer (reported live: "which
+    // should be visible in the game display") -- a separate 1-second
+    // interval from pollTimer above, since a 30-second countdown needs
+    // to visibly tick between polls, not just jump every ~4 seconds.
+    // synchronousDeadlineInfo holds the latest server-reported deadline;
+    // tickSynchronousActionTimer() (called every second) recomputes the
+    // remaining time purely from Date.now() against it, self-correcting
+    // whenever the next poll updates synchronousDeadlineInfo again. See
+    // renderBoard()'s own call site for when this starts/stops.
+    let synchronousActionTimerInterval = null;
+    let synchronousDeadlineInfo = null;
     // Spectator mode (issue #128) -- true for the rest of this page's
     // lifetime once a ?spectate_game_id= URL param is detected at
     // bootstrap (see the very bottom of this file); never toggled back to
@@ -1578,6 +1589,7 @@
             clearInterval(pollTimer);
             pollTimer = null;
         }
+        stopSynchronousActionTimer();
         // Watch game replay (issue #240) -- unlike isSpectating (never
         // reset; a spectator leaves this page entirely instead), a replay
         // session ends back at this same in-page lobby, so its own state
@@ -5990,6 +6002,17 @@
         // recolored three ways.
         actionTimeoutWarning: '<path d="M12 2a1 1 0 0 1 1 1v.6c3.4.9 5.8 4 5.8 7.6v3.4l1.7 2.6a1 1 0 0 1-.84 1.55H4.34a1 1 0 0 1-.84-1.55l1.7-2.6V11.2c0-3.6 2.4-6.7 5.8-7.6V3a1 1 0 0 1 1-1Z"/>'
             + '<path d="M9.2 20.2a2.8 2.8 0 0 0 5.6 0Z"/>',
+        // Synchronous mode's own banked timeout-extension count -- a
+        // stopwatch (outline circle, the same stroke-only technique
+        // timeUsed's clock face already uses, plus a small top button
+        // and side knob to read as "stopwatch" rather than "clock")
+        // with a small "+" beside it, since this represents *extra*
+        // time available, not time already spent.
+        extensionsBanked: '<circle cx="11" cy="13" r="8" fill="none" stroke="currentColor" stroke-width="2"/>'
+            + '<path d="M11 8 V13 L14 15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>'
+            + '<line x1="9" y1="2" x2="13" y2="2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
+            + '<line x1="17" y1="4.5" x2="19" y2="2.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
+            + '<path d="M20 17 V21 M18 19 H22" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
         // Team affiliation (Open/Closed Team Play only, player.team_id !==
         // null): a heraldic shield, reported live as hard to distinguish
         // for colorblind users when the two teams were told apart by color
@@ -6287,6 +6310,20 @@
         const severityClass = secondsRemaining <= 300 ? 'player-stat--actionTimeoutWarning-danger' : null;
 
         return buildPlayerStat('actionTimeoutWarning', badge, label, severityClass);
+    }
+
+    // Synchronous mode's own timeout-extension bank -- "players earn 1
+    // additional extension for every 3 full turns played without
+    // triggering the countdown timer... a banked timeout extension is
+    // automatically consumed to grant you an extra 30 seconds." Shown
+    // for every seat once state.game.synchronous_mode is true (even at
+    // 0 banked -- unlike the action-timeout warning above, this is an
+    // ongoing resource to track, not a transient alert, so it stays
+    // visible the whole game the same way hand_count/points/wins do).
+    function buildExtensionsBankedStat(extensionsBanked) {
+        const label = extensionsBanked === 1 ? '1 banked timeout extension' : extensionsBanked + ' banked timeout extensions';
+
+        return buildPlayerStat('extensionsBanked', extensionsBanked, label);
     }
 
     function renderBoard(state) {
@@ -6596,6 +6633,9 @@
                 if (state.game.action_timeout_warning !== null && state.game.action_timeout_warning.game_player_id === player.game_player_id) {
                     iconsEl.appendChild(buildActionTimeoutWarningStat(state.game.action_timeout_warning.seconds_remaining));
                 }
+                if (state.game.synchronous_mode) {
+                    iconsEl.appendChild(buildExtensionsBankedStat(player.timeout_extensions_banked));
+                }
                 if (wentFirst) {
                     iconsEl.appendChild(buildPlayerFlag('wentFirst', 'Went first this round'));
                 }
@@ -6651,6 +6691,7 @@
         renderTeamScores(state.teams, viewerTeamId);
 
         if (state.game.status === 'waiting') {
+            stopSynchronousActionTimer();
             inProgressArea.hidden = true;
             // #recent-events-details now lives outside #in-progress-area
             // (moved below #resign-button/#view-chat-button/
@@ -6797,6 +6838,27 @@
             } else {
                 boardRoundStatusEl.textContent = 'Round ' + state.round.round_number + turnSuffix;
             }
+        }
+
+        // Synchronous mode's own live action timer -- see
+        // tickSynchronousActionTimer()'s own docblock. Started/refreshed
+        // here on every poll; stopped (and hidden) the moment there's
+        // nobody currently on the clock (game.status !== 'in_progress'
+        // is impossible to reach this far down renderBoard(), so the
+        // only real "nothing to show" case here is a non-synchronous
+        // game or a null action_deadline_at/action_deadline_game_player_id).
+        if (state.game.status === 'in_progress' && state.game.synchronous_mode && state.game.action_deadline_at !== null && state.game.action_deadline_game_player_id !== null) {
+            const onTheClock = state.players.find((p) => p.game_player_id === state.game.action_deadline_game_player_id);
+            synchronousDeadlineInfo = {
+                deadlineAtMs: new Date(state.game.action_deadline_at).getTime(),
+                username: onTheClock ? onTheClock.username : 'Someone',
+            };
+            tickSynchronousActionTimer();
+            if (synchronousActionTimerInterval === null) {
+                synchronousActionTimerInterval = setInterval(tickSynchronousActionTimer, 1000);
+            }
+        } else {
+            stopSynchronousActionTimer();
         }
 
         // "Pause at the start of your turn" (reported live) -- only ever
@@ -8830,6 +8892,38 @@
                 renderDraftDeckBuilding(sd.deck_building);
             }
         }
+    }
+
+    // Synchronous mode's own live 30-second action timer (reported live:
+    // "which should be visible in the game display") -- purely a
+    // display refresh, computed from synchronousDeadlineInfo (last set
+    // by renderBoard() from the server's own action_deadline_at) against
+    // the current time; never itself decides anything expired -- that's
+    // enforceSynchronousActionDeadline()'s own job server-side, on the
+    // next ~4-second poll. Escalates to a danger style under 10 seconds
+    // remaining, the same "getting close" severity language the
+    // async action-timeout warning icon already uses elsewhere on this
+    // page.
+    function tickSynchronousActionTimer() {
+        const el = document.getElementById('synchronous-action-timer');
+        if (!synchronousDeadlineInfo) {
+            el.hidden = true;
+            return;
+        }
+
+        const secondsRemaining = Math.max(0, Math.ceil((synchronousDeadlineInfo.deadlineAtMs - Date.now()) / 1000));
+        el.hidden = false;
+        el.textContent = synchronousDeadlineInfo.username + "'s action timer: " + secondsRemaining + 's';
+        el.className = secondsRemaining <= 10 ? 'synchronous-action-timer--danger' : '';
+    }
+
+    function stopSynchronousActionTimer() {
+        if (synchronousActionTimerInterval !== null) {
+            clearInterval(synchronousActionTimerInterval);
+            synchronousActionTimerInterval = null;
+        }
+        synchronousDeadlineInfo = null;
+        document.getElementById('synchronous-action-timer').hidden = true;
     }
 
     // Synchronous mode's own pre-game ready check (reported live) --

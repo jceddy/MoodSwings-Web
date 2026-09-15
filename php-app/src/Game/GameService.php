@@ -206,6 +206,44 @@ final class GameService
     private const SYNCHRONOUS_MODE_ALLOWED_FORMATS = ['standard', 'duel'];
 
     /**
+     * Synchronous mode's own live action timer (increment 2 -- see
+     * migration 0329's own roadmap docblock). Every one of these is
+     * fixed, not configurable per game the way $timeoutMinutes is --
+     * "live, right now" play only has one realistic pace.
+     *
+     * - SYNCHRONOUS_ACTION_TIMEOUT_SECONDS: how long the currently-idle
+     *   player has to act before their own window expires -- see
+     *   resetSynchronousActionDeadline().
+     * - SYNCHRONOUS_STARTING_EXTENSIONS: granted to every seat the
+     *   moment a synchronous game actually starts (startGame()) --
+     *   "players start a match with 0 timeout extensions and are
+     *   granted 2 once the game starts."
+     * - SYNCHRONOUS_EXTENSION_EVERY_N_CLEAN_TURNS/SYNCHRONOUS_MAX_BANKED_EXTENSIONS:
+     *   "players earn 1 additional extension for every 3 full turns
+     *   played without triggering the countdown timer," capped so a
+     *   long clean streak can't stockpile an unbounded pile late-game --
+     *   see updateSynchronousActionClock()'s own "clean turn" bookkeeping.
+     * - SYNCHRONOUS_AUTO_LOSS_AFTER_CONSECUTIVE_TIMEOUTS: "automatically
+     *   passing priority twice in a row when timed out results in an
+     *   immediate concession" -- see enforceSynchronousActionDeadline().
+     * - SYNCHRONOUS_ABANDONMENT_GRACE_SECONDS: the 15-minute cron's own
+     *   backstop threshold (applySynchronousAbandonment()) -- "requires
+     *   at least one player to have the game open/polling, if both
+     *   players abandon the game, the 15-minute cron... should detect
+     *   and resolve it." Deliberately shorter than that cron's own
+     *   15-minute cadence (so the very first tick to actually see a
+     *   stale deadline already clears this bar) but far longer than any
+     *   realistic gap between two ordinary ~4-second polls during
+     *   actual live play.
+     */
+    private const SYNCHRONOUS_ACTION_TIMEOUT_SECONDS = 30;
+    private const SYNCHRONOUS_STARTING_EXTENSIONS = 2;
+    private const SYNCHRONOUS_EXTENSION_EVERY_N_CLEAN_TURNS = 3;
+    private const SYNCHRONOUS_MAX_BANKED_EXTENSIONS = 5;
+    private const SYNCHRONOUS_AUTO_LOSS_AFTER_CONSECUTIVE_TIMEOUTS = 2;
+    private const SYNCHRONOUS_ABANDONMENT_GRACE_SECONDS = 300;
+
+    /**
      * The 'power' deck_type's own non-Mythic card count -- see
      * buildPowerDeckCardIds(), which pairs this many random non-Mythic
      * cards with exactly one random Mythic (15 total).
@@ -3154,11 +3192,48 @@ final class GameService
             $updateGame = $pdo->prepare("UPDATE games SET status = 'in_progress', started_at = NOW() WHERE id = :game_id");
             $updateGame->execute(['game_id' => $gameId]);
 
+            // Synchronous mode's own action timer (see
+            // self::SYNCHRONOUS_STARTING_EXTENSIONS' own docblock):
+            // "players start a match with 0 timeout extensions and are
+            // granted 2 once the game starts" -- every seat's own
+            // clean_turn_streak/consecutive_timed_out_actions already
+            // start at 0 via their own column defaults, so only the
+            // starting grant needs a real statement here.
+            if ((bool) $game['synchronous_mode']) {
+                $grantExtensions = $pdo->prepare('UPDATE game_players SET timeout_extensions_banked = :starting WHERE game_id = :game_id');
+                $grantExtensions->execute(['starting' => self::SYNCHRONOUS_STARTING_EXTENSIONS, 'game_id' => $gameId]);
+
+                // resetSynchronousActionDeadline() below needs a non-NULL
+                // last_move_at to resolve anyone as idle at all (see
+                // resolveIdleGamePlayerAndSecondsSinceLastMove()'s own
+                // guard) -- ordinarily left NULL until the first real
+                // move (touchLastMoveAt()'s own docblock), which the
+                // OTHER consumer of that gap (total_time_limit_minutes'
+                // own active_seconds_used crediting) deliberately relies
+                // on to skip crediting a "game start to first move"
+                // interval nobody actually spent thinking. Synchronous
+                // mode is mutually exclusive with that feature, so
+                // stamping it here only ever affects synchronous games,
+                // and is exactly correct for this one anyway: the
+                // 30-second clock for round 1's own first player
+                // legitimately starts counting from the moment the game
+                // actually starts.
+                $pdo->prepare('UPDATE games SET last_move_at = NOW() WHERE id = :game_id')->execute(['game_id' => $gameId]);
+            }
+
             $pdo->commit();
         } catch (Throwable $e) {
             $pdo->rollBack();
             throw $e;
         }
+
+        // Outside the transaction (needs the round it just committed) --
+        // sets the very first action_deadline_at/action_deadline_game_player_id
+        // for whoever's turn it is first, the same way every later one
+        // gets (re)computed after each real action (see
+        // resetSynchronousActionDeadline() -- a no-op for a
+        // non-synchronous game).
+        $this->resetSynchronousActionDeadline($gameId);
     }
 
     /**
@@ -13208,7 +13283,7 @@ final class GameService
         $idsStmt = Connection::get()->query(
             "SELECT id FROM games
              WHERE status = 'in_progress'
-               AND (timeout_minutes IS NOT NULL OR total_time_limit_minutes IS NOT NULL)
+               AND (timeout_minutes IS NOT NULL OR total_time_limit_minutes IS NOT NULL OR synchronous_mode = 1)
                AND last_move_at IS NOT NULL"
         );
         $gameIds = array_map(intval(...), $idsStmt->fetchAll(PDO::FETCH_COLUMN));
@@ -13299,6 +13374,15 @@ final class GameService
             $secondsSinceLastMove = time() - strtotime((string) $game['last_move_at']);
             if ($secondsSinceLastMove < 0) {
                 return false; // clock skew or a move that landed between the SELECT and here -- nothing to do yet
+            }
+
+            // Synchronous mode (increment 2) has its own, wholly
+            // different enforcement -- see applySynchronousAbandonment()'s
+            // own docblock for why this cron only ever acts as an
+            // abandonment-only backstop for it, never the ordinary
+            // per-turn timeout_minutes/timeout_action dispatch below.
+            if ((bool) $game['synchronous_mode']) {
+                return $this->applySynchronousAbandonment($gameId, $game);
             }
 
             // Checked before currentRound() below -- a team decision can
@@ -15860,7 +15944,7 @@ final class GameService
         $pdo = Connection::get();
 
         $playersStmt = $pdo->prepare(
-            'SELECT gp.id, gp.user_id, gp.seat_order, gp.team_id, gp.custom_deck_name, gp.custom_deck_card_ids, gp.resigned_at, gp.active_seconds_used, gp.ready_at, u.username, u.share_presence, u.is_bot FROM game_players gp
+            'SELECT gp.id, gp.user_id, gp.seat_order, gp.team_id, gp.custom_deck_name, gp.custom_deck_card_ids, gp.resigned_at, gp.active_seconds_used, gp.ready_at, gp.timeout_extensions_banked, u.username, u.share_presence, u.is_bot FROM game_players gp
              JOIN users u ON u.id = gp.user_id
              WHERE gp.game_id = :game_id ORDER BY gp.seat_order ASC'
         );
@@ -16014,6 +16098,12 @@ final class GameService
                 // branch just to read one field. See markReady()'s own
                 // docblock.
                 'ready' => $row['ready_at'] !== null,
+                // Synchronous mode's own action-timer extension bank
+                // (increment 2) -- same "always present, harmless
+                // outside synchronous mode" treatment as ready above.
+                // See self::SYNCHRONOUS_STARTING_EXTENSIONS' own
+                // docblock for how it's granted/earned/spent.
+                'timeout_extensions_banked' => (int) $row['timeout_extensions_banked'],
                 'hand_count' => $handCounts[(int) $row['id']] ?? 0,
                 'total_wins' => $this->totalWinsFor($gameId, (int) $row['id']),
                 // Overwritten below with the live sum of this player's
@@ -16148,6 +16238,18 @@ final class GameService
                 // since this is the one setting that's genuinely
                 // per-player, not per-game.
                 'synchronous_mode' => (bool) $game['synchronous_mode'],
+                // Synchronous mode's own live action timer (increment 2)
+                // -- who is currently on the clock and when their
+                // 30-second window expires, kept in sync by
+                // resetSynchronousActionDeadline() after every real
+                // action. Both null outside synchronous mode (and
+                // briefly, harmlessly, for an in_progress synchronous
+                // game between actions -- the frontend only ever reads
+                // this while synchronous_mode is true). See
+                // web-static/README.md's own client-side countdown this
+                // drives.
+                'action_deadline_at' => $game['action_deadline_at'],
+                'action_deadline_game_player_id' => $game['action_deadline_game_player_id'] !== null ? (int) $game['action_deadline_game_player_id'] : null,
                 'winner_game_player_id' => $game['winner_game_player_id'] !== null ? (int) $game['winner_game_player_id'] : null,
                 // Every winning username -- both teammates' for a
                 // team-format win, just the one player's otherwise. Empty
@@ -17873,6 +17975,12 @@ final class GameService
                 'skip' => "{$actor} timed out and their turn/response was automatically skipped",
                 default => "{$actor} timed out and a move/response was automatically chosen for them",
             },
+            // Synchronous mode's own action timer (increment 2) -- logged
+            // by enforceSynchronousActionDeadline() every time a banked
+            // extension covers an expired window instead of anything
+            // actually being auto-resolved, so the game log shows
+            // plainly why nothing else happened right then.
+            $row['event_type'] === 'timeout_extension_used' => "{$actor} used a banked timeout extension for another 30 seconds",
             // 'automated' (see pass()'s own docblock) covers both a bot's
             // own pass (nothing playable) and an opted-in player's
             // auto-pass (no legal play at all in hand/discard, see
@@ -19198,6 +19306,14 @@ final class GameService
      * credit them for. Silently skipped (not an error) for the very
      * first move of a game, when there's no prior last_move_at yet to
      * measure an interval from.
+     *
+     * $creditGamePlayerId non-null is ALSO exactly "a real action just
+     * landed" for synchronous mode's own action timer (increment 2) --
+     * updateSynchronousActionClock() below reuses the identical
+     * "whoever is acting was who the clock was running against"
+     * reasoning to update that player's own clean-turn/timeout-extension
+     * bookkeeping and recompute the deadline for whoever's on the clock
+     * next, a no-op for every non-synchronous game.
      */
     private function touchLastMoveAt(int $gameId, ?int $creditGamePlayerId = null): void
     {
@@ -19212,6 +19328,290 @@ final class GameService
 
         Connection::get()->prepare('UPDATE games SET last_move_at = NOW() WHERE id = :game_id')
             ->execute(['game_id' => $gameId]);
+
+        if ($creditGamePlayerId !== null) {
+            $this->updateSynchronousActionClock($gameId, $creditGamePlayerId);
+        }
+    }
+
+    /**
+     * Synchronous mode's own "did this action land within its own
+     * 30-second window" bookkeeping (increment 2) -- called for every
+     * real action in every synchronous game (touchLastMoveAt()'s own
+     * credited case), a no-op for every other game.
+     *
+     * Deliberately judges "on time" purely by comparing NOW() against
+     * games.action_deadline_at/action_deadline_game_player_id as they
+     * stood BEFORE this action (read here, overwritten only at the very
+     * end via resetSynchronousActionDeadline()) -- the SAME rule applies
+     * whether $actingGamePlayerId is a real player who submitted an
+     * ordinary action a little late, or enforceSynchronousActionDeadline()'s
+     * own auto-resolved pass()/respondToDecision() call (which, by the
+     * time it runs, is by definition already past that same deadline).
+     * This is deliberate, not an oversight: "did this land within the
+     * 30-second window" is the only thing that actually matters for the
+     * clean-turn-streak/consecutive-timeout rules below, not who or what
+     * technically submitted the request that satisfied it -- so
+     * enforceSynchronousActionDeadline() itself never has to separately
+     * track "was this a timeout" before calling into pass()/
+     * respondToDecision(); this method works it out fresh every time,
+     * from the same timestamps either caller would have seen.
+     *
+     * On time: consecutive_timed_out_actions resets to 0 (the player is
+     * clearly still present) and clean_turn_streak increments -- every
+     * SYNCHRONOUS_EXTENSION_EVERY_N_CLEAN_TURNS of those banks one more
+     * timeout_extensions_banked (capped at SYNCHRONOUS_MAX_BANKED_EXTENSIONS)
+     * and resets the streak. Late: clean_turn_streak resets to 0 (a
+     * missed window breaks any streak in progress) and
+     * consecutive_timed_out_actions increments -- reaching
+     * SYNCHRONOUS_AUTO_LOSS_AFTER_CONSECUTIVE_TIMEOUTS is
+     * enforceSynchronousActionDeadline()'s own cue to resign the player
+     * outright instead of auto-resolving yet again.
+     *
+     * Either way, ends by calling resetSynchronousActionDeadline() to
+     * compute a fresh deadline for whoever's actually on the clock now
+     * that this action has fully resolved (a different player's turn, a
+     * new pending decision, or nobody at all if the game just ended).
+     */
+    private function updateSynchronousActionClock(int $gameId, int $actingGamePlayerId): void
+    {
+        $game = $this->fetchGame($gameId);
+        if (!(bool) $game['synchronous_mode']) {
+            return;
+        }
+
+        $missedOwnDeadline = $game['action_deadline_game_player_id'] !== null
+            && (int) $game['action_deadline_game_player_id'] === $actingGamePlayerId
+            && $game['action_deadline_at'] !== null
+            && strtotime((string) $game['action_deadline_at']) < time();
+
+        if ($missedOwnDeadline) {
+            Connection::get()->prepare(
+                'UPDATE game_players SET consecutive_timed_out_actions = consecutive_timed_out_actions + 1, clean_turn_streak = 0 WHERE id = :id'
+            )->execute(['id' => $actingGamePlayerId]);
+        } else {
+            Connection::get()->prepare(
+                'UPDATE game_players SET consecutive_timed_out_actions = 0, clean_turn_streak = clean_turn_streak + 1 WHERE id = :id'
+            )->execute(['id' => $actingGamePlayerId]);
+            Connection::get()->prepare(
+                'UPDATE game_players
+                 SET timeout_extensions_banked = LEAST(:max, timeout_extensions_banked + 1), clean_turn_streak = 0
+                 WHERE id = :id AND clean_turn_streak >= :every'
+            )->execute([
+                'id' => $actingGamePlayerId,
+                'max' => self::SYNCHRONOUS_MAX_BANKED_EXTENSIONS,
+                'every' => self::SYNCHRONOUS_EXTENSION_EVERY_N_CLEAN_TURNS,
+            ]);
+        }
+
+        $this->resetSynchronousActionDeadline($gameId);
+    }
+
+    /**
+     * (Re)computes games.action_deadline_at/action_deadline_game_player_id
+     * for whoever is currently idle in a synchronous-mode game -- called
+     * once from startGame() (the very first deadline, for round 1's own
+     * first-turn player) and once at the end of every
+     * updateSynchronousActionClock() (after a real action resolves,
+     * whether on time or not). A no-op -- both columns left/cleared to
+     * NULL -- for a non-synchronous game, a game that isn't
+     * `in_progress` (already completed, or -- startGame()'s own call --
+     * not synchronous at all), or one where nobody is currently idle
+     * (shouldn't normally happen for an in_progress game, but "nothing
+     * to do" rather than an error either way).
+     *
+     * Reuses resolveIdleGamePlayerAndSecondsSinceLastMove() -- the exact
+     * same "who is this game actually waiting on" resolution issue #85
+     * follow-up's own action-timeout warning indicator already uses --
+     * rather than re-deriving it: by the time this runs, last_move_at
+     * has already been stamped to NOW() (touchLastMoveAt() itself, or
+     * startGame()'s own started_at), so it resolves the CURRENT idle
+     * player with a ~0-second "time already elapsed," exactly what a
+     * fresh 30-second window needs.
+     */
+    private function resetSynchronousActionDeadline(int $gameId): void
+    {
+        $game = $this->fetchGame($gameId);
+        if (!(bool) $game['synchronous_mode'] || $game['status'] !== 'in_progress') {
+            return;
+        }
+
+        $idle = $this->resolveIdleGamePlayerAndSecondsSinceLastMove($gameId, $game);
+        $idleGamePlayerId = $idle['game_player_id'] ?? null;
+
+        Connection::get()->prepare(
+            'UPDATE games SET action_deadline_at = :deadline, action_deadline_game_player_id = :player_id WHERE id = :game_id'
+        )->execute([
+            'deadline' => $idleGamePlayerId !== null
+                ? date('Y-m-d H:i:s', time() + self::SYNCHRONOUS_ACTION_TIMEOUT_SECONDS)
+                : null,
+            'player_id' => $idleGamePlayerId,
+            'game_id' => $gameId,
+        ]);
+    }
+
+    /**
+     * Synchronous mode's own real-time, poll-driven enforcement
+     * (increment 2) -- called from GET /games/state on every ~4-second
+     * poll while the board is open (the exact same "cheap early-out,
+     * best-effort, never blocks the read that follows" treatment
+     * advanceAutomatedTurns() already gets there), NOT a cron: a
+     * 30-second deadline can't wait for the 15-minute sweep
+     * (applySynchronousAbandonment() below is that sweep's own
+     * abandonment-only backstop for when NOBODY is polling at all).
+     *
+     * A no-op whenever there's nothing due: not a synchronous game, no
+     * deadline set, or the deadline hasn't passed yet. Once it has:
+     * - A banked extension, if the idle player has one, is consumed
+     *   automatically instead of resolving anything -- "when a countdown
+     *   timer runs out, a banked timeout extension is automatically
+     *   consumed to grant you an extra 30 seconds," logged as its own
+     *   'timeout_extension_used' event so the game log shows plainly why
+     *   nothing else happened. consecutive_timed_out_actions is
+     *   deliberately untouched here -- covering an expired window with a
+     *   banked extension was never a lapse the player needs charged
+     *   against them.
+     * - With none left, this is a real timeout: if the idle player's own
+     *   consecutive_timed_out_actions is ALREADY at least 1 (their
+     *   previous action was also a timeout), resolving this one the
+     *   same way would make it SYNCHRONOUS_AUTO_LOSS_AFTER_CONSECUTIVE_TIMEOUTS
+     *   in a row -- "automatically passing priority twice in a row when
+     *   timed out results in an immediate concession" -- so this
+     *   resigns them outright instead.
+     * - Otherwise (their first timeout), auto-resolves whatever they're
+     *   idle on -- a pending decision via the exact same
+     *   BotPlayerService::chooseDecisionAnswer() default-answer
+     *   machinery applyTimeoutToGame() itself uses, or an ordinary turn
+     *   via a plain automated pass() -- exactly the "skip" behavior
+     *   (never auto_play; synchronous mode has no configurable
+     *   timeout_action the way the async opt-in does). Either path's
+     *   own respondToDecision()/pass() call re-enters touchLastMoveAt()
+     *   normally, which is what actually increments
+     *   consecutive_timed_out_actions to 1 and computes the next
+     *   deadline (see updateSynchronousActionClock()'s own docblock for
+     *   why this method never has to track that itself).
+     *
+     * Bot exclusion, the try/catch-and-log shape, and the "just skip
+     * this game, a concurrent action already changed things" resilience
+     * all mirror applyTimeoutToGame()'s own identical concerns -- see
+     * that method's docblock.
+     */
+    public function enforceSynchronousActionDeadline(int $gameId): void
+    {
+        try {
+            $game = $this->fetchGame($gameId);
+            if (
+                !(bool) $game['synchronous_mode']
+                || $game['status'] !== 'in_progress'
+                || $game['action_deadline_at'] === null
+                || $game['action_deadline_game_player_id'] === null
+                || strtotime((string) $game['action_deadline_at']) >= time()
+            ) {
+                return;
+            }
+
+            $idleGamePlayerId = (int) $game['action_deadline_game_player_id'];
+            if (in_array($idleGamePlayerId, $this->botGamePlayerIds($gameId), true)) {
+                return;
+            }
+
+            $extensionsStmt = Connection::get()->prepare('SELECT timeout_extensions_banked, consecutive_timed_out_actions FROM game_players WHERE id = :id');
+            $extensionsStmt->execute(['id' => $idleGamePlayerId]);
+            $playerRow = $extensionsStmt->fetch();
+            if ($playerRow === false) {
+                return;
+            }
+
+            if ((int) $playerRow['timeout_extensions_banked'] > 0) {
+                $consumed = Connection::get()->prepare(
+                    'UPDATE game_players SET timeout_extensions_banked = timeout_extensions_banked - 1 WHERE id = :id AND timeout_extensions_banked > 0'
+                );
+                $consumed->execute(['id' => $idleGamePlayerId]);
+                if ($consumed->rowCount() > 0) {
+                    Connection::get()->prepare(
+                        'UPDATE games SET action_deadline_at = :deadline WHERE id = :game_id'
+                    )->execute([
+                        'deadline' => date('Y-m-d H:i:s', time() + self::SYNCHRONOUS_ACTION_TIMEOUT_SECONDS),
+                        'game_id' => $gameId,
+                    ]);
+                    $round = $this->currentRound($gameId);
+                    $this->logEvent($gameId, (int) $round['id'], $idleGamePlayerId, 'timeout_extension_used', null, []);
+                }
+
+                return;
+            }
+
+            $round = $this->currentRound($gameId);
+            if ((int) $playerRow['consecutive_timed_out_actions'] + 1 >= self::SYNCHRONOUS_AUTO_LOSS_AFTER_CONSECUTIVE_TIMEOUTS) {
+                $this->logEvent($gameId, (int) $round['id'], $idleGamePlayerId, 'timeout_applied', null, ['timeout_action' => 'resign', 'synchronous' => true, 'consecutive' => true]);
+                $this->resignGame($gameId, $idleGamePlayerId);
+
+                return;
+            }
+
+            $pendingDecisionTargetId = $this->currentPendingDecisionTargetId((int) $round['id']);
+            $this->logEvent($gameId, (int) $round['id'], $idleGamePlayerId, 'timeout_applied', null, ['timeout_action' => 'skip', 'synchronous' => true]);
+
+            if ($pendingDecisionTargetId !== null) {
+                $batch = $this->activePendingBatch((int) $round['id']);
+                $decision = $this->activePendingDecision((int) $batch['id']);
+                $field = json_decode((string) $decision['field'], true);
+                $answer = $this->bots->chooseDecisionAnswer(
+                    $this->boardStates->load($gameId),
+                    $field,
+                    $idleGamePlayerId,
+                    (string) $decision['decision_type'],
+                    (int) $batch['played_card_id'],
+                );
+                $this->respondToDecision($gameId, $idleGamePlayerId, $answer);
+
+                return;
+            }
+
+            $this->pass($gameId, $idleGamePlayerId, automated: true);
+        } catch (Throwable $e) {
+            error_log("enforceSynchronousActionDeadline({$gameId}): timeout action failed -- " . $e);
+        }
+    }
+
+    /**
+     * applyTimeoutsForAllActiveGames()'s own abandonment-only backstop
+     * for a synchronous-mode game (increment 2) -- see
+     * self::SYNCHRONOUS_ABANDONMENT_GRACE_SECONDS' own docblock for why
+     * this is a wholly different (much coarser) check than
+     * enforceSynchronousActionDeadline()'s real-time enforcement: this
+     * only ever fires once a deadline has sat unresolved for minutes,
+     * meaning nobody has had the board open to poll GET /games/state at
+     * all -- an ordinary live game, even a laggy one, never comes close.
+     * Always resigns outright (no extension/consecutive-timeout
+     * bookkeeping -- there's no live player here to charge a "first
+     * timeout" against, only an abandoned game to close out), the same
+     * "timeout_applied" event type and 'resign' action
+     * enforceSynchronousActionDeadline()'s own auto-loss path logs,
+     * just tagged 'abandoned' instead of 'consecutive' in the details so
+     * the game log reads accurately either way.
+     */
+    private function applySynchronousAbandonment(int $gameId, array $game): bool
+    {
+        if ($game['action_deadline_at'] === null || $game['action_deadline_game_player_id'] === null) {
+            return false;
+        }
+
+        $secondsPastDeadline = time() - strtotime((string) $game['action_deadline_at']);
+        if ($secondsPastDeadline < self::SYNCHRONOUS_ABANDONMENT_GRACE_SECONDS) {
+            return false;
+        }
+
+        $idleGamePlayerId = (int) $game['action_deadline_game_player_id'];
+        if (in_array($idleGamePlayerId, $this->botGamePlayerIds($gameId), true)) {
+            return false;
+        }
+
+        $round = $this->currentRound($gameId);
+        $this->logEvent($gameId, (int) $round['id'], $idleGamePlayerId, 'timeout_applied', null, ['timeout_action' => 'resign', 'synchronous' => true, 'abandoned' => true]);
+        $this->resignGame($gameId, $idleGamePlayerId);
+
+        return true;
     }
 
     /** @return int[] game_players.id, ordered by seat_order */

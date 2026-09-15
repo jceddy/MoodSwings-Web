@@ -2138,6 +2138,23 @@ body.game-page {
     color: var(--color-error);
 }
 
+/* Synchronous mode's own banked timeout-extension count -- reuses
+   --color-info (blue), the same "a little color per stat kind, nothing
+   alarming" treatment .player-stat--timeUsed's own default state gets. */
+.player-stat--extensionsBanked {
+    color: var(--color-info);
+}
+
+/* Synchronous mode's own live 30-second action timer (reported live) --
+   plain text color by default, escalating to --color-error under 10
+   seconds remaining (tickSynchronousActionTimer() in game.js), the same
+   severity language every other "getting close" indicator on this page
+   already uses. */
+#synchronous-action-timer.synchronous-action-timer--danger {
+    color: var(--color-error);
+    font-weight: bold;
+}
+
 .player-flag--wentFirst {
     color: var(--color-error);
 }

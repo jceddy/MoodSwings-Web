@@ -1511,6 +1511,11 @@ if ($path === '/games/state' && $method === 'GET') {
     } catch (GameStateException) {
         // Best-effort only -- see above. The next poll simply tries again.
     }
+    // Synchronous mode's own real-time action timer (increment 2) --
+    // enforceSynchronousActionDeadline() already swallows every
+    // Throwable itself (see its own docblock), so this is purely a
+    // no-op for a non-synchronous game and never risks this read.
+    $games->enforceSynchronousActionDeadline($gameId);
     respond(200, ['status' => 'ok', ...$games->getState($gameId, (int) $currentUser['id'])]);
 }
 
