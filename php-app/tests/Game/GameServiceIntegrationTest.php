@@ -10766,6 +10766,38 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame(1, (int) $this->fetchGame($game2Id)['diagnostic_mode'], 'diagnostic mode must carry forward into game 2 of a best-of-three draft match');
     }
 
+    /**
+     * Issue #85's own turn/decision timeouts, the same
+     * advanceDraftMatch()-INSERT carry-forward shape as diagnostic mode
+     * just above -- set via a raw UPDATE (rather than createGame()'s own
+     * $timeoutMinutes/$timeoutAction params) since this test only cares
+     * whether the carry-forward itself works, not createGame()'s own
+     * validation/exclusion rules, already covered elsewhere.
+     */
+    public function testQuickDraftMatchCarriesTimeoutSettingsForwardIntoGameTwo(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture(winsNeeded: 1);
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+        $this->submitFullQuickDraftDeck($gameId, $u1);
+        $this->submitFullQuickDraftDeck($gameId, $u2);
+        $this->games->startGame($gameId);
+
+        $this->pdo->prepare("UPDATE games SET timeout_minutes = 1440, timeout_action = 'skip' WHERE id = :id")->execute(['id' => $gameId]);
+
+        $this->completeQuickDraftGameByPassing($gameId);
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE draft_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $draftMatchId]);
+        $game2Id = (int) $nextGameStmt->fetchColumn();
+
+        $game2 = $this->fetchGame($game2Id);
+        self::assertSame(1440, (int) $game2['timeout_minutes'], 'timeout settings must carry forward into game 2 of a best-of-three draft match');
+        self::assertSame('skip', $game2['timeout_action']);
+    }
+
     /** @return array{gameId: int, u1: int, u2: int, nextGameId: int, winnerUserId: int, loserUserId: int} */
     private function buildQuickDraftMatchThroughGameOne(): array
     {
@@ -18523,6 +18555,35 @@ final class GameServiceIntegrationTest extends TestCase
      * diagnostic_mode at all, so it silently reset to off (the column's
      * own default) every time.
      */
+    public function testBestOfThreeDuelMatchCarriesTimeoutSettingsForwardIntoGameTwo(): void
+    {
+        $alice = $this->insertUser('bo3-timeout-alice');
+        $bob = $this->insertUser('bo3-timeout-bob');
+
+        $gameId = $this->games->createGame(
+            $alice,
+            [$alice, $bob],
+            format: 'duel',
+            deckType: 'structure',
+            bestOfThree: true,
+            timeoutMinutes: 120,
+            timeoutAction: 'auto_play',
+        );
+        $this->games->startGame($gameId);
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $alice));
+
+        $gameMatchId = (int) $this->fetchGame($gameId)['game_match_id'];
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE game_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $gameMatchId]);
+        $game2Id = (int) $nextGameStmt->fetchColumn();
+
+        $game2 = $this->fetchGame($game2Id);
+        self::assertSame(120, (int) $game2['timeout_minutes'], 'timeout settings must carry forward into game 2 of the match');
+        self::assertSame('auto_play', $game2['timeout_action']);
+    }
+
     public function testBestOfThreeDuelMatchCarriesDiagnosticModeForwardIntoGameTwo(): void
     {
         $human = $this->insertUser('bo3-diag-human');
@@ -19482,5 +19543,226 @@ final class GameServiceIntegrationTest extends TestCase
         foreach ($userIds as $userId) {
             self::assertCount(45, json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userId)['drafted_card_ids'], true));
         }
+    }
+
+    // -- Issue #85: turn/decision timeouts -----------------------------
+
+    public function testCreateGameRejectsATimeoutShorterThanTheMinimum(): void
+    {
+        $userIds = $this->insertUsers('timeout-short-' . uniqid(), 2);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('at least 30 minutes');
+        $this->games->createGame($userIds[0], $userIds, timeoutMinutes: 15, timeoutAction: 'skip');
+    }
+
+    public function testCreateGameRejectsATimeoutWithoutAValidAction(): void
+    {
+        $userIds = $this->insertUsers('timeout-noaction-' . uniqid(), 2);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('valid timeout_action');
+        $this->games->createGame($userIds[0], $userIds, timeoutMinutes: 60, timeoutAction: 'bogus');
+    }
+
+    public function testCreateGameStoresValidTimeoutSettings(): void
+    {
+        $userIds = $this->insertUsers('timeout-store-' . uniqid(), 2);
+
+        $gameId = $this->games->createGame($userIds[0], $userIds, timeoutMinutes: 60, timeoutAction: 'skip');
+
+        $game = $this->fetchGame($gameId);
+        self::assertSame(60, (int) $game['timeout_minutes']);
+        self::assertSame('skip', $game['timeout_action']);
+    }
+
+    /**
+     * Reported live: timeouts should never apply to Sealed Pool of the
+     * Day/Weekly Sealed Pool -- always played same-day/same-week against
+     * a live opponent, with no long-running "pick this back up later"
+     * story the way every other format has. Silently ignored (not a
+     * GameStateException) the same "harmless no-op outside its own
+     * narrow scope" way diagnostic_mode/etc. already are elsewhere in
+     * createGame().
+     */
+    public function testCreateGameSilentlyIgnoresTimeoutForSealedPoolOfTheDay(): void
+    {
+        $userIds = $this->insertUsers('timeout-spotd-' . uniqid(), 2);
+
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'draft',
+            deckType: 'sealed_pool_of_the_day',
+            timeoutMinutes: 60,
+            timeoutAction: 'skip',
+        );
+
+        $game = $this->fetchGame($gameId);
+        self::assertNull($game['timeout_minutes']);
+        self::assertNull($game['timeout_action']);
+    }
+
+    /** @return array{gameId: int, p1: int, p2: int, handCardId: int} */
+    private function buildTimeoutTurnFixture(int $timeoutMinutes, string $timeoutAction): array
+    {
+        $u1 = $this->insertUser('timeout-turn-p1-' . uniqid());
+        $u2 = $this->insertUser('timeout-turn-p2-' . uniqid());
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed, timeout_minutes, timeout_action, last_move_at)
+             VALUES ('standard', 'in_progress', :created_by, 3, :timeout_minutes, :timeout_action, NOW() - INTERVAL :elapsed MINUTE)"
+        );
+        $stmt->execute([
+            'created_by' => $u1,
+            'timeout_minutes' => $timeoutMinutes,
+            'timeout_action' => $timeoutAction,
+            'elapsed' => $timeoutMinutes + 1,
+        ]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $handCardId = $this->insertGameCard($gameId, 55, 'hand', $p1); // Apathy -- a plain, always-legal play
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        return ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2, 'handCardId' => $handCardId];
+    }
+
+    public function testApplyTimeoutsSkipsAnIdleTurnEvenWithALegalPlayInHand(): void
+    {
+        ['gameId' => $gameId, 'handCardId' => $handCardId] = $this->buildTimeoutTurnFixture(30, 'skip');
+
+        self::assertSame(1, $this->games->applyTimeoutsForAllActiveGames());
+
+        $cardStmt = $this->pdo->prepare('SELECT zone FROM game_cards WHERE id = :id');
+        $cardStmt->execute(['id' => $handCardId]);
+        self::assertSame('hand', $cardStmt->fetchColumn(), 'skip must pass, never actually play the legal card sitting in hand');
+
+        $eventStmt = $this->pdo->prepare("SELECT event_type FROM game_events WHERE game_id = :game_id ORDER BY id ASC");
+        $eventStmt->execute(['game_id' => $gameId]);
+        $eventTypes = $eventStmt->fetchAll(PDO::FETCH_COLUMN);
+        self::assertSame(['timeout_applied', 'turn_passed'], array_slice($eventTypes, 0, 2), 'the time-out annotation must be logged before the real pass() it explains');
+    }
+
+    public function testApplyTimeoutsAutoPlaysAMoveForAnIdleTurn(): void
+    {
+        ['gameId' => $gameId, 'handCardId' => $handCardId] = $this->buildTimeoutTurnFixture(30, 'auto_play');
+
+        self::assertSame(1, $this->games->applyTimeoutsForAllActiveGames());
+
+        $cardStmt = $this->pdo->prepare('SELECT zone FROM game_cards WHERE id = :id');
+        $cardStmt->execute(['id' => $handCardId]);
+        self::assertSame('in_play', $cardStmt->fetchColumn(), 'auto_play must actually play the only legal card via the same heuristic a practice bot uses');
+
+        $eventStmt = $this->pdo->prepare("SELECT event_type FROM game_events WHERE game_id = :game_id ORDER BY id ASC");
+        $eventStmt->execute(['game_id' => $gameId]);
+        $eventTypes = $eventStmt->fetchAll(PDO::FETCH_COLUMN);
+        self::assertSame(['timeout_applied', 'mood_played'], array_slice($eventTypes, 0, 2), 'the time-out annotation must be logged before the real playMood() it explains');
+    }
+
+    public function testApplyTimeoutsResignsAnIdlePlayer(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1] = $this->buildTimeoutTurnFixture(30, 'resign');
+
+        self::assertSame(1, $this->games->applyTimeoutsForAllActiveGames());
+
+        $resignedStmt = $this->pdo->prepare('SELECT resigned_at FROM game_players WHERE id = :id');
+        $resignedStmt->execute(['id' => $p1]);
+        self::assertNotNull($resignedStmt->fetchColumn());
+        self::assertSame('completed', $this->fetchGame($gameId)['status']);
+    }
+
+    public function testApplyTimeoutsAnswersAPendingDecisionOnTheIdlePlayersBehalf(): void
+    {
+        $initiator = $this->insertUser('timeout-decision-initiator-' . uniqid());
+        $target = $this->insertUser('timeout-decision-target-' . uniqid());
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed, timeout_minutes, timeout_action, last_move_at)
+             VALUES ('standard', 'in_progress', :created_by, 3, 30, 'skip', NOW() - INTERVAL 31 MINUTE)"
+        );
+        $stmt->execute(['created_by' => $initiator]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $initiatorPlayerId = $this->insertGamePlayer($gameId, $initiator, 0);
+        $targetPlayerId = $this->insertGamePlayer($gameId, $target, 1);
+
+        $compulsionId = $this->insertGameCard($gameId, 86, 'hand', $initiatorPlayerId); // Compulsion
+        $givenCardId = $this->insertGameCard($gameId, 3, 'hand', $targetPlayerId); // Charity, the target's only hand card
+        $this->insertGameRound($gameId, 1, $initiatorPlayerId, $initiatorPlayerId, 2);
+
+        // Playing Compulsion touches last_move_at (see touchLastMoveAt()),
+        // so it's pushed back into the past again afterward -- the point
+        // here is a decision that's been sitting unanswered past the
+        // timeout, not one from the instant it was created.
+        $this->games->playMood($gameId, $initiatorPlayerId, $compulsionId, ['target_player_id' => $targetPlayerId]);
+        $this->pdo->prepare('UPDATE games SET last_move_at = NOW() - INTERVAL 31 MINUTE WHERE id = :id')->execute(['id' => $gameId]);
+
+        self::assertSame(1, $this->games->applyTimeoutsForAllActiveGames());
+
+        $movedCardStmt = $this->pdo->prepare('SELECT owner_game_player_id FROM game_cards WHERE id = :id');
+        $movedCardStmt->execute(['id' => $givenCardId]);
+        self::assertSame($initiatorPlayerId, (int) $movedCardStmt->fetchColumn(), 'the pending Compulsion decision must have been auto-answered on the idle target\'s behalf');
+
+        $pendingStmt = $this->pdo->prepare('SELECT 1 FROM game_pending_decision_batches WHERE game_id = :game_id AND resolved_at IS NULL');
+        $pendingStmt->execute(['game_id' => $gameId]);
+        self::assertFalse($pendingStmt->fetchColumn());
+    }
+
+    public function testApplyTimeoutsNeverActsOnABotsIdleTurn(): void
+    {
+        $u1 = $this->insertUser('timeout-bot-human-' . uniqid());
+        $botUserId = $this->insertBotUser('timeout-bot-' . uniqid());
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed, timeout_minutes, timeout_action, last_move_at)
+             VALUES ('standard', 'in_progress', :created_by, 3, 30, 'resign', NOW() - INTERVAL 31 MINUTE)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+
+        $this->insertGameCard($gameId, 55, 'hand', $botPlayerId); // Apathy
+        $this->insertGameRound($gameId, 1, $p1, $botPlayerId, 1);
+
+        self::assertSame(0, $this->games->applyTimeoutsForAllActiveGames());
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
+        $resignedStmt = $this->pdo->prepare('SELECT resigned_at FROM game_players WHERE id = :id');
+        $resignedStmt->execute(['id' => $botPlayerId]);
+        self::assertNull($resignedStmt->fetchColumn());
+    }
+
+    public function testApplyTimeoutsIgnoresAGameThatHasNotYetBeenIdleLongEnough(): void
+    {
+        ['gameId' => $gameId] = $this->buildTimeoutTurnFixture(60, 'resign');
+        $this->pdo->prepare('UPDATE games SET last_move_at = NOW() - INTERVAL 5 MINUTE WHERE id = :id')->execute(['id' => $gameId]);
+
+        self::assertSame(0, $this->games->applyTimeoutsForAllActiveGames());
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
+    }
+
+    public function testApplyTimeoutsIgnoresAGameWithTimeoutsDisabled(): void
+    {
+        $u1 = $this->insertUser('timeout-disabled-p1-' . uniqid());
+        $u2 = $this->insertUser('timeout-disabled-p2-' . uniqid());
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed, last_move_at)
+             VALUES ('standard', 'in_progress', :created_by, 3, NOW() - INTERVAL 1 DAY)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameCard($gameId, 55, 'hand', $p1);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        self::assertSame(0, $this->games->applyTimeoutsForAllActiveGames());
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
     }
 }

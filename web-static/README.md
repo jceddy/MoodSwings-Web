@@ -1524,6 +1524,62 @@ capability); opening the builder on an existing owned deck
 `sideboard_cards` back in, the same way it already did for the main
 deck's `cards`.
 
+### Turn and decision timeouts (issue #85)
+
+`#new-game-timeout-enabled-label` (a checkbox right after the deck-type
+description) opts a game into automatically resolving an idle turn or
+pending decision -- see "Turn and decision timeouts" in
+`php-app/README.md` for the full backend writeup (`games.timeout_minutes`/
+`timeout_action`, migration 0324, `bin/apply_game_timeouts.php`). Checking
+it reveals `#new-game-timeout-fields`: a duration `<select>`
+(`#new-game-timeout-minutes`, a fixed preset ladder from 30 minutes to 7
+days -- never an arbitrary typed number, so there's no way to
+accidentally request something below the backend's own 30-minute floor)
+and an action `<select>` (`#new-game-timeout-action`: "Automatically
+play a move for them" / "Skip their turn/response" / "Resign them from
+the game/match", values `auto_play`/`skip`/`resign`), plus a plain-text
+note that the sweep only runs every 15 minutes, so an idle turn may take
+a little longer than the chosen duration to actually resolve.
+
+`updateTimeoutFieldVisibility()` (wired to the same format/deck-type
+`change` events `updateDeckTypeAvailability()` already listens to, plus
+the checkbox's own `change`, and run from both branches of
+`updateDeckTypeAvailability()` itself so switching TO or AWAY FROM
+Sealed Pool of the Day takes effect immediately even though setting
+`<select>.value` programmatically fires no `change` event of its own)
+hides (and unchecks) the whole feature for `sealed_pool_of_the_day`/
+`weekly_sealed_pool` -- `TIMEOUT_EXCLUDED_DECK_TYPES`, kept deck-type-generic
+rather than hardcoding just the one reachable through this dialog,
+matching `createGame()`'s own `PERIODIC_SEALED_POOL_DECK_TYPES`-keyed
+exclusion exactly (`weekly_sealed_pool` never actually appears in
+`#new-game-deck-type`'s own option list at all -- that format is only
+ever entered through `WeeklySealedPoolQueueService`'s own separate
+queue/pairing flow, never this dialog). The sub-fields
+(`#new-game-timeout-fields`) stay hidden whenever the checkbox itself is
+either unchecked or not shown at all.
+
+Checking the box sends `timeout_minutes`/`timeout_action` (both
+`undefined`, so omitted from the request body entirely, whenever the
+checkbox is unchecked) to `POST /games` (`createGame()`'s own two new
+trailing parameters, both here and in `app.js`'s own wrapper) or `POST
+/open-games` (`postOpenGame()`), threaded through `create_game_params`
+to `MatchmakingService::joinOpenGame()`'s own eventual `createGame()`
+call once the roster fills -- the same "post to the open lobby" support
+`best_of_three`/`allow_sideboarding` already have.
+
+**Board display** -- `renderBoard()`'s own title line appends a third
+parenthetical, right after "default selections" (`state.game.timeout_minutes`/
+`timeout_action`, surfaced by `getState()` specifically so every seated
+player, not just whoever created the game, can see it's active): e.g.
+"Game #42 (Traditional, Structure deck, 6-hour timeout (resign))".
+`TIMEOUT_DURATION_LABELS`/`TIMEOUT_ACTION_LABELS` mirror the New Game
+dialog's own option text, just phrased for a title's parenthetical
+rather than a dropdown option. A `timeout_applied` game-log event
+(`describeEvent()`, `php-app/README.md`'s own writeup) needs no
+special-casing here at all -- like every other event type, the log view
+just displays whatever plain-text description the backend already
+rendered.
+
 ## Pages
 
 - `index.html` (`/`) — Login form. If the visitor already has an active

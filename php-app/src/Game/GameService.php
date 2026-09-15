@@ -157,6 +157,20 @@ final class GameService
     ];
 
     /**
+     * Issue #85's own floor on games.timeout_minutes -- see migration
+     * 0324's own docblock for why 30 (not 15) is the shortest realistic
+     * value: the sweep cron (bin/apply_game_timeouts.php) can only run
+     * every 15 minutes in the maintainer's own dev/production
+     * environments, so a shorter configured timeout could go unnoticed
+     * for up to one whole extra cron interval past when it nominally
+     * elapsed.
+     */
+    private const TIMEOUT_MINIMUM_MINUTES = 30;
+
+    /** games.timeout_action's own legal values -- see applyTimeoutToGame()'s own docblock for what each one actually does. */
+    private const TIMEOUT_ACTIONS = ['auto_play', 'skip', 'resign'];
+
+    /**
      * The 'power' deck_type's own non-Mythic card count -- see
      * buildPowerDeckCardIds(), which pairs this many random non-Mythic
      * cards with exactly one random Mythic (15 total).
@@ -1472,6 +1486,26 @@ final class GameService
         // considered candidates/heuristic exclusions.
         bool $diagnosticMode = false,
         ?array $botDecklists = null,
+        // Issue #85's own opt-in-at-creation turn/decision timeouts:
+        // $timeoutMinutes null (the default) means off; a non-null value
+        // is how long a player may sit idle, on either their own
+        // ordinary turn or a pending_decision targeting them, before
+        // $timeoutAction fires on their behalf (see
+        // applyTimeoutToGame()'s own docblock for exactly what each
+        // action does). Silently forced back to null/null -- not an
+        // error, the same "harmless no-op outside its own narrow scope"
+        // convention every other creation-time opt-in here already
+        // follows -- for Sealed Pool of the Day/Weekly Sealed Pool
+        // (self::PERIODIC_SEALED_POOL_DECK_TYPES): both are always
+        // played same-day/same-week against a live opponent with no
+        // long-running "pick this back up tomorrow" story the way every
+        // other format has, so an idle timeout has nothing sensible to
+        // protect there. $timeoutMinutes below self::TIMEOUT_MINIMUM_MINUTES
+        // or a $timeoutAction outside self::TIMEOUT_ACTIONS IS an error
+        // (GameStateException), since those are direct misuse rather
+        // than a deck_type this feature was never meant to reach.
+        ?int $timeoutMinutes = null,
+        ?string $timeoutAction = null,
     ): int {
         if (count($userIds) > self::MAX_PLAYERS) {
             throw new GameStateException('A game cannot have more than ' . self::MAX_PLAYERS . ' players');
@@ -1526,6 +1560,21 @@ final class GameService
             }
             if ($format === 'draft' && count($userIds) !== 2) {
                 throw new GameStateException("A {$deckType} game must have exactly 2 players");
+            }
+        }
+        // Issue #85: validated up front like every other misuse-vs-
+        // scope-mismatch pair above (Sealed Pool of the Day/Weekly Sealed
+        // Pool's own PERIODIC_SEALED_POOL_DECK_TYPES exclusion is instead
+        // silently applied further below, alongside $diagnosticModeForGame's
+        // identical treatment, since naming one of those two deck types
+        // is a legitimate request that simply doesn't get this feature,
+        // not a mistake worth rejecting outright).
+        if ($timeoutMinutes !== null) {
+            if ($timeoutMinutes < self::TIMEOUT_MINIMUM_MINUTES) {
+                throw new GameStateException("A turn/decision timeout must be at least " . self::TIMEOUT_MINIMUM_MINUTES . ' minutes');
+            }
+            if (!in_array($timeoutAction, self::TIMEOUT_ACTIONS, true)) {
+                throw new GameStateException('A turn/decision timeout requires a valid timeout_action (auto_play, skip, or resign)');
             }
         }
         if ($deckType === 'rotisserie_draft' && ($rotisserieDraftCutoffCount < self::ROTISSERIE_DRAFT_MIN_CUTOFF || $rotisserieDraftCutoffCount > self::ROTISSERIE_DRAFT_MAX_CUTOFF)) {
@@ -1818,6 +1867,12 @@ final class GameService
         // Tactical Bot; a harmless no-op otherwise.
         $diagnosticModeForGame = $diagnosticMode && $this->includesATacticalBot($userIds);
 
+        // Issue #85's own turn/decision timeouts (see $timeoutMinutes'
+        // own docblock above) -- silently off for Sealed Pool of the
+        // Day/Weekly Sealed Pool regardless of what was requested.
+        $timeoutMinutesForGame = array_key_exists($deckType, self::PERIODIC_SEALED_POOL_DECK_TYPES) ? null : $timeoutMinutes;
+        $timeoutActionForGame = $timeoutMinutesForGame !== null ? $timeoutAction : null;
+
         $pdo = Connection::get();
         $pdo->beginTransaction();
 
@@ -1855,12 +1910,14 @@ final class GameService
                     format, deck_type, custom_deck_name, custom_deck_card_ids,
                     custom_duel_rules_preset, custom_duel_min_cards, custom_duel_rarity_limits, custom_duel_duplicate_limits,
                     custom_duel_even_color_distribution_rarities, draft_match_id, game_match_id, match_game_number,
-                    status, created_by_user_id, wins_needed, default_selections_mode, bot_goes_first, diagnostic_mode
+                    status, created_by_user_id, wins_needed, default_selections_mode, bot_goes_first, diagnostic_mode,
+                    timeout_minutes, timeout_action
                  ) VALUES (
                     :format, :deck_type, :custom_deck_name, :custom_deck_card_ids,
                     :duel_rules_preset, :duel_min_cards, :duel_rarity_limits, :duel_duplicate_limits,
                     :duel_even_color_distribution_rarities, :draft_match_id, :game_match_id, :match_game_number,
-                    'waiting', :created_by, :wins_needed, :default_selections_mode, :bot_goes_first, :diagnostic_mode
+                    'waiting', :created_by, :wins_needed, :default_selections_mode, :bot_goes_first, :diagnostic_mode,
+                    :timeout_minutes, :timeout_action
                  )"
             );
             $insertGame->execute([
@@ -1881,6 +1938,8 @@ final class GameService
                 'default_selections_mode' => $defaultSelectionsMode ? 1 : 0,
                 'bot_goes_first' => $botGoesFirst ? 1 : 0,
                 'diagnostic_mode' => $diagnosticModeForGame ? 1 : 0,
+                'timeout_minutes' => $timeoutMinutesForGame,
+                'timeout_action' => $timeoutActionForGame,
             ]);
             $gameId = (int) $pdo->lastInsertId();
 
@@ -10949,8 +11008,8 @@ final class GameService
         $seats = $seatStmt->fetchAll();
 
         $insertGame = $pdo->prepare(
-            "INSERT INTO games (format, deck_type, draft_match_id, match_game_number, status, created_by_user_id, wins_needed, default_selections_mode, diagnostic_mode)
-             VALUES (:format, :deck_type, :draft_match_id, :match_game_number, 'waiting', :created_by, :wins_needed, :default_selections_mode, :diagnostic_mode)"
+            "INSERT INTO games (format, deck_type, draft_match_id, match_game_number, status, created_by_user_id, wins_needed, default_selections_mode, diagnostic_mode, timeout_minutes, timeout_action)
+             VALUES (:format, :deck_type, :draft_match_id, :match_game_number, 'waiting', :created_by, :wins_needed, :default_selections_mode, :diagnostic_mode, :timeout_minutes, :timeout_action)"
         );
         $insertGame->execute([
             'format' => $game['format'],
@@ -10975,6 +11034,15 @@ final class GameService
             // to off (this INSERT's own implicit default) every time a
             // fresh game row is created for the next game of the match.
             'diagnostic_mode' => (int) $game['diagnostic_mode'],
+            // Issue #85's own turn/decision timeouts -- same "chosen
+            // once at match creation, carried through every match game"
+            // treatment as diagnostic_mode/default_selections_mode above
+            // (this deck_type family is never one of
+            // PERIODIC_SEALED_POOL_DECK_TYPES to begin with, so
+            // $game['timeout_minutes'] is whatever createGame() itself
+            // already validated and stored).
+            'timeout_minutes' => $game['timeout_minutes'],
+            'timeout_action' => $game['timeout_action'],
         ]);
         $nextGameId = (int) $pdo->lastInsertId();
 
@@ -11128,12 +11196,14 @@ final class GameService
                 format, deck_type, custom_deck_name, custom_deck_card_ids,
                 custom_duel_rules_preset, custom_duel_min_cards, custom_duel_rarity_limits, custom_duel_duplicate_limits,
                 custom_duel_even_color_distribution_rarities, game_match_id, match_game_number,
-                status, created_by_user_id, wins_needed, default_selections_mode, diagnostic_mode
+                status, created_by_user_id, wins_needed, default_selections_mode, diagnostic_mode,
+                timeout_minutes, timeout_action
              ) VALUES (
                 :format, :deck_type, :custom_deck_name, :custom_deck_card_ids,
                 :duel_rules_preset, :duel_min_cards, :duel_rarity_limits, :duel_duplicate_limits,
                 :duel_even_color_distribution_rarities, :game_match_id, :match_game_number,
-                'waiting', :created_by, :wins_needed, :default_selections_mode, :diagnostic_mode
+                'waiting', :created_by, :wins_needed, :default_selections_mode, :diagnostic_mode,
+                :timeout_minutes, :timeout_action
              )"
         );
         $insertGame->execute([
@@ -11162,6 +11232,11 @@ final class GameService
             // off (this INSERT's own implicit default) every time a
             // fresh game row is created for the next game of the match.
             'diagnostic_mode' => (int) $game['diagnostic_mode'],
+            // Issue #85's own turn/decision timeouts -- same "chosen
+            // once at match creation, carried through every match game"
+            // treatment as diagnostic_mode/default_selections_mode above.
+            'timeout_minutes' => $game['timeout_minutes'],
+            'timeout_action' => $game['timeout_action'],
         ]);
         $nextGameId = (int) $pdo->lastInsertId();
 
@@ -12906,6 +12981,169 @@ final class GameService
         }
 
         return $expiredCount;
+    }
+
+    /**
+     * Issue #85's own sweep, bin/apply_game_timeouts.php's cron entry
+     * point -- unlike expireStaleActiveGames() above (which force-ends a
+     * game nobody has touched in days), this only ever acts on a game
+     * that opted into games.timeout_minutes/timeout_action at creation
+     * (see createGame()'s own docblock), and never ends the GAME itself
+     * -- it just moves the specific idle player's own turn/decision
+     * along, exactly the way that player acting themselves would have.
+     *
+     * Deliberately queries with no lock held (unlike
+     * expireStaleActiveGames(), which has to hold one across its own raw
+     * UPDATE) -- applyTimeoutToGame() below only ever calls this class's
+     * own already-self-locking public entry points (playMood()/pass()/
+     * respondToDecision()/resignGame()), each of which re-validates the
+     * exact state it needs under its own lock and throws if anything
+     * about the situation already changed (a player who acted moments
+     * before this sweep reached their game, e.g.), so a stale row from
+     * this initial SELECT just means that one game's own attempt throws
+     * and is skipped -- no different from two humans racing to act on
+     * the same turn.
+     *
+     * @return int how many games had a timeout actually applied
+     */
+    public function applyTimeoutsForAllActiveGames(): int
+    {
+        $idsStmt = Connection::get()->query(
+            "SELECT id FROM games
+             WHERE status = 'in_progress' AND timeout_minutes IS NOT NULL
+               AND last_move_at IS NOT NULL
+               AND last_move_at < (NOW() - INTERVAL timeout_minutes MINUTE)"
+        );
+        $gameIds = array_map(intval(...), $idsStmt->fetchAll(PDO::FETCH_COLUMN));
+
+        $appliedCount = 0;
+        foreach ($gameIds as $gameId) {
+            if ($this->applyTimeoutToGame($gameId)) {
+                $appliedCount++;
+            }
+        }
+
+        return $appliedCount;
+    }
+
+    /**
+     * One game's own share of applyTimeoutsForAllActiveGames() above --
+     * split out so a single game's own failure (a race against a
+     * player's own concurrent action, or a genuinely unexpected error)
+     * never stops the sweep from reaching every other game still due.
+     *
+     * "Idle" here means whichever specific player the game is actually
+     * waiting on right now: a pending_decision's own target_game_player_id
+     * if one is open (RequiresOpponentDecision -- see php-app/README.md's
+     * pause/resume mechanism), otherwise the round's own plain
+     * current_turn_game_player_id. Returns false with no action taken
+     * (not an error) when neither identifies anyone -- most commonly
+     * Open/Closed Team Play's own separate game_team_decisions proposal/
+     * turn-order flow, which this issue's own two bullet points
+     * (turn timeout, reaction/decision timeout) never covered and this
+     * sweep doesn't reach yet (see php-app/README.md's own writeup) --
+     * or a bot (bots are never left idle long enough for a
+     * TIMEOUT_MINIMUM_MINUTES-or-longer timeout to matter; automated
+     * turns already act for them within moments, so a bot still showing
+     * up here would mean something else entirely is stuck, not
+     * disengagement this feature is meant to address).
+     *
+     * The timeout_action itself:
+     * - 'resign' calls resignGame() on the idle player's behalf --
+     *   already handles a pending decision targeting them by auto-
+     *   answering it first (autoAnswerOwnPendingDecisionBeforeResigning())
+     *   before completing the resignation, so this one call covers both
+     *   "idle" shapes with no extra branching needed here.
+     * - 'skip'/'auto_play' on a pending decision behave IDENTICALLY --
+     *   both answer it via BotPlayerService::chooseDecisionAnswer(), the
+     *   exact same target-agnostic default-answer machinery a bot's own
+     *   turn already uses (and autoAnswerOwnPendingDecisionBeforeResigning()
+     *   reuses for a resigning human) -- see this issue's own "need to
+     *   decide what a default choice looks like" note; a decision has no
+     *   universal notion of "just skip it" the way an ordinary turn
+     *   does; some fields already resolve to a legal "decline" through
+     *   that exact same method when declining is the right/only sensible
+     *   default, so reusing it covers that case too rather than
+     *   reinventing it.
+     * - 'skip' on an ordinary turn is a plain pass(), even if a legal
+     *   play exists -- "the player's move is skipped."
+     * - 'auto_play' on an ordinary turn reuses playViaHeuristicBotFallback()
+     *   as-is, the exact same "pick a real move the way a practice bot
+     *   would" logic already used when a Tactical Bot's own search comes
+     *   up with nothing recoverable.
+     *
+     * A 'timeout_applied' event is logged before acting, so the game log
+     * always shows plainly that this was a time-out and not a real
+     * response, regardless of which action fired or whether it
+     * ultimately succeeded.
+     */
+    private function applyTimeoutToGame(int $gameId): bool
+    {
+        try {
+            $game = $this->fetchGame($gameId);
+            if ($game['status'] !== 'in_progress' || $game['timeout_minutes'] === null) {
+                return false; // already resolved/changed since applyTimeoutsForAllActiveGames()'s own SELECT
+            }
+            if ($game['last_move_at'] === null || strtotime((string) $game['last_move_at']) > time() - ((int) $game['timeout_minutes'] * 60)) {
+                return false; // someone acted moments ago, no longer actually due
+            }
+
+            $round = $this->currentRound($gameId);
+            $pendingDecisionTargetId = $this->currentPendingDecisionTargetId((int) $round['id']);
+            $idleGamePlayerId = $pendingDecisionTargetId
+                ?? ($round['current_turn_game_player_id'] !== null ? (int) $round['current_turn_game_player_id'] : null);
+            if ($idleGamePlayerId === null || in_array($idleGamePlayerId, $this->botGamePlayerIds($gameId), true)) {
+                return false;
+            }
+
+            $this->logEvent($gameId, (int) $round['id'], $idleGamePlayerId, 'timeout_applied', null, ['timeout_action' => $game['timeout_action']]);
+
+            if ($game['timeout_action'] === 'resign') {
+                $this->resignGame($gameId, $idleGamePlayerId);
+
+                return true;
+            }
+
+            if ($pendingDecisionTargetId !== null) {
+                $batch = $this->activePendingBatch((int) $round['id']);
+                $decision = $this->activePendingDecision((int) $batch['id']);
+                $field = json_decode((string) $decision['field'], true);
+                $answer = $this->bots->chooseDecisionAnswer(
+                    $this->boardStates->load($gameId),
+                    $field,
+                    $idleGamePlayerId,
+                    (string) $decision['decision_type'],
+                    (int) $batch['played_card_id'],
+                );
+                $this->respondToDecision($gameId, $idleGamePlayerId, $answer);
+
+                return true;
+            }
+
+            if ($game['timeout_action'] === 'skip') {
+                $this->pass($gameId, $idleGamePlayerId, automated: true);
+            } else {
+                $this->playViaHeuristicBotFallback($gameId, $idleGamePlayerId);
+            }
+
+            return true;
+        } catch (Throwable $e) {
+            error_log("applyTimeoutToGame({$gameId}): timeout action failed -- " . $e);
+
+            return false;
+        }
+    }
+
+    /** @return ?int the game_player_id the round's one still-open pending decision (if any) is currently waiting on */
+    private function currentPendingDecisionTargetId(int $roundId): ?int
+    {
+        $batch = $this->activePendingBatch($roundId);
+        if ($batch === null) {
+            return null;
+        }
+        $decision = $this->activePendingDecision((int) $batch['id']);
+
+        return $decision !== null ? (int) $decision['target_game_player_id'] : null;
     }
 
     /**
@@ -15353,6 +15591,16 @@ final class GameService
                 // already carry a `default` key per field wherever one
                 // was computed, with no client-side re-derivation needed.
                 'default_selections_mode' => (bool) $game['default_selections_mode'],
+                // Issue #85's own opt-in turn/decision timeouts -- null
+                // for both when off (the default, and always true for
+                // Sealed Pool of the Day/Weekly Sealed Pool -- see
+                // createGame()'s own docblock), surfaced purely so the
+                // frontend can show every seated player that this game
+                // has them, and how it's configured, the same
+                // "visible to the players playing it" treatment
+                // default_selections_mode gets just above.
+                'timeout_minutes' => $game['timeout_minutes'] !== null ? (int) $game['timeout_minutes'] : null,
+                'timeout_action' => $game['timeout_action'],
                 'winner_game_player_id' => $game['winner_game_player_id'] !== null ? (int) $game['winner_game_player_id'] : null,
                 // Every winning username -- both teammates' for a
                 // team-format win, just the one player's otherwise. Empty
@@ -17066,6 +17314,18 @@ final class GameService
         // second copy of the same card.
         $description = match (true) {
             $row['event_type'] === 'mood_played' => "{$actor} played {$cardName}{$playedFromSuffix}{$grantUsedSuffix}",
+            // Issue #85's own turn/decision timeouts -- logged by
+            // applyTimeoutToGame() right before it actually acts, so this
+            // line always appears ahead of whatever the action itself
+            // goes on to log (a 'mood_played'/'turn_passed'/
+            // 'pending_decision_resolved' event, or a resignation),
+            // making plain that it wasn't a real response even though
+            // everything after it reads exactly like one.
+            $row['event_type'] === 'timeout_applied' => match ($details['timeout_action'] ?? null) {
+                'resign' => "{$actor} timed out and was automatically resigned from the game",
+                'skip' => "{$actor} timed out and their turn/response was automatically skipped",
+                default => "{$actor} timed out and a move/response was automatically chosen for them",
+            },
             // 'automated' (see pass()'s own docblock) covers both a bot's
             // own pass (nothing playable) and an opted-in player's
             // auto-pass (no legal play at all in hand/discard, see

@@ -2467,6 +2467,7 @@
             deckTypeSelect.value = isSealedDeckFormat ? 'sealed_deck' : 'sealed_pool_of_the_day';
             updateDeckTypeDescription();
             updateOpponentSelectionLimit();
+            updateTimeoutFieldVisibility();
             return;
         }
 
@@ -2494,6 +2495,7 @@
         // isn't left capped at 1 opponent from whatever deck_type was
         // selected a moment ago.
         updateOpponentSelectionLimit();
+        updateTimeoutFieldVisibility();
     }
 
     // Shows the partner picker only for Open Team Play, populated from
@@ -3326,6 +3328,34 @@
         }
     }
 
+    // Issue #85's own turn/decision timeout opt-in -- see
+    // GameService::createGame()'s own $timeoutMinutes docblock for why
+    // Sealed Pool of the Day/Weekly Sealed Pool never get this option
+    // (always played same-day/same-week against a live opponent, with no
+    // "pick this back up later" story). weekly_sealed_pool never
+    // actually appears in #new-game-deck-type's own option list (that
+    // format is only ever entered through WeeklySealedPoolQueueService's
+    // own separate queue/pairing flow, never this dialog), but the check
+    // stays deck-type-generic rather than hardcoding
+    // 'sealed_pool_of_the_day' alone, matching createGame()'s own
+    // PERIODIC_SEALED_POOL_DECK_TYPES-keyed exclusion exactly. Unchecked
+    // (not just hidden) whenever it goes out of view, same as every
+    // other conditionally-shown New Game field; the two sub-fields
+    // (#new-game-timeout-fields) are shown only once the checkbox
+    // itself is both visible AND checked.
+    const TIMEOUT_EXCLUDED_DECK_TYPES = ['sealed_pool_of_the_day', 'weekly_sealed_pool'];
+    function updateTimeoutFieldVisibility() {
+        const deckType = document.getElementById('new-game-deck-type').value;
+        const show = !TIMEOUT_EXCLUDED_DECK_TYPES.includes(deckType);
+        const checkboxLabel = document.getElementById('new-game-timeout-enabled-label');
+        checkboxLabel.hidden = !show;
+        if (!show) {
+            document.getElementById('new-game-timeout-enabled').checked = false;
+        }
+        document.getElementById('new-game-timeout-fields').hidden =
+            !show || !document.getElementById('new-game-timeout-enabled').checked;
+    }
+
     // Hides (and, if checked, unchecks) every bot checkbox -- and their
     // own "Practice bots" heading -- whenever the current format/deck_type
     // combination doesn't support seating one (see botsSupportedFor()).
@@ -3456,6 +3486,9 @@
     document.getElementById('new-game-deck-type').addEventListener('change', updateOpponentSelectionLimit);
     document.getElementById('new-game-deck-type').addEventListener('change', updateBotCheckboxAvailability);
     document.getElementById('new-game-deck-type').addEventListener('change', updateBestOfThreeFieldVisibility);
+    document.getElementById('new-game-format').addEventListener('change', updateTimeoutFieldVisibility);
+    document.getElementById('new-game-deck-type').addEventListener('change', updateTimeoutFieldVisibility);
+    document.getElementById('new-game-timeout-enabled').addEventListener('change', updateTimeoutFieldVisibility);
     document.getElementById('new-game-saved-decklist').addEventListener('change', updateDeckTypeDescription);
     document.getElementById('new-game-duel-rules-preset').addEventListener('change', updateDuelRulesPresetVisibility);
     // Power Duel sideboarding's own checkbox depends on both the current
@@ -4169,6 +4202,19 @@
         // itself unchecked whenever hidden, so reading .checked
         // unconditionally here already reflects that.
         const diagnosticMode = document.getElementById('new-game-diagnostic-mode').checked;
+        // Issue #85's own turn/decision timeout opt-in -- see
+        // updateTimeoutFieldVisibility() for when the checkbox itself is
+        // shown; #new-game-timeout-enabled is itself unchecked whenever
+        // hidden, so reading .checked unconditionally here already
+        // reflects that. timeoutMinutes/timeoutAction are only sent at
+        // all once the checkbox is actually checked -- undefined (rather
+        // than the select's own always-present default value) so the
+        // request cleanly omits both when timeouts aren't wanted, the
+        // same "undefined means don't send this at all" convention every
+        // other optional field on this form already follows.
+        const timeoutEnabled = document.getElementById('new-game-timeout-enabled').checked;
+        const timeoutMinutes = timeoutEnabled ? Number(document.getElementById('new-game-timeout-minutes').value) : undefined;
+        const timeoutAction = timeoutEnabled ? document.getElementById('new-game-timeout-action').value : undefined;
 
         // Issue #116: post to the open lobby instead of creating the game
         // directly -- mirrors createGame()'s own params (see above) minus
@@ -4205,6 +4251,8 @@
                 // lobby silently did nothing.
                 best_of_three: bestOfThree,
                 allow_sideboarding: allowSideboarding,
+                timeout_minutes: timeoutMinutes,
+                timeout_action: timeoutAction,
             });
 
             if (!ok) {
@@ -4249,6 +4297,8 @@
             allowSideboarding,
             diagnosticMode,
             botDecklists,
+            timeoutMinutes,
+            timeoutAction,
         );
 
         if (!ok) {
@@ -6010,6 +6060,37 @@
         }
     }
 
+    // Issue #85's own turn/decision timeout action labels -- mirrors
+    // #new-game-timeout-action's own option text in web-static/game/index.html,
+    // just phrased for a board title's parenthetical rather than a
+    // dropdown option.
+    const TIMEOUT_ACTION_LABELS = {
+        auto_play: 'auto-play',
+        skip: 'skip',
+        resign: 'resign',
+    };
+
+    // Mirrors #new-game-timeout-minutes' own option labels (30 minutes
+    // through 7 days) -- see games.timeout_minutes's own docblock for
+    // why the value is always one of that exact preset ladder, never an
+    // arbitrary number, so a plain lookup (falling back to "N minutes"
+    // for anything unexpected) covers every legal value.
+    const TIMEOUT_DURATION_LABELS = {
+        30: '30-minute',
+        60: '1-hour',
+        120: '2-hour',
+        360: '6-hour',
+        720: '12-hour',
+        1440: '1-day',
+        2880: '2-day',
+        4320: '3-day',
+        10080: '7-day',
+    };
+
+    function timeoutDurationLabel(minutes) {
+        return TIMEOUT_DURATION_LABELS[minutes] || (minutes + '-minute');
+    }
+
     function renderBoard(state) {
         // A custom decklist's own name (or "Uploaded Deck" if none was
         // specified) replaces "<deck type> deck" entirely here, rather than
@@ -6041,9 +6122,17 @@
         // row's own indicator (buildGameRow()) so it's visible once a
         // player has actually opened the board too, not just from the
         // lobby list.
+        // Issue #85's own turn/decision timeouts -- shown the same
+        // parenthetical way, so a player who wasn't the one who created
+        // the game still knows an idle turn/response won't just sit
+        // forever, and roughly how it'll be resolved if it does.
+        const timeoutDescription = state.game.timeout_minutes !== null
+            ? ', ' + timeoutDurationLabel(state.game.timeout_minutes) + ' timeout (' + TIMEOUT_ACTION_LABELS[state.game.timeout_action] + ')'
+            : '';
         document.getElementById('board-title').textContent =
             'Game #' + state.game.id + ' (' + formatAndDeckDescription +
-            (state.game.default_selections_mode ? ', default selections' : '') + ')';
+            (state.game.default_selections_mode ? ', default selections' : '') +
+            timeoutDescription + ')';
 
         // Spectator mode (issue #128)/Watch game replay (issue #240) --
         // only a real seated player can mint/share this game's own code,

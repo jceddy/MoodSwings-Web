@@ -4216,6 +4216,122 @@ top-level `game_match` field.
 
 **Frontend** -- see "Best of three" in `web-static/README.md`.
 
+### Turn and decision timeouts (issue #85)
+
+"Don't make everyone wait on one AFK player" -- an opt-in-at-creation
+pair of `games` columns, `timeout_minutes` (nullable -- `NULL` means
+off) and `timeout_action` (`'auto_play'`/`'skip'`/`'resign'`, always set
+together with `timeout_minutes`, migration 0324), plus a periodic sweep
+(`bin/apply_game_timeouts.php` -> `GameService::applyTimeoutsForAllActiveGames()`)
+that resolves an idle player's own turn or pending decision on their
+behalf once they've gone quiet for that long.
+
+**Opt-in at creation, never for Sealed Pool of the Day/Weekly Sealed
+Pool** -- `createGame()`'s own `$timeoutMinutes`/`$timeoutAction`
+parameters (`timeout_minutes`/`timeout_action` in the API/New Game
+dialog). Both are silently forced back to `null` (not an error, the same
+"harmless no-op outside its own narrow scope" convention `$diagnosticMode`
+etc. already follow) whenever `$deckType` is one of
+`PERIODIC_SEALED_POOL_DECK_TYPES` (`sealed_pool_of_the_day`/
+`weekly_sealed_pool`) -- both are always played same-day/same-week
+against a live opponent, with no long-running "pick this back up later"
+story the way every other format has, so an idle timeout has nothing
+sensible to protect there. Every other format/deck_type combination is
+fair game. A non-null `$timeoutMinutes` below `TIMEOUT_MINIMUM_MINUTES`
+(30) or a `$timeoutAction` outside `TIMEOUT_ACTIONS` (`'auto_play'`,
+`'skip'`, `'resign'`) IS rejected with a `GameStateException` -- that's
+direct misuse, not a deck_type this feature was never meant to reach.
+
+**Why 30 minutes, not 15** -- reported live, the maintainer's own
+dev/production environments can only run the sweep cron every 15
+minutes. A configured timeout shorter than one full cron interval could
+sit unnoticed for up to one whole EXTRA interval past when it nominally
+elapsed (a 15-minute timeout checked by a cron that just fired 14
+minutes ago won't be caught for another ~14 minutes), which would
+mislead whoever configured it about how quickly it actually fires. 30
+minutes is the shortest value where "checked every 15 minutes" reads as
+a reasonable rounding error rather than the timeout being effectively
+double its stated length.
+
+**Carried forward across match games** the same "chosen once at match
+creation" way `diagnostic_mode`/`default_selections_mode` already are
+(see "Best of three" above) -- both `advanceDraftMatch()`'s and
+`advanceGameMatch()`'s own next-game `INSERT`s copy `timeout_minutes`/
+`timeout_action` straight from the game that just finished, rather than
+requiring the setting to be re-chosen (or silently resetting to off,
+this column's own implicit default) for game 2/3 of a best-of-three
+match.
+
+**`applyTimeoutToGame()`'s own "who is this game actually waiting on"
+resolution** -- a still-open `pending_decision`'s own
+`target_game_player_id` if one exists (`RequiresOpponentDecision`, see
+the pause/resume mechanism above), otherwise the round's own plain
+`current_turn_game_player_id`. Neither identifying anyone (most
+commonly Open/Closed Team Play's own separate `game_team_decisions`
+proposal/turn-order flow -- this issue's own two bullet points, turn
+timeout and reaction/decision timeout, never covered that separate
+mechanism, and this sweep doesn't reach it yet) or the idle player being
+a bot (practice bots are never actually left idle long enough for a
+30-minute-or-longer timeout to matter -- automated turns already act for
+them within moments, so a bot still showing up here would mean
+something else entirely is stuck) both mean "nothing to do," not an
+error.
+
+**The action itself:**
+- `'resign'` calls `resignGame()` on the idle player's behalf outright
+  -- it already auto-answers any pending decision targeting them first
+  (`autoAnswerOwnPendingDecisionBeforeResigning()`, added for issue
+  #85's own "can we allow players to resign while a choice is waiting on
+  them?" precedent) before completing the resignation, so this one call
+  cleanly covers both "idle" shapes with no extra branching needed.
+- `'skip'`/`'auto_play'` on a pending decision behave IDENTICALLY --
+  both answer it via `BotPlayerService::chooseDecisionAnswer()`, the
+  exact same target-agnostic default-answer machinery a bot's own turn
+  (and a resigning human's own pending decision, see above) already
+  uses. A decision has no universal notion of "just skip it" the way an
+  ordinary turn does -- some fields already resolve to a legal "decline"
+  through that exact same method when declining is the right/only
+  sensible default, so reusing it covers that case too rather than
+  reinventing a separate one.
+- `'skip'` on an ordinary turn is a plain `pass()` (`automated: true`),
+  even when a legal play exists -- "the player's move is skipped."
+- `'auto_play'` on an ordinary turn reuses `playViaHeuristicBotFallback()`
+  as-is -- the exact same "pick a real move the way a practice bot
+  would" logic already used when a Tactical Bot's own search comes up
+  with nothing recoverable (see "Practice bots" below).
+
+A `timeout_applied` event is logged immediately before acting (`describeEvent()`
+renders it as "{player} timed out and ..." per action), so the game log
+always shows plainly that a turn/response was a time-out and not a real
+one, ahead of whatever the action itself goes on to log (`mood_played`/
+`turn_passed`/`pending_decision_resolved`, or a resignation).
+
+**No lock held across the sweep itself** (unlike `expireStaleActiveGames()`
+above, which holds one across its own raw `UPDATE`) -- `applyTimeoutToGame()`
+only ever calls this class's own already-self-locking public entry
+points (`playMood()`/`pass()`/`respondToDecision()`/`resignGame()`), each
+of which re-validates the exact state it needs under its own lock and
+throws if anything about the situation already changed. A stale row from
+the sweep's own initial `SELECT` (a player who acted moments before the
+cron reached their game, e.g.) just means that one game's own attempt
+throws and is skipped -- no different from two humans racing to act on
+the same turn, and no different from `playViaHeuristicBotFallback()`'s
+own identical catch-and-skip precedent elsewhere in this file.
+
+**Surfaced read-only via `getState()`** -- `timeout_minutes`/
+`timeout_action` on the top-level `game` object, `null`/`null` when off,
+purely so every seated player (not just whoever created the game) can
+see it's active and how it's configured. See "Turn and decision
+timeouts" in `web-static/README.md` for the New Game dialog fields and
+board display this drives.
+
+**Cron** -- `bin/apply_game_timeouts.php`, meant to run every 15 minutes
+(`*/15 * * * *`), wired up identically to `bin/advance_automated_turns.php`
+(a real `NotificationService`, `ChaosDefaultEffectRegistry` alongside the
+plain registry) since an auto-played/skipped/resigned action can just as
+easily hand the turn to a human owed an "it's your turn" notification as
+any other automated turn advance would.
+
 ### Power Duel sideboarding
 
 A second, narrower opt-in on top of best-of-three (migration 0228):

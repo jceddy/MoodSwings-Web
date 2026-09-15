@@ -1120,6 +1120,12 @@ if ($path === '/games' && $method === 'POST') {
     // Only meaningful once $userIds seats at least one Tactical Bot --
     // see createGame()'s own $diagnosticMode docblock.
     $diagnosticMode = (bool) ($body['diagnostic_mode'] ?? false);
+    // Issue #85's own opt-in turn/decision timeouts -- null/unset means
+    // off; a request naming timeout_minutes without timeout_action (or
+    // vice versa) is left for createGame()'s own validation to reject.
+    // See createGame()'s own $timeoutMinutes docblock.
+    $timeoutMinutes = isset($body['timeout_minutes']) ? (int) $body['timeout_minutes'] : null;
+    $timeoutAction = isset($body['timeout_action']) ? (string) $body['timeout_action'] : null;
     // Only meaningful for deck_type 'rotisserie_draft' -- see createGame()'s own docblock.
     $rotisserieDraftPoolSource = isset($body['rotisserie_draft_pool_source']) ? (string) $body['rotisserie_draft_pool_source'] : null;
     $rotisserieDraftCustomPoolText = isset($body['rotisserie_draft_custom_pool_text']) ? (string) $body['rotisserie_draft_custom_pool_text'] : null;
@@ -1180,6 +1186,8 @@ if ($path === '/games' && $method === 'POST') {
             $allowSideboarding,
             $diagnosticMode,
             $botDecklists,
+            $timeoutMinutes,
+            $timeoutAction,
         );
         respond(201, ['status' => 'ok', 'game_id' => $gameId]);
     } catch (GameStateException $e) {
@@ -1246,6 +1254,10 @@ function openGameCreateParamsFromRequestBody(array $body): array
         // Only meaningful once the roster ends up seating at least one
         // Tactical Bot -- see createGame()'s own $diagnosticMode docblock.
         'diagnostic_mode' => (bool) ($body['diagnostic_mode'] ?? false),
+        // Issue #85's own opt-in turn/decision timeouts -- see
+        // createGame()'s own $timeoutMinutes docblock.
+        'timeout_minutes' => isset($body['timeout_minutes']) ? (int) $body['timeout_minutes'] : null,
+        'timeout_action' => isset($body['timeout_action']) ? (string) $body['timeout_action'] : null,
     ];
 }
 

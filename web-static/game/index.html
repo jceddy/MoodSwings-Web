@@ -643,6 +643,31 @@
             </label>
             <p id="new-game-deck-type-description"></p>
 
+            <label class="new-game-field" id="new-game-timeout-enabled-label"><input type="checkbox" id="new-game-timeout-enabled"> Automatically resolve an idle turn/response</label>
+            <div id="new-game-timeout-fields" hidden>
+                <label class="new-game-field">After being idle for
+                    <select id="new-game-timeout-minutes">
+                        <option value="30">30 minutes</option>
+                        <option value="60">1 hour</option>
+                        <option value="120">2 hours</option>
+                        <option value="360">6 hours</option>
+                        <option value="720">12 hours</option>
+                        <option value="1440">1 day</option>
+                        <option value="2880">2 days</option>
+                        <option value="4320">3 days</option>
+                        <option value="10080">7 days</option>
+                    </select>
+                </label>
+                <label class="new-game-field">
+                    <select id="new-game-timeout-action">
+                        <option value="auto_play">Automatically play a move for them</option>
+                        <option value="skip">Skip their turn/response</option>
+                        <option value="resign">Resign them from the game/match</option>
+                    </select>
+                </label>
+                <p>Checked periodically (at most every 15 minutes), so an idle turn/response may take a little longer than the chosen duration to actually resolve.</p>
+            </div>
+
             <div id="new-game-decklist-fields" hidden>
                 <label>Use a saved deck
                     <select id="new-game-saved-decklist">
