@@ -265,6 +265,45 @@ final class GameService
     private const SYNCHRONOUS_DRAFT_PICK_TIMEOUT_SECONDS = 60;
 
     /**
+     * Synchronous mode's own match-wide chess clock (increment 4,
+     * migration 0332) -- "each player has a total 30 minutes for a
+     * match (in best of 3) or an individual game (in single game
+     * matches) -- if the user goes over the 30 minute allotment, they
+     * automatically lose," reported live. Reuses games.active_seconds_used
+     * (the exact column total_time_limit_minutes' own full-game mode
+     * already accumulates via touchLastMoveAt()'s own $creditGamePlayerId
+     * parameter) as its accumulator -- safe since the two modes are
+     * mutually exclusive (see createGame()'s own validation), so a
+     * synchronous game's own active_seconds_used is never touched by
+     * that other feature. The one behavioral difference: THIS mode's own
+     * cap is scoped to the whole MATCH, not one game -- see
+     * advanceGameMatch()/advanceDraftMatch()'s own carry-forward
+     * comments for how active_seconds_used survives into game 2/3,
+     * unlike total_time_limit_minutes' own deliberate per-game reset.
+     *
+     * "The time spent on deck building/sideboarding counts against your
+     * 30 minutes total match time" -- creditDeckBuildingTimeIfNeeded()
+     * credits that phase's own elapsed wall-clock time onto this same
+     * running total once a player submits their deck, since deck-
+     * building/sideboarding has no timer or "whose turn" of its own for
+     * touchLastMoveAt() to credit through the ordinary gameplay path.
+     * Time spent actually DRAFTING (increment 3's own 60-second-per-pick
+     * timer) is deliberately NOT credited here, though -- drafting
+     * already has its own hard per-pick governor bounding how much real
+     * time it can consume, and the user's own clarification calling out
+     * deck-building specifically ("there is no time limit on deck
+     * building/sideboarding, but...") implies drafting itself needed no
+     * equivalent carve-out.
+     *
+     * enforceSynchronousMatchClock() is the real-time enforcement (called
+     * from GET /games/state, same as the action/draft-pick deadlines
+     * above) -- a 15-minute-cron-only check the way total_time_limit_minutes
+     * gets by on would leave a player who's blown well past 30 minutes
+     * live for up to 15 more, which doesn't fit "live, right now" play.
+     */
+    private const SYNCHRONOUS_MATCH_TIME_LIMIT_MINUTES = 30;
+
+    /**
      * The 'power' deck_type's own non-Mythic card count -- see
      * buildPowerDeckCardIds(), which pairs this many random non-Mythic
      * cards with exactly one random Mythic (15 total).
@@ -702,7 +741,7 @@ final class GameService
      */
     private function initializeSealedDeck(int $draftMatchId): void
     {
-        Connection::get()->prepare("UPDATE draft_matches SET status = 'deck_building' WHERE id = :id")
+        Connection::get()->prepare("UPDATE draft_matches SET status = 'deck_building', deck_building_started_at = NOW() WHERE id = :id")
             ->execute(['id' => $draftMatchId]);
     }
 
@@ -4583,7 +4622,7 @@ final class GameService
             ]);
         }
 
-        $pdo->prepare("UPDATE draft_matches SET status = 'deck_building' WHERE id = :id")
+        $pdo->prepare("UPDATE draft_matches SET status = 'deck_building', deck_building_started_at = NOW() WHERE id = :id")
             ->execute(['id' => $draftMatchId]);
     }
 
@@ -4900,6 +4939,14 @@ final class GameService
         });
 
         $this->touchLastMoveAt($gameId);
+        // Synchronous mode's own match-wide chess clock (increment 4) --
+        // "the time spent on deck building/sideboarding counts against
+        // your 30 minutes total match time," reported live. A no-op
+        // outside synchronous mode, same convention as every other
+        // opt-in field here.
+        if ((bool) $game['synchronous_mode']) {
+            $this->creditDeckBuildingTimeIfNeeded($gameId, $draftMatchId, $userId);
+        }
     }
 
     /**
@@ -5305,7 +5352,7 @@ final class GameService
             $this->removeDraftMatchPlayer($gameId, $draftMatchId, $shortUserId);
         }
 
-        $pdo->prepare("UPDATE draft_matches SET status = 'deck_building' WHERE id = :id")->execute(['id' => $draftMatchId]);
+        $pdo->prepare("UPDATE draft_matches SET status = 'deck_building', deck_building_started_at = NOW() WHERE id = :id")->execute(['id' => $draftMatchId]);
         $this->notifyDraftUsersItsYourTurn($gameId, $survivingUserIds, "Game #{$gameId}'s draft is complete -- submit your deck.", 'draft-deck');
     }
 
@@ -5551,7 +5598,7 @@ final class GameService
 
             if ($currentRound >= self::gridDraftRounds($playerCount)) {
                 $pdo->prepare('DELETE FROM draft_grid_state WHERE draft_match_id = :id')->execute(['id' => $draftMatchId]);
-                $pdo->prepare("UPDATE draft_matches SET status = 'deck_building' WHERE id = :id")->execute(['id' => $draftMatchId]);
+                $pdo->prepare("UPDATE draft_matches SET status = 'deck_building', deck_building_started_at = NOW() WHERE id = :id")->execute(['id' => $draftMatchId]);
                 $this->notifyDraftUsersItsYourTurn($gameId, $userIds, "Game #{$gameId}'s draft is complete -- submit your deck.", 'draft-deck');
 
                 return [
@@ -5709,7 +5756,7 @@ final class GameService
                 // "remainder discarded" precedent as Grid Draft's own
                 // leftover grid cells).
                 $pdo->prepare('DELETE FROM draft_rotisserie_state WHERE draft_match_id = :id')->execute(['id' => $draftMatchId]);
-                $pdo->prepare("UPDATE draft_matches SET status = 'deck_building' WHERE id = :id")->execute(['id' => $draftMatchId]);
+                $pdo->prepare("UPDATE draft_matches SET status = 'deck_building', deck_building_started_at = NOW() WHERE id = :id")->execute(['id' => $draftMatchId]);
                 $this->notifyDraftUsersItsYourTurn($gameId, $userIds, "Game #{$gameId}'s draft is complete -- submit your deck.", 'draft-deck');
 
                 return [
@@ -5888,7 +5935,7 @@ final class GameService
                 // same "remainder discarded" precedent as base Rotisserie
                 // Draft's own leftover pool cards.
                 $pdo->prepare('DELETE FROM draft_tiered_rotisserie_state WHERE draft_match_id = :id')->execute(['id' => $draftMatchId]);
-                $pdo->prepare("UPDATE draft_matches SET status = 'deck_building' WHERE id = :id")->execute(['id' => $draftMatchId]);
+                $pdo->prepare("UPDATE draft_matches SET status = 'deck_building', deck_building_started_at = NOW() WHERE id = :id")->execute(['id' => $draftMatchId]);
                 $this->notifyDraftUsersItsYourTurn($gameId, $userIds, "Game #{$gameId}'s draft is complete -- submit your deck.", 'draft-deck');
 
                 return [
@@ -11351,7 +11398,7 @@ final class GameService
         }
 
         $seatStmt = $pdo->prepare(
-            'SELECT gp.user_id, gp.seat_order, u.is_bot FROM game_players gp JOIN users u ON u.id = gp.user_id WHERE gp.game_id = :game_id ORDER BY gp.seat_order ASC'
+            'SELECT gp.user_id, gp.seat_order, gp.active_seconds_used, u.is_bot FROM game_players gp JOIN users u ON u.id = gp.user_id WHERE gp.game_id = :game_id ORDER BY gp.seat_order ASC'
         );
         $seatStmt->execute(['game_id' => $gameId]);
         $seats = $seatStmt->fetchAll();
@@ -11394,12 +11441,15 @@ final class GameService
             'timeout_action' => $game['timeout_action'],
             // Issue #85 follow-up's own full-game time-limit mode --
             // same carry-forward treatment. game_players.active_seconds_used
-            // needs no analogous carry-forward: it's a fresh column
-            // default (0) on the new game_players rows insertPlayer
-            // below creates, correctly starting each match game's own
-            // budget over from zero rather than accumulating across the
-            // whole match (the setting's own docblock is explicit that
-            // this is a per-GAME limit).
+            // itself needs no analogous carry-forward for THIS setting:
+            // it's a fresh column default (0) on the new game_players
+            // rows insertPlayer below creates when total_time_limit_minutes
+            // is what's driving it, correctly starting each match game's
+            // own budget over from zero rather than accumulating across
+            // the whole match (that setting's own docblock is explicit
+            // it's a per-GAME limit) -- synchronous mode's OWN use of the
+            // same column (increment 4, mutually exclusive with this one)
+            // carries it forward instead, see the INSERT loop below.
             'total_time_limit_minutes' => $game['total_time_limit_minutes'],
             // Synchronous mode (increment 3) -- same "chosen once at
             // match creation, carried through every match game"
@@ -11415,7 +11465,7 @@ final class GameService
         $nextGameId = (int) $pdo->lastInsertId();
 
         $insertPlayer = $pdo->prepare(
-            'INSERT INTO game_players (game_id, user_id, seat_order) VALUES (:game_id, :user_id, :seat_order)'
+            'INSERT INTO game_players (game_id, user_id, seat_order, active_seconds_used) VALUES (:game_id, :user_id, :seat_order, :active_seconds_used)'
         );
         // Synchronous mode's own ready check -- see createGame()'s own
         // identical bot-auto-ready comment; a harmless no-op outside a
@@ -11426,6 +11476,14 @@ final class GameService
                 'game_id' => $nextGameId,
                 'user_id' => (int) $seat['user_id'],
                 'seat_order' => (int) $seat['seat_order'],
+                // Synchronous mode's own match-wide chess clock
+                // (increment 4) -- see advanceGameMatch()'s own identical
+                // carry-forward comment; a draft-family match's own
+                // deck-building/sideboarding time is credited onto this
+                // same running total by submitDraftDeck() before this
+                // next game's own row even exists, so it's already
+                // baked into $seat['active_seconds_used'] here.
+                'active_seconds_used' => (bool) $game['synchronous_mode'] ? (int) $seat['active_seconds_used'] : 0,
             ]);
             if ((bool) $seat['is_bot']) {
                 $markBotReady->execute(['id' => (int) $pdo->lastInsertId()]);
@@ -11433,11 +11491,11 @@ final class GameService
         }
 
         $pdo->prepare(
-            'UPDATE draft_match_players SET previous_deck_card_ids = deck_card_ids, deck_card_ids = NULL
+            'UPDATE draft_match_players SET previous_deck_card_ids = deck_card_ids, deck_card_ids = NULL, deck_building_time_credited_at = NULL
              WHERE draft_match_id = :match_id'
         )->execute(['match_id' => $draftMatchId]);
 
-        $pdo->prepare("UPDATE draft_matches SET status = 'deck_building' WHERE id = :id")
+        $pdo->prepare("UPDATE draft_matches SET status = 'deck_building', deck_building_started_at = NOW() WHERE id = :id")
             ->execute(['id' => $draftMatchId]);
 
         $seatUserIds = array_map(static fn (array $seat): int => (int) $seat['user_id'], $seats);
@@ -11559,7 +11617,7 @@ final class GameService
         // Harmlessly fetched for every other seat too, rather than a
         // second, deck-type-conditional query.
         $seatStmt = $pdo->prepare(
-            'SELECT gp.user_id, gp.seat_order, gp.team_id, gp.custom_deck_name, gp.custom_deck_card_ids, gp.custom_deck_sideboard_card_ids, u.is_bot
+            'SELECT gp.user_id, gp.seat_order, gp.team_id, gp.custom_deck_name, gp.custom_deck_card_ids, gp.custom_deck_sideboard_card_ids, gp.active_seconds_used, u.is_bot
              FROM game_players gp JOIN users u ON u.id = gp.user_id
              WHERE gp.game_id = :game_id ORDER BY gp.seat_order ASC'
         );
@@ -11629,8 +11687,8 @@ final class GameService
         $nextGameId = (int) $pdo->lastInsertId();
 
         $insertPlayer = $pdo->prepare(
-            'INSERT INTO game_players (game_id, user_id, seat_order, team_id, custom_deck_name, custom_deck_card_ids, custom_deck_sideboard_card_ids)
-             VALUES (:game_id, :user_id, :seat_order, :team_id, :custom_deck_name, :custom_deck_card_ids, :custom_deck_sideboard_card_ids)'
+            'INSERT INTO game_players (game_id, user_id, seat_order, team_id, custom_deck_name, custom_deck_card_ids, custom_deck_sideboard_card_ids, active_seconds_used)
+             VALUES (:game_id, :user_id, :seat_order, :team_id, :custom_deck_name, :custom_deck_card_ids, :custom_deck_sideboard_card_ids, :active_seconds_used)'
         );
         $humanCustomDuelSeatUserIds = [];
         $markBotReady = $pdo->prepare('UPDATE game_players SET ready_at = NOW() WHERE id = :id');
@@ -11645,6 +11703,16 @@ final class GameService
                 'custom_deck_name' => $carryForwardCustomDeck ? $seat['custom_deck_name'] : null,
                 'custom_deck_card_ids' => $carryForwardCustomDeck ? $seat['custom_deck_card_ids'] : null,
                 'custom_deck_sideboard_card_ids' => $carryForwardCustomDeck ? $seat['custom_deck_sideboard_card_ids'] : null,
+                // Synchronous mode's own match-wide chess clock (increment
+                // 4) -- unlike total_time_limit_minutes' own PER-GAME
+                // active_seconds_used (deliberately reset for each match
+                // game, see this method's own docblock above), the
+                // 30-minute cap is scoped to the WHOLE match, so a
+                // synchronous seat's already-spent time carries forward
+                // into its fresh game_players row here instead of
+                // starting over at 0. See SYNCHRONOUS_MATCH_TIME_LIMIT_MINUTES'
+                // own docblock.
+                'active_seconds_used' => (bool) $game['synchronous_mode'] ? (int) $seat['active_seconds_used'] : 0,
             ]);
             if ($game['deck_type'] === 'custom_duel' && !$seat['is_bot'] && !$isLockedPowerDuelMatch) {
                 $humanCustomDuelSeatUserIds[] = (int) $seat['user_id'];
@@ -19948,6 +20016,168 @@ final class GameService
     }
 
     /**
+     * Synchronous mode's own match-wide chess clock (increment 4) -- the
+     * real-time counterpart to enforceSynchronousActionDeadline()/
+     * enforceSynchronousDraftPickDeadline() above, called from the same
+     * GET /games/state poll. Branches on where a synchronous match's
+     * clock can actually be running right now: an ordinary in_progress
+     * turn (or Open/Closed Team Play decision -- resolveIdleGamePlayerAndSecondsSinceLastMove()
+     * already covers both) projects the currently-idle player's own
+     * would-be total the exact same way applyTotalTimeLimitIfExceeded()
+     * does; a draft-family match sitting in 'waiting'/'deck_building'
+     * has no single idle player at all (both seats sideboard
+     * concurrently) so that phase gets its own check instead. Every
+     * other phase (still drafting, or not yet initialized at all) is a
+     * no-op here -- drafting has its own governor (SYNCHRONOUS_DRAFT_PICK_TIMEOUT_SECONDS)
+     * and doesn't feed this clock at all, see SYNCHRONOUS_MATCH_TIME_LIMIT_MINUTES'
+     * own docblock.
+     */
+    public function enforceSynchronousMatchClock(int $gameId): void
+    {
+        try {
+            $game = $this->fetchGame($gameId);
+            if (!(bool) $game['synchronous_mode']) {
+                return;
+            }
+
+            if ($game['status'] === 'in_progress') {
+                $idle = $this->resolveIdleGamePlayerAndSecondsSinceLastMove($gameId, $game);
+                if ($idle !== null) {
+                    $this->applySynchronousMatchClockIfExceeded($gameId, $idle['game_player_id'], $idle['seconds_since_last_move']);
+                }
+
+                return;
+            }
+
+            if ($game['status'] === 'waiting' && $game['draft_match_id'] !== null) {
+                $this->enforceSynchronousMatchClockDuringDeckBuilding($gameId, $game);
+            }
+        } catch (Throwable $e) {
+            error_log("enforceSynchronousMatchClock({$gameId}): timeout action failed -- " . $e);
+        }
+    }
+
+    /**
+     * enforceSynchronousMatchClock()'s own in_progress branch --
+     * mirrors applyTotalTimeLimitIfExceeded() almost exactly (same
+     * "project the idle player's own would-be total, resign outright
+     * once it clears the cap" shape), just against
+     * SYNCHRONOUS_MATCH_TIME_LIMIT_MINUTES's own fixed cap instead of a
+     * per-game configurable one, and called from the real-time poll
+     * rather than only the 15-minute cron (see
+     * SYNCHRONOUS_MATCH_TIME_LIMIT_MINUTES' own docblock for why this
+     * mode needs that).
+     */
+    private function applySynchronousMatchClockIfExceeded(int $gameId, int $idleGamePlayerId, int $secondsSinceLastMove): void
+    {
+        $usedStmt = Connection::get()->prepare('SELECT active_seconds_used FROM game_players WHERE id = :id');
+        $usedStmt->execute(['id' => $idleGamePlayerId]);
+        $activeSecondsUsed = $usedStmt->fetchColumn();
+        if ($activeSecondsUsed === false) {
+            return;
+        }
+
+        $projectedSeconds = (int) $activeSecondsUsed + $secondsSinceLastMove;
+        if ($projectedSeconds < self::SYNCHRONOUS_MATCH_TIME_LIMIT_MINUTES * 60) {
+            return;
+        }
+
+        $round = $this->currentRound($gameId);
+        $this->logEvent($gameId, (int) $round['id'], $idleGamePlayerId, 'timeout_applied', null, ['timeout_action' => 'resign', 'synchronous' => true, 'match_clock' => true]);
+        $this->resignGame($gameId, $idleGamePlayerId);
+    }
+
+    /**
+     * enforceSynchronousMatchClock()'s own deck-building/sideboard
+     * branch -- unlike an ordinary turn, both seats are "on the clock"
+     * simultaneously here (nobody's waiting on the other the way a turn
+     * order implies), so every not-yet-credited human seat is checked in
+     * turn rather than resolving a single idle player. A seat that's
+     * already submitted this window (draft_match_players.deck_building_time_credited_at
+     * non-NULL -- see creditDeckBuildingTimeIfNeeded()) is skipped: its
+     * own final total is already baked into active_seconds_used, so
+     * nothing is still "running" for them to project forward.
+     */
+    private function enforceSynchronousMatchClockDuringDeckBuilding(int $gameId, array $game): void
+    {
+        $draftMatchId = (int) $game['draft_match_id'];
+        $match = $this->fetchDraftMatch($draftMatchId);
+        if ($match['status'] !== 'deck_building' || $match['deck_building_started_at'] === null) {
+            return;
+        }
+
+        $secondsSinceDeckBuildingStarted = time() - strtotime((string) $match['deck_building_started_at']);
+        if ($secondsSinceDeckBuildingStarted < 0) {
+            return;
+        }
+
+        $rowsStmt = Connection::get()->prepare(
+            'SELECT gp.id AS game_player_id, gp.user_id, gp.active_seconds_used
+             FROM game_players gp
+             JOIN draft_match_players dmp ON dmp.draft_match_id = :match_id AND dmp.user_id = gp.user_id
+             WHERE gp.game_id = :game_id AND dmp.deck_building_time_credited_at IS NULL'
+        );
+        $rowsStmt->execute(['match_id' => $draftMatchId, 'game_id' => $gameId]);
+
+        $botUserIds = $this->draftMatchBotUserIds($draftMatchId);
+        foreach ($rowsStmt->fetchAll() as $row) {
+            if (in_array((int) $row['user_id'], $botUserIds, true)) {
+                continue;
+            }
+
+            $projectedSeconds = (int) $row['active_seconds_used'] + $secondsSinceDeckBuildingStarted;
+            if ($projectedSeconds < self::SYNCHRONOUS_MATCH_TIME_LIMIT_MINUTES * 60) {
+                continue;
+            }
+
+            $idleGamePlayerId = (int) $row['game_player_id'];
+            $this->logEvent($gameId, null, $idleGamePlayerId, 'timeout_applied', null, ['timeout_action' => 'resign', 'synchronous' => true, 'match_clock' => true, 'deck_building' => true]);
+            $this->resignFromDraftMatch($gameId, $idleGamePlayerId, $draftMatchId, (string) $game['format']);
+
+            return; // resignFromDraftMatch() may end the whole match outright -- one action, same as everywhere else here
+        }
+    }
+
+    /**
+     * "The time spent on deck building/sideboarding counts against your
+     * 30 minutes total match time" -- called from submitDraftDeck() for
+     * a synchronous match, this credits the elapsed time since
+     * draft_matches.deck_building_started_at onto the submitting
+     * player's own game_players.active_seconds_used, exactly once per
+     * deck-building/sideboard window (the atomic UPDATE ... WHERE
+     * deck_building_time_credited_at IS NULL claim below is what makes a
+     * player editing/resubmitting their deck before the game actually
+     * starts harmless rather than double-credited -- only their FIRST
+     * submission this window is charged, an intentional simplification
+     * since this phase has no timer of its own to begin with).
+     */
+    private function creditDeckBuildingTimeIfNeeded(int $gameId, int $draftMatchId, int $userId): void
+    {
+        $match = $this->fetchDraftMatch($draftMatchId);
+        if ($match['deck_building_started_at'] === null) {
+            return;
+        }
+
+        $pdo = Connection::get();
+        $claim = $pdo->prepare(
+            'UPDATE draft_match_players SET deck_building_time_credited_at = NOW()
+             WHERE draft_match_id = :match_id AND user_id = :user_id AND deck_building_time_credited_at IS NULL'
+        );
+        $claim->execute(['match_id' => $draftMatchId, 'user_id' => $userId]);
+        if ($claim->rowCount() === 0) {
+            return;
+        }
+
+        $gamePlayerId = $this->gamePlayerIdForUser($gameId, $userId);
+        $pdo->prepare(
+            'UPDATE game_players gp
+             JOIN draft_matches dm ON dm.id = :match_id
+             SET gp.active_seconds_used = gp.active_seconds_used + GREATEST(0, TIMESTAMPDIFF(SECOND, dm.deck_building_started_at, NOW()))
+             WHERE gp.id = :player_id'
+        )->execute(['match_id' => $draftMatchId, 'player_id' => $gamePlayerId]);
+    }
+
+    /**
      * applyTimeoutsForAllActiveGames()'s own abandonment-only backstop
      * for a synchronous-mode game (increment 2) -- see
      * self::SYNCHRONOUS_ABANDONMENT_GRACE_SECONDS' own docblock for why
@@ -20012,12 +20242,11 @@ final class GameService
      * watch.
      *
      * Not yet initialized (pending_draft_init still set -- nobody's
-     * clicked Ready) and 'deck_building' (drafting already finished)
-     * both fall through as a no-op here -- the former has no deadline to
-     * compare against yet, and the latter's own untimed deck-building/
-     * sideboard abandonment is deferred to the match-wide chess clock
-     * (still unbuilt -- see php-app/README.md's own Synchronous mode
-     * roadmap).
+     * clicked Ready) falls through as a no-op here -- there's no
+     * deadline to compare against yet. 'deck_building' (increment 4) is
+     * its own separate branch below, since enforceSynchronousMatchClockDuringDeckBuilding()'s
+     * own real-time check (the SAME thing that would otherwise resolve
+     * this) never runs at all once nobody's left to poll GET /games/state.
      */
     private function applySynchronousDraftAbandonment(int $gameId, array $game): bool
     {
@@ -20027,6 +20256,11 @@ final class GameService
 
         $draftMatchId = (int) $game['draft_match_id'];
         $match = $this->fetchDraftMatch($draftMatchId);
+
+        if ($match['status'] === 'deck_building') {
+            return $this->applySynchronousDeckBuildingAbandonment($gameId, $game, $draftMatchId, $match);
+        }
+
         if ($match['pending_draft_init'] !== null || $match['status'] !== 'drafting' || $match['pick_deadline_at'] === null) {
             return false;
         }
@@ -20044,6 +20278,45 @@ final class GameService
 
         $idleGamePlayerId = $this->gamePlayerIdForUser($gameId, $humanUserIds[0]);
         $this->logEvent($gameId, null, $idleGamePlayerId, 'timeout_applied', null, ['timeout_action' => 'resign', 'synchronous' => true, 'abandoned' => true, 'draft_pick' => true]);
+        $this->resignFromDraftMatch($gameId, $idleGamePlayerId, $draftMatchId, (string) $game['format']);
+
+        return true;
+    }
+
+    /**
+     * applySynchronousDraftAbandonment()'s own 'deck_building' branch
+     * (increment 4) -- draft_matches.deck_building_started_at doubles as
+     * this backstop's own signal, the same "reuse the real-time check's
+     * own timestamp as a coarse cron threshold instead" shape every
+     * other synchronous abandonment backstop here follows. Resigns
+     * outright on behalf of the first human seat that hasn't already
+     * submitted a deck this window (draft_match_players.deck_building_time_credited_at
+     * still NULL) -- a seat that already submitted isn't who a
+     * completely-abandoned match is actually waiting on.
+     */
+    private function applySynchronousDeckBuildingAbandonment(int $gameId, array $game, int $draftMatchId, array $match): bool
+    {
+        if ($match['deck_building_started_at'] === null) {
+            return false;
+        }
+
+        $secondsSinceDeckBuildingStarted = time() - strtotime((string) $match['deck_building_started_at']);
+        if ($secondsSinceDeckBuildingStarted < self::SYNCHRONOUS_ABANDONMENT_GRACE_SECONDS) {
+            return false;
+        }
+
+        $botUserIds = $this->draftMatchBotUserIds($draftMatchId);
+        $stmt = Connection::get()->prepare(
+            'SELECT user_id FROM draft_match_players WHERE draft_match_id = :id AND deck_building_time_credited_at IS NULL ORDER BY id ASC'
+        );
+        $stmt->execute(['id' => $draftMatchId]);
+        $notYetSubmittedUserIds = array_values(array_diff(array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN)), $botUserIds));
+        if ($notYetSubmittedUserIds === []) {
+            return false; // every human seat already submitted -- not actually abandoned, just about to start
+        }
+
+        $idleGamePlayerId = $this->gamePlayerIdForUser($gameId, $notYetSubmittedUserIds[0]);
+        $this->logEvent($gameId, null, $idleGamePlayerId, 'timeout_applied', null, ['timeout_action' => 'resign', 'synchronous' => true, 'abandoned' => true, 'deck_building' => true]);
         $this->resignFromDraftMatch($gameId, $idleGamePlayerId, $draftMatchId, (string) $game['format']);
 
         return true;

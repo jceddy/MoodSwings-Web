@@ -20285,21 +20285,23 @@ final class GameServiceIntegrationTest extends TestCase
      * isolation from the ready-check/dealing machinery increment 1
      * already covers elsewhere.
      */
-    private function buildSynchronousFixture(int $deadlineSecondsFromNow = 30): array
+    private function buildSynchronousFixture(int $deadlineSecondsFromNow = 30, int $p1ActiveSecondsUsed = 0, int $minutesSinceLastMove = 0): array
     {
         $u1 = $this->insertUser('sync-timer-p1-' . uniqid());
         $u2 = $this->insertUser('sync-timer-p2-' . uniqid());
 
         $stmt = $this->pdo->prepare(
             "INSERT INTO games (format, status, created_by_user_id, wins_needed, synchronous_mode, last_move_at)
-             VALUES ('standard', 'in_progress', :created_by, 3, 1, NOW())"
+             VALUES ('standard', 'in_progress', :created_by, 3, 1, NOW() - INTERVAL :elapsed MINUTE)"
         );
-        $stmt->execute(['created_by' => $u1]);
+        $stmt->execute(['created_by' => $u1, 'elapsed' => $minutesSinceLastMove]);
         $gameId = (int) $this->pdo->lastInsertId();
 
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
         $this->pdo->prepare('UPDATE game_players SET timeout_extensions_banked = 2 WHERE game_id = :g')->execute(['g' => $gameId]);
+        $this->pdo->prepare('UPDATE game_players SET active_seconds_used = :used WHERE id = :id')
+            ->execute(['used' => $p1ActiveSecondsUsed, 'id' => $p1]);
 
         $handCardId = $this->insertGameCard($gameId, 55, 'hand', $p1); // Apathy -- a plain, always-legal play
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
@@ -20764,13 +20766,24 @@ final class GameServiceIntegrationTest extends TestCase
         $this->games->markReady($gameId, $this->games->gamePlayerIdFor($gameId, $u1));
         $this->games->markReady($gameId, $this->games->gamePlayerIdFor($gameId, $u2));
         $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        // Increment 4: back-date the deck-building window so crediting it
+        // onto active_seconds_used (below) is unambiguously non-zero.
+        $this->pdo->prepare('UPDATE draft_matches SET deck_building_started_at = :started WHERE id = :id')
+            ->execute(['started' => date('Y-m-d H:i:s', time() - 180), 'id' => $draftMatchId]);
         $this->submitFullQuickDraftDeck($gameId, $u1);
         $this->submitFullQuickDraftDeck($gameId, $u2);
+
+        $p1 = $this->games->gamePlayerIdFor($gameId, $u1);
+        $usedStmt = $this->pdo->prepare('SELECT active_seconds_used FROM game_players WHERE id = :id');
+        $usedStmt->execute(['id' => $p1]);
+        self::assertGreaterThanOrEqual(175, (int) $usedStmt->fetchColumn(), 'deck-building time must be credited onto the match clock');
+
         $this->games->startGame($gameId);
 
+        $this->pdo->prepare('UPDATE game_players SET active_seconds_used = 600 WHERE id = :id')->execute(['id' => $p1]);
         $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $u1));
 
-        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
         $nextGameStmt = $this->pdo->prepare('SELECT id FROM games WHERE draft_match_id = :match_id AND match_game_number = 2');
         $nextGameStmt->execute(['match_id' => $draftMatchId]);
         $nextGameId = (int) $nextGameStmt->fetchColumn();
@@ -20779,5 +20792,177 @@ final class GameServiceIntegrationTest extends TestCase
         $readyStmt = $this->pdo->prepare('SELECT COUNT(*) FROM game_players WHERE game_id = :game_id AND ready_at IS NOT NULL');
         $readyStmt->execute(['game_id' => $nextGameId]);
         self::assertSame(0, (int) $readyStmt->fetchColumn(), 'game 2 needs its own fresh ready check');
+
+        $carriedStmt = $this->pdo->prepare('SELECT active_seconds_used FROM game_players WHERE game_id = :game_id AND user_id = :user_id');
+        $carriedStmt->execute(['game_id' => $nextGameId, 'user_id' => $u1]);
+        self::assertSame(600, (int) $carriedStmt->fetchColumn(), 'the match clock must carry forward into game 2');
+
+        $creditedStmt = $this->pdo->prepare('SELECT deck_building_time_credited_at FROM draft_match_players WHERE draft_match_id = :match_id AND user_id = :user_id');
+        $creditedStmt->execute(['match_id' => $draftMatchId, 'user_id' => $u1]);
+        self::assertNull($creditedStmt->fetchColumn(), 'game 2 opens a fresh sideboard window, so the credited flag must reset too');
+    }
+
+    public function testSubmitDraftDeckDoesNotDoubleCreditDeckBuildingTimeOnResubmission(): void
+    {
+        $u1 = $this->insertUser('sync-sealed-credit-p1');
+        $u2 = $this->insertUser('sync-sealed-credit-p2');
+        $gameId = $this->games->createGame($u1, [$u1, $u2], format: 'draft', deckType: 'sealed_deck', synchronousMode: true);
+        $this->games->markReady($gameId, $this->games->gamePlayerIdFor($gameId, $u1));
+        $this->games->markReady($gameId, $this->games->gamePlayerIdFor($gameId, $u2));
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $this->pdo->prepare('UPDATE draft_matches SET deck_building_started_at = :started WHERE id = :id')
+            ->execute(['started' => date('Y-m-d H:i:s', time() - 120), 'id' => $draftMatchId]);
+
+        $pool = $this->fetchDraftMatchPlayer($draftMatchId, $u1)['drafted_card_ids'];
+        $poolCardIds = array_slice(json_decode((string) $pool, true), 0, 15);
+        $this->games->submitDraftDeck($gameId, $u1, $poolCardIds);
+        $p1 = $this->games->gamePlayerIdFor($gameId, $u1);
+        $usedStmt = $this->pdo->prepare('SELECT active_seconds_used FROM game_players WHERE id = :id');
+        $usedStmt->execute(['id' => $p1]);
+        $firstCredit = (int) $usedStmt->fetchColumn();
+        self::assertGreaterThanOrEqual(115, $firstCredit);
+
+        // Resubmitting (still before the opponent submits, still 'deck_building')
+        // must not credit a second time.
+        $this->games->submitDraftDeck($gameId, $u1, array_slice($poolCardIds, 0, 14));
+        $usedStmt->execute(['id' => $p1]);
+        self::assertSame($firstCredit, (int) $usedStmt->fetchColumn());
+    }
+
+    public function testEnforceSynchronousMatchClockResignsAPlayerProjectedOverTheLimitInProgress(): void
+    {
+        // 30-minute cap, already used 28 of it, idle 5 more minutes -- 33
+        // projected minutes exceeds the cap.
+        ['gameId' => $gameId, 'p1' => $p1] = $this->buildSynchronousFixture(30, 28 * 60, 5);
+
+        $this->games->enforceSynchronousMatchClock($gameId);
+
+        self::assertSame('completed', $this->fetchGame($gameId)['status']);
+        $resignedStmt = $this->pdo->prepare('SELECT resigned_at FROM game_players WHERE id = :id');
+        $resignedStmt->execute(['id' => $p1]);
+        self::assertNotNull($resignedStmt->fetchColumn());
+    }
+
+    public function testEnforceSynchronousMatchClockIsANoOpBeforeTheLimitInProgress(): void
+    {
+        // Only 5 minutes used, idle 2 more minutes -- nowhere near the
+        // 30-minute cap.
+        ['gameId' => $gameId] = $this->buildSynchronousFixture(30, 5 * 60, 2);
+
+        $this->games->enforceSynchronousMatchClock($gameId);
+
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
+    }
+
+    public function testEnforceSynchronousMatchClockDuringDeckBuildingResignsAPlayerProjectedOverTheLimit(): void
+    {
+        $u1 = $this->insertUser('sync-sealed-clock-p1');
+        $u2 = $this->insertUser('sync-sealed-clock-p2');
+        $gameId = $this->games->createGame($u1, [$u1, $u2], format: 'draft', deckType: 'sealed_deck', synchronousMode: true);
+        $this->games->markReady($gameId, $this->games->gamePlayerIdFor($gameId, $u1));
+        $this->games->markReady($gameId, $this->games->gamePlayerIdFor($gameId, $u2));
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        // 31 minutes of pure elapsed deck-building time, on top of 0
+        // previously-used seconds -- already past the 30-minute cap.
+        $this->pdo->prepare('UPDATE draft_matches SET deck_building_started_at = :started WHERE id = :id')
+            ->execute(['started' => date('Y-m-d H:i:s', time() - 31 * 60), 'id' => $draftMatchId]);
+
+        $this->games->enforceSynchronousMatchClock($gameId);
+
+        self::assertSame('abandoned', $this->fetchGame($gameId)['status']);
+        self::assertSame('completed', $this->fetchDraftMatch($draftMatchId)['status']);
+    }
+
+    public function testEnforceSynchronousMatchClockDuringDeckBuildingIsANoOpBeforeTheLimit(): void
+    {
+        $u1 = $this->insertUser('sync-sealed-clock2-p1');
+        $u2 = $this->insertUser('sync-sealed-clock2-p2');
+        $gameId = $this->games->createGame($u1, [$u1, $u2], format: 'draft', deckType: 'sealed_deck', synchronousMode: true);
+        $this->games->markReady($gameId, $this->games->gamePlayerIdFor($gameId, $u1));
+        $this->games->markReady($gameId, $this->games->gamePlayerIdFor($gameId, $u2));
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $this->pdo->prepare('UPDATE draft_matches SET deck_building_started_at = :started WHERE id = :id')
+            ->execute(['started' => date('Y-m-d H:i:s', time() - 60), 'id' => $draftMatchId]);
+
+        $this->games->enforceSynchronousMatchClock($gameId);
+
+        self::assertSame('waiting', $this->fetchGame($gameId)['status']);
+        self::assertSame('deck_building', $this->fetchDraftMatch($draftMatchId)['status']);
+    }
+
+    public function testApplySynchronousDeckBuildingAbandonmentResignsAfterGraceThreshold(): void
+    {
+        $u1 = $this->insertUser('sync-sealed-abandon-p1');
+        $u2 = $this->insertUser('sync-sealed-abandon-p2');
+        $gameId = $this->games->createGame($u1, [$u1, $u2], format: 'draft', deckType: 'sealed_deck', synchronousMode: true);
+        $this->games->markReady($gameId, $this->games->gamePlayerIdFor($gameId, $u1));
+        $this->games->markReady($gameId, $this->games->gamePlayerIdFor($gameId, $u2));
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $this->pdo->prepare('UPDATE draft_matches SET deck_building_started_at = :started WHERE id = :id')
+            ->execute(['started' => date('Y-m-d H:i:s', time() - 301), 'id' => $draftMatchId]);
+
+        self::assertSame(1, $this->games->applyTimeoutsForAllActiveGames());
+
+        self::assertSame('abandoned', $this->fetchGame($gameId)['status']);
+        self::assertSame('completed', $this->fetchDraftMatch($draftMatchId)['status']);
+    }
+
+    public function testApplySynchronousDeckBuildingAbandonmentIgnoresARecentWindow(): void
+    {
+        $u1 = $this->insertUser('sync-sealed-abandon2-p1');
+        $u2 = $this->insertUser('sync-sealed-abandon2-p2');
+        $gameId = $this->games->createGame($u1, [$u1, $u2], format: 'draft', deckType: 'sealed_deck', synchronousMode: true);
+        $this->games->markReady($gameId, $this->games->gamePlayerIdFor($gameId, $u1));
+        $this->games->markReady($gameId, $this->games->gamePlayerIdFor($gameId, $u2));
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $this->pdo->prepare('UPDATE draft_matches SET deck_building_started_at = :started WHERE id = :id')
+            ->execute(['started' => date('Y-m-d H:i:s', time() - 10), 'id' => $draftMatchId]);
+
+        self::assertSame(0, $this->games->applyTimeoutsForAllActiveGames());
+        self::assertSame('waiting', $this->fetchGame($gameId)['status']);
+    }
+
+    public function testSynchronousMatchClockCarriesForwardToGame2OfABestOfThreeConstructedMatch(): void
+    {
+        $u1 = $this->insertUser('sync-clock-match-p1');
+        $u2 = $this->insertUser('sync-clock-match-p2');
+        $gameId = $this->games->createGame($u1, [$u1, $u2], format: 'duel', deckType: 'structure', bestOfThree: true, synchronousMode: true);
+        $p1 = $this->games->gamePlayerIdFor($gameId, $u1);
+        $this->games->markReady($gameId, $p1);
+        $this->games->markReady($gameId, $this->games->gamePlayerIdFor($gameId, $u2));
+        $this->games->startGame($gameId);
+
+        $this->pdo->prepare('UPDATE game_players SET active_seconds_used = 600 WHERE id = :id')->execute(['id' => $p1]);
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $u2)); // p1 wins game 1 -- match needs 2 wins, not over yet
+
+        $gameMatchId = (int) $this->fetchGame($gameId)['game_match_id'];
+        $nextGameStmt = $this->pdo->prepare('SELECT id FROM games WHERE game_match_id = :match_id AND match_game_number = 2');
+        $nextGameStmt->execute(['match_id' => $gameMatchId]);
+        $nextGameId = (int) $nextGameStmt->fetchColumn();
+
+        $carriedStmt = $this->pdo->prepare('SELECT active_seconds_used FROM game_players WHERE game_id = :game_id AND user_id = :user_id');
+        $carriedStmt->execute(['game_id' => $nextGameId, 'user_id' => $u1]);
+        self::assertSame(600, (int) $carriedStmt->fetchColumn());
+    }
+
+    public function testNonSynchronousBestOfThreeMatchStillResetsActiveSecondsUsedEachGame(): void
+    {
+        $u1 = $this->insertUser('async-clock-match-p1');
+        $u2 = $this->insertUser('async-clock-match-p2');
+        $gameId = $this->games->createGame($u1, [$u1, $u2], format: 'duel', deckType: 'structure', bestOfThree: true, totalTimeLimitMinutes: 120);
+        $p1 = $this->games->gamePlayerIdFor($gameId, $u1);
+        $this->games->startGame($gameId);
+
+        $this->pdo->prepare('UPDATE game_players SET active_seconds_used = 600 WHERE id = :id')->execute(['id' => $p1]);
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $u2));
+
+        $gameMatchId = (int) $this->fetchGame($gameId)['game_match_id'];
+        $nextGameStmt = $this->pdo->prepare('SELECT id FROM games WHERE game_match_id = :match_id AND match_game_number = 2');
+        $nextGameStmt->execute(['match_id' => $gameMatchId]);
+        $nextGameId = (int) $nextGameStmt->fetchColumn();
+
+        $carriedStmt = $this->pdo->prepare('SELECT active_seconds_used FROM game_players WHERE game_id = :game_id AND user_id = :user_id');
+        $carriedStmt->execute(['game_id' => $nextGameId, 'user_id' => $u1]);
+        self::assertSame(0, (int) $carriedStmt->fetchColumn(), 'total_time_limit_minutes stays a per-GAME budget, unlike synchronous mode');
     }
 }

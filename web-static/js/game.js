@@ -6293,6 +6293,34 @@
         return buildPlayerStat('timeUsed', formatDurationCompact(activeSecondsUsed), label, severityClass);
     }
 
+    // Synchronous mode's own match-wide chess clock (increment 4,
+    // reported live: "each player has a total 30 minutes for a match...
+    // if the user goes over the 30 minute allotment, they automatically
+    // lose"). Reuses buildPlayerTimeUsedStat()'s own icon/severity-escalation
+    // shape against player.active_seconds_used -- the exact same field
+    // total_time_limit_minutes' own stat reads, just fed a fixed 30-minute
+    // cap (SYNCHRONOUS_MATCH_TIME_LIMIT_MINUTES, mirroring
+    // GameService::SYNCHRONOUS_MATCH_TIME_LIMIT_MINUTES exactly) instead
+    // of a per-game configurable one -- the two stats are mutually
+    // exclusive on any one board the same way the settings themselves
+    // are (see renderBoard()'s own call site). Unlike
+    // formatDurationCompact()'s hour-rounded badge (built for the async
+    // feature's multi-hour scale), a 30-minute cap never reaches a whole
+    // hour, so formatDurationLong()'s own "12m" form is already compact
+    // enough for the badge itself here.
+    const SYNCHRONOUS_MATCH_TIME_LIMIT_MINUTES = 30;
+
+    function buildPlayerSynchronousMatchClockStat(activeSecondsUsed) {
+        const limitSeconds = SYNCHRONOUS_MATCH_TIME_LIMIT_MINUTES * 60;
+        const fraction = activeSecondsUsed / limitSeconds;
+        const severityClass = fraction >= 0.9 ? 'player-stat--timeUsed-danger'
+            : fraction >= 0.75 ? 'player-stat--timeUsed-warning'
+                : null;
+        const label = formatDurationLong(activeSecondsUsed) + ' used of a ' + SYNCHRONOUS_MATCH_TIME_LIMIT_MINUTES + '-minute match clock';
+
+        return buildPlayerStat('timeUsed', formatDurationLong(activeSecondsUsed), label, severityClass);
+    }
+
     // Issue #85 follow-up: "add some kind of indicator for action timeout
     // if it's close (like within 15 minutes)" -- $secondsRemaining only
     // ever arrives here already inside that 15-minute window (see
@@ -6622,6 +6650,12 @@
                 // game? Kind of like a chess clock display."
                 if (state.game.total_time_limit_minutes !== null) {
                     iconsEl.appendChild(buildPlayerTimeUsedStat(player.active_seconds_used, state.game.total_time_limit_minutes));
+                } else if (state.game.synchronous_mode) {
+                    // Synchronous mode's own match-wide chess clock
+                    // (increment 4) -- mutually exclusive with
+                    // total_time_limit_minutes above, same as the
+                    // settings themselves.
+                    iconsEl.appendChild(buildPlayerSynchronousMatchClockStat(player.active_seconds_used));
                 }
                 // Issue #85 follow-up's own action-timeout warning --
                 // state.game.action_timeout_warning is null except on

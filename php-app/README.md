@@ -4506,17 +4506,16 @@ scope mismatch).
 
 **Landing in increments**, the same way issue #85 itself shipped team-
 decision coverage and the full-game time-limit mode as separate follow-
-ups rather than all at once. Shipped so far: the mode flag and pre-game
-"ready check" (increment 1); the 30-second live action timer with
-timeout-extension banking (increment 2); and Draft/Sealed Deck support,
-including a 60-second-per-pick timer for the five draft-family
-deck_types and a ready check that gates drafting itself, not just the
-eventual hand deal (increment 3, below) -- covering 2-player
-Traditional/Duel/Draft (`self::SYNCHRONOUS_MODE_ALLOWED_FORMATS = ['standard', 'duel', 'draft']`).
-Planned follow-up (not yet built): a match-wide (not per-game)
-30-minute chess clock covering the whole best-of-three match, including
-time spent deck-building/sideboarding (untimed for now -- see increment
-3's own "what's still untimed" note below).
+ups rather than all at once: the mode flag and pre-game "ready check"
+(increment 1); the 30-second live action timer with timeout-extension
+banking (increment 2); Draft/Sealed Deck support, including a
+60-second-per-pick timer for the five draft-family deck_types and a
+ready check that gates drafting itself, not just the eventual hand deal
+(increment 3); and the match-wide 30-minute chess clock, covering
+deck-building/sideboarding time too (increment 4, below) -- covering
+2-player Traditional/Duel/Draft
+(`self::SYNCHRONOUS_MODE_ALLOWED_FORMATS = ['standard', 'duel', 'draft']`).
+The roadmap this feature originally set out with is now fully shipped.
 
 **The ready check** (`game_players.ready_at`, migration 0329) -- "each
 player needs to be seated/looking at the game before it starts." Every
@@ -4803,11 +4802,10 @@ match is resigned outright (`resignFromDraftMatch()`, same as a human's
 own deliberate resignation mid-draft) on behalf of whichever seat is a
 real human, rather than repeatedly auto-picking through an entire draft
 nobody is left to watch. Not-yet-initialized (`pending_draft_init` still
-set -- nobody's clicked Ready) and `'deck_building'` (drafting already
-finished) both fall through as a no-op -- the former has no deadline to
-compare against yet, and the latter's own untimed deck-building/
-sideboard abandonment is deferred to the match-wide chess clock, still
-unbuilt.
+set -- nobody's clicked Ready) falls through as a no-op here -- there's
+no deadline to compare against yet. `'deck_building'` gets its own
+separate abandonment check -- see increment 4's own
+`applySynchronousDeckBuildingAbandonment()` below.
 
 **Surfaced via `getState()`** -- `game.draft_pick_deadline_at`/
 `draft_pick_deadline_usernames` (`null`/empty outside synchronous mode,
@@ -4816,6 +4814,86 @@ before the ready check clears, or once drafting itself has finished) --
 `game_player_id` since Quick Draft/Chaos Draft can put more than one
 player on the clock at once. See "Synchronous mode" in
 `web-static/README.md` for the board's own countdown reused for this.
+
+**Increment 4: the match-wide chess clock** (migration 0332) -- "each
+player has a total 30 minutes for a match (in best of 3) or an
+individual game (in single game matches) -- if the user goes over the
+30 minute allotment, they automatically lose." `SYNCHRONOUS_MATCH_TIME_LIMIT_MINUTES`
+(30, fixed -- not configurable per game the way `total_time_limit_minutes`
+is, since "live, right now" play only has one realistic pace, the same
+reasoning every other synchronous-mode constant follows).
+
+No new accumulator column: this reuses `game_players.active_seconds_used`,
+the exact column `total_time_limit_minutes`' own full-game mode already
+accumulates via `touchLastMoveAt()`'s `$creditGamePlayerId` parameter --
+safe since the two modes are mutually exclusive, so a synchronous game's
+own `active_seconds_used` is never touched by that other feature. The
+one behavioral difference: this cap is scoped to the whole MATCH, not
+one game. `total_time_limit_minutes` deliberately resets
+`active_seconds_used` to 0 for every match game (a per-GAME limit, see
+its own docblock); `advanceGameMatch()`/`advanceDraftMatch()` now carry
+it forward into game 2/3 instead, but ONLY when `game.synchronous_mode`
+is set, leaving the async feature's own existing behavior for every
+other match completely unchanged.
+
+**"The time spent on deck building/sideboarding counts against your 30
+minutes total match time"** -- deck-building/sideboarding has no timer
+or per-player "whose turn" of its own for `touchLastMoveAt()` to credit
+through the ordinary gameplay path (both seats sideboard concurrently),
+so it needs its own crediting mechanism. `draft_matches.deck_building_started_at`
+is stamped every time `draft_matches.status` transitions to
+`'deck_building'` (the initial post-draft trim, and every later
+match-game sideboard reuse -- all 7 call sites share one literal SQL
+string, updated together). `creditDeckBuildingTimeIfNeeded()`, called
+from `submitDraftDeck()` for a synchronous match, credits the elapsed
+time since that timestamp onto the submitting player's own
+`active_seconds_used` -- exactly ONCE per deck-building window per seat,
+via an atomic `UPDATE ... WHERE deck_building_time_credited_at IS NULL`
+claim (`draft_match_players.deck_building_time_credited_at`) that makes
+a player editing/resubmitting their deck before the game actually
+starts harmless rather than double-credited (an intentional
+simplification, since this phase has no timer of its own to begin
+with -- only the FIRST submission each window is charged). Time spent
+actually DRAFTING (increment 3's own 60-second-per-pick timer) is
+deliberately NOT credited here at all -- drafting already has its own
+hard per-pick governor bounding how much real time it can consume, and
+the user's own clarification calling out deck-building specifically
+implies drafting needed no equivalent carve-out.
+
+**`enforceSynchronousMatchClock()`** is the real-time enforcement,
+called from `GET /games/state` alongside the other two synchronous
+deadline checks -- a 15-minute-cron-only check the way
+`total_time_limit_minutes` gets by on would leave a player who's blown
+well past 30 minutes live for up to 15 more, which doesn't fit "live,
+right now" play. Branches on where a synchronous match's clock can
+actually be running: an ordinary `in_progress` turn (or Open/Closed Team
+Play decision) reuses `resolveIdleGamePlayerAndSecondsSinceLastMove()`
+and projects that idle player's own would-be total the exact same way
+`applyTotalTimeLimitIfExceeded()` does, resigning them outright
+(`resignGame()`) once it clears the cap; a draft-family match sitting in
+`'deck_building'` has no single idle player at all, so
+`enforceSynchronousMatchClockDuringDeckBuilding()` instead checks every
+not-yet-credited human seat's own projected total in turn, resigning
+via `resignFromDraftMatch()`. Still-drafting or not-yet-initialized
+phases are a no-op here, per the "drafting doesn't feed this clock"
+decision above.
+
+**Abandonment backstop** -- `applySynchronousDraftAbandonment()` (from
+increment 3) gained its own `'deck_building'` branch,
+`applySynchronousDeckBuildingAbandonment()`, using
+`deck_building_started_at` the same "reuse the real-time check's own
+timestamp as a coarse cron threshold" way `applySynchronousDraftAbandonment()`'s
+`pick_deadline_at` check already does -- once
+`SYNCHRONOUS_ABANDONMENT_GRACE_SECONDS` has passed with nobody polling
+to trip the real-time check above, whichever human seat hasn't yet
+submitted a deck this window (`deck_building_time_credited_at` still
+`NULL`) is resigned outright.
+
+**Surfaced via `getState()`** -- no new field: `players[].active_seconds_used`
+(already exposed) is the same running total for a synchronous match's
+own chess clock as it always was for `total_time_limit_minutes`'. See
+"Synchronous mode" in `web-static/README.md` for the board's own
+chess-clock stat, reused for this.
 
 ### Power Duel sideboarding
 

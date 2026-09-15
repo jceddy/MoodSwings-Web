@@ -1711,12 +1711,11 @@ Deck/Sealed Pool of the Day/Weekly Sealed Pool) --
 `updateSynchronousFieldVisibility()` re-runs on every format/
 deck-type/opponent-checkbox change `updateBestOfThreeFieldVisibility()`
 already does, since "exactly 2 total players" depends on the same
-`currentNewGamePlayerCount()` that one already reads. A match-wide chess
-clock is still a planned follow-up -- see `php-app/README.md`'s own
-"Synchronous mode" roadmap; the live 30-second action timer and
-timeout-extension banking shipped as increment 2, and Draft/Sealed Deck
-support (a 60-second-per-pick timer, plus the ready check gating
-drafting itself) as increment 3, both below.
+`currentNewGamePlayerCount()` that one already reads. The live
+30-second action timer and timeout-extension banking shipped as
+increment 2, Draft/Sealed Deck support (a 60-second-per-pick timer,
+plus the ready check gating drafting itself) as increment 3, and the
+match-wide 30-minute chess clock as increment 4 -- all three below.
 
 **Ready-check panel** (`#ready-check-panel`, shown in place of the
 ordinary "Waiting for the game to start" text once `state.game.status
@@ -1801,6 +1800,33 @@ just one arbitrarily. Both fields go `null`/empty the moment drafting
 finishes, so the countdown naturally disappears again once deck-building
 begins (still untimed, same as an async draft) with no extra branching
 needed here.
+
+**Increment 4: the match-wide chess clock** (reported live: "each
+player has a total 30 minutes for a match... if the user goes over the
+30 minute allotment, they automatically lose") -- `buildPlayerSynchronousMatchClockStat()`
+reuses `buildPlayerTimeUsedStat()`'s own icon and severity-escalation
+shape (blue → amber past 75% → red past 90%) against
+`players[].active_seconds_used` -- the SAME field the async full-game
+time-limit mode's own stat already reads -- just against a fixed
+30-minute cap (`SYNCHRONOUS_MATCH_TIME_LIMIT_MINUTES`, mirroring
+`GameService::SYNCHRONOUS_MATCH_TIME_LIMIT_MINUTES` exactly) instead of
+a per-game configurable one. The two stats are mutually exclusive on any
+one board the same way the settings themselves are
+(`state.game.total_time_limit_minutes !== null` vs.
+`state.game.synchronous_mode`). Unlike `formatDurationCompact()`'s
+hour-rounded badge (built for the async feature's own multi-hour
+scale), a 30-minute cap never reaches a whole hour, so
+`formatDurationLong()`'s own "12m" form is already compact enough for
+the badge here -- no new formatter needed. Rendered in the same
+always-visible Players-list icon row as `hand_count`/the extensions-
+banked stat, so it's visible during deck-building/sideboarding (still
+untimed to interact with, but the elapsed time is quietly counting
+against the same 30-minute total) just as much as during actual
+gameplay.
+
+The New Game dialog's own `#new-game-synchronous-description` now
+mentions the chess clock explicitly, since opting in this way commits a
+player to a hard 30-minute budget they can't configure or turn off.
 
 ## Pages
 
