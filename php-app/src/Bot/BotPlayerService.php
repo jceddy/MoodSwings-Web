@@ -115,7 +115,16 @@ use MoodSwings\Rules\RoundScorer;
  * as Pacifism above, whenever angerTargetMoodIds() itself comes back
  * empty -- Anger's own printed value is 0, so with nothing to discard
  * it's just a worthless opening play, not worth leading with the way a
- * genuinely swing-maximizing target set would be; and sneakinessTargetPlayerId()/
+ * genuinely swing-maximizing target set would be; and isWorthPlaying()
+ * once more for Anger too (reported live, from an actual game log: a
+ * bot played out its whole hand down to Anger as its only remaining
+ * card, used a granted extra play on it with zero opponent moods in
+ * play to target, and gained nothing for it) -- the same stronger
+ * skip-entirely-and-pass treatment Pacifism gets below, rather than the
+ * weaker "still played as a last resort" sortPriorityValue() deprioritization
+ * alone, since a 0-value card played for literally no effect has
+ * nothing to gain over simply waiting for a real target on some later
+ * turn; and sneakinessTargetPlayerId()/
  * isWorthPlaying() once more (confirmed by the maintainer), which vetoes
  * Sneakiness outright (the same treatment Fury/Avoidance get above)
  * unless either a non-teammate opponent's own current round score is
@@ -489,7 +498,7 @@ final class BotPlayerService
 
         foreach ($playableCardIds as $cardId) {
             $effectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
-            if (!$this->isWorthPlaying($state, $effectKey, $botGamePlayerId)) {
+            if (!$this->isWorthPlaying($state, $effectKey, $cardId, $botGamePlayerId)) {
                 continue;
             }
 
@@ -522,30 +531,36 @@ final class BotPlayerService
      * Fury's veto does; and for Pacifism (reported live: "I still have
      * bots occasionally playing Pacifism with no target in the first
      * turn of the game - there is no reason to do that, it would be
-     * better to pass and wait for a target"), which gets this method's
-     * stronger "skip it entirely, fall through to the next candidate or
-     * an outright pass" treatment -- unlike sortPriorityValue()'s own
+     * better to pass and wait for a target") and Anger (reported live,
+     * from an actual game log: a bot played out every other card in hand,
+     * then used a granted extra play on Anger with zero opponent moods in
+     * play to target, gaining nothing -- "it would have been better to
+     * pass and hold onto Anger to use in a subsequent round when it
+     * *could* create a point swing"), which get this method's stronger
+     * "skip it entirely, fall through to the next candidate or an
+     * outright pass" treatment -- unlike sortPriorityValue()'s own
      * PHP_INT_MIN `hasGoodReasonToPlayNow()` veto elsewhere in this class
      * (Rationalization/Denial/Rejection/Shock and others -- "deprioritized
      * WHEN, never skipped outright," still played as an eventual last
-     * resort), a genuinely wasted Pacifism has nothing to gain from that
-     * fallback and a real cost to it: scoring only happens at round end,
-     * so passing and simply playing Pacifism on a LATER turn instead
-     * banks the exact same printed value with no penalty for the delay,
-     * while playing it now with no target PERMANENTLY forfeits this
-     * instance's own "put an opponent's mood back in their hand" ability
-     * for the rest of the round, for no compensating benefit. Keyed by
-     * effect key; everything not listed here is always
-     * worth playing (the default, unconditional "yes" every other
-     * effect already got before this method existed).
+     * resort), a genuinely wasted Pacifism/Anger has nothing to gain from
+     * that fallback and a real cost to it: scoring only happens at round
+     * end, so passing and simply playing the card on a LATER turn instead
+     * banks the exact same printed value (0, for Anger) with no penalty
+     * for the delay, while playing it now with no target PERMANENTLY
+     * forfeits this instance's own after-playing ability for the rest of
+     * the round, for no compensating benefit. Keyed by effect key;
+     * everything not listed here is always worth playing (the default,
+     * unconditional "yes" every other effect already got before this
+     * method existed).
      */
-    private function isWorthPlaying(BoardState $state, string $effectKey, int $botGamePlayerId): bool
+    private function isWorthPlaying(BoardState $state, string $effectKey, int $cardId, int $botGamePlayerId): bool
     {
         return match ($effectKey) {
             'fury' => $this->furyIsWorthPlaying($state, $botGamePlayerId),
             'avoidance' => $this->avoidanceHasAGoodReasonToPlay($state, $botGamePlayerId),
             'sneakiness' => $this->sneakinessTargetPlayerId($state, $botGamePlayerId) !== null,
             'pacifism' => $this->pacifismTargetMoodIds($state, $botGamePlayerId) !== [],
+            'anger' => $this->angerTargetMoodIds($state, $cardId, $botGamePlayerId) !== [],
             default => true,
         };
     }

@@ -1,0 +1,25 @@
+-- Reported live, from an actual game log: a bot played out its whole
+-- hand down to Anger as its last remaining card, then used a granted
+-- extra play (from Eagerness) on it with zero opponent moods in play to
+-- target, gaining nothing -- "it would have been better to pass and
+-- hold onto Anger to use in a subsequent round when it *could* create a
+-- point swing."
+--
+-- Anger already had a sortPriorityValue() veto (deprioritize it behind
+-- any other legal card whenever angerTargetMoodIds() comes back empty),
+-- but that veto is "deprioritized WHEN, never skipped outright" -- it
+-- still falls through to actually playing Anger once it's the bot's own
+-- ONLY legal card. That's fine for cards with real printed value (some
+-- value beats none), but Anger's own printed value is 0, so playing it
+-- for nothing is no better than passing, and passing preserves the
+-- option to play it on some later turn when it might actually matter.
+--
+-- BotPlayerService::isWorthPlaying() (the same stronger "skip entirely,
+-- fall through to pass" treatment Pacifism already has) now vetoes
+-- Anger outright under the identical empty-target condition, instead of
+-- ever submitting an unfilled target_mood_ids. See php-app/README.md's
+-- "Anger" bot-policy writeup for the full details.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.40.16' WHERE id = 1;

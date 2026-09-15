@@ -8137,6 +8137,25 @@ since it already holds that dependency):
   instant a legal target exists (either kind), Anger reverts to plain
   `baseValue()` ordering (0) like any other unboosted card.
 
+  That deprioritization alone still let Anger get played with an empty
+  `target_mood_ids` whenever it ended up the bot's own ONLY playable
+  card that turn -- "deprioritized WHEN, never skipped outright" always
+  falls through to actually playing the last card left, on the
+  assumption that some value beats none. Anger's own printed value is 0
+  though, so that assumption doesn't hold for it: playing it now for
+  nothing is no better than passing, and passing preserves the option to
+  play it on some LATER turn (this round or a future one) when it might
+  actually swing something. Reported live, from an actual game log: a
+  bot played out its whole hand down to Anger as its last remaining
+  card, then used a granted extra play (from Eagerness) on it with zero
+  opponent moods in play to target, gaining nothing -- "it would have
+  been better to pass and hold onto Anger to use in a subsequent round
+  when it *could* create a point swing." `isWorthPlaying()` (see
+  Pacifism above for the identical existing treatment) now vetoes Anger
+  outright under the same condition (`angerTargetMoodIds() === []`),
+  falling through to the next candidate or an outright pass instead of
+  ever submitting an unfilled `target_mood_ids`.
+
   **Cruelty and Indecisiveness** (reported live: "bots should avoid
   playing Cruelty with no targets," then again for Indecisiveness once
   the identical gap was noticed -- `IndecisivenessEffect`'s own

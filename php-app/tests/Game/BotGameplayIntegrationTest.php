@@ -1773,7 +1773,13 @@ final class BotGameplayIntegrationTest extends TestCase
      * opponent's own deck has AT LEAST as much discard-recursion capacity
      * as the bot's own (here, strictly more: 2 recursion cards against the
      * bot's 1), the bot should NOT gamble on getting back to a
-     * self-discarded Anger first, so it leaves itself in play.
+     * self-discarded Anger first, so it leaves itself in play. The
+     * human's own Kindness (value 2) in play gives Anger a genuine
+     * swing-maximizing target -- without one, isWorthPlaying()'s own
+     * no-legal-target veto (see BotPlayerServiceTest's
+     * testChooseActionPassesInsteadOfPlayingAngerUnfilledWhenNothingElseIsPlayable())
+     * would keep Anger unplayed altogether, never reaching the
+     * self-targeting decision this test actually exercises.
      */
     public function testBotDoesNotTargetItselfWhenPlayingAngerWithoutMoreRecursionThanTheOpponent(): void
     {
@@ -1787,11 +1793,13 @@ final class BotGameplayIntegrationTest extends TestCase
         $this->insertGameCard($gameId, 123, 'deck', $botPlayerId, 0); // Harmony -- the bot's own only recursion card
         $this->insertGameCard($gameId, 65, 'deck', $p1, 0); // Grief -- human opponent's own recursion
         $this->insertGameCard($gameId, 54, 'deck', $p1, 1); // Angst -- human opponent's own recursion, 2 total against the bot's 1
+        $this->insertGameCard($gameId, 17, 'in_play', $p1); // human's own Kindness, value 2 -- a genuine swing target
         $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
 
         self::assertNotNull($this->games->advanceAutomatedTurns($gameId));
 
         self::assertTrue($this->cardIsInPlay($gameId, 80), "Anger should stay in play -- the bot's own 1 recursion card doesn't exceed the opponent's own 2");
+        self::assertFalse($this->cardIsInPlay($gameId, 17), 'Kindness should still have been discarded as the swing-maximizing target, independent of the self-targeting decision');
     }
 
     /**

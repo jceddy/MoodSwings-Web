@@ -2719,18 +2719,48 @@ final class BotPlayerServiceTest extends TestCase
     }
 
     /**
-     * With nothing else playable, Anger is still played -- deprioritized
-     * WHEN, never skipped outright, the same policy every other
-     * sortPriorityValue() veto in this class already follows.
+     * Reported live, from an actual game log: BotSage played out its
+     * whole hand down to Anger as its only remaining card, then used a
+     * granted extra play (from Eagerness) to play it with zero opponent
+     * moods in play to target, gaining nothing -- "it would have been
+     * better to pass and hold onto Anger to use in a subsequent round
+     * when it *could* create a point swing." Anger's own printed value
+     * is 0, so unlike every other PHP_INT_MIN-deprioritized card in this
+     * class (still played as an eventual last resort, "deprioritized
+     * WHEN, never skipped outright"), Anger now gets isWorthPlaying()'s
+     * stronger outright skip, the same treatment Pacifism already has
+     * (see testChooseActionPassesInsteadOfPlayingPacifismUnfilledWhenNothingElseIsPlayable()
+     * above): with no legal target at all -- even as the bot's own ONLY
+     * playable card -- chooseAction() passes instead of playing Anger
+     * unfilled, since round-end-only scoring means waiting for a real
+     * target on some later turn costs nothing, while playing it now
+     * would permanently waste this instance's own discard ability for
+     * the round, for no compensating benefit.
      */
-    public function testChooseActionStillPlaysAngerWhenNothingElseIsPlayable(): void
+    public function testChooseActionPassesInsteadOfPlayingAngerUnfilledWhenNothingElseIsPlayable(): void
     {
         $state = $this->boardState(hands: [1 => [80]]);
 
         $action = $this->bot->chooseAction($state, [80], 1);
 
+        self::assertNull($action);
+    }
+
+    /**
+     * Same "only card left" shape as above, but an opponent target IS in
+     * play -- angerTargetMoodIds() is no longer empty, so isWorthPlaying()'s
+     * veto doesn't apply and Anger is played with that mood as its
+     * target, exactly as it would be with other cards still in hand.
+     */
+    public function testChooseActionStillPlaysAngerWhenItsTheOnlyCardAndAnOpponentTargetExists(): void
+    {
+        $state = $this->boardState(hands: [1 => [80], 2 => [55]]);
+        $state->moveHandToInPlay(2, 55);
+
+        $action = $this->bot->chooseAction($state, [80], 1);
+
         self::assertSame(80, $action['card_id']);
-        self::assertSame(['target_mood_ids' => []], $action['choices']);
+        self::assertSame(['target_mood_ids' => [55]], $action['choices']);
     }
 
     /**
