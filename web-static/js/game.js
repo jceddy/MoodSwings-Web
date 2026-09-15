@@ -6403,17 +6403,6 @@
         // recolored three ways.
         actionTimeoutWarning: '<path d="M12 2a1 1 0 0 1 1 1v.6c3.4.9 5.8 4 5.8 7.6v3.4l1.7 2.6a1 1 0 0 1-.84 1.55H4.34a1 1 0 0 1-.84-1.55l1.7-2.6V11.2c0-3.6 2.4-6.7 5.8-7.6V3a1 1 0 0 1 1-1Z"/>'
             + '<path d="M9.2 20.2a2.8 2.8 0 0 0 5.6 0Z"/>',
-        // Synchronous mode's own banked timeout-extension count -- a
-        // stopwatch (outline circle, the same stroke-only technique
-        // timeUsed's clock face already uses, plus a small top button
-        // and side knob to read as "stopwatch" rather than "clock")
-        // with a small "+" beside it, since this represents *extra*
-        // time available, not time already spent.
-        extensionsBanked: '<circle cx="11" cy="13" r="8" fill="none" stroke="currentColor" stroke-width="2"/>'
-            + '<path d="M11 8 V13 L14 15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>'
-            + '<line x1="9" y1="2" x2="13" y2="2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
-            + '<line x1="17" y1="4.5" x2="19" y2="2.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
-            + '<path d="M20 17 V21 M18 19 H22" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
         // Team affiliation (Open/Closed Team Play only, player.team_id !==
         // null): a heraldic shield, reported live as hard to distinguish
         // for colorblind users when the two teams were told apart by color
@@ -6741,20 +6730,6 @@
         return buildPlayerStat('actionTimeoutWarning', badge, label, severityClass);
     }
 
-    // Synchronous mode's own timeout-extension bank -- "players earn 1
-    // additional extension for every 3 full turns played without
-    // triggering the countdown timer... a banked timeout extension is
-    // automatically consumed to grant you an extra 30 seconds." Shown
-    // for every seat once state.game.synchronous_mode is true (even at
-    // 0 banked -- unlike the action-timeout warning above, this is an
-    // ongoing resource to track, not a transient alert, so it stays
-    // visible the whole game the same way hand_count/points/wins do).
-    function buildExtensionsBankedStat(extensionsBanked) {
-        const label = extensionsBanked === 1 ? '1 banked timeout extension' : extensionsBanked + ' banked timeout extensions';
-
-        return buildPlayerStat('extensionsBanked', extensionsBanked, label);
-    }
-
     function renderBoard(state) {
         // A custom decklist's own name (or "Uploaded Deck" if none was
         // specified) replaces "<deck type> deck" entirely here, rather than
@@ -7068,9 +7043,6 @@
                 if (state.game.action_timeout_warning !== null && state.game.action_timeout_warning.game_player_id === player.game_player_id) {
                     iconsEl.appendChild(buildActionTimeoutWarningStat(state.game.action_timeout_warning.seconds_remaining));
                 }
-                if (state.game.synchronous_mode) {
-                    iconsEl.appendChild(buildExtensionsBankedStat(player.timeout_extensions_banked));
-                }
                 if (wentFirst) {
                     iconsEl.appendChild(buildPlayerFlag('wentFirst', 'Went first this round'));
                 }
@@ -7319,16 +7291,34 @@
         // nobody currently on the clock (game.status !== 'in_progress'
         // is impossible to reach this far down renderBoard(), so the
         // only real "nothing to show" case here is a non-synchronous
-        // game or a null action_deadline_at/action_deadline_game_player_id).
-        if (state.game.status === 'in_progress' && state.game.synchronous_mode && state.game.action_deadline_at !== null && state.game.action_deadline_game_player_id !== null) {
+        // game or a null action_deadline_at/action_deadline_game_player_id),
+        // OR the player on the clock still has a banked timeout extension
+        // left (reported live: showing a countdown is misleading/needless
+        // anxiety while a timeout would just silently consume a banked
+        // extension and reset for another 30 seconds -- see
+        // enforceSynchronousActionDeadline()'s own extension-consumption
+        // branch on the backend). Falls back to showing it if the
+        // on-the-clock player can't be resolved at all, same "safer to
+        // show than to hide" default `onTheClock ? ... : 'Someone'` below
+        // already follows for the label itself.
+        if (
+            state.game.status === 'in_progress'
+            && state.game.synchronous_mode
+            && state.game.action_deadline_at !== null
+            && state.game.action_deadline_game_player_id !== null
+        ) {
             const onTheClock = state.players.find((p) => p.game_player_id === state.game.action_deadline_game_player_id);
-            synchronousDeadlineInfo = {
-                deadlineAtMs: parseUtcTimestamp(state.game.action_deadline_at).getTime(),
-                username: onTheClock ? onTheClock.username : 'Someone',
-            };
-            tickSynchronousActionTimer();
-            if (synchronousActionTimerInterval === null) {
-                synchronousActionTimerInterval = setInterval(tickSynchronousActionTimer, 1000);
+            if (!onTheClock || onTheClock.timeout_extensions_banked === 0) {
+                synchronousDeadlineInfo = {
+                    deadlineAtMs: parseUtcTimestamp(state.game.action_deadline_at).getTime(),
+                    username: onTheClock ? onTheClock.username : 'Someone',
+                };
+                tickSynchronousActionTimer();
+                if (synchronousActionTimerInterval === null) {
+                    synchronousActionTimerInterval = setInterval(tickSynchronousActionTimer, 1000);
+                }
+            } else {
+                stopSynchronousActionTimer();
             }
         } else {
             stopSynchronousActionTimer();

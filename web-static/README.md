@@ -1741,12 +1741,19 @@ per-turn-timeout/total-time-limit descriptions.
 visible in the game display") -- `#synchronous-action-timer`, a plain
 countdown line ("Username's action timer: 12s") shown whenever
 `state.game.status === 'in_progress'` and `state.game.synchronous_mode`
-with a non-null `action_deadline_at`/`action_deadline_game_player_id`.
-Unlike every other "live" value on this page (deliberately refresh-only,
-no client-side ticking -- see the chess-clock indicator's own "Follow-up"
-writeup above), a 30-second window genuinely needs to visibly tick
-between the board's own ~4-second polls, so `tickSynchronousActionTimer()`
-runs on its OWN separate 1-second `setInterval` (`synchronousActionTimerInterval`),
+with a non-null `action_deadline_at`/`action_deadline_game_player_id`
+AND the player on the clock has no banked timeout extension left
+(reported live -- follow-up: showing a live countdown while a timeout
+would just silently consume a banked extension and reset for another 30
+seconds is misleading/needless anxiety, so `renderBoard()` now checks
+`onTheClock.timeout_extensions_banked === 0` before starting it, falling
+back to showing it if the on-the-clock player can't be resolved from
+`state.players` at all). Unlike every other "live" value on this page
+(deliberately refresh-only, no client-side ticking -- see the
+chess-clock indicator's own "Follow-up" writeup above), a 30-second
+window genuinely needs to visibly tick between the board's own
+~4-second polls, so `tickSynchronousActionTimer()` runs on its OWN
+separate 1-second `setInterval` (`synchronousActionTimerInterval`),
 purely recomputing "seconds remaining" from `Date.now()` against the
 last server-reported `action_deadline_at` (`synchronousDeadlineInfo`,
 refreshed by `renderBoard()` every poll) -- it never itself decides
@@ -1758,19 +1765,16 @@ not ticking. Turns red under 10 seconds remaining
 language the async action-timeout warning icon already established.
 `stopSynchronousActionTimer()` clears the interval and hides the line
 whenever there's nothing to show it for (a 'waiting' game -- the
-ready-check panel owns that state instead -- or leaving the board
-entirely via `showLobby()`).
+ready-check panel owns that state instead -- a banked extension still in
+hand, or leaving the board entirely via `showLobby()`).
 
-**Extensions-banked stat** -- `buildExtensionsBankedStat()`, a new
-stopwatch-with-a-plus icon (`PLAYER_STAT_ICON_PATHS.extensionsBanked`,
-deliberately a different silhouette from `timeUsed`'s plain clock face,
-since this represents extra time available rather than time already
-spent) in the Players list, showing `players[].timeout_extensions_banked`
-for every seat once `state.game.synchronous_mode` is true -- unlike the
-action-timeout warning icon (a transient alert), this stays visible the
-whole game at whatever count it's at, the same "always-shown running
-total" treatment `hand_count`/`points`/`wins` already get, so a player
-can see at a glance how much slack they've banked.
+**Extensions-banked stat -- removed** (reported live: potentially
+confusing information sitting right next to the match-wide chess clock
+stat). `buildExtensionsBankedStat()`/`PLAYER_STAT_ICON_PATHS.extensionsBanked`/
+`.player-stat--extensionsBanked` are gone; `players[].timeout_extensions_banked`
+itself is unchanged on the wire (still exactly what the action timer's
+own gating above, and the backend's extension-consumption logic, read),
+just no longer rendered anywhere in the Players list.
 
 **Increment 3: Draft/Sealed Deck, and the ready check gating drafting
 itself** -- for a synchronous draft-family match, the board's own
