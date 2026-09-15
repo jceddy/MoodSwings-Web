@@ -2312,6 +2312,19 @@ dialog#confirm-dialog {
     display: none;
 }
 
+/* Same block/spacing treatment as .new-game-field above, generalized for
+   every other dialog's own plain <label>-wrapped fields (issue #91's New
+   Tournament dialog is the first of these) rather than reusing a
+   "new-game"-prefixed class outside that one dialog. */
+.dialog-field {
+    display: block;
+    margin-bottom: 0.5rem;
+}
+
+.dialog-field[hidden] {
+    display: none;
+}
+
 /* Quick/Winston/Grid Draft's own "My saved deck" pool-source fields --
    each is the LAST field shown before #new-game-submit-button whenever
    that pool source is chosen, and (like every other plain <div>-wrapped

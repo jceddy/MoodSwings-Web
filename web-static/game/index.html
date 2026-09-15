@@ -101,6 +101,7 @@
                 <button id="new-game-button" type="button">New game</button>
                 <button id="open-games-button" type="button">Open games</button>
                 <button id="weekly-sealed-pool-button" type="button">Weekly Sealed Pool</button>
+                <button id="tournaments-button" type="button">Tournaments</button>
                 <button id="past-games-button" type="button">Past games</button>
                 <!-- "Is there a way I can replay these in the dev site using
                      the game export json files?" -- a completed game's own
@@ -1094,6 +1095,133 @@
             <p id="weekly-sealed-pool-standings-empty" hidden>No standings yet -- be the first to finish a match this week!</p>
         </section>
         <button id="weekly-sealed-pool-close-button" type="button">Close</button>
+    </dialog>
+
+    <!-- Issue #91: tournaments -- single/double elimination or Swiss-round
+         events, built on top of the same single-game/best-of-three/draft
+         match machinery every other format already uses (see
+         TournamentService's own docblock). Mirrors #open-games-dialog's
+         own three-section layout (available/waiting/mine), just with a
+         fourth "Invitations" section up top for invite-only tournaments'
+         own accept/decline step -- open-registration tournaments never
+         populate that one, there's nothing to accept. -->
+    <dialog id="tournaments-dialog">
+        <h2>Tournaments</h2>
+        <button id="new-tournament-button" type="button">New tournament</button>
+        <section id="tournaments-invitations-section" hidden>
+            <h3>Invitations</h3>
+            <ul id="tournaments-invitations-list"></ul>
+        </section>
+        <section>
+            <h3>Your tournaments</h3>
+            <ul id="tournaments-mine-list"></ul>
+            <p id="tournaments-mine-empty" hidden>You haven't created or joined any tournaments yet.</p>
+        </section>
+        <section>
+            <h3>Open to join</h3>
+            <ul id="tournaments-open-list"></ul>
+            <p id="tournaments-open-empty" hidden>No open tournaments right now.</p>
+        </section>
+        <p id="tournaments-error" class="error" hidden></p>
+        <button id="tournaments-close-button" type="button">Close</button>
+    </dialog>
+
+    <!-- match_params fields here are deliberately a curated subset of
+         #new-game-dialog's own exhaustive per-deck_type options (issue
+         #91 is scoped to Duel/Standard/Draft played 2-player, using
+         whichever of that subset's deck types don't themselves need a
+         setting no single fixed match_params blob could sensibly carry
+         for every future matchup -- e.g. a duel_deck_rules preset or a
+         custom draft pool are still just as available per-match via
+         'custom_duel'/'custom pool' text if an organizer really wants
+         one, just not exposed as their own dedicated fields here). -->
+    <dialog id="new-tournament-dialog">
+        <h2>New tournament</h2>
+        <form id="new-tournament-form">
+            <label class="dialog-field">Name
+                <input type="text" id="new-tournament-name" required maxlength="120">
+            </label>
+
+            <label class="dialog-field">Bracket
+                <select id="new-tournament-bracket-type">
+                    <option value="single_elimination">Single elimination</option>
+                    <option value="double_elimination">Double elimination (requires an exact power-of-two field: 4, 8, 16, ...)</option>
+                    <option value="swiss">Swiss rounds</option>
+                </select>
+            </label>
+
+            <label class="dialog-field" id="new-tournament-swiss-round-count-label" hidden>Number of rounds (blank = automatic)
+                <input type="number" id="new-tournament-swiss-round-count" min="1">
+            </label>
+
+            <fieldset id="new-tournament-registration-mode-fields">
+                <legend>Registration</legend>
+                <label><input type="radio" name="new-tournament-registration-mode" id="new-tournament-registration-mode-invite" value="invite_only" checked> Invite specific friends</label>
+                <label><input type="radio" name="new-tournament-registration-mode" id="new-tournament-registration-mode-open" value="open"> Open to anyone (requires "Discoverable for open games" in Settings)</label>
+            </fieldset>
+
+            <div id="new-tournament-invite-fields">
+                <p>Choose friends to invite:</p>
+                <div id="tournament-invite-checkboxes"></div>
+                <p id="tournament-invite-checkboxes-empty" hidden>
+                    You don't have any friends yet &mdash; add some from the Friends dialog first.
+                </p>
+            </div>
+
+            <label class="dialog-field" id="new-tournament-max-participants-label" hidden>Maximum participants
+                <input type="number" id="new-tournament-max-participants" min="2">
+            </label>
+
+            <label class="dialog-field">Minimum participants to start
+                <input type="number" id="new-tournament-min-participants" min="2" value="2">
+            </label>
+
+            <label class="dialog-field">Format
+                <select id="new-tournament-format">
+                    <option value="duel">Duel</option>
+                    <option value="standard">Traditional</option>
+                    <option value="draft">Draft</option>
+                </select>
+            </label>
+
+            <label class="dialog-field" id="new-tournament-best-of-three-label"><input type="checkbox" id="new-tournament-best-of-three"> Best of three</label>
+
+            <label class="dialog-field">Deck
+                <select id="new-tournament-deck-type">
+                    <option value="structure">Structure</option>
+                    <option value="power">Power</option>
+                    <option value="jceddys_75">jceddy's 75 Card</option>
+                    <option value="one_of_each">One of Each Card</option>
+                </select>
+            </label>
+
+            <button type="submit" id="new-tournament-submit-button">Create tournament</button>
+            <button type="button" id="new-tournament-cancel-button">Cancel</button>
+            <p id="new-tournament-error" class="error" hidden></p>
+        </form>
+    </dialog>
+
+    <!-- The bracket/standings view for one specific tournament -- opened
+         from a "View" button on a #tournaments-dialog row, stacking on
+         top of it the same way e.g. Deck View stacks on top of Decks
+         (see the dialog-stack docblock in game.js). Refreshed on open
+         and on a plain button click rather than its own poll -- a
+         tournament advances only when one of its own games finishes,
+         not continuously, so there's nothing to gain from polling while
+         someone's just looking at it. -->
+    <dialog id="tournament-view-dialog">
+        <h2 id="tournament-view-title"></h2>
+        <p id="tournament-view-status"></p>
+        <button id="tournament-view-refresh-button" type="button">Refresh</button>
+        <button id="tournament-view-start-button" type="button" hidden>Start tournament</button>
+        <button id="tournament-view-cancel-button" type="button" hidden>Cancel tournament</button>
+        <div id="tournament-view-standings-section" hidden>
+            <h3>Standings</h3>
+            <ol id="tournament-view-standings-list"></ol>
+        </div>
+        <div id="tournament-view-bracket"></div>
+        <p id="tournament-view-error" class="error" hidden></p>
+        <button id="tournament-view-close-button" type="button">Close</button>
     </dialog>
 
     <dialog id="card-detail-dialog">

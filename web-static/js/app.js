@@ -482,6 +482,80 @@ function cancelOpenGame(listingId) {
     });
 }
 
+// Issue #91: tournaments -- single/double elimination or Swiss-round
+// events on top of the same createGame()-shaped match_params
+// open-games listings already use. createTournament() takes the
+// tournament fields (name/bracket_type/registration_mode/
+// swiss_round_count/min_participants/max_participants/
+// invite_user_ids) spread alongside the same match-setting keys
+// openGameCreateParamsFromRequestBody() (index.php) reads for a POST
+// /games body -- see the New Tournament dialog's own submit handler in
+// game.js for exactly which of those it actually sends.
+function createTournament(params) {
+    return apiRequest('/tournaments', { method: 'POST', body: JSON.stringify(params) });
+}
+
+// mine=false (the default) lists open-registration tournaments visible
+// to browse and join; mine=true lists every tournament this user
+// created, was invited to, or has joined -- see GET /tournaments'
+// own docblock.
+function listTournaments(mine = false) {
+    return apiRequest(`/tournaments${mine ? '?mine=1' : ''}`);
+}
+
+function getTournamentState(tournamentId) {
+    return apiRequest(`/tournaments/state?id=${tournamentId}`);
+}
+
+function inviteToTournament(tournamentId, userId) {
+    return apiRequest('/tournaments/invite', {
+        method: 'POST',
+        body: JSON.stringify({ tournament_id: tournamentId, user_id: userId }),
+    });
+}
+
+function acceptTournamentInvite(tournamentId) {
+    return apiRequest('/tournaments/accept-invite', {
+        method: 'POST',
+        body: JSON.stringify({ tournament_id: tournamentId }),
+    });
+}
+
+function declineTournamentInvite(tournamentId) {
+    return apiRequest('/tournaments/decline-invite', {
+        method: 'POST',
+        body: JSON.stringify({ tournament_id: tournamentId }),
+    });
+}
+
+function joinTournament(tournamentId) {
+    return apiRequest('/tournaments/join', {
+        method: 'POST',
+        body: JSON.stringify({ tournament_id: tournamentId }),
+    });
+}
+
+function withdrawFromTournament(tournamentId) {
+    return apiRequest('/tournaments/withdraw', {
+        method: 'POST',
+        body: JSON.stringify({ tournament_id: tournamentId }),
+    });
+}
+
+function startTournament(tournamentId) {
+    return apiRequest('/tournaments/start', {
+        method: 'POST',
+        body: JSON.stringify({ tournament_id: tournamentId }),
+    });
+}
+
+function cancelTournament(tournamentId) {
+    return apiRequest('/tournaments/cancel', {
+        method: 'POST',
+        body: JSON.stringify({ tournament_id: tournamentId }),
+    });
+}
+
 // Weekly Sealed Pool's own queue (issue #520) -- a FIFO auto-pairing
 // ladder, deliberately separate from the open-lobby endpoints above (see
 // WeeklySealedPoolQueueService's own docblock). getWeeklySealedPoolQueueStatus()

@@ -1828,7 +1828,72 @@ The New Game dialog's own `#new-game-synchronous-description` now
 mentions the chess clock explicitly, since opting in this way commits a
 player to a hard 30-minute budget they can't configure or turn off.
 
-## Pages
+### Tournaments (issue #91)
+
+A new "Tournaments" button (next to "Weekly Sealed Pool") opens
+`#tournaments-dialog` -- mirroring `#open-games-dialog`'s own
+available/waiting/mine three-section layout, plus a fourth
+"Invitations" section up top (`GET /tournaments?mine=1`, filtered to
+`my_participant_status === 'invited'`) for an invite-only tournament's
+own accept/decline step via `acceptTournamentInvite()`/
+`declineTournamentInvite()`; an open-registration tournament never puts
+a viewer in that status at all, so the section stays hidden for those.
+"Your tournaments" (the same response, everything else) shows a View
+button (opens `#tournament-view-dialog`, see below) and, for a
+still-in-registration tournament the viewer joined but didn't create, a
+Withdraw button (`withdrawFromTournament()`). "Open to join" (`GET
+/tournaments`, no `?mine=1`) lists every open-registration tournament
+visible to the current user with a Join button
+(`joinTournament()`) -- same `matchmaking_discoverable`/blocked-pair
+gating `#open-games-dialog`'s own "Available to join" section already
+uses, since `TournamentService::listOpenFor()` is built the same way
+`OpenGameListingRepository::listOpenFor()` is (see "Tournaments" in
+`php-app/README.md`).
+
+**New tournament dialog** (`#new-tournament-dialog`, opened by its own
+button inside `#tournaments-dialog`) collects: a name; the bracket type
+(`#new-tournament-bracket-type` -- single elimination, double
+elimination, or Swiss rounds, with a Swiss-only round-count field,
+`updateNewTournamentSwissRoundCountVisibility()`, blank meaning "let the
+server pick" via `TournamentService`'s own `ceil(log2(n))` default);
+registration mode (the same "Invite friends"/open-lobby radio-pair
+shape `#new-game-mode-fields` uses, `updateNewTournamentRegistrationModeFields()`
+swapping a friend-checkbox picker for a required max-participants
+field); and a deliberately curated subset of the New Game dialog's own
+match settings -- format (Duel/Traditional/Draft only, no team formats,
+since a tournament match is always exactly 2 players -- see
+`TournamentService::ALLOWED_FORMATS`), a deck select
+(`updateNewTournamentDeckTypeOptions()` swaps its whole option set
+between Structure/Power/jceddy's 75/One of Each for Duel/Traditional and
+Quick Draft/Sealed Deck for Draft -- every OTHER `#new-game-deck-type`
+option is still reachable per match indirectly, e.g. Custom Decklist
+via each matchup's own normal decklist-submission flow, just not
+offered as a dedicated field here), and a Best of Three checkbox
+(`updateNewTournamentBestOfThreeVisibility()` hides it for Draft, whose
+matches are already potentially multi-game on their own via
+`GameService::draftGamesToWin()`). Submitting calls `createTournament()`
+with all of the above (`invite_user_ids` from the checked friend
+checkboxes) and closes the dialog on success, refreshing
+`#tournaments-dialog` underneath it.
+
+**Tournament view dialog** (`#tournament-view-dialog`) shows the
+tournament's name/status, a Start button (creator only, still in
+`registration`, at least `min_participants` joined -- calls
+`startTournament()`) and a Cancel button (creator only, not yet
+`completed`/`cancelled` -- `cancelTournament()`), a standings list for a
+Swiss event once it's left `registration` (`GET /tournaments/state`'s
+own `standings`, ranked by win count already server-side), and the
+bracket itself: every round (`TOURNAMENT_BRACKET_LABELS` -- "Round" for
+single elimination/Swiss, "Winners round"/"Losers round"/"Grand final"
+for double elimination) listing each of its matches as
+`<participant> vs <participant> — <status>`, with a "Go to game"/"View
+game" button once a match's own game has actually been created --
+closes both this dialog and `#tournaments-dialog` before handing off to
+`showBoard()`, the same as `#open-games-dialog`'s own join-success
+handoff. Refreshed by its own Refresh button rather than a poll -- a
+tournament only ever advances when one of its games finishes, not
+continuously, so there's nothing to gain from polling it open-ended
+while someone's just looking.
 
 - `index.html` (`/`) — Login form. If the visitor already has an active
   session (checked via `GET /app/me`), they're redirected straight to

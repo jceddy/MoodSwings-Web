@@ -54,6 +54,9 @@ use MoodSwings\Repository\PasswordResetRepository;
 use MoodSwings\Repository\PushSubscriptionRepository;
 use MoodSwings\Repository\QueuedNotificationRepository;
 use MoodSwings\Repository\SessionRepository;
+use MoodSwings\Repository\TournamentMatchRepository;
+use MoodSwings\Repository\TournamentParticipantRepository;
+use MoodSwings\Repository\TournamentRepository;
 use MoodSwings\Repository\UserDecklistRepository;
 use MoodSwings\Repository\UserRepository;
 use MoodSwings\Rules\ChaosDefaultEffectRegistry;
@@ -65,6 +68,11 @@ use MoodSwings\Rules\MoodPlayService;
 use MoodSwings\Rules\RoundScorer;
 use MoodSwings\SiteUrl;
 use MoodSwings\Stats\CardStatsService;
+use MoodSwings\Tournament\NotAuthorizedForTournamentException;
+use MoodSwings\Tournament\TournamentBracketBuilder;
+use MoodSwings\Tournament\TournamentNotFoundException;
+use MoodSwings\Tournament\TournamentService;
+use MoodSwings\Tournament\TournamentStateException;
 
 header('Content-Type: application/json');
 
@@ -820,6 +828,10 @@ $cardStats = new CardStatsService();
 $games = new GameService(new BoardStateRepository($gameRegistry, $chaosRegistry), new MoodPlayService($gameRegistry, $chaosRegistry), new RoundScorer(), $userDecklists, new ReplayStateBuilder($gameRegistry), notifications: $notifications, cardStats: $cardStats, chaosRegistry: $chaosRegistry);
 $matchmaking = new MatchmakingService(new OpenGameListingRepository(), new UserRepository(), new FriendshipRepository(), $games);
 $weeklySealedPoolQueue = new WeeklySealedPoolQueueService($games);
+// Issue #91 -- see TournamentMatchObserver's own docblock for why this
+// is a setter rather than a constructor dependency on $games.
+$tournaments = new TournamentService(new TournamentRepository(), new TournamentParticipantRepository(), new TournamentMatchRepository(), new TournamentBracketBuilder(), $games, new UserRepository(), new FriendshipRepository());
+$games->setTournamentObserver($tournaments);
 
 // Lifetime game/match wins-losses (issue #106) -- see
 // GameService::lifetimeStatsFor()/recordGameCompletionStats()/
@@ -1415,6 +1427,164 @@ if ($path === '/weekly-sealed-pool/standings' && $method === 'GET') {
         'status' => 'ok',
         'standings' => $periodicSealedPoolId !== null ? $games->weeklySealedPoolStandings($periodicSealedPoolId) : null,
     ]);
+}
+
+// Issue #91: tournaments -- see TournamentService's own docblock.
+// match_params is the same POST /games request-body shape
+// openGameCreateParamsFromRequestBody() already extracts for the open
+// lobby, fixed once for the whole event rather than negotiated per game.
+if ($path === '/tournaments' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $tournamentId = $tournaments->createTournament(
+            (int) $currentUser['id'],
+            (string) ($body['name'] ?? ''),
+            (string) ($body['bracket_type'] ?? ''),
+            (string) ($body['registration_mode'] ?? ''),
+            openGameCreateParamsFromRequestBody($body),
+            isset($body['swiss_round_count']) ? (int) $body['swiss_round_count'] : null,
+            isset($body['min_participants']) ? (int) $body['min_participants'] : 2,
+            isset($body['max_participants']) ? (int) $body['max_participants'] : null,
+            array_map(intval(...), (array) ($body['invite_user_ids'] ?? [])),
+        );
+        respond(201, ['status' => 'ok', 'tournament_id' => $tournamentId]);
+    } catch (TournamentStateException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+// ?mine=1 lists every tournament the current user created, was invited
+// to, or has joined; omitted (or any other value) lists open-registration
+// tournaments visible to them to browse and join -- same split as
+// GET /open-games above.
+if ($path === '/tournaments' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $currentUserId = (int) $currentUser['id'];
+
+    $list = ($_GET['mine'] ?? '') === '1'
+        ? $tournaments->listMine($currentUserId)
+        : $tournaments->listOpenFor($currentUserId);
+
+    respond(200, ['status' => 'ok', 'tournaments' => $list]);
+}
+
+if ($path === '/tournaments/state' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $tournamentId = (int) ($_GET['id'] ?? 0);
+
+    try {
+        respond(200, ['status' => 'ok', ...$tournaments->getState($tournamentId, (int) $currentUser['id'])]);
+    } catch (TournamentNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAuthorizedForTournamentException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/tournaments/invite' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $tournaments->invite((int) ($body['tournament_id'] ?? 0), (int) $currentUser['id'], (int) ($body['user_id'] ?? 0));
+        respond(200, ['status' => 'ok']);
+    } catch (TournamentNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAuthorizedForTournamentException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (TournamentStateException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/tournaments/accept-invite' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $tournaments->acceptInvite((int) ($body['tournament_id'] ?? 0), (int) $currentUser['id']);
+        respond(200, ['status' => 'ok']);
+    } catch (TournamentNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (TournamentStateException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/tournaments/decline-invite' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $tournaments->declineInvite((int) ($body['tournament_id'] ?? 0), (int) $currentUser['id']);
+        respond(200, ['status' => 'ok']);
+    } catch (TournamentStateException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/tournaments/join' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $tournaments->joinOpenTournament((int) ($body['tournament_id'] ?? 0), (int) $currentUser['id']);
+        respond(200, ['status' => 'ok']);
+    } catch (TournamentNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAuthorizedForTournamentException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (TournamentStateException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/tournaments/withdraw' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $tournaments->withdraw((int) ($body['tournament_id'] ?? 0), (int) $currentUser['id']);
+        respond(200, ['status' => 'ok']);
+    } catch (TournamentNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (TournamentStateException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/tournaments/start' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $tournaments->startTournament((int) ($body['tournament_id'] ?? 0), (int) $currentUser['id']);
+        respond(200, ['status' => 'ok']);
+    } catch (TournamentNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAuthorizedForTournamentException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (TournamentStateException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/tournaments/cancel' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $tournaments->cancelTournament((int) ($body['tournament_id'] ?? 0), (int) $currentUser['id']);
+        respond(200, ['status' => 'ok']);
+    } catch (TournamentNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAuthorizedForTournamentException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (TournamentStateException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
 }
 
 if ($path === '/user/matchmaking-discoverable-preference' && $method === 'POST') {
