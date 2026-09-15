@@ -727,8 +727,13 @@ dialog#resources-dialog #resources-close-button {
     margin-bottom: 0.5rem;
 }
 
-#past-games-button {
-    margin-left: 0.5rem;
+/* Past games/Import replay wrap onto their own line below the main
+   action row (New game/Open games/Weekly Sealed Pool/Tournaments)
+   rather than just flowing inline with them, with some breathing room
+   above (between it and that row) and below (between it and
+   #games-list). */
+#lobby-secondary-actions {
+    margin-top: 0.5rem;
     margin-bottom: 0.5rem;
 }
 
