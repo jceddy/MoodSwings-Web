@@ -88,8 +88,19 @@ final class TournamentService implements TournamentMatchObserver
         if (!in_array($format, self::ALLOWED_FORMATS, true)) {
             throw new TournamentStateException("Tournament matches don't support the \"{$format}\" format");
         }
-        if ($registrationMode === 'open' && $maxParticipants === null) {
-            throw new TournamentStateException('An open-registration tournament needs a maximum participant count');
+        if ($registrationMode === 'open') {
+            if ($maxParticipants === null) {
+                throw new TournamentStateException('An open-registration tournament needs a maximum participant count');
+            }
+            // Same discoverability gate MatchmakingService::postOpenGame()
+            // already requires of an open-lobby listing's own creator --
+            // without it, listOpenFor()'s own matchmaking_discoverable
+            // filter would silently make this tournament unjoinable by
+            // anyone, with no indication why.
+            $creator = $this->users->findById($createdByUserId);
+            if ($creator === null || !(bool) $creator['matchmaking_discoverable']) {
+                throw new TournamentStateException('You must enable "Discoverable for open games" in Settings before creating an open-registration tournament.');
+            }
         }
         if ($minParticipants < 2) {
             throw new TournamentStateException('A tournament needs at least 2 participants');

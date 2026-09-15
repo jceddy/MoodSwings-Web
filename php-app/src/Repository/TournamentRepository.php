@@ -46,11 +46,20 @@ final class TournamentRepository
         return $row === false ? null : $this->decode($row);
     }
 
-    /** Every tournament $userId either created, is a participant in, or was invited to -- still in registration or already under way/completed. */
+    /**
+     * Every tournament $userId either created, is a participant in, or
+     * was invited to -- still in registration or already under way/
+     * completed. my_participant_status/my_participant_id are the
+     * viewer's own tournament_participants row (NULL for a tournament
+     * they only created but never joined themselves) -- the frontend
+     * needs this to know whether to offer Accept/Decline, Withdraw, or
+     * nothing at all, without a separate per-tournament lookup.
+     */
     public function listForUser(int $userId): array
     {
         $stmt = Connection::get()->prepare(
-            'SELECT DISTINCT t.* FROM tournaments t
+            'SELECT DISTINCT t.*, tp.id AS my_participant_id, tp.status AS my_participant_status
+             FROM tournaments t
              LEFT JOIN tournament_participants tp ON tp.tournament_id = t.id AND tp.user_id = :user_id
              WHERE t.created_by_user_id = :user_id_created OR tp.id IS NOT NULL
              ORDER BY t.created_at DESC'

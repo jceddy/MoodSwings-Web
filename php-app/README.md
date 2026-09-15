@@ -4895,6 +4895,137 @@ own chess clock as it always was for `total_time_limit_minutes`'. See
 "Synchronous mode" in `web-static/README.md` for the board's own
 chess-clock stat, reused for this.
 
+### Tournaments (issue #91)
+
+Single elimination, double elimination, or Swiss-round tournaments on
+top of the existing single-game/best-of-three/draft match machinery
+(migrations 0027/0223) -- a tournament never re-plays any of that, it
+just seats two participants against each other via
+`GameService::createGame()` for each bracket slot and watches for the
+result via the same completion paths every other game already goes
+through. Scoped to 1v1 matchups only: every tournament match uses
+exactly 2 seats (`TournamentService::ALLOWED_FORMATS` -- `duel`, or
+`draft`/`standard` played 2-player), the same restriction open lobby
+matchmaking's own first cut placed on itself (migration 0198) for
+exactly the same reason -- team formats need a full known roster (a
+chosen partner) that has no natural meaning against a lone bracket
+opponent.
+
+**Schema** (migration 0334) -- `tournaments` (`bracket_type`,
+`registration_mode`, `match_params` JSON -- the exact same
+`createGame()`-argument shape `open_game_listings.create_game_params`
+already uses, minus identity params, just fixed once for the whole
+event rather than negotiated per game -- `swiss_round_count`,
+`min_participants`/`max_participants`, `status`, `winner_user_id`);
+`tournament_participants` (one row per invited/registered/joined user;
+win/loss counts are never stored, the same `game_matches` convention of
+recomputing from whatever few rows reference a participant, here
+`tournament_matches`, since `seed`/`status` are the only two things
+that can't be derived); `tournament_rounds` (`bracket` -- `single` for
+single elimination, `winners`/`losers`/`grand_final` for double
+elimination's three concurrent round sequences, `swiss` -- plus
+`round_number`, restarting at 1 within each bracket); `tournament_matches`
+(one row per bracket slot -- `participant1_id`/`participant2_id`,
+`winner_participant_id`, exactly one of `game_id`/`game_match_id`/
+`draft_match_id` once the underlying game(s) actually exist,
+`winner_advances_to_match_id`/`_slot` and `loser_advances_to_match_id`/
+`_slot` wiring a single/double-elimination bracket's tree explicitly).
+
+**`TournamentBracketBuilder`** is pure bracket-shape math with no
+database access -- given a participant count (single/double
+elimination) or the current win-count standings and already-played
+pairs (Swiss), it returns a plan `TournamentService` turns into real
+rows. Single/double elimination both pad the participant count up to
+the next power of two, filling the gap with byes placed against the
+weakest seeds first (the standard recursive bracket-seeding order, e.g.
+`1v8, 4v5, 2v7, 3v6` for 8 -- see `buildSeedOrder()`'s own docblock for
+why a bye can never land against another bye). Double elimination's
+losers bracket follows the standard "minor/major round" shape: for `k`
+= winners-bracket rounds, the losers bracket has `2k-2` rounds
+alternating between a "minor" round (pairing the previous major round's
+-- or, for round 1, the winners bracket's own round-1 losers --
+survivors against each other) and a "major" round (those survivors
+against the next winners-bracket round's own fresh losers), converging
+on a losers-bracket final that meets the winners-bracket champion in a
+two-match grand final slot (round 2 only actually gets played out if
+the losers-bracket finalist wins round 1 -- see
+`onGrandFinalResolved()`). **Double elimination is scoped to an exact
+power-of-two participant count** at start time (4, 8, 16, ...) --
+`TournamentService::startTournament()` rejects anything else. A
+non-power-of-two field needs byes in BOTH brackets, and a
+winners-bracket bye produces no loser to drop down at all; which
+losers-bracket slot that "phantom" loser would have occupied can itself
+need a bye, cascading arbitrarily deep for an unlucky field size. Single
+elimination has no such problem (a bye's winner simply advances,
+nothing else to resolve), so it accepts any count >= 2. Swiss pairing
+(`swissPairings()`) groups remaining participants by current win count
+and pairs within/adjacent to their own group, skipping any pairing
+already played (falling back to the closest-standing opponent anyway
+once every candidate has already been played, in a small field with
+many rounds) -- a bye for an odd count goes to the lowest standing among
+participants who haven't already had one this event.
+
+**`TournamentService`** is the orchestration layer: `createTournament()`
+(validates format/bracket/registration-mode combinations, requires the
+same `matchmaking_discoverable` opt-in an open-lobby listing's own
+creator needs for `registration_mode: 'open'`, seats the creator as an
+already-`joined` participant, and seats each `invite_user_ids` entry as
+`'invited'` for `registration_mode: 'invite_only'`), `invite()`/
+`acceptInvite()`/`declineInvite()`, `joinOpenTournament()` (same
+discoverability/blocked-pair gating as `MatchmakingService::joinOpenGame()`)/
+`withdraw()`, `startTournament()` (creator-only, requires
+`min_participants` joined; randomly seeds every joined participant --
+nothing about registration/invite-accept order should predict bracket
+strength -- then materializes the whole bracket tree at once for
+single/double elimination, or just Swiss round 1, since Swiss pairs
+fresh from standings each round instead of a fixed tree), and
+`cancelTournament()`.
+
+**Advancing the bracket** -- `TournamentMatchObserver` is
+`GameService`'s own hook into this system, called alongside
+`advanceDraftMatch()`/`advanceGameMatch()` at every one of their three
+call sites once a game's own TOP-LEVEL match has genuinely concluded
+(re-reading whichever of `draft_matches`/`game_matches`/a bare `games`
+row the result landed in, not just "this one game of a still-ongoing
+best-of-three/draft match finished"). Set via
+`GameService::setTournamentObserver()` rather than a constructor
+dependency: `TournamentService` itself depends on `GameService` (to
+create each matchup's underlying game via `startMatchGame()`, which
+also calls `startGame()` immediately afterward -- exactly
+`tryAutoStartDraftGame()`'s own tolerance, since a tournament match has
+no browser tab of its own polling to clear that `'waiting'` status the
+normal way; a deck_type needing a decklist submitted first, or
+`synchronous_mode` needing its own ready check, throws here and is
+silently left for that same deck_type/mode's own ordinary flow to call
+`startGame()` once actually ready), so a constructor dependency in the
+other direction would be circular -- `index.php`'s own bootstrap wires
+`$games->setTournamentObserver($tournaments)` once both are
+constructed. `TournamentService::onMatchConcluded()` resolves the
+finishing game back to its own `tournament_matches` row (via whichever
+of `game_id`/`game_match_id`/`draft_match_id` matches), records the
+result, and either fills the next slot its `winner_advances_to_match_id`/
+`loser_advances_to_match_id` point at (starting that match's own game
+once both its slots are filled), finishes the tournament outright (a
+single-elimination final, or a double-elimination grand final decisively
+won), triggers a bracket-reset round 2 (a double-elimination grand final
+round 1 won by the losers-bracket finalist), or -- for Swiss, once
+`TournamentMatchRepository::isRoundComplete()` confirms every match in
+the round has resolved -- generates the next round's pairings or
+finishes the event at its own `swiss_round_count`, crowning whoever
+`swissStandings()` ranks first (win count, then head-to-head-flavored
+Buchholz, then seed, as tiebreaks -- deliberately not a fully optimal
+Swiss tiebreak system, which is overkill for a casual TCG tournament
+tool).
+
+**API** -- `POST /tournaments` (create), `GET /tournaments`
+(`?mine=1` for the current user's own/invited/joined tournaments,
+omitted for open-registration tournaments visible to browse),
+`GET /tournaments/state?id=` (participants/rounds/matches/standings),
+`POST /tournaments/invite`, `/accept-invite`, `/decline-invite`,
+`/join`, `/withdraw`, `/start`, `/cancel`. See "Tournaments" in
+`web-static/README.md` for the New Tournament dialog and the
+bracket/standings view built on top of these.
+
 ### Power Duel sideboarding
 
 A second, narrower opt-in on top of best-of-three (migration 0228):

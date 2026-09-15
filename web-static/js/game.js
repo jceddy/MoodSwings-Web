@@ -4055,6 +4055,406 @@
         openGamesDialog.close();
     });
 
+    // -- Tournaments (issue #91) ---------------------------------------
+
+    const tournamentsDialog = document.getElementById('tournaments-dialog');
+    const tournamentsError = document.getElementById('tournaments-error');
+    const newTournamentDialog = document.getElementById('new-tournament-dialog');
+    const newTournamentForm = document.getElementById('new-tournament-form');
+    const newTournamentError = document.getElementById('new-tournament-error');
+    const tournamentInviteCheckboxes = document.getElementById('tournament-invite-checkboxes');
+    const tournamentViewDialog = document.getElementById('tournament-view-dialog');
+    const tournamentViewError = document.getElementById('tournament-view-error');
+    let currentTournamentViewId = null;
+
+    const TOURNAMENT_BRACKET_TYPE_LABELS = { single_elimination: 'Single elimination', double_elimination: 'Double elimination', swiss: 'Swiss rounds' };
+    const TOURNAMENT_STATUS_LABELS = { registration: 'Registration open', in_progress: 'In progress', completed: 'Completed', cancelled: 'Cancelled' };
+    // 'Round'/'winners round'/etc. prefix a plain round_number in the
+    // bracket view below -- see TournamentBracketBuilder's own docblock
+    // for what each of these three concurrent round sequences means.
+    const TOURNAMENT_BRACKET_LABELS = { single: 'Round', winners: 'Winners round', losers: 'Losers round', grand_final: 'Grand final', swiss: 'Round' };
+
+    // Reuses NEW_GAME_FORMAT_LABELS/NEW_GAME_DECK_TYPE_LABELS (New Game
+    // dialog, above) -- tournaments use the exact same format/deck_type
+    // value strings, just a curated subset of them (see #new-tournament-dialog's
+    // own docblock).
+    function tournamentMatchSummary(tournament) {
+        const params = tournament.match_params;
+        const deckType = NEW_GAME_DECK_TYPE_LABELS[params.deck_type] || params.deck_type;
+        const format = `${NEW_GAME_FORMAT_LABELS[params.format] || params.format} – ${deckType}`;
+        return `${TOURNAMENT_BRACKET_TYPE_LABELS[tournament.bracket_type] || tournament.bracket_type} – ${format}`;
+    }
+
+    async function loadTournamentsDialog() {
+        tournamentsError.hidden = true;
+
+        const [mineResp, openResp] = await Promise.all([listTournaments(true), listTournaments(false)]);
+        const mine = mineResp.ok ? mineResp.body.tournaments : [];
+
+        // Invite-only tournaments' own accept/decline step -- an
+        // open-registration tournament never puts a viewer in 'invited'
+        // status at all (joinOpenTournament() only ever creates 'joined'
+        // rows), so this section is simply empty for those.
+        const invitations = mine.filter((t) => t.my_participant_status === 'invited');
+        const invitationsSection = document.getElementById('tournaments-invitations-section');
+        const invitationsList = document.getElementById('tournaments-invitations-list');
+        invitationsList.innerHTML = '';
+        invitationsSection.hidden = invitations.length === 0;
+
+        for (const tournament of invitations) {
+            const item = document.createElement('li');
+            item.append(`${tournament.name} (${tournamentMatchSummary(tournament)}) `);
+
+            const acceptButton = document.createElement('button');
+            acceptButton.type = 'button';
+            acceptButton.textContent = 'Accept';
+            acceptButton.addEventListener('click', async () => {
+                acceptButton.disabled = true;
+                const { ok, body } = await acceptTournamentInvite(tournament.id);
+                if (!ok) {
+                    tournamentsError.textContent = body.message || 'Could not accept this invite.';
+                    tournamentsError.hidden = false;
+                    acceptButton.disabled = false;
+                    return;
+                }
+                await loadTournamentsDialog();
+            });
+
+            const declineButton = document.createElement('button');
+            declineButton.type = 'button';
+            declineButton.textContent = 'Decline';
+            declineButton.addEventListener('click', async () => {
+                declineButton.disabled = true;
+                const { ok, body } = await declineTournamentInvite(tournament.id);
+                if (!ok) {
+                    tournamentsError.textContent = body.message || 'Could not decline this invite.';
+                    tournamentsError.hidden = false;
+                    declineButton.disabled = false;
+                    return;
+                }
+                await loadTournamentsDialog();
+            });
+
+            item.appendChild(acceptButton);
+            item.appendChild(declineButton);
+            invitationsList.appendChild(item);
+        }
+
+        const mineProper = mine.filter((t) => t.my_participant_status !== 'invited' && t.my_participant_status !== 'declined');
+        const mineList = document.getElementById('tournaments-mine-list');
+        mineList.innerHTML = '';
+        document.getElementById('tournaments-mine-empty').hidden = mineProper.length > 0;
+
+        for (const tournament of mineProper) {
+            const item = document.createElement('li');
+            item.append(`${tournament.name} — ${tournamentMatchSummary(tournament)} — ${TOURNAMENT_STATUS_LABELS[tournament.status] || tournament.status} `);
+
+            const viewButton = document.createElement('button');
+            viewButton.type = 'button';
+            viewButton.textContent = 'View';
+            viewButton.addEventListener('click', () => openTournamentView(tournament.id));
+            item.appendChild(viewButton);
+
+            const isCreator = tournament.created_by_user_id === user.id;
+            if (tournament.status === 'registration' && !isCreator && tournament.my_participant_status === 'joined') {
+                const withdrawButton = document.createElement('button');
+                withdrawButton.type = 'button';
+                withdrawButton.textContent = 'Withdraw';
+                withdrawButton.addEventListener('click', async () => {
+                    withdrawButton.disabled = true;
+                    const { ok, body } = await withdrawFromTournament(tournament.id);
+                    if (!ok) {
+                        tournamentsError.textContent = body.message || 'Could not withdraw.';
+                        tournamentsError.hidden = false;
+                        withdrawButton.disabled = false;
+                        return;
+                    }
+                    await loadTournamentsDialog();
+                });
+                item.appendChild(withdrawButton);
+            }
+
+            mineList.appendChild(item);
+        }
+
+        const open = openResp.ok ? openResp.body.tournaments : [];
+        const openList = document.getElementById('tournaments-open-list');
+        openList.innerHTML = '';
+        document.getElementById('tournaments-open-empty').hidden = open.length > 0;
+
+        for (const tournament of open) {
+            const item = document.createElement('li');
+            item.append(`${tournament.creator_username}: ${tournament.name} — ${tournamentMatchSummary(tournament)} (${tournament.joined_count} of ${tournament.max_participants} joined) `);
+
+            const joinButton = document.createElement('button');
+            joinButton.type = 'button';
+            joinButton.textContent = 'Join';
+            joinButton.addEventListener('click', async () => {
+                joinButton.disabled = true;
+                const { ok, body } = await joinTournament(tournament.id);
+                if (!ok) {
+                    tournamentsError.textContent = body.message || 'Could not join this tournament.';
+                    tournamentsError.hidden = false;
+                    joinButton.disabled = false;
+                    return;
+                }
+                await loadTournamentsDialog();
+            });
+            item.appendChild(joinButton);
+            openList.appendChild(item);
+        }
+    }
+
+    document.getElementById('tournaments-button').addEventListener('click', async () => {
+        await loadTournamentsDialog();
+        tournamentsDialog.showModal();
+    });
+
+    document.getElementById('tournaments-close-button').addEventListener('click', () => {
+        tournamentsDialog.close();
+    });
+
+    // -- New tournament dialog --
+
+    function updateNewTournamentDeckTypeOptions() {
+        const format = document.getElementById('new-tournament-format').value;
+        const deckTypeSelect = document.getElementById('new-tournament-deck-type');
+        // A curated subset of #new-game-deck-type's own options -- see
+        // #new-tournament-dialog's own docblock for why the full
+        // exhaustive list isn't offered here.
+        const draftOptions = { quick_draft: 'Quick Draft', sealed_deck: 'Sealed Deck' };
+        const constructedOptions = { structure: 'Structure', power: 'Power', jceddys_75: "jceddy's 75 Card", one_of_each: 'One of Each Card' };
+        const options = format === 'draft' ? draftOptions : constructedOptions;
+
+        const previousValue = deckTypeSelect.value;
+        deckTypeSelect.innerHTML = '';
+        for (const [value, label] of Object.entries(options)) {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = label;
+            deckTypeSelect.appendChild(option);
+        }
+        deckTypeSelect.value = options[previousValue] ? previousValue : Object.keys(options)[0];
+    }
+
+    function updateNewTournamentBestOfThreeVisibility() {
+        const format = document.getElementById('new-tournament-format').value;
+        // Draft-family matches are already potentially multi-game on
+        // their own (GameService::draftGamesToWin(), always best-of-three
+        // at 2 players) -- best_of_three is only ever a meaningful
+        // opt-in for Duel/Traditional. See createGame()'s own docblock.
+        document.getElementById('new-tournament-best-of-three-label').hidden = format === 'draft';
+    }
+
+    function updateNewTournamentRegistrationModeFields() {
+        const isOpen = document.getElementById('new-tournament-registration-mode-open').checked;
+        document.getElementById('new-tournament-invite-fields').hidden = isOpen;
+        document.getElementById('new-tournament-max-participants-label').hidden = !isOpen;
+    }
+
+    function updateNewTournamentSwissRoundCountVisibility() {
+        const bracketType = document.getElementById('new-tournament-bracket-type').value;
+        document.getElementById('new-tournament-swiss-round-count-label').hidden = bracketType !== 'swiss';
+    }
+
+    document.getElementById('new-tournament-format').addEventListener('change', updateNewTournamentDeckTypeOptions);
+    document.getElementById('new-tournament-format').addEventListener('change', updateNewTournamentBestOfThreeVisibility);
+    document.getElementById('new-tournament-registration-mode-invite').addEventListener('change', updateNewTournamentRegistrationModeFields);
+    document.getElementById('new-tournament-registration-mode-open').addEventListener('change', updateNewTournamentRegistrationModeFields);
+    document.getElementById('new-tournament-bracket-type').addEventListener('change', updateNewTournamentSwissRoundCountVisibility);
+
+    async function openNewTournamentDialog() {
+        newTournamentError.hidden = true;
+        newTournamentForm.reset();
+        updateNewTournamentDeckTypeOptions();
+        updateNewTournamentBestOfThreeVisibility();
+        updateNewTournamentRegistrationModeFields();
+        updateNewTournamentSwissRoundCountVisibility();
+
+        const { ok, body } = await listFriends();
+        const friends = ok ? body.friends : [];
+        tournamentInviteCheckboxes.innerHTML = '';
+        document.getElementById('tournament-invite-checkboxes-empty').hidden = friends.length > 0;
+
+        for (const friend of friends) {
+            const label = document.createElement('label');
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.value = friend.friend_id;
+            label.appendChild(checkbox);
+            label.append(' ' + friend.friend_username);
+            tournamentInviteCheckboxes.appendChild(label);
+        }
+
+        newTournamentDialog.showModal();
+    }
+
+    document.getElementById('new-tournament-button').addEventListener('click', openNewTournamentDialog);
+    document.getElementById('new-tournament-cancel-button').addEventListener('click', () => {
+        newTournamentDialog.close();
+    });
+
+    newTournamentForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        newTournamentError.hidden = true;
+        const submitButton = document.getElementById('new-tournament-submit-button');
+        submitButton.disabled = true;
+
+        const registrationMode = document.getElementById('new-tournament-registration-mode-open').checked ? 'open' : 'invite_only';
+        const bracketType = document.getElementById('new-tournament-bracket-type').value;
+        const format = document.getElementById('new-tournament-format').value;
+        const swissRoundCountRaw = document.getElementById('new-tournament-swiss-round-count').value;
+        const maxParticipantsRaw = document.getElementById('new-tournament-max-participants').value;
+
+        const inviteUserIds = registrationMode === 'invite_only'
+            ? Array.from(tournamentInviteCheckboxes.querySelectorAll('input[type=checkbox]:checked')).map((cb) => parseInt(cb.value, 10))
+            : [];
+
+        const params = {
+            name: document.getElementById('new-tournament-name').value,
+            bracket_type: bracketType,
+            registration_mode: registrationMode,
+            swiss_round_count: bracketType === 'swiss' && swissRoundCountRaw ? parseInt(swissRoundCountRaw, 10) : null,
+            min_participants: parseInt(document.getElementById('new-tournament-min-participants').value, 10) || 2,
+            max_participants: registrationMode === 'open' && maxParticipantsRaw ? parseInt(maxParticipantsRaw, 10) : null,
+            invite_user_ids: inviteUserIds,
+            format,
+            deck_type: document.getElementById('new-tournament-deck-type').value,
+            best_of_three: format !== 'draft' && document.getElementById('new-tournament-best-of-three').checked,
+        };
+
+        const { ok, body } = await createTournament(params);
+        submitButton.disabled = false;
+        if (!ok) {
+            newTournamentError.textContent = body.message || 'Could not create this tournament.';
+            newTournamentError.hidden = false;
+            return;
+        }
+
+        newTournamentDialog.close();
+        await loadTournamentsDialog();
+    });
+
+    // -- Tournament view (bracket/standings) --
+
+    function tournamentMatchLabel(match, participantsById) {
+        const p1 = match.participant1_id ? (participantsById[match.participant1_id] || '?') : 'BYE';
+        const p2 = match.participant2_id ? (participantsById[match.participant2_id] || '?') : 'BYE';
+        let result = `${p1} vs ${p2}`;
+        if (match.status === 'completed' || match.status === 'bye') {
+            result += ` — ${participantsById[match.winner_participant_id] || '?'} won`;
+        } else if (match.status === 'in_progress') {
+            result += ' — in progress';
+        } else {
+            result += ' — waiting';
+        }
+        return result;
+    }
+
+    async function openTournamentView(tournamentId) {
+        currentTournamentViewId = tournamentId;
+        tournamentViewError.hidden = true;
+        tournamentViewDialog.showModal();
+        await refreshTournamentView();
+    }
+
+    async function refreshTournamentView() {
+        if (currentTournamentViewId === null) {
+            return;
+        }
+        const { ok, body } = await getTournamentState(currentTournamentViewId);
+        if (!ok) {
+            tournamentViewError.textContent = body.message || 'Could not load this tournament.';
+            tournamentViewError.hidden = false;
+            return;
+        }
+
+        const { tournament, participants, rounds, matches_by_round: matchesByRound, standings } = body;
+        document.getElementById('tournament-view-title').textContent = tournament.name;
+        document.getElementById('tournament-view-status').textContent =
+            `${TOURNAMENT_BRACKET_TYPE_LABELS[tournament.bracket_type] || tournament.bracket_type} — ${TOURNAMENT_STATUS_LABELS[tournament.status] || tournament.status}`;
+
+        const participantsById = {};
+        for (const participant of participants) {
+            participantsById[participant.id] = participant.username;
+        }
+
+        const isCreator = tournament.created_by_user_id === user.id;
+        const joinedCount = participants.filter((p) => p.status === 'joined').length;
+        document.getElementById('tournament-view-start-button').hidden =
+            !(isCreator && tournament.status === 'registration' && joinedCount >= tournament.min_participants);
+        document.getElementById('tournament-view-cancel-button').hidden =
+            !(isCreator && (tournament.status === 'registration' || tournament.status === 'in_progress'));
+
+        const standingsSection = document.getElementById('tournament-view-standings-section');
+        const standingsList = document.getElementById('tournament-view-standings-list');
+        standingsList.innerHTML = '';
+        standingsSection.hidden = !standings;
+        if (standings) {
+            for (const [participantId, record] of Object.entries(standings)) {
+                const item = document.createElement('li');
+                item.textContent = `${participantsById[participantId] || '?'} — ${record.wins} win${record.wins === 1 ? '' : 's'}`;
+                standingsList.appendChild(item);
+            }
+        }
+
+        const bracketContainer = document.getElementById('tournament-view-bracket');
+        bracketContainer.innerHTML = '';
+        for (const round of rounds) {
+            const heading = document.createElement('h3');
+            heading.textContent = `${TOURNAMENT_BRACKET_LABELS[round.bracket] || round.bracket} ${round.round_number}`;
+            bracketContainer.appendChild(heading);
+
+            const list = document.createElement('ul');
+            for (const match of matchesByRound[round.id] || []) {
+                const item = document.createElement('li');
+                item.append(tournamentMatchLabel(match, participantsById) + ' ');
+                if (match.game_id && (match.status === 'in_progress' || match.status === 'completed')) {
+                    const goToGameButton = document.createElement('button');
+                    goToGameButton.type = 'button';
+                    goToGameButton.textContent = match.status === 'in_progress' ? 'Go to game' : 'View game';
+                    goToGameButton.addEventListener('click', () => {
+                        tournamentViewDialog.close();
+                        tournamentsDialog.close();
+                        showBoard(match.game_id);
+                    });
+                    item.appendChild(goToGameButton);
+                }
+                list.appendChild(item);
+            }
+            bracketContainer.appendChild(list);
+        }
+    }
+
+    document.getElementById('tournament-view-refresh-button').addEventListener('click', refreshTournamentView);
+
+    document.getElementById('tournament-view-start-button').addEventListener('click', async () => {
+        tournamentViewError.hidden = true;
+        const { ok, body } = await startTournament(currentTournamentViewId);
+        if (!ok) {
+            tournamentViewError.textContent = body.message || 'Could not start this tournament.';
+            tournamentViewError.hidden = false;
+            return;
+        }
+        await refreshTournamentView();
+    });
+
+    document.getElementById('tournament-view-cancel-button').addEventListener('click', async () => {
+        tournamentViewError.hidden = true;
+        const { ok, body } = await cancelTournament(currentTournamentViewId);
+        if (!ok) {
+            tournamentViewError.textContent = body.message || 'Could not cancel this tournament.';
+            tournamentViewError.hidden = false;
+            return;
+        }
+        await refreshTournamentView();
+        await loadTournamentsDialog();
+    });
+
+    document.getElementById('tournament-view-close-button').addEventListener('click', () => {
+        tournamentViewDialog.close();
+    });
+
     // Weekly Sealed Pool's own queue/standings dialog (issue #520) -- see
     // WeeklySealedPoolQueueService's own docblock for why this is a
     // separate FIFO auto-pairing queue rather than another open-lobby
