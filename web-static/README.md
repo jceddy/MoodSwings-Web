@@ -4234,34 +4234,46 @@ deck's `cards`.
     fields on this page already follow.
 
     **Team affiliation icon.** For Open/Closed Team Play (`player.team_id
-    !== null`), each row gets a plain heraldic shield icon
-    (`buildPlayerFlag('team', ..., 'player-flag--teamMate'/'--teamOpponent')`)
+    !== null`), each row gets a heraldic shield icon
+    (`buildPlayerFlag('team'/'teamOpponent', ..., 'player-flag--teamMate'/'--teamOpponent')`)
     right after its presence dot -- the ONLY place team affiliation
     appears on the row now; there used to also be a plain "— Team N (your
     teammate)" text tag appended after the username, removed once the
     icon existed to cover the same information, so it isn't shown twice.
-    Color, not the shield's shape, is what actually carries the "which
-    side" information: green (`--color-success`) for every row sharing
-    the *viewer's own* `team_id` — including the viewer's own row — and
-    red (`--color-error`) for the opposing team's two rows, so which side
-    is "us" vs. "them" reads at a glance without needing to read each
-    row's team number. The removed text tag's own wording didn't just
-    vanish, though -- the icon's `title`/`aria-label` (`teamIconLabel`,
-    same `buildPlayerFlag()` tooltip/accessible-label convention every
-    other icon on this row already uses) carries the exact same "Team N"/
-    "(your teammate)" text a screen reader or a sighted user hovering for
-    a reminder would have gotten from the old text tag, just moved onto
-    the icon instead of sitting separately on the row. Computed once,
-    right before the `players-list` `renderList()` call, as
-    `viewerTeamId` (`you ? you.team_id : null`, `you` being the same
-    viewer's-own-row lookup the board title/hand section already use) —
-    `null` for every non-team format (the icon is skipped outright, same
-    as the old text tag already was) and also for a spectator/replay
-    viewer, who has no `team_id` of their own to color the icon relative
-    to (coloring every row red for someone with no "own team" to contrast
-    against would be misleading, not informative, so the icon just
-    doesn't render for them at all rather than defaulting to one color or
-    the other).
+    Reported live as hard to tell apart for colorblind users back when
+    color alone (green vs. red) carried the "which side" information --
+    red-green is the worst possible pairing for the most common forms of
+    color blindness -- so both color *and* shape now carry it (WCAG
+    1.4.1, "Use of Color"): blue (`--color-info`, already used elsewhere
+    on this page and clearly distinguishable from red under essentially
+    all common forms of color blindness) with a solid-filled shield for
+    every row sharing the *viewer's own* `team_id` — including the
+    viewer's own row — and red (`--color-error`) with the same shield
+    outline hollowed out instead (`PLAYER_STAT_ICON_PATHS.teamOpponent`,
+    `fill="none" stroke="currentColor"`, the same technique the
+    presence-hidden icon below already uses to override the inherited
+    `fill: currentColor`) for the opposing team's two rows, so which side
+    is "us" vs. "them" reads at a glance even with no color perception at
+    all, not just without needing to read each row's team number. The
+    removed text tag's own wording didn't just vanish, though -- the
+    icon's `title`/`aria-label` (`teamIconLabel`, same `buildPlayerFlag()`
+    tooltip/accessible-label convention every other icon on this row
+    already uses) carries the exact same "Team N"/"(your teammate)" text
+    a screen reader or a sighted user hovering for a reminder would have
+    gotten from the old text tag, just moved onto the icon instead of
+    sitting separately on the row. Computed once, right before the
+    `players-list` `renderList()` call, as `viewerTeamId` (`you ?
+    you.team_id : null`, `you` being the same viewer's-own-row lookup the
+    board title/hand section already use) — `null` for every non-team
+    format (the icon is skipped outright, same as the old text tag
+    already was) and also for a spectator/replay viewer, who has no
+    `team_id` of their own to compare against (marking every row as "the
+    opposing team" for someone with no "own team" to contrast against
+    would be misleading, not informative, so the icon just doesn't render
+    for them at all rather than defaulting to one team's look or the
+    other). The Team Scores panel's own per-team icon
+    (`renderTeamScores()`) follows the identical solid-blue/hollow-red
+    convention, using `'team'`/`'teamOpponent'` the same way.
 
     `'after_scoring_order'`'s own field (`type: 'card_order'`) is the one
     pending-decision field that isn't a `<select>`-backed widget at all —

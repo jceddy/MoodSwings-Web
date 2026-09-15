@@ -2156,14 +2156,20 @@ body.game-page {
 }
 
 /* Team affiliation (Open/Closed Team Play only, player.team_id !== null --
-   see buildPlayerFlag('team', ...) in game.js): green for the viewer's
-   own team (including their own row), red for the opposing team -- the
-   same --color-success/--color-error pairing already used for "good"/
-   "went first" elsewhere on this page, just repurposed here as "mine" vs
-   "theirs" rather than "good" vs "bad" (the opposing team isn't a bad
-   thing, just the other side). */
+   see buildPlayerFlag('team'/'teamOpponent', ...) in game.js): reported
+   live as hard to tell apart for colorblind users when the green/red
+   (--color-success/--color-error) pairing this used to have was the only
+   thing distinguishing "mine" from "theirs" -- red-green is the worst
+   possible pair for the most common forms of color blindness. Now blue
+   (--color-info, already used elsewhere on this page and clearly
+   distinguishable from red under essentially all common forms of color
+   blindness) for the viewer's own team, paired with a solid-filled
+   shield shape; --color-error/red stays for the opposing team, now paired
+   with a hollow/outline shield shape (see PLAYER_STAT_ICON_PATHS.team vs
+   .teamOpponent in game.js) so the two are distinguishable by shape alone
+   too, per WCAG 1.4.1 (never rely on color alone). */
 .player-flag--teamMate {
-    color: var(--color-success);
+    color: var(--color-info);
 }
 
 .player-flag--teamOpponent {
