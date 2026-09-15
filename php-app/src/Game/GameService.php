@@ -15823,6 +15823,16 @@ final class GameService
                 // BlissEffect::payToPlayCost()) -- so every other card's
                 // detail view just reads this as null/absent.
                 'bliss_discard_color' => $serialized['effect_key'] === 'bliss' ? $state->effectState($cardId, 'blissColor') : null,
+                // Reported live: show a Wonder's own chosen color(s) in its
+                // detail view. A list, not a single color, since Duplicity
+                // can repeat WonderEffect::afterPlaying() (see that class's
+                // own docblock), each repeat appending its own color choice
+                // on top of any earlier one(s) rather than replacing it --
+                // array_unique() only for display here, since a repeated
+                // pick of the SAME color is a legal (if redundant) choice
+                // that would otherwise show up twice. Every other card's
+                // detail view reads this as null/absent.
+                'wonder_colors' => $serialized['effect_key'] === 'wonder' ? array_values(array_unique($state->effectState($cardId, 'colors') ?? [])) : null,
             ];
         }
 
@@ -16424,6 +16434,7 @@ final class GameService
                         'affecting' => $this->affectingEntries($state, $cardId, $names),
                         'temporary_ownership' => $this->temporaryOwnershipInfo($state, $cardId, $names, $playerNames),
                         'bliss_discard_color' => $serialized['effect_key'] === 'bliss' ? $state->effectState($cardId, 'blissColor') : null,
+                        'wonder_colors' => $serialized['effect_key'] === 'wonder' ? array_values(array_unique($state->effectState($cardId, 'colors') ?? [])) : null,
                     ];
                 },
                 array_keys($state->moodsInPlay()),
@@ -16734,6 +16745,7 @@ final class GameService
                         'affecting' => $this->affectingEntries($state, $cardId, $names),
                         'temporary_ownership' => $this->temporaryOwnershipInfo($state, $cardId, $names, $playerNames),
                         'bliss_discard_color' => $serialized['effect_key'] === 'bliss' ? $state->effectState($cardId, 'blissColor') : null,
+                        'wonder_colors' => $serialized['effect_key'] === 'wonder' ? array_values(array_unique($state->effectState($cardId, 'colors') ?? [])) : null,
                     ];
                 },
                 array_keys($state->moodsInPlay()),

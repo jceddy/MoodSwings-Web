@@ -1,0 +1,16 @@
+-- Reported live: "when opening the detail view from a Wonder in play,
+-- show the color(s) that were chosen when it was played along with the
+-- other information printed beneath the card image."
+--
+-- Added a new `wonder_colors` field to every in-play card's serialization
+-- (getState()/replay snapshots), the identical pattern the existing
+-- `bliss_discard_color` field already uses for Bliss -- null for every
+-- other card, an array (not a single color, since Duplicity can repeat
+-- Wonder's own color choice) for an in-play Wonder, deduplicated for
+-- display. The frontend's card-detail dialog renders it the same
+-- hidden-unless-populated way it already renders Bliss's own field. See
+-- php-app/README.md for the full writeup.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.40.13' WHERE id = 1;

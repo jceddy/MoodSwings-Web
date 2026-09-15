@@ -4053,6 +4053,42 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertNull(self::findByCardId($inPlay, $courageId)['bliss_discard_color']);
     }
 
+    /**
+     * Reported live: show a Wonder's own chosen color(s) in its detail
+     * view, the same way Bliss's own discard color already is. A list,
+     * not a single color, since Duplicity can repeat WonderEffect's own
+     * color choice -- 'colors' accumulates one entry per invocation
+     * (WonderEffect's own docblock) -- deduplicated for display only, so
+     * choosing the same color twice doesn't read as though it were
+     * chosen twice.
+     */
+    public function testGetStateExposesWonderColorsOnItsOwnInPlayCardOnly(): void
+    {
+        $u1 = $this->insertUser('wondercolor1');
+        $u2 = $this->insertUser('wondercolor2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $wonderId = $this->insertGameCard($gameId, 133, 'in_play', $p1); // Wonder
+        $courageId = $this->insertGameCard($gameId, 7, 'in_play', $p1); // Courage -- an unrelated card
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->pdo->prepare('UPDATE game_cards SET effect_state = :effect_state WHERE id = :id')
+            ->execute(['effect_state' => json_encode(['colors' => ['blue', 'red', 'blue']]), 'id' => $wonderId]);
+
+        $inPlay = $this->games->getState($gameId, $u1)['in_play'];
+
+        self::assertSame(['blue', 'red'], self::findByCardId($inPlay, $wonderId)['wonder_colors'], 'deduplicated for display -- the repeated blue only shows once');
+        self::assertNull(self::findByCardId($inPlay, $courageId)['wonder_colors']);
+    }
+
     public function testGetStateExposesBoardEffectsForImaginationOverridingEveryMoodsColor(): void
     {
         $u1 = $this->insertUser('boardfx1');

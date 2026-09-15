@@ -4697,6 +4697,21 @@
             blissColorEl.hidden = true;
         }
 
+        // wonder_colors only exists on an in-play Wonder card (see
+        // GameService::getState()'s in_play mapping) -- reads as
+        // undefined/empty for every other card, so this stays hidden the
+        // rest of the time. A list (not just one color) since Duplicity
+        // can repeat Wonder's own color choice, each repeat contributing
+        // its own color on top of the earlier one(s).
+        const wonderColorsEl = document.getElementById('card-detail-wonder-colors');
+        if (card.wonder_colors && card.wonder_colors.length > 0) {
+            wonderColorsEl.textContent = 'Chosen color' + (card.wonder_colors.length > 1 ? 's' : '') +
+                ': ' + card.wonder_colors.join(', ');
+            wonderColorsEl.hidden = false;
+        } else {
+            wonderColorsEl.hidden = true;
+        }
+
         // has_unused_play_grant only exists (and is only ever true) on an
         // in-play card whose own effect (Hope, Grace, ...) granted an extra
         // play that hasn't been spent yet -- see GameService::getState()'s

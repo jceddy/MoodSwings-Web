@@ -993,6 +993,23 @@ captured once at play time — see `BlissEffect::payToPlayCost()`) so the
 client can show *which* color it's currently tripling without the player
 having to remember what they discarded.
 
+**`wonder_colors`** is the identical idea for Wonder (reported live: show
+the color(s) chosen when a Wonder was played, alongside the other
+information already printed beneath its card image in the detail view) —
+`null` for every other card, an array for an in-play Wonder, read from
+its own `colors` `effectState` (`WonderEffect::afterPlaying()`). A list,
+not a single color like Bliss's own field, since Duplicity can repeat
+Wonder's own color choice (`WonderEffect`'s own docblock), each repeat
+appending its own color on top of whatever was already chosen rather than
+replacing it — deduplicated for display (`array_unique()`) so choosing
+the same color twice doesn't read as though it were chosen twice; the
+underlying `effectState` list itself is left exactly as `WonderEffect`
+wrote it, since `computeValue()`'s own `in_array()` check against it
+doesn't care about duplicates either. The frontend renders it in
+`openCardDetail()` as `card-detail-wonder-colors`, the same
+hidden-unless-populated `<p>` pattern `card-detail-bliss-color` already
+uses.
+
 `round.board_effects` is `scoring_effects`' sibling for non-scoring
 board-wide reshaping: same `{card_id, card_name, owner_game_player_id,
 description}` shape, built by `GameService::boardEffectEntries()`, but for
