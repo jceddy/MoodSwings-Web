@@ -1580,6 +1580,43 @@ special-casing here at all -- like every other event type, the log view
 just displays whatever plain-text description the backend already
 rendered.
 
+**Follow-up: full-game time-limit mode** -- a second, independent
+checkbox, `#new-game-total-time-limit-enabled-label` (right after the
+per-turn timeout's own `#new-game-timeout-fields`), reveals
+`#new-game-total-time-limit-fields`: a single duration `<select>`
+(`#new-game-total-time-limit-minutes`, 1 to 72 hours -- `TOTAL_TIME_LIMIT_MIN_MINUTES`/
+`MAX_MINUTES` in `php-app/README.md`) with its own `24 hours` option
+marked `selected` by default (see `createGame()`'s own
+`$totalTimeLimitMinutes` docblock for why 24h -- reported live as a
+sensible default), and a plain-text note that this is a hard cap
+separate from the idle time-out above, also checked at most every 15
+minutes. `updateTotalTimeLimitFieldVisibility()` mirrors
+`updateTimeoutFieldVisibility()` exactly (same `TIMEOUT_EXCLUDED_DECK_TYPES`
+list, same wiring into both branches of `updateDeckTypeAvailability()`,
+same "unchecked, not just hidden, whenever it goes out of view"
+treatment) -- the two opt-ins are fully independent, so a game may have
+either, both, or neither. Checking it sends `total_time_limit_minutes`
+(`undefined` when unchecked, so omitted from the request entirely) to
+`POST /games`/`POST /open-games`, the same "post to the open lobby"
+support the per-turn timeout already has.
+
+`renderBoard()`'s own title line gets a FOURTH parenthetical for this
+one, independent of the per-turn timeout's own third (`state.game.total_time_limit_minutes`):
+e.g. "Game #42 (Traditional, Structure deck, 24-hour total time limit)".
+`TIMEOUT_DURATION_LABELS` is shared between both parentheticals (4/8
+hours -- 240/480 minutes -- are the only two entries that exist purely
+for this dropdown's own preset ladder; every other entry is shared with
+the per-turn timeout's own).
+
+Each seated player's own accumulated "clock" time
+(`game_players.active_seconds_used`, `php-app/README.md`'s own
+`touchLastMoveAt()` writeup for exactly how it's credited) is included
+on `getState()`'s own `players[].active_seconds_used` -- not yet
+surfaced anywhere in the UI itself (a possible follow-up would be
+showing each player their own running total, chess-clock style,
+somewhere in the Players list), but available for a future enhancement
+without any further backend work.
+
 ## Pages
 
 - `index.html` (`/`) — Login form. If the visitor already has an active

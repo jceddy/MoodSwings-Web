@@ -171,6 +171,22 @@ final class GameService
     private const TIMEOUT_ACTIONS = ['auto_play', 'skip', 'resign'];
 
     /**
+     * Issue #85 follow-up's own full-game time-limit mode
+     * (games.total_time_limit_minutes) -- a hard cap, in hours, on any
+     * ONE player's own cumulative "clock" time across the whole game
+     * (game_players.active_seconds_used), independent of the per-turn
+     * timeout above. 1 hour minimum (a genuinely tight but not
+     * impossible budget for a short game), 72 hours (3 days) maximum --
+     * past that, the per-turn timeout above (which can itself go up to
+     * 7 days per idle turn/decision, see the New Game dialog's own
+     * preset ladder) already covers "let a slow game run for a very
+     * long time" better than an even longer hard total-time ceiling
+     * would.
+     */
+    private const TOTAL_TIME_LIMIT_MIN_MINUTES = 60;
+    private const TOTAL_TIME_LIMIT_MAX_MINUTES = 4320;
+
+    /**
      * The 'power' deck_type's own non-Mythic card count -- see
      * buildPowerDeckCardIds(), which pairs this many random non-Mythic
      * cards with exactly one random Mythic (15 total).
@@ -1506,6 +1522,19 @@ final class GameService
         // than a deck_type this feature was never meant to reach.
         ?int $timeoutMinutes = null,
         ?string $timeoutAction = null,
+        // Issue #85 follow-up's own full-game time-limit mode -- a
+        // second, independent opt-in from $timeoutMinutes/$timeoutAction
+        // above (a game may have either, both, or neither): null (the
+        // default) means off; a non-null value is the most total
+        // "clock" time (in minutes) any ONE player may accumulate across
+        // the whole game before being automatically resigned -- always
+        // resign for this mode, no auto_play/skip choice, since the
+        // whole point is a hard ceiling rather than a per-turn nudge.
+        // Same Sealed Pool of the Day/Weekly Sealed Pool exclusion as
+        // $timeoutMinutes above (silently forced back to null, not an
+        // error); a value outside self::TOTAL_TIME_LIMIT_MIN_MINUTES..
+        // self::TOTAL_TIME_LIMIT_MAX_MINUTES IS an error.
+        ?int $totalTimeLimitMinutes = null,
     ): int {
         if (count($userIds) > self::MAX_PLAYERS) {
             throw new GameStateException('A game cannot have more than ' . self::MAX_PLAYERS . ' players');
@@ -1576,6 +1605,12 @@ final class GameService
             if (!in_array($timeoutAction, self::TIMEOUT_ACTIONS, true)) {
                 throw new GameStateException('A turn/decision timeout requires a valid timeout_action (auto_play, skip, or resign)');
             }
+        }
+        if ($totalTimeLimitMinutes !== null && ($totalTimeLimitMinutes < self::TOTAL_TIME_LIMIT_MIN_MINUTES || $totalTimeLimitMinutes > self::TOTAL_TIME_LIMIT_MAX_MINUTES)) {
+            throw new GameStateException(
+                'A full-game time limit must be between ' . (self::TOTAL_TIME_LIMIT_MIN_MINUTES / 60)
+                . ' and ' . (self::TOTAL_TIME_LIMIT_MAX_MINUTES / 60) . ' hours'
+            );
         }
         if ($deckType === 'rotisserie_draft' && ($rotisserieDraftCutoffCount < self::ROTISSERIE_DRAFT_MIN_CUTOFF || $rotisserieDraftCutoffCount > self::ROTISSERIE_DRAFT_MAX_CUTOFF)) {
             throw new GameStateException(
@@ -1872,6 +1907,10 @@ final class GameService
         // Day/Weekly Sealed Pool regardless of what was requested.
         $timeoutMinutesForGame = array_key_exists($deckType, self::PERIODIC_SEALED_POOL_DECK_TYPES) ? null : $timeoutMinutes;
         $timeoutActionForGame = $timeoutMinutesForGame !== null ? $timeoutAction : null;
+        // Issue #85 follow-up's own full-game time-limit mode -- same
+        // Sealed Pool of the Day/Weekly Sealed Pool exclusion, but
+        // otherwise fully independent of $timeoutMinutesForGame above.
+        $totalTimeLimitMinutesForGame = array_key_exists($deckType, self::PERIODIC_SEALED_POOL_DECK_TYPES) ? null : $totalTimeLimitMinutes;
 
         $pdo = Connection::get();
         $pdo->beginTransaction();
@@ -1911,13 +1950,13 @@ final class GameService
                     custom_duel_rules_preset, custom_duel_min_cards, custom_duel_rarity_limits, custom_duel_duplicate_limits,
                     custom_duel_even_color_distribution_rarities, draft_match_id, game_match_id, match_game_number,
                     status, created_by_user_id, wins_needed, default_selections_mode, bot_goes_first, diagnostic_mode,
-                    timeout_minutes, timeout_action
+                    timeout_minutes, timeout_action, total_time_limit_minutes
                  ) VALUES (
                     :format, :deck_type, :custom_deck_name, :custom_deck_card_ids,
                     :duel_rules_preset, :duel_min_cards, :duel_rarity_limits, :duel_duplicate_limits,
                     :duel_even_color_distribution_rarities, :draft_match_id, :game_match_id, :match_game_number,
                     'waiting', :created_by, :wins_needed, :default_selections_mode, :bot_goes_first, :diagnostic_mode,
-                    :timeout_minutes, :timeout_action
+                    :timeout_minutes, :timeout_action, :total_time_limit_minutes
                  )"
             );
             $insertGame->execute([
@@ -1940,6 +1979,7 @@ final class GameService
                 'diagnostic_mode' => $diagnosticModeForGame ? 1 : 0,
                 'timeout_minutes' => $timeoutMinutesForGame,
                 'timeout_action' => $timeoutActionForGame,
+                'total_time_limit_minutes' => $totalTimeLimitMinutesForGame,
             ]);
             $gameId = (int) $pdo->lastInsertId();
 
@@ -5660,7 +5700,7 @@ final class GameService
             return $this->finishPlay($gameId, $round, $gamePlayerId, $state, $gamePlayerId);
         });
 
-        $this->touchLastMoveAt($gameId);
+        $this->touchLastMoveAt($gameId, $gamePlayerId);
         $this->clearQueuedNotificationForGamePlayer($gameId, $gamePlayerId);
 
         return $result;
@@ -5698,7 +5738,7 @@ final class GameService
             return $this->advanceTurn($gameId, $round, $this->boardStates->load($gameId), $gamePlayerId);
         });
 
-        $this->touchLastMoveAt($gameId);
+        $this->touchLastMoveAt($gameId, $gamePlayerId);
         $this->clearQueuedNotificationForGamePlayer($gameId, $gamePlayerId);
 
         return $result;
@@ -8527,7 +8567,7 @@ final class GameService
     {
         $result = $this->withGameLock($gameId, fn (): array => $this->respondToDecisionLocked($gameId, $gamePlayerId, $choices));
 
-        $this->touchLastMoveAt($gameId);
+        $this->touchLastMoveAt($gameId, $gamePlayerId);
         $this->clearQueuedNotificationForGamePlayer($gameId, $gamePlayerId);
 
         return $result;
@@ -9016,7 +9056,7 @@ final class GameService
             return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => true];
         });
 
-        $this->touchLastMoveAt($gameId);
+        $this->touchLastMoveAt($gameId, $actingGamePlayerId);
         $this->clearQueuedNotificationForGamePlayer($gameId, $actingGamePlayerId);
 
         return $result;
@@ -9081,7 +9121,7 @@ final class GameService
                 : $this->applyTurnOrderDecision($gameId, (int) $decision['game_round_id'], (int) $decision['proposed_game_player_id']);
         });
 
-        $this->touchLastMoveAt($gameId);
+        $this->touchLastMoveAt($gameId, $actingGamePlayerId);
         $this->clearQueuedNotificationForGamePlayer($gameId, $actingGamePlayerId);
 
         return $result;
@@ -11008,8 +11048,8 @@ final class GameService
         $seats = $seatStmt->fetchAll();
 
         $insertGame = $pdo->prepare(
-            "INSERT INTO games (format, deck_type, draft_match_id, match_game_number, status, created_by_user_id, wins_needed, default_selections_mode, diagnostic_mode, timeout_minutes, timeout_action)
-             VALUES (:format, :deck_type, :draft_match_id, :match_game_number, 'waiting', :created_by, :wins_needed, :default_selections_mode, :diagnostic_mode, :timeout_minutes, :timeout_action)"
+            "INSERT INTO games (format, deck_type, draft_match_id, match_game_number, status, created_by_user_id, wins_needed, default_selections_mode, diagnostic_mode, timeout_minutes, timeout_action, total_time_limit_minutes)
+             VALUES (:format, :deck_type, :draft_match_id, :match_game_number, 'waiting', :created_by, :wins_needed, :default_selections_mode, :diagnostic_mode, :timeout_minutes, :timeout_action, :total_time_limit_minutes)"
         );
         $insertGame->execute([
             'format' => $game['format'],
@@ -11043,6 +11083,15 @@ final class GameService
             // already validated and stored).
             'timeout_minutes' => $game['timeout_minutes'],
             'timeout_action' => $game['timeout_action'],
+            // Issue #85 follow-up's own full-game time-limit mode --
+            // same carry-forward treatment. game_players.active_seconds_used
+            // needs no analogous carry-forward: it's a fresh column
+            // default (0) on the new game_players rows insertPlayer
+            // below creates, correctly starting each match game's own
+            // budget over from zero rather than accumulating across the
+            // whole match (the setting's own docblock is explicit that
+            // this is a per-GAME limit).
+            'total_time_limit_minutes' => $game['total_time_limit_minutes'],
         ]);
         $nextGameId = (int) $pdo->lastInsertId();
 
@@ -11197,13 +11246,13 @@ final class GameService
                 custom_duel_rules_preset, custom_duel_min_cards, custom_duel_rarity_limits, custom_duel_duplicate_limits,
                 custom_duel_even_color_distribution_rarities, game_match_id, match_game_number,
                 status, created_by_user_id, wins_needed, default_selections_mode, diagnostic_mode,
-                timeout_minutes, timeout_action
+                timeout_minutes, timeout_action, total_time_limit_minutes
              ) VALUES (
                 :format, :deck_type, :custom_deck_name, :custom_deck_card_ids,
                 :duel_rules_preset, :duel_min_cards, :duel_rarity_limits, :duel_duplicate_limits,
                 :duel_even_color_distribution_rarities, :game_match_id, :match_game_number,
                 'waiting', :created_by, :wins_needed, :default_selections_mode, :diagnostic_mode,
-                :timeout_minutes, :timeout_action
+                :timeout_minutes, :timeout_action, :total_time_limit_minutes
              )"
         );
         $insertGame->execute([
@@ -11237,6 +11286,11 @@ final class GameService
             // treatment as diagnostic_mode/default_selections_mode above.
             'timeout_minutes' => $game['timeout_minutes'],
             'timeout_action' => $game['timeout_action'],
+            // Issue #85 follow-up's own full-game time-limit mode --
+            // same carry-forward treatment (see advanceDraftMatch()'s
+            // own identical comment for why active_seconds_used itself
+            // needs no analogous carry-forward).
+            'total_time_limit_minutes' => $game['total_time_limit_minutes'],
         ]);
         $nextGameId = (int) $pdo->lastInsertId();
 
@@ -12987,22 +13041,35 @@ final class GameService
      * Issue #85's own sweep, bin/apply_game_timeouts.php's cron entry
      * point -- unlike expireStaleActiveGames() above (which force-ends a
      * game nobody has touched in days), this only ever acts on a game
-     * that opted into games.timeout_minutes/timeout_action at creation
-     * (see createGame()'s own docblock), and never ends the GAME itself
-     * -- it just moves the specific idle player's own turn/decision
-     * along, exactly the way that player acting themselves would have.
+     * that opted into games.timeout_minutes/timeout_action and/or
+     * total_time_limit_minutes at creation (see createGame()'s own
+     * docblock), and never ends the GAME itself for the per-turn case --
+     * it just moves the specific idle player's own turn/decision along,
+     * exactly the way that player acting themselves would have (the
+     * full-game time-limit case is the one exception: it always ends in
+     * a resignation, by design -- see applyTotalTimeLimitIfExceeded()'s
+     * own docblock).
+     *
+     * The candidate SELECT deliberately doesn't try to also pre-filter
+     * "is this game's own total_time_limit_minutes actually exceeded
+     * yet" in SQL the way it does for timeout_minutes -- that depends on
+     * a specific PLAYER's own accumulated game_players.active_seconds_used,
+     * not a single game-level timestamp, so every in_progress game with
+     * either opt-in set is just handed to applyTimeoutToGame() below to
+     * work out precisely.
      *
      * Deliberately queries with no lock held (unlike
      * expireStaleActiveGames(), which has to hold one across its own raw
      * UPDATE) -- applyTimeoutToGame() below only ever calls this class's
      * own already-self-locking public entry points (playMood()/pass()/
-     * respondToDecision()/resignGame()), each of which re-validates the
-     * exact state it needs under its own lock and throws if anything
-     * about the situation already changed (a player who acted moments
-     * before this sweep reached their game, e.g.), so a stale row from
-     * this initial SELECT just means that one game's own attempt throws
-     * and is skipped -- no different from two humans racing to act on
-     * the same turn.
+     * respondToDecision()/resignGame()/proposeTeamDecision()/
+     * confirmTeamDecision()), each of which re-validates the exact state
+     * it needs under its own lock and throws if anything about the
+     * situation already changed (a player who acted moments before this
+     * sweep reached their game, e.g.), so a stale row from this initial
+     * SELECT just means that one game's own attempt throws and is
+     * skipped -- no different from two humans racing to act on the same
+     * turn.
      *
      * @return int how many games had a timeout actually applied
      */
@@ -13010,9 +13077,9 @@ final class GameService
     {
         $idsStmt = Connection::get()->query(
             "SELECT id FROM games
-             WHERE status = 'in_progress' AND timeout_minutes IS NOT NULL
-               AND last_move_at IS NOT NULL
-               AND last_move_at < (NOW() - INTERVAL timeout_minutes MINUTE)"
+             WHERE status = 'in_progress'
+               AND (timeout_minutes IS NOT NULL OR total_time_limit_minutes IS NOT NULL)
+               AND last_move_at IS NOT NULL"
         );
         $gameIds = array_map(intval(...), $idsStmt->fetchAll(PDO::FETCH_COLUMN));
 
@@ -13033,22 +13100,30 @@ final class GameService
      * never stops the sweep from reaching every other game still due.
      *
      * "Idle" here means whichever specific player the game is actually
-     * waiting on right now: a pending_decision's own target_game_player_id
-     * if one is open (RequiresOpponentDecision -- see php-app/README.md's
-     * pause/resume mechanism), otherwise the round's own plain
-     * current_turn_game_player_id. Returns false with no action taken
-     * (not an error) when neither identifies anyone -- most commonly
-     * Open/Closed Team Play's own separate game_team_decisions proposal/
-     * turn-order flow, which this issue's own two bullet points
-     * (turn timeout, reaction/decision timeout) never covered and this
-     * sweep doesn't reach yet (see php-app/README.md's own writeup) --
-     * or a bot (bots are never left idle long enough for a
-     * TIMEOUT_MINIMUM_MINUTES-or-longer timeout to matter; automated
-     * turns already act for them within moments, so a bot still showing
-     * up here would mean something else entirely is stuck, not
-     * disengagement this feature is meant to address).
+     * waiting on right now: an Open/Closed Team Play turn-order/draw-
+     * recipient decision (game_team_decisions -- see
+     * applyTimeoutToTeamDecision() below for its own "who's idle" rules)
+     * if one is open, else a pending_decision's own target_game_player_id
+     * if THAT'S open instead (RequiresOpponentDecision -- see
+     * php-app/README.md's pause/resume mechanism), else the round's own
+     * plain current_turn_game_player_id. Returns false with no action
+     * taken (not an error) when none of those identifies anyone, or the
+     * identified player is a bot (bots are never left idle long enough
+     * for a TIMEOUT_MINIMUM_MINUTES-or-longer timeout to matter --
+     * automated turns already act for them within moments, so a bot
+     * still showing up here would mean something else entirely is
+     * stuck, not disengagement this feature is meant to address).
      *
-     * The timeout_action itself:
+     * applyTotalTimeLimitIfExceeded() (the full-game time-limit mode) is
+     * checked first, ahead of the ordinary per-turn/decision timeout
+     * below -- the two are independent opt-ins (a game may have either,
+     * both, or neither), but when both apply to the same idle player at
+     * once, the hard total-time ceiling takes priority over whatever the
+     * ordinary timeout_action would otherwise have done.
+     *
+     * The ordinary timeout_action itself (applyTimeoutToTeamDecision()
+     * below covers the team-decision case; everything past this point
+     * is the ordinary turn/pending_decision case):
      * - 'resign' calls resignGame() on the idle player's behalf --
      *   already handles a pending decision targeting them by auto-
      *   answering it first (autoAnswerOwnPendingDecisionBeforeResigning())
@@ -13081,11 +13156,25 @@ final class GameService
     {
         try {
             $game = $this->fetchGame($gameId);
-            if ($game['status'] !== 'in_progress' || $game['timeout_minutes'] === null) {
+            if ($game['status'] !== 'in_progress' || $game['last_move_at'] === null) {
                 return false; // already resolved/changed since applyTimeoutsForAllActiveGames()'s own SELECT
             }
-            if ($game['last_move_at'] === null || strtotime((string) $game['last_move_at']) > time() - ((int) $game['timeout_minutes'] * 60)) {
-                return false; // someone acted moments ago, no longer actually due
+            $secondsSinceLastMove = time() - strtotime((string) $game['last_move_at']);
+            if ($secondsSinceLastMove < 0) {
+                return false; // clock skew or a move that landed between the SELECT and here -- nothing to do yet
+            }
+
+            // Checked before currentRound() below -- a team decision can
+            // be open with no 'in_progress' round at all (Team Play's own
+            // draw_recipient window, between the round that just scored
+            // and the next one, which applyDrawRecipientDecision() only
+            // creates once this decision resolves -- see
+            // currentOrLatestRoundForResignation()'s own identical
+            // concern), which would otherwise make currentRound() throw
+            // before this ever got a chance to look.
+            $teamDecision = $this->activeTeamDecision($gameId);
+            if ($teamDecision !== null) {
+                return $this->applyTimeoutToTeamDecision($gameId, $game, $teamDecision, $secondsSinceLastMove);
             }
 
             $round = $this->currentRound($gameId);
@@ -13094,6 +13183,14 @@ final class GameService
                 ?? ($round['current_turn_game_player_id'] !== null ? (int) $round['current_turn_game_player_id'] : null);
             if ($idleGamePlayerId === null || in_array($idleGamePlayerId, $this->botGamePlayerIds($gameId), true)) {
                 return false;
+            }
+
+            if ($this->applyTotalTimeLimitIfExceeded($gameId, $game, $idleGamePlayerId, (int) $round['id'], $secondsSinceLastMove)) {
+                return true;
+            }
+
+            if ($game['timeout_minutes'] === null || $secondsSinceLastMove < (int) $game['timeout_minutes'] * 60) {
+                return false; // no ordinary per-turn/decision timeout configured, or not due yet
             }
 
             $this->logEvent($gameId, (int) $round['id'], $idleGamePlayerId, 'timeout_applied', null, ['timeout_action' => $game['timeout_action']]);
@@ -13132,6 +13229,118 @@ final class GameService
 
             return false;
         }
+    }
+
+    /**
+     * applyTimeoutToGame()'s own Open/Closed Team Play branch -- a
+     * game_team_decisions row (turn_order/draw_recipient, see
+     * proposeTeamDecision()/confirmTeamDecision() above) has no single
+     * current_turn_game_player_id/pending_decision.target_game_player_id
+     * the way an ordinary turn or RequiresOpponentDecision does, so it
+     * needs its own "who's idle" rule per phase:
+     * - `'propose'`: EITHER of the deciding team's own two members may
+     *   act (proposeTeamDecision()'s own "either candidate" rule), so
+     *   there's no single idle player to blame -- $candidateIds[0] is
+     *   picked deterministically, mirroring chooseTeamDecisionProposal()'s
+     *   own equally arbitrary, non-strategic choice for a bot's identical
+     *   situation. Which one gets picked barely matters for 'resign'
+     *   specifically: completeGameByResignation() ends a team-format
+     *   game outright regardless of which teammate's own resignGame()
+     *   call actually triggered it (see its own docblock), so either
+     *   choice ends the SAME team's game the same way.
+     * - `'confirm'`: only the non-proposing teammate may act
+     *   (confirmTeamDecision() itself rejects the proposer trying to),
+     *   so they're unambiguously the one idle here.
+     *
+     * applyTotalTimeLimitIfExceeded() is checked first here too, exactly
+     * mirroring applyTimeoutToGame()'s own ordering. 'skip'/'auto_play'
+     * behave identically for the ordinary per-turn/decision case too,
+     * the same reasoning applyTimeoutToGame()'s own pending_decision
+     * case already follows: `chooseTeamDecisionProposal()`/an outright
+     * approve are each already the sole non-strategic default this
+     * decision type has, the exact same one a bot sitting in either seat
+     * would use, so there's no separate "just skip it" to distinguish
+     * from "answer with the default."
+     */
+    private function applyTimeoutToTeamDecision(int $gameId, array $game, array $decision, int $secondsSinceLastMove): bool
+    {
+        $candidateIds = array_map(intval(...), json_decode((string) $decision['candidate_game_player_ids'], true));
+        $idleGamePlayerId = $decision['phase'] === 'propose'
+            ? $candidateIds[0]
+            : ($candidateIds[0] === (int) $decision['proposer_game_player_id'] ? $candidateIds[1] : $candidateIds[0]);
+
+        if (in_array($idleGamePlayerId, $this->botGamePlayerIds($gameId), true)) {
+            return false;
+        }
+
+        if ($this->applyTotalTimeLimitIfExceeded($gameId, $game, $idleGamePlayerId, (int) $decision['game_round_id'], $secondsSinceLastMove)) {
+            return true;
+        }
+
+        if ($game['timeout_minutes'] === null || $secondsSinceLastMove < (int) $game['timeout_minutes'] * 60) {
+            return false;
+        }
+
+        $this->logEvent($gameId, (int) $decision['game_round_id'], $idleGamePlayerId, 'timeout_applied', null, ['timeout_action' => $game['timeout_action']]);
+
+        if ($game['timeout_action'] === 'resign') {
+            $this->resignGame($gameId, $idleGamePlayerId);
+
+            return true;
+        }
+
+        if ($decision['phase'] === 'propose') {
+            $this->proposeTeamDecision($gameId, $idleGamePlayerId, $this->bots->chooseTeamDecisionProposal($candidateIds));
+        } else {
+            $this->confirmTeamDecision($gameId, $idleGamePlayerId, true);
+        }
+
+        return true;
+    }
+
+    /**
+     * Issue #85 follow-up's own full-game time-limit mode
+     * (games.total_time_limit_minutes) -- a hard cap on any ONE player's
+     * own cumulative "clock" time across the whole game, independent of
+     * (and checked ahead of) the ordinary per-turn/decision timeout
+     * above. game_players.active_seconds_used already holds every
+     * PAST interval this player finished acting on their own (credited
+     * by touchLastMoveAt()'s own $creditGamePlayerId parameter); adding
+     * $secondsSinceLastMove projects what that total would become if
+     * $idleGamePlayerId is STILL the one the game is waiting on right
+     * now -- this is what lets the sweep catch a player who's already
+     * over budget mid-turn, without waiting for them to finish acting
+     * (which might never happen).
+     *
+     * Always resigns outright once exceeded -- there's no auto_play/skip
+     * choice for this mode (see createGame()'s own $totalTimeLimitMinutes
+     * docblock for why): the whole point is a hard ceiling on how much
+     * of the game one player is allowed to consume, not a per-turn
+     * nudge. Returns false (nothing done) when total_time_limit_minutes
+     * itself is off, or the projected total doesn't reach it yet.
+     */
+    private function applyTotalTimeLimitIfExceeded(int $gameId, array $game, int $idleGamePlayerId, ?int $roundId, int $secondsSinceLastMove): bool
+    {
+        if ($game['total_time_limit_minutes'] === null) {
+            return false;
+        }
+
+        $usedStmt = Connection::get()->prepare('SELECT active_seconds_used FROM game_players WHERE id = :id');
+        $usedStmt->execute(['id' => $idleGamePlayerId]);
+        $activeSecondsUsed = $usedStmt->fetchColumn();
+        if ($activeSecondsUsed === false) {
+            return false; // shouldn't happen -- $idleGamePlayerId not seated in $gameId
+        }
+
+        $projectedSeconds = (int) $activeSecondsUsed + $secondsSinceLastMove;
+        if ($projectedSeconds < (int) $game['total_time_limit_minutes'] * 60) {
+            return false;
+        }
+
+        $this->logEvent($gameId, $roundId, $idleGamePlayerId, 'timeout_applied', null, ['timeout_action' => 'resign', 'total_time_limit' => true]);
+        $this->resignGame($gameId, $idleGamePlayerId);
+
+        return true;
     }
 
     /** @return ?int the game_player_id the round's one still-open pending decision (if any) is currently waiting on */
@@ -15347,7 +15556,7 @@ final class GameService
         $pdo = Connection::get();
 
         $playersStmt = $pdo->prepare(
-            'SELECT gp.id, gp.user_id, gp.seat_order, gp.team_id, gp.custom_deck_name, gp.custom_deck_card_ids, gp.resigned_at, u.username, u.share_presence, u.is_bot FROM game_players gp
+            'SELECT gp.id, gp.user_id, gp.seat_order, gp.team_id, gp.custom_deck_name, gp.custom_deck_card_ids, gp.resigned_at, gp.active_seconds_used, u.username, u.share_presence, u.is_bot FROM game_players gp
              JOIN users u ON u.id = gp.user_id
              WHERE gp.game_id = :game_id ORDER BY gp.seat_order ASC'
         );
@@ -15532,6 +15741,13 @@ final class GameService
                 // sharing presence at all, see users.share_presence /
                 // the User info page) -- see PresenceService.
                 'presence' => $presenceStatuses[(int) $row['user_id']],
+                // Issue #85 follow-up's own full-game time-limit mode --
+                // only actually meaningful once $game['total_time_limit_minutes']
+                // is non-null, but always included (like hand_count/
+                // deck_count above) rather than conditionally, so a
+                // player considering whether to opt into a rematch with
+                // the same settings can see how close everyone got.
+                'active_seconds_used' => (int) $row['active_seconds_used'],
             ];
         }
 
@@ -15601,6 +15817,10 @@ final class GameService
                 // default_selections_mode gets just above.
                 'timeout_minutes' => $game['timeout_minutes'] !== null ? (int) $game['timeout_minutes'] : null,
                 'timeout_action' => $game['timeout_action'],
+                // Issue #85 follow-up's own full-game time-limit mode --
+                // same "visible to the players playing it" treatment,
+                // independent of timeout_minutes/timeout_action above.
+                'total_time_limit_minutes' => $game['total_time_limit_minutes'] !== null ? (int) $game['total_time_limit_minutes'] : null,
                 'winner_game_player_id' => $game['winner_game_player_id'] !== null ? (int) $game['winner_game_player_id'] : null,
                 // Every winning username -- both teammates' for a
                 // team-format win, just the one player's otherwise. Empty
@@ -18633,9 +18853,36 @@ final class GameService
      * listGamesForUser(), which sorts the lobby by this column (falling
      * back to started_at/created_at) so a stalled game doesn't outrank an
      * actively-progressing one.
+     *
+     * $creditGamePlayerId (issue #85 follow-up, the full-game time-limit
+     * mode) additionally credits the OLD last_move_at-to-now interval
+     * onto that player's own game_players.active_seconds_used, BEFORE
+     * last_move_at itself gets overwritten -- $creditGamePlayerId is
+     * only ever passed by playMood()/pass()/respondToDecision()/
+     * proposeTeamDecision()/confirmTeamDecision(), the exact same set of
+     * "whoever is acting was necessarily the one the game was waiting
+     * on" methods applyTimeoutToGame()'s own idle-player resolution
+     * already covers (each is turn-/target-gated, so the acting player
+     * IS who the clock was running against for that whole interval) --
+     * resignGame() deliberately passes null (omits crediting entirely)
+     * since it explicitly ISN'T turn-gated (see its own docblock): a
+     * bystander resigning mid-someone-else's-turn was never the one the
+     * clock was actually running against, so there's nothing correct to
+     * credit them for. Silently skipped (not an error) for the very
+     * first move of a game, when there's no prior last_move_at yet to
+     * measure an interval from.
      */
-    private function touchLastMoveAt(int $gameId): void
+    private function touchLastMoveAt(int $gameId, ?int $creditGamePlayerId = null): void
     {
+        if ($creditGamePlayerId !== null) {
+            Connection::get()->prepare(
+                'UPDATE game_players gp
+                 JOIN games g ON g.id = :game_id
+                 SET gp.active_seconds_used = gp.active_seconds_used + GREATEST(0, TIMESTAMPDIFF(SECOND, g.last_move_at, NOW()))
+                 WHERE gp.id = :player_id AND g.last_move_at IS NOT NULL'
+            )->execute(['game_id' => $gameId, 'player_id' => $creditGamePlayerId]);
+        }
+
         Connection::get()->prepare('UPDATE games SET last_move_at = NOW() WHERE id = :game_id')
             ->execute(['game_id' => $gameId]);
     }

@@ -668,6 +668,23 @@
                 <p>Checked periodically (at most every 15 minutes), so an idle turn/response may take a little longer than the chosen duration to actually resolve.</p>
             </div>
 
+            <label class="new-game-field" id="new-game-total-time-limit-enabled-label"><input type="checkbox" id="new-game-total-time-limit-enabled"> Auto-resign after too much total time in this game</label>
+            <div id="new-game-total-time-limit-fields" hidden>
+                <label class="new-game-field">Total time allowed per player
+                    <select id="new-game-total-time-limit-minutes">
+                        <option value="60">1 hour</option>
+                        <option value="120">2 hours</option>
+                        <option value="240">4 hours</option>
+                        <option value="480">8 hours</option>
+                        <option value="720">12 hours</option>
+                        <option value="1440" selected>24 hours</option>
+                        <option value="2880">48 hours</option>
+                        <option value="4320">72 hours</option>
+                    </select>
+                </label>
+                <p>A hard cap, separate from the idle time-out above: however long each player has spent actually taking their own turns and responses, added up over the whole game, before they're automatically resigned. Also checked at most every 15 minutes.</p>
+            </div>
+
             <div id="new-game-decklist-fields" hidden>
                 <label>Use a saved deck
                     <select id="new-game-saved-decklist">

@@ -2468,6 +2468,7 @@
             updateDeckTypeDescription();
             updateOpponentSelectionLimit();
             updateTimeoutFieldVisibility();
+            updateTotalTimeLimitFieldVisibility();
             return;
         }
 
@@ -2496,6 +2497,7 @@
         // selected a moment ago.
         updateOpponentSelectionLimit();
         updateTimeoutFieldVisibility();
+        updateTotalTimeLimitFieldVisibility();
     }
 
     // Shows the partner picker only for Open Team Play, populated from
@@ -3356,6 +3358,24 @@
             !show || !document.getElementById('new-game-timeout-enabled').checked;
     }
 
+    // Issue #85 follow-up's own full-game time-limit mode -- a second,
+    // independent opt-in from the idle turn/decision timeout above (a
+    // game may have either, both, or neither). Same
+    // TIMEOUT_EXCLUDED_DECK_TYPES exclusion and "unchecked, not just
+    // hidden, whenever it goes out of view" treatment as
+    // updateTimeoutFieldVisibility() above.
+    function updateTotalTimeLimitFieldVisibility() {
+        const deckType = document.getElementById('new-game-deck-type').value;
+        const show = !TIMEOUT_EXCLUDED_DECK_TYPES.includes(deckType);
+        const checkboxLabel = document.getElementById('new-game-total-time-limit-enabled-label');
+        checkboxLabel.hidden = !show;
+        if (!show) {
+            document.getElementById('new-game-total-time-limit-enabled').checked = false;
+        }
+        document.getElementById('new-game-total-time-limit-fields').hidden =
+            !show || !document.getElementById('new-game-total-time-limit-enabled').checked;
+    }
+
     // Hides (and, if checked, unchecks) every bot checkbox -- and their
     // own "Practice bots" heading -- whenever the current format/deck_type
     // combination doesn't support seating one (see botsSupportedFor()).
@@ -3489,6 +3509,9 @@
     document.getElementById('new-game-format').addEventListener('change', updateTimeoutFieldVisibility);
     document.getElementById('new-game-deck-type').addEventListener('change', updateTimeoutFieldVisibility);
     document.getElementById('new-game-timeout-enabled').addEventListener('change', updateTimeoutFieldVisibility);
+    document.getElementById('new-game-format').addEventListener('change', updateTotalTimeLimitFieldVisibility);
+    document.getElementById('new-game-deck-type').addEventListener('change', updateTotalTimeLimitFieldVisibility);
+    document.getElementById('new-game-total-time-limit-enabled').addEventListener('change', updateTotalTimeLimitFieldVisibility);
     document.getElementById('new-game-saved-decklist').addEventListener('change', updateDeckTypeDescription);
     document.getElementById('new-game-duel-rules-preset').addEventListener('change', updateDuelRulesPresetVisibility);
     // Power Duel sideboarding's own checkbox depends on both the current
@@ -4215,6 +4238,11 @@
         const timeoutEnabled = document.getElementById('new-game-timeout-enabled').checked;
         const timeoutMinutes = timeoutEnabled ? Number(document.getElementById('new-game-timeout-minutes').value) : undefined;
         const timeoutAction = timeoutEnabled ? document.getElementById('new-game-timeout-action').value : undefined;
+        // Issue #85 follow-up's own full-game time-limit mode -- same
+        // "undefined means don't send this at all" convention as
+        // timeoutMinutes/timeoutAction above; fully independent of them.
+        const totalTimeLimitEnabled = document.getElementById('new-game-total-time-limit-enabled').checked;
+        const totalTimeLimitMinutes = totalTimeLimitEnabled ? Number(document.getElementById('new-game-total-time-limit-minutes').value) : undefined;
 
         // Issue #116: post to the open lobby instead of creating the game
         // directly -- mirrors createGame()'s own params (see above) minus
@@ -4253,6 +4281,7 @@
                 allow_sideboarding: allowSideboarding,
                 timeout_minutes: timeoutMinutes,
                 timeout_action: timeoutAction,
+                total_time_limit_minutes: totalTimeLimitMinutes,
             });
 
             if (!ok) {
@@ -4299,6 +4328,7 @@
             botDecklists,
             timeoutMinutes,
             timeoutAction,
+            totalTimeLimitMinutes,
         );
 
         if (!ok) {
@@ -6070,16 +6100,20 @@
         resign: 'resign',
     };
 
-    // Mirrors #new-game-timeout-minutes' own option labels (30 minutes
-    // through 7 days) -- see games.timeout_minutes's own docblock for
-    // why the value is always one of that exact preset ladder, never an
-    // arbitrary number, so a plain lookup (falling back to "N minutes"
-    // for anything unexpected) covers every legal value.
+    // Mirrors #new-game-timeout-minutes'/#new-game-total-time-limit-minutes'
+    // own option labels -- see games.timeout_minutes'/total_time_limit_minutes'
+    // own docblocks for why each is always one of its own exact preset
+    // ladder, never an arbitrary number, so a plain lookup (falling back
+    // to "N-minute" for anything unexpected) covers every legal value of
+    // either. 240/480 (4/8 hours) are total_time_limit_minutes-only;
+    // every other entry is shared between the two ladders.
     const TIMEOUT_DURATION_LABELS = {
         30: '30-minute',
         60: '1-hour',
         120: '2-hour',
+        240: '4-hour',
         360: '6-hour',
+        480: '8-hour',
         720: '12-hour',
         1440: '1-day',
         2880: '2-day',
@@ -6129,9 +6163,16 @@
         const timeoutDescription = state.game.timeout_minutes !== null
             ? ', ' + timeoutDurationLabel(state.game.timeout_minutes) + ' timeout (' + TIMEOUT_ACTION_LABELS[state.game.timeout_action] + ')'
             : '';
+        // Issue #85 follow-up's own full-game time-limit mode -- same
+        // parenthetical treatment, independent of timeoutDescription
+        // above (a game may have either, both, or neither).
+        const totalTimeLimitDescription = state.game.total_time_limit_minutes !== null
+            ? ', ' + timeoutDurationLabel(state.game.total_time_limit_minutes) + ' total time limit'
+            : '';
         document.getElementById('board-title').textContent =
             'Game #' + state.game.id + ' (' + formatAndDeckDescription +
             (state.game.default_selections_mode ? ', default selections' : '') +
+            totalTimeLimitDescription +
             timeoutDescription + ')';
 
         // Spectator mode (issue #128)/Watch game replay (issue #240) --

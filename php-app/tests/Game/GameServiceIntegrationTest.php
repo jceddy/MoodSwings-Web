@@ -19765,4 +19765,244 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame(0, $this->games->applyTimeoutsForAllActiveGames());
         self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
     }
+
+    /** Backdates $gameId's own last_move_at and sets timeout_minutes/timeout_action, reusing buildTeamFixture()'s already-open 'propose' team decision. */
+    private function enableTimeoutOnGame(int $gameId, int $timeoutMinutes, string $timeoutAction): void
+    {
+        $this->pdo->prepare(
+            'UPDATE games SET timeout_minutes = :minutes, timeout_action = :action, last_move_at = NOW() - INTERVAL :elapsed MINUTE WHERE id = :id'
+        )->execute(['minutes' => $timeoutMinutes, 'action' => $timeoutAction, 'elapsed' => $timeoutMinutes + 1, 'id' => $gameId]);
+    }
+
+    public function testApplyTimeoutsAutoAnswersATeamProposeDecision(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2] = $this->buildTeamFixture();
+        $this->enableTimeoutOnGame($gameId, 30, 'auto_play');
+
+        self::assertSame(1, $this->games->applyTimeoutsForAllActiveGames());
+
+        $decision = $this->fetchOpenTeamDecision($gameId);
+        self::assertNotFalse($decision, 'the decision should still be open, now awaiting confirmation');
+        self::assertSame('confirm', $decision['phase']);
+        self::assertContains((int) $decision['proposer_game_player_id'], [$p1, $p2]);
+    }
+
+    public function testApplyTimeoutsSkipsBehavesLikeAutoPlayForATeamConfirmDecision(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2] = $this->buildTeamFixture();
+        $this->games->proposeTeamDecision($gameId, $p1, $p2);
+        $decisionId = (int) $this->fetchOpenTeamDecision($gameId)['id'];
+        $this->enableTimeoutOnGame($gameId, 30, 'skip');
+
+        self::assertSame(1, $this->games->applyTimeoutsForAllActiveGames());
+
+        // Team 0's own decision must resolve -- approved, not rejected --
+        // even though team 1's own turn_order decision opens immediately
+        // afterward (applyTurnOrderDecision()'s own "opens the SECOND
+        // team's decision the instant team 1's resolves" rule), so
+        // fetchOpenTeamDecision() alone can't tell the two apart here.
+        $team0Decision = $this->fetchTeamDecisionById($decisionId);
+        self::assertNotNull($team0Decision['resolved_at']);
+        $round = $this->fetchRound($gameId);
+        self::assertSame($p2, (int) $round['team_turn_1_game_player_id']);
+    }
+
+    public function testApplyTimeoutsResignsTheGameForATeamProposeDecision(): void
+    {
+        ['gameId' => $gameId] = $this->buildTeamFixture();
+        $this->enableTimeoutOnGame($gameId, 30, 'resign');
+
+        self::assertSame(1, $this->games->applyTimeoutsForAllActiveGames());
+
+        self::assertSame('completed', $this->fetchGame($gameId)['status']);
+    }
+
+    public function testApplyTimeoutsNeverActsOnATeamDecisionWhenTheIdleCandidateIsABot(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1] = $this->buildTeamFixture();
+        $botUserStmt = $this->pdo->prepare('SELECT user_id FROM game_players WHERE id = :id');
+        $botUserStmt->execute(['id' => $p1]);
+        $this->pdo->prepare('UPDATE users SET is_bot = 1 WHERE id = :id')->execute(['id' => (int) $botUserStmt->fetchColumn()]);
+        $this->enableTimeoutOnGame($gameId, 30, 'resign');
+
+        self::assertSame(0, $this->games->applyTimeoutsForAllActiveGames());
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
+    }
+
+    // -- Issue #85 follow-up: full-game time-limit mode ----------------
+
+    public function testCreateGameRejectsATotalTimeLimitBelowTheMinimum(): void
+    {
+        $userIds = $this->insertUsers('total-time-short-' . uniqid(), 2);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('between 1 and 72 hours');
+        $this->games->createGame($userIds[0], $userIds, totalTimeLimitMinutes: 30);
+    }
+
+    public function testCreateGameRejectsATotalTimeLimitAboveTheMaximum(): void
+    {
+        $userIds = $this->insertUsers('total-time-long-' . uniqid(), 2);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('between 1 and 72 hours');
+        $this->games->createGame($userIds[0], $userIds, totalTimeLimitMinutes: 4321);
+    }
+
+    public function testCreateGameStoresAValidTotalTimeLimit(): void
+    {
+        $userIds = $this->insertUsers('total-time-store-' . uniqid(), 2);
+
+        $gameId = $this->games->createGame($userIds[0], $userIds, totalTimeLimitMinutes: 1440);
+
+        self::assertSame(1440, (int) $this->fetchGame($gameId)['total_time_limit_minutes']);
+    }
+
+    public function testCreateGameSilentlyIgnoresATotalTimeLimitForSealedPoolOfTheDay(): void
+    {
+        $userIds = $this->insertUsers('total-time-spotd-' . uniqid(), 2);
+
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'draft',
+            deckType: 'sealed_pool_of_the_day',
+            totalTimeLimitMinutes: 1440,
+        );
+
+        self::assertNull($this->fetchGame($gameId)['total_time_limit_minutes']);
+    }
+
+    /**
+     * Reported live: playing a card, passing, or responding to a
+     * decision should credit however long that player was actually
+     * "on the clock" for onto their own game_players.active_seconds_used
+     * -- touchLastMoveAt()'s own $creditGamePlayerId parameter. Backdates
+     * last_move_at by 2 hours before the play, so the credited interval
+     * is unambiguous against test timing noise.
+     */
+    public function testPlayMoodCreditsActiveSecondsUsedToTheActingPlayer(): void
+    {
+        $u1 = $this->insertUser('credit-play-p1-' . uniqid());
+        $u2 = $this->insertUser('credit-play-p2-' . uniqid());
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed, last_move_at)
+             VALUES ('standard', 'in_progress', :created_by, 3, NOW() - INTERVAL 2 HOUR)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+        $handCardId = $this->insertGameCard($gameId, 55, 'hand', $p1); // Apathy
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $handCardId, []);
+
+        $usedStmt = $this->pdo->prepare('SELECT active_seconds_used FROM game_players WHERE id = :id');
+        $usedStmt->execute(['id' => $p1]);
+        // At least ~2 hours (7200s), allowing a little slack for test
+        // execution time itself between the INSERT above and the play.
+        self::assertGreaterThanOrEqual(7195, (int) $usedStmt->fetchColumn());
+    }
+
+    /**
+     * resignGame() is explicitly NOT turn-gated (see its own docblock),
+     * so touchLastMoveAt()'s own call for it deliberately omits
+     * $creditGamePlayerId -- a bystander resigning mid-someone-else's
+     * turn was never who the clock was actually running against.
+     */
+    public function testResignGameNeverCreditsActiveSecondsUsed(): void
+    {
+        ['gameId' => $gameId, 'p2' => $p2] = $this->buildTimeoutTurnFixture(60, 'skip');
+
+        $this->games->resignGame($gameId, $p2);
+
+        $usedStmt = $this->pdo->prepare('SELECT active_seconds_used FROM game_players WHERE id = :id');
+        $usedStmt->execute(['id' => $p2]);
+        self::assertSame(0, (int) $usedStmt->fetchColumn());
+    }
+
+    /** @return array{gameId: int, p1: int, p2: int} */
+    private function buildTotalTimeLimitFixture(int $totalTimeLimitMinutes, int $p1ActiveSecondsUsed, int $minutesSinceLastMove): array
+    {
+        $u1 = $this->insertUser('total-time-p1-' . uniqid());
+        $u2 = $this->insertUser('total-time-p2-' . uniqid());
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed, total_time_limit_minutes, last_move_at)
+             VALUES ('standard', 'in_progress', :created_by, 3, :limit, NOW() - INTERVAL :elapsed MINUTE)"
+        );
+        $stmt->execute(['created_by' => $u1, 'limit' => $totalTimeLimitMinutes, 'elapsed' => $minutesSinceLastMove]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $this->pdo->prepare('UPDATE game_players SET active_seconds_used = :used WHERE id = :id')
+            ->execute(['used' => $p1ActiveSecondsUsed, 'id' => $p1]);
+
+        $this->insertGameCard($gameId, 55, 'hand', $p1);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        return ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2];
+    }
+
+    public function testApplyTimeoutsResignsAPlayerProjectedOverTheTotalTimeLimit(): void
+    {
+        // 60-minute limit, already used 55 of it, idle 10 more minutes --
+        // 65 projected minutes exceeds the 60-minute cap.
+        ['gameId' => $gameId, 'p1' => $p1] = $this->buildTotalTimeLimitFixture(60, 55 * 60, 10);
+
+        self::assertSame(1, $this->games->applyTimeoutsForAllActiveGames());
+
+        self::assertSame('completed', $this->fetchGame($gameId)['status']);
+        $resignedStmt = $this->pdo->prepare('SELECT resigned_at FROM game_players WHERE id = :id');
+        $resignedStmt->execute(['id' => $p1]);
+        self::assertNotNull($resignedStmt->fetchColumn());
+    }
+
+    public function testApplyTimeoutsDoesNotResignBeforeTheTotalTimeLimitIsProjectedExceeded(): void
+    {
+        // 60-minute limit, only used 10 of it, idle 5 more minutes -- 15
+        // projected minutes is nowhere near the 60-minute cap.
+        ['gameId' => $gameId] = $this->buildTotalTimeLimitFixture(60, 10 * 60, 5);
+
+        self::assertSame(0, $this->games->applyTimeoutsForAllActiveGames());
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
+    }
+
+    /**
+     * Reported live: the full-game time-limit mode always resigns,
+     * taking priority over whatever the ordinary per-turn timeout_action
+     * would otherwise have done -- here 'auto_play' would normally just
+     * play the idle player's only hand card, but the total time limit
+     * fires first instead.
+     */
+    public function testApplyTimeoutsPrioritizesTheTotalTimeLimitOverTheOrdinaryTimeoutAction(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'handCardId' => $handCardId] = $this->buildTimeoutTurnFixture(30, 'auto_play');
+        $this->pdo->prepare('UPDATE games SET total_time_limit_minutes = 30 WHERE id = :id')->execute(['id' => $gameId]);
+        $this->pdo->prepare('UPDATE game_players SET active_seconds_used = :used WHERE id = :id')
+            ->execute(['used' => 29 * 60, 'id' => $p1]);
+
+        self::assertSame(1, $this->games->applyTimeoutsForAllActiveGames());
+
+        self::assertSame('completed', $this->fetchGame($gameId)['status'], 'the total time limit should resign the game outright, not auto-play the hand card');
+        $cardStmt = $this->pdo->prepare('SELECT zone FROM game_cards WHERE id = :id');
+        $cardStmt->execute(['id' => $handCardId]);
+        self::assertSame('hand', $cardStmt->fetchColumn());
+    }
+
+    public function testApplyTimeoutsAppliesTheTotalTimeLimitToATeamDecision(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1] = $this->buildTeamFixture();
+        $this->pdo->prepare('UPDATE games SET total_time_limit_minutes = 60, last_move_at = NOW() - INTERVAL 10 MINUTE WHERE id = :id')->execute(['id' => $gameId]);
+        $this->pdo->prepare('UPDATE game_players SET active_seconds_used = :used WHERE id = :id')
+            ->execute(['used' => 55 * 60, 'id' => $p1]);
+
+        self::assertSame(1, $this->games->applyTimeoutsForAllActiveGames());
+
+        self::assertSame('completed', $this->fetchGame($gameId)['status']);
+    }
 }

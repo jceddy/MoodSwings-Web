@@ -4263,19 +4263,40 @@ this column's own implicit default) for game 2/3 of a best-of-three
 match.
 
 **`applyTimeoutToGame()`'s own "who is this game actually waiting on"
-resolution** -- a still-open `pending_decision`'s own
-`target_game_player_id` if one exists (`RequiresOpponentDecision`, see
-the pause/resume mechanism above), otherwise the round's own plain
-`current_turn_game_player_id`. Neither identifying anyone (most
-commonly Open/Closed Team Play's own separate `game_team_decisions`
-proposal/turn-order flow -- this issue's own two bullet points, turn
-timeout and reaction/decision timeout, never covered that separate
-mechanism, and this sweep doesn't reach it yet) or the idle player being
-a bot (practice bots are never actually left idle long enough for a
+resolution** -- an open Open/Closed Team Play turn-order/draw-recipient
+decision first (`game_team_decisions`, see `applyTimeoutToTeamDecision()`'s
+own docblock immediately below for why it's checked before
+`currentRound()` -- and for its own separate "who's idle" rules, since
+a team decision has no single `current_turn_game_player_id`/
+`pending_decision.target_game_player_id` the way everything else here
+does), else a still-open `pending_decision`'s own `target_game_player_id`
+if one exists (`RequiresOpponentDecision`, see the pause/resume
+mechanism above), else the round's own plain `current_turn_game_player_id`.
+None of those identifying anyone, or the idle player being a bot
+(practice bots are never actually left idle long enough for a
 30-minute-or-longer timeout to matter -- automated turns already act for
 them within moments, so a bot still showing up here would mean
-something else entirely is stuck) both mean "nothing to do," not an
+something else entirely is stuck), both mean "nothing to do," not an
 error.
+
+**`applyTimeoutToTeamDecision()`'s own per-phase "who's idle" rule** --
+phase `'propose'`: EITHER of the deciding team's own two members may act
+(`proposeTeamDecision()`'s own "either candidate" rule), so there's no
+single idle player to blame; `$candidateIds[0]` is picked
+deterministically, mirroring `chooseTeamDecisionProposal()`'s own
+equally arbitrary, non-strategic choice for a bot's identical situation
+-- and since `resignGame()` ends a team-format game outright regardless
+of which teammate's own resignation actually triggered it
+(`completeGameByResignation()`), which specific one gets picked barely
+matters for `'resign'` specifically. Phase `'confirm'`: only the
+non-proposing teammate may act (`confirmTeamDecision()` itself rejects
+the proposer trying to), so they're unambiguously the one idle here.
+`'skip'`/`'auto_play'` behave identically for a team decision too, the
+same reasoning the ordinary pending_decision case below already follows
+-- `chooseTeamDecisionProposal()`/an outright approve are each already
+the sole non-strategic default this decision type has, the exact same
+one a bot sitting in either seat would use, so there's no separate "just
+skip it" to distinguish from "answer with the default."
 
 **The action itself:**
 - `'resign'` calls `resignGame()` on the idle player's behalf outright
@@ -4331,6 +4352,86 @@ board display this drives.
 plain registry) since an auto-played/skipped/resigned action can just as
 easily hand the turn to a human owed an "it's your turn" notification as
 any other automated turn advance would.
+
+**Follow-up (issue #85 follow-up): full-game time-limit mode** (migration
+0325) -- a second, independent opt-in from `timeout_minutes`/`timeout_action`
+above, `createGame()`'s own `$totalTimeLimitMinutes` parameter
+(`total_time_limit_minutes` in the API/New Game dialog; `games.total_time_limit_minutes`,
+`self::TOTAL_TIME_LIMIT_MIN_MINUTES`/`MAX_MINUTES`, 1-72 hours): a hard
+cap on any ONE player's own cumulative "clock" time across the whole
+game, regardless of how many separate turns/decisions that time was
+spread across. A game may have either opt-in, both, or neither. Always
+resigns once exceeded -- no `auto_play`/`skip` choice the way the
+per-turn timeout has, since the whole point is a hard ceiling rather
+than a per-turn nudge. Same Sealed Pool of the Day/Weekly Sealed Pool
+exclusion as `timeout_minutes` above; carried forward across match games
+the same way (per-GAME, not per-match -- each match game's own budget
+starts fresh).
+
+`game_players.active_seconds_used` (migration 0325) is the running
+total: `touchLastMoveAt()` grew a `$creditGamePlayerId` parameter that
+credits the OLD `last_move_at`-to-now interval onto that player's own
+total, BEFORE `last_move_at` itself gets overwritten. Only
+`playMood()`/`pass()`/`respondToDecision()`/`proposeTeamDecision()`/
+`confirmTeamDecision()` pass it -- the exact same set of "whoever is
+acting was necessarily the one the game was waiting on" methods
+`applyTimeoutToGame()`'s own idle-player resolution already covers (each
+is turn-/target-gated, so the acting player IS who the clock was
+running against for that whole interval). `resignGame()` deliberately
+omits it: it's explicitly NOT turn-gated (see its own docblock), so a
+bystander resigning mid-someone-else's-turn was never who the clock was
+actually running against, and crediting them would be wrong.
+
+`applyTotalTimeLimitIfExceeded()` is checked first in both
+`applyTimeoutToGame()` and `applyTimeoutToTeamDecision()`, ahead of the
+ordinary per-turn/decision `timeout_action` -- when both opt-ins apply
+to the same idle player at once, the hard total-time ceiling wins.
+Rather than waiting for that player to actually finish acting (which
+might never happen), it PROJECTS what their own total would become if
+they're still the one being waited on right now
+(`active_seconds_used + $secondsSinceLastMove`), so a player already
+over budget mid-turn is caught by the very next sweep run rather than
+being stuck there indefinitely. `applyTimeoutsForAllActiveGames()`'s own
+candidate `SELECT` was widened to include any `in_progress` game with
+EITHER `timeout_minutes` OR `total_time_limit_minutes` set (previously
+just the former) -- unlike the per-turn case, whether a game's own
+total-time opt-in is actually due can't be pre-filtered by a single
+game-level timestamp comparison in SQL (it depends on a specific
+player's own accumulated total), so every candidate game is simply
+handed to `applyTimeoutToGame()` to work out precisely.
+
+**Follow-up (issue #85 follow-up): Open/Closed Team Play coverage** --
+`game_team_decisions` (turn-order/draw-recipient proposals, see
+"Open Team Play" below) was this feature's own one documented gap; it's
+now covered too, via `applyTimeoutToTeamDecision()`. A team decision has
+no single `current_turn_game_player_id`/`pending_decision.target_game_player_id`
+the way everything else here does, so it needs its own "who's idle"
+rule per `game_team_decisions.phase`:
+- `'propose'`: EITHER of the deciding team's own two members may act
+  (`proposeTeamDecision()`'s own "either candidate" rule), so there's no
+  single idle player to blame -- `$candidateIds[0]` is picked
+  deterministically, mirroring `chooseTeamDecisionProposal()`'s own
+  equally arbitrary, non-strategic choice for a bot's identical
+  situation. Which one gets picked barely matters for `'resign'`
+  specifically (ordinary or total-time-limit): `completeGameByResignation()`
+  ends a team-format game outright regardless of which teammate's own
+  resignation actually triggered it, so either choice ends the SAME
+  team's game the same way.
+- `'confirm'`: only the non-proposing teammate may act
+  (`confirmTeamDecision()` itself rejects the proposer trying to), so
+  they're unambiguously the one idle here.
+
+`'skip'`/`'auto_play'` behave identically for a team decision too, the
+same reasoning the ordinary `pending_decision` case already follows:
+`chooseTeamDecisionProposal()`/an outright approve are each already the
+sole non-strategic default this decision type has, the exact same one a
+bot sitting in either seat would use, so there's no separate "just skip
+it" to distinguish from "answer with the default." The one remaining
+gap: Open/Closed Team Play's own pregame initial-card-pass window
+(`game_initial_card_passes`) and every draft-family deck type's own
+"whose turn is it to pick" state aren't covered by either timeout mode
+yet -- a slow drafter, or a Closed Team Play player who never submits
+their opening 2-card pass, isn't currently caught by this sweep.
 
 ### Power Duel sideboarding
 

@@ -139,7 +139,7 @@ function getCardStats() {
     return apiRequest('/stats/cards');
 }
 
-function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId, defaultSelectionsMode, botDecklistText, botSavedDecklistId, randomTeams, rotisserieDraftPoolSource, rotisserieDraftCustomPoolText, rotisserieDraftCutoffCount, tieredRotisserieDraftMode, tieredRotisserieDraftTiers, botGoesFirst, bestOfThree, allowSideboarding, diagnosticMode, botDecklists, timeoutMinutes, timeoutAction) {
+function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId, defaultSelectionsMode, botDecklistText, botSavedDecklistId, randomTeams, rotisserieDraftPoolSource, rotisserieDraftCustomPoolText, rotisserieDraftCutoffCount, tieredRotisserieDraftMode, tieredRotisserieDraftTiers, botGoesFirst, bestOfThree, allowSideboarding, diagnosticMode, botDecklists, timeoutMinutes, timeoutAction, totalTimeLimitMinutes) {
     return apiRequest('/games', {
         method: 'POST',
         body: JSON.stringify({
@@ -228,6 +228,11 @@ function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText,
             // "Turn and decision timeouts" in web-static/README.md.
             timeout_minutes: timeoutMinutes,
             timeout_action: timeoutAction,
+            // Issue #85 follow-up's own full-game time-limit mode --
+            // undefined means off; fully independent of timeout_minutes/
+            // timeout_action above. See "Turn and decision timeouts" in
+            // web-static/README.md.
+            total_time_limit_minutes: totalTimeLimitMinutes,
         }),
     });
 }

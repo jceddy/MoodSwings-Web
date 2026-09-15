@@ -1126,6 +1126,10 @@ if ($path === '/games' && $method === 'POST') {
     // See createGame()'s own $timeoutMinutes docblock.
     $timeoutMinutes = isset($body['timeout_minutes']) ? (int) $body['timeout_minutes'] : null;
     $timeoutAction = isset($body['timeout_action']) ? (string) $body['timeout_action'] : null;
+    // Issue #85 follow-up's own full-game time-limit mode -- independent
+    // of timeout_minutes/timeout_action above. See createGame()'s own
+    // $totalTimeLimitMinutes docblock.
+    $totalTimeLimitMinutes = isset($body['total_time_limit_minutes']) ? (int) $body['total_time_limit_minutes'] : null;
     // Only meaningful for deck_type 'rotisserie_draft' -- see createGame()'s own docblock.
     $rotisserieDraftPoolSource = isset($body['rotisserie_draft_pool_source']) ? (string) $body['rotisserie_draft_pool_source'] : null;
     $rotisserieDraftCustomPoolText = isset($body['rotisserie_draft_custom_pool_text']) ? (string) $body['rotisserie_draft_custom_pool_text'] : null;
@@ -1188,6 +1192,7 @@ if ($path === '/games' && $method === 'POST') {
             $botDecklists,
             $timeoutMinutes,
             $timeoutAction,
+            $totalTimeLimitMinutes,
         );
         respond(201, ['status' => 'ok', 'game_id' => $gameId]);
     } catch (GameStateException $e) {
@@ -1258,6 +1263,9 @@ function openGameCreateParamsFromRequestBody(array $body): array
         // createGame()'s own $timeoutMinutes docblock.
         'timeout_minutes' => isset($body['timeout_minutes']) ? (int) $body['timeout_minutes'] : null,
         'timeout_action' => isset($body['timeout_action']) ? (string) $body['timeout_action'] : null,
+        // Issue #85 follow-up's own full-game time-limit mode -- see
+        // createGame()'s own $totalTimeLimitMinutes docblock.
+        'total_time_limit_minutes' => isset($body['total_time_limit_minutes']) ? (int) $body['total_time_limit_minutes'] : null,
     ];
 }
 
