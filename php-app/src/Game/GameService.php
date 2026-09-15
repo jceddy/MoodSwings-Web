@@ -19706,7 +19706,7 @@ final class GameService
             'UPDATE games SET action_deadline_at = :deadline, action_deadline_game_player_id = :player_id WHERE id = :game_id'
         )->execute([
             'deadline' => $idleGamePlayerId !== null
-                ? date('Y-m-d H:i:s', time() + self::SYNCHRONOUS_ACTION_TIMEOUT_SECONDS)
+                ? gmdate('Y-m-d H:i:s', time() + self::SYNCHRONOUS_ACTION_TIMEOUT_SECONDS)
                 : null,
             'player_id' => $idleGamePlayerId,
             'game_id' => $gameId,
@@ -19794,7 +19794,7 @@ final class GameService
                     Connection::get()->prepare(
                         'UPDATE games SET action_deadline_at = :deadline WHERE id = :game_id'
                     )->execute([
-                        'deadline' => date('Y-m-d H:i:s', time() + self::SYNCHRONOUS_ACTION_TIMEOUT_SECONDS),
+                        'deadline' => gmdate('Y-m-d H:i:s', time() + self::SYNCHRONOUS_ACTION_TIMEOUT_SECONDS),
                         'game_id' => $gameId,
                     ]);
                     $round = $this->currentRound($gameId);
@@ -19930,7 +19930,7 @@ final class GameService
 
         $match = $this->fetchDraftMatch($draftMatchId);
         $deadline = $match['status'] === 'drafting'
-            ? date('Y-m-d H:i:s', time() + self::SYNCHRONOUS_DRAFT_PICK_TIMEOUT_SECONDS)
+            ? gmdate('Y-m-d H:i:s', time() + self::SYNCHRONOUS_DRAFT_PICK_TIMEOUT_SECONDS)
             : null;
 
         Connection::get()->prepare('UPDATE draft_matches SET pick_deadline_at = :deadline WHERE id = :id')

@@ -8970,8 +8970,10 @@
     // Every *_deadline_at timestamp this page reads (action_deadline_at,
     // draft_pick_deadline_at) comes from the server as a bare
     // "YYYY-MM-DD HH:MM:SS" string (MySQL's own TIMESTAMP format, always
-    // UTC here -- the server runs with no date.timezone override) with
-    // no zone marker at all. `new Date(...)` on a space-separated
+    // UTC here -- Connection::get() pins the MySQL session's time_zone to
+    // '+00:00' and PHP's own default timezone to UTC, and GameService
+    // writes these deadlines with gmdate()) with no zone marker at all.
+    // `new Date(...)` on a space-separated
     // datetime string like that is NOT one of the ECMAScript-specified
     // formats, so browsers are free to guess -- and every major engine
     // guesses the VIEWER's own local timezone, not UTC. Reported live:
