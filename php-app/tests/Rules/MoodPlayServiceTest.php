@@ -3956,7 +3956,13 @@ final class MoodPlayServiceTest extends TestCase
 
         $this->plays->playMood($state, 1, 60, new PlayerChoices(['mode' => 'double_win']));
 
-        self::assertTrue($state->effectState(60, 'awardsExtraWin'));
+        // Round-level state (reported live: this must survive Corruption
+        // itself leaving play before the round finishes scoring), not
+        // per-card effectState -- see BoardState::$awardsExtraWinThisRound's
+        // own docblock.
+        self::assertTrue($state->awardsExtraWinThisRound());
+        self::assertSame(60, $state->awardsExtraWinSourceCardId());
+        self::assertSame(1, $state->awardsExtraWinOwnerId());
     }
 
     public function testCorruptionRejectsAnInvalidMode(): void

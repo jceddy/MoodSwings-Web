@@ -157,6 +157,28 @@ final class BoardState
     /** See $skipScoringSourceCardId's own docblock. */
     private ?int $skipScoringOwnerId = null;
 
+    /**
+     * Corruption: "...or the winner of the current round wins two rounds
+     * instead of one." A round-wide flag rather than per-card effectState,
+     * for the identical reason $skipScoringThisRound above is one: this
+     * triggers *after playing* Corruption, a one-time choice already fully
+     * locked in the instant it resolves -- Corruption's own text has no
+     * "while in play" condition on it. Tagging it on Corruption's own card
+     * meant it silently vanished if Corruption left play (discarded,
+     * bounced, etc.) before the round it was played in actually finished
+     * scoring -- reported live, the exact same failure mode
+     * $skipScoringThisRound's own docblock already documents for Awe. See
+     * markAwardsExtraWinThisRound()/GameService::hasExtraWinMarker()/
+     * consumeExtraWinMarker().
+     */
+    private bool $awardsExtraWinThisRound = false;
+
+    /** The Corruption card that set $awardsExtraWinThisRound, and whoever played it -- display-only, see $skipScoringSourceCardId's own docblock for why. */
+    private ?int $awardsExtraWinSourceCardId = null;
+
+    /** See $awardsExtraWinSourceCardId's own docblock. */
+    private ?int $awardsExtraWinOwnerId = null;
+
     /** @var array<int, array<string, mixed>> cardId => effectState staged during payToPlayCost(), before the card exists as a MoodInPlay -- see stagePrePlayEffectState(). */
     private array $pendingEffectState = [];
 
@@ -1214,6 +1236,9 @@ final class BoardState
         ?int $skipScoringFirstPlayerId = null,
         ?int $skipScoringSourceCardId = null,
         ?int $skipScoringOwnerId = null,
+        bool $awardsExtraWinThisRound = false,
+        ?int $awardsExtraWinSourceCardId = null,
+        ?int $awardsExtraWinOwnerId = null,
     ): void {
         $this->currentPlayerId = $currentPlayerId;
         $this->playGrants = $playGrants;
@@ -1224,6 +1249,9 @@ final class BoardState
         $this->skipScoringFirstPlayerId = $skipScoringFirstPlayerId;
         $this->skipScoringSourceCardId = $skipScoringSourceCardId;
         $this->skipScoringOwnerId = $skipScoringOwnerId;
+        $this->awardsExtraWinThisRound = $awardsExtraWinThisRound;
+        $this->awardsExtraWinSourceCardId = $awardsExtraWinSourceCardId;
+        $this->awardsExtraWinOwnerId = $awardsExtraWinOwnerId;
     }
 
     /** Vulnerability: whether any card has been put into the discard pile so far this round -- see moveHandToDiscard()/moveInPlayToDiscard(). */
@@ -1272,6 +1300,52 @@ final class BoardState
         $this->skipScoringOwnerId = $ownerId;
         $this->skipScoringThisRound = true;
         $this->skipScoringFirstPlayerId = $firstPlayerId;
+    }
+
+    /** Corruption's own afterPlaying() trigger -- see $awardsExtraWinThisRound's own docblock. */
+    public function awardsExtraWinThisRound(): bool
+    {
+        return $this->awardsExtraWinThisRound;
+    }
+
+    /** Only meaningful when awardsExtraWinThisRound() is true. See $awardsExtraWinSourceCardId's own docblock. */
+    public function awardsExtraWinSourceCardId(): ?int
+    {
+        return $this->awardsExtraWinSourceCardId;
+    }
+
+    /** Only meaningful when awardsExtraWinThisRound() is true. See $awardsExtraWinSourceCardId's own docblock. */
+    public function awardsExtraWinOwnerId(): ?int
+    {
+        return $this->awardsExtraWinOwnerId;
+    }
+
+    /**
+     * Corruption: "...or the winner of the current round wins two rounds
+     * instead of one." Called from CorruptionEffect::afterPlaying() -- see
+     * $awardsExtraWinThisRound's own docblock for why this is tracked here
+     * rather than as per-card effectState. $cardId/$ownerId are
+     * Corruption's own card and whoever played it, purely for
+     * GameService::scoringEffectEntries()'s own display entry.
+     */
+    public function markAwardsExtraWinThisRound(int $cardId, int $ownerId): void
+    {
+        $this->awardsExtraWinSourceCardId = $cardId;
+        $this->awardsExtraWinOwnerId = $ownerId;
+        $this->awardsExtraWinThisRound = true;
+    }
+
+    /**
+     * Resets the marker back to unset -- called once it's actually been
+     * applied (GameService::consumeExtraWinMarker()) or once it's known it
+     * never will be (skipScoringAndAdvance(), when Awe's own "no scoring
+     * this round" means there's nothing left for it to modify).
+     */
+    public function clearAwardsExtraWinThisRound(): void
+    {
+        $this->awardsExtraWinThisRound = false;
+        $this->awardsExtraWinSourceCardId = null;
+        $this->awardsExtraWinOwnerId = null;
     }
 
     // --- suppression ---

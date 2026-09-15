@@ -5985,6 +5985,56 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * Reported live: "corruption double wins should apply even if
+     * corruption is no longer in play at the end of the round." Corruption
+     * chooses double_win, then leaves play entirely (discarded here, but
+     * any means would do -- bounced, stolen, etc.) before the round
+     * finishes scoring. The double win must still apply: unlike Honor's
+     * similarly-worded but genuinely "while in play" ability, Corruption's
+     * own printed text has no such condition -- the choice is fully locked
+     * in the instant it resolves. Mirrors
+     * testCorruptionsDoubleWinCompletesTheGameAfterOneRound() above except
+     * for the explicit discard in between.
+     */
+    public function testCorruptionsDoubleWinStillAppliesAfterCorruptionLeavesPlay(): void
+    {
+        $u1 = $this->insertUser('corruptgone1');
+        $u2 = $this->insertUser('corruptgone2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 2)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $corruptionId = $this->insertGameCard($gameId, 60, 'hand', $p1); // Corruption, value 2
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $corruptionId, ['mode' => 'double_win']);
+
+        // Corruption leaves play entirely -- the round-level marker must
+        // survive this, unlike the old per-card effectState tag it used
+        // to be.
+        $this->pdo->prepare("UPDATE game_cards SET zone = 'discard', owner_game_player_id = NULL WHERE id = :id")
+            ->execute(['id' => $corruptionId]);
+
+        $result = $this->games->pass($gameId, $p2);
+
+        self::assertTrue($result['round_scored']);
+        self::assertTrue($result['game_completed']);
+        self::assertSame($p1, $result['winner_game_player_id']);
+
+        $roundStmt = $this->pdo->prepare('SELECT wins_awarded FROM game_rounds WHERE game_id = :game_id AND round_number = 1');
+        $roundStmt->execute(['game_id' => $gameId]);
+        self::assertSame(2, (int) $roundStmt->fetchColumn(), 'the double win must still apply even though Corruption already left play');
+
+        self::assertSame('completed', $this->fetchGame($gameId)['status']);
+    }
+
+    /**
      * Doubt's next-round color ban has to survive a real load()/save()
      * round trip: tagged when played (round 1), inert during that same
      * round, then enforced during round 2 -- rejecting a matching-color

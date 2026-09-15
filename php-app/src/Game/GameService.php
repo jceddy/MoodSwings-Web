@@ -3280,7 +3280,7 @@ final class GameService
                 $freshGrants = $this->computeFreshGrants($loggedState, $chosenGamePlayerId, 1);
                 $this->logFreshGrants($gameId, (int) $round['id'], $chosenGamePlayerId, $freshGrants);
                 $this->boardStates->save($gameId, $loggedState);
-                $this->updateRoundTurnState((int) $round['id'], $chosenGamePlayerId, $freshGrants, $loggedState->discardedThisRound(), $loggedState->skipScoringThisRound(), $loggedState->skipScoringFirstPlayerId(), $loggedState->skipScoringSourceCardId(), $loggedState->skipScoringOwnerId());
+                $this->updateRoundTurnState((int) $round['id'], $chosenGamePlayerId, $freshGrants, $loggedState->discardedThisRound(), $loggedState->skipScoringThisRound(), $loggedState->skipScoringFirstPlayerId(), $loggedState->skipScoringSourceCardId(), $loggedState->skipScoringOwnerId(), $loggedState->awardsExtraWinThisRound(), $loggedState->awardsExtraWinSourceCardId(), $loggedState->awardsExtraWinOwnerId());
             }
 
             $this->logEvent($gameId, (int) $round['id'], $chosenGamePlayerId, 'match_first_player_decided', null, ['game_player_id' => $chosenGamePlayerId], $loggedState);
@@ -5583,7 +5583,7 @@ final class GameService
 
                 try {
                     $this->boardStates->save($gameId, $state);
-                    $this->updateRoundTurnState($roundId, $gamePlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId());
+                    $this->updateRoundTurnState($roundId, $gamePlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId());
                     $this->writePendingBatch($gameId, $roundId, $gamePlayerId, $playerChoices, $result->invocationChoices, $result);
                     $this->logEvent($gameId, $roundId, $gamePlayerId, 'pending_decision_created', $cardId, $this->withPlayedFrom($state, $cardId, $choices), $state);
 
@@ -8733,7 +8733,7 @@ final class GameService
                 // Already inside this method's own transaction, so this
                 // just writes rows -- no nested beginTransaction().
                 $this->boardStates->save($gameId, $state);
-                $this->updateRoundTurnState($roundId, $initiatingPlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId());
+                $this->updateRoundTurnState($roundId, $initiatingPlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId());
                 $this->writePendingBatch($gameId, $roundId, $initiatingPlayerId, $topLevelChoices, $result->invocationChoices, $result);
                 $this->logEvent($gameId, $roundId, $initiatingPlayerId, 'pending_decision_created', $playedCardId, $this->withPlayedFrom($state, $playedCardId, []), $state);
 
@@ -8853,7 +8853,7 @@ final class GameService
                 $freshGrants = $this->computeFreshGrants($freshState, $firstPlayerId, 1);
                 $this->logFreshGrants($gameId, (int) $round['id'], $firstPlayerId, $freshGrants);
                 $this->boardStates->save($gameId, $freshState);
-                $this->updateRoundTurnState((int) $round['id'], $firstPlayerId, $freshGrants, $freshState->discardedThisRound(), $freshState->skipScoringThisRound(), $freshState->skipScoringFirstPlayerId(), $freshState->skipScoringSourceCardId(), $freshState->skipScoringOwnerId());
+                $this->updateRoundTurnState((int) $round['id'], $firstPlayerId, $freshGrants, $freshState->discardedThisRound(), $freshState->skipScoringThisRound(), $freshState->skipScoringFirstPlayerId(), $freshState->skipScoringSourceCardId(), $freshState->skipScoringOwnerId(), $freshState->awardsExtraWinThisRound(), $freshState->awardsExtraWinSourceCardId(), $freshState->awardsExtraWinOwnerId());
             }
 
             return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => !$allSubmitted];
@@ -9066,7 +9066,7 @@ final class GameService
             $freshGrants = $this->computeFreshGrants($state, $chosenGamePlayerId, 1);
             $this->logFreshGrants($gameId, $roundId, $chosenGamePlayerId, $freshGrants);
             $this->boardStates->save($gameId, $state);
-            $this->updateRoundTurnState($roundId, $chosenGamePlayerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId());
+            $this->updateRoundTurnState($roundId, $chosenGamePlayerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId());
         }
 
         $pdo->prepare("UPDATE game_rounds SET {$column} = :chosen WHERE id = :round_id")
@@ -9111,7 +9111,7 @@ final class GameService
         $freshGrants = $this->computeFreshGrants($state, $chosenGamePlayerId, 1);
         $this->logFreshGrants($gameId, $roundId, $chosenGamePlayerId, $freshGrants);
         $this->boardStates->save($gameId, $state);
-        $this->updateRoundTurnState($roundId, $chosenGamePlayerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId());
+        $this->updateRoundTurnState($roundId, $chosenGamePlayerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId());
 
         Connection::get()->prepare('UPDATE game_rounds SET first_game_player_id = :chosen WHERE id = :round_id')
             ->execute(['chosen' => $chosenGamePlayerId, 'round_id' => $roundId]);
@@ -9159,7 +9159,7 @@ final class GameService
         $freshGrants = $this->computeFreshGrants($state, $overridePlayerId, 1);
         $this->logFreshGrants($gameId, $roundId, $overridePlayerId, $freshGrants);
         $this->boardStates->save($gameId, $state);
-        $this->updateRoundTurnState($roundId, $overridePlayerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId());
+        $this->updateRoundTurnState($roundId, $overridePlayerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId());
 
         $pdo = Connection::get();
 
@@ -9955,7 +9955,7 @@ final class GameService
         $this->boardStates->save($gameId, $state);
 
         if ($state->playsRemaining() > 0) {
-            $this->updateRoundTurnState((int) $round['id'], $actingGamePlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId());
+            $this->updateRoundTurnState((int) $round['id'], $actingGamePlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId());
 
             return ['round_scored' => false, 'game_completed' => false];
         }
@@ -10008,7 +10008,7 @@ final class GameService
         // which has to be persisted even though this turn's own play
         // didn't otherwise touch the board.
         $this->boardStates->save($gameId, $state);
-        $this->updateRoundTurnState((int) $round['id'], $nextPlayerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId());
+        $this->updateRoundTurnState((int) $round['id'], $nextPlayerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId());
 
         return ['round_scored' => false, 'game_completed' => false];
     }
@@ -10083,7 +10083,7 @@ final class GameService
         $freshGrants = $this->computeFreshGrants($state, $playerId, 1);
         $this->logFreshGrants($gameId, $roundId, $playerId, $freshGrants);
         $this->boardStates->save($gameId, $state);
-        $this->updateRoundTurnState($roundId, $playerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId());
+        $this->updateRoundTurnState($roundId, $playerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId());
     }
 
     /**
@@ -11592,9 +11592,20 @@ final class GameService
      * before it's known whether this round will actually go on to be
      * scored via this same $state instance or a freshly-reloaded one on
      * a later request (see roundWouldCompleteGame()'s own docblock).
+     *
+     * Read from round-level state, not moodsInPlay(), precisely so this
+     * stays true even after Corruption itself has left play -- see
+     * BoardState::$awardsExtraWinThisRound's own docblock (reported
+     * live). The moodsInPlay() scan below is legacy cleanup only, for a
+     * game whose Corruption resolved before this round-level tracking
+     * existed.
      */
     private function hasExtraWinMarker(BoardState $state): bool
     {
+        if ($state->awardsExtraWinThisRound()) {
+            return true;
+        }
+
         foreach ($state->moodsInPlay() as $mood) {
             if ($state->effectState($mood->cardId, 'awardsExtraWin')) {
                 return true;
@@ -11617,6 +11628,12 @@ final class GameService
             return 1;
         }
 
+        $state->clearAwardsExtraWinThisRound();
+
+        // Legacy per-card marker, kept purely for backward compatibility
+        // with a game whose Corruption resolved before this round-level
+        // tracking existed -- see BoardState::$awardsExtraWinThisRound's
+        // own docblock.
         foreach ($state->moodsInPlay() as $mood) {
             if ($state->effectState($mood->cardId, 'awardsExtraWin')) {
                 $state->clearEffectState($mood->cardId, 'awardsExtraWin');
@@ -12384,31 +12401,33 @@ final class GameService
      * state here, since the round it belongs to is about to become
      * 'scored' and BoardStateRepository::load() only ever reads the
      * latest 'in_progress' one; the fresh round created below simply
-     * starts with it unset. The `skipScoringThisRound`/
-     * `oneTimeFirstPlayerOverride` half of the per-card clearing loop just
-     * below is legacy cleanup only, for a game whose Awe resolved before
-     * this round-level tracking existed -- see BoardState::
-     * $skipScoringThisRound's own docblock.
+     * starts with it unset. `awardsExtraWinThisRound()` above is cleared
+     * the same way, for the same reason -- see its own docblock, added
+     * alongside `skipScoringThisRound` once Corruption's own marker moved
+     * to this identical round-level tracking. The `skipScoringThisRound`/
+     * `oneTimeFirstPlayerOverride`/`awardsExtraWin` per-card tags in the
+     * clearing loop just below are legacy cleanup only, for a game whose
+     * Awe/Corruption resolved before this round-level tracking existed --
+     * see BoardState::$skipScoringThisRound's/$awardsExtraWinThisRound's
+     * own docblocks.
      *
-     * The `swapScoreWithPlayerId`/`awardsExtraWin` half is NOT legacy,
-     * though -- a real bug, reported live: Sneakiness's "this round, after
-     * scoring, swap your score..." and Corruption's "the winner of the
-     * CURRENT round wins two..." are both explicitly THIS round's own
-     * one-time effects, normally cleared by applyScoreSwaps()/
-     * consumeExtraWinMarker() the moment they're actually applied -- but
-     * neither of those ever runs on this (skipped-scoring) path, since
-     * this method entirely bypasses finishScoringAndAdvance(), where both
-     * live. Playing Sneakiness/Corruption in the SAME round as Awe used to
-     * leave their own tag sitting on the card indefinitely (both cards
-     * commonly stay in play well past the round they were played), so
-     * they'd keep showing in "How scoring will be affected"
+     * The `swapScoreWithPlayerId` clear is NOT legacy, though -- a real
+     * bug, reported live: Sneakiness's "this round, after scoring, swap
+     * your score..." is explicitly THIS round's own one-time effect,
+     * normally cleared by applyScoreSwaps() the moment it's actually
+     * applied -- but that never runs on this (skipped-scoring) path,
+     * since this method entirely bypasses finishScoringAndAdvance(),
+     * where it lives. Playing Sneakiness in the SAME round as Awe used to
+     * leave its own tag sitting on the card indefinitely (it commonly
+     * stays in play well past the round it was played), so it'd keep
+     * showing in "How scoring will be affected"
      * (scoringEffectEntries()) forever after -- and, far worse than a
      * cosmetic display bug, actually fire for real on whatever LATER round
-     * eventually does score normally, silently swapping/doubling that
-     * unrelated round's own outcome. Clearing both tags here matches "no
-     * one wins or loses this round" at face value: if there's no scoring,
-     * there's nothing for either effect to modify, so neither should
-     * survive to ambush a round it was never meant to touch.
+     * eventually does score normally, silently swapping that unrelated
+     * round's own outcome. Clearing it here matches "no one wins or loses
+     * this round" at face value: if there's no scoring, there's nothing
+     * for it to modify, so it shouldn't survive to ambush a round it was
+     * never meant to touch.
      *
      * @return array{round_scored: bool, game_completed: bool}
      */
@@ -12419,6 +12438,10 @@ final class GameService
         $nextFirstPlayer = $state->firstPlayerOverride()
             ?? throw new GameStateException("Round {$roundId} was marked to skip scoring but no player was chosen to go first next round");
 
+        if ($state->awardsExtraWinThisRound()) {
+            $state->clearAwardsExtraWinThisRound();
+        }
+
         foreach ($state->moodsInPlay() as $mood) {
             if ($state->effectState($mood->cardId, 'skipScoringThisRound')) {
                 $state->clearEffectState($mood->cardId, 'skipScoringThisRound');
@@ -12427,6 +12450,10 @@ final class GameService
             if ($state->effectState($mood->cardId, 'swapScoreWithPlayerId') !== null) {
                 $state->clearEffectState($mood->cardId, 'swapScoreWithPlayerId');
             }
+            // Legacy per-card marker, kept purely for backward
+            // compatibility with a game whose Corruption resolved before
+            // round-level tracking existed -- see
+            // BoardState::$awardsExtraWinThisRound's own docblock.
             if ($state->effectState($mood->cardId, 'awardsExtraWin')) {
                 $state->clearEffectState($mood->cardId, 'awardsExtraWin');
             }
@@ -18392,7 +18419,7 @@ final class GameService
      * notifyItsYourTurn() call site that never even offers a
      * $worthPausingFor argument, relying on its default of false.
      */
-    private function updateRoundTurnState(int $roundId, int $playerId, array $playGrants, bool $discardedThisRound, bool $skipScoringThisRound, ?int $skipScoringFirstPlayerId, ?int $skipScoringSourceCardId, ?int $skipScoringOwnerId): void
+    private function updateRoundTurnState(int $roundId, int $playerId, array $playGrants, bool $discardedThisRound, bool $skipScoringThisRound, ?int $skipScoringFirstPlayerId, ?int $skipScoringSourceCardId, ?int $skipScoringOwnerId, bool $awardsExtraWinThisRound = false, ?int $awardsExtraWinSourceCardId = null, ?int $awardsExtraWinOwnerId = null): void
     {
         $pdo = Connection::get();
 
@@ -18402,7 +18429,7 @@ final class GameService
         $previousPlayerId = $previousPlayerId !== false ? (int) $previousPlayerId : null;
 
         $stmt = $pdo->prepare(
-            'UPDATE game_rounds SET current_turn_game_player_id = :player_id, plays_remaining = :plays_remaining, pending_play_grants = :pending_play_grants, discarded_this_round = :discarded_this_round, skip_scoring = :skip_scoring, skip_scoring_first_player_game_player_id = :skip_scoring_first_player_id, skip_scoring_source_card_id = :skip_scoring_source_card_id, skip_scoring_owner_game_player_id = :skip_scoring_owner_id WHERE id = :round_id'
+            'UPDATE game_rounds SET current_turn_game_player_id = :player_id, plays_remaining = :plays_remaining, pending_play_grants = :pending_play_grants, discarded_this_round = :discarded_this_round, skip_scoring = :skip_scoring, skip_scoring_first_player_game_player_id = :skip_scoring_first_player_id, skip_scoring_source_card_id = :skip_scoring_source_card_id, skip_scoring_owner_game_player_id = :skip_scoring_owner_id, awards_extra_win = :awards_extra_win, awards_extra_win_source_card_id = :awards_extra_win_source_card_id, awards_extra_win_owner_game_player_id = :awards_extra_win_owner_id WHERE id = :round_id'
         );
         $stmt->execute([
             'player_id' => $playerId,
@@ -18413,6 +18440,9 @@ final class GameService
             'skip_scoring_first_player_id' => $skipScoringFirstPlayerId,
             'skip_scoring_source_card_id' => $skipScoringSourceCardId,
             'skip_scoring_owner_id' => $skipScoringOwnerId,
+            'awards_extra_win' => $awardsExtraWinThisRound ? 1 : 0,
+            'awards_extra_win_source_card_id' => $awardsExtraWinSourceCardId,
+            'awards_extra_win_owner_id' => $awardsExtraWinOwnerId,
             'round_id' => $roundId,
         ]);
 
@@ -18712,17 +18742,20 @@ final class GameService
      * Creativity copy of one of these is picked up the same way it
      * actually contributes to the score.
      *
-     * Awe is the one entry NOT keyed off a specific in-play mood at all
-     * (a bug caught live: it used to be, reading the same per-card
-     * 'skipScoringThisRound' tag skipScoringAndAdvance() itself checks --
-     * but that tag moved to round-level state precisely because it has to
-     * survive Awe leaving play before the round it was played in finishes
-     * scoring, see BoardState::$skipScoringThisRound's own docblock, and
-     * this entry silently went dark the same way the underlying skip
-     * itself used to). Built as its own, separate check below rather than
-     * inside the per-mood loop, straight from $state->skipScoringThisRound(),
-     * so it stays visible for exactly as long as the underlying effect
-     * does -- including after Awe itself is gone.
+     * Awe/Corruption are the two entries NOT keyed off a specific in-play
+     * mood at all (a bug caught live for each: they used to be, reading
+     * the same per-card 'skipScoringThisRound'/'awardsExtraWin' tags
+     * skipScoringAndAdvance()/consumeExtraWinMarker() themselves check --
+     * but both tags moved to round-level state precisely because they have
+     * to survive the source card leaving play before the round it was
+     * played in finishes scoring, see BoardState::$skipScoringThisRound's/
+     * $awardsExtraWinThisRound's own docblocks, and both entries silently
+     * went dark the same way the underlying effect itself used to). Each
+     * is built as its own, separate check below rather than inside the
+     * per-mood loop, straight from $state->skipScoringThisRound()/
+     * awardsExtraWinThisRound(), so it stays visible for exactly as long
+     * as the underlying effect does -- including after the source card
+     * itself is gone.
      *
      * @param array<int, string> $names
      * @param array<int, string> $playerNames
@@ -18750,6 +18783,21 @@ final class GameService
             ];
         }
 
+        // Same treatment for Corruption's own double-win choice -- see
+        // BoardState::$awardsExtraWinThisRound's own docblock (reported
+        // live).
+        if ($state->awardsExtraWinThisRound()) {
+            $sourceCardId = $state->awardsExtraWinSourceCardId();
+            $cardName = $sourceCardId !== null ? ($names[$sourceCardId] ?? 'Corruption') : 'Corruption';
+
+            $entries[] = [
+                'card_id' => $sourceCardId ?? 0,
+                'card_name' => $cardName,
+                'owner_game_player_id' => $state->awardsExtraWinOwnerId() ?? 0,
+                'description' => "This round's winner will get two wins instead of one ({$cardName}).",
+            ];
+        }
+
         foreach ($state->moodsInPlay() as $mood) {
             $effectKey = $state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'];
             $ownerName = $playerNames[$mood->ownerId] ?? 'A player';
@@ -18759,7 +18807,12 @@ final class GameService
                 'exhilaration' => "{$ownerName}'s {$cardName} scores all of their moods an extra time.",
                 'bliss' => $this->blissScoringDescription($state, $mood, $ownerName, $cardName),
                 'sneakiness' => $this->sneakinessScoringDescription($state, $mood, $ownerName, $cardName, $playerNames),
-                'corruption' => $state->effectState($mood->cardId, 'awardsExtraWin')
+                // Legacy per-card marker, kept purely for backward
+                // compatibility with a game whose Corruption resolved
+                // before round-level tracking existed -- the entry above
+                // already covers every other case, so this never fires
+                // alongside it.
+                'corruption' => (!$state->awardsExtraWinThisRound() && $state->effectState($mood->cardId, 'awardsExtraWin'))
                     ? "This round's winner will get two wins instead of one ({$cardName})."
                     : null,
                 'enthusiasm' => "{$ownerName} may score their highest-valued mood an extra time ({$cardName}).",

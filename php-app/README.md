@@ -393,10 +393,20 @@ the round it was played in finishes scoring. The legacy per-card
 `oneTimeFirstPlayerOverride`/`skipScoringThisRound` effectState keys are
 still read as a fallback, purely for backward compatibility with a game
 whose Awe resolved before this round-level tracking existed. There's
-also an unconditional "the round's winner is awarded an extra win" tag
+also an unconditional "the round's winner is awarded an extra win" flag
 that doubles `game_rounds.wins_awarded` regardless of who plays it or
-who wins (Corruption — `GameService::consumeExtraWinMarker()`). A
-separate, reusable "was this mood played this round" tag
+who wins (Corruption — `GameService::hasExtraWinMarker()`/
+`consumeExtraWinMarker()`). Reported live, the identical failure mode
+Awe's own pair already had: this used to be per-card effectState too
+(`awardsExtraWin`), and so silently vanished if Corruption left play
+before the round it was played in finished scoring, since Corruption's
+own choice is likewise locked in the instant it resolves. Fixed the same
+way — round-level state (`game_rounds.awards_extra_win`/
+`awards_extra_win_source_card_id`/`awards_extra_win_owner_game_player_id`,
+see `BoardState::$awardsExtraWinThisRound`'s own docblock), with the
+legacy per-card tag still read as a fallback for a game whose Corruption
+resolved before this existed. A separate, reusable "was this mood played
+this round" tag
 (`playedInRound`, stamped on every mood the moment it enters play from
 `BoardState::currentRoundNumber()`, alongside `playedByPlayerId` —
 whoever actually played it, immutable even once ownership itself
@@ -963,23 +973,31 @@ ends. Built by `GameService::scoringEffectEntries()`, it's one
 in-play mood whose ability changes how this round scores — Bliss and
 Exhilaration (always, for as long as they stay in play), Enthusiasm and
 Passion (likewise, since their "you may" option recurs every round), and
-Sneakiness/Awe/Corruption (only for as long as their one-time
-round-scoped `effectState` tag stays set — `swapScoreWithPlayerId`/
-`skipScoringThisRound`/`awardsExtraWin` — since `applyScoreSwaps()`/
-`consumeExtraWinMarker()` each clear their own tag once the round it
-covers actually scores, so a stale Sneakiness from three rounds ago never
-lingers here). A bug caught live, reported by a user: playing Sneakiness
-or Corruption in the SAME round as Awe used to leave that tag stuck
-forever, since `applyScoreSwaps()`/`consumeExtraWinMarker()` only ever
-run inside `finishScoringAndAdvance()`, and Awe's own skip-scoring path
-(`skipScoringAndAdvance()`) bypasses that method entirely — the round
-never actually scores, so neither one-time tag ever got the chance to
-fire *or* clear, leaving it to keep showing here indefinitely and then
-genuinely misfire on whatever LATER round finally did score normally.
-`skipScoringAndAdvance()` now clears both tags itself, alongside its own
-Awe-specific ones, matching "no one wins or loses this round" — if
-there's no scoring, there's nothing left for either effect to modify.
-None of this is hidden information
+Sneakiness (only for as long as its one-time round-scoped `effectState`
+tag, `swapScoreWithPlayerId`, stays set — `applyScoreSwaps()` clears it
+once the round it covers actually scores, so a stale Sneakiness from
+three rounds ago never lingers here). Awe's and Corruption's own one-time
+choices are each built as their own separate, non-mood-keyed checks
+instead — see `BoardState::$skipScoringThisRound`'s/`$awardsExtraWinThisRound`'s
+own docblocks for why (reported live, twice: both choices are locked in
+the instant they resolve, with no "while in play" condition on either
+one, so tagging them on the card itself meant they silently vanished if
+Awe/Corruption left play before the round they were played in finished
+scoring — Corruption's own version of this bug, and fix, came second,
+mirroring Awe's exactly). A separate bug caught live, reported by a
+user: playing Sneakiness or Corruption in the SAME round as Awe used to
+leave Sneakiness's own tag (and, before its own round-level fix,
+Corruption's) stuck forever, since `applyScoreSwaps()`/
+`consumeExtraWinMarker()` only ever run inside `finishScoringAndAdvance()`,
+and Awe's own skip-scoring path (`skipScoringAndAdvance()`) bypasses that
+method entirely — the round never actually scores, so neither one-time
+effect ever got the chance to fire *or* clear, leaving it to keep showing
+here indefinitely and then genuinely misfire on whatever LATER round
+finally did score normally. `skipScoringAndAdvance()` clears both
+(Corruption's now via `BoardState::clearAwardsExtraWinThisRound()`)
+itself, alongside its own Awe-specific state, matching "no one wins or
+loses this round" — if there's no scoring, there's nothing left for
+either effect to modify. None of this is hidden information
 — an in-play card and the choice it was played with are both already
 public — so every viewer sees the same list. The `effect_key` lookup goes
 through `BoardState::effectiveCardId()`, mirroring `RoundScorer::score()`'s
