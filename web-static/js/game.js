@@ -6797,7 +6797,7 @@
                 // naturally stops itself once deck-building begins).
                 if (state.game.synchronous_mode && state.game.draft_pick_deadline_at !== null && state.game.draft_pick_deadline_usernames.length > 0) {
                     synchronousDeadlineInfo = {
-                        deadlineAtMs: new Date(state.game.draft_pick_deadline_at).getTime(),
+                        deadlineAtMs: parseUtcTimestamp(state.game.draft_pick_deadline_at).getTime(),
                         username: state.game.draft_pick_deadline_usernames.join(' & '),
                     };
                     tickSynchronousActionTimer();
@@ -6923,7 +6923,7 @@
         if (state.game.status === 'in_progress' && state.game.synchronous_mode && state.game.action_deadline_at !== null && state.game.action_deadline_game_player_id !== null) {
             const onTheClock = state.players.find((p) => p.game_player_id === state.game.action_deadline_game_player_id);
             synchronousDeadlineInfo = {
-                deadlineAtMs: new Date(state.game.action_deadline_at).getTime(),
+                deadlineAtMs: parseUtcTimestamp(state.game.action_deadline_at).getTime(),
                 username: onTheClock ? onTheClock.username : 'Someone',
             };
             tickSynchronousActionTimer();
@@ -8965,6 +8965,26 @@
                 renderDraftDeckBuilding(sd.deck_building);
             }
         }
+    }
+
+    // Every *_deadline_at timestamp this page reads (action_deadline_at,
+    // draft_pick_deadline_at) comes from the server as a bare
+    // "YYYY-MM-DD HH:MM:SS" string (MySQL's own TIMESTAMP format, always
+    // UTC here -- the server runs with no date.timezone override) with
+    // no zone marker at all. `new Date(...)` on a space-separated
+    // datetime string like that is NOT one of the ECMAScript-specified
+    // formats, so browsers are free to guess -- and every major engine
+    // guesses the VIEWER's own local timezone, not UTC. Reported live:
+    // a player whose browser is ahead of UTC saw a freshly-issued
+    // deadline read as already hours in the past, so the countdown
+    // showed "0s" from the very moment it appeared (never fixing itself
+    // on a later poll, since every subsequent deadline gets misread the
+    // exact same way). Splicing in an explicit 'T'/'Z' turns it into a
+    // real ISO 8601 UTC string first, which every engine parses
+    // unambiguously the same way regardless of the viewer's own
+    // timezone.
+    function parseUtcTimestamp(mysqlTimestamp) {
+        return new Date(mysqlTimestamp.replace(' ', 'T') + 'Z');
     }
 
     // Synchronous mode's own live 30-second action timer (reported live:
