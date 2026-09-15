@@ -5412,6 +5412,41 @@ is expected, not a bug. `last_move_at` is also what the lobby list itself
 sorts by within its two status tiers -- see `GET /games` in the API table
 above.
 
+**UTC consistency across MySQL, PHP, and the browser** -- reported live
+on dev: a Synchronous mode countdown (`action_deadline_at`/
+`draft_pick_deadline_at`/`pick_deadline_at`, see "Synchronous mode"
+above) could show "0s" the instant it should have started, even after
+`web-static/js/game.js`'s `parseUtcTimestamp()` helper made the browser
+treat every bare `"YYYY-MM-DD HH:MM:SS"` deadline string as UTC rather
+than letting `new Date(...)` guess the viewer's own local timezone.
+That fix alone assumes the string it's handed IS true UTC to begin with
+-- two upstream layers could each independently violate that:
+
+- **MySQL**: a `TIMESTAMP` column (unlike `DATETIME`) converts to/from
+  storage using the *session's own* `time_zone` on every read and
+  write, regardless of PHP's own timezone setting. `Connection::get()`
+  never issued a `SET time_zone` statement, so every session defaulted
+  to `'SYSTEM'` -- silently following whatever timezone the host OS
+  itself is configured with, which need not be UTC on a given deploy.
+- **PHP**: `GameService`'s three deadline writes
+  (`resetSynchronousActionDeadline()`,
+  `enforceSynchronousActionDeadline()`'s extension-consumption branch,
+  `resetSynchronousDraftPickDeadlineIfNeeded()`) used
+  `date('Y-m-d H:i:s', ...)`, which formats using PHP's own configured
+  `date.timezone` rather than UTC.
+
+`Connection::get()` now issues `SET time_zone = '+00:00'` on every
+connection it opens, and forces `date_default_timezone_set('UTC')` as
+its own first side effect -- the earliest chokepoint nearly every entry
+point (web requests and cron scripts alike) passes through, so this
+holds even where a call site can't be individually switched to
+`gmdate()`/`gmtime()`. The three `GameService` writes above now use
+`gmdate()` explicitly regardless. Together with the browser's own
+`parseUtcTimestamp()`, all three layers -- MySQL, PHP, and the browser
+-- are now unambiguously UTC, so a deadline written on one layer is
+always read back correctly by the others no matter how the underlying
+host itself is configured.
+
 ### Past games (issue #84)
 
 `GET /games` used to return every game you're seated in, `completed`
