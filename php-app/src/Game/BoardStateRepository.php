@@ -166,7 +166,7 @@ final class BoardStateRepository
         }
 
         $roundStmt = $pdo->prepare(
-            "SELECT current_turn_game_player_id, first_game_player_id, team_turn_1_game_player_id, plays_remaining, pending_play_grants, round_number, discarded_this_round, skip_scoring, skip_scoring_first_player_game_player_id, skip_scoring_source_card_id, skip_scoring_owner_game_player_id FROM game_rounds
+            "SELECT current_turn_game_player_id, first_game_player_id, team_turn_1_game_player_id, plays_remaining, pending_play_grants, round_number, discarded_this_round, skip_scoring, skip_scoring_first_player_game_player_id, skip_scoring_source_card_id, skip_scoring_owner_game_player_id, awards_extra_win, awards_extra_win_source_card_id, awards_extra_win_owner_game_player_id FROM game_rounds
              WHERE game_id = :game_id AND status = 'in_progress'
              ORDER BY round_number DESC LIMIT 1"
         );
@@ -204,6 +204,9 @@ final class BoardStateRepository
                 $roundRow['skip_scoring_first_player_game_player_id'] !== null ? (int) $roundRow['skip_scoring_first_player_game_player_id'] : null,
                 $roundRow['skip_scoring_source_card_id'] !== null ? (int) $roundRow['skip_scoring_source_card_id'] : null,
                 $roundRow['skip_scoring_owner_game_player_id'] !== null ? (int) $roundRow['skip_scoring_owner_game_player_id'] : null,
+                (bool) $roundRow['awards_extra_win'],
+                $roundRow['awards_extra_win_source_card_id'] !== null ? (int) $roundRow['awards_extra_win_source_card_id'] : null,
+                $roundRow['awards_extra_win_owner_game_player_id'] !== null ? (int) $roundRow['awards_extra_win_owner_game_player_id'] : null,
             );
         }
 

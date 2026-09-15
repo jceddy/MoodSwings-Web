@@ -659,7 +659,8 @@ if ($path === '/notifications/preferences' && $method === 'POST') {
         (bool) ($body['notify_friend_request'] ?? true),
         (bool) ($body['notify_game_finished'] ?? true),
         (bool) ($body['disable_cooldown'] ?? false),
-        (bool) ($body['notify_chat_message'] ?? true)
+        (bool) ($body['notify_chat_message'] ?? true),
+        (bool) ($body['notify_timeout_warning'] ?? true)
     );
     respond(200, ['status' => 'ok', 'preferences' => $notificationPreferences->forUser((int) $currentUser['id'])]);
 }
@@ -1120,6 +1121,21 @@ if ($path === '/games' && $method === 'POST') {
     // Only meaningful once $userIds seats at least one Tactical Bot --
     // see createGame()'s own $diagnosticMode docblock.
     $diagnosticMode = (bool) ($body['diagnostic_mode'] ?? false);
+    // Issue #85's own opt-in turn/decision timeouts -- null/unset means
+    // off; a request naming timeout_minutes without timeout_action (or
+    // vice versa) is left for createGame()'s own validation to reject.
+    // See createGame()'s own $timeoutMinutes docblock.
+    $timeoutMinutes = isset($body['timeout_minutes']) ? (int) $body['timeout_minutes'] : null;
+    $timeoutAction = isset($body['timeout_action']) ? (string) $body['timeout_action'] : null;
+    // Issue #85 follow-up's own full-game time-limit mode -- independent
+    // of timeout_minutes/timeout_action above. See createGame()'s own
+    // $totalTimeLimitMinutes docblock.
+    $totalTimeLimitMinutes = isset($body['total_time_limit_minutes']) ? (int) $body['total_time_limit_minutes'] : null;
+    // Reported live: "synchronous" mode -- mutually exclusive with
+    // timeout_minutes/total_time_limit_minutes above, left for
+    // createGame()'s own validation to reject if combined. See
+    // createGame()'s own $synchronousMode docblock.
+    $synchronousMode = (bool) ($body['synchronous_mode'] ?? false);
     // Only meaningful for deck_type 'rotisserie_draft' -- see createGame()'s own docblock.
     $rotisserieDraftPoolSource = isset($body['rotisserie_draft_pool_source']) ? (string) $body['rotisserie_draft_pool_source'] : null;
     $rotisserieDraftCustomPoolText = isset($body['rotisserie_draft_custom_pool_text']) ? (string) $body['rotisserie_draft_custom_pool_text'] : null;
@@ -1180,6 +1196,10 @@ if ($path === '/games' && $method === 'POST') {
             $allowSideboarding,
             $diagnosticMode,
             $botDecklists,
+            $timeoutMinutes,
+            $timeoutAction,
+            $totalTimeLimitMinutes,
+            $synchronousMode,
         );
         respond(201, ['status' => 'ok', 'game_id' => $gameId]);
     } catch (GameStateException $e) {
@@ -1246,6 +1266,16 @@ function openGameCreateParamsFromRequestBody(array $body): array
         // Only meaningful once the roster ends up seating at least one
         // Tactical Bot -- see createGame()'s own $diagnosticMode docblock.
         'diagnostic_mode' => (bool) ($body['diagnostic_mode'] ?? false),
+        // Issue #85's own opt-in turn/decision timeouts -- see
+        // createGame()'s own $timeoutMinutes docblock.
+        'timeout_minutes' => isset($body['timeout_minutes']) ? (int) $body['timeout_minutes'] : null,
+        'timeout_action' => isset($body['timeout_action']) ? (string) $body['timeout_action'] : null,
+        // Issue #85 follow-up's own full-game time-limit mode -- see
+        // createGame()'s own $totalTimeLimitMinutes docblock.
+        'total_time_limit_minutes' => isset($body['total_time_limit_minutes']) ? (int) $body['total_time_limit_minutes'] : null,
+        // Reported live: "synchronous" mode -- see createGame()'s own
+        // $synchronousMode docblock.
+        'synchronous_mode' => (bool) ($body['synchronous_mode'] ?? false),
     ];
 }
 
@@ -1481,6 +1511,21 @@ if ($path === '/games/state' && $method === 'GET') {
     } catch (GameStateException) {
         // Best-effort only -- see above. The next poll simply tries again.
     }
+    // Synchronous mode's own real-time action timer (increment 2) --
+    // enforceSynchronousActionDeadline() already swallows every
+    // Throwable itself (see its own docblock), so this is purely a
+    // no-op for a non-synchronous game and never risks this read.
+    $games->enforceSynchronousActionDeadline($gameId);
+    // Synchronous mode's own real-time draft-pick timer (increment 3) --
+    // enforceSynchronousDraftPickDeadline() swallows every Throwable
+    // itself too, so this is purely a no-op for a non-synchronous or
+    // non-draft game and never risks this read.
+    $games->enforceSynchronousDraftPickDeadline($gameId);
+    // Synchronous mode's own real-time match-wide chess clock (increment
+    // 4) -- enforceSynchronousMatchClock() swallows every Throwable
+    // itself too, so this is purely a no-op for a non-synchronous game
+    // and never risks this read.
+    $games->enforceSynchronousMatchClock($gameId);
     respond(200, ['status' => 'ok', ...$games->getState($gameId, (int) $currentUser['id'])]);
 }
 
@@ -1740,6 +1785,24 @@ if ($path === '/games/start' && $method === 'POST') {
         // comment on POST /games/play above.
         $autoResult = $games->advanceAutomatedTurns($gameId);
         respond(200, ['status' => 'ok', ...($autoResult ?? [])]);
+    } catch (GameStateException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+// Reported live: "synchronous" mode's own pre-game ready check -- see
+// GameService::markReady()'s own docblock. Idempotent; the frontend
+// keeps polling GET /games/state the same way it already does for
+// decklist submission until autoStartGameIfReady() notices every seat
+// is ready and calls POST /games/start itself.
+if ($path === '/games/ready' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $gameId = (int) ($body['game_id'] ?? 0);
+    $gamePlayerId = requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    try {
+        respond(200, ['status' => 'ok', ...$games->markReady($gameId, $gamePlayerId)]);
     } catch (GameStateException $e) {
         respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
     }

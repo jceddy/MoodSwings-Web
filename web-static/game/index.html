@@ -139,6 +139,28 @@
             <button id="spectate-share-button" type="button" hidden>Share spectate code</button>
             <h2 id="board-title"></h2>
             <p id="board-round-status"></p>
+            <!-- Synchronous mode's own live 30-second action timer
+                 (reported live: "which should be visible in the game
+                 display") -- a client-side ticking countdown (see
+                 tickSynchronousActionTimer() in game.js), corrected
+                 every ~4 seconds by the ordinary state poll the way
+                 every other live value on this page already is. Only
+                 shown while state.game.synchronous_mode is true AND the
+                 game is in_progress. -->
+            <p id="synchronous-action-timer" hidden></p>
+            <!-- Synchronous mode's own pre-game ready check (reported
+                 live) -- shown only while state.game.status === 'waiting'
+                 AND state.game.synchronous_mode is true, replacing the
+                 ordinary "Waiting for the game to start" text for that
+                 one case. #ready-check-status lists each seat's own
+                 ready/not-ready state; #ready-check-button calls
+                 markReady() for the viewer's own seat and hides itself
+                 once they've clicked it. See renderBoard() in game.js. -->
+            <div id="ready-check-panel" hidden>
+                <p>Both players must confirm they're ready before this game deals.</p>
+                <ul id="ready-check-status"></ul>
+                <button id="ready-check-button" type="button">I'm ready</button>
+            </div>
             <p id="draft-match-scoreline" hidden></p>
             <button id="draft-match-next-game-button" type="button" hidden>Go to next game &rarr;</button>
             <!-- Rematch (issue #398): offered only to this game's own
@@ -643,6 +665,51 @@
             </label>
             <p id="new-game-deck-type-description"></p>
 
+            <label class="new-game-field" id="new-game-timeout-enabled-label"><input type="checkbox" id="new-game-timeout-enabled"> Automatically resolve an idle turn/response</label>
+            <div id="new-game-timeout-fields" hidden>
+                <label class="new-game-field">After being idle for
+                    <select id="new-game-timeout-minutes">
+                        <option value="30">30 minutes</option>
+                        <option value="60">1 hour</option>
+                        <option value="120">2 hours</option>
+                        <option value="360">6 hours</option>
+                        <option value="720">12 hours</option>
+                        <option value="1440">1 day</option>
+                        <option value="2880">2 days</option>
+                        <option value="4320">3 days</option>
+                        <option value="10080">7 days</option>
+                    </select>
+                </label>
+                <label class="new-game-field">
+                    <select id="new-game-timeout-action">
+                        <option value="auto_play">Automatically play a move for them</option>
+                        <option value="skip">Skip their turn/response</option>
+                        <option value="resign">Resign them from the game/match</option>
+                    </select>
+                </label>
+                <p>Checked periodically (at most every 15 minutes), so an idle turn/response may take a little longer than the chosen duration to actually resolve.</p>
+            </div>
+
+            <label class="new-game-field" id="new-game-total-time-limit-enabled-label"><input type="checkbox" id="new-game-total-time-limit-enabled"> Auto-resign after too much total time in this game</label>
+            <div id="new-game-total-time-limit-fields" hidden>
+                <label class="new-game-field">Total time allowed per player
+                    <select id="new-game-total-time-limit-minutes">
+                        <option value="60">1 hour</option>
+                        <option value="120">2 hours</option>
+                        <option value="240">4 hours</option>
+                        <option value="480">8 hours</option>
+                        <option value="720">12 hours</option>
+                        <option value="1440" selected>24 hours</option>
+                        <option value="2880">48 hours</option>
+                        <option value="4320">72 hours</option>
+                    </select>
+                </label>
+                <p>A hard cap, separate from the idle time-out above: however long each player has spent actually taking their own turns and responses, added up over the whole game, before they're automatically resigned. Also checked at most every 15 minutes.</p>
+            </div>
+
+            <label class="new-game-field" id="new-game-synchronous-enabled-label"><input type="checkbox" id="new-game-synchronous-enabled"> Synchronous mode (play live, right now)</label>
+            <p id="new-game-synchronous-description" hidden>Both players must be ready before the game (or draft) deals. Each action/pick has a short timer, and each player has a 30-minute chess clock for the whole match (deck-building/sideboarding time counts against it) -- automatic loss if it runs out. Mutually exclusive with the idle time-out/total-time-limit options above.</p>
+
             <div id="new-game-decklist-fields" hidden>
                 <label>Use a saved deck
                     <select id="new-game-saved-decklist">
@@ -1040,6 +1107,7 @@
         <p id="card-detail-affected-by" hidden></p>
         <p id="card-detail-affecting" hidden></p>
         <p id="card-detail-bliss-color" hidden></p>
+        <p id="card-detail-wonder-colors" hidden></p>
         <p id="card-detail-unused-grant" hidden></p>
         <button id="card-detail-select-button" type="button" hidden>Select</button>
         <button id="card-detail-close-button" type="button">Close</button>
@@ -1333,6 +1401,7 @@
                     <label><input type="checkbox" id="notify-friend-request-checkbox"> I receive a friend request</label>
                     <label><input type="checkbox" id="notify-game-finished-checkbox"> One of my games finishes</label>
                     <label><input type="checkbox" id="notify-chat-message-checkbox"> I receive an in-game chat message</label>
+                    <label><input type="checkbox" id="notify-timeout-warning-checkbox"> A turn or full-game timeout is less than 15 minutes away</label>
                     <label><input type="checkbox" id="disable-cooldown-checkbox"> Send every notification immediately (disable the 5-minute cooldown)</label>
                 </fieldset>
             </div>

@@ -131,6 +131,31 @@ final class NotificationService
         ]);
     }
 
+    /**
+     * Issue #85 follow-up: "send a notification if either the action
+     * timeout or the full game chess clock timeout becomes less than 15
+     * minutes left" -- see GameService::sendTimeoutWarningIfClose(), the
+     * only caller (bin/apply_game_timeouts.php's own 15-minute sweep).
+     * Its own preference (notify_timeout_warning, migration 0327)
+     * defaults on, same as every other notify_* preference except
+     * disable_cooldown -- a player who's already opted into timeouts at
+     * all is assumed to want the heads-up before one actually fires.
+     * Shares NotificationScope::forGame() with notifyYourTurn()/
+     * notifyGameFinished()/notifyNewChatMessage(), same reasoning as
+     * those three: one game is one 5-minute cooldown/queue bucket,
+     * regardless of which of these several things about it just
+     * happened.
+     */
+    public function notifyTimeoutWarning(int $userId, int $gameId, string $body): void
+    {
+        $this->notify($userId, NotificationScope::forGame($gameId), 'notify_timeout_warning', [
+            'title' => 'Timeout approaching',
+            'body' => $body,
+            'url' => "/game/?id={$gameId}",
+            'tag' => "game-{$gameId}-timeout-warning",
+        ]);
+    }
+
     /** GameService::clearQueuedNotificationForGamePlayer()'s own passthrough -- see that method's docblock. */
     public function clearQueuedForGame(int $userId, int $gameId): void
     {

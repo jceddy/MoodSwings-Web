@@ -228,6 +228,7 @@
         const friendRequestCheckbox = document.getElementById('notify-friend-request-checkbox');
         const gameFinishedCheckbox = document.getElementById('notify-game-finished-checkbox');
         const chatMessageCheckbox = document.getElementById('notify-chat-message-checkbox');
+        const timeoutWarningCheckbox = document.getElementById('notify-timeout-warning-checkbox');
         const disableCooldownCheckbox = document.getElementById('disable-cooldown-checkbox');
 
         const supported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
@@ -255,6 +256,7 @@
                     friendRequestCheckbox.checked = body.preferences.notify_friend_request;
                     gameFinishedCheckbox.checked = body.preferences.notify_game_finished;
                     chatMessageCheckbox.checked = body.preferences.notify_chat_message;
+                    timeoutWarningCheckbox.checked = body.preferences.notify_timeout_warning;
                     disableCooldownCheckbox.checked = body.preferences.disable_cooldown;
                 }
             }
@@ -504,6 +506,7 @@
                 notify_friend_request: friendRequestCheckbox.checked,
                 notify_game_finished: gameFinishedCheckbox.checked,
                 notify_chat_message: chatMessageCheckbox.checked,
+                notify_timeout_warning: timeoutWarningCheckbox.checked,
                 disable_cooldown: disableCooldownCheckbox.checked,
             });
         }
@@ -511,6 +514,7 @@
         friendRequestCheckbox.addEventListener('change', savePreferences);
         gameFinishedCheckbox.addEventListener('change', savePreferences);
         chatMessageCheckbox.addEventListener('change', savePreferences);
+        timeoutWarningCheckbox.addEventListener('change', savePreferences);
         disableCooldownCheckbox.addEventListener('change', savePreferences);
     }
 
@@ -1473,6 +1477,17 @@
     let currentGameId = null;
     let currentState = null;
     let pollTimer = null;
+    // Synchronous mode's own live action timer (reported live: "which
+    // should be visible in the game display") -- a separate 1-second
+    // interval from pollTimer above, since a 30-second countdown needs
+    // to visibly tick between polls, not just jump every ~4 seconds.
+    // synchronousDeadlineInfo holds the latest server-reported deadline;
+    // tickSynchronousActionTimer() (called every second) recomputes the
+    // remaining time purely from Date.now() against it, self-correcting
+    // whenever the next poll updates synchronousDeadlineInfo again. See
+    // renderBoard()'s own call site for when this starts/stops.
+    let synchronousActionTimerInterval = null;
+    let synchronousDeadlineInfo = null;
     // Spectator mode (issue #128) -- true for the rest of this page's
     // lifetime once a ?spectate_game_id= URL param is detected at
     // bootstrap (see the very bottom of this file); never toggled back to
@@ -1574,6 +1589,7 @@
             clearInterval(pollTimer);
             pollTimer = null;
         }
+        stopSynchronousActionTimer();
         // Watch game replay (issue #240) -- unlike isSpectating (never
         // reset; a spectator leaves this page entirely instead), a replay
         // session ends back at this same in-page lobby, so its own state
@@ -2467,6 +2483,9 @@
             deckTypeSelect.value = isSealedDeckFormat ? 'sealed_deck' : 'sealed_pool_of_the_day';
             updateDeckTypeDescription();
             updateOpponentSelectionLimit();
+            updateTimeoutFieldVisibility();
+            updateTotalTimeLimitFieldVisibility();
+            updateSynchronousFieldVisibility();
             return;
         }
 
@@ -2494,6 +2513,9 @@
         // isn't left capped at 1 opponent from whatever deck_type was
         // selected a moment ago.
         updateOpponentSelectionLimit();
+        updateTimeoutFieldVisibility();
+        updateTotalTimeLimitFieldVisibility();
+        updateSynchronousFieldVisibility();
     }
 
     // Shows the partner picker only for Open Team Play, populated from
@@ -3326,6 +3348,95 @@
         }
     }
 
+    // Issue #85's own turn/decision timeout opt-in -- see
+    // GameService::createGame()'s own $timeoutMinutes docblock for why
+    // Sealed Pool of the Day/Weekly Sealed Pool never get this option
+    // (always played same-day/same-week against a live opponent, with no
+    // "pick this back up later" story). weekly_sealed_pool never
+    // actually appears in #new-game-deck-type's own option list (that
+    // format is only ever entered through WeeklySealedPoolQueueService's
+    // own separate queue/pairing flow, never this dialog), but the check
+    // stays deck-type-generic rather than hardcoding
+    // 'sealed_pool_of_the_day' alone, matching createGame()'s own
+    // PERIODIC_SEALED_POOL_DECK_TYPES-keyed exclusion exactly. Unchecked
+    // (not just hidden) whenever it goes out of view, same as every
+    // other conditionally-shown New Game field; the two sub-fields
+    // (#new-game-timeout-fields) are shown only once the checkbox
+    // itself is both visible AND checked.
+    const TIMEOUT_EXCLUDED_DECK_TYPES = ['sealed_pool_of_the_day', 'weekly_sealed_pool'];
+    function updateTimeoutFieldVisibility() {
+        const deckType = document.getElementById('new-game-deck-type').value;
+        const show = !TIMEOUT_EXCLUDED_DECK_TYPES.includes(deckType);
+        const checkboxLabel = document.getElementById('new-game-timeout-enabled-label');
+        checkboxLabel.hidden = !show;
+        if (!show) {
+            document.getElementById('new-game-timeout-enabled').checked = false;
+        }
+        document.getElementById('new-game-timeout-fields').hidden =
+            !show || !document.getElementById('new-game-timeout-enabled').checked;
+    }
+
+    // Issue #85 follow-up's own full-game time-limit mode -- a second,
+    // independent opt-in from the idle turn/decision timeout above (a
+    // game may have either, both, or neither). Same
+    // TIMEOUT_EXCLUDED_DECK_TYPES exclusion and "unchecked, not just
+    // hidden, whenever it goes out of view" treatment as
+    // updateTimeoutFieldVisibility() above.
+    function updateTotalTimeLimitFieldVisibility() {
+        const deckType = document.getElementById('new-game-deck-type').value;
+        const show = !TIMEOUT_EXCLUDED_DECK_TYPES.includes(deckType);
+        const checkboxLabel = document.getElementById('new-game-total-time-limit-enabled-label');
+        checkboxLabel.hidden = !show;
+        if (!show) {
+            document.getElementById('new-game-total-time-limit-enabled').checked = false;
+        }
+        document.getElementById('new-game-total-time-limit-fields').hidden =
+            !show || !document.getElementById('new-game-total-time-limit-enabled').checked;
+    }
+
+    // Reported live: "synchronous" mode -- see GameService::createGame()'s
+    // own $synchronousMode docblock. SYNCHRONOUS_MODE_ALLOWED_FORMATS
+    // mirrors GameService::SYNCHRONOUS_MODE_ALLOWED_FORMATS exactly
+    // (increment 1: 2-player Traditional/Duel only), narrowing as later
+    // increments add Draft/Sealed Deck support -- also requires exactly
+    // 2 total players (currentNewGamePlayerCount()), the one restriction
+    // that isn't itself a format/deck_type check. Same "unchecked, not
+    // just hidden, whenever it goes out of view" treatment as the two
+    // async timeout checkboxes above.
+    const SYNCHRONOUS_MODE_ALLOWED_FORMATS = ['standard', 'duel'];
+    function updateSynchronousFieldVisibility() {
+        const format = effectiveNewGameFormat();
+        const show = SYNCHRONOUS_MODE_ALLOWED_FORMATS.includes(format) && currentNewGamePlayerCount() === 2;
+        const checkboxLabel = document.getElementById('new-game-synchronous-enabled-label');
+        checkboxLabel.hidden = !show;
+        const checkbox = document.getElementById('new-game-synchronous-enabled');
+        if (!show) {
+            checkbox.checked = false;
+        }
+        document.getElementById('new-game-synchronous-description').hidden = !show || !checkbox.checked;
+    }
+
+    // Synchronous mode is mutually exclusive with the idle time-out/
+    // total-time-limit checkboxes above (see createGame()'s own
+    // validation) -- checking any one of the three unchecks the other
+    // two, wired as an extra 'change' listener on each of the three
+    // checkboxes (registered below, after each checkbox's own primary
+    // visibility-update listener).
+    function enforceSynchronousExclusivityFromSynchronousCheckbox() {
+        if (document.getElementById('new-game-synchronous-enabled').checked) {
+            document.getElementById('new-game-timeout-enabled').checked = false;
+            document.getElementById('new-game-total-time-limit-enabled').checked = false;
+            updateTimeoutFieldVisibility();
+            updateTotalTimeLimitFieldVisibility();
+        }
+    }
+    function enforceSynchronousExclusivityFromAsyncCheckboxes() {
+        if (document.getElementById('new-game-timeout-enabled').checked || document.getElementById('new-game-total-time-limit-enabled').checked) {
+            document.getElementById('new-game-synchronous-enabled').checked = false;
+            updateSynchronousFieldVisibility();
+        }
+    }
+
     // Hides (and, if checked, unchecks) every bot checkbox -- and their
     // own "Practice bots" heading -- whenever the current format/deck_type
     // combination doesn't support seating one (see botsSupportedFor()).
@@ -3380,6 +3491,10 @@
         // best-of-three checkbox depends on the current player count too
         // (see currentNewGamePlayerCount()).
         updateBestOfThreeFieldVisibility();
+        // Synchronous mode also depends on the current player count
+        // (exactly 2, see updateSynchronousFieldVisibility()'s own
+        // docblock).
+        updateSynchronousFieldVisibility();
     }
 
     // Order matters for the two bot-related listeners here: a bot
@@ -3456,6 +3571,21 @@
     document.getElementById('new-game-deck-type').addEventListener('change', updateOpponentSelectionLimit);
     document.getElementById('new-game-deck-type').addEventListener('change', updateBotCheckboxAvailability);
     document.getElementById('new-game-deck-type').addEventListener('change', updateBestOfThreeFieldVisibility);
+    document.getElementById('new-game-format').addEventListener('change', updateTimeoutFieldVisibility);
+    document.getElementById('new-game-deck-type').addEventListener('change', updateTimeoutFieldVisibility);
+    document.getElementById('new-game-timeout-enabled').addEventListener('change', updateTimeoutFieldVisibility);
+    document.getElementById('new-game-format').addEventListener('change', updateTotalTimeLimitFieldVisibility);
+    document.getElementById('new-game-deck-type').addEventListener('change', updateTotalTimeLimitFieldVisibility);
+    document.getElementById('new-game-total-time-limit-enabled').addEventListener('change', updateTotalTimeLimitFieldVisibility);
+    document.getElementById('new-game-format').addEventListener('change', updateSynchronousFieldVisibility);
+    document.getElementById('new-game-deck-type').addEventListener('change', updateSynchronousFieldVisibility);
+    document.getElementById('new-game-synchronous-enabled').addEventListener('change', updateSynchronousFieldVisibility);
+    // Mutual exclusivity (see createGame()'s own validation) -- registered
+    // after each checkbox's own primary visibility-update listener above,
+    // so this always runs last.
+    document.getElementById('new-game-synchronous-enabled').addEventListener('change', enforceSynchronousExclusivityFromSynchronousCheckbox);
+    document.getElementById('new-game-timeout-enabled').addEventListener('change', enforceSynchronousExclusivityFromAsyncCheckboxes);
+    document.getElementById('new-game-total-time-limit-enabled').addEventListener('change', enforceSynchronousExclusivityFromAsyncCheckboxes);
     document.getElementById('new-game-saved-decklist').addEventListener('change', updateDeckTypeDescription);
     document.getElementById('new-game-duel-rules-preset').addEventListener('change', updateDuelRulesPresetVisibility);
     // Power Duel sideboarding's own checkbox depends on both the current
@@ -4169,6 +4299,31 @@
         // itself unchecked whenever hidden, so reading .checked
         // unconditionally here already reflects that.
         const diagnosticMode = document.getElementById('new-game-diagnostic-mode').checked;
+        // Issue #85's own turn/decision timeout opt-in -- see
+        // updateTimeoutFieldVisibility() for when the checkbox itself is
+        // shown; #new-game-timeout-enabled is itself unchecked whenever
+        // hidden, so reading .checked unconditionally here already
+        // reflects that. timeoutMinutes/timeoutAction are only sent at
+        // all once the checkbox is actually checked -- undefined (rather
+        // than the select's own always-present default value) so the
+        // request cleanly omits both when timeouts aren't wanted, the
+        // same "undefined means don't send this at all" convention every
+        // other optional field on this form already follows.
+        const timeoutEnabled = document.getElementById('new-game-timeout-enabled').checked;
+        const timeoutMinutes = timeoutEnabled ? Number(document.getElementById('new-game-timeout-minutes').value) : undefined;
+        const timeoutAction = timeoutEnabled ? document.getElementById('new-game-timeout-action').value : undefined;
+        // Issue #85 follow-up's own full-game time-limit mode -- same
+        // "undefined means don't send this at all" convention as
+        // timeoutMinutes/timeoutAction above; fully independent of them.
+        const totalTimeLimitEnabled = document.getElementById('new-game-total-time-limit-enabled').checked;
+        const totalTimeLimitMinutes = totalTimeLimitEnabled ? Number(document.getElementById('new-game-total-time-limit-minutes').value) : undefined;
+        // Reported live: "synchronous" mode -- mutually exclusive with
+        // timeoutEnabled/totalTimeLimitEnabled above (enforced both by
+        // the checkboxes' own mutual exclusivity and, ultimately,
+        // createGame()'s own validation). undefined (not false) when
+        // unchecked, same "don't send this at all" convention as every
+        // other optional field on this form.
+        const synchronousMode = document.getElementById('new-game-synchronous-enabled').checked ? true : undefined;
 
         // Issue #116: post to the open lobby instead of creating the game
         // directly -- mirrors createGame()'s own params (see above) minus
@@ -4205,6 +4360,10 @@
                 // lobby silently did nothing.
                 best_of_three: bestOfThree,
                 allow_sideboarding: allowSideboarding,
+                timeout_minutes: timeoutMinutes,
+                timeout_action: timeoutAction,
+                total_time_limit_minutes: totalTimeLimitMinutes,
+                synchronous_mode: synchronousMode,
             });
 
             if (!ok) {
@@ -4249,6 +4408,10 @@
             allowSideboarding,
             diagnosticMode,
             botDecklists,
+            timeoutMinutes,
+            timeoutAction,
+            totalTimeLimitMinutes,
+            synchronousMode,
         );
 
         if (!ok) {
@@ -4695,6 +4858,21 @@
             blissColorEl.hidden = false;
         } else {
             blissColorEl.hidden = true;
+        }
+
+        // wonder_colors only exists on an in-play Wonder card (see
+        // GameService::getState()'s in_play mapping) -- reads as
+        // undefined/empty for every other card, so this stays hidden the
+        // rest of the time. A list (not just one color) since Duplicity
+        // can repeat Wonder's own color choice, each repeat contributing
+        // its own color on top of the earlier one(s).
+        const wonderColorsEl = document.getElementById('card-detail-wonder-colors');
+        if (card.wonder_colors && card.wonder_colors.length > 0) {
+            wonderColorsEl.textContent = 'Chosen color' + (card.wonder_colors.length > 1 ? 's' : '') +
+                ': ' + card.wonder_colors.join(', ');
+            wonderColorsEl.hidden = false;
+        } else {
+            wonderColorsEl.hidden = true;
         }
 
         // has_unused_play_grant only exists (and is only ever true) on an
@@ -5805,11 +5983,49 @@
         onTurn: '<polygon points="7,4 20,12 7,20"/>',
         // A delayed decision response awaiting this player: an hourglass.
         pendingDecision: '<polygon points="6,3 18,3 12,11"/><polygon points="6,21 18,21 12,13"/>',
+        // Issue #85 follow-up's own full-game time-limit mode: a plain
+        // clock face -- outline circle plus two hands, all stroke-based
+        // rather than filled (the same outline technique presenceHidden
+        // below already uses to override the inherited `fill:
+        // currentColor`), so it reads as a distinct "clock" shape rather
+        // than another solid dot/blob among the filled icons above.
+        timeUsed: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/>'
+            + '<path d="M12 7 V12 L16 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
+        // Issue #85 follow-up's own "indicator for action timeout if it's
+        // close" -- a plain alarm bell, deliberately a different SILHOUETTE
+        // from both timeUsed's clock face just above (that one's the
+        // optional full-game time budget, always shown once configured)
+        // and pendingDecision's hourglass below (a delayed CHOICE awaiting
+        // an answer, not a countdown to an automatic one) -- distinct
+        // shapes so a row showing more than one of these at once still
+        // reads as three different things at a glance, not the same icon
+        // recolored three ways.
+        actionTimeoutWarning: '<path d="M12 2a1 1 0 0 1 1 1v.6c3.4.9 5.8 4 5.8 7.6v3.4l1.7 2.6a1 1 0 0 1-.84 1.55H4.34a1 1 0 0 1-.84-1.55l1.7-2.6V11.2c0-3.6 2.4-6.7 5.8-7.6V3a1 1 0 0 1 1-1Z"/>'
+            + '<path d="M9.2 20.2a2.8 2.8 0 0 0 5.6 0Z"/>',
+        // Synchronous mode's own banked timeout-extension count -- a
+        // stopwatch (outline circle, the same stroke-only technique
+        // timeUsed's clock face already uses, plus a small top button
+        // and side knob to read as "stopwatch" rather than "clock")
+        // with a small "+" beside it, since this represents *extra*
+        // time available, not time already spent.
+        extensionsBanked: '<circle cx="11" cy="13" r="8" fill="none" stroke="currentColor" stroke-width="2"/>'
+            + '<path d="M11 8 V13 L14 15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>'
+            + '<line x1="9" y1="2" x2="13" y2="2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
+            + '<line x1="17" y1="4.5" x2="19" y2="2.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
+            + '<path d="M20 17 V21 M18 19 H22" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
         // Team affiliation (Open/Closed Team Play only, player.team_id !==
-        // null): a plain heraldic shield -- color (not shape) is what
-        // actually distinguishes "your own team" from "the opposing team",
-        // see .player-flag--teamMate/--teamOpponent in style.css.
+        // null): a heraldic shield, reported live as hard to distinguish
+        // for colorblind users when the two teams were told apart by color
+        // alone (green/red). Now BOTH color and shape carry the meaning
+        // (WCAG 1.4.1): "team" below is solid-filled for "your own team",
+        // while "teamOpponent" is the same shield outline hollowed out
+        // (fill="none", stroke instead -- same trick as presenceHidden's
+        // outline eye above) for "the opposing team" -- see
+        // .player-flag--teamMate/--teamOpponent in style.css for the
+        // accompanying blue/red recolor.
         team: '<path d="M12 2 L20 5 V11 C20 16 16.5 20 12 22 C7.5 20 4 16 4 11 V5 Z"/>',
+        teamOpponent: '<path d="M12 2 L20 5 V11 C20 16 16.5 20 12 22 C7.5 20 4 16 4 11 V5 Z" '
+            + 'fill="none" stroke="currentColor" stroke-width="2"/>',
         // Shared with friends (issue #92 follow-up): two overlapping people,
         // replacing what used to be a plain "shared with friends" text
         // clause next to a saved deck's name.
@@ -5852,9 +6068,9 @@
     // `role="img"` tells assistive tech to treat the whole span as a single
     // image-with-text-alternative rather than trying to read its
     // (redundant, aria-hidden) SVG and badge separately.
-    function buildPlayerStat(kind, value, label) {
+    function buildPlayerStat(kind, value, label, extraClass) {
         const wrapper = document.createElement('span');
-        wrapper.className = 'player-stat player-stat--' + kind;
+        wrapper.className = 'player-stat player-stat--' + kind + (extraClass ? ' ' + extraClass : '');
         wrapper.title = label;
         wrapper.setAttribute('role', 'img');
         wrapper.setAttribute('aria-label', label);
@@ -5987,6 +6203,157 @@
         }
     }
 
+    // Issue #85's own turn/decision timeout action labels -- mirrors
+    // #new-game-timeout-action's own option text in web-static/game/index.html,
+    // just phrased for a board title's parenthetical rather than a
+    // dropdown option.
+    const TIMEOUT_ACTION_LABELS = {
+        auto_play: 'auto-play',
+        skip: 'skip',
+        resign: 'resign',
+    };
+
+    // Mirrors #new-game-timeout-minutes'/#new-game-total-time-limit-minutes'
+    // own option labels -- see games.timeout_minutes'/total_time_limit_minutes'
+    // own docblocks for why each is always one of its own exact preset
+    // ladder, never an arbitrary number, so a plain lookup (falling back
+    // to "N-minute" for anything unexpected) covers every legal value of
+    // either. 240/480 (4/8 hours) are total_time_limit_minutes-only;
+    // every other entry is shared between the two ladders.
+    const TIMEOUT_DURATION_LABELS = {
+        30: '30-minute',
+        60: '1-hour',
+        120: '2-hour',
+        240: '4-hour',
+        360: '6-hour',
+        480: '8-hour',
+        720: '12-hour',
+        1440: '1-day',
+        2880: '2-day',
+        4320: '3-day',
+        10080: '7-day',
+    };
+
+    function timeoutDurationLabel(minutes) {
+        return TIMEOUT_DURATION_LABELS[minutes] || (minutes + '-minute');
+    }
+
+    // Issue #85 follow-up's own full-game time-limit mode -- "3h 12m" for
+    // the tooltip/aria-label (full precision, minutes dropped once there
+    // are none to show, e.g. a clean "2h"), reused by
+    // buildPlayerTimeUsedStat() below.
+    function formatDurationLong(totalSeconds) {
+        const totalMinutes = Math.floor(totalSeconds / 60);
+        const hours = Math.floor(totalMinutes / 60);
+        const minutes = totalMinutes % 60;
+        if (hours === 0) {
+            return minutes + 'm';
+        }
+        return hours + 'h' + (minutes > 0 ? ' ' + minutes + 'm' : '');
+    }
+
+    // The same duration, rounded down to a whole hour, for the small
+    // circular badge itself -- "3h 12m" doesn't fit that space the way
+    // every other stat's plain 1-2 digit count does, so the badge shows
+    // this compact form and the tooltip/aria-label (buildPlayerTimeUsedStat()
+    // below) carries the full formatDurationLong() precision instead, the
+    // same "badge is the compact value, title/aria-label is the full
+    // detail" split buildPlayerStat() itself already establishes.
+    function formatDurationCompact(totalSeconds) {
+        const hours = Math.floor(totalSeconds / 3600);
+        return hours === 0 ? '<1h' : hours + 'h';
+    }
+
+    // Chess-clock-style time-used indicator (reported live: "did you add
+    // any indicators ... how much time you've spent total on the game?
+    // Kind of like a chess clock display") -- only ever built once the
+    // game has actually opted into the full-game time-limit mode (see
+    // renderBoard()'s own call site), so $totalTimeLimitMinutes is never
+    // null here. Escalates color the same way the lobby's own awaiting-
+    // response styling and went-first pennant already do elsewhere on
+    // this page (--color-info -> --color-pending -> --color-error) as
+    // $activeSecondsUsed approaches the limit, rather than a plain
+    // always-blue stat that gives no visual warning before a player is
+    // suddenly auto-resigned. Deliberately a plain fraction-of-limit
+    // threshold rather than trying to project forward the way the
+    // backend's own applyTotalTimeLimitIfExceeded() sweep does -- this
+    // only ever reflects $activeSecondsUsed as of the board's last
+    // refresh (no client-side ticking), so a bar that's still comfortably
+    // under 75%/90% here can still legitimately jump past the limit
+    // between refreshes if that player's own turn runs very long; the
+    // point is an early warning, not a live countdown.
+    function buildPlayerTimeUsedStat(activeSecondsUsed, totalTimeLimitMinutes) {
+        const limitSeconds = totalTimeLimitMinutes * 60;
+        const fraction = activeSecondsUsed / limitSeconds;
+        const severityClass = fraction >= 0.9 ? 'player-stat--timeUsed-danger'
+            : fraction >= 0.75 ? 'player-stat--timeUsed-warning'
+                : null;
+        const label = formatDurationLong(activeSecondsUsed) + ' used of a ' + (totalTimeLimitMinutes / 60) + '-hour total time limit';
+
+        return buildPlayerStat('timeUsed', formatDurationCompact(activeSecondsUsed), label, severityClass);
+    }
+
+    // Synchronous mode's own match-wide chess clock (increment 4,
+    // reported live: "each player has a total 30 minutes for a match...
+    // if the user goes over the 30 minute allotment, they automatically
+    // lose"). Reuses buildPlayerTimeUsedStat()'s own icon/severity-escalation
+    // shape against player.active_seconds_used -- the exact same field
+    // total_time_limit_minutes' own stat reads, just fed a fixed 30-minute
+    // cap (SYNCHRONOUS_MATCH_TIME_LIMIT_MINUTES, mirroring
+    // GameService::SYNCHRONOUS_MATCH_TIME_LIMIT_MINUTES exactly) instead
+    // of a per-game configurable one -- the two stats are mutually
+    // exclusive on any one board the same way the settings themselves
+    // are (see renderBoard()'s own call site). Unlike
+    // formatDurationCompact()'s hour-rounded badge (built for the async
+    // feature's multi-hour scale), a 30-minute cap never reaches a whole
+    // hour, so formatDurationLong()'s own "12m" form is already compact
+    // enough for the badge itself here.
+    const SYNCHRONOUS_MATCH_TIME_LIMIT_MINUTES = 30;
+
+    function buildPlayerSynchronousMatchClockStat(activeSecondsUsed) {
+        const limitSeconds = SYNCHRONOUS_MATCH_TIME_LIMIT_MINUTES * 60;
+        const fraction = activeSecondsUsed / limitSeconds;
+        const severityClass = fraction >= 0.9 ? 'player-stat--timeUsed-danger'
+            : fraction >= 0.75 ? 'player-stat--timeUsed-warning'
+                : null;
+        const label = formatDurationLong(activeSecondsUsed) + ' used of a ' + SYNCHRONOUS_MATCH_TIME_LIMIT_MINUTES + '-minute match clock';
+
+        return buildPlayerStat('timeUsed', formatDurationLong(activeSecondsUsed), label, severityClass);
+    }
+
+    // Issue #85 follow-up: "add some kind of indicator for action timeout
+    // if it's close (like within 15 minutes)" -- $secondsRemaining only
+    // ever arrives here already inside that 15-minute window (see
+    // state.game.action_timeout_warning/buildActionTimeoutWarning() on the
+    // backend), so this is purely a display formatter, not another
+    // threshold check. Escalates to --color-error under 5 minutes left,
+    // the same --color-pending -> --color-error severity language
+    // buildPlayerTimeUsedStat() just above already established, just with
+    // only one step (there's no "comfortable" state to render here at all
+    // -- if this is showing, it's already a warning).
+    function buildActionTimeoutWarningStat(secondsRemaining) {
+        const minutes = Math.floor(secondsRemaining / 60);
+        const badge = minutes < 1 ? '<1m' : minutes + 'm';
+        const label = (minutes < 1 ? 'Less than a minute' : 'About ' + minutes + ' minute(s)') + ' left before this turn times out.';
+        const severityClass = secondsRemaining <= 300 ? 'player-stat--actionTimeoutWarning-danger' : null;
+
+        return buildPlayerStat('actionTimeoutWarning', badge, label, severityClass);
+    }
+
+    // Synchronous mode's own timeout-extension bank -- "players earn 1
+    // additional extension for every 3 full turns played without
+    // triggering the countdown timer... a banked timeout extension is
+    // automatically consumed to grant you an extra 30 seconds." Shown
+    // for every seat once state.game.synchronous_mode is true (even at
+    // 0 banked -- unlike the action-timeout warning above, this is an
+    // ongoing resource to track, not a transient alert, so it stays
+    // visible the whole game the same way hand_count/points/wins do).
+    function buildExtensionsBankedStat(extensionsBanked) {
+        const label = extensionsBanked === 1 ? '1 banked timeout extension' : extensionsBanked + ' banked timeout extensions';
+
+        return buildPlayerStat('extensionsBanked', extensionsBanked, label);
+    }
+
     function renderBoard(state) {
         // A custom decklist's own name (or "Uploaded Deck" if none was
         // specified) replaces "<deck type> deck" entirely here, rather than
@@ -6018,9 +6385,29 @@
         // row's own indicator (buildGameRow()) so it's visible once a
         // player has actually opened the board too, not just from the
         // lobby list.
+        // Issue #85's own turn/decision timeouts -- shown the same
+        // parenthetical way, so a player who wasn't the one who created
+        // the game still knows an idle turn/response won't just sit
+        // forever, and roughly how it'll be resolved if it does.
+        const timeoutDescription = state.game.timeout_minutes !== null
+            ? ', ' + timeoutDurationLabel(state.game.timeout_minutes) + ' timeout (' + TIMEOUT_ACTION_LABELS[state.game.timeout_action] + ')'
+            : '';
+        // Issue #85 follow-up's own full-game time-limit mode -- same
+        // parenthetical treatment, independent of timeoutDescription
+        // above (a game may have either, both, or neither).
+        const totalTimeLimitDescription = state.game.total_time_limit_minutes !== null
+            ? ', ' + timeoutDurationLabel(state.game.total_time_limit_minutes) + ' total time limit'
+            : '';
+        // Reported live: "synchronous" mode -- mutually exclusive with
+        // both descriptions above (a game has one of the three, never a
+        // combination -- see createGame()'s own validation).
+        const synchronousDescription = state.game.synchronous_mode ? ', synchronous' : '';
         document.getElementById('board-title').textContent =
             'Game #' + state.game.id + ' (' + formatAndDeckDescription +
-            (state.game.default_selections_mode ? ', default selections' : '') + ')';
+            (state.game.default_selections_mode ? ', default selections' : '') +
+            totalTimeLimitDescription +
+            timeoutDescription +
+            synchronousDescription + ')';
 
         // Spectator mode (issue #128)/Watch game replay (issue #240) --
         // only a real seated player can mint/share this game's own code,
@@ -6215,28 +6602,32 @@
                 // name in the Players list.
                 const isThinking = Boolean(state.bot_thinking) && state.bot_thinking.game_player_id === player.game_player_id;
                 iconsEl.appendChild(buildPresenceFlag(player.username, player.presence, isThinking));
-                // Team affiliation (Open/Closed Team Play only) -- color,
-                // not the team NUMBER, is what actually matters to the
-                // viewer at a glance: green for their own team (including
-                // their own row), red for the opposing team. This icon is
-                // the ONLY place that information appears now (there used
-                // to also be a plain "— Team N (your teammate)" text tag
-                // on the row itself) -- its title/aria-label (see
-                // buildPlayerFlag()) carries the exact same wording that
-                // text tag used to, so a screen reader (or a sighted user
-                // hovering for a reminder) still gets the full "Team N"/
-                // "your teammate" information, just via the icon instead
-                // of separate on-row text. Skipped entirely for a
-                // spectator/replay viewer (viewerTeamId === null there,
-                // since they have no team of their own) -- coloring every
-                // row red for someone with no "own team" to contrast
-                // against would just be misleading, not informative.
+                // Team affiliation (Open/Closed Team Play only) -- color
+                // AND shape, not the team NUMBER, are what actually matter
+                // to the viewer at a glance: blue solid shield for their
+                // own team (including their own row), red hollow shield
+                // for the opposing team (reported live as hard to tell
+                // apart by color alone for colorblind users -- see
+                // PLAYER_STAT_ICON_PATHS.team/.teamOpponent's own comment).
+                // This icon is the ONLY place that information appears now
+                // (there used to also be a plain "— Team N (your
+                // teammate)" text tag on the row itself) -- its
+                // title/aria-label (see buildPlayerFlag()) carries the
+                // exact same wording that text tag used to, so a screen
+                // reader (or a sighted user hovering for a reminder) still
+                // gets the full "Team N"/"your teammate" information, just
+                // via the icon instead of separate on-row text. Skipped
+                // entirely for a spectator/replay viewer (viewerTeamId ===
+                // null there, since they have no team of their own) --
+                // marking every row as "the opposing team" for someone
+                // with no "own team" to contrast against would just be
+                // misleading, not informative.
                 if (player.team_id !== null && viewerTeamId !== null) {
                     const isSameTeamAsViewer = player.team_id === viewerTeamId;
                     const teamIconLabel = 'Team ' + (player.team_id + 1) +
                         (isTeammate ? ' (your teammate)' : '');
                     iconsEl.appendChild(buildPlayerFlag(
-                        'team',
+                        isSameTeamAsViewer ? 'team' : 'teamOpponent',
                         teamIconLabel,
                         isSameTeamAsViewer ? 'player-flag--teamMate' : 'player-flag--teamOpponent'
                     ));
@@ -6249,6 +6640,36 @@
                 iconsEl.appendChild(buildPlayerStat('points', player.total_score, player.total_score + ' point(s)'));
                 iconsEl.appendChild(buildPlayerStat('wins', player.total_wins, player.total_wins + ' win(s)'));
                 iconsEl.appendChild(buildPlayerStat('hand', player.hand_count, player.hand_count + ' card(s) in hand'));
+                // Issue #85 follow-up's own full-game time-limit mode --
+                // only rendered at all once the game actually opted in
+                // (state.game.total_time_limit_minutes), same "harmless
+                // no-op outside its own narrow scope" treatment every
+                // other conditional icon on this row already follows.
+                // Chess-clock-style: reported live, "did you add any
+                // indicators ... how much time you've spent total on the
+                // game? Kind of like a chess clock display."
+                if (state.game.total_time_limit_minutes !== null) {
+                    iconsEl.appendChild(buildPlayerTimeUsedStat(player.active_seconds_used, state.game.total_time_limit_minutes));
+                } else if (state.game.synchronous_mode) {
+                    // Synchronous mode's own match-wide chess clock
+                    // (increment 4) -- mutually exclusive with
+                    // total_time_limit_minutes above, same as the
+                    // settings themselves.
+                    iconsEl.appendChild(buildPlayerSynchronousMatchClockStat(player.active_seconds_used));
+                }
+                // Issue #85 follow-up's own action-timeout warning --
+                // state.game.action_timeout_warning is null except on
+                // whichever single row is both currently idle and within
+                // 15 minutes of its own timeout_minutes clock firing (see
+                // buildActionTimeoutWarning() on the backend), so this
+                // never needs its own "is it this player's turn" check
+                // here -- the game_player_id match already is one.
+                if (state.game.action_timeout_warning !== null && state.game.action_timeout_warning.game_player_id === player.game_player_id) {
+                    iconsEl.appendChild(buildActionTimeoutWarningStat(state.game.action_timeout_warning.seconds_remaining));
+                }
+                if (state.game.synchronous_mode) {
+                    iconsEl.appendChild(buildExtensionsBankedStat(player.timeout_extensions_banked));
+                }
                 if (wentFirst) {
                     iconsEl.appendChild(buildPlayerFlag('wentFirst', 'Went first this round'));
                 }
@@ -6304,6 +6725,7 @@
         renderTeamScores(state.teams, viewerTeamId);
 
         if (state.game.status === 'waiting') {
+            stopSynchronousActionTimer();
             inProgressArea.hidden = true;
             // #recent-events-details now lives outside #in-progress-area
             // (moved below #resign-button/#view-chat-button/
@@ -6325,6 +6747,7 @@
 
             if (state.game.deck_type === 'custom_duel') {
                 document.getElementById('board-round-status').textContent = 'Waiting for the game to start.';
+                document.getElementById('ready-check-panel').hidden = true;
                 document.getElementById('quick-draft-panel').hidden = true;
                 document.getElementById('winston-draft-panel').hidden = true;
                 document.getElementById('grid-draft-panel').hidden = true;
@@ -6333,7 +6756,26 @@
                 document.getElementById('draft-deck-building').hidden = true;
                 renderDuelDeckSubmission(state);
                 autoStartGameIfReady(state.players.every((p) => p.deck_submitted));
+            } else if (DRAFT_DECK_TYPES.includes(state.game.deck_type) && state.game.synchronous_mode && !state.players.every((p) => p.ready)) {
+                // Synchronous mode's own ready check gates drafting
+                // itself, not just the eventual hand deal (increment 3,
+                // reported live) -- the server hasn't even dealt this
+                // match's first round/pile/pool yet (see
+                // GameService::markReady()'s own docblock), so there's
+                // no state.quick_draft/winston_draft/etc. to read at all
+                // until every seat clicks Ready.
+                document.getElementById('quick-draft-panel').hidden = true;
+                document.getElementById('winston-draft-panel').hidden = true;
+                document.getElementById('grid-draft-panel').hidden = true;
+                document.getElementById('rotisserie-draft-panel').hidden = true;
+                document.getElementById('tiered-rotisserie-draft-panel').hidden = true;
+                document.getElementById('draft-deck-building').hidden = true;
+                document.getElementById('duel-deck-submission').hidden = true;
+                document.getElementById('board-round-status').textContent = '';
+                renderReadyCheckPanel(state);
+                autoStartGameIfReady(false);
             } else if (DRAFT_DECK_TYPES.includes(state.game.deck_type)) {
+                document.getElementById('ready-check-panel').hidden = true;
                 document.getElementById('duel-deck-submission').hidden = true;
                 const draftState = state.game.deck_type === 'quick_draft' || state.game.deck_type === 'chaos_draft' ? state.quick_draft
                     : state.game.deck_type === 'winston_draft' ? state.winston_draft
@@ -6344,6 +6786,26 @@
                 document.getElementById('board-round-status').textContent =
                     draftState.status === 'drafting' ? 'Drafting your deck.' : 'Building your deck.';
                 renderDraftPanel(state);
+                // Synchronous mode's own draft-pick timer (increment 3)
+                // -- same live countdown the in-progress branch further
+                // down wires from action_deadline_at/
+                // action_deadline_game_player_id, just driven from
+                // draft_pick_deadline_at/draft_pick_deadline_usernames
+                // instead (both null/empty once drafting finishes -- see
+                // GameService::buildGameState()'s own docblock -- so this
+                // naturally stops itself once deck-building begins).
+                if (state.game.synchronous_mode && state.game.draft_pick_deadline_at !== null && state.game.draft_pick_deadline_usernames.length > 0) {
+                    synchronousDeadlineInfo = {
+                        deadlineAtMs: new Date(state.game.draft_pick_deadline_at).getTime(),
+                        username: state.game.draft_pick_deadline_usernames.join(' & '),
+                    };
+                    tickSynchronousActionTimer();
+                    if (synchronousActionTimerInterval === null) {
+                        synchronousActionTimerInterval = setInterval(tickSynchronousActionTimer, 1000);
+                    }
+                } else {
+                    stopSynchronousActionTimer();
+                }
                 // other_players (issue #189) covers every OTHER seated
                 // player -- for a 3-4 player Quick Draft match,
                 // opponent_submitted alone only reflects the first of them,
@@ -6359,7 +6821,6 @@
                     && everyOtherDeckSubmitted
                 );
             } else {
-                document.getElementById('board-round-status').textContent = 'Waiting for the game to start.';
                 document.getElementById('duel-deck-submission').hidden = true;
                 document.getElementById('quick-draft-panel').hidden = true;
                 document.getElementById('winston-draft-panel').hidden = true;
@@ -6367,12 +6828,21 @@
                 document.getElementById('rotisserie-draft-panel').hidden = true;
                 document.getElementById('tiered-rotisserie-draft-panel').hidden = true;
                 document.getElementById('draft-deck-building').hidden = true;
-                autoStartGameIfReady(true);
+                if (state.game.synchronous_mode) {
+                    document.getElementById('board-round-status').textContent = '';
+                    renderReadyCheckPanel(state);
+                    autoStartGameIfReady(state.players.every((p) => p.ready));
+                } else {
+                    document.getElementById('board-round-status').textContent = 'Waiting for the game to start.';
+                    document.getElementById('ready-check-panel').hidden = true;
+                    autoStartGameIfReady(true);
+                }
             }
 
             return;
         }
 
+        document.getElementById('ready-check-panel').hidden = true;
         document.getElementById('duel-deck-submission').hidden = true;
         document.getElementById('quick-draft-panel').hidden = true;
         document.getElementById('winston-draft-panel').hidden = true;
@@ -6440,6 +6910,27 @@
             } else {
                 boardRoundStatusEl.textContent = 'Round ' + state.round.round_number + turnSuffix;
             }
+        }
+
+        // Synchronous mode's own live action timer -- see
+        // tickSynchronousActionTimer()'s own docblock. Started/refreshed
+        // here on every poll; stopped (and hidden) the moment there's
+        // nobody currently on the clock (game.status !== 'in_progress'
+        // is impossible to reach this far down renderBoard(), so the
+        // only real "nothing to show" case here is a non-synchronous
+        // game or a null action_deadline_at/action_deadline_game_player_id).
+        if (state.game.status === 'in_progress' && state.game.synchronous_mode && state.game.action_deadline_at !== null && state.game.action_deadline_game_player_id !== null) {
+            const onTheClock = state.players.find((p) => p.game_player_id === state.game.action_deadline_game_player_id);
+            synchronousDeadlineInfo = {
+                deadlineAtMs: new Date(state.game.action_deadline_at).getTime(),
+                username: onTheClock ? onTheClock.username : 'Someone',
+            };
+            tickSynchronousActionTimer();
+            if (synchronousActionTimerInterval === null) {
+                synchronousActionTimerInterval = setInterval(tickSynchronousActionTimer, 1000);
+            }
+        } else {
+            stopSynchronousActionTimer();
         }
 
         // "Pause at the start of your turn" (reported live) -- only ever
@@ -6623,15 +7114,17 @@
             const li = document.createElement('li');
             const memberNames = team.game_player_ids.map(playerLabelFor).join(' & ');
             const teamLabel = 'Team ' + (team.team_id + 1) + ' (' + memberNames + ')';
-            // No color-coding at all (left at .player-flag's own default
-            // muted gray) when there's no viewer team to compare
-            // against -- coloring both teams red for a spectator would
-            // be misleading, not informative, same reasoning the
+            // No color-coding (or shape distinction) at all -- left at the
+            // solid shield in .player-flag's own default muted gray --
+            // when there's no viewer team to compare against: marking
+            // every other team as "the opposing team" for a spectator
+            // would be misleading, not informative, same reasoning the
             // Players-list icon already follows.
             const extraClass = viewerTeamId === null
                 ? null
                 : (team.team_id === viewerTeamId ? 'player-flag--teamMate' : 'player-flag--teamOpponent');
-            li.appendChild(buildPlayerFlag('team', teamLabel, extraClass));
+            const iconKind = viewerTeamId !== null && team.team_id !== viewerTeamId ? 'teamOpponent' : 'team';
+            li.appendChild(buildPlayerFlag(iconKind, teamLabel, extraClass));
             li.append(' — ' + team.total_score + ' point(s) this round, ' + team.total_wins + ' round win(s)');
             return li;
         });
@@ -8473,6 +8966,64 @@
         }
     }
 
+    // Synchronous mode's own live 30-second action timer (reported live:
+    // "which should be visible in the game display") -- purely a
+    // display refresh, computed from synchronousDeadlineInfo (last set
+    // by renderBoard() from the server's own action_deadline_at) against
+    // the current time; never itself decides anything expired -- that's
+    // enforceSynchronousActionDeadline()'s own job server-side, on the
+    // next ~4-second poll. Escalates to a danger style under 10 seconds
+    // remaining, the same "getting close" severity language the
+    // async action-timeout warning icon already uses elsewhere on this
+    // page.
+    function tickSynchronousActionTimer() {
+        const el = document.getElementById('synchronous-action-timer');
+        if (!synchronousDeadlineInfo) {
+            el.hidden = true;
+            return;
+        }
+
+        const secondsRemaining = Math.max(0, Math.ceil((synchronousDeadlineInfo.deadlineAtMs - Date.now()) / 1000));
+        el.hidden = false;
+        el.textContent = synchronousDeadlineInfo.username + "'s action timer: " + secondsRemaining + 's';
+        el.className = secondsRemaining <= 10 ? 'synchronous-action-timer--danger' : '';
+    }
+
+    function stopSynchronousActionTimer() {
+        if (synchronousActionTimerInterval !== null) {
+            clearInterval(synchronousActionTimerInterval);
+            synchronousActionTimerInterval = null;
+        }
+        synchronousDeadlineInfo = null;
+        document.getElementById('synchronous-action-timer').hidden = true;
+    }
+
+    // Synchronous mode's own pre-game ready check (reported live) --
+    // lists each seat's own ready/not-ready status and, if the viewer
+    // hasn't clicked Ready yet, the button to do so. Mirrors
+    // renderDuelDeckSubmission()'s own "never lets you re-submit once
+    // you already have" treatment: #ready-check-button hides itself the
+    // moment the viewer's own row reads ready, the same way that
+    // function's submission form disappears once deck_submitted is
+    // true. Start game itself stays hidden/gated until every seat is
+    // ready -- see renderBoard()'s own caller (autoStartGameIfReady()).
+    function renderReadyCheckPanel(state) {
+        const panel = document.getElementById('ready-check-panel');
+        panel.hidden = false;
+
+        const list = document.getElementById('ready-check-status');
+        list.innerHTML = '';
+        for (const player of state.players) {
+            const item = document.createElement('li');
+            item.textContent = player.username + ': ' + (player.ready ? 'Ready' : 'Not ready yet');
+            list.appendChild(item);
+        }
+
+        const you = state.players.find((p) => p.game_player_id === state.you.game_player_id);
+        const button = document.getElementById('ready-check-button');
+        button.hidden = !you || you.ready;
+    }
+
     // The 'custom_duel' waiting-room view: shows the creator's own locked-
     // in deck-building rules, both players' submission status (never the
     // decklist contents themselves -- see deck_submitted's own docblock in
@@ -8742,6 +9293,21 @@
         selectedCard = null;
         choicesPanel.hidden = true;
         announceOutcome(body);
+        await refreshBoard();
+    });
+
+    // Synchronous mode's own ready check (reported live) -- idempotent
+    // server-side (see GameService::markReady()), so no confirmation
+    // dialog the way resigning gets; the button itself hides once the
+    // viewer's own row reads ready (see renderReadyCheckPanel()).
+    document.getElementById('ready-check-button').addEventListener('click', async () => {
+        boardError.hidden = true;
+        const { ok, body } = await markReady(currentGameId);
+        if (!ok) {
+            boardError.textContent = body.message || 'Could not confirm ready.';
+            boardError.hidden = false;
+            return;
+        }
         await refreshBoard();
     });
 

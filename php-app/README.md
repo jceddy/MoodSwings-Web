@@ -89,7 +89,8 @@ HTML maintenance page) — see "Maintenance mode" below.
 | GET    | `/games/log`    | query params `game_id`, `code`?                                   | Requires auth; `403` unless you're seated in that game OR authorized to spectate it (issue #128 -- same `canSpectateGame()` check `GET /games/spectate/state`/`GET /games/deck` use). The entire `game_events` log for this game, oldest first, unbounded (issue #98) -- unlike `/games/state`'s own `recent_events`, which is newest-first and capped at 15. Each entry is `{"id", "created_at", "round_number", "event_type", "acting_game_player_id", "acting_username", "card_id", "card_name", "details", "description"}` -- `description` is the same `describeEvent()`-rendered text `recent_events` itself uses; the rest is raw enough for a genuine offline export (see "Game log" below). No per-viewer filtering -- every event is already visible to every seated player (and now every spectator) regardless of who triggered it. See `GameService::fullEventLog()`. |
 | GET    | `/games/deck`   | query params `game_id`, `code`?                                   | Requires auth; `403` unless you're seated in that game OR authorized to spectate it (issue #128 -- friends with a seated player, or `code` matches the game's own spectate code; same `canSpectateGame()` check `GET /games/spectate/state` uses). A shared-deck game's entire deck (issue #197) -- every `deck_type` except `custom_duel`/`quick_draft`/`winston_draft`/`grid_draft`, where each player has their own deck rather than one shared pool (see `GameService::isSharedDeckType()`). Returns `{"cards": [...]}`, hydrated the same way `/decklists/view` hydrates a saved decklist's cards, sorted white/blue/black/red/green then alphabetically by name within a color. `409` if the game's `deck_type` has no single shared deck, or the game is still `waiting` (nothing dealt yet). See "Shared deck view" below. |
 | GET    | `/games/export` | query param `game_id`                                             | Requires auth; `403` if you're not seated in that game -- deliberately narrower than `/games/log` above (no spectator path), since this is a personal offline archive rather than a shareable view. A raw, complete dump of every row related to this game (issue #99), across every table with any FK relationship to `games.id` -- not the curated, human-readable view `/games/log` already provides. Returns `{"export": {...}}`; see `GameService::exportGameData()` and "Download complete game data" below for the full shape. |
-| POST   | `/games/start`  | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. Deals hands and begins round 1. `409` if the game isn't `waiting` or has fewer than 2 seated players. |
+| POST   | `/games/start`  | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. Deals hands and begins round 1. `409` if the game isn't `waiting`, has fewer than 2 seated players, or (a `synchronous_mode` game) not every seat is ready yet. |
+| POST   | `/games/ready`  | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. Synchronous mode's own pre-game ready check -- idempotent. `409` if the game isn't a `synchronous_mode` game. Returns `{"all_ready"}`. See "Synchronous mode" above. |
 | POST   | `/games/play`   | `{"game_id", "card_id", "choices"?}`                              | Requires auth; `403` if you're not seated in that game. `choices` is an opaque object passed straight through to the rules engine — its shape (a target player id, a discard, a mode string, etc.) is entirely card-specific; see `src/Rules/PlayerChoices.php` and `CardChoiceSchema` below. `400` on an invalid/missing choice for that card, `409` if it's not your turn, a decision is already pending, this round's own Chaos Draft offer is still unresolved for ANY seated player (see "Chaos Draft" below), or the play is otherwise illegal. Returns `{"round_scored", "game_completed", "winner_game_player_id"?}`, or `{"pending_decision": true}` if the play now needs another player's own answer before it can finish — see `RequiresOpponentDecision` below. |
 | POST   | `/games/pass`   | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. `409` if it's not your turn, a decision is pending, this round's own Chaos Draft offer is still unresolved for ANY seated player (see "Chaos Draft" below), or your own turn is still gated behind "Pause at the start of your turn" below. Same return shape as `/games/play`. |
 | POST   | `/games/advance-turn` | `{"game_id"}`                                               | Requires auth; `403` if you're not seated in that game. `409` if it's not your turn. Clears `round.turn_pending_acknowledgment` for your own current turn (a no-op if it's already clear) -- the only way to unlock `/games/play`/`/games/pass` once "Pause at the start of your turn" has gated them. Same return shape as `/games/pass`. See "Pause at the start of your turn" below. |
@@ -117,8 +118,8 @@ HTML maintenance page) — see "Maintenance mode" below.
 | GET    | `/notifications/vapid-public-key` | —                                                | No auth required -- the VAPID public key isn't secret (that's the point of asymmetric VAPID auth), same reasoning as `/cards/catalog` being public. Returns `{"public_key"}` (empty string if the server has none configured). See "Browser push notifications" below. |
 | POST   | `/notifications/subscribe` | `{"endpoint", "keys": {"p256dh", "auth"}}`                | Requires auth. Stores (or updates, if the endpoint's already known) a `PushSubscription` for the current user. `400` if `endpoint`/`keys.p256dh`/`keys.auth` are missing. See "Browser push notifications" below. |
 | POST   | `/notifications/unsubscribe` | `{"endpoint"}`                                          | Requires auth. Removes the current user's subscription for that endpoint, if any (silently a no-op otherwise). |
-| GET    | `/notifications/preferences` | —                                                        | Requires auth. Returns `{"preferences": {"notify_your_turn", "notify_friend_request", "notify_game_finished", "notify_chat_message", "disable_cooldown"}}` -- the four `notify_*` toggles default `true`, `disable_cooldown` defaults `false`, for a user who's never changed them. |
-| POST   | `/notifications/preferences` | `{"notify_your_turn"?, "notify_friend_request"?, "notify_game_finished"?, "notify_chat_message"?, "disable_cooldown"?}` | Requires auth. Upserts the current user's preferences (each `notify_*` field defaults to `true` if omitted, `disable_cooldown` defaults to `false`); returns the saved `{"preferences"}`. See "Browser push notifications" below for what `disable_cooldown` does, "In-game chat" above for `notify_chat_message`. |
+| GET    | `/notifications/preferences` | —                                                        | Requires auth. Returns `{"preferences": {"notify_your_turn", "notify_friend_request", "notify_game_finished", "notify_chat_message", "notify_timeout_warning", "disable_cooldown"}}` -- the five `notify_*` toggles default `true`, `disable_cooldown` defaults `false`, for a user who's never changed them. |
+| POST   | `/notifications/preferences` | `{"notify_your_turn"?, "notify_friend_request"?, "notify_game_finished"?, "notify_chat_message"?, "notify_timeout_warning"?, "disable_cooldown"?}` | Requires auth. Upserts the current user's preferences (each `notify_*` field defaults to `true` if omitted, `disable_cooldown` defaults to `false`); returns the saved `{"preferences"}`. See "Browser push notifications" below for what `disable_cooldown` does, "In-game chat" above for `notify_chat_message`, "Turn and decision timeouts" above for `notify_timeout_warning`. |
 | GET    | `/discord/status` | —                                                             | Requires auth. Returns `{"linked", "discord_username"}` (the latter `null` if unlinked). See "Discord" below. |
 | GET    | `/discord/oauth/start` | —                                                        | Requires auth. Not a JSON endpoint -- a `302` straight to Discord's own OAuth2 consent screen. Meant for browser navigation (a link/button), not `fetch()`. See "Discord" below. |
 | GET    | `/discord/oauth/callback` | `code`, `state` (query params, set by Discord's own redirect) | Requires auth. Not a JSON endpoint -- a `302` back to the lobby, `?discord_linked=1` on success or `?discord_link_error=<message>` on failure. See "Discord" below. |
@@ -393,10 +394,20 @@ the round it was played in finishes scoring. The legacy per-card
 `oneTimeFirstPlayerOverride`/`skipScoringThisRound` effectState keys are
 still read as a fallback, purely for backward compatibility with a game
 whose Awe resolved before this round-level tracking existed. There's
-also an unconditional "the round's winner is awarded an extra win" tag
+also an unconditional "the round's winner is awarded an extra win" flag
 that doubles `game_rounds.wins_awarded` regardless of who plays it or
-who wins (Corruption — `GameService::consumeExtraWinMarker()`). A
-separate, reusable "was this mood played this round" tag
+who wins (Corruption — `GameService::hasExtraWinMarker()`/
+`consumeExtraWinMarker()`). Reported live, the identical failure mode
+Awe's own pair already had: this used to be per-card effectState too
+(`awardsExtraWin`), and so silently vanished if Corruption left play
+before the round it was played in finished scoring, since Corruption's
+own choice is likewise locked in the instant it resolves. Fixed the same
+way — round-level state (`game_rounds.awards_extra_win`/
+`awards_extra_win_source_card_id`/`awards_extra_win_owner_game_player_id`,
+see `BoardState::$awardsExtraWinThisRound`'s own docblock), with the
+legacy per-card tag still read as a fallback for a game whose Corruption
+resolved before this existed. A separate, reusable "was this mood played
+this round" tag
 (`playedInRound`, stamped on every mood the moment it enters play from
 `BoardState::currentRoundNumber()`, alongside `playedByPlayerId` —
 whoever actually played it, immutable even once ownership itself
@@ -963,23 +974,31 @@ ends. Built by `GameService::scoringEffectEntries()`, it's one
 in-play mood whose ability changes how this round scores — Bliss and
 Exhilaration (always, for as long as they stay in play), Enthusiasm and
 Passion (likewise, since their "you may" option recurs every round), and
-Sneakiness/Awe/Corruption (only for as long as their one-time
-round-scoped `effectState` tag stays set — `swapScoreWithPlayerId`/
-`skipScoringThisRound`/`awardsExtraWin` — since `applyScoreSwaps()`/
-`consumeExtraWinMarker()` each clear their own tag once the round it
-covers actually scores, so a stale Sneakiness from three rounds ago never
-lingers here). A bug caught live, reported by a user: playing Sneakiness
-or Corruption in the SAME round as Awe used to leave that tag stuck
-forever, since `applyScoreSwaps()`/`consumeExtraWinMarker()` only ever
-run inside `finishScoringAndAdvance()`, and Awe's own skip-scoring path
-(`skipScoringAndAdvance()`) bypasses that method entirely — the round
-never actually scores, so neither one-time tag ever got the chance to
-fire *or* clear, leaving it to keep showing here indefinitely and then
-genuinely misfire on whatever LATER round finally did score normally.
-`skipScoringAndAdvance()` now clears both tags itself, alongside its own
-Awe-specific ones, matching "no one wins or loses this round" — if
-there's no scoring, there's nothing left for either effect to modify.
-None of this is hidden information
+Sneakiness (only for as long as its one-time round-scoped `effectState`
+tag, `swapScoreWithPlayerId`, stays set — `applyScoreSwaps()` clears it
+once the round it covers actually scores, so a stale Sneakiness from
+three rounds ago never lingers here). Awe's and Corruption's own one-time
+choices are each built as their own separate, non-mood-keyed checks
+instead — see `BoardState::$skipScoringThisRound`'s/`$awardsExtraWinThisRound`'s
+own docblocks for why (reported live, twice: both choices are locked in
+the instant they resolve, with no "while in play" condition on either
+one, so tagging them on the card itself meant they silently vanished if
+Awe/Corruption left play before the round they were played in finished
+scoring — Corruption's own version of this bug, and fix, came second,
+mirroring Awe's exactly). A separate bug caught live, reported by a
+user: playing Sneakiness or Corruption in the SAME round as Awe used to
+leave Sneakiness's own tag (and, before its own round-level fix,
+Corruption's) stuck forever, since `applyScoreSwaps()`/
+`consumeExtraWinMarker()` only ever run inside `finishScoringAndAdvance()`,
+and Awe's own skip-scoring path (`skipScoringAndAdvance()`) bypasses that
+method entirely — the round never actually scores, so neither one-time
+effect ever got the chance to fire *or* clear, leaving it to keep showing
+here indefinitely and then genuinely misfire on whatever LATER round
+finally did score normally. `skipScoringAndAdvance()` clears both
+(Corruption's now via `BoardState::clearAwardsExtraWinThisRound()`)
+itself, alongside its own Awe-specific state, matching "no one wins or
+loses this round" — if there's no scoring, there's nothing left for
+either effect to modify. None of this is hidden information
 — an in-play card and the choice it was played with are both already
 public — so every viewer sees the same list. The `effect_key` lookup goes
 through `BoardState::effectiveCardId()`, mirroring `RoundScorer::score()`'s
@@ -992,6 +1011,23 @@ card except an in-play Bliss, which reads it from its own `blissColor`
 captured once at play time — see `BlissEffect::payToPlayCost()`) so the
 client can show *which* color it's currently tripling without the player
 having to remember what they discarded.
+
+**`wonder_colors`** is the identical idea for Wonder (reported live: show
+the color(s) chosen when a Wonder was played, alongside the other
+information already printed beneath its card image in the detail view) —
+`null` for every other card, an array for an in-play Wonder, read from
+its own `colors` `effectState` (`WonderEffect::afterPlaying()`). A list,
+not a single color like Bliss's own field, since Duplicity can repeat
+Wonder's own color choice (`WonderEffect`'s own docblock), each repeat
+appending its own color on top of whatever was already chosen rather than
+replacing it — deduplicated for display (`array_unique()`) so choosing
+the same color twice doesn't read as though it were chosen twice; the
+underlying `effectState` list itself is left exactly as `WonderEffect`
+wrote it, since `computeValue()`'s own `in_array()` check against it
+doesn't care about duplicates either. The frontend renders it in
+`openCardDetail()` as `card-detail-wonder-colors`, the same
+hidden-unless-populated `<p>` pattern `card-detail-bliss-color` already
+uses.
 
 `round.board_effects` is `scoring_effects`' sibling for non-scoring
 board-wide reshaping: same `{card_id, card_name, owner_game_player_id,
@@ -4181,6 +4217,684 @@ top-level `game_match` field.
 
 **Frontend** -- see "Best of three" in `web-static/README.md`.
 
+### Turn and decision timeouts (issue #85)
+
+"Don't make everyone wait on one AFK player" -- an opt-in-at-creation
+pair of `games` columns, `timeout_minutes` (nullable -- `NULL` means
+off) and `timeout_action` (`'auto_play'`/`'skip'`/`'resign'`, always set
+together with `timeout_minutes`, migration 0324), plus a periodic sweep
+(`bin/apply_game_timeouts.php` -> `GameService::applyTimeoutsForAllActiveGames()`)
+that resolves an idle player's own turn or pending decision on their
+behalf once they've gone quiet for that long.
+
+**Opt-in at creation, never for Sealed Pool of the Day/Weekly Sealed
+Pool** -- `createGame()`'s own `$timeoutMinutes`/`$timeoutAction`
+parameters (`timeout_minutes`/`timeout_action` in the API/New Game
+dialog). Both are silently forced back to `null` (not an error, the same
+"harmless no-op outside its own narrow scope" convention `$diagnosticMode`
+etc. already follow) whenever `$deckType` is one of
+`PERIODIC_SEALED_POOL_DECK_TYPES` (`sealed_pool_of_the_day`/
+`weekly_sealed_pool`) -- both are always played same-day/same-week
+against a live opponent, with no long-running "pick this back up later"
+story the way every other format has, so an idle timeout has nothing
+sensible to protect there. Every other format/deck_type combination is
+fair game. A non-null `$timeoutMinutes` below `TIMEOUT_MINIMUM_MINUTES`
+(30) or a `$timeoutAction` outside `TIMEOUT_ACTIONS` (`'auto_play'`,
+`'skip'`, `'resign'`) IS rejected with a `GameStateException` -- that's
+direct misuse, not a deck_type this feature was never meant to reach.
+
+**Why 30 minutes, not 15** -- reported live, the maintainer's own
+dev/production environments can only run the sweep cron every 15
+minutes. A configured timeout shorter than one full cron interval could
+sit unnoticed for up to one whole EXTRA interval past when it nominally
+elapsed (a 15-minute timeout checked by a cron that just fired 14
+minutes ago won't be caught for another ~14 minutes), which would
+mislead whoever configured it about how quickly it actually fires. 30
+minutes is the shortest value where "checked every 15 minutes" reads as
+a reasonable rounding error rather than the timeout being effectively
+double its stated length.
+
+**Carried forward across match games** the same "chosen once at match
+creation" way `diagnostic_mode`/`default_selections_mode` already are
+(see "Best of three" above) -- both `advanceDraftMatch()`'s and
+`advanceGameMatch()`'s own next-game `INSERT`s copy `timeout_minutes`/
+`timeout_action` straight from the game that just finished, rather than
+requiring the setting to be re-chosen (or silently resetting to off,
+this column's own implicit default) for game 2/3 of a best-of-three
+match.
+
+**`applyTimeoutToGame()`'s own "who is this game actually waiting on"
+resolution** -- an open Open/Closed Team Play turn-order/draw-recipient
+decision first (`game_team_decisions`, see `applyTimeoutToTeamDecision()`'s
+own docblock immediately below for why it's checked before
+`currentRound()` -- and for its own separate "who's idle" rules, since
+a team decision has no single `current_turn_game_player_id`/
+`pending_decision.target_game_player_id` the way everything else here
+does), else a still-open `pending_decision`'s own `target_game_player_id`
+if one exists (`RequiresOpponentDecision`, see the pause/resume
+mechanism above), else the round's own plain `current_turn_game_player_id`.
+None of those identifying anyone, or the idle player being a bot
+(practice bots are never actually left idle long enough for a
+30-minute-or-longer timeout to matter -- automated turns already act for
+them within moments, so a bot still showing up here would mean
+something else entirely is stuck), both mean "nothing to do," not an
+error.
+
+**`applyTimeoutToTeamDecision()`'s own per-phase "who's idle" rule** --
+phase `'propose'`: EITHER of the deciding team's own two members may act
+(`proposeTeamDecision()`'s own "either candidate" rule), so there's no
+single idle player to blame; `$candidateIds[0]` is picked
+deterministically, mirroring `chooseTeamDecisionProposal()`'s own
+equally arbitrary, non-strategic choice for a bot's identical situation
+-- and since `resignGame()` ends a team-format game outright regardless
+of which teammate's own resignation actually triggered it
+(`completeGameByResignation()`), which specific one gets picked barely
+matters for `'resign'` specifically. Phase `'confirm'`: only the
+non-proposing teammate may act (`confirmTeamDecision()` itself rejects
+the proposer trying to), so they're unambiguously the one idle here.
+`'skip'`/`'auto_play'` behave identically for a team decision too, the
+same reasoning the ordinary pending_decision case below already follows
+-- `chooseTeamDecisionProposal()`/an outright approve are each already
+the sole non-strategic default this decision type has, the exact same
+one a bot sitting in either seat would use, so there's no separate "just
+skip it" to distinguish from "answer with the default."
+
+**The action itself:**
+- `'resign'` calls `resignGame()` on the idle player's behalf outright
+  -- it already auto-answers any pending decision targeting them first
+  (`autoAnswerOwnPendingDecisionBeforeResigning()`, added for issue
+  #85's own "can we allow players to resign while a choice is waiting on
+  them?" precedent) before completing the resignation, so this one call
+  cleanly covers both "idle" shapes with no extra branching needed.
+- `'skip'`/`'auto_play'` on a pending decision behave IDENTICALLY --
+  both answer it via `BotPlayerService::chooseDecisionAnswer()`, the
+  exact same target-agnostic default-answer machinery a bot's own turn
+  (and a resigning human's own pending decision, see above) already
+  uses. A decision has no universal notion of "just skip it" the way an
+  ordinary turn does -- some fields already resolve to a legal "decline"
+  through that exact same method when declining is the right/only
+  sensible default, so reusing it covers that case too rather than
+  reinventing a separate one.
+- `'skip'` on an ordinary turn is a plain `pass()` (`automated: true`),
+  even when a legal play exists -- "the player's move is skipped."
+- `'auto_play'` on an ordinary turn reuses `playViaHeuristicBotFallback()`
+  as-is -- the exact same "pick a real move the way a practice bot
+  would" logic already used when a Tactical Bot's own search comes up
+  with nothing recoverable (see "Practice bots" below).
+
+A `timeout_applied` event is logged immediately before acting (`describeEvent()`
+renders it as "{player} timed out and ..." per action), so the game log
+always shows plainly that a turn/response was a time-out and not a real
+one, ahead of whatever the action itself goes on to log (`mood_played`/
+`turn_passed`/`pending_decision_resolved`, or a resignation).
+
+**No lock held across the sweep itself** (unlike `expireStaleActiveGames()`
+above, which holds one across its own raw `UPDATE`) -- `applyTimeoutToGame()`
+only ever calls this class's own already-self-locking public entry
+points (`playMood()`/`pass()`/`respondToDecision()`/`resignGame()`), each
+of which re-validates the exact state it needs under its own lock and
+throws if anything about the situation already changed. A stale row from
+the sweep's own initial `SELECT` (a player who acted moments before the
+cron reached their game, e.g.) just means that one game's own attempt
+throws and is skipped -- no different from two humans racing to act on
+the same turn, and no different from `playViaHeuristicBotFallback()`'s
+own identical catch-and-skip precedent elsewhere in this file.
+
+**Surfaced read-only via `getState()`** -- `timeout_minutes`/
+`timeout_action` on the top-level `game` object, `null`/`null` when off,
+purely so every seated player (not just whoever created the game) can
+see it's active and how it's configured. See "Turn and decision
+timeouts" in `web-static/README.md` for the New Game dialog fields and
+board display this drives.
+
+**Cron** -- `bin/apply_game_timeouts.php`, meant to run every 15 minutes
+(`*/15 * * * *`), wired up identically to `bin/advance_automated_turns.php`
+(a real `NotificationService`, `ChaosDefaultEffectRegistry` alongside the
+plain registry) since an auto-played/skipped/resigned action can just as
+easily hand the turn to a human owed an "it's your turn" notification as
+any other automated turn advance would.
+
+**Follow-up (issue #85 follow-up): full-game time-limit mode** (migration
+0325) -- a second, independent opt-in from `timeout_minutes`/`timeout_action`
+above, `createGame()`'s own `$totalTimeLimitMinutes` parameter
+(`total_time_limit_minutes` in the API/New Game dialog; `games.total_time_limit_minutes`,
+`self::TOTAL_TIME_LIMIT_MIN_MINUTES`/`MAX_MINUTES`, 1-72 hours): a hard
+cap on any ONE player's own cumulative "clock" time across the whole
+game, regardless of how many separate turns/decisions that time was
+spread across. A game may have either opt-in, both, or neither. Always
+resigns once exceeded -- no `auto_play`/`skip` choice the way the
+per-turn timeout has, since the whole point is a hard ceiling rather
+than a per-turn nudge. Same Sealed Pool of the Day/Weekly Sealed Pool
+exclusion as `timeout_minutes` above; carried forward across match games
+the same way (per-GAME, not per-match -- each match game's own budget
+starts fresh).
+
+`game_players.active_seconds_used` (migration 0325) is the running
+total: `touchLastMoveAt()` grew a `$creditGamePlayerId` parameter that
+credits the OLD `last_move_at`-to-now interval onto that player's own
+total, BEFORE `last_move_at` itself gets overwritten. Only
+`playMood()`/`pass()`/`respondToDecision()`/`proposeTeamDecision()`/
+`confirmTeamDecision()` pass it -- the exact same set of "whoever is
+acting was necessarily the one the game was waiting on" methods
+`applyTimeoutToGame()`'s own idle-player resolution already covers (each
+is turn-/target-gated, so the acting player IS who the clock was
+running against for that whole interval). `resignGame()` deliberately
+omits it: it's explicitly NOT turn-gated (see its own docblock), so a
+bystander resigning mid-someone-else's-turn was never who the clock was
+actually running against, and crediting them would be wrong.
+
+`applyTotalTimeLimitIfExceeded()` is checked first in both
+`applyTimeoutToGame()` and `applyTimeoutToTeamDecision()`, ahead of the
+ordinary per-turn/decision `timeout_action` -- when both opt-ins apply
+to the same idle player at once, the hard total-time ceiling wins.
+Rather than waiting for that player to actually finish acting (which
+might never happen), it PROJECTS what their own total would become if
+they're still the one being waited on right now
+(`active_seconds_used + $secondsSinceLastMove`), so a player already
+over budget mid-turn is caught by the very next sweep run rather than
+being stuck there indefinitely. `applyTimeoutsForAllActiveGames()`'s own
+candidate `SELECT` was widened to include any `in_progress` game with
+EITHER `timeout_minutes` OR `total_time_limit_minutes` set (previously
+just the former) -- unlike the per-turn case, whether a game's own
+total-time opt-in is actually due can't be pre-filtered by a single
+game-level timestamp comparison in SQL (it depends on a specific
+player's own accumulated total), so every candidate game is simply
+handed to `applyTimeoutToGame()` to work out precisely.
+
+**Follow-up (issue #85 follow-up): Open/Closed Team Play coverage** --
+`game_team_decisions` (turn-order/draw-recipient proposals, see
+"Open Team Play" below) was this feature's own one documented gap; it's
+now covered too, via `applyTimeoutToTeamDecision()`. A team decision has
+no single `current_turn_game_player_id`/`pending_decision.target_game_player_id`
+the way everything else here does, so it needs its own "who's idle"
+rule per `game_team_decisions.phase`:
+- `'propose'`: EITHER of the deciding team's own two members may act
+  (`proposeTeamDecision()`'s own "either candidate" rule), so there's no
+  single idle player to blame -- `$candidateIds[0]` is picked
+  deterministically, mirroring `chooseTeamDecisionProposal()`'s own
+  equally arbitrary, non-strategic choice for a bot's identical
+  situation. Which one gets picked barely matters for `'resign'`
+  specifically (ordinary or total-time-limit): `completeGameByResignation()`
+  ends a team-format game outright regardless of which teammate's own
+  resignation actually triggered it, so either choice ends the SAME
+  team's game the same way.
+- `'confirm'`: only the non-proposing teammate may act
+  (`confirmTeamDecision()` itself rejects the proposer trying to), so
+  they're unambiguously the one idle here.
+
+`'skip'`/`'auto_play'` behave identically for a team decision too, the
+same reasoning the ordinary `pending_decision` case already follows:
+`chooseTeamDecisionProposal()`/an outright approve are each already the
+sole non-strategic default this decision type has, the exact same one a
+bot sitting in either seat would use, so there's no separate "just skip
+it" to distinguish from "answer with the default." The one remaining
+gap: Open/Closed Team Play's own pregame initial-card-pass window
+(`game_initial_card_passes`) and every draft-family deck type's own
+"whose turn is it to pick" state aren't covered by either timeout mode
+yet -- a slow drafter, or a Closed Team Play player who never submits
+their opening 2-card pass, isn't currently caught by this sweep.
+
+**Follow-up (issue #85 follow-up): "close to timing out" indicator +
+notification** -- reported live: "add some kind of indicator for action
+timeout if it's close (like within 15 minutes)... also send a
+notification if either the action timeout or full game chess clock
+timeout becomes less than 15 minutes left." Two independent additions,
+both built on the same read-only idle-player resolution:
+
+- `GameService::resolveIdleGamePlayerAndSecondsSinceLastMove()` -- a
+  read-only counterpart to `applyTimeoutToGame()`'s own "who is this game
+  actually waiting on" resolution documented above, deliberately
+  duplicated rather than shared: that method and
+  `applyTimeoutToTeamDecision()` go on to actually mutate game state once
+  they've resolved an idle player, while this is called from
+  `buildGameState()` (on every board poll) and `sendTimeoutWarningIfClose()`
+  below (every 15-minute cron tick), neither of which may ever throw or
+  change anything -- wrapped in its own `try`/`catch` for exactly that
+  reason, so a transient race against a player's own concurrent action
+  never breaks an ordinary `getState()` call the way it's fine for
+  `applyTimeoutToGame()` to simply catch, log, and skip that same race on
+  its own next cron tick.
+- **Visual indicator** -- `GameService::buildActionTimeoutWarning()`
+  backs a new `getState()` field, `game.action_timeout_warning`: `null`
+  unless `timeout_minutes` is on, someone's currently idle (and not a
+  bot), AND that player's own `timeout_minutes` clock has 15 minutes or
+  less left to run, in which case it's
+  `{"game_player_id", "seconds_remaining"}`. Kept this narrow (rather
+  than always exposing a raw countdown) so the frontend only ever needs
+  to check "is this non-null" -- see "Turn and decision timeouts" in
+  `web-static/README.md` for the board-side icon this drives. Only ever
+  covers the ordinary per-turn/decision timeout, not the full-game time
+  limit -- that one already has its own always-on chess-clock indicator
+  (`active_seconds_used`/`buildPlayerTimeUsedStat()`, see the follow-up
+  above), so it needs no separate "getting close" flag.
+- **Notification** -- `GameService::sendTimeoutWarningIfClose()`, called
+  from `applyTimeoutsForAllActiveGames()`'s own sweep loop for every game
+  `applyTimeoutToGame()` did NOT itself resolve on that same tick (a game
+  that just timed out -- resigned/skipped/auto-played, or the
+  total-time-limit resignation -- has nothing left to warn its idle
+  player about; the thing this would have warned about already
+  happened). Reuses the same resolved idle player to check BOTH timeout
+  modes independently (a game may have either, both, or neither): only
+  that one player's clock can possibly be running right now for either
+  mode (`touchLastMoveAt()` only ever credits `active_seconds_used` to
+  whoever is currently being waited on, so a player merely waiting for
+  their OWN next turn isn't "at risk" of the total-time-limit this
+  moment even if their own accumulated total is already close). Calls
+  `NotificationService::notifyTimeoutWarning()` (new, mirrors
+  `notifyYourTurn()`'s shape; own preference `notify_timeout_warning`,
+  migration 0327, defaults on like every other `notify_*` toggle;
+  shares `NotificationScope::forGame()` with `notifyYourTurn()`/
+  `notifyGameFinished()`/`notifyNewChatMessage()`, so it's still just one
+  5-minute cooldown/queue bucket per game, not a separate one per kind of
+  event). No "just crossed under 15 minutes" edge-detection -- the
+  cooldown already prevents spamming a still-idle player on back-to-back
+  ticks, and in practice a game sits in either warning window for at most
+  one 15-minute tick before the idle player acts or the timeout itself
+  fires.
+
+### Synchronous mode
+
+Reported live: a mode for two players who are both actually sitting down
+to play live, right now -- distinct from everything in "Turn and
+decision timeouts" above, which is entirely about tolerating a
+slow/disconnected player over minutes-to-days. `games.synchronous_mode`
+(`BOOLEAN`, migration 0329) is a third, mutually exclusive choice
+alongside "off" and the async `timeout_minutes`/`total_time_limit_minutes`
+opt-ins -- `createGame()` rejects combining it with either
+(`GameStateException`, direct misuse rather than a silently-ignored
+scope mismatch).
+
+**Landing in increments**, the same way issue #85 itself shipped team-
+decision coverage and the full-game time-limit mode as separate follow-
+ups rather than all at once: the mode flag and pre-game "ready check"
+(increment 1); the 30-second live action timer with timeout-extension
+banking (increment 2); Draft/Sealed Deck support, including a
+60-second-per-pick timer for the five draft-family deck_types and a
+ready check that gates drafting itself, not just the eventual hand deal
+(increment 3); and the match-wide 30-minute chess clock, covering
+deck-building/sideboarding time too (increment 4, below) -- covering
+2-player Traditional/Duel/Draft
+(`self::SYNCHRONOUS_MODE_ALLOWED_FORMATS = ['standard', 'duel', 'draft']`).
+The roadmap this feature originally set out with is now fully shipped.
+
+**The ready check** (`game_players.ready_at`, migration 0329) -- "each
+player needs to be seated/looking at the game before it starts." Every
+seated human must call `markReady()` (idempotent -- a second call from
+the same seat is a harmless no-op, matching `acknowledgeTurnStart()`'s
+own convention, see that method's docblock for the closest existing
+analog this was modeled on) before `startGame()` will proceed; a
+practice bot seat is stamped ready immediately at seating time (both in
+`createGame()` and `advanceGameMatch()`'s own next-match-game seating
+loop), since there's no one to click anything on its behalf. `markReady()`
+itself never starts the game -- like every other "waiting" precondition
+in this class (a `custom_duel`/draft deck submission), the frontend's
+own poll-and-retry (`autoStartGameIfReady()`) is what actually calls
+`startGame()` once it notices every seat is ready, so no new server-push
+mechanism was needed: `GET /games/state` already gets polled every 4
+seconds while the board is open (see "Browser push notifications"
+above's own presence docblock for that same cadence).
+
+`allPlayersReady()` checks every seated `game_players.id` for a non-NULL
+`ready_at` in one query. `startGame()` throws
+`"Game {id} cannot start until every player is ready"` when the check
+fails for a `synchronous_mode` game -- a no-op check for every other
+game, the same "only ever consulted once its own opt-in is set"
+treatment `timeout_minutes`/`total_time_limit_minutes` already get
+elsewhere in this class.
+
+**Carried forward across match games** the same "chosen once at match
+creation" way `diagnostic_mode`/`timeout_minutes` already are (see "Best
+of three" above) -- `advanceGameMatch()`'s own next-game `INSERT` copies
+`synchronous_mode` straight from the game that just finished. The ready
+check itself still starts fresh every match game, though: a new set of
+`game_players` rows means everyone's own `ready_at` resets to NULL by
+that column's own default, so both seats confirm they're still there for
+game 2/3 too. A draft-family match's own best-of-three games 2/3 never
+need an analogous ready check of their own, though -- `advanceDraftMatch()`
+carries `synchronous_mode` forward exactly like every other opt-in, but
+there's no fresh *drafting* phase to gate on game 2/3 the way game 1's
+own `markReady()` gates it (only deck-building/sideboarding, which
+increment 3 leaves untimed -- see below).
+
+**Surfaced via `getState()`** -- `game.synchronous_mode` (top-level,
+always present, `false` for every other game) and a `ready` boolean on
+each entry in `players[]` (per-player, since readiness is genuinely
+per-seat, not per-game). See "Synchronous mode" in `web-static/README.md`
+for the New Game dialog checkbox and the board's own ready-check panel
+this drives.
+
+**Increment 2: the live action timer** (migration 0330) -- "each player
+has 30 seconds to make a play/respond to a decision before a 30-second
+timer starts... if the timer expires, the player's action is
+skipped/auto-resolved." Two new columns on `games` --
+`action_deadline_at`/`action_deadline_game_player_id` -- track who's
+currently on the clock and when their window expires; three new columns
+on `game_players` -- `timeout_extensions_banked`/`clean_turn_streak`/
+`consecutive_timed_out_actions` -- track that player's own bank, streak,
+and how many times in a row their own window has lapsed with nothing
+left to cover it.
+
+`action_deadline_at` is deliberately its own new column, not a repurposed
+`last_move_at`: the two are different SHAPES of value (a hard, forward-
+looking deadline vs. a backward-looking "when did the clock last
+reset"), and `last_move_at` already has other consumers (the lobby's own
+sort order, `total_time_limit_minutes`' own `active_seconds_used`
+interval math) that assume it always means exactly the latter -- see
+`resetSynchronousActionDeadline()`'s own docblock for the full reasoning,
+mirroring `total_time_limit_minutes` (migration 0325) itself landing as
+an independent column beside `timeout_minutes`/`timeout_action` rather
+than folding into them.
+
+**Granting/earning/spending extensions** -- "players start a match with
+0 timeout extensions and are granted 2 once the game starts" is
+`self::SYNCHRONOUS_STARTING_EXTENSIONS`, granted inside `startGame()`'s
+own transaction for a `synchronous_mode` game (which also has to stamp
+`last_move_at = NOW()` there, for the same reason: it's otherwise left
+NULL until the first real move, which `resolveIdleGamePlayerAndSecondsSinceLastMove()`
+-- reused here to resolve round 1's own first-turn player -- requires to
+resolve anyone as idle at all; synchronous mode is mutually exclusive
+with `total_time_limit_minutes`, so this never disturbs that other
+feature's own reliance on the same gap). "Earn 1 additional extension
+for every 3 full turns played without triggering the countdown" is
+`self::SYNCHRONOUS_EXTENSION_EVERY_N_CLEAN_TURNS`, capped at
+`self::SYNCHRONOUS_MAX_BANKED_EXTENSIONS` (5) so a long clean streak
+can't stockpile an unbounded pile late-game. "When a countdown timer
+runs out, a banked timeout extension is automatically consumed to grant
+you an extra 30 seconds" is `enforceSynchronousActionDeadline()`'s own
+first check once a deadline has passed -- consuming one via a single
+guarded `UPDATE ... WHERE timeout_extensions_banked > 0` (atomic, immune
+to a double-decrement race even without an app-level lock) and logging a
+`timeout_extension_used` game-log event, without touching
+`consecutive_timed_out_actions` at all -- covering an expired window
+with a banked extension was never a lapse worth charging against the
+player.
+
+**`updateSynchronousActionClock()`** is `touchLastMoveAt()`'s own new
+synchronous-mode hook (fires for every credited action -- `playMood()`/
+`pass()`/`respondToDecision()`/`proposeTeamDecision()`/
+`confirmTeamDecision()` -- a no-op for every other game), and is the one
+piece of this whole mechanism worth reading closely: it judges "did this
+action land within its own 30-second window" purely by comparing NOW()
+against `action_deadline_at`/`action_deadline_game_player_id` as they
+stood BEFORE this action (read here, only overwritten at the very end).
+That same rule applies whether the acting player is a real human who
+submitted an ordinary action a little late, OR
+`enforceSynchronousActionDeadline()`'s own auto-resolved `pass()`/
+`respondToDecision()` call (which, by the time it runs, is by definition
+already past that same deadline) -- deliberately unified, so
+`enforceSynchronousActionDeadline()` never has to separately track "was
+this a timeout" before calling into either: this method works it out
+fresh, from the same timestamps either caller would have seen. On time:
+`consecutive_timed_out_actions` resets to 0 and `clean_turn_streak`
+increments (paying out an extension every 3rd). Late: `clean_turn_streak`
+resets to 0 and `consecutive_timed_out_actions` increments --
+`enforceSynchronousActionDeadline()`'s own cue for whether the NEXT
+lapse is the second in a row. Either way, ends by calling
+`resetSynchronousActionDeadline()` (also `startGame()`'s own means of
+setting the very first deadline) to compute a fresh one for whoever's
+actually on the clock now, reusing
+`resolveIdleGamePlayerAndSecondsSinceLastMove()` -- the exact same
+"who is this game actually waiting on" resolution the action-timeout
+warning indicator above already uses.
+
+**`enforceSynchronousActionDeadline()`** is the real-time enforcement
+itself -- called from `GET /games/state` on every ~4-second poll while
+the board is open (the same "cheap early-out, best-effort, never blocks
+the read that follows" treatment `advanceAutomatedTurns()` already gets
+there), NOT a cron: a 30-second deadline can't wait for the 15-minute
+sweep. With no extension left to consume, it's a real timeout: "two in a
+row" (`self::SYNCHRONOUS_AUTO_LOSS_AFTER_CONSECUTIVE_TIMEOUTS`) checks
+the idle player's own CURRENT `consecutive_timed_out_actions` (before
+this one) -- already at least 1 means resolving this one the same way
+would make it the second in a row, so this resigns them outright instead
+(`timeout_applied` event, `{"timeout_action": "resign", "synchronous": true, "consecutive": true}`).
+Otherwise (their first lapse), auto-resolves whatever they're idle on --
+a pending decision via the exact same `BotPlayerService::chooseDecisionAnswer()`
+default-answer machinery `applyTimeoutToGame()` itself uses, or an
+ordinary turn via a plain automated `pass()` -- always the "skip"
+behavior; synchronous mode has no configurable `timeout_action` the way
+the async opt-in does. Bot exclusion and the try/catch-and-log
+resilience (a stale read racing a real concurrent action just means this
+tick is skipped, same as the next poll gets another try) both mirror
+`applyTimeoutToGame()`'s own identical concerns.
+
+**`applySynchronousAbandonment()`** is the 15-minute cron's own
+abandonment-ONLY backstop -- "requires at least one player to have the
+game open/polling, if both players abandon the game, the 15-minute cron
+job... should detect and resolve it." `applyTimeoutsForAllActiveGames()`'s
+own candidate `SELECT` now also matches `synchronous_mode = 1` games, and
+`applyTimeoutToGame()` dispatches a synchronous game here immediately
+instead of the ordinary per-turn `timeout_minutes`/`timeout_action` logic
+below it. Only fires once a deadline has sat unresolved for
+`self::SYNCHRONOUS_ABANDONMENT_GRACE_SECONDS` (5 minutes) -- comfortably
+longer than any real gap between two ordinary ~4-second polls during
+actual live play, but short enough that the very first cron tick to see
+a genuinely abandoned game already clears the bar, rather than needing a
+threshold that risks missing it for another full 15-minute cycle. Always
+resigns outright (no extension/consecutive-timeout bookkeeping -- there's
+no live player here to charge a "first lapse" against, only an abandoned
+game to close out), the same `timeout_applied`/`resign` shape as the
+real-time auto-loss path, tagged `"abandoned"` instead of `"consecutive"`
+so the game log reads accurately either way.
+
+**Surfaced via `getState()`** -- `game.action_deadline_at`/
+`action_deadline_game_player_id` (both `null` outside synchronous mode)
+and a `timeout_extensions_banked` int on each entry in `players[]`
+(always present, harmless outside synchronous mode, the same treatment
+`ready` already gets). See "Synchronous mode" in `web-static/README.md`
+for the board's own live countdown and extension-count display these
+drive.
+
+**Increment 3: Draft/Sealed Deck support** (migration 0331) -- "for
+draft, players are allowed 60 seconds for each pick... there is no time
+limit on deck building/sideboarding, but the time spent... counts
+against your 30 minutes total match time" (the match-wide chess clock
+itself is still the one planned-but-unbuilt follow-up -- see the
+roadmap paragraph above -- so today deck-building/sideboarding stays
+genuinely untimed for a synchronous match, exactly like an async one).
+`self::SYNCHRONOUS_MODE_ALLOWED_FORMATS` gained `'draft'`, which covers
+all five draft-family deck_types plus Sealed Deck/Sealed Pool of the
+Day/Weekly Sealed Pool -- every one of them already 2-player-only or
+2-4-player, and the general synchronous-mode gate still hard-requires
+exactly 2 either way, so `'team'`/`'closed_team'` drafts remain out of
+scope for now.
+
+**The ready check gates drafting itself, not just the eventual hand
+deal** -- "each player needs to be seated/looking at the game before it
+starts" applies just as much to a live draft as to an ordinary turn.
+Unlike every other synchronous opt-in, this couldn't be a pure
+validation/enforcement addition: `createGame()` has always dealt a
+draft-family match's first round/pile/pool immediately, in the same
+transaction that seats the players, with no later "start drafting"
+request for a human to make at all. For a synchronous match, that
+dealing is deferred instead -- `draft_matches.pending_draft_init`
+(`JSON`, non-`NULL` from creation until every seat has clicked Ready)
+holds whatever deck_type-specific config
+`initializeDeferredSynchronousDraft()` will still need once it finally
+runs (Rotisserie Draft's own cutoff count; Tiered Rotisserie Draft's own
+tier pools/mode -- everything else is already recoverable from
+`draft_matches.pool_card_ids`/`draftMatchUserIds()` alone). `markReady()`
+itself is what actually deals the first round once `allPlayersReady()`
+turns true, wrapped in `withGameLock()` so two players' own ready
+clicks landing back to back can't deal it twice. `draftHasBeenInitialized()`
+(`pending_draft_init IS NULL`) guards `buildGameState()`'s own
+per-deck_type dispatch, so a still-waiting viewer's `GET /games/state`
+simply omits `quick_draft`/`winston_draft`/etc. entirely rather than
+trying to read state tables that don't exist yet -- the frontend shows
+the same ready-check panel an ordinary synchronous game does until then
+(see `web-static/README.md`). Sealed Deck has no live drafting phase at
+all (`initializeSealedDeck()` just flips `draft_matches.status` straight
+to `'deck_building'`), but gets the exact same deferral treatment for
+consistency -- a synchronous Sealed Deck match's already-built pools
+stay unread until both seats are in. A best-of-three draft match's own
+game 2/3 needs no analogous re-deferral: `advanceDraftMatch()` carries
+`synchronous_mode` forward exactly like `timeout_minutes`/
+`total_time_limit_minutes` already were, and stamps a practice bot seat
+ready immediately (mirroring `createGame()`'s own identical treatment),
+but there's no fresh *drafting* to gate for a later match game -- only
+the ordinary hand deal, which `startGame()`'s existing ready-check gate
+already covers generically once `game_players.ready_at` resets to NULL
+for the new game's own fresh seats.
+
+**The 60-second pick timer** -- `draft_matches.pick_deadline_at`
+(`TIMESTAMP`) is `action_deadline_at`'s own analogue, scoped to the
+whole match rather than one `games` row (a draft match's drafting phase
+happens entirely before any of its up to 3 `games` rows ever reaches
+`'in_progress'`). Set to `NOW() + 60s` by `resetSynchronousDraftPickDeadlineIfNeeded()`
+-- called once when `initializeDeferredSynchronousDraft()` deals the
+first round, and again after every successful
+`submitQuickDraftPick()`/`submitWinstonDraftPick()`/`submitGridDraftPick()`/
+`submitRotisserieDraftPick()`/`submitTieredRotisserieDraftPick()` --
+and cleared back to `NULL` once `draft_matches.status` leaves
+`'drafting'` (a complete no-op outside synchronous mode throughout,
+same as every other opt-in field here). `currentDraftPickUserIds()`
+resolves "who's actually on the clock right now" per deck_type: Winston/
+Grid/Rotisserie/Tiered Rotisserie Draft each have one single
+`current_player_user_id`/`current_turn_user_id` column to read directly,
+but Quick Draft/Chaos Draft's own SIMULTANEOUS per-stage picks (every
+seated player picks independently within a stage -- see
+`submitQuickDraftPick()`'s own docblock) mean potentially every seated
+player is still on the clock for the current stage at once, not just
+one.
+
+**`enforceSynchronousDraftPickDeadline()`** is the real-time enforcement
+-- called from `GET /games/state` right alongside
+`enforceSynchronousActionDeadline()`, same "cheap early-out, best-effort,
+never blocks the read" treatment. Rather than inventing a new "auto-pick
+for an idle human" mechanism, it reuses the exact same machinery a
+practice bot's own idle turn already resolves through --
+`advanceBotQuickDraftPick()`/`advanceBotWinstonDraftPick()`/
+`advanceBotGridDraftPick()`/`advanceBotRotisserieDraftPick()`/
+`advanceBotTieredRotisserieDraftPick()` -- simply passing every seated
+user id in place of a real bot user id list; none of those five methods
+actually check anything bot-specific beyond "is this user id in the
+list I was given," so a timed-out human is indistinguishable to them
+from an idle bot, and each already no-ops (or resolves whichever seat
+is still pending) when everyone it's handed has already acted. Unlike
+`enforceSynchronousActionDeadline()`'s own extension-banking/auto-resign
+escalation, a skipped draft pick has no notion of "forfeiting" anything
+-- the same heuristic a bot would use just picks FOR the idle player,
+so there's deliberately no extension bank or auto-concession here (a
+separate constant, `SYNCHRONOUS_DRAFT_PICK_TIMEOUT_SECONDS`, rather than
+reusing `SYNCHRONOUS_ACTION_TIMEOUT_SECONDS`, reflects that this is a
+different KIND of timeout, not just a different duration). Each call
+resolves at most one pick, the same "one action, let the loop call back
+around" convention `advanceBotDraftTurn()` itself follows -- Quick
+Draft/Chaos Draft's own simultaneous model can leave a second seat still
+overdue after one call returns, but the pick that call DID just submit
+already reset the deadline for whatever's next, handing that second seat
+a fresh window on the next poll.
+
+**Abandonment backstop** -- `applySynchronousAbandonment()` now branches
+on the underlying `games.status`: an ordinary in_progress synchronous
+game still uses `action_deadline_at`/`action_deadline_game_player_id`
+exactly as increment 2 built it, but a synchronous draft-family match
+can be abandoned entirely while its own `games` row is still `'waiting'`
+-- mid-draft, or even before the ready check ever completes -- so a
+`'waiting'` game defers to `applySynchronousDraftAbandonment()`'s own
+equivalent check against `draft_matches.pick_deadline_at` instead.
+`applyTimeoutsForAllActiveGames()`'s own candidate `SELECT` gained a
+second branch (`status = 'waiting' AND synchronous_mode = 1 AND
+draft_match_id IS NOT NULL`) to actually reach these. Once
+`pick_deadline_at` has sat `SYNCHRONOUS_ABANDONMENT_GRACE_SECONDS` past
+due with nobody polling to trip the real-time enforcement above, the
+match is resigned outright (`resignFromDraftMatch()`, same as a human's
+own deliberate resignation mid-draft) on behalf of whichever seat is a
+real human, rather than repeatedly auto-picking through an entire draft
+nobody is left to watch. Not-yet-initialized (`pending_draft_init` still
+set -- nobody's clicked Ready) falls through as a no-op here -- there's
+no deadline to compare against yet. `'deck_building'` gets its own
+separate abandonment check -- see increment 4's own
+`applySynchronousDeckBuildingAbandonment()` below.
+
+**Surfaced via `getState()`** -- `game.draft_pick_deadline_at`/
+`draft_pick_deadline_usernames` (`null`/empty outside synchronous mode,
+before the ready check clears, or once drafting itself has finished) --
+`action_deadline_at`'s own analogue, just usernames rather than a single
+`game_player_id` since Quick Draft/Chaos Draft can put more than one
+player on the clock at once. See "Synchronous mode" in
+`web-static/README.md` for the board's own countdown reused for this.
+
+**Increment 4: the match-wide chess clock** (migration 0332) -- "each
+player has a total 30 minutes for a match (in best of 3) or an
+individual game (in single game matches) -- if the user goes over the
+30 minute allotment, they automatically lose." `SYNCHRONOUS_MATCH_TIME_LIMIT_MINUTES`
+(30, fixed -- not configurable per game the way `total_time_limit_minutes`
+is, since "live, right now" play only has one realistic pace, the same
+reasoning every other synchronous-mode constant follows).
+
+No new accumulator column: this reuses `game_players.active_seconds_used`,
+the exact column `total_time_limit_minutes`' own full-game mode already
+accumulates via `touchLastMoveAt()`'s `$creditGamePlayerId` parameter --
+safe since the two modes are mutually exclusive, so a synchronous game's
+own `active_seconds_used` is never touched by that other feature. The
+one behavioral difference: this cap is scoped to the whole MATCH, not
+one game. `total_time_limit_minutes` deliberately resets
+`active_seconds_used` to 0 for every match game (a per-GAME limit, see
+its own docblock); `advanceGameMatch()`/`advanceDraftMatch()` now carry
+it forward into game 2/3 instead, but ONLY when `game.synchronous_mode`
+is set, leaving the async feature's own existing behavior for every
+other match completely unchanged.
+
+**"The time spent on deck building/sideboarding counts against your 30
+minutes total match time"** -- deck-building/sideboarding has no timer
+or per-player "whose turn" of its own for `touchLastMoveAt()` to credit
+through the ordinary gameplay path (both seats sideboard concurrently),
+so it needs its own crediting mechanism. `draft_matches.deck_building_started_at`
+is stamped every time `draft_matches.status` transitions to
+`'deck_building'` (the initial post-draft trim, and every later
+match-game sideboard reuse -- all 7 call sites share one literal SQL
+string, updated together). `creditDeckBuildingTimeIfNeeded()`, called
+from `submitDraftDeck()` for a synchronous match, credits the elapsed
+time since that timestamp onto the submitting player's own
+`active_seconds_used` -- exactly ONCE per deck-building window per seat,
+via an atomic `UPDATE ... WHERE deck_building_time_credited_at IS NULL`
+claim (`draft_match_players.deck_building_time_credited_at`) that makes
+a player editing/resubmitting their deck before the game actually
+starts harmless rather than double-credited (an intentional
+simplification, since this phase has no timer of its own to begin
+with -- only the FIRST submission each window is charged). Time spent
+actually DRAFTING (increment 3's own 60-second-per-pick timer) is
+deliberately NOT credited here at all -- drafting already has its own
+hard per-pick governor bounding how much real time it can consume, and
+the user's own clarification calling out deck-building specifically
+implies drafting needed no equivalent carve-out.
+
+**`enforceSynchronousMatchClock()`** is the real-time enforcement,
+called from `GET /games/state` alongside the other two synchronous
+deadline checks -- a 15-minute-cron-only check the way
+`total_time_limit_minutes` gets by on would leave a player who's blown
+well past 30 minutes live for up to 15 more, which doesn't fit "live,
+right now" play. Branches on where a synchronous match's clock can
+actually be running: an ordinary `in_progress` turn (or Open/Closed Team
+Play decision) reuses `resolveIdleGamePlayerAndSecondsSinceLastMove()`
+and projects that idle player's own would-be total the exact same way
+`applyTotalTimeLimitIfExceeded()` does, resigning them outright
+(`resignGame()`) once it clears the cap; a draft-family match sitting in
+`'deck_building'` has no single idle player at all, so
+`enforceSynchronousMatchClockDuringDeckBuilding()` instead checks every
+not-yet-credited human seat's own projected total in turn, resigning
+via `resignFromDraftMatch()`. Still-drafting or not-yet-initialized
+phases are a no-op here, per the "drafting doesn't feed this clock"
+decision above.
+
+**Abandonment backstop** -- `applySynchronousDraftAbandonment()` (from
+increment 3) gained its own `'deck_building'` branch,
+`applySynchronousDeckBuildingAbandonment()`, using
+`deck_building_started_at` the same "reuse the real-time check's own
+timestamp as a coarse cron threshold" way `applySynchronousDraftAbandonment()`'s
+`pick_deadline_at` check already does -- once
+`SYNCHRONOUS_ABANDONMENT_GRACE_SECONDS` has passed with nobody polling
+to trip the real-time check above, whichever human seat hasn't yet
+submitted a deck this window (`deck_building_time_credited_at` still
+`NULL`) is resigned outright.
+
+**Surfaced via `getState()`** -- no new field: `players[].active_seconds_used`
+(already exposed) is the same running total for a synchronous match's
+own chess clock as it always was for `total_time_limit_minutes`'. See
+"Synchronous mode" in `web-static/README.md` for the board's own
+chess-clock stat, reused for this.
+
 ### Power Duel sideboarding
 
 A second, narrower opt-in on top of best-of-three (migration 0228):
@@ -5813,9 +6527,10 @@ now keeps from ever reaching the triggering request.
 `auth_key`, exactly what `PushSubscription.toJSON()` returns; uniqueness is
 enforced on a SHA-256 `endpoint_hash` rather than the raw `endpoint` column,
 since push-service endpoint URLs can run past reasonable index key-length
-limits); `notification_preferences` (one row per user, four boolean
+limits); `notification_preferences` (one row per user, five boolean
 columns -- `notify_your_turn`/`notify_friend_request`/`notify_game_finished`/
-`notify_chat_message` (migration `0079`, issue #109) -- created lazily the
+`notify_chat_message` (migration `0079`, issue #109)/`notify_timeout_warning`
+(migration `0327`, issue #85 follow-up) -- created lazily the
 first time a user changes a setting; a user with no row yet gets all-`true`
 defaults from `NotificationPreferenceRepository::forUser()`);
 `notification_cooldowns` (one row per `(user_id, scope)` pair, `last_notified_at`
@@ -8102,6 +8817,25 @@ since it already holds that dependency):
   instant a legal target exists (either kind), Anger reverts to plain
   `baseValue()` ordering (0) like any other unboosted card.
 
+  That deprioritization alone still let Anger get played with an empty
+  `target_mood_ids` whenever it ended up the bot's own ONLY playable
+  card that turn -- "deprioritized WHEN, never skipped outright" always
+  falls through to actually playing the last card left, on the
+  assumption that some value beats none. Anger's own printed value is 0
+  though, so that assumption doesn't hold for it: playing it now for
+  nothing is no better than passing, and passing preserves the option to
+  play it on some LATER turn (this round or a future one) when it might
+  actually swing something. Reported live, from an actual game log: a
+  bot played out its whole hand down to Anger as its last remaining
+  card, then used a granted extra play (from Eagerness) on it with zero
+  opponent moods in play to target, gaining nothing -- "it would have
+  been better to pass and hold onto Anger to use in a subsequent round
+  when it *could* create a point swing." `isWorthPlaying()` (see
+  Pacifism above for the identical existing treatment) now vetoes Anger
+  outright under the same condition (`angerTargetMoodIds() === []`),
+  falling through to the next candidate or an outright pass instead of
+  ever submitting an unfilled `target_mood_ids`.
+
   **Cruelty and Indecisiveness** (reported live: "bots should avoid
   playing Cruelty with no targets," then again for Indecisiveness once
   the identical gap was noticed -- `IndecisivenessEffect`'s own
@@ -8213,7 +8947,23 @@ since it already holds that dependency):
     (preferring their highest-value one, since the bot loses nothing by
     touching it) over a SECOND one of the bot's own moods, so the
     "filler" second target never costs the bot a good card of its own
-    just to enable one cheap replay.
+    just to enable one cheap replay. Both `denialReplayTargetMoodIds()`
+    and `bestDenialReplayPartner()` explicitly exclude Denial's own
+    currently-resolving `$cardId` from every candidate pool they build
+    -- a bug caught live via a crash log: Denial is itself blue, value 1,
+    with its own `hasAfterPlaying` ability, so it qualifies as one of its
+    own "cheap own mood" replay candidates the moment it's in play (see
+    `resolveAfterPlayingChain()`'s own docblock for why `$cardId` is
+    already among the bot's own in-play moods by this point) -- normally
+    masked by priority 1/2 finding a real opponent pair first, but a
+    Duplicity-granted repeat of Denial's own effect, immediately after
+    its first resolution already moved the only qualifying opponent
+    moods off the board, could reach priority 3 with Denial as its only
+    remaining "candidate," pairing it with itself and crashing
+    `DenialEffect`'s own `$targetCardId === $cardId` guard
+    (`InvalidChoiceException`), stalling the game (`advanceAutomatedTurns()`
+    throwing on every subsequent request that touched it, per
+    `app/index.php`'s own unconditional call).
 
   Returns `[]` (Denial still legally playable as a plain 1-point blue
   mood, per `DenialEffect`'s own `if ($targets === []) { return; }`)

@@ -1524,6 +1524,310 @@ capability); opening the builder on an existing owned deck
 `sideboard_cards` back in, the same way it already did for the main
 deck's `cards`.
 
+### Turn and decision timeouts (issue #85)
+
+`#new-game-timeout-enabled-label` (a checkbox right after the deck-type
+description) opts a game into automatically resolving an idle turn or
+pending decision -- see "Turn and decision timeouts" in
+`php-app/README.md` for the full backend writeup (`games.timeout_minutes`/
+`timeout_action`, migration 0324, `bin/apply_game_timeouts.php`). Checking
+it reveals `#new-game-timeout-fields`: a duration `<select>`
+(`#new-game-timeout-minutes`, a fixed preset ladder from 30 minutes to 7
+days -- never an arbitrary typed number, so there's no way to
+accidentally request something below the backend's own 30-minute floor)
+and an action `<select>` (`#new-game-timeout-action`: "Automatically
+play a move for them" / "Skip their turn/response" / "Resign them from
+the game/match", values `auto_play`/`skip`/`resign`), plus a plain-text
+note that the sweep only runs every 15 minutes, so an idle turn may take
+a little longer than the chosen duration to actually resolve.
+
+`updateTimeoutFieldVisibility()` (wired to the same format/deck-type
+`change` events `updateDeckTypeAvailability()` already listens to, plus
+the checkbox's own `change`, and run from both branches of
+`updateDeckTypeAvailability()` itself so switching TO or AWAY FROM
+Sealed Pool of the Day takes effect immediately even though setting
+`<select>.value` programmatically fires no `change` event of its own)
+hides (and unchecks) the whole feature for `sealed_pool_of_the_day`/
+`weekly_sealed_pool` -- `TIMEOUT_EXCLUDED_DECK_TYPES`, kept deck-type-generic
+rather than hardcoding just the one reachable through this dialog,
+matching `createGame()`'s own `PERIODIC_SEALED_POOL_DECK_TYPES`-keyed
+exclusion exactly (`weekly_sealed_pool` never actually appears in
+`#new-game-deck-type`'s own option list at all -- that format is only
+ever entered through `WeeklySealedPoolQueueService`'s own separate
+queue/pairing flow, never this dialog). The sub-fields
+(`#new-game-timeout-fields`) stay hidden whenever the checkbox itself is
+either unchecked or not shown at all.
+
+Checking the box sends `timeout_minutes`/`timeout_action` (both
+`undefined`, so omitted from the request body entirely, whenever the
+checkbox is unchecked) to `POST /games` (`createGame()`'s own two new
+trailing parameters, both here and in `app.js`'s own wrapper) or `POST
+/open-games` (`postOpenGame()`), threaded through `create_game_params`
+to `MatchmakingService::joinOpenGame()`'s own eventual `createGame()`
+call once the roster fills -- the same "post to the open lobby" support
+`best_of_three`/`allow_sideboarding` already have.
+
+**Board display** -- `renderBoard()`'s own title line appends a third
+parenthetical, right after "default selections" (`state.game.timeout_minutes`/
+`timeout_action`, surfaced by `getState()` specifically so every seated
+player, not just whoever created the game, can see it's active): e.g.
+"Game #42 (Traditional, Structure deck, 6-hour timeout (resign))".
+`TIMEOUT_DURATION_LABELS`/`TIMEOUT_ACTION_LABELS` mirror the New Game
+dialog's own option text, just phrased for a title's parenthetical
+rather than a dropdown option. A `timeout_applied` game-log event
+(`describeEvent()`, `php-app/README.md`'s own writeup) needs no
+special-casing here at all -- like every other event type, the log view
+just displays whatever plain-text description the backend already
+rendered.
+
+**Follow-up: full-game time-limit mode** -- a second, independent
+checkbox, `#new-game-total-time-limit-enabled-label` (right after the
+per-turn timeout's own `#new-game-timeout-fields`), reveals
+`#new-game-total-time-limit-fields`: a single duration `<select>`
+(`#new-game-total-time-limit-minutes`, 1 to 72 hours -- `TOTAL_TIME_LIMIT_MIN_MINUTES`/
+`MAX_MINUTES` in `php-app/README.md`) with its own `24 hours` option
+marked `selected` by default (see `createGame()`'s own
+`$totalTimeLimitMinutes` docblock for why 24h -- reported live as a
+sensible default), and a plain-text note that this is a hard cap
+separate from the idle time-out above, also checked at most every 15
+minutes. `updateTotalTimeLimitFieldVisibility()` mirrors
+`updateTimeoutFieldVisibility()` exactly (same `TIMEOUT_EXCLUDED_DECK_TYPES`
+list, same wiring into both branches of `updateDeckTypeAvailability()`,
+same "unchecked, not just hidden, whenever it goes out of view"
+treatment) -- the two opt-ins are fully independent, so a game may have
+either, both, or neither. Checking it sends `total_time_limit_minutes`
+(`undefined` when unchecked, so omitted from the request entirely) to
+`POST /games`/`POST /open-games`, the same "post to the open lobby"
+support the per-turn timeout already has.
+
+`renderBoard()`'s own title line gets a FOURTH parenthetical for this
+one, independent of the per-turn timeout's own third (`state.game.total_time_limit_minutes`):
+e.g. "Game #42 (Traditional, Structure deck, 24-hour total time limit)".
+`TIMEOUT_DURATION_LABELS` is shared between both parentheticals (4/8
+hours -- 240/480 minutes -- are the only two entries that exist purely
+for this dropdown's own preset ladder; every other entry is shared with
+the per-turn timeout's own).
+
+**Chess-clock indicator** (reported live: "did you add any indicators on
+the displays like ... how much time you've spent total on the game?
+Kind of like a chess clock display") -- each seated player's own
+accumulated "clock" time (`game_players.active_seconds_used`,
+`php-app/README.md`'s own `touchLastMoveAt()` writeup for exactly how
+it's credited, included on `getState()`'s own `players[].active_seconds_used`)
+gets its own icon+badge stat in the Players list, `buildPlayerTimeUsedStat()`
+-- a plain clock face (`PLAYER_STAT_ICON_PATHS.timeUsed`, an outline
+circle plus two hands, the same stroke-only technique `presenceHidden`
+already uses to override the inherited `fill: currentColor`, so it reads
+as a distinct clock shape rather than another filled blob). Rendered
+right after the hand-count stat, but ONLY once `state.game.total_time_limit_minutes`
+is actually set -- the same "harmless no-op outside its own narrow
+scope" treatment every other conditional icon on this row already
+follows, so a game with only the ordinary per-turn timeout (or neither
+opt-in) shows no clock icon at all.
+
+The badge itself is deliberately compact -- `formatDurationCompact()`
+rounds down to a whole hour ("3h", or "<1h" under one) rather than
+trying to fit "3h 12m" into the same small circle every other stat's
+plain 1-2 digit count already uses -- with `formatDurationLong()`'s full
+minute-level precision ("3h 12m") carried in the tooltip/aria-label
+instead, the same "badge is the compact value, title/aria-label is the
+full detail" split `buildPlayerStat()` itself already establishes for
+points/wins/hand-count.
+
+**Color escalates as a player approaches their own limit** --
+`buildPlayerTimeUsedStat()` computes `active_seconds_used / (total_time_limit_minutes * 60)`
+and adds a modifier class once that fraction crosses a threshold:
+`--color-info` (blue, the default, `.player-stat--timeUsed`) under 75%,
+`--color-pending` (amber, `.player-stat--timeUsed-warning`) from 75% up
+to 90%, `--color-error` (red, `.player-stat--timeUsed-danger`) at 90%
+and above -- the same severity escalation the lobby's own
+awaiting-response styling and the went-first pennant already use
+elsewhere on this page, so "getting close" and "basically out of time"
+read as familiar colors rather than a new color language invented just
+for this one stat. Deliberately a plain snapshot-of-last-refresh
+fraction, not a live countdown or a projection forward the way the
+backend's own `applyTotalTimeLimitIfExceeded()` sweep does (issue #85
+follow-up's own "refresh-only, no client-side ticking" decision) -- a
+still-blue icon can legitimately jump straight to being auto-resigned
+between two refreshes if that player's own turn runs very long; the
+point is an early warning at a glance, not a precise real-time clock.
+
+**Follow-up: action-timeout warning icon + notification preference**
+(reported live: "add some kind of indicator for action timeout if it's
+close (like within 15 minutes)... also send a notification if either the
+action timeout or full game chess clock timeout becomes less than 15
+minutes left") -- a second, DIFFERENT stat icon from the chess-clock one
+above: `state.game.action_timeout_warning`
+(`{"game_player_id", "seconds_remaining"} | null`, backed by
+`GameService::buildActionTimeoutWarning()`) is only ever non-null while
+someone's currently idle turn/decision under `timeout_minutes` has 15
+minutes or less left before it fires, so the frontend never needs its
+own "is this close" threshold check -- it just renders whenever the
+field isn't null, on whichever single Players-list row matches
+`game_player_id`.
+
+`buildActionTimeoutWarningStat()` builds it via the same
+`buildPlayerStat()` icon+badge convention as every other stat on this
+row, with its own icon (`PLAYER_STAT_ICON_PATHS.actionTimeoutWarning`, a
+plain alarm bell) deliberately a different SILHOUETTE from both
+`timeUsed`'s clock face just above it (the full-game time BUDGET,
+always shown once configured) and `pendingDecision`'s hourglass flag
+(a delayed CHOICE awaiting an answer, not a countdown to an automatic
+one) -- so a row showing more than one of these at once still reads as
+three different things at a glance, not the same icon recolored three
+ways. Badge text is whole minutes (`"12m"`, `"<1m"` under one), with the
+full "About N minute(s) left before this turn times out."/"Less than a
+minute left..." wording in the tooltip/aria-label. Unlike the chess-clock
+stat, there's no "comfortable" default color here -- `.player-stat--actionTimeoutWarning`
+(amber, `--color-pending`) is the base state (since this icon only ever
+appears once it's already a warning), escalating to
+`.player-stat--actionTimeoutWarning-danger` (red, `--color-error`) under
+5 minutes remaining.
+
+**Notification preference**: a new `#notify-timeout-warning-checkbox` in
+the Settings dialog's "Notify me when..." fieldset ("A turn or full-game
+timeout is less than 15 minutes away"), wired exactly like the four
+existing `notify_*` checkboxes (`notify_timeout_warning`, migration 0327
+in `php-app/README.md`, defaults on) -- backs
+`NotificationService::notifyTimeoutWarning()`, sent from
+`GameService::sendTimeoutWarningIfClose()` (part of the same 15-minute
+`applyTimeoutsForAllActiveGames()` sweep the visual indicator's own data
+comes from) for either the per-turn timeout OR the full-game total-time
+limit crossing under 15 minutes remaining, whichever seated player it's
+actually about.
+
+### Synchronous mode (reported live)
+
+`#new-game-synchronous-enabled-label` (right after the full-game
+time-limit checkbox) opts into a THIRD, mutually exclusive mode --
+checking it unchecks (and re-hides the sub-fields of) both async
+checkboxes above, and vice versa (`enforceSynchronousExclusivityFromSynchronousCheckbox()`/
+`enforceSynchronousExclusivityFromAsyncCheckboxes()`), matching
+`createGame()`'s own validation that a game never combines them. Shown
+for exactly 2 players in Traditional/Duel/Draft
+(`SYNCHRONOUS_MODE_ALLOWED_FORMATS`, mirroring `GameService::SYNCHRONOUS_MODE_ALLOWED_FORMATS`
+exactly -- Draft covers all five draft-family deck_types plus Sealed
+Deck/Sealed Pool of the Day/Weekly Sealed Pool) --
+`updateSynchronousFieldVisibility()` re-runs on every format/
+deck-type/opponent-checkbox change `updateBestOfThreeFieldVisibility()`
+already does, since "exactly 2 total players" depends on the same
+`currentNewGamePlayerCount()` that one already reads. The live
+30-second action timer and timeout-extension banking shipped as
+increment 2, Draft/Sealed Deck support (a 60-second-per-pick timer,
+plus the ready check gating drafting itself) as increment 3, and the
+match-wide 30-minute chess clock as increment 4 -- all three below.
+
+**Ready-check panel** (`#ready-check-panel`, shown in place of the
+ordinary "Waiting for the game to start" text once `state.game.status
+=== 'waiting'` for a `synchronous_mode` game) -- `renderReadyCheckPanel()`
+lists every seated player's own `players[].ready` flag and shows an "I'm
+ready" button (`#ready-check-button`) that calls `POST /games/ready`
+(`markReady()` in `app.js`), hiding itself the moment the viewer's own
+row reads ready (mirrors how `renderDuelDeckSubmission()`'s own
+submission form disappears once `deck_submitted` is true). No new
+push/polling infrastructure needed: the board's own existing 4-second
+`GET /games/state` poll (see "Browser push notifications"'s own presence
+docblock in `php-app/README.md`) is what notices every seat has readied
+up, at which point `renderBoard()` calls the same `autoStartGameIfReady()`
+every other "waiting" precondition on this page already uses (decklist
+submission, draft decks) -- just gated on `state.players.every((p) =>
+p.ready)` instead of that precondition's own check.
+
+The board title's own parenthetical gets a fourth, mutually-exclusive
+clause for this mode (`", synchronous"`), alongside the existing
+per-turn-timeout/total-time-limit descriptions.
+
+**Increment 2: the live action timer** (reported live: "which should be
+visible in the game display") -- `#synchronous-action-timer`, a plain
+countdown line ("Username's action timer: 12s") shown whenever
+`state.game.status === 'in_progress'` and `state.game.synchronous_mode`
+with a non-null `action_deadline_at`/`action_deadline_game_player_id`.
+Unlike every other "live" value on this page (deliberately refresh-only,
+no client-side ticking -- see the chess-clock indicator's own "Follow-up"
+writeup above), a 30-second window genuinely needs to visibly tick
+between the board's own ~4-second polls, so `tickSynchronousActionTimer()`
+runs on its OWN separate 1-second `setInterval` (`synchronousActionTimerInterval`),
+purely recomputing "seconds remaining" from `Date.now()` against the
+last server-reported `action_deadline_at` (`synchronousDeadlineInfo`,
+refreshed by `renderBoard()` every poll) -- it never itself decides
+anything expired, that's still entirely server-side
+(`GameService::enforceSynchronousActionDeadline()`, called from the very
+same poll), so a client with a slow/paused tab can't game the timer by
+not ticking. Turns red under 10 seconds remaining
+(`.synchronous-action-timer--danger`), the same escalating-severity
+language the async action-timeout warning icon already established.
+`stopSynchronousActionTimer()` clears the interval and hides the line
+whenever there's nothing to show it for (a 'waiting' game -- the
+ready-check panel owns that state instead -- or leaving the board
+entirely via `showLobby()`).
+
+**Extensions-banked stat** -- `buildExtensionsBankedStat()`, a new
+stopwatch-with-a-plus icon (`PLAYER_STAT_ICON_PATHS.extensionsBanked`,
+deliberately a different silhouette from `timeUsed`'s plain clock face,
+since this represents extra time available rather than time already
+spent) in the Players list, showing `players[].timeout_extensions_banked`
+for every seat once `state.game.synchronous_mode` is true -- unlike the
+action-timeout warning icon (a transient alert), this stays visible the
+whole game at whatever count it's at, the same "always-shown running
+total" treatment `hand_count`/`points`/`wins` already get, so a player
+can see at a glance how much slack they've banked.
+
+**Increment 3: Draft/Sealed Deck, and the ready check gating drafting
+itself** -- for a synchronous draft-family match, the board's own
+`'waiting'`-status branch (`DRAFT_DECK_TYPES.includes(state.game.deck_type)`)
+now checks `state.players.every((p) => p.ready)` FIRST, before ever
+touching `state.quick_draft`/`state.winston_draft`/etc.: the server
+hasn't dealt this match's first round/pile/pool at all until every seat
+clicks Ready (see `php-app/README.md`'s own `GameService::markReady()`
+writeup), so there's nothing for the usual draft panel
+(`renderDraftPanel()`) to read yet. While any seat is still unready, the
+exact same `renderReadyCheckPanel()`/`#ready-check-panel` an ordinary
+synchronous game shows takes over instead -- a synchronous draft match
+never shows its own drafting UI at all until both players are actually
+there.
+
+Once drafting begins, `#synchronous-action-timer` gets reused
+essentially unchanged for the 60-second pick timer: `renderBoard()`'s
+draft branch wires the same `tickSynchronousActionTimer()`/
+`synchronousDeadlineInfo` machinery increment 2 built, just fed from
+`state.game.draft_pick_deadline_at`/`draft_pick_deadline_usernames`
+instead of `action_deadline_at`/`action_deadline_game_player_id` --
+`draft_pick_deadline_usernames` can hold MORE than one name at once for
+Quick Draft/Chaos Draft's own simultaneous-per-stage picks (every seated
+player picks independently within a stage), joined with `" & "` for
+display (e.g. "alice & bob's action timer: 12s") rather than picking
+just one arbitrarily. Both fields go `null`/empty the moment drafting
+finishes, so the countdown naturally disappears again once deck-building
+begins (still untimed, same as an async draft) with no extra branching
+needed here.
+
+**Increment 4: the match-wide chess clock** (reported live: "each
+player has a total 30 minutes for a match... if the user goes over the
+30 minute allotment, they automatically lose") -- `buildPlayerSynchronousMatchClockStat()`
+reuses `buildPlayerTimeUsedStat()`'s own icon and severity-escalation
+shape (blue → amber past 75% → red past 90%) against
+`players[].active_seconds_used` -- the SAME field the async full-game
+time-limit mode's own stat already reads -- just against a fixed
+30-minute cap (`SYNCHRONOUS_MATCH_TIME_LIMIT_MINUTES`, mirroring
+`GameService::SYNCHRONOUS_MATCH_TIME_LIMIT_MINUTES` exactly) instead of
+a per-game configurable one. The two stats are mutually exclusive on any
+one board the same way the settings themselves are
+(`state.game.total_time_limit_minutes !== null` vs.
+`state.game.synchronous_mode`). Unlike `formatDurationCompact()`'s
+hour-rounded badge (built for the async feature's own multi-hour
+scale), a 30-minute cap never reaches a whole hour, so
+`formatDurationLong()`'s own "12m" form is already compact enough for
+the badge here -- no new formatter needed. Rendered in the same
+always-visible Players-list icon row as `hand_count`/the extensions-
+banked stat, so it's visible during deck-building/sideboarding (still
+untimed to interact with, but the elapsed time is quietly counting
+against the same 30-minute total) just as much as during actual
+gameplay.
+
+The New Game dialog's own `#new-game-synchronous-description` now
+mentions the chess clock explicitly, since opting in this way commits a
+player to a hard 30-minute budget they can't configure or turn off.
+
 ## Pages
 
 - `index.html` (`/`) — Login form. If the visitor already has an active
@@ -4234,34 +4538,46 @@ deck's `cards`.
     fields on this page already follow.
 
     **Team affiliation icon.** For Open/Closed Team Play (`player.team_id
-    !== null`), each row gets a plain heraldic shield icon
-    (`buildPlayerFlag('team', ..., 'player-flag--teamMate'/'--teamOpponent')`)
+    !== null`), each row gets a heraldic shield icon
+    (`buildPlayerFlag('team'/'teamOpponent', ..., 'player-flag--teamMate'/'--teamOpponent')`)
     right after its presence dot -- the ONLY place team affiliation
     appears on the row now; there used to also be a plain "— Team N (your
     teammate)" text tag appended after the username, removed once the
     icon existed to cover the same information, so it isn't shown twice.
-    Color, not the shield's shape, is what actually carries the "which
-    side" information: green (`--color-success`) for every row sharing
-    the *viewer's own* `team_id` — including the viewer's own row — and
-    red (`--color-error`) for the opposing team's two rows, so which side
-    is "us" vs. "them" reads at a glance without needing to read each
-    row's team number. The removed text tag's own wording didn't just
-    vanish, though -- the icon's `title`/`aria-label` (`teamIconLabel`,
-    same `buildPlayerFlag()` tooltip/accessible-label convention every
-    other icon on this row already uses) carries the exact same "Team N"/
-    "(your teammate)" text a screen reader or a sighted user hovering for
-    a reminder would have gotten from the old text tag, just moved onto
-    the icon instead of sitting separately on the row. Computed once,
-    right before the `players-list` `renderList()` call, as
-    `viewerTeamId` (`you ? you.team_id : null`, `you` being the same
-    viewer's-own-row lookup the board title/hand section already use) —
-    `null` for every non-team format (the icon is skipped outright, same
-    as the old text tag already was) and also for a spectator/replay
-    viewer, who has no `team_id` of their own to color the icon relative
-    to (coloring every row red for someone with no "own team" to contrast
-    against would be misleading, not informative, so the icon just
-    doesn't render for them at all rather than defaulting to one color or
-    the other).
+    Reported live as hard to tell apart for colorblind users back when
+    color alone (green vs. red) carried the "which side" information --
+    red-green is the worst possible pairing for the most common forms of
+    color blindness -- so both color *and* shape now carry it (WCAG
+    1.4.1, "Use of Color"): blue (`--color-info`, already used elsewhere
+    on this page and clearly distinguishable from red under essentially
+    all common forms of color blindness) with a solid-filled shield for
+    every row sharing the *viewer's own* `team_id` — including the
+    viewer's own row — and red (`--color-error`) with the same shield
+    outline hollowed out instead (`PLAYER_STAT_ICON_PATHS.teamOpponent`,
+    `fill="none" stroke="currentColor"`, the same technique the
+    presence-hidden icon below already uses to override the inherited
+    `fill: currentColor`) for the opposing team's two rows, so which side
+    is "us" vs. "them" reads at a glance even with no color perception at
+    all, not just without needing to read each row's team number. The
+    removed text tag's own wording didn't just vanish, though -- the
+    icon's `title`/`aria-label` (`teamIconLabel`, same `buildPlayerFlag()`
+    tooltip/accessible-label convention every other icon on this row
+    already uses) carries the exact same "Team N"/"(your teammate)" text
+    a screen reader or a sighted user hovering for a reminder would have
+    gotten from the old text tag, just moved onto the icon instead of
+    sitting separately on the row. Computed once, right before the
+    `players-list` `renderList()` call, as `viewerTeamId` (`you ?
+    you.team_id : null`, `you` being the same viewer's-own-row lookup the
+    board title/hand section already use) — `null` for every non-team
+    format (the icon is skipped outright, same as the old text tag
+    already was) and also for a spectator/replay viewer, who has no
+    `team_id` of their own to compare against (marking every row as "the
+    opposing team" for someone with no "own team" to contrast against
+    would be misleading, not informative, so the icon just doesn't render
+    for them at all rather than defaulting to one team's look or the
+    other). The Team Scores panel's own per-team icon
+    (`renderTeamScores()`) follows the identical solid-blue/hollow-red
+    convention, using `'team'`/`'teamOpponent'` the same way.
 
     `'after_scoring_order'`'s own field (`type: 'card_order'`) is the one
     pending-decision field that isn't a `<select>`-backed widget at all —

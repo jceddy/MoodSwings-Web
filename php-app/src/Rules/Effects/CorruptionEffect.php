@@ -15,10 +15,11 @@ use MoodSwings\Rules\PlayerChoices;
  * many cards, or the winner of the current round wins two rounds instead
  * of one (each losing player still draws only one card)." The second
  * option is unconditional on the round itself (not on who played
- * Corruption or who wins), tagged via the well-known 'awardsExtraWin'
- * effectState key -- see GameService::consumeExtraWinMarker(), which
- * doubles game_rounds.wins_awarded for this round regardless of who ends
- * up winning it.
+ * Corruption or who wins, and not on Corruption remaining in play -- see
+ * BoardState::$awardsExtraWinThisRound's own docblock, reported live) --
+ * see GameService::consumeExtraWinMarker(), which doubles
+ * game_rounds.wins_awarded for this round regardless of who ends up
+ * winning it.
  */
 final class CorruptionEffect extends AbstractMoodEffect
 {
@@ -32,7 +33,7 @@ final class CorruptionEffect extends AbstractMoodEffect
 
         match ($choices->requireString('mode')) {
             'cycle' => $this->cycleDiscardCards($state, $playerId, $choices),
-            'double_win' => $state->setEffectState($cardId, 'awardsExtraWin', true),
+            'double_win' => $state->markAwardsExtraWinThisRound($cardId, $playerId),
             default => throw new InvalidChoiceException("Corruption's mode must be 'cycle' or 'double_win'"),
         };
     }
