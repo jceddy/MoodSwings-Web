@@ -2102,6 +2102,29 @@ body.game-page {
     color: var(--color-gold);
 }
 
+/* Issue #85 follow-up's own full-game time-limit mode -- only rendered
+   at all once games.total_time_limit_minutes is set (see renderBoard()).
+   --color-info (blue) by default, same "a little color per stat kind"
+   treatment as hand/points/wins above; overridden by one of the two
+   modifier classes below, added dynamically by buildPlayerTimeUsedStat()
+   once a player's own game_players.active_seconds_used crosses a
+   fraction of the limit worth calling out -- the same --color-pending/
+   --color-error escalation the lobby's own awaiting-response styling and
+   went-first pennant already use elsewhere on this page, so "getting
+   close" and "basically out of time" read as familiar severities rather
+   than a new color language just for this one stat. */
+.player-stat--timeUsed {
+    color: var(--color-info);
+}
+
+.player-stat--timeUsed-warning {
+    color: var(--color-pending);
+}
+
+.player-stat--timeUsed-danger {
+    color: var(--color-error);
+}
+
 .player-flag--wentFirst {
     color: var(--color-error);
 }

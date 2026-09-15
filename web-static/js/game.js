@@ -5900,6 +5900,14 @@
         onTurn: '<polygon points="7,4 20,12 7,20"/>',
         // A delayed decision response awaiting this player: an hourglass.
         pendingDecision: '<polygon points="6,3 18,3 12,11"/><polygon points="6,21 18,21 12,13"/>',
+        // Issue #85 follow-up's own full-game time-limit mode: a plain
+        // clock face -- outline circle plus two hands, all stroke-based
+        // rather than filled (the same outline technique presenceHidden
+        // below already uses to override the inherited `fill:
+        // currentColor`), so it reads as a distinct "clock" shape rather
+        // than another solid dot/blob among the filled icons above.
+        timeUsed: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/>'
+            + '<path d="M12 7 V12 L16 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
         // Team affiliation (Open/Closed Team Play only, player.team_id !==
         // null): a heraldic shield, reported live as hard to distinguish
         // for colorblind users when the two teams were told apart by color
@@ -5955,9 +5963,9 @@
     // `role="img"` tells assistive tech to treat the whole span as a single
     // image-with-text-alternative rather than trying to read its
     // (redundant, aria-hidden) SVG and badge separately.
-    function buildPlayerStat(kind, value, label) {
+    function buildPlayerStat(kind, value, label, extraClass) {
         const wrapper = document.createElement('span');
-        wrapper.className = 'player-stat player-stat--' + kind;
+        wrapper.className = 'player-stat player-stat--' + kind + (extraClass ? ' ' + extraClass : '');
         wrapper.title = label;
         wrapper.setAttribute('role', 'img');
         wrapper.setAttribute('aria-label', label);
@@ -6123,6 +6131,61 @@
 
     function timeoutDurationLabel(minutes) {
         return TIMEOUT_DURATION_LABELS[minutes] || (minutes + '-minute');
+    }
+
+    // Issue #85 follow-up's own full-game time-limit mode -- "3h 12m" for
+    // the tooltip/aria-label (full precision, minutes dropped once there
+    // are none to show, e.g. a clean "2h"), reused by
+    // buildPlayerTimeUsedStat() below.
+    function formatDurationLong(totalSeconds) {
+        const totalMinutes = Math.floor(totalSeconds / 60);
+        const hours = Math.floor(totalMinutes / 60);
+        const minutes = totalMinutes % 60;
+        if (hours === 0) {
+            return minutes + 'm';
+        }
+        return hours + 'h' + (minutes > 0 ? ' ' + minutes + 'm' : '');
+    }
+
+    // The same duration, rounded down to a whole hour, for the small
+    // circular badge itself -- "3h 12m" doesn't fit that space the way
+    // every other stat's plain 1-2 digit count does, so the badge shows
+    // this compact form and the tooltip/aria-label (buildPlayerTimeUsedStat()
+    // below) carries the full formatDurationLong() precision instead, the
+    // same "badge is the compact value, title/aria-label is the full
+    // detail" split buildPlayerStat() itself already establishes.
+    function formatDurationCompact(totalSeconds) {
+        const hours = Math.floor(totalSeconds / 3600);
+        return hours === 0 ? '<1h' : hours + 'h';
+    }
+
+    // Chess-clock-style time-used indicator (reported live: "did you add
+    // any indicators ... how much time you've spent total on the game?
+    // Kind of like a chess clock display") -- only ever built once the
+    // game has actually opted into the full-game time-limit mode (see
+    // renderBoard()'s own call site), so $totalTimeLimitMinutes is never
+    // null here. Escalates color the same way the lobby's own awaiting-
+    // response styling and went-first pennant already do elsewhere on
+    // this page (--color-info -> --color-pending -> --color-error) as
+    // $activeSecondsUsed approaches the limit, rather than a plain
+    // always-blue stat that gives no visual warning before a player is
+    // suddenly auto-resigned. Deliberately a plain fraction-of-limit
+    // threshold rather than trying to project forward the way the
+    // backend's own applyTotalTimeLimitIfExceeded() sweep does -- this
+    // only ever reflects $activeSecondsUsed as of the board's last
+    // refresh (no client-side ticking), so a bar that's still comfortably
+    // under 75%/90% here can still legitimately jump past the limit
+    // between refreshes if that player's own turn runs very long; the
+    // point is an early warning, not a live countdown.
+    function buildPlayerTimeUsedStat(activeSecondsUsed, totalTimeLimitMinutes) {
+        const limitSeconds = totalTimeLimitMinutes * 60;
+        const fraction = activeSecondsUsed / limitSeconds;
+        const severityClass = fraction >= 0.9 ? 'player-stat--timeUsed-danger'
+            : fraction >= 0.75 ? 'player-stat--timeUsed-warning'
+                : null;
+        const label = formatDurationLong(activeSecondsUsed) + ' used of a ' + (totalTimeLimitMinutes / 60) + '-hour total time limit';
+
+        return buildPlayerStat('timeUsed', formatDurationCompact(activeSecondsUsed), label, severityClass);
     }
 
     function renderBoard(state) {
@@ -6406,6 +6469,17 @@
                 iconsEl.appendChild(buildPlayerStat('points', player.total_score, player.total_score + ' point(s)'));
                 iconsEl.appendChild(buildPlayerStat('wins', player.total_wins, player.total_wins + ' win(s)'));
                 iconsEl.appendChild(buildPlayerStat('hand', player.hand_count, player.hand_count + ' card(s) in hand'));
+                // Issue #85 follow-up's own full-game time-limit mode --
+                // only rendered at all once the game actually opted in
+                // (state.game.total_time_limit_minutes), same "harmless
+                // no-op outside its own narrow scope" treatment every
+                // other conditional icon on this row already follows.
+                // Chess-clock-style: reported live, "did you add any
+                // indicators ... how much time you've spent total on the
+                // game? Kind of like a chess clock display."
+                if (state.game.total_time_limit_minutes !== null) {
+                    iconsEl.appendChild(buildPlayerTimeUsedStat(player.active_seconds_used, state.game.total_time_limit_minutes));
+                }
                 if (wentFirst) {
                     iconsEl.appendChild(buildPlayerFlag('wentFirst', 'Went first this round'));
                 }

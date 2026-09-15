@@ -1608,14 +1608,49 @@ hours -- 240/480 minutes -- are the only two entries that exist purely
 for this dropdown's own preset ladder; every other entry is shared with
 the per-turn timeout's own).
 
-Each seated player's own accumulated "clock" time
-(`game_players.active_seconds_used`, `php-app/README.md`'s own
-`touchLastMoveAt()` writeup for exactly how it's credited) is included
-on `getState()`'s own `players[].active_seconds_used` -- not yet
-surfaced anywhere in the UI itself (a possible follow-up would be
-showing each player their own running total, chess-clock style,
-somewhere in the Players list), but available for a future enhancement
-without any further backend work.
+**Chess-clock indicator** (reported live: "did you add any indicators on
+the displays like ... how much time you've spent total on the game?
+Kind of like a chess clock display") -- each seated player's own
+accumulated "clock" time (`game_players.active_seconds_used`,
+`php-app/README.md`'s own `touchLastMoveAt()` writeup for exactly how
+it's credited, included on `getState()`'s own `players[].active_seconds_used`)
+gets its own icon+badge stat in the Players list, `buildPlayerTimeUsedStat()`
+-- a plain clock face (`PLAYER_STAT_ICON_PATHS.timeUsed`, an outline
+circle plus two hands, the same stroke-only technique `presenceHidden`
+already uses to override the inherited `fill: currentColor`, so it reads
+as a distinct clock shape rather than another filled blob). Rendered
+right after the hand-count stat, but ONLY once `state.game.total_time_limit_minutes`
+is actually set -- the same "harmless no-op outside its own narrow
+scope" treatment every other conditional icon on this row already
+follows, so a game with only the ordinary per-turn timeout (or neither
+opt-in) shows no clock icon at all.
+
+The badge itself is deliberately compact -- `formatDurationCompact()`
+rounds down to a whole hour ("3h", or "<1h" under one) rather than
+trying to fit "3h 12m" into the same small circle every other stat's
+plain 1-2 digit count already uses -- with `formatDurationLong()`'s full
+minute-level precision ("3h 12m") carried in the tooltip/aria-label
+instead, the same "badge is the compact value, title/aria-label is the
+full detail" split `buildPlayerStat()` itself already establishes for
+points/wins/hand-count.
+
+**Color escalates as a player approaches their own limit** --
+`buildPlayerTimeUsedStat()` computes `active_seconds_used / (total_time_limit_minutes * 60)`
+and adds a modifier class once that fraction crosses a threshold:
+`--color-info` (blue, the default, `.player-stat--timeUsed`) under 75%,
+`--color-pending` (amber, `.player-stat--timeUsed-warning`) from 75% up
+to 90%, `--color-error` (red, `.player-stat--timeUsed-danger`) at 90%
+and above -- the same severity escalation the lobby's own
+awaiting-response styling and the went-first pennant already use
+elsewhere on this page, so "getting close" and "basically out of time"
+read as familiar colors rather than a new color language invented just
+for this one stat. Deliberately a plain snapshot-of-last-refresh
+fraction, not a live countdown or a projection forward the way the
+backend's own `applyTotalTimeLimitIfExceeded()` sweep does (issue #85
+follow-up's own "refresh-only, no client-side ticking" decision) -- a
+still-blue icon can legitimately jump straight to being auto-resigned
+between two refreshes if that player's own turn runs very long; the
+point is an early warning at a glance, not a precise real-time clock.
 
 ## Pages
 
