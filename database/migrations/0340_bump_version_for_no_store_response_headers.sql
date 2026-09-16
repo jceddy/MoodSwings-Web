@@ -1,0 +1,14 @@
+-- Every API response now carries Cache-Control: no-store, no-cache,
+-- must-revalidate + Pragma: no-cache (set once in public/index.php
+-- alongside the shared Content-Type: application/json). Without it, a
+-- cache between the browser and this server (CDN, corporate proxy, or
+-- the browser's own cache) had no signal that a response was scoped to
+-- one session, and could serve one user's own per-session response body
+-- (tournament/game/friend state, /me, etc.) back to a different user
+-- who later requested the identical URL with a different session
+-- cookie -- the reported symptom was an open tournament looking
+-- already-joined to a user who had never joined it.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.50.3' WHERE id = 1;

@@ -79,6 +79,16 @@ use MoodSwings\Tournament\TournamentService;
 use MoodSwings\Tournament\TournamentStateException;
 
 header('Content-Type: application/json');
+// Every response here carries the current session's own data (tournament/
+// game/friend state, /me, etc.) -- without an explicit no-store, a cache
+// sitting between the browser and this server (a CDN, a corporate proxy,
+// even the browser's own disk cache under some conditions) has no signal
+// that this response is per-session rather than shared, and can serve one
+// user's own response body back to a completely different user who later
+// requests the exact same URL with a different session cookie -- cache
+// keys are URL-based by default and don't vary by cookie unless told to.
+header('Cache-Control: no-store, no-cache, must-revalidate');
+header('Pragma: no-cache');
 
 // Without this, an uncaught Throwable from any route (there's no per-route
 // try/catch for anything unexpected, only for specific, anticipated
