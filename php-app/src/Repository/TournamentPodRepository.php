@@ -15,17 +15,29 @@ use MoodSwings\Database\Connection;
  * "Pod draft (once)" option (see GridDraftPodBuilder), whose pods have
  * no booster/pick rows of their own at all, just a single backing Grid
  * Draft game (an ordinary `games`/`draft_matches` row, entirely
- * GameService's own to manage).
+ * GameService's own to manage) -- and Grid Draft's third "Pods with
+ * playoffs" option (grid_draft_pod_playoff), whose pods are formed and
+ * drafted the exact same way but each go on to play their OWN bracket
+ * (kind/winner_participant_id below) rather than feeding one bracket
+ * shared across every pod.
  */
 final class TournamentPodRepository
 {
-    /** $gameId is Grid Draft pods' own backing game (see this class's own docblock) -- null for a Booster Draft pod, which has no single backing game. */
-    public function createPod(int $tournamentId, int $podNumber, ?int $gameId = null): int
+    /**
+     * $gameId is Grid Draft pods' own backing game (see this class's own
+     * docblock) -- null for a Booster Draft pod, which has no single
+     * backing game. $kind is 'final' only for Grid Draft "Pods with
+     * playoffs" (grid_draft_pod_playoff) own single winners' pod (see
+     * TournamentService::startGridDraftPodPlayoffFinals()) -- 'regular'
+     * (the default) for every other pod, including every
+     * grid_draft_pod_playoff pod formed at tournament start.
+     */
+    public function createPod(int $tournamentId, int $podNumber, ?int $gameId = null, string $kind = 'regular'): int
     {
         $stmt = Connection::get()->prepare(
-            'INSERT INTO tournament_pods (tournament_id, pod_number, game_id) VALUES (:tournament_id, :pod_number, :game_id)'
+            'INSERT INTO tournament_pods (tournament_id, pod_number, game_id, kind) VALUES (:tournament_id, :pod_number, :game_id, :kind)'
         );
-        $stmt->execute(['tournament_id' => $tournamentId, 'pod_number' => $podNumber, 'game_id' => $gameId]);
+        $stmt->execute(['tournament_id' => $tournamentId, 'pod_number' => $podNumber, 'game_id' => $gameId, 'kind' => $kind]);
 
         return (int) Connection::get()->lastInsertId();
     }
@@ -72,6 +84,22 @@ final class TournamentPodRepository
         Connection::get()
             ->prepare("UPDATE tournament_pods SET status = 'completed', completed_at = NOW() WHERE id = :id")
             ->execute(['id' => $podId]);
+    }
+
+    /** Grid Draft "Pods with playoffs" only (issue #91 follow-up): drafting has finished and this pod's own bracket is now being played -- see TournamentService::startPodBracket(). */
+    public function markPlaying(int $podId): void
+    {
+        Connection::get()
+            ->prepare("UPDATE tournament_pods SET status = 'playing' WHERE id = :id")
+            ->execute(['id' => $podId]);
+    }
+
+    /** Grid Draft "Pods with playoffs" only: this pod's own bracket has resolved -- see TournamentService::onPodBracketFinished(). */
+    public function recordWinner(int $podId, int $winnerParticipantId): void
+    {
+        Connection::get()
+            ->prepare("UPDATE tournament_pods SET status = 'completed', completed_at = NOW(), winner_participant_id = :winner WHERE id = :id")
+            ->execute(['winner' => $winnerParticipantId, 'id' => $podId]);
     }
 
     public function addParticipant(int $podId, int $participantId, int $seatOrder): int

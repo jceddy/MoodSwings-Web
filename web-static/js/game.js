@@ -4081,15 +4081,16 @@
     // (issue #392) but has no actual drafting phase of its own, so
     // (same special case openGameSummary() already makes) it's shown as
     // just "Sealed Deck" rather than "Draft – Sealed Deck". Grid Draft
-    // ('grid_draft'/'grid_draft_pod' both) is shown the same bare way --
-    // it's the only draft type the tournament dialog offers any more
-    // (Quick Draft was removed), so "Draft – Grid Draft" would be
-    // redundant. 'custom_duel' is shown as bare "Power Duel" for the
-    // same reason -- it's the only thing "Duel" tournaments offer any
-    // more (see effectiveNewTournamentDeckType()'s own docblock), so
-    // "Duel – Power Duel" would be redundant too; unlike the New Game
-    // dialog's own generic "Custom Decklists (Duel)" label, which still
-    // needs to say so since it's one option among several there.
+    // ('grid_draft'/'grid_draft_pod'/'grid_draft_pod_playoff' all three)
+    // is shown the same bare way -- it's the only draft type the
+    // tournament dialog offers any more (Quick Draft was removed), so
+    // "Draft – Grid Draft" would be redundant. 'custom_duel' is shown as
+    // bare "Power Duel" for the same reason -- it's the only thing
+    // "Duel" tournaments offer any more (see effectiveNewTournamentDeckType()'s
+    // own docblock), so "Duel – Power Duel" would be redundant too;
+    // unlike the New Game dialog's own generic "Custom Decklists (Duel)"
+    // label, which still needs to say so since it's one option among
+    // several there.
     function tournamentMatchSummary(tournament) {
         const params = tournament.match_params;
         const deckType = params.deck_type === 'custom_duel'
@@ -4098,8 +4099,10 @@
                 ? 'Booster Draft'
                 : params.deck_type === 'grid_draft_pod'
                     ? 'Grid Draft (Pod)'
-                    : NEW_GAME_DECK_TYPE_LABELS[params.deck_type] || params.deck_type;
-        const format = ['sealed_deck', 'booster_draft', 'grid_draft', 'grid_draft_pod', 'custom_duel'].includes(params.deck_type)
+                    : params.deck_type === 'grid_draft_pod_playoff'
+                        ? 'Grid Draft (Pod Playoffs)'
+                        : NEW_GAME_DECK_TYPE_LABELS[params.deck_type] || params.deck_type;
+        const format = ['sealed_deck', 'booster_draft', 'grid_draft', 'grid_draft_pod', 'grid_draft_pod_playoff', 'custom_duel'].includes(params.deck_type)
             ? deckType
             : `${NEW_GAME_FORMAT_LABELS[params.format] || params.format} – ${deckType}`;
         return `${TOURNAMENT_BRACKET_TYPE_LABELS[tournament.bracket_type] || tournament.bracket_type} – ${format}`;
@@ -4294,11 +4297,18 @@
     const GRID_DRAFT_MODE_DESCRIPTIONS = {
         grid_draft: 'Every bracket match is its own independent 2-player Grid Draft, drafted fresh right before that match is played.',
         grid_draft_pod: 'Participants split into pods of up to 4 and draft together once, before the bracket starts -- see "Booster Draft" for the same idea, just with a shared Grid Draft grid instead of boosters. Every pod member then plays the tournament’s real matches (mixed freely across pods) using a deck built from their own drafted pool, re-sideboardable every round.',
+        grid_draft_pod_playoff: 'Participants split into pods of up to 4 and draft together once, same as "Pod draft (once)" -- but instead of mixing everyone into one shared bracket, each pod plays its own bracket to completion first. Every pod’s own winner then drafts again, together, in one final pod, whose own bracket decides the tournament champion.',
     };
 
     // Shown only for Grid Draft (#new-tournament-format's own 'draft'
     // option) -- every other format has nothing left to choose (see
-    // effectiveNewTournamentDeckType()'s own docblock).
+    // effectiveNewTournamentDeckType()'s own docblock). "Pods with
+    // playoffs" (grid_draft_pod_playoff) also forces the Bracket field
+    // to Single elimination and hides it -- every pod's own bracket, and
+    // the final playoff among pod winners, are always single elimination
+    // regardless of what's chosen there (TournamentService::createTournament()'s
+    // own docblock), so leaving it open to choose would just be
+    // misleading.
     function updateNewTournamentGridDraftModeVisibility() {
         const show = document.getElementById('new-tournament-format').value === 'draft';
         document.getElementById('new-tournament-grid-draft-mode-label').hidden = !show;
@@ -4306,6 +4316,14 @@
         description.hidden = !show;
         if (show) {
             description.textContent = GRID_DRAFT_MODE_DESCRIPTIONS[document.getElementById('new-tournament-grid-draft-mode').value];
+        }
+
+        const isPlayoffPods = show && document.getElementById('new-tournament-grid-draft-mode').value === 'grid_draft_pod_playoff';
+        document.getElementById('new-tournament-bracket-type-label').hidden = isPlayoffPods;
+        document.getElementById('new-tournament-bracket-type-forced-description').hidden = !isPlayoffPods;
+        if (isPlayoffPods) {
+            document.getElementById('new-tournament-bracket-type').value = 'single_elimination';
+            updateNewTournamentSwissRoundCountVisibility();
         }
     }
 
@@ -4378,7 +4396,26 @@
     function updateNewTournamentRegistrationModeFields() {
         const isOpen = document.getElementById('new-tournament-registration-mode-open').checked;
         document.getElementById('new-tournament-invite-fields').hidden = isOpen;
-        document.getElementById('new-tournament-max-participants-label').hidden = !isOpen;
+    }
+
+    // Every tournament is capped to 4-16 joined participants for now (see
+    // TournamentService::createTournament()'s own docblock) -- populated
+    // once here rather than hard-coded as 13 <option> tags apiece.
+    // max_participants defaults to 16 (the widest allowed), min_participants
+    // to 4 (the narrowest) -- reset every time the dialog opens, same as
+    // every other field newTournamentForm.reset() doesn't already cover.
+    function populateNewTournamentParticipantRangeSelects() {
+        for (const [id, defaultValue] of [['new-tournament-min-participants', 4], ['new-tournament-max-participants', 16]]) {
+            const select = document.getElementById(id);
+            select.innerHTML = '';
+            for (let n = 4; n <= 16; n++) {
+                const option = document.createElement('option');
+                option.value = String(n);
+                option.textContent = String(n);
+                select.appendChild(option);
+            }
+            select.value = String(defaultValue);
+        }
     }
 
     function updateNewTournamentSwissRoundCountVisibility() {
@@ -4402,6 +4439,7 @@
     async function openNewTournamentDialog() {
         newTournamentError.hidden = true;
         newTournamentForm.reset();
+        populateNewTournamentParticipantRangeSelects();
         updateNewTournamentAllowSideboardingVisibility();
         updateNewTournamentGridDraftModeVisibility();
         updateNewTournamentRegistrationModeFields();
@@ -4443,7 +4481,6 @@
         const bracketType = document.getElementById('new-tournament-bracket-type').value;
         const format = effectiveNewTournamentFormat();
         const swissRoundCountRaw = document.getElementById('new-tournament-swiss-round-count').value;
-        const maxParticipantsRaw = document.getElementById('new-tournament-max-participants').value;
 
         const inviteUserIds = registrationMode === 'invite_only'
             ? Array.from(tournamentInviteCheckboxes.querySelectorAll('input[type=checkbox]:checked')).map((cb) => parseInt(cb.value, 10))
@@ -4456,8 +4493,12 @@
             bracket_type: bracketType,
             registration_mode: registrationMode,
             swiss_round_count: bracketType === 'swiss' && swissRoundCountRaw ? parseInt(swissRoundCountRaw, 10) : null,
-            min_participants: parseInt(document.getElementById('new-tournament-min-participants').value, 10) || 2,
-            max_participants: registrationMode === 'open' && maxParticipantsRaw ? parseInt(maxParticipantsRaw, 10) : null,
+            // Every tournament is capped to 4-16 joined participants for
+            // now, both fields always required -- see
+            // populateNewTournamentParticipantRangeSelects()'s own
+            // docblock.
+            min_participants: parseInt(document.getElementById('new-tournament-min-participants').value, 10),
+            max_participants: parseInt(document.getElementById('new-tournament-max-participants').value, 10),
             invite_user_ids: inviteUserIds,
             format,
             deck_type: deckType,
@@ -4470,9 +4511,10 @@
             // default-feeling choice (#new-game-grid-draft-pool-source's
             // own first/default option). Without this, createGame() would
             // reject the match with 'Unknown pool source ""' the moment
-            // the tournament (or, for 'grid_draft_pod', each of its own
-            // pods) actually tried to start it.
-            grid_draft_pool_source: (deckType === 'grid_draft' || deckType === 'grid_draft_pod') ? 'random_48' : undefined,
+            // the tournament (or, for 'grid_draft_pod'/'grid_draft_pod_playoff',
+            // each of its own pods, including the playoff finals' own
+            // final pod) actually tried to start it.
+            grid_draft_pool_source: ['grid_draft', 'grid_draft_pod', 'grid_draft_pod_playoff'].includes(deckType) ? 'random_48' : undefined,
             // Every tournament match is always best-of-three now (no
             // opt-out) -- TournamentService::createTournament() forces
             // this server-side regardless of what's sent, so this is just
@@ -4567,19 +4609,37 @@
         }
     }
 
-    // pod.game_id (Grid Draft's own "Pod draft (once)" option, issue #91
-    // follow-up -- see TournamentService::podsSummary()'s own docblock)
-    // is non-null for a pod backed by one ordinary Grid Draft game --
-    // Booster Draft's own pods have no single backing game at all, only
-    // their own booster/pick rows, so it's always null for those.
-    // "Continue drafting" routes to whichever this pod actually is:
-    // Grid Draft's own ordinary board (showBoard(), the exact same
-    // drafting UI a 3-4 player ad hoc Grid Draft game already uses --
-    // nothing tournament-specific to build) or Booster Draft's own
-    // dedicated #pod-draft-dialog.
+    // pod.game_id (Grid Draft's own "Pod draft (once)"/"Pods with
+    // playoffs" options, issue #91 follow-up -- see
+    // TournamentService::podsSummary()'s own docblock) is non-null for a
+    // pod backed by one ordinary Grid Draft game -- Booster Draft's own
+    // pods have no single backing game at all, only their own
+    // booster/pick rows, so it's always null for those. "Continue
+    // drafting" routes to whichever this pod actually is: Grid Draft's
+    // own ordinary board (showBoard(), the exact same drafting UI a 3-4
+    // player ad hoc Grid Draft game already uses -- nothing
+    // tournament-specific to build) or Booster Draft's own dedicated
+    // #pod-draft-dialog. Only offered while pod.status is 'drafting' --
+    // a "Pods with playoffs" pod moves on to 'playing' (its own bracket)
+    // the moment drafting finishes, with nothing left to "continue"
+    // there; see renderTournamentPods()'s own bracket rendering for that
+    // instead.
     let viewerActivePod = null;
 
-    function renderTournamentPods(tournament, pods) {
+    /**
+     * Booster Draft's and Grid Draft's own "Pod draft (once)"/"Pods with
+     * playoffs" options' shared pre-bracket ("Pod draft (once)") or
+     * entirely self-contained ("Pods with playoffs") pod structure
+     * (issue #91 follow-up). Every pod gets one line naming its own
+     * seats and current progress; a "Pods with playoffs" pod
+     * (pod.bracket_rounds non-empty once drafting finishes) additionally
+     * renders its own mini bracket right there using the exact same
+     * renderBracketRounds() the tournament's own top-level bracket uses
+     * -- the final pod (pod.kind === 'final', formed once every regular
+     * pod has its own winner) is labeled "Finals" instead of "Pod N"
+     * since by then there's only ever the one.
+     */
+    function renderTournamentPods(tournament, pods, participantsById) {
         const section = document.getElementById('tournament-view-pods-section');
         section.hidden = !pods;
         if (!pods) {
@@ -4592,12 +4652,22 @@
         for (const pod of pods) {
             const item = document.createElement('li');
             const seatNames = pod.seats.map((seat) => seat.username).join(', ');
+            const label = pod.kind === 'final' ? 'Finals' : `Pod ${pod.pod_number}`;
             const progress = pod.status === 'completed'
-                ? 'done drafting'
-                : pod.game_id !== null ? 'drafting' : `round ${pod.current_round}/15`;
-            item.textContent = `Pod ${pod.pod_number} (${progress}): ${seatNames}`;
+                ? `winner: ${pod.winner_username || '?'}`
+                : pod.status === 'playing'
+                    ? 'playing its own bracket'
+                    : pod.game_id !== null ? 'drafting' : `round ${pod.current_round}/15`;
+            item.textContent = `${label} (${progress}): ${seatNames}`;
+
+            if (pod.bracket_rounds.length > 0) {
+                const podBracketContainer = document.createElement('div');
+                renderBracketRounds(podBracketContainer, pod.bracket_rounds, (round) => round.matches, participantsById);
+                item.appendChild(podBracketContainer);
+            }
+
             list.appendChild(item);
-            if (pod.status !== 'completed' && pod.seats.some((seat) => seat.username === user.username)) {
+            if (pod.status === 'drafting' && pod.seats.some((seat) => seat.username === user.username)) {
                 viewerActivePod = pod;
             }
         }
@@ -4654,7 +4724,7 @@
         document.getElementById('tournament-view-cancel-button').hidden =
             !(isCreator && (tournament.status === 'registration' || tournament.status === 'in_progress'));
 
-        renderTournamentPods(tournament, pods);
+        renderTournamentPods(tournament, pods, participantsById);
         renderMyBoosterDraftDeck(participants);
 
         const standingsSection = document.getElementById('tournament-view-standings-section');
@@ -4670,14 +4740,29 @@
         }
 
         const bracketContainer = document.getElementById('tournament-view-bracket');
-        bracketContainer.innerHTML = '';
+        renderBracketRounds(bracketContainer, rounds, (round) => matchesByRound[round.id], participantsById);
+    }
+
+    /**
+     * Shared by the tournament's own top-level bracket/Swiss above and,
+     * for Grid Draft's "Pods with playoffs" option (issue #91
+     * follow-up), each pod's own mini bracket inside renderTournamentPods()
+     * below -- identical rendering either way, just a different round
+     * list and a different way of finding each round's own matches (the
+     * top-level bracket looks them up from GET /tournaments/state's own
+     * matches_by_round map; a pod's own bracket_rounds already carry
+     * their matches inline -- see TournamentService::podsSummary()'s own
+     * docblock).
+     */
+    function renderBracketRounds(container, rounds, getMatchesForRound, participantsById) {
+        container.innerHTML = '';
         for (const round of rounds) {
-            const heading = document.createElement('h3');
+            const heading = document.createElement('h4');
             heading.textContent = `${TOURNAMENT_BRACKET_LABELS[round.bracket] || round.bracket} ${round.round_number}`;
-            bracketContainer.appendChild(heading);
+            container.appendChild(heading);
 
             const list = document.createElement('ul');
-            for (const match of matchesByRound[round.id] || []) {
+            for (const match of getMatchesForRound(round) || []) {
                 const item = document.createElement('li');
                 item.append(tournamentMatchLabel(match, participantsById) + ' ');
                 if (match.game_id && (match.status === 'in_progress' || match.status === 'completed')) {
@@ -4693,7 +4778,7 @@
                 }
                 list.appendChild(item);
             }
-            bracketContainer.appendChild(list);
+            container.appendChild(list);
         }
     }
 

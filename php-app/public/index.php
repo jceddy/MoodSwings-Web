@@ -1449,7 +1449,7 @@ if ($path === '/tournaments' && $method === 'POST') {
             (string) ($body['registration_mode'] ?? ''),
             openGameCreateParamsFromRequestBody($body),
             isset($body['swiss_round_count']) ? (int) $body['swiss_round_count'] : null,
-            isset($body['min_participants']) ? (int) $body['min_participants'] : 2,
+            isset($body['min_participants']) ? (int) $body['min_participants'] : 4,
             isset($body['max_participants']) ? (int) $body['max_participants'] : null,
             array_map(intval(...), (array) ($body['invite_user_ids'] ?? [])),
         );

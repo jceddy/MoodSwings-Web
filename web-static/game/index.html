@@ -1144,13 +1144,14 @@
                 <input type="text" id="new-tournament-name" required maxlength="120">
             </label>
 
-            <label class="dialog-field">Bracket
+            <label class="dialog-field" id="new-tournament-bracket-type-label">Bracket
                 <select id="new-tournament-bracket-type">
                     <option value="single_elimination">Single elimination</option>
                     <option value="double_elimination">Double elimination</option>
                     <option value="swiss">Swiss rounds</option>
                 </select>
             </label>
+            <p id="new-tournament-bracket-type-forced-description" hidden>Every pod, and the final playoff among each pod's own winner, always plays single elimination -- there's nothing to choose here for this draft type.</p>
 
             <label class="dialog-field" id="new-tournament-swiss-round-count-label" hidden>Number of rounds (blank = automatic)
                 <input type="number" id="new-tournament-swiss-round-count" min="1">
@@ -1170,12 +1171,18 @@
                 </p>
             </div>
 
-            <label class="dialog-field" id="new-tournament-max-participants-label" hidden>Maximum participants
-                <input type="number" id="new-tournament-max-participants" min="2">
+            <!-- For now (may be relaxed later), every tournament is
+                 capped to 4-16 joined participants -- see
+                 TournamentService::createTournament()'s own docblock --
+                 so both of these are fixed <select> lists of that range
+                 rather than free-entry numbers; there's nothing outside
+                 4-16 the server would ever accept anyway. -->
+            <label class="dialog-field">Maximum participants
+                <select id="new-tournament-max-participants"></select>
             </label>
 
             <label class="dialog-field">Minimum participants to start
-                <input type="number" id="new-tournament-min-participants" min="2" value="2">
+                <select id="new-tournament-min-participants"></select>
             </label>
 
             <label class="dialog-field">Format
@@ -1192,6 +1199,7 @@
                 <select id="new-tournament-grid-draft-mode">
                     <option value="grid_draft">Fresh draft each match</option>
                     <option value="grid_draft_pod">Pod draft (once)</option>
+                    <option value="grid_draft_pod_playoff">Pods with playoffs</option>
                 </select>
             </label>
             <p id="new-tournament-grid-draft-mode-description" hidden></p>
@@ -1263,12 +1271,15 @@
         <button id="tournament-view-refresh-button" type="button">Refresh</button>
         <button id="tournament-view-start-button" type="button" hidden>Start tournament</button>
         <button id="tournament-view-cancel-button" type="button" hidden>Cancel tournament</button>
-        <!-- Booster Draft's, and Grid Draft's own "Pod draft (once)"
-             option's, pre-bracket phase (issue #91 follow-up) -- shown
-             only while tournament.status is 'drafting'; see
-             renderTournamentPods() in game.js. -->
+        <!-- Booster Draft's, Grid Draft's own "Pod draft (once)"
+             option's, and Grid Draft's own "Pods with playoffs" option's
+             pod structure (issue #91 follow-up) -- shown only while
+             tournament.status is 'drafting' (every one of these three
+             options stays 'drafting' for its own whole pod stage, even
+             once a "Pods with playoffs" pod moves on to playing its own
+             bracket -- see renderTournamentPods() in game.js). -->
         <div id="tournament-view-pods-section" hidden>
-            <h3>Drafting</h3>
+            <h3>Pods</h3>
             <ul id="tournament-view-pods-list"></ul>
             <button id="tournament-view-continue-drafting-button" type="button" hidden>Continue drafting</button>
         </div>
