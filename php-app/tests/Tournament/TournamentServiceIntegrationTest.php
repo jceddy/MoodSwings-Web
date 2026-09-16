@@ -130,15 +130,25 @@ final class TournamentServiceIntegrationTest extends TestCase
         return (int) $this->pdo->lastInsertId();
     }
 
-    /** @param int[] $userIds */
-    private function createDuelTournament(int $creatorUserId, array $inviteUserIds, string $bracketType, ?int $swissRoundCount = null): int
+    /**
+     * A generic bracket-mechanics tournament -- Traditional format, whose
+     * always-implied Structure deck (see TournamentService::createTournament()'s
+     * own docblock) starts every match's game immediately with no
+     * decklist submission required, exactly what these tests need to
+     * drive a bracket to completion purely via decideMatch() resignations.
+     * Named for what it tests (bracket shape/progression), not the
+     * format itself, since that's incidental here.
+     *
+     * @param int[] $inviteUserIds
+     */
+    private function createStandardTournament(int $creatorUserId, array $inviteUserIds, string $bracketType, ?int $swissRoundCount = null): int
     {
         return $this->tournaments->createTournament(
             $creatorUserId,
             'Test Cup',
             $bracketType,
             'invite_only',
-            ['format' => 'duel', 'deck_type' => 'structure'],
+            ['format' => 'standard'],
             $swissRoundCount,
             minParticipants: 2,
             maxParticipants: null,
@@ -152,6 +162,28 @@ final class TournamentServiceIntegrationTest extends TestCase
         $gamePlayerId = $this->games->gamePlayerIdFor($gameId, $losingUserId);
         self::assertNotNull($gamePlayerId, "user {$losingUserId} isn't seated in game {$gameId}");
         $this->games->resignGame($gameId, $gamePlayerId);
+    }
+
+    /**
+     * Resigns $losingUserId enough times to decide a tournament match
+     * outright -- every tournament match is best-of-three now (see
+     * TournamentService::createTournament()'s own docblock), so a single
+     * resignation only ever wins game 1. Every generic bracket test in
+     * this file plays Traditional (createStandardTournament()), whose
+     * shared 'custom' deck_type carries its card ids forward
+     * automatically once GameService::advanceGameMatch() creates game
+     * 2 -- unlike a Power Duel/Booster Draft match, no fresh decklist
+     * submission is needed, just an explicit startGame() call (the same
+     * one an ordinary ad hoc match's own browser-side polling would
+     * otherwise make).
+     */
+    private function decideMatch(int $firstGameId, int $losingUserId): void
+    {
+        $this->loseGameAs($firstGameId, $losingUserId);
+        $gameMatchId = (int) $this->fetchGame($firstGameId)['game_match_id'];
+        $game2Id = $this->fetchLatestGameIdForMatch($gameMatchId);
+        $this->games->startGame($game2Id);
+        $this->loseGameAs($game2Id, $losingUserId);
     }
 
     private function onlyGameFor(int $tournamentMatchId): array
@@ -169,7 +201,7 @@ final class TournamentServiceIntegrationTest extends TestCase
         $p3 = $this->insertUser('single_p3');
         $p4 = $this->insertUser('single_p4');
 
-        $tournamentId = $this->createDuelTournament($creator, [$p2, $p3, $p4], 'single_elimination');
+        $tournamentId = $this->createStandardTournament($creator, [$p2, $p3, $p4], 'single_elimination');
         foreach ([$p2, $p3, $p4] as $invitee) {
             $this->tournaments->acceptInvite($tournamentId, $invitee);
         }
@@ -191,7 +223,7 @@ final class TournamentServiceIntegrationTest extends TestCase
             $game = $this->onlyGameFor((int) $match['id']);
             $p1 = $this->participantUserId((int) $match['participant1_id']);
             $p2Id = $this->participantUserId((int) $match['participant2_id']);
-            $this->loseGameAs((int) $game['game_id'], $p2Id);
+            $this->decideMatch((int) $game['game_id'], $p2Id);
             $winners[] = $p1;
         }
 
@@ -207,11 +239,122 @@ final class TournamentServiceIntegrationTest extends TestCase
         $finalLoserUserId = $this->participantUserId((int) $round2Match['participant1_id']) === $finalWinnerUserId
             ? $this->participantUserId((int) $round2Match['participant2_id'])
             : $this->participantUserId((int) $round2Match['participant1_id']);
-        $this->loseGameAs((int) $finalGame['game_id'], $finalLoserUserId);
+        $this->decideMatch((int) $finalGame['game_id'], $finalLoserUserId);
 
         $state = $this->tournaments->getState($tournamentId, $creator);
         self::assertSame('completed', $state['tournament']['status']);
         self::assertSame($finalWinnerUserId, (int) $state['tournament']['winner_user_id']);
+    }
+
+    /**
+     * createTournament() forces deck_type/duel_deck_rules/best_of_three
+     * itself now -- the New Tournament dialog no longer offers any of
+     * these as a choice, so this proves the server-side contract holds
+     * even against a caller that sends something else entirely (a direct
+     * API request bypassing the frontend, or a stale client): Duel
+     * always becomes "Power Duel" (deck_type 'custom_duel' under the
+     * "power" preset), Traditional always becomes 'structure' with its
+     * own freshly-generated fixed deck, Booster Draft's own
+     * `deck_type: 'booster_draft'` sentinel survives untouched (it's
+     * also `format: 'duel'` under the hood but is a completely different
+     * format choice, not "Duel" with something to override), and every
+     * format gets best_of_three forced to true.
+     */
+    public function testCreateTournamentForcesFormatImpliedSettingsRegardlessOfWhatIsSent(): void
+    {
+        $creator = $this->insertUser('force_p1');
+        $tournaments = new TournamentRepository();
+
+        $duelId = $this->tournaments->createTournament(
+            $creator,
+            'Duel Cup',
+            'single_elimination',
+            'invite_only',
+            ['format' => 'duel', 'deck_type' => 'structure', 'best_of_three' => false],
+            swissRoundCount: null,
+            minParticipants: 2,
+            maxParticipants: null,
+        );
+        $duelParams = $tournaments->find($duelId)['match_params'];
+        self::assertSame('custom_duel', $duelParams['deck_type']);
+        self::assertSame(['preset' => 'power'], $duelParams['duel_deck_rules']);
+        self::assertTrue($duelParams['best_of_three']);
+
+        $standardId = $this->tournaments->createTournament(
+            $creator,
+            'Standard Cup',
+            'single_elimination',
+            'invite_only',
+            ['format' => 'standard', 'deck_type' => 'power', 'best_of_three' => false],
+            swissRoundCount: null,
+            minParticipants: 2,
+            maxParticipants: null,
+        );
+        $standardParams = $tournaments->find($standardId)['match_params'];
+        self::assertSame('structure', $standardParams['deck_type']);
+        self::assertNotEmpty($standardParams['structure_deck_card_ids']);
+        self::assertTrue($standardParams['best_of_three']);
+
+        $boosterDraftId = $this->tournaments->createTournament(
+            $creator,
+            'Booster Cup',
+            'single_elimination',
+            'invite_only',
+            ['format' => 'duel', 'deck_type' => 'booster_draft', 'best_of_three' => false],
+            swissRoundCount: null,
+            minParticipants: 2,
+            maxParticipants: null,
+        );
+        $boosterDraftParams = $tournaments->find($boosterDraftId)['match_params'];
+        self::assertSame('booster_draft', $boosterDraftParams['deck_type'], 'Booster Draft\'s own sentinel must survive the Duel override');
+        self::assertArrayNotHasKey('duel_deck_rules', $boosterDraftParams);
+        self::assertTrue($boosterDraftParams['best_of_three']);
+    }
+
+    /**
+     * Traditional's fixed, once-per-tournament Structure deck (see
+     * TournamentService::createTournament()'s own docblock) -- both
+     * round-1 matches, seating four DIFFERENT participants, deal from
+     * the exact same card ids GameService::generateStructureDeckCardIds()
+     * generated once at tournament-creation time (stored on
+     * match_params.structure_deck_card_ids), not a fresh random deck per
+     * match the way an ordinary non-tournament Traditional game still
+     * gets. Also proves the deck_type/name translation
+     * startMatchGame() does under the hood: the underlying `games` row
+     * is deck_type 'custom' (not 'structure') with custom_deck_name
+     * 'Structure Deck', even though the tournament's own match_params
+     * (and therefore tournamentMatchSummary() on the frontend) still say
+     * 'structure'.
+     */
+    public function testStandardTournamentUsesOneFixedStructureDeckForEveryMatch(): void
+    {
+        $creator = $this->insertUser('fixed_deck_p1');
+        $p2 = $this->insertUser('fixed_deck_p2');
+        $p3 = $this->insertUser('fixed_deck_p3');
+        $p4 = $this->insertUser('fixed_deck_p4');
+
+        $tournamentId = $this->createStandardTournament($creator, [$p2, $p3, $p4], 'single_elimination');
+        foreach ([$p2, $p3, $p4] as $invitee) {
+            $this->tournaments->acceptInvite($tournamentId, $invitee);
+        }
+        $this->tournaments->startTournament($tournamentId, $creator);
+
+        $tournament = (new TournamentRepository())->find($tournamentId);
+        self::assertSame('structure', $tournament['match_params']['deck_type']);
+        $expectedCardIds = $tournament['match_params']['structure_deck_card_ids'];
+        self::assertNotEmpty($expectedCardIds);
+
+        $round1 = $this->matchRepo->listRounds($tournamentId)[0];
+        $round1Matches = $this->matchRepo->listForRound((int) $round1['id']);
+        self::assertCount(2, $round1Matches);
+
+        foreach ($round1Matches as $match) {
+            $matchGame = $this->onlyGameFor((int) $match['id']);
+            $game = $this->fetchGame((int) $matchGame['game_id']);
+            self::assertSame('custom', $game['deck_type'], 'Traditional tournament matches use deck_type custom under the hood');
+            self::assertSame('Structure Deck', $game['custom_deck_name']);
+            self::assertSame($expectedCardIds, array_map(intval(...), json_decode((string) $game['custom_deck_card_ids'], true)));
+        }
     }
 
     public function testSingleEliminationWithByeAutoAdvances(): void
@@ -220,7 +363,7 @@ final class TournamentServiceIntegrationTest extends TestCase
         $p2 = $this->insertUser('bye_p2');
         $p3 = $this->insertUser('bye_p3');
 
-        $tournamentId = $this->createDuelTournament($creator, [$p2, $p3], 'single_elimination');
+        $tournamentId = $this->createStandardTournament($creator, [$p2, $p3], 'single_elimination');
         $this->tournaments->acceptInvite($tournamentId, $p2);
         $this->tournaments->acceptInvite($tournamentId, $p3);
         $this->tournaments->startTournament($tournamentId, $creator);
@@ -248,7 +391,7 @@ final class TournamentServiceIntegrationTest extends TestCase
         $p3 = $this->insertUser('double_p3');
         $p4 = $this->insertUser('double_p4');
 
-        $tournamentId = $this->createDuelTournament($creator, [$p2, $p3, $p4], 'double_elimination');
+        $tournamentId = $this->createStandardTournament($creator, [$p2, $p3, $p4], 'double_elimination');
         foreach ([$p2, $p3, $p4] as $invitee) {
             $this->tournaments->acceptInvite($tournamentId, $invitee);
         }
@@ -266,7 +409,7 @@ final class TournamentServiceIntegrationTest extends TestCase
             $game = $this->onlyGameFor((int) $match['id']);
             $p1UserId = $this->participantUserId((int) $match['participant1_id']);
             $p2UserId = $this->participantUserId((int) $match['participant2_id']);
-            $this->loseGameAs((int) $game['game_id'], $p2UserId); // participant1 always wins WB round 1 in this test
+            $this->decideMatch((int) $game['game_id'], $p2UserId); // participant1 always wins WB round 1 in this test
             $wbLosers[] = $p2UserId;
         }
 
@@ -278,7 +421,7 @@ final class TournamentServiceIntegrationTest extends TestCase
         $lbP1 = $this->participantUserId((int) $lbRound1Matches[0]['participant1_id']);
         $lbP2 = $this->participantUserId((int) $lbRound1Matches[0]['participant2_id']);
         self::assertEqualsCanonicalizing($wbLosers, [$lbP1, $lbP2]);
-        $this->loseGameAs((int) $lbMatch['game_id'], $lbP2); // lbP1 wins LB round 1
+        $this->decideMatch((int) $lbMatch['game_id'], $lbP2); // lbP1 wins LB round 1
 
         // Winners bracket final (round 2 of 'single'): the two WB round-1 winners.
         $wbFinalRound = current(array_filter($this->matchRepo->listRounds($tournamentId), static fn (array $r): bool => $r['bracket'] === 'single' && (int) $r['round_number'] === 2));
@@ -286,7 +429,7 @@ final class TournamentServiceIntegrationTest extends TestCase
         $wbFinalGame = $this->onlyGameFor((int) $wbFinalMatch['id']);
         $wbFinalP1 = $this->participantUserId((int) $wbFinalMatch['participant1_id']);
         $wbFinalP2 = $this->participantUserId((int) $wbFinalMatch['participant2_id']);
-        $this->loseGameAs((int) $wbFinalGame['game_id'], $wbFinalP2); // wbFinalP1 is the WB champion
+        $this->decideMatch((int) $wbFinalGame['game_id'], $wbFinalP2); // wbFinalP1 is the WB champion
 
         // Losers bracket final (round 2 of 'losers'): LB round 1 winner vs WB final loser.
         $lbFinalRound = current(array_filter($this->matchRepo->listRounds($tournamentId), static fn (array $r): bool => $r['bracket'] === 'losers' && (int) $r['round_number'] === 2));
@@ -298,7 +441,7 @@ final class TournamentServiceIntegrationTest extends TestCase
         // The losers-bracket champion (lbP1) wins through to the grand final.
         $lbChampion = $lbP1;
         $lbFinalLoser = $lbFinalP1 === $lbChampion ? $lbFinalP2 : $lbFinalP1;
-        $this->loseGameAs((int) $lbFinalGame['game_id'], $lbFinalLoser);
+        $this->decideMatch((int) $lbFinalGame['game_id'], $lbFinalLoser);
 
         // Grand final round 1: WB champion vs LB champion. Force the LB
         // champion to win -- this must trigger a bracket-reset round 2,
@@ -308,7 +451,7 @@ final class TournamentServiceIntegrationTest extends TestCase
         self::assertSame($wbFinalP1, $this->participantUserId((int) $gfMatch1['participant1_id']));
         self::assertSame($lbChampion, $this->participantUserId((int) $gfMatch1['participant2_id']));
         $gfGame1 = $this->onlyGameFor((int) $gfMatch1['id']);
-        $this->loseGameAs((int) $gfGame1['game_id'], $wbFinalP1); // LB champion wins round 1 -- WB champion's first loss
+        $this->decideMatch((int) $gfGame1['game_id'], $wbFinalP1); // LB champion wins round 1 -- WB champion's first loss
 
         $stateAfterGf1 = $this->tournaments->getState($tournamentId, $creator);
         self::assertSame('in_progress', $stateAfterGf1['tournament']['status'], 'a bracket reset must be played, not end the tournament yet');
@@ -317,7 +460,7 @@ final class TournamentServiceIntegrationTest extends TestCase
         $gfMatch2 = $this->matchRepo->listForRound((int) $gfRound2['id'])[0];
         $gfGame2 = $this->onlyGameFor((int) $gfMatch2['id']);
         // WB champion wins the reset -- they should be the tournament champion outright.
-        $this->loseGameAs((int) $gfGame2['game_id'], $lbChampion);
+        $this->decideMatch((int) $gfGame2['game_id'], $lbChampion);
 
         $finalState = $this->tournaments->getState($tournamentId, $creator);
         self::assertSame('completed', $finalState['tournament']['status']);
@@ -349,7 +492,7 @@ final class TournamentServiceIntegrationTest extends TestCase
             $this->insertUser('de5_p5'),
         ];
 
-        $tournamentId = $this->createDuelTournament($creator, $invitees, 'double_elimination');
+        $tournamentId = $this->createStandardTournament($creator, $invitees, 'double_elimination');
         foreach ($invitees as $invitee) {
             $this->tournaments->acceptInvite($tournamentId, $invitee);
         }
@@ -360,7 +503,7 @@ final class TournamentServiceIntegrationTest extends TestCase
             foreach ($this->matchRepo->listForTournament($tournamentId) as $match) {
                 if ($match['status'] === 'in_progress' && $match['game_id'] !== null) {
                     $loserUserId = $this->participantUserId((int) $match['participant2_id']);
-                    $this->loseGameAs((int) $match['game_id'], $loserUserId);
+                    $this->decideMatch((int) $match['game_id'], $loserUserId);
                     $resolvedAny = true;
                 }
             }
@@ -402,7 +545,7 @@ final class TournamentServiceIntegrationTest extends TestCase
         $p3 = $this->insertUser('swiss_p3');
         $p4 = $this->insertUser('swiss_p4');
 
-        $tournamentId = $this->createDuelTournament($creator, [$p2, $p3, $p4], 'swiss', swissRoundCount: 2);
+        $tournamentId = $this->createStandardTournament($creator, [$p2, $p3, $p4], 'swiss', swissRoundCount: 2);
         foreach ([$p2, $p3, $p4] as $invitee) {
             $this->tournaments->acceptInvite($tournamentId, $invitee);
         }
@@ -417,7 +560,7 @@ final class TournamentServiceIntegrationTest extends TestCase
             $game = $this->onlyGameFor((int) $match['id']);
             $p1UserId = $this->participantUserId((int) $match['participant1_id']);
             $p2UserId = $this->participantUserId((int) $match['participant2_id']);
-            $this->loseGameAs((int) $game['game_id'], $p2UserId);
+            $this->decideMatch((int) $game['game_id'], $p2UserId);
             $round1WinnerUserIds[] = $p1UserId;
         }
 
@@ -436,7 +579,7 @@ final class TournamentServiceIntegrationTest extends TestCase
             // Whoever is participant1 wins again -- if this is the
             // undefeated-vs-undefeated match, that decides the champion
             // outright at 2-0.
-            $this->loseGameAs((int) $game['game_id'], $p2UserId);
+            $this->decideMatch((int) $game['game_id'], $p2UserId);
         }
 
         $state = $this->tournaments->getState($tournamentId, $creator);
@@ -455,7 +598,7 @@ final class TournamentServiceIntegrationTest extends TestCase
             'Open Cup',
             'single_elimination',
             'open',
-            ['format' => 'duel', 'deck_type' => 'structure'],
+            ['format' => 'standard'],
             null,
             minParticipants: 2,
             maxParticipants: 2,
@@ -472,7 +615,7 @@ final class TournamentServiceIntegrationTest extends TestCase
     {
         $creator = $this->insertUser('auth_p1');
         $p2 = $this->insertUser('auth_p2');
-        $tournamentId = $this->createDuelTournament($creator, [$p2], 'single_elimination');
+        $tournamentId = $this->createStandardTournament($creator, [$p2], 'single_elimination');
         $this->tournaments->acceptInvite($tournamentId, $p2);
 
         $this->expectException(NotAuthorizedForTournamentException::class);
@@ -480,20 +623,20 @@ final class TournamentServiceIntegrationTest extends TestCase
     }
 
     /**
-     * A Duel tournament may use deck_type 'custom_duel' under the "power"
-     * duel_deck_rules preset (each player submits their own decklist,
-     * validated against DuelDeckRules::forPreset('power')) instead of one
-     * of the algorithmically-assembled deck types -- see the New
-     * Tournament dialog's "Power (Custom Decks)" option. startMatchGame()
+     * A Duel tournament ("Power Duel" in the New Tournament dialog)
+     * always uses deck_type 'custom_duel' under the "power"
+     * duel_deck_rules preset now (each player submits their own
+     * decklist, validated against DuelDeckRules::forPreset('power'))
+     * rather than one of the algorithmically-assembled deck types --
+     * createTournament() forces this itself (see its own docblock)
+     * regardless of what's passed in, which this test proves by passing
+     * neither 'deck_type' nor 'duel_deck_rules' at all. startMatchGame()
      * creates the game up front same as any other match, but it starts
      * out 'waiting' rather than 'in_progress' since neither player has
      * submitted a decklist yet -- exactly the same tolerance the class
-     * docblock already describes for draft matches. best_of_three plus
-     * allow_sideboarding here also proves TournamentService threads
-     * 'allow_sideboarding' through to the created game_match wrapper,
-     * previously missing from startMatchGame()'s createGame() call
-     * entirely (silently defaulting to false for every tournament match,
-     * since nothing could ever opt into it before this option existed).
+     * docblock already describes for draft matches. allow_sideboarding
+     * here also proves TournamentService threads it through to the
+     * created game_match wrapper.
      */
     public function testDuelTournamentSupportsCustomDuelPowerDecksWithSideboarding(): void
     {
@@ -507,9 +650,6 @@ final class TournamentServiceIntegrationTest extends TestCase
             'invite_only',
             [
                 'format' => 'duel',
-                'deck_type' => 'custom_duel',
-                'duel_deck_rules' => ['preset' => 'power'],
-                'best_of_three' => true,
                 'allow_sideboarding' => true,
             ],
             swissRoundCount: null,
@@ -631,7 +771,9 @@ final class TournamentServiceIntegrationTest extends TestCase
      * see TournamentService::startMatchGame()'s own docblock), and
      * GameService::submitCustomDuelDeck()'s own onCustomDuelDeckSubmitted()
      * hook persisting each side's submission as their new
-     * tournament_participants.current_deck_card_ids.
+     * tournament_participants.current_deck_card_ids, and driving that
+     * match to completion over two games (every tournament match is
+     * best-of-three now, so one resignation only decides game 1).
      */
     public function testBoosterDraftFormsAPodDraftsToCompletionAndPlaysBracketMatches(): void
     {
@@ -725,10 +867,33 @@ final class TournamentServiceIntegrationTest extends TestCase
         self::assertCount(12, $p1Participant['current_deck_card_ids'], 'submission should have persisted as this participant\'s new current deck');
         self::assertCount(12, $p2Participant['current_deck_card_ids']);
 
-        // Resigning cascades the tournament forward same as any other format.
+        // Booster Draft matches are best-of-three now too (every
+        // tournament format is -- see TournamentService::createTournament()'s
+        // own docblock), so one resignation only wins game 1, not the
+        // match itself. Booster Draft's own "sideboard from your whole
+        // pool every round" story means neither seat's deck carries
+        // forward automatically the way a locked Power Duel match's does
+        // (isPowerDuelMatch is false for a 'user_defined' preset) --
+        // game 2 needs its own fresh submission from the same pool
+        // before it can start.
         $this->loseGameAs((int) $match['game_id'], $p2UserId);
+        $gameMatchId = (int) $this->fetchGame((int) $match['game_id'])['game_match_id'];
+        $game2Id = $this->fetchLatestGameIdForMatch($gameMatchId);
+        $this->games->submitCustomDuelDeck($game2Id, $this->games->gamePlayerIdFor($game2Id, $p1UserId), $this->decklistTextForCardIds(array_slice($p1Pool, 0, 12)));
+        $this->games->submitCustomDuelDeck($game2Id, $this->games->gamePlayerIdFor($game2Id, $p2UserId), $this->decklistTextForCardIds(array_slice($p2Pool, 0, 12)));
+        $this->games->startGame($game2Id);
+        $this->loseGameAs($game2Id, $p2UserId);
+
         $state = $this->tournaments->getState($tournamentId, $creator);
         self::assertSame('in_progress', $state['tournament']['status'], 'more rounds remain with 5 participants');
+    }
+
+    private function fetchLatestGameIdForMatch(int $gameMatchId): int
+    {
+        $stmt = $this->pdo->prepare('SELECT id FROM games WHERE game_match_id = :id ORDER BY match_game_number DESC LIMIT 1');
+        $stmt->execute(['id' => $gameMatchId]);
+
+        return (int) $stmt->fetchColumn();
     }
 
     /** @param int[] $cardIds honors multiplicity (a repeated id becomes "2 Name") */

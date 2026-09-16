@@ -5041,17 +5041,62 @@ omitted for open-registration tournaments visible to browse),
 `web-static/README.md` for the New Tournament dialog and the
 bracket/standings view built on top of these.
 
-A Duel tournament's `match_params` may also set `deck_type: 'custom_duel'`
-(each player submits their own decklist for every match, rather than one
-algorithmically assembled deck for the whole event) same as any other
-Duel game -- `duel_deck_rules`/`allow_sideboarding` pass straight through
-`startMatchGame()`'s own `createGame()` call same as every other
+A Duel tournament ("Power Duel" in the New Tournament dialog) always
+sets `deck_type: 'custom_duel'` under the "power" `duel_deck_rules`
+preset now -- using custom decks is no longer one deck_type option among
+several for `format: 'duel'`, it's simply what a Duel tournament is:
+each player submits their own decklist for every match, rather than one
+algorithmically assembled deck for the whole event, validated against
+that fixed preset -- `duel_deck_rules`/`allow_sideboarding` pass straight
+through `startMatchGame()`'s own `createGame()` call same as every other
 `match_params` key. See "Power Duel sideboarding" below for what
-`allow_sideboarding` actually does; the New Tournament dialog only ever
-offers it under the "power" preset (its "Power (Custom Decks)" option),
-never `user_defined`, so `allow_sideboarding` is meaningful for every
+`allow_sideboarding` actually does; the New Tournament dialog never
+offers `user_defined`, so `allow_sideboarding` is meaningful for every
 tournament match that opts into it (unlike the New Game dialog, where a
 `user_defined`-preset match can check the box for no effect).
+
+A Traditional tournament (`format: 'standard'`) always sets `deck_type:
+'structure'` the same way -- there is no longer a Structure/Power/
+jceddy's 75/One of Each choice for it either. Unlike an ordinary
+non-tournament Traditional game, which gets a fresh random Structure
+deck every single game (including game 2/3 of its own best-of-three
+match, since `advanceGameMatch()` only ever carries forward a `'custom'`
+deck's own card ids, never a `'structure'` deck's), a Traditional
+tournament's whole event shares exactly ONE randomly-generated Structure
+deck: `createTournament()` calls `GameService::generateStructureDeckCardIds()`
+(a thin public wrapper around the same private `buildStructureDeckCardIds()`
+an ordinary game already uses) exactly once, at tournament-creation
+time, and stores the result on `match_params.structure_deck_card_ids`
+alongside the rest of this event's fixed settings -- overwriting
+whatever `deck_type` the caller actually sent, since there's nothing
+left to choose. `startMatchGame()` then passes `deckType: 'custom'`
+(not `'structure'`) to `createGame()` for every match, along with those
+same stored ids as its new `$fixedCustomDeckCardIds` param -- a
+tournament-only way to force deck_type `'custom'` to use a specific,
+already-resolved card pool instead of parsing `$decklistText` or
+resolving `$savedDecklistId` (`customDeckName` is hardcoded to
+`'Structure Deck'` for this path, so the board still reads "Traditional,
+Structure Deck" rather than the generic "Uploaded Deck" a blank name
+would otherwise show). Reusing `'custom'`'s own machinery this way means
+every game gets the exact same shared table-wide deck for free -- no new
+schema, no new carry-forward logic -- and `advanceGameMatch()`'s
+existing `deck_type === 'custom'` carry-forward already keeps a single
+match's own game 2/3 on it too, same as it always has for an ordinary
+`'custom'` game. `tournament.match_params.deck_type` itself stays
+`'structure'` in the API response the whole time (never rewritten to
+`'custom'`) -- exactly the same "keep the UI-facing sentinel, translate
+only at `startMatchGame()` time" pattern `'booster_draft'` below already
+follows -- so `tournamentMatchSummary()` keeps showing plain "Structure"
+regardless of this internal `createGame()`-level detail.
+
+Every tournament match is always best-of-three now, for every format --
+`createTournament()` forces `match_params.best_of_three = true`
+unconditionally, overwriting whatever the caller sent, since the New
+Tournament dialog no longer offers a choice. A no-op (silently ignored,
+not an error) for the draft-family deck types (`grid_draft`/`sealed_deck`/
+`booster_draft`), which already run their own best-of-three-at-2-players
+story via `GameService::draftGamesToWin()` regardless of this flag -- see
+`createGame()`'s own `$bestOfThree` docblock.
 
 ### Booster Draft (issue #91 follow-up)
 

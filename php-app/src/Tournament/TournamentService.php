@@ -100,6 +100,46 @@ final class TournamentService implements TournamentMatchObserver
         if (!in_array($format, self::ALLOWED_FORMATS, true)) {
             throw new TournamentStateException("Tournament matches don't support the \"{$format}\" format");
         }
+        // Every tournament match is always best-of-three now -- the New
+        // Tournament dialog no longer offers a choice, and this override
+        // makes that the actual server-side contract rather than merely
+        // the frontend's own default; overwrites whatever the caller
+        // sent. A no-op (silently ignored, not an error) for the
+        // draft-family deck types (grid_draft/sealed_deck/booster_draft),
+        // which already run their own best-of-three-at-2-players story
+        // via GameService::draftGamesToWin() -- see createGame()'s own
+        // $bestOfThree docblock.
+        $matchParams['best_of_three'] = true;
+        // Traditional always implies deck_type 'structure' now -- no
+        // separate deck choice is offered for it any more (New Tournament
+        // dialog docblock) -- and every match, every game, of the whole
+        // event deals from the exact same randomly-generated Structure
+        // deck rather than each getting its own, so it's generated
+        // exactly once, right here, rather than per-match. Stored on
+        // match_params itself (structure_deck_card_ids) alongside the
+        // rest of this event's fixed settings, and passed back into
+        // GameService::createGame() as $fixedCustomDeckCardIds -- see
+        // startMatchGame()'s own docblock -- for every match this
+        // tournament ever plays. Overwrites whatever deck_type the caller
+        // sent; there is nothing left to choose for Traditional.
+        if ($format === 'standard') {
+            $matchParams['deck_type'] = 'structure';
+            $matchParams['structure_deck_card_ids'] = $this->games->generateStructureDeckCardIds();
+        }
+        // Duel always implies "Power Duel" now (deck_type 'custom_duel'
+        // under the "power" duel_deck_rules preset) for exactly the same
+        // reason -- using custom decks is no longer one deck_type choice
+        // among several for format 'duel', it's simply what a Duel
+        // tournament is -- EXCEPT for Booster Draft's own
+        // `deck_type: 'booster_draft'` sentinel, which is also
+        // `format: 'duel'` under the hood (see startMatchGame()'s own
+        // docblock) but is a completely different, already-fully-decided
+        // format choice from a tournament creator's perspective, not
+        // "Duel" with a deck_type left to override.
+        if ($format === 'duel' && ($matchParams['deck_type'] ?? null) !== 'booster_draft') {
+            $matchParams['deck_type'] = 'custom_duel';
+            $matchParams['duel_deck_rules'] = ['preset' => 'power'];
+        }
         if ($registrationMode === 'open') {
             if ($maxParticipants === null) {
                 throw new TournamentStateException('An open-registration tournament needs a maximum participant count');
@@ -594,6 +634,12 @@ final class TournamentService implements TournamentMatchObserver
         $format = (string) ($params['format'] ?? 'standard');
         $deckType = (string) ($params['deck_type'] ?? 'structure');
         $isBoosterDraft = $deckType === 'booster_draft';
+        // See createTournament()'s own docblock -- Traditional's fixed,
+        // once-per-tournament Structure deck (structure_deck_card_ids),
+        // generated there rather than left for GameService to build a
+        // fresh random one for every game the way an ordinary
+        // non-tournament Traditional game still does.
+        $isFixedStructureDeck = $deckType === 'structure' && isset($params['structure_deck_card_ids']);
 
         // Booster Draft's own match_params.deck_type is a tournament-only
         // sentinel -- GameService has no idea what it means (there's no
@@ -618,7 +664,7 @@ final class TournamentService implements TournamentMatchObserver
                 userIds: [$user1Id, $user2Id],
                 format: $isBoosterDraft ? 'duel' : $format,
                 winsNeeded: (int) ($params['wins_needed'] ?? 3),
-                deckType: $isBoosterDraft ? 'custom_duel' : $deckType,
+                deckType: $isBoosterDraft ? 'custom_duel' : ($isFixedStructureDeck ? 'custom' : $deckType),
                 decklistText: $params['decklist_text'] ?? null,
                 duelDeckRules: $duelDeckRules,
                 quickDraftPoolSource: $params['quick_draft_pool_source'] ?? null,
@@ -641,6 +687,7 @@ final class TournamentService implements TournamentMatchObserver
                 totalTimeLimitMinutes: isset($params['total_time_limit_minutes']) ? (int) $params['total_time_limit_minutes'] : null,
                 synchronousMode: (bool) ($params['synchronous_mode'] ?? false),
                 perSeatAllowedCardIds: $perSeatAllowedCardIds,
+                fixedCustomDeckCardIds: $isFixedStructureDeck ? $params['structure_deck_card_ids'] : null,
             );
         } catch (GameStateException $e) {
             throw new TournamentStateException("Couldn't start a tournament match between the fixed match settings and these two players: {$e->getMessage()}", previous: $e);

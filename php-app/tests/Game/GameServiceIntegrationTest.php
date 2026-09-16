@@ -599,6 +599,42 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * $fixedCustomDeckCardIds (tournament-only -- see its own docblock)
+     * forces deck_type 'custom' to use a specific, already-resolved card
+     * pool instead of parsing $decklistText or resolving
+     * $savedDecklistId -- TournamentService's own way of giving a
+     * Traditional tournament's whole event one fixed, once-generated
+     * Structure deck (GameService::generateStructureDeckCardIds()) that
+     * every match deals from identically, rather than each game building
+     * its own fresh random one. customDeckName is hardcoded to
+     * "Structure Deck" for this path so the board still reads something
+     * meaningful rather than the generic "Uploaded Deck" a blank name
+     * would otherwise show.
+     */
+    public function testCreateGameCanUseAFixedCustomDeckCardIdsPool(): void
+    {
+        $creator = $this->insertUser('fixed-deck-alice');
+        $bob = $this->insertUser('fixed-deck-bob');
+
+        $gameId = $this->games->createGame($creator, [$creator, $bob], deckType: 'custom', fixedCustomDeckCardIds: range(1, 15));
+        $game = $this->fetchGame($gameId);
+        self::assertSame('custom', $game['deck_type']);
+        self::assertSame('Structure Deck', $game['custom_deck_name']);
+        self::assertSame(range(1, 15), array_map(intval(...), json_decode($game['custom_deck_card_ids'], true)));
+    }
+
+    /** $fixedCustomDeckCardIds still enforces the ordinary minimum-card-count rule, same as a too-short $decklistText or saved decklist would. */
+    public function testCreateGameRejectsAFixedCustomDeckCardIdsPoolBelowTheMinimumCardCount(): void
+    {
+        $creator = $this->insertUser('fixed-deck-short-alice');
+        $bob = $this->insertUser('fixed-deck-short-bob');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('at least 15 are required');
+        $this->games->createGame($creator, [$creator, $bob], deckType: 'custom', fixedCustomDeckCardIds: range(1, 5));
+    }
+
+    /**
      * Issue #398's own Rematch prompt needs to know who created a game to
      * offer the button only to them -- getState()'s own 'game.
      * created_by_user_id' field, plain public information (unlike
