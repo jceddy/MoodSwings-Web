@@ -1188,6 +1188,14 @@
                 </select>
             </label>
 
+            <label class="dialog-field" id="new-tournament-grid-draft-mode-label" hidden>Draft type
+                <select id="new-tournament-grid-draft-mode">
+                    <option value="grid_draft">Fresh draft each match</option>
+                    <option value="grid_draft_pod">Pod draft (once)</option>
+                </select>
+            </label>
+            <p id="new-tournament-grid-draft-mode-description" hidden></p>
+
             <label class="dialog-field" id="new-tournament-allow-sideboarding-label" hidden><input type="checkbox" id="new-tournament-allow-sideboarding"> Allow sideboarding</label>
 
             <label class="dialog-field" id="new-tournament-timeout-enabled-label"><input type="checkbox" id="new-tournament-timeout-enabled"> Automatically resolve an idle turn/response</label>
@@ -1255,21 +1263,23 @@
         <button id="tournament-view-refresh-button" type="button">Refresh</button>
         <button id="tournament-view-start-button" type="button" hidden>Start tournament</button>
         <button id="tournament-view-cancel-button" type="button" hidden>Cancel tournament</button>
-        <!-- Booster Draft's own pre-bracket phase (issue #91 follow-up) --
-             shown only while tournament.status is 'drafting'; see
+        <!-- Booster Draft's, and Grid Draft's own "Pod draft (once)"
+             option's, pre-bracket phase (issue #91 follow-up) -- shown
+             only while tournament.status is 'drafting'; see
              renderTournamentPods() in game.js. -->
         <div id="tournament-view-pods-section" hidden>
             <h3>Drafting</h3>
             <ul id="tournament-view-pods-list"></ul>
             <button id="tournament-view-continue-drafting-button" type="button" hidden>Continue drafting</button>
         </div>
-        <!-- Booster Draft's own drafted pool/current deck (issue #91
-             follow-up), shown only for the viewer's own row -- see
+        <!-- Booster Draft's, and Grid Draft's own "Pod draft (once)"
+             option's, drafted pool/current deck (issue #91 follow-up),
+             shown only for the viewer's own row -- see
              renderMyBoosterDraftDeck() in game.js. The in-game decklist
              submission box (POST /games/decklist) has no idea any of
              this exists; this is purely a convenience to paste from. -->
         <div id="tournament-view-my-pool-section" hidden>
-            <h3>Your Booster Draft pool</h3>
+            <h3>Your drafted pool</h3>
             <p id="tournament-view-my-pool-count"></p>
             <textarea id="tournament-view-my-pool-text" readonly rows="6"></textarea>
             <p id="tournament-view-my-deck-label" hidden>Your current deck (pre-fill this into the decklist box for your next match):</p>

@@ -21,6 +21,7 @@ use MoodSwings\Rules\MoodPlayService;
 use MoodSwings\Rules\RoundScorer;
 use MoodSwings\Tournament\BoosterDraftPodBuilder;
 use MoodSwings\Tournament\BoosterPackBuilder;
+use MoodSwings\Tournament\GridDraftPodBuilder;
 use MoodSwings\Tournament\NotAuthorizedForTournamentException;
 use MoodSwings\Tournament\TournamentBracketBuilder;
 use MoodSwings\Tournament\TournamentService;
@@ -115,6 +116,7 @@ final class TournamentServiceIntegrationTest extends TestCase
             new TournamentPodRepository(),
             new BoosterPackBuilder(),
             new BoosterDraftPodBuilder(),
+            new GridDraftPodBuilder(),
         );
         $this->games->setTournamentObserver($this->tournaments);
     }
@@ -886,6 +888,167 @@ final class TournamentServiceIntegrationTest extends TestCase
 
         $state = $this->tournaments->getState($tournamentId, $creator);
         self::assertSame('in_progress', $state['tournament']['status'], 'more rounds remain with 5 participants');
+    }
+
+    /**
+     * Grid Draft's own "Pod draft (once)" tournament option (issue #91
+     * follow-up) end to end, mirroring testBoosterDraftFormsAPodDraftsToCompletionAndPlaysBracketMatches()'s
+     * own shape: a 4-player tournament (fits in a single pod, since Grid
+     * Draft's own drafting mechanic caps pods at 4 -- see
+     * GridDraftPodBuilder), pod formation creating one ordinary
+     * multiplayer Grid Draft game, drafting it to completion via the
+     * public API (submitGridDraftPick()/submitDraftDeck()) the same way
+     * an ordinary ad hoc Grid Draft game would be, the pod's own backing
+     * game getting abandoned (never actually played) once every seat's
+     * deck is in, the tournament auto-transitioning out of 'drafting',
+     * and the resulting bracket's own first real match using each side's
+     * own tournament-drafted pool (deck_type 'custom_duel' +
+     * game_players.custom_deck_allowed_card_ids, never the tournament's
+     * own 'grid_draft_pod' sentinel directly -- see
+     * TournamentService::startMatchGame()'s own docblock).
+     */
+    public function testGridDraftPodFormsAPodDraftsToCompletionAndPlaysBracketMatches(): void
+    {
+        $userIds = [];
+        foreach (['gdp_p1', 'gdp_p2', 'gdp_p3', 'gdp_p4'] as $username) {
+            $userIds[] = $this->insertUser($username);
+        }
+        $creator = $userIds[0];
+        $others = array_slice($userIds, 1);
+
+        $tournamentId = $this->tournaments->createTournament(
+            $creator,
+            'Grid Draft Pod Cup',
+            'single_elimination',
+            'invite_only',
+            ['format' => 'draft', 'deck_type' => 'grid_draft_pod', 'grid_draft_pool_source' => 'random_48'],
+            swissRoundCount: null,
+            minParticipants: 2,
+            maxParticipants: null,
+            inviteUserIds: $others,
+        );
+        foreach ($others as $userId) {
+            $this->tournaments->acceptInvite($tournamentId, $userId);
+        }
+
+        $this->tournaments->startTournament($tournamentId, $creator);
+
+        $state = $this->tournaments->getState($tournamentId, $creator);
+        self::assertSame('drafting', $state['tournament']['status']);
+        self::assertCount(1, $state['pods'], '4 participants fit in a single pod');
+        self::assertCount(4, $state['pods'][0]['seats']);
+        $podGameId = $state['pods'][0]['game_id'];
+        self::assertNotNull($podGameId, "a Grid Draft pod is backed by an ordinary Grid Draft game");
+
+        $podGame = $this->fetchGame($podGameId);
+        self::assertSame('grid_draft', $podGame['deck_type']);
+        self::assertSame('waiting', $podGame['status'], "a pod's backing game is never actually started/played");
+
+        // Drive the pod's own 4-player Grid Draft to deck-building via
+        // the exact same "first available grid line" deterministic
+        // policy GameServiceIntegrationTest's own multiplayer Grid Draft
+        // tests use -- always a legal pick regardless of how many
+        // players/refills have already happened this round.
+        $draftMatchId = (int) $podGame['draft_match_id'];
+        for ($i = 0; $i < 300; $i++) {
+            if ($this->fetchDraftMatch($draftMatchId)['status'] !== 'drafting') {
+                break;
+            }
+            $gridState = $this->fetchGridState($draftMatchId);
+            $currentUserId = (int) $gridState['current_turn_user_id'];
+            $grid = json_decode((string) $gridState['grid_card_ids'], true);
+            [$axis, $index] = $this->firstAvailableGridLine($grid);
+            $this->games->submitGridDraftPick($podGameId, $currentUserId, $axis, $index);
+        }
+        self::assertSame('deck_building', $this->fetchDraftMatch($draftMatchId)['status'], 'Grid Draft did not reach deck-building within 300 picks -- possible infinite loop');
+
+        // Every seat submits their own full drafted pool as their deck --
+        // the last submission should trigger pod completion via
+        // GameService::submitDraftDeck()'s own onDraftDeckSubmitted() hook.
+        foreach ($userIds as $userId) {
+            $playerState = $this->games->getState($podGameId, $userId);
+            $cardIds = array_column($playerState['grid_draft']['deck_building']['drafted_cards'], 'card_id');
+            $this->games->submitDraftDeck($podGameId, $userId, $cardIds);
+        }
+
+        $state = $this->tournaments->getState($tournamentId, $creator);
+        self::assertSame('in_progress', $state['tournament']['status'], 'drafting done -> bracket should auto-materialize');
+        self::assertSame('completed', $state['pods'][0]['status']);
+        self::assertSame('abandoned', $this->fetchGame($podGameId)['status'], "the pod's own backing game is retired, never played");
+
+        $participants = new TournamentParticipantRepository();
+        foreach ($userIds as $userId) {
+            $participant = $participants->findForUser($tournamentId, $userId);
+            self::assertNotEmpty($participant['draft_pool_card_ids'], "user {$userId} should have a drafted pool");
+            self::assertNull($participant['current_deck_card_ids'], 'no deck submitted yet');
+        }
+
+        // 4 participants -> a clean 2-round bracket, both round-1 matches real.
+        $round1 = $this->matchRepo->listRounds($tournamentId)[0];
+        $round1Matches = $this->matchRepo->listForRound((int) $round1['id']);
+        self::assertCount(2, $round1Matches);
+        $match = $round1Matches[0];
+
+        $matchGame = $this->fetchGame((int) $match['game_id']);
+        self::assertSame('custom_duel', $matchGame['deck_type'], 'Grid Draft pod matches are ordinary custom_duel games under the hood');
+
+        $p1UserId = $this->participantUserId((int) $match['participant1_id']);
+        $p2UserId = $this->participantUserId((int) $match['participant2_id']);
+        $p1Pool = $participants->find((int) $match['participant1_id'])['draft_pool_card_ids'];
+        $p2Pool = $participants->find((int) $match['participant2_id'])['draft_pool_card_ids'];
+
+        $p1PlayerId = $this->games->gamePlayerIdFor((int) $match['game_id'], $p1UserId);
+        $allowedStmt = $this->pdo->prepare('SELECT custom_deck_allowed_card_ids FROM game_players WHERE id = :id');
+        $allowedStmt->execute(['id' => $p1PlayerId]);
+        self::assertNotNull($allowedStmt->fetchColumn(), 'seat should carry its own pool restriction');
+
+        $this->games->submitCustomDuelDeck((int) $match['game_id'], $p1PlayerId, $this->decklistTextForCardIds(array_slice($p1Pool, 0, 12)));
+        $this->games->submitCustomDuelDeck((int) $match['game_id'], $this->games->gamePlayerIdFor((int) $match['game_id'], $p2UserId), $this->decklistTextForCardIds(array_slice($p2Pool, 0, 12)));
+        $this->games->startGame((int) $match['game_id']);
+
+        self::assertSame('in_progress', $this->fetchGame((int) $match['game_id'])['status']);
+    }
+
+    private function fetchDraftMatch(int $draftMatchId): array
+    {
+        $stmt = $this->pdo->prepare('SELECT * FROM draft_matches WHERE id = :id');
+        $stmt->execute(['id' => $draftMatchId]);
+
+        return $stmt->fetch();
+    }
+
+    private function fetchGridState(int $draftMatchId): array
+    {
+        $stmt = $this->pdo->prepare('SELECT * FROM draft_grid_state WHERE draft_match_id = :id');
+        $stmt->execute(['id' => $draftMatchId]);
+
+        return $stmt->fetch();
+    }
+
+    /**
+     * @param array<int, int|null> $grid a row-major grid, gridSize^2 cells
+     * @return array{0:string, 1:int}
+     */
+    private function firstAvailableGridLine(array $grid): array
+    {
+        $gridSize = (int) sqrt(count($grid));
+
+        for ($row = 0; $row < $gridSize; $row++) {
+            for ($column = 0; $column < $gridSize; $column++) {
+                if ($grid[$row * $gridSize + $column] !== null) {
+                    return ['row', $row];
+                }
+            }
+        }
+        for ($column = 0; $column < $gridSize; $column++) {
+            for ($row = 0; $row < $gridSize; $row++) {
+                if ($grid[$row * $gridSize + $column] !== null) {
+                    return ['column', $column];
+                }
+            }
+        }
+
+        throw new \LogicException('grid is fully empty -- draft should already be in deck_building by now');
     }
 
     private function fetchLatestGameIdForMatch(int $gameMatchId): int

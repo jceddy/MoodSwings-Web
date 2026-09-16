@@ -4080,24 +4080,26 @@
     // own docblock). Sealed Deck is `format: 'draft'` under the hood
     // (issue #392) but has no actual drafting phase of its own, so
     // (same special case openGameSummary() already makes) it's shown as
-    // just "Sealed Deck" rather than "Draft – Sealed Deck". Grid Draft is
-    // shown the same bare way -- it's the only draft type the tournament
-    // dialog offers any more (Quick Draft was removed), so "Draft – Grid
-    // Draft" would be redundant. 'custom_duel' is shown as bare "Power
-    // Duel" for the same reason -- it's the only thing "Duel" tournaments
-    // offer any more (see effectiveNewTournamentDeckType()'s own
-    // docblock), so "Duel – Power Duel" would be redundant too; unlike
-    // the New Game dialog's own generic "Custom Decklists (Duel)" label,
-    // which still needs to say so since it's one option among several
-    // there.
+    // just "Sealed Deck" rather than "Draft – Sealed Deck". Grid Draft
+    // ('grid_draft'/'grid_draft_pod' both) is shown the same bare way --
+    // it's the only draft type the tournament dialog offers any more
+    // (Quick Draft was removed), so "Draft – Grid Draft" would be
+    // redundant. 'custom_duel' is shown as bare "Power Duel" for the
+    // same reason -- it's the only thing "Duel" tournaments offer any
+    // more (see effectiveNewTournamentDeckType()'s own docblock), so
+    // "Duel – Power Duel" would be redundant too; unlike the New Game
+    // dialog's own generic "Custom Decklists (Duel)" label, which still
+    // needs to say so since it's one option among several there.
     function tournamentMatchSummary(tournament) {
         const params = tournament.match_params;
         const deckType = params.deck_type === 'custom_duel'
             ? 'Power Duel'
             : params.deck_type === 'booster_draft'
                 ? 'Booster Draft'
-                : NEW_GAME_DECK_TYPE_LABELS[params.deck_type] || params.deck_type;
-        const format = ['sealed_deck', 'booster_draft', 'grid_draft', 'custom_duel'].includes(params.deck_type)
+                : params.deck_type === 'grid_draft_pod'
+                    ? 'Grid Draft (Pod)'
+                    : NEW_GAME_DECK_TYPE_LABELS[params.deck_type] || params.deck_type;
+        const format = ['sealed_deck', 'booster_draft', 'grid_draft', 'grid_draft_pod', 'custom_duel'].includes(params.deck_type)
             ? deckType
             : `${NEW_GAME_FORMAT_LABELS[params.format] || params.format} – ${deckType}`;
         return `${TOURNAMENT_BRACKET_TYPE_LABELS[tournament.bracket_type] || tournament.bracket_type} – ${format}`;
@@ -4268,17 +4270,42 @@
     // it's simply what Duel tournaments are), and "Traditional" always
     // implies 'structure' (TournamentService::createTournament() then
     // generates that one random Structure deck exactly once, for the
-    // whole tournament, server-side -- see its own docblock). Nothing is
-    // left to choose here at all any more, so #new-tournament-dialog no
-    // longer has a "Deck"/"Draft type" field for any format.
+    // whole tournament, server-side -- see its own docblock). "Grid
+    // Draft" is the one format that still has something to choose --
+    // #new-tournament-grid-draft-mode's own "Fresh draft each match"
+    // (deck_type 'grid_draft', unchanged) vs. "Pod draft (once)"
+    // (deck_type 'grid_draft_pod', issue #91 follow-up: participants
+    // split into pods of <=4, each playing one ordinary Grid Draft game
+    // together to build a personal pool -- see
+    // TournamentService::startGridDraftPods()'s own docblock -- reused
+    // for every one of that pod's members' own real bracket matches
+    // exactly like Booster Draft's own drafted pool already is).
     function effectiveNewTournamentDeckType() {
         const raw = document.getElementById('new-tournament-format').value;
         switch (raw) {
             case 'sealed_deck': return 'sealed_deck';
             case 'booster_draft': return 'booster_draft';
-            case 'draft': return 'grid_draft';
+            case 'draft': return document.getElementById('new-tournament-grid-draft-mode').value;
             case 'duel': return 'custom_duel';
             default: return 'structure'; // 'standard'
+        }
+    }
+
+    const GRID_DRAFT_MODE_DESCRIPTIONS = {
+        grid_draft: 'Every bracket match is its own independent 2-player Grid Draft, drafted fresh right before that match is played.',
+        grid_draft_pod: 'Participants split into pods of up to 4 and draft together once, before the bracket starts -- see "Booster Draft" for the same idea, just with a shared Grid Draft grid instead of boosters. Every pod member then plays the tournament’s real matches (mixed freely across pods) using a deck built from their own drafted pool, re-sideboardable every round.',
+    };
+
+    // Shown only for Grid Draft (#new-tournament-format's own 'draft'
+    // option) -- every other format has nothing left to choose (see
+    // effectiveNewTournamentDeckType()'s own docblock).
+    function updateNewTournamentGridDraftModeVisibility() {
+        const show = document.getElementById('new-tournament-format').value === 'draft';
+        document.getElementById('new-tournament-grid-draft-mode-label').hidden = !show;
+        const description = document.getElementById('new-tournament-grid-draft-mode-description');
+        description.hidden = !show;
+        if (show) {
+            description.textContent = GRID_DRAFT_MODE_DESCRIPTIONS[document.getElementById('new-tournament-grid-draft-mode').value];
         }
     }
 
@@ -4360,6 +4387,8 @@
     }
 
     document.getElementById('new-tournament-format').addEventListener('change', updateNewTournamentAllowSideboardingVisibility);
+    document.getElementById('new-tournament-format').addEventListener('change', updateNewTournamentGridDraftModeVisibility);
+    document.getElementById('new-tournament-grid-draft-mode').addEventListener('change', updateNewTournamentGridDraftModeVisibility);
     document.getElementById('new-tournament-registration-mode-invite').addEventListener('change', updateNewTournamentRegistrationModeFields);
     document.getElementById('new-tournament-registration-mode-open').addEventListener('change', updateNewTournamentRegistrationModeFields);
     document.getElementById('new-tournament-bracket-type').addEventListener('change', updateNewTournamentSwissRoundCountVisibility);
@@ -4374,6 +4403,7 @@
         newTournamentError.hidden = true;
         newTournamentForm.reset();
         updateNewTournamentAllowSideboardingVisibility();
+        updateNewTournamentGridDraftModeVisibility();
         updateNewTournamentRegistrationModeFields();
         updateNewTournamentSwissRoundCountVisibility();
         updateNewTournamentTimeoutFieldVisibility();
@@ -4440,8 +4470,9 @@
             // default-feeling choice (#new-game-grid-draft-pool-source's
             // own first/default option). Without this, createGame() would
             // reject the match with 'Unknown pool source ""' the moment
-            // the tournament actually tried to start it.
-            grid_draft_pool_source: deckType === 'grid_draft' ? 'random_48' : undefined,
+            // the tournament (or, for 'grid_draft_pod', each of its own
+            // pods) actually tried to start it.
+            grid_draft_pool_source: (deckType === 'grid_draft' || deckType === 'grid_draft_pod') ? 'random_48' : undefined,
             // Every tournament match is always best-of-three now (no
             // opt-out) -- TournamentService::createTournament() forces
             // this server-side regardless of what's sent, so this is just
@@ -4501,13 +4532,15 @@
         return result;
     }
 
-    // Booster Draft's own pre-bracket phase (issue #91 follow-up) --
-    // shown only while pods is non-null (tournament.match_params.deck_type
-    // === 'booster_draft', see TournamentService::getState()'s own
-    // docblock), listing every pod's own round progress and, for the
-    // viewer's own pod, a "Continue drafting" button opening
-    // #pod-draft-dialog.
-    // Booster Draft's own drafted pool/current deck (issue #91
+    // Booster Draft's, and Grid Draft's own "Pod draft (once)" option's,
+    // pre-bracket phase (issue #91 follow-up) -- shown only while pods
+    // is non-null (tournament.match_params.deck_type is 'booster_draft'
+    // or 'grid_draft_pod', see TournamentService::getState()'s own
+    // docblock), listing every pod's own progress and, for the viewer's
+    // own pod, a "Continue drafting" button routing to whichever pod
+    // kind this actually is -- see renderTournamentPods()'s own
+    // docblock.
+    // Same two formats' own drafted pool/current deck (issue #91
     // follow-up) -- only the viewer's own participant row ever carries
     // these two fields hydrated (every other row is scrubbed to null
     // server-side, see TournamentService::getState()'s own docblock), so
@@ -4534,6 +4567,18 @@
         }
     }
 
+    // pod.game_id (Grid Draft's own "Pod draft (once)" option, issue #91
+    // follow-up -- see TournamentService::podsSummary()'s own docblock)
+    // is non-null for a pod backed by one ordinary Grid Draft game --
+    // Booster Draft's own pods have no single backing game at all, only
+    // their own booster/pick rows, so it's always null for those.
+    // "Continue drafting" routes to whichever this pod actually is:
+    // Grid Draft's own ordinary board (showBoard(), the exact same
+    // drafting UI a 3-4 player ad hoc Grid Draft game already uses --
+    // nothing tournament-specific to build) or Booster Draft's own
+    // dedicated #pod-draft-dialog.
+    let viewerActivePod = null;
+
     function renderTournamentPods(tournament, pods) {
         const section = document.getElementById('tournament-view-pods-section');
         section.hidden = !pods;
@@ -4543,22 +4588,34 @@
 
         const list = document.getElementById('tournament-view-pods-list');
         list.innerHTML = '';
-        let viewerHasActivePod = false;
+        viewerActivePod = null;
         for (const pod of pods) {
             const item = document.createElement('li');
             const seatNames = pod.seats.map((seat) => seat.username).join(', ');
-            const progress = pod.status === 'completed' ? 'done drafting' : `round ${pod.current_round}/15`;
+            const progress = pod.status === 'completed'
+                ? 'done drafting'
+                : pod.game_id !== null ? 'drafting' : `round ${pod.current_round}/15`;
             item.textContent = `Pod ${pod.pod_number} (${progress}): ${seatNames}`;
             list.appendChild(item);
             if (pod.status !== 'completed' && pod.seats.some((seat) => seat.username === user.username)) {
-                viewerHasActivePod = true;
+                viewerActivePod = pod;
             }
         }
 
-        document.getElementById('tournament-view-continue-drafting-button').hidden = !viewerHasActivePod;
+        document.getElementById('tournament-view-continue-drafting-button').hidden = !viewerActivePod;
     }
 
     document.getElementById('tournament-view-continue-drafting-button').addEventListener('click', () => {
+        if (viewerActivePod === null) {
+            return;
+        }
+        if (viewerActivePod.game_id !== null) {
+            tournamentViewDialog.close();
+            tournamentsDialog.close();
+            showBoard(viewerActivePod.game_id);
+
+            return;
+        }
         openPodDraftDialog(currentTournamentViewId);
     });
 

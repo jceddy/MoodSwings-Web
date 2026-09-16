@@ -71,6 +71,7 @@ use MoodSwings\SiteUrl;
 use MoodSwings\Stats\CardStatsService;
 use MoodSwings\Tournament\BoosterDraftPodBuilder;
 use MoodSwings\Tournament\BoosterPackBuilder;
+use MoodSwings\Tournament\GridDraftPodBuilder;
 use MoodSwings\Tournament\NotAuthorizedForTournamentException;
 use MoodSwings\Tournament\TournamentBracketBuilder;
 use MoodSwings\Tournament\TournamentNotFoundException;
@@ -833,7 +834,7 @@ $matchmaking = new MatchmakingService(new OpenGameListingRepository(), new UserR
 $weeklySealedPoolQueue = new WeeklySealedPoolQueueService($games);
 // Issue #91 -- see TournamentMatchObserver's own docblock for why this
 // is a setter rather than a constructor dependency on $games.
-$tournaments = new TournamentService(new TournamentRepository(), new TournamentParticipantRepository(), new TournamentMatchRepository(), new TournamentBracketBuilder(), $games, new UserRepository(), new FriendshipRepository(), new TournamentPodRepository(), new BoosterPackBuilder(), new BoosterDraftPodBuilder());
+$tournaments = new TournamentService(new TournamentRepository(), new TournamentParticipantRepository(), new TournamentMatchRepository(), new TournamentBracketBuilder(), $games, new UserRepository(), new FriendshipRepository(), new TournamentPodRepository(), new BoosterPackBuilder(), new BoosterDraftPodBuilder(), new GridDraftPodBuilder());
 $games->setTournamentObserver($tournaments);
 
 // Lifetime game/match wins-losses (issue #106) -- see

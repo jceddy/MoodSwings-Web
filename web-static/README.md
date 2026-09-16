@@ -2048,12 +2048,67 @@ fields hydrated for the VIEWER's own participant row (every other row's
 are `null`, so an opponent's pool/deck is never visible ahead of playing
 them -- see `TournamentService::getState()`'s own docblock).
 
+**Grid Draft "Pod draft (once)"** (issue #91 follow-up) --
+`#new-tournament-format`'s own `draft` option (Grid Draft) now shows a
+second select, `#new-tournament-grid-draft-mode`, right below it:
+"Fresh draft each match" (`grid_draft`, unchanged -- every bracket match
+is its own independent 2-player Grid Draft) or "Pod draft (once)"
+(`grid_draft_pod`, `effectiveNewTournamentDeckType()`'s own `'draft'`
+case reads whichever this select is set to). Only shown while Grid
+Draft itself is the chosen format (`updateNewTournamentGridDraftModeVisibility()`,
+mirroring `updateNewTournamentAllowSideboardingVisibility()`'s own "only
+relevant for this one format" pattern) -- each option's own description
+paragraph (`GRID_DRAFT_MODE_DESCRIPTIONS`) explains the choice inline,
+the same "description text next to the select" convention the New Game
+dialog's own format/deck_type selects already use.
+
+`grid_draft_pod` mirrors Booster Draft's own structure above almost
+exactly -- participants split into pods (up to 4 this time, Grid
+Draft's own drafting cap, vs. Booster Draft's 8) that each draft a
+personal pool before the bracket starts, then the tournament's real
+matches mix players across pods freely, always best-of-three like every
+other format now, with the sideboarding checkbox never applicable for
+the same reason it doesn't apply to Booster Draft. The one real
+difference: a pod's own drafting happens through an ordinary Grid Draft
+game rather than a dedicated pod-draft dialog -- see below.
+
+`tournamentMatchSummary()` shows this option as bare "Grid Draft (Pod)"
+(same "no `Draft – ` prefix" reasoning as `grid_draft`/`sealed_deck`
+already follow, since it's one of only two things the Grid Draft option
+under Format offers any more).
+
+**Continuing a Grid Draft pod's own drafting** -- `#tournament-view-dialog`'s
+own pods section (`renderTournamentPods()`, shown whenever `GET
+/tournaments/state`'s own `pods` field is non-null -- true for a
+`grid_draft_pod` tournament exactly as for a `booster_draft` one) lists
+every pod's own progress the same way for both, and shows a "Continue
+drafting" button whenever the viewer's own username appears in a
+still-active pod's own seats. Clicking it routes based on `pod.game_id`
+(non-null only for a Grid Draft pod, since a Booster Draft pod has no
+single backing game of its own): a Grid Draft pod closes
+`#tournament-view-dialog`/`#tournaments-dialog` and hands off straight
+to `showBoard(pod.game_id)` -- the exact same drafting board a 3-4
+player ad hoc Grid Draft game already uses, nothing tournament-specific
+to build -- while a Booster Draft pod still opens `#pod-draft-dialog` as
+before. Once the pod's own game has every seat's deck submitted, the pod
+completes on its own (no further UI action needed) and the "Continue
+drafting" button simply stops appearing for it next refresh.
+
+Once a Grid Draft pod's own drafting finishes, the viewer's drafted pool
+and current match deck show up in the very same section Booster Draft's
+own pool uses (`renderMyBoosterDraftDeck()`, `#tournament-view-my-pool-section`,
+now titled "Your drafted pool" rather than "Your Booster Draft pool"
+since it covers both) -- everything from "a read-only textarea listing
+every drafted card" onward in "Booster Draft" above applies identically
+here; the two options only ever differ in how the pool gets built, never
+in how it's shown or used to submit a match deck.
+
 **Tournament view dialog** (`#tournament-view-dialog`) shows the
 tournament's name/status, a Start button (creator only, still in
 `registration`, at least `min_participants` joined -- calls
 `startTournament()`) and a Cancel button (creator only, not yet
-`completed`/`cancelled` -- `cancelTournament()`), Booster Draft's own
-drafting-progress/pool/deck sections above, a standings list for a
+`completed`/`cancelled` -- `cancelTournament()`), Booster Draft's/Grid
+Draft Pod's own drafting-progress/pool/deck sections above, a standings list for a
 Swiss event once it's left `registration` (`GET /tournaments/state`'s
 own `standings`, ranked by win count already server-side), and the
 bracket itself: every round (`TOURNAMENT_BRACKET_LABELS` -- "Round" for
@@ -2066,10 +2121,12 @@ closes both this dialog and `#tournaments-dialog` before handing off to
 handoff. Refreshed by its own Refresh button rather than a poll -- a
 tournament only ever advances when one of its games finishes, not
 continuously, so there's nothing to gain from polling it open-ended
-while someone's just looking (Booster Draft's own pod-drafting phase is
-the one part of a tournament that genuinely needs live updates while
-open, which is why `#pod-draft-dialog` polls on its own rather than
-piggybacking on this dialog's Refresh button).
+while someone's just looking (a pod's own drafting phase, for either
+Booster Draft or Grid Draft Pod, is the one part of a tournament that
+genuinely needs live updates while open, which is why `#pod-draft-dialog`
+and, for Grid Draft Pod, `showBoard()`'s own existing poll each handle
+that on their own rather than piggybacking on this dialog's Refresh
+button).
 
 - `index.html` (`/`) — Login form. If the visitor already has an active
   session (checked via `GET /app/me`), they're redirected straight to

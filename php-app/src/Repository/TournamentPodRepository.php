@@ -11,16 +11,21 @@ use MoodSwings\Database\Connection;
  * tournament_pod_boosters/tournament_pod_picks -- Booster Draft's own
  * pod-drafting phase (see BoosterDraftPodBuilder/BoosterPackBuilder for
  * the pure math this operates on, and TournamentService for the
- * orchestration).
+ * orchestration) -- and, via tournament_pods.game_id, Grid Draft's own
+ * "Pod draft (once)" option (see GridDraftPodBuilder), whose pods have
+ * no booster/pick rows of their own at all, just a single backing Grid
+ * Draft game (an ordinary `games`/`draft_matches` row, entirely
+ * GameService's own to manage).
  */
 final class TournamentPodRepository
 {
-    public function createPod(int $tournamentId, int $podNumber): int
+    /** $gameId is Grid Draft pods' own backing game (see this class's own docblock) -- null for a Booster Draft pod, which has no single backing game. */
+    public function createPod(int $tournamentId, int $podNumber, ?int $gameId = null): int
     {
         $stmt = Connection::get()->prepare(
-            'INSERT INTO tournament_pods (tournament_id, pod_number) VALUES (:tournament_id, :pod_number)'
+            'INSERT INTO tournament_pods (tournament_id, pod_number, game_id) VALUES (:tournament_id, :pod_number, :game_id)'
         );
-        $stmt->execute(['tournament_id' => $tournamentId, 'pod_number' => $podNumber]);
+        $stmt->execute(['tournament_id' => $tournamentId, 'pod_number' => $podNumber, 'game_id' => $gameId]);
 
         return (int) Connection::get()->lastInsertId();
     }
@@ -29,6 +34,16 @@ final class TournamentPodRepository
     {
         $stmt = Connection::get()->prepare('SELECT * FROM tournament_pods WHERE id = :id');
         $stmt->execute(['id' => $podId]);
+        $row = $stmt->fetch();
+
+        return $row === false ? null : $row;
+    }
+
+    /** The Grid Draft pod (see this class's own docblock) backed by $gameId, if any -- null for a game that isn't a tournament pod's own backing game at all. */
+    public function findPodByGameId(int $gameId): ?array
+    {
+        $stmt = Connection::get()->prepare('SELECT * FROM tournament_pods WHERE game_id = :game_id');
+        $stmt->execute(['game_id' => $gameId]);
         $row = $stmt->fetch();
 
         return $row === false ? null : $row;

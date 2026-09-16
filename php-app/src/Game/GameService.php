@@ -5052,6 +5052,15 @@ final class GameService
             ]);
         });
 
+        // Grid Draft's own "Pod draft (once)" tournament option (issue
+        // #91 follow-up) -- see TournamentMatchObserver::onDraftDeckSubmitted()'s
+        // own docblock for what this actually triggers, and why a
+        // harmless no-op for every OTHER draft match (an ordinary ad hoc
+        // game, or any deck_type other than Grid Draft's own pod option)
+        // is exactly what TournamentPodRepository::findPodByGameId()
+        // returning null on the observer's own side gives it.
+        $this->tournamentObserver?->onDraftDeckSubmitted($gameId, $draftMatchId, $this->allDraftMatchPlayersHaveSubmittedDecks($draftMatchId));
+
         $this->touchLastMoveAt($gameId);
         // Synchronous mode's own match-wide chess clock (increment 4) --
         // "the time spent on deck building/sideboarding counts against
@@ -5493,6 +5502,63 @@ final class GameService
         Connection::get()->prepare(
             "UPDATE games SET status = 'abandoned' WHERE id = :game_id"
         )->execute(['game_id' => $gameId]);
+    }
+
+    /** @return bool whether every seat in $draftMatchId has a non-null deck_card_ids of their own right now -- see submitDraftDeck()'s own onDraftDeckSubmitted() call. */
+    private function allDraftMatchPlayersHaveSubmittedDecks(int $draftMatchId): bool
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT COUNT(*) FROM draft_match_players WHERE draft_match_id = :match_id AND deck_card_ids IS NULL'
+        );
+        $stmt->execute(['match_id' => $draftMatchId]);
+
+        return (int) $stmt->fetchColumn() === 0;
+    }
+
+    /**
+     * Grid Draft's own "Pod draft (once)" tournament option (issue #91
+     * follow-up): TournamentService's own way of retiring a pod's
+     * backing Grid Draft game once every seat has submitted a deck --
+     * see TournamentMatchObserver::onDraftDeckSubmitted()'s own docblock
+     * for why it's never actually played out as a real match. A thin
+     * public wrapper around the same abandonDraftMatch() every other
+     * mid-draft abandonment (a resignation, Winston Draft's own
+     * too-short finish) already uses, just resolving $draftMatchId from
+     * $gameId first since TournamentService only ever has the game id at
+     * this point.
+     */
+    public function abandonDraftGame(int $gameId): void
+    {
+        $game = $this->fetchGame($gameId);
+        if ($game['draft_match_id'] === null) {
+            throw new GameStateException("Game {$gameId} is not a draft game");
+        }
+
+        $this->abandonDraftMatch($gameId, (int) $game['draft_match_id']);
+    }
+
+    /**
+     * Grid Draft's own "Pod draft (once)" tournament option (issue #91
+     * follow-up): every seat's own final drafted_card_ids for
+     * $draftMatchId, keyed by user id -- TournamentService's own way of
+     * reading back what each pod participant actually drafted once their
+     * pod finishes, to copy into tournament_participants.draft_pool_card_ids.
+     *
+     * @return array<int, int[]>
+     */
+    public function draftedCardIdsByUserForDraftMatch(int $draftMatchId): array
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT user_id, drafted_card_ids FROM draft_match_players WHERE draft_match_id = :match_id'
+        );
+        $stmt->execute(['match_id' => $draftMatchId]);
+
+        $result = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $result[(int) $row['user_id']] = array_map(intval(...), json_decode((string) $row['drafted_card_ids'], true));
+        }
+
+        return $result;
     }
 
     /**

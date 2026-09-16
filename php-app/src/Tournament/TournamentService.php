@@ -52,6 +52,9 @@ final class TournamentService implements TournamentMatchObserver
     /** How many cards a Booster Draft deck must have at minimum -- see submitCustomDuelDeck()'s own pool-membership check. */
     public const BOOSTER_DRAFT_MIN_DECK_SIZE = 12;
 
+    /** How many cards a Grid Draft "Pod draft (once)" deck must have at minimum -- see submitCustomDuelDeck()'s own pool-membership check. Same floor as Booster Draft's, coincidentally -- GameService's own GRID_DRAFT_MIN_DECK_SIZE ordinary Grid Draft games use -- but a dedicated constant since the two are conceptually independent. */
+    public const GRID_DRAFT_POD_MIN_DECK_SIZE = 12;
+
     public function __construct(
         private readonly TournamentRepository $tournaments,
         private readonly TournamentParticipantRepository $participants,
@@ -63,6 +66,7 @@ final class TournamentService implements TournamentMatchObserver
         private readonly TournamentPodRepository $pods,
         private readonly BoosterPackBuilder $boosterPackBuilder,
         private readonly BoosterDraftPodBuilder $podBuilder,
+        private readonly GridDraftPodBuilder $gridDraftPodBuilder,
     ) {
     }
 
@@ -314,6 +318,13 @@ final class TournamentService implements TournamentMatchObserver
             return;
         }
 
+        if ($this->isGridDraftPod($tournament)) {
+            $this->tournaments->markDrafting($tournamentId);
+            $this->startGridDraftPods($tournamentId, array_values($seedToParticipantId), $tournament);
+
+            return;
+        }
+
         $this->tournaments->markStarted($tournamentId);
         $this->materializeBracket($tournament, $seedToParticipantId);
     }
@@ -321,6 +332,11 @@ final class TournamentService implements TournamentMatchObserver
     private function isBoosterDraft(array $tournament): bool
     {
         return (string) ($tournament['match_params']['deck_type'] ?? '') === 'booster_draft';
+    }
+
+    private function isGridDraftPod(array $tournament): bool
+    {
+        return (string) ($tournament['match_params']['deck_type'] ?? '') === 'grid_draft_pod';
     }
 
     private function materializeBracket(array $tournament, array $seedToParticipantId): void
@@ -368,6 +384,63 @@ final class TournamentService implements TournamentMatchObserver
                 $this->pods->createBooster($podId, $podParticipantId, 'right', $this->boosterPackBuilder->buildBooster($cardIdsByRarity));
             }
             $offset += $podSize;
+        }
+    }
+
+    /**
+     * Grid Draft's own "Pod draft (once)" tournament option (issue #91
+     * follow-up): splits $participantIds into pods of <=4
+     * (GridDraftPodBuilder::podSizes(), as even as possible -- Grid
+     * Draft's own drafting mechanic only supports up to 4 simultaneous
+     * drafters at all), assigns each a random seat_order within its own
+     * pod (same "nothing about seeding should predict who drafts with
+     * whom" rationale startBoosterDraftPods() already follows), and
+     * creates one ordinary Grid Draft game per pod, seating exactly that
+     * pod's own members -- GameService::createGame() itself deals the
+     * grid immediately (Grid Draft's own drafting phase begins as part
+     * of game creation, not a later startGame() call), so there's
+     * nothing further to do here. The tournament sits in 'drafting'
+     * status until every pod's own game has every seat's deck submitted
+     * (see GameService::submitDraftDeck()'s own onDraftDeckSubmitted()
+     * hook, and this class's own implementation of it below), at which
+     * point the real bracket/Swiss round 1 materializes, mixing players
+     * across pods freely exactly like any other tournament.
+     *
+     * @param int[] $participantIds tournament_participants ids
+     */
+    private function startGridDraftPods(int $tournamentId, array $participantIds, array $tournament): void
+    {
+        $poolSource = (string) ($tournament['match_params']['grid_draft_pool_source'] ?? 'random_48');
+
+        shuffle($participantIds);
+        $podSizes = $this->gridDraftPodBuilder->podSizes(count($participantIds));
+
+        $offset = 0;
+        foreach ($podSizes as $podIndex => $podSize) {
+            $podParticipantIds = array_slice($participantIds, $offset, $podSize);
+            $offset += $podSize;
+
+            $userIds = [];
+            foreach ($podParticipantIds as $participantId) {
+                $userIds[] = (int) $this->participants->find($participantId)['user_id'];
+            }
+
+            try {
+                $gameId = $this->games->createGame(
+                    createdByUserId: $userIds[0],
+                    userIds: $userIds,
+                    format: 'draft',
+                    deckType: 'grid_draft',
+                    gridDraftPoolSource: $poolSource,
+                );
+            } catch (GameStateException $e) {
+                throw new TournamentStateException("Couldn't start a Grid Draft pod: {$e->getMessage()}", previous: $e);
+            }
+
+            $podId = $this->pods->createPod($tournamentId, $podIndex + 1, $gameId);
+            foreach ($podParticipantIds as $seat => $participantId) {
+                $this->pods->addParticipant($podId, $participantId, $seat);
+            }
         }
     }
 
@@ -634,6 +707,13 @@ final class TournamentService implements TournamentMatchObserver
         $format = (string) ($params['format'] ?? 'standard');
         $deckType = (string) ($params['deck_type'] ?? 'structure');
         $isBoosterDraft = $deckType === 'booster_draft';
+        $isGridDraftPod = $deckType === 'grid_draft_pod';
+        // Both Booster Draft and Grid Draft's own "Pod draft (once)"
+        // option play their real bracket matches as ordinary 'custom_duel'
+        // games restricted to each side's own tournament-drafted pool --
+        // see the $duelDeckRules/$perSeatAllowedCardIds docblock just
+        // below.
+        $isPodDraft = $isBoosterDraft || $isGridDraftPod;
         // See createTournament()'s own docblock -- Traditional's fixed,
         // once-per-tournament Structure deck (structure_deck_card_ids),
         // generated there rather than left for GameService to build a
@@ -641,8 +721,9 @@ final class TournamentService implements TournamentMatchObserver
         // non-tournament Traditional game still does.
         $isFixedStructureDeck = $deckType === 'structure' && isset($params['structure_deck_card_ids']);
 
-        // Booster Draft's own match_params.deck_type is a tournament-only
-        // sentinel -- GameService has no idea what it means (there's no
+        // Booster Draft's and Grid Draft's own "Pod draft (once)" option
+        // are both tournament-only match_params.deck_type sentinels --
+        // GameService has no idea what either means (there's no
         // algorithmic way to build "a subset of this specific player's
         // own drafted pool" from a bare deck_type string the way
         // structure/power/etc. do). Every actual match instead plays as
@@ -651,10 +732,12 @@ final class TournamentService implements TournamentMatchObserver
         // via $perSeatAllowedCardIds -- see GameService::createGame()'s
         // own docblock for that param, and submitCustomDuelDeck()'s own
         // pool-membership check.
-        $duelDeckRules = $isBoosterDraft
-            ? ['preset' => 'user_defined', 'min_cards' => self::BOOSTER_DRAFT_MIN_DECK_SIZE]
-            : ($params['duel_deck_rules'] ?? null);
-        $perSeatAllowedCardIds = $isBoosterDraft
+        $duelDeckRules = match (true) {
+            $isBoosterDraft => ['preset' => 'user_defined', 'min_cards' => self::BOOSTER_DRAFT_MIN_DECK_SIZE],
+            $isGridDraftPod => ['preset' => 'user_defined', 'min_cards' => self::GRID_DRAFT_POD_MIN_DECK_SIZE],
+            default => $params['duel_deck_rules'] ?? null,
+        };
+        $perSeatAllowedCardIds = $isPodDraft
             ? [$user1Id => $participant1['draft_pool_card_ids'], $user2Id => $participant2['draft_pool_card_ids']]
             : null;
 
@@ -662,9 +745,9 @@ final class TournamentService implements TournamentMatchObserver
             $gameId = $this->games->createGame(
                 createdByUserId: $user1Id,
                 userIds: [$user1Id, $user2Id],
-                format: $isBoosterDraft ? 'duel' : $format,
+                format: $isPodDraft ? 'duel' : $format,
                 winsNeeded: (int) ($params['wins_needed'] ?? 3),
-                deckType: $isBoosterDraft ? 'custom_duel' : ($isFixedStructureDeck ? 'custom' : $deckType),
+                deckType: $isPodDraft ? 'custom_duel' : ($isFixedStructureDeck ? 'custom' : $deckType),
                 decklistText: $params['decklist_text'] ?? null,
                 duelDeckRules: $duelDeckRules,
                 quickDraftPoolSource: $params['quick_draft_pool_source'] ?? null,
@@ -757,6 +840,48 @@ final class TournamentService implements TournamentMatchObserver
         }
 
         $this->participants->setCurrentDeckCardIds((int) $participant['id'], $cardIds);
+    }
+
+    /**
+     * Grid Draft's own "Pod draft (once)" tournament option (issue #91
+     * follow-up) -- see the interface's own docblock for when
+     * GameService actually calls this. A no-op for any draft match that
+     * isn't a Grid Draft pod's own backing game at all (findPodByGameId()
+     * returns null for an ordinary ad hoc drafted game), and for one
+     * whose pod already finished (idempotent against $everyoneSubmitted
+     * staying true on a later resubmission, or two submissions racing --
+     * whichever request's own query sees the pod already 'completed'
+     * simply does nothing). Once every seat's deck is in: copies each
+     * seat's own final drafted_card_ids into
+     * tournament_participants.draft_pool_card_ids (the exact same field
+     * Booster Draft's own pod-completion uses), marks the pod
+     * 'completed', abandons the now-superfluous backing game (it only
+     * ever existed to run the shared drafting UI -- see
+     * GameService::abandonDraftGame()'s own docblock for why it's never
+     * actually played), and checks whether every pod for this tournament
+     * is now done (maybeFinishDrafting()).
+     */
+    public function onDraftDeckSubmitted(int $gameId, int $draftMatchId, bool $everyoneSubmitted): void
+    {
+        if (!$everyoneSubmitted) {
+            return;
+        }
+
+        $pod = $this->pods->findPodByGameId($gameId);
+        if ($pod === null || $pod['status'] !== 'drafting') {
+            return;
+        }
+
+        $draftedCardIdsByUserId = $this->games->draftedCardIdsByUserForDraftMatch($draftMatchId);
+        foreach ($this->pods->listPodParticipants((int) $pod['id']) as $podParticipant) {
+            $participant = $this->participants->find((int) $podParticipant['participant_id']);
+            $userId = (int) $participant['user_id'];
+            $this->participants->setDraftPoolCardIds((int) $podParticipant['participant_id'], $draftedCardIdsByUserId[$userId] ?? []);
+        }
+
+        $this->pods->markCompleted((int) $pod['id']);
+        $this->games->abandonDraftGame($gameId);
+        $this->maybeFinishDrafting((int) $pod['tournament_id']);
     }
 
     private function resolveMatchResult(int $tournamentId, array $tournamentMatch, int $winnerParticipantId, bool $isBye): void
@@ -1062,11 +1187,19 @@ final class TournamentService implements TournamentMatchObserver
             'standings' => $tournament['bracket_type'] === 'swiss' && $tournament['status'] !== 'registration'
                 ? $this->swissStandings($tournamentId)
                 : null,
-            'pods' => $this->isBoosterDraft($tournament) ? $this->podsSummary($tournamentId) : null,
+            'pods' => ($this->isBoosterDraft($tournament) || $this->isGridDraftPod($tournament)) ? $this->podsSummary($tournamentId) : null,
         ];
     }
 
-    /** @return array[] every pod's own status/round/seated participants, for the tournament view's "drafting" progress display. */
+    /**
+     * @return array[] every pod's own status/round/seated participants,
+     *     for the tournament view's "drafting" progress display. `game_id`
+     *     is Grid Draft's own "Pod draft (once)" pods' backing game
+     *     (null for a Booster Draft pod, which has no single backing
+     *     game) -- the frontend uses it to route "Continue drafting" to
+     *     that ordinary game's own board rather than Booster Draft's own
+     *     dedicated pod-draft dialog.
+     */
     private function podsSummary(int $tournamentId): array
     {
         $summary = [];
@@ -1085,6 +1218,7 @@ final class TournamentService implements TournamentMatchObserver
                 'pod_number' => (int) $pod['pod_number'],
                 'status' => $pod['status'],
                 'current_round' => (int) $pod['current_round'],
+                'game_id' => $pod['game_id'] !== null ? (int) $pod['game_id'] : null,
                 'seats' => $seats,
             ];
         }

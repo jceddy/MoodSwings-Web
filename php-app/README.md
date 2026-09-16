@@ -5217,6 +5217,101 @@ each via `CardCatalog::serialize()`. See "Booster Draft" in
 `web-static/README.md` for the pod-drafting board and the tournament
 view's own pool/deck display built on top of these.
 
+### Grid Draft "Pod draft (once)" (issue #91 follow-up)
+
+A Grid Draft tournament's New Tournament dialog offers a second choice
+alongside deck_type `grid_draft` itself ("Fresh draft each match" --
+unchanged, every bracket match is its own independent 2-player Grid
+Draft game): `match_params.deck_type` `'grid_draft_pod'` (migration
+0336), "Pod draft (once)" -- every joined participant drafts a personal
+pool once, up front, sharing a single Grid Draft game with a handful of
+other participants, then plays the tournament's ordinary bracket/Swiss
+using a deck built from that pool every round. It mirrors Booster
+Draft's own structure above almost exactly -- pods drafted before the
+bracket materializes, matches played from a fixed personal pool -- but
+deliberately reuses Grid Draft's own EXISTING drafting engine as each
+pod's "backing game" rather than building bespoke pod/pick tables the
+way Booster Draft's own `BoosterPackBuilder`/`tournament_pod_boosters`/
+`tournament_pod_picks` do. `grid_draft_pod` is, like `booster_draft`, a
+tournament-only sentinel `startMatchGame()` translates away before ever
+calling `GameService::createGame()` for a real match -- see below.
+
+**Pods** (`GridDraftPodBuilder::podSizes()`, pure -- same algorithm as
+`BoosterDraftPodBuilder::podSizes()`, just a lower cap) -- up to 4
+participants draft together in a pod, since Grid Draft's own drafting
+mechanic only ever supports up to 4 simultaneous drafters at all (a 3x3
+grid for 2-3 players, 4x4 for exactly 4 -- see
+`GameService::gridDraftRounds()`); a tournament with more than 4 joined
+participants splits into multiple pods, sized as evenly as possible,
+same "differing by at most 1" convention Booster Draft's own pods
+follow.
+
+**The backing game** -- `startGridDraftPods()` creates one ordinary
+`format: 'draft'`, `deck_type: 'grid_draft'` game per pod via the
+regular `GameService::createGame()`, seating exactly that pod's own
+members and carrying the tournament's own `grid_draft_pool_source`
+choice. Nothing further is needed to start it: unlike `custom_duel`/
+Booster-Draft-style games, Grid Draft's own `createGame()` already
+begins drafting as part of game creation (`initializeGridDraft()`), so
+`games.status` stays `'waiting'` for the whole drafting+deck-building
+phase and there's no separate `startGame()` call to make here. Players
+draft and build a deck through the exact same board/UI as any other
+Grid Draft game -- nothing about the pod's own drafting experience is
+special-cased at all.
+
+**Finishing a pod** -- a pod's backing game is never actually played
+out. `GameService::submitDraftDeck()` reports every deck submission,
+for any drafted deck_type, to `TournamentMatchObserver::onDraftDeckSubmitted()`
+(`$everyoneSubmitted` says whether this submission was the pod's last)
+-- harmlessly a no-op for an ordinary ad hoc drafted game, since
+`TournamentPodRepository::findPodByGameId()` returns null for it.
+`TournamentService::onDraftDeckSubmitted()`, once every seat's deck is
+in, copies each seat's own final `drafted_card_ids`
+(`GameService::draftedCardIdsByUserForDraftMatch()`) into
+`tournament_participants.draft_pool_card_ids` (the exact same column
+Booster Draft's own pod-completion uses), marks the pod `'completed'`,
+and retires the now-superfluous backing game via the new
+`GameService::abandonDraftGame()` (the same `draft_matches.status =
+'completed'` / `games.status = 'abandoned'` mechanism already used for
+mid-draft resignations and Winston Draft's too-short finish, just
+invoked directly rather than via a player leaving) -- then checks
+whether every pod for this tournament is now done
+(`maybeFinishDrafting()`), materializing the real bracket/Swiss round 1
+the moment it is, exactly like Booster Draft's own pod completion does.
+
+**Schema** (migration 0336) -- `tournament_pods` gains `game_id`
+(nullable, `FOREIGN KEY ... ON DELETE SET NULL` against `games.id`):
+the pod's own backing Grid Draft game, null for a Booster Draft
+tournament's own pods (which have no single backing game of their own).
+No other new tables -- a Grid Draft pod's drafting state lives entirely
+in that backing game's own existing `draft_matches`/`games` rows, not
+in anything tournament-specific.
+
+**Playing the bracket** -- exactly Booster Draft's own approach:
+`startMatchGame()` never passes `'grid_draft_pod'` to
+`GameService::createGame()` itself; every actual match instead plays as
+an ordinary `format: 'duel'`, `deck_type: 'custom_duel'` game
+(`duel_deck_rules: {preset: 'user_defined', min_cards:
+TournamentService::GRID_DRAFT_POD_MIN_DECK_SIZE}`, currently the same
+floor as Booster Draft's own `BOOSTER_DRAFT_MIN_DECK_SIZE` -- a
+dedicated constant since the two are conceptually independent),
+restricted per seat to that participant's own drafted pool via the same
+`perSeatAllowedCardIds` mechanism (`$isPodDraft = $isBoosterDraft ||
+$isGridDraftPod` picks between the two `duel_deck_rules` shapes above
+and shares everything else -- `custom_deck_allowed_card_ids`,
+`assertWithinAllowedCardPool()`'s multiset-subset check,
+`onCustomDuelDeckSubmitted()`'s `current_deck_card_ids` carry-forward
+across every subsequent match -- unchanged from Booster Draft's own
+description above).
+
+**API** -- no new endpoints: a Grid Draft pod's drafting happens through
+the ordinary Grid Draft game endpoints (`GET`/`POST` under
+`/games/{id}`) using its `game_id` from `GET /tournaments/state`'s own
+`pods` summary, rather than through Booster Draft's own dedicated
+`/tournaments/pod-draft/*` endpoints. See "Grid Draft (Pod)" in
+`web-static/README.md` for how the tournament view routes "Continue
+drafting" to that game's own board.
+
 ### Power Duel sideboarding
 
 A second, narrower opt-in on top of best-of-three (migration 0228):
