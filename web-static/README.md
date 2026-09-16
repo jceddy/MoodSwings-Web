@@ -1864,41 +1864,38 @@ registration mode (the same "Invite friends"/open-lobby radio-pair
 shape `#new-game-mode-fields` uses, `updateNewTournamentRegistrationModeFields()`
 swapping a friend-checkbox picker for a required max-participants
 field); and a deliberately curated subset of the New Game dialog's own
-match settings -- format (Duel/Traditional/Grid Draft/Sealed Deck, no
-team formats, since a tournament match is always exactly 2 players --
-see `TournamentService::ALLOWED_FORMATS`), a second select reused only
-for Duel/Traditional's own deck choice --
-`updateNewTournamentDeckTypeOptions()` hides that field entirely for
-Grid Draft/Sealed Deck/Booster Draft (each already fully determines its
-own `deck_type` on its own, nothing left to choose), otherwise offering
-Structure/Power/jceddy's 75/One of Each, plus a Duel-only "Power (Custom
-Decks)" option (`custom_duel`, see below). Every OTHER
-`#new-game-deck-type` option is still reachable per match indirectly,
-e.g. Custom Decklist via each matchup's own normal decklist-submission
-flow, just not offered as a dedicated field here. Best of Three
-(`updateNewTournamentBestOfThreeVisibility()` hides it for Grid
-Draft/Sealed Deck, whose matches are already potentially multi-game on
-their own via `GameService::draftGamesToWin()`) rounds out the match
-settings. "Grid Draft" is `#new-tournament-format`'s own `draft` option
-relabeled -- Quick Draft was removed as a tournament choice entirely
-(it's still offered, unchanged, from the New Game dialog above), leaving
-Grid Draft as the only draft type a tournament can pick, so
-`effectiveNewTournamentDeckType()` now returns `deck_type: 'grid_draft'`
-outright for it rather than reading a second "Draft type" select the
-way it briefly did. Sealed Deck is `#new-tournament-format`'s own
-UI-only option (mirroring `#new-game-format`'s identical
+match settings -- just a single format select (Power Duel/Traditional/
+Grid Draft/Sealed Deck/Booster Draft, no team formats, since a
+tournament match is always exactly 2 players -- see
+`TournamentService::ALLOWED_FORMATS`). Every one of these five options
+is now its own fully-determined `format`/`deck_type` combination with
+nothing left to choose underneath it (`effectiveNewTournamentFormat()`/
+`effectiveNewTournamentDeckType()` compute both directly from the one
+select's value) -- there is no second "Deck"/"Draft type" select, no
+Best of Three checkbox, and no Allow Sideboarding checkbox visible by
+default; the dialog shows only what a given format actually still needs
+deciding; every match is always best-of-three (see below), and every
+`#new-game-deck-type` option other than these five is still reachable
+per match indirectly, e.g. Custom Decklist via each matchup's own normal
+decklist-submission flow, just not offered as a dedicated field here.
+"Grid Draft" is `#new-tournament-format`'s own `draft` option relabeled
+-- Quick Draft was removed as a tournament choice entirely (it's still
+offered, unchanged, from the New Game dialog above), leaving Grid Draft
+as the only draft type a tournament can pick, so
+`effectiveNewTournamentDeckType()` returns `deck_type: 'grid_draft'`
+outright for it. Sealed Deck is `#new-tournament-format`'s own UI-only
+option (mirroring `#new-game-format`'s identical
 `sealed_pool_of_the_day` sentinel, see `effectiveNewGameFormat()`) --
 `effectiveNewTournamentFormat()` resolves it to `format: 'draft'` on
 submit (`effectiveNewTournamentDeckType()` supplies its own fixed
-`deck_type: 'sealed_deck'` the same way, entirely independent of
-whatever the now-hidden `#new-tournament-deck-type` last held), so it
-shows up as its own top-level choice rather than a deck picked after
-first choosing "Grid Draft" -- there's no drafting phase to speak of, so
-nesting it under that label would misname what it actually is, the
-exact same reasoning `openGameSummary()`'s own Sealed-Deck special case
-already documents. Submitting calls `createTournament()` with all of the
-above (`invite_user_ids` from the checked friend checkboxes) and closes
-the dialog on success, refreshing `#tournaments-dialog` underneath it.
+`deck_type: 'sealed_deck'` the same way), so it shows up as its own
+top-level choice rather than a deck picked after first choosing "Grid
+Draft" -- there's no drafting phase to speak of, so nesting it under
+that label would misname what it actually is, the exact same reasoning
+`openGameSummary()`'s own Sealed-Deck special case already documents.
+Submitting calls `createTournament()` with all of the above
+(`invite_user_ids` from the checked friend checkboxes) and closes the
+dialog on success, refreshing `#tournaments-dialog` underneath it.
 
 Grid Draft always submits a fixed `'random_48'` pool source
 (`grid_draft_pool_source`) -- its own pool-source picker isn't offered
@@ -1912,25 +1909,32 @@ added, since Quick Draft's own field was never wired up either -- meant
 a Draft-format tournament's own match could never actually start once
 fixed match settings actually got used against real opponents.
 
-**Power (Custom Decks)** -- `#new-tournament-deck-type`'s `custom_duel`
-option, only ever offered for format `duel` (`updateNewTournamentDeckTypeOptions()`
-omits it entirely for Traditional, matching `GameService::createGame()`'s
-own "only supported for duel games" restriction on this deck_type):
-each match's two players submit their own decklist, validated against
-the "power" `duel_deck_rules` preset, rather than one deck
-algorithmically assembled for the whole event -- see "Power Duel
-sideboarding" in `php-app/README.md`. Selecting it sends
-`duel_deck_rules: {preset: 'power'}` alongside `deck_type: 'custom_duel'`
-(`effectiveNewTournamentDeckType()` passes `custom_duel` straight
-through unchanged, unlike Sealed Deck's own translation, since it's
-already the real deck_type value); the tournament dialog never exposes
-the full `user_defined` rule fields the New Game dialog offers for this
-same deck_type, only this one fixed preset. Checking Best of Three then
-reveals `#new-tournament-allow-sideboarding-label`
-(`updateNewTournamentAllowSideboardingVisibility()`, the same
-format/deck_type/best-of-three condition the New Game dialog's own
-`updateAllowSideboardingFieldVisibility()` uses, minus its preset check
-since Power is the only preset offered here) -- checking it sends
+**Best of Three (always on)** -- every tournament match is best-of-three
+now; there is no longer a checkbox for it. The submit handler sends
+`best_of_three: true` unconditionally, and `TournamentService::createTournament()`
+enforces the same thing server-side regardless of what a caller sends
+(see its own docblock in `php-app/README.md`), so this is a genuine
+contract rather than merely today's frontend default. It's a harmless
+no-op for the draft-family deck types (Grid Draft/Sealed Deck/Booster
+Draft), which already run their own best-of-three-at-2-players story via
+`GameService::draftGamesToWin()` -- see `createGame()`'s own
+`$bestOfThree` docblock.
+
+**Power Duel** -- `#new-tournament-format`'s `duel` option, relabeled
+from the plain "Duel" it used to be: using custom decks is no longer a
+choice, it's simply what this format is, so
+`effectiveNewTournamentDeckType()` returns `deck_type: 'custom_duel'`
+outright for it (no second select involved at all) and the submit
+handler pairs it with `duel_deck_rules: {preset: 'power'}` unconditionally.
+Each match's two players submit their own decklist, validated against
+that "power" preset, rather than one deck algorithmically assembled for
+the whole event -- see "Power Duel sideboarding" in `php-app/README.md`.
+The tournament dialog never exposes the full `user_defined` rule fields
+the New Game dialog offers for this same deck_type, only this one fixed
+preset. Selecting "Power Duel" reveals `#new-tournament-allow-sideboarding-label`
+(`updateNewTournamentAllowSideboardingVisibility()`, now simply keyed
+off the format select's value, since deck_type/best-of-three are no
+longer independent variables here) -- checking it sends
 `allow_sideboarding: true`, threaded through by
 `TournamentService::startMatchGame()`'s own `createGame()` call exactly
 like `best_of_three`. Because the game this creates needs each player's
@@ -1938,27 +1942,39 @@ decklist submitted before it can start, `startMatchGame()`'s own
 `startGame()` call fails harmlessly and is left for the same
 per-player decklist-submission flow an ordinary ad hoc Power Duel match
 already uses (see `TournamentService`'s own class docblock). The
-tournaments list (`tournamentMatchSummary()`) shows this option as
-"Power (Custom Decks)" rather than `NEW_GAME_DECK_TYPE_LABELS`'s own
-generic "Custom Decklists (Duel)" label, since the tournament dialog
-only ever offers it under the "power" preset.
+tournaments list (`tournamentMatchSummary()`) shows this option as bare
+"Power Duel" rather than `NEW_GAME_DECK_TYPE_LABELS`'s own generic
+"Custom Decklists (Duel)" label, and without the "Duel – " prefix every
+other non-sentinel format/deck_type combination gets, the same "it's the
+only thing this format offers any more" reasoning Grid Draft's own label
+follows.
+
+**Traditional's fixed Structure deck** -- `#new-tournament-format`'s
+`standard` option always implies `deck_type: 'structure'`
+(`effectiveNewTournamentDeckType()`'s own `default` case) -- there is no
+longer a Structure/Power/jceddy's 75/One of Each choice for Traditional
+tournaments. Unlike an ordinary non-tournament Traditional game (which
+gets a fresh random Structure deck every single game, including game 2/3
+of its own best-of-three match), a Traditional tournament generates its
+one Structure deck exactly once, server-side, at tournament-creation
+time, and every match's every game for the whole event deals from that
+identical pool -- see `TournamentService::createTournament()`'s own
+docblock and `GameService::generateStructureDeckCardIds()`/`createGame()`'s
+own `$fixedCustomDeckCardIds` param in `php-app/README.md` for how.
 
 **Booster Draft** (issue #91 follow-up) -- `#new-tournament-format`'s
 own `booster_draft` option, another UI-only sentinel alongside Sealed
 Deck's (`effectiveNewTournamentFormat()`/`effectiveNewTournamentDeckType()`
-resolve it to `format: 'duel'`/`deck_type: 'booster_draft'` on submit,
-never touching `#new-tournament-deck-type` at all -- see
-`updateNewTournamentDeckTypeOptions()`'s own docblock for why the field
-disappears entirely for it, same as Sealed Deck). Every joined
-participant first drafts a personal 30-card pool from real boosters
-(pack/pick/pass, up to 8 players per pod -- see "Booster Draft" in
-`php-app/README.md` for the full mechanic and schema), then the
+resolve it to `format: 'duel'`/`deck_type: 'booster_draft'` on submit).
+Every joined participant first drafts a personal 30-card pool from real
+boosters (pack/pick/pass, up to 8 players per pod -- see "Booster Draft"
+in `php-app/README.md` for the full mechanic and schema), then the
 tournament's ordinary bracket/Swiss plays out using a deck built from
-that pool. Best of Three stays available and meaningful here (unlike
-Draft/Sealed Deck) since a Booster Draft match is an ordinary Duel
-underneath; the sideboarding checkbox never applies (its own visibility
-check only ever fires for the `custom_duel` OPTION under Format
-`duel`, which this sentinel bypasses entirely) since Booster Draft's own
+that pool, always best-of-three like every other format now (see "Best
+of Three (always on)" above) since a Booster Draft match is an ordinary
+Duel underneath; the sideboarding checkbox never applies (its own
+visibility check only ever fires for the `duel` OPTION under Format,
+which this sentinel bypasses entirely) since Booster Draft's own
 "sideboard from your whole pool every round" story (below) already
 supersedes it.
 

@@ -1696,6 +1696,22 @@ final class GameService
         // creation-time opt-in here already follows. See
         // submitCustomDuelDeck()'s own pool-membership check.
         ?array $perSeatAllowedCardIds = null,
+        // Traditional tournament matches only: TournamentService's own
+        // way of forcing deck_type 'custom' to use a specific, already-
+        // generated card pool (@param int[] $fixedCustomDeckCardIds)
+        // instead of parsing $decklistText or resolving $savedDecklistId
+        // -- see generateStructureDeckCardIds()'s own docblock for why. A
+        // Traditional tournament generates its one random Structure deck
+        // exactly once, at tournament-creation time, then passes those
+        // same card ids back in here for every match's every game, so
+        // every game in the whole event deals from the identical pool
+        // rather than deckCardIdsFor() building a fresh random one each
+        // time the way an ordinary non-tournament Traditional game still
+        // does. Only meaningful for deck_type 'custom'; silently ignored
+        // (not an error) otherwise, the same "harmless no-op outside its
+        // own narrow scope" convention $perSeatAllowedCardIds above
+        // already follows.
+        ?array $fixedCustomDeckCardIds = null,
     ): int {
         if (count($userIds) > self::MAX_PLAYERS) {
             throw new GameStateException('A game cannot have more than ' . self::MAX_PLAYERS . ' players');
@@ -1930,7 +1946,11 @@ final class GameService
                 throw new GameStateException('Custom decklists are not supported for duel games -- use deck_type "custom_duel" instead');
             }
 
-            if ($savedDecklistId !== null) {
+            if ($fixedCustomDeckCardIds !== null) {
+                $customDeckName = 'Structure Deck';
+                $customDeckCardIds = $fixedCustomDeckCardIds;
+                $this->assertCustomDecklistCardCount($customDeckCardIds, count($userIds));
+            } elseif ($savedDecklistId !== null) {
                 ['name' => $customDeckName, 'cardIds' => $customDeckCardIds] = $this->userDecklists->cardIdsForUse($createdByUserId, $savedDecklistId);
                 $this->assertCustomDecklistCardCount($customDeckCardIds, count($userIds));
             } else {
@@ -3874,6 +3894,25 @@ final class GameService
     private function customDeckCardIds(array $game): array
     {
         return array_map(intval(...), json_decode((string) $game['custom_deck_card_ids'], true));
+    }
+
+    /**
+     * Public wrapper around buildStructureDeckCardIds() for
+     * TournamentService's own one-time "fixed Structure deck for the
+     * whole Traditional tournament" generation (see its own
+     * createTournament() docblock) -- a Traditional tournament generates
+     * this exactly once, at tournament-creation time, and every match's
+     * every game reuses the identical card ids (passed back in as
+     * createGame()'s own $fixedCustomDeckCardIds, under deck_type
+     * 'custom') rather than letting deckCardIdsFor() build a fresh random
+     * 'structure' pool for each one the way an ordinary non-tournament
+     * Traditional game still does.
+     *
+     * @return int[]
+     */
+    public function generateStructureDeckCardIds(): array
+    {
+        return $this->buildStructureDeckCardIds();
     }
 
     /**
