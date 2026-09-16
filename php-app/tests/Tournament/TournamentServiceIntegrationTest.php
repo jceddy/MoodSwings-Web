@@ -528,6 +528,87 @@ final class TournamentServiceIntegrationTest extends TestCase
         self::assertSame('in_progress', $this->fetchGame((int) $match['game_id'])['status']);
     }
 
+    /**
+     * A Draft-format tournament may also use deck_type 'grid_draft'
+     * instead of the original 'quick_draft' -- both are 2-4 player draft
+     * deck types that play a best-of-three match at exactly 2 players
+     * (every tournament match's own fixed seat count), so nothing about
+     * TournamentService itself needs to change, only the New Tournament
+     * dialog's own "Draft type" option and (see below) the pool source
+     * every draft deck_type requires. match_params must set
+     * 'grid_draft_pool_source' itself -- GameService::createGame() has no
+     * default of its own for it (an omitted pool source resolves to an
+     * empty string, which buildDraftPool() rejects with 'Unknown pool
+     * source ""'), so the New Tournament dialog now always sends
+     * 'random_48' for whichever draft type is chosen.
+     */
+    public function testDraftTournamentSupportsGridDraft(): void
+    {
+        $creator = $this->insertUser('grid_draft_p1');
+        $p2 = $this->insertUser('grid_draft_p2');
+
+        $tournamentId = $this->tournaments->createTournament(
+            $creator,
+            'Grid Draft Cup',
+            'single_elimination',
+            'invite_only',
+            [
+                'format' => 'draft',
+                'deck_type' => 'grid_draft',
+                'grid_draft_pool_source' => 'random_48',
+            ],
+            swissRoundCount: null,
+            minParticipants: 2,
+            maxParticipants: null,
+            inviteUserIds: [$p2],
+        );
+        $this->tournaments->acceptInvite($tournamentId, $p2);
+        $this->tournaments->startTournament($tournamentId, $creator);
+
+        $round1 = $this->matchRepo->listRounds($tournamentId)[0];
+        $match = $this->matchRepo->listForRound((int) $round1['id'])[0];
+        self::assertNotNull($match['game_id'], 'a grid_draft match should still create its game up front, left drafting');
+
+        $game = $this->fetchGame((int) $match['game_id']);
+        self::assertSame('grid_draft', $game['deck_type']);
+        self::assertNotNull($game['draft_match_id']);
+
+        $state = $this->games->getState((int) $match['game_id'], $creator);
+        self::assertSame('drafting', $state['grid_draft']['status']);
+        self::assertCount(9, $state['grid_draft']['drafting']['grid_cards'], '2 players draft from a 3x3 grid');
+    }
+
+    /**
+     * Omitting a draft deck_type's own pool source entirely (the bug this
+     * feature's own fix addresses -- see testDraftTournamentSupportsGridDraft()'s
+     * own docblock) fails the match at start time exactly like any other
+     * bad fixed match setting, converted to a TournamentStateException
+     * the same way custom_duel's own "needs at least 4 participants"-style
+     * GameStateExceptions already are.
+     */
+    public function testDraftTournamentWithoutAPoolSourceFailsToStart(): void
+    {
+        $creator = $this->insertUser('no_pool_p1');
+        $p2 = $this->insertUser('no_pool_p2');
+
+        $tournamentId = $this->tournaments->createTournament(
+            $creator,
+            'No Pool Cup',
+            'single_elimination',
+            'invite_only',
+            ['format' => 'draft', 'deck_type' => 'grid_draft'],
+            swissRoundCount: null,
+            minParticipants: 2,
+            maxParticipants: null,
+            inviteUserIds: [$p2],
+        );
+        $this->tournaments->acceptInvite($tournamentId, $p2);
+
+        $this->expectException(TournamentStateException::class);
+        $this->expectExceptionMessage('Unknown pool source');
+        $this->tournaments->startTournament($tournamentId, $creator);
+    }
+
     private function participantUserId(int $participantId): int
     {
         $participant = (new TournamentParticipantRepository())->find($participantId);
