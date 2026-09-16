@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace MoodSwings\Tournament;
 
+use MoodSwings\Game\CardCatalog;
 use MoodSwings\Game\Exceptions\GameStateException;
 use MoodSwings\Game\GameService;
 use MoodSwings\Repository\FriendshipRepository;
 use MoodSwings\Repository\TournamentMatchRepository;
 use MoodSwings\Repository\TournamentParticipantRepository;
+use MoodSwings\Repository\TournamentPodRepository;
 use MoodSwings\Repository\TournamentRepository;
 use MoodSwings\Repository\UserRepository;
 
@@ -47,6 +49,9 @@ final class TournamentService implements TournamentMatchObserver
     /** Formats a tournament match may use -- always exactly 2 players, so the team formats are excluded. */
     private const ALLOWED_FORMATS = ['duel', 'draft', 'standard'];
 
+    /** How many cards a Booster Draft deck must have at minimum -- see submitCustomDuelDeck()'s own pool-membership check. */
+    public const BOOSTER_DRAFT_MIN_DECK_SIZE = 12;
+
     public function __construct(
         private readonly TournamentRepository $tournaments,
         private readonly TournamentParticipantRepository $participants,
@@ -55,6 +60,9 @@ final class TournamentService implements TournamentMatchObserver
         private readonly GameService $games,
         private readonly UserRepository $users,
         private readonly FriendshipRepository $friendships,
+        private readonly TournamentPodRepository $pods,
+        private readonly BoosterPackBuilder $boosterPackBuilder,
+        private readonly BoosterDraftPodBuilder $podBuilder,
     ) {
     }
 
@@ -259,12 +267,221 @@ final class TournamentService implements TournamentMatchObserver
             $seedToParticipantId[$seedIndex + 1] = (int) $participant['id'];
         }
 
-        $this->tournaments->markStarted($tournamentId);
+        if ($this->isBoosterDraft($tournament)) {
+            $this->tournaments->markDrafting($tournamentId);
+            $this->startBoosterDraftPods($tournamentId, array_values($seedToParticipantId));
 
+            return;
+        }
+
+        $this->tournaments->markStarted($tournamentId);
+        $this->materializeBracket($tournament, $seedToParticipantId);
+    }
+
+    private function isBoosterDraft(array $tournament): bool
+    {
+        return (string) ($tournament['match_params']['deck_type'] ?? '') === 'booster_draft';
+    }
+
+    private function materializeBracket(array $tournament, array $seedToParticipantId): void
+    {
         match ($tournament['bracket_type']) {
             'swiss' => $this->startSwiss($tournament, $seedToParticipantId),
             default => $this->materializeEliminationBracket($tournament, $seedToParticipantId),
         };
+    }
+
+    /**
+     * Booster Draft's own pre-bracket phase (issue #91 follow-up): splits
+     * $participantIds into pods of <=8 (BoosterDraftPodBuilder::podSizes(),
+     * as even as possible), assigns each a random seat_order within its
+     * own pod -- nothing about seeding should predict who drafts with
+     * whom, same rationale bracket seeding itself already follows -- and
+     * deals every seat its own two 15-card boosters (BoosterPackBuilder),
+     * one to pass left, one to pass right. The tournament sits in
+     * 'drafting' status until every pod's own 15 rounds finish (see
+     * pickBoosterDraftCard()/maybeFinishDrafting()), at which point the
+     * real bracket/Swiss round 1 materializes, mixing players across
+     * pods freely exactly like any other tournament.
+     *
+     * @param int[] $participantIds tournament_participants ids
+     */
+    private function startBoosterDraftPods(int $tournamentId, array $participantIds): void
+    {
+        $cardIdsByRarity = ['mythic' => [], 'rare' => [], 'uncommon' => [], 'common' => []];
+        foreach (CardCatalog::load()['rowsById'] as $cardId => $row) {
+            $cardIdsByRarity[$row['rarity']][] = $cardId;
+        }
+
+        shuffle($participantIds);
+        $podSizes = $this->podBuilder->podSizes(count($participantIds));
+
+        $offset = 0;
+        foreach ($podSizes as $podIndex => $podSize) {
+            $podId = $this->pods->createPod($tournamentId, $podIndex + 1);
+            $podParticipantIds = [];
+            for ($seat = 0; $seat < $podSize; $seat++) {
+                $podParticipantIds[] = $this->pods->addParticipant($podId, $participantIds[$offset + $seat], $seat);
+            }
+            foreach ($podParticipantIds as $podParticipantId) {
+                $this->pods->createBooster($podId, $podParticipantId, 'left', $this->boosterPackBuilder->buildBooster($cardIdsByRarity));
+                $this->pods->createBooster($podId, $podParticipantId, 'right', $this->boosterPackBuilder->buildBooster($cardIdsByRarity));
+            }
+            $offset += $podSize;
+        }
+    }
+
+    /**
+     * A pod participant's own pick for the pod's CURRENT round -- one
+     * call per direction ('left'/'right') per round, both required
+     * before that round advances (TournamentPodRepository::countPicksForRound()).
+     * $cardId must still be present in whichever booster the circulation
+     * math (BoosterDraftPodBuilder::openerSeatHeldBy()) currently places
+     * at this seat. Once the whole pod's own round 15 completes, every
+     * seat's 30 total picks are copied into
+     * tournament_participants.draft_pool_card_ids and the pod is marked
+     * 'completed' -- once every pod for this tournament is 'completed',
+     * the bracket/Swiss actually materializes (maybeFinishDrafting()).
+     */
+    public function pickBoosterDraftCard(int $tournamentId, int $userId, string $direction, int $cardId): void
+    {
+        if (!in_array($direction, ['left', 'right'], true)) {
+            throw new TournamentStateException('direction must be "left" or "right"');
+        }
+
+        $tournament = $this->requireTournament($tournamentId);
+        if ($tournament['status'] !== 'drafting') {
+            throw new TournamentStateException('This tournament is not currently drafting');
+        }
+
+        $participant = $this->participants->findForUser($tournamentId, $userId);
+        if ($participant === null) {
+            throw new NotAuthorizedForTournamentException("You're not part of this tournament");
+        }
+
+        $podParticipant = $this->pods->findPodParticipantForParticipant((int) $participant['id']);
+        if ($podParticipant === null) {
+            throw new TournamentStateException("You're not seated in a Booster Draft pod");
+        }
+
+        $pod = $this->pods->findPod((int) $podParticipant['pod_id']);
+        if ($pod === null || $pod['status'] !== 'drafting') {
+            throw new TournamentStateException('Your pod has already finished drafting');
+        }
+        $round = (int) $pod['current_round'];
+
+        if ($this->pods->hasPicked((int) $podParticipant['id'], $round, $direction)) {
+            throw new TournamentStateException('You have already picked for this round');
+        }
+
+        $podSize = count($this->pods->listPodParticipants((int) $pod['id']));
+        $openerSeat = BoosterDraftPodBuilder::openerSeatHeldBy((int) $podParticipant['seat_order'], $direction, $round, $podSize);
+        $opener = $this->pods->findPodParticipantBySeat((int) $pod['id'], $openerSeat);
+        $booster = $this->pods->findBooster((int) $opener['id'], $direction);
+
+        $pickIndex = array_search($cardId, $booster['remaining_card_ids'], true);
+        if ($pickIndex === false) {
+            throw new TournamentStateException('That card is not available to pick from this booster');
+        }
+
+        $remaining = $booster['remaining_card_ids'];
+        unset($remaining[$pickIndex]);
+        $this->pods->updateBoosterRemainingCardIds((int) $booster['id'], array_values($remaining));
+        $this->pods->recordPick((int) $podParticipant['id'], $round, $direction, $cardId);
+
+        if ($this->pods->countPicksForRound((int) $pod['id'], $round) === $podSize * 2) {
+            $this->advanceBoosterDraftPod($tournamentId, $pod);
+        }
+    }
+
+    private function advanceBoosterDraftPod(int $tournamentId, array $pod): void
+    {
+        $round = (int) $pod['current_round'];
+        if ($round < 15) {
+            $this->pods->advanceRound((int) $pod['id'], $round + 1);
+
+            return;
+        }
+
+        foreach ($this->pods->listPodParticipants((int) $pod['id']) as $podParticipant) {
+            $picks = $this->pods->listPicksForParticipant((int) $podParticipant['id']);
+            $this->participants->setDraftPoolCardIds((int) $podParticipant['participant_id'], $picks);
+        }
+        $this->pods->markCompleted((int) $pod['id']);
+        $this->maybeFinishDrafting($tournamentId);
+    }
+
+    /**
+     * A participant's own live Booster Draft pod state -- whichever of
+     * their currently-held left/right boosters they haven't yet picked
+     * from this round (null once picked, or once their pod is
+     * 'completed'), plus their own drafted-so-far pool (accumulating
+     * toward 30 total). Throws if they're not seated in any pod for this
+     * tournament at all.
+     *
+     * @return array{pod_status: string, current_round: int, total_rounds: int, pod_size: int, drafted_card_ids: int[], left: ?int[], right: ?int[]}
+     */
+    public function getPodDraftState(int $tournamentId, int $userId): array
+    {
+        $participant = $this->participants->findForUser($tournamentId, $userId);
+        if ($participant === null) {
+            throw new NotAuthorizedForTournamentException("You're not part of this tournament");
+        }
+
+        $podParticipant = $this->pods->findPodParticipantForParticipant((int) $participant['id']);
+        if ($podParticipant === null) {
+            throw new TournamentStateException("You're not seated in a Booster Draft pod");
+        }
+
+        $pod = $this->pods->findPod((int) $podParticipant['pod_id']);
+        $podSize = count($this->pods->listPodParticipants((int) $pod['id']));
+        $round = (int) $pod['current_round'];
+
+        $result = [
+            'pod_status' => $pod['status'],
+            'current_round' => $round,
+            'total_rounds' => 15,
+            'pod_size' => $podSize,
+            'drafted_card_ids' => $this->pods->listPicksForParticipant((int) $podParticipant['id']),
+            'left' => null,
+            'right' => null,
+        ];
+
+        if ($pod['status'] === 'drafting') {
+            foreach (['left', 'right'] as $direction) {
+                if ($this->pods->hasPicked((int) $podParticipant['id'], $round, $direction)) {
+                    continue;
+                }
+                $openerSeat = BoosterDraftPodBuilder::openerSeatHeldBy((int) $podParticipant['seat_order'], $direction, $round, $podSize);
+                $opener = $this->pods->findPodParticipantBySeat((int) $pod['id'], $openerSeat);
+                $booster = $this->pods->findBooster((int) $opener['id'], $direction);
+                $result[$direction] = $booster['remaining_card_ids'];
+            }
+        }
+
+        return $result;
+    }
+
+    /** Once every one of this tournament's pods has finished drafting, materializes the real bracket/Swiss round 1 -- see startBoosterDraftPods()'s own docblock. */
+    private function maybeFinishDrafting(int $tournamentId): void
+    {
+        foreach ($this->pods->listPodsForTournament($tournamentId) as $pod) {
+            if ($pod['status'] !== 'completed') {
+                return;
+            }
+        }
+
+        $tournament = $this->requireTournament($tournamentId);
+        $seedToParticipantId = [];
+        foreach ($this->participants->listForTournament($tournamentId) as $participant) {
+            if ($participant['seed'] !== null) {
+                $seedToParticipantId[(int) $participant['seed']] = (int) $participant['id'];
+            }
+        }
+        ksort($seedToParticipantId);
+
+        $this->tournaments->markInProgressAfterDrafting($tournamentId);
+        $this->materializeBracket($tournament, $seedToParticipantId);
     }
 
     private function materializeEliminationBracket(array $tournament, array $seedToParticipantId): void
@@ -375,16 +592,35 @@ final class TournamentService implements TournamentMatchObserver
         $user2Id = (int) $participant2['user_id'];
         $params = $tournament['match_params'];
         $format = (string) ($params['format'] ?? 'standard');
+        $deckType = (string) ($params['deck_type'] ?? 'structure');
+        $isBoosterDraft = $deckType === 'booster_draft';
+
+        // Booster Draft's own match_params.deck_type is a tournament-only
+        // sentinel -- GameService has no idea what it means (there's no
+        // algorithmic way to build "a subset of this specific player's
+        // own drafted pool" from a bare deck_type string the way
+        // structure/power/etc. do). Every actual match instead plays as
+        // an ordinary 'custom_duel' game, restricted per seat to that
+        // participant's own tournament_participants.draft_pool_card_ids
+        // via $perSeatAllowedCardIds -- see GameService::createGame()'s
+        // own docblock for that param, and submitCustomDuelDeck()'s own
+        // pool-membership check.
+        $duelDeckRules = $isBoosterDraft
+            ? ['preset' => 'user_defined', 'min_cards' => self::BOOSTER_DRAFT_MIN_DECK_SIZE]
+            : ($params['duel_deck_rules'] ?? null);
+        $perSeatAllowedCardIds = $isBoosterDraft
+            ? [$user1Id => $participant1['draft_pool_card_ids'], $user2Id => $participant2['draft_pool_card_ids']]
+            : null;
 
         try {
             $gameId = $this->games->createGame(
                 createdByUserId: $user1Id,
                 userIds: [$user1Id, $user2Id],
-                format: $format,
+                format: $isBoosterDraft ? 'duel' : $format,
                 winsNeeded: (int) ($params['wins_needed'] ?? 3),
-                deckType: (string) ($params['deck_type'] ?? 'structure'),
+                deckType: $isBoosterDraft ? 'custom_duel' : $deckType,
                 decklistText: $params['decklist_text'] ?? null,
-                duelDeckRules: $params['duel_deck_rules'] ?? null,
+                duelDeckRules: $duelDeckRules,
                 quickDraftPoolSource: $params['quick_draft_pool_source'] ?? null,
                 quickDraftCustomPoolText: $params['quick_draft_custom_pool_text'] ?? null,
                 winstonDraftPoolSource: $params['winston_draft_pool_source'] ?? null,
@@ -404,6 +640,7 @@ final class TournamentService implements TournamentMatchObserver
                 timeoutAction: isset($params['timeout_action']) ? (string) $params['timeout_action'] : null,
                 totalTimeLimitMinutes: isset($params['total_time_limit_minutes']) ? (int) $params['total_time_limit_minutes'] : null,
                 synchronousMode: (bool) ($params['synchronous_mode'] ?? false),
+                perSeatAllowedCardIds: $perSeatAllowedCardIds,
             );
         } catch (GameStateException $e) {
             throw new TournamentStateException("Couldn't start a tournament match between the fixed match settings and these two players: {$e->getMessage()}", previous: $e);
@@ -447,6 +684,32 @@ final class TournamentService implements TournamentMatchObserver
         }
 
         $this->resolveMatchResult($tournamentId, $tournamentMatch, (int) $winnerParticipant['id'], isBye: false);
+    }
+
+    /**
+     * Booster Draft's own persistent "current deck" (issue #91 follow-up)
+     * -- see the interface's own docblock for when GameService actually
+     * calls this (only ever for a seat carrying its own
+     * custom_deck_allowed_card_ids restriction, i.e. a Booster Draft
+     * tournament match). Resolved back to the right tournament_matches
+     * row the exact same way onMatchConcluded() is, then to that match's
+     * OWN participant matching $userId (never the opponent).
+     */
+    public function onCustomDuelDeckSubmitted(int $gameId, ?int $gameMatchId, int $gamePlayerId, int $userId, array $cardIds): void
+    {
+        $tournamentMatch = $gameMatchId !== null
+            ? $this->matches->findByGameMatchId($gameMatchId)
+            : $this->matches->findByGameId($gameId);
+        if ($tournamentMatch === null) {
+            return;
+        }
+
+        $participant = $this->participants->findForUser((int) $tournamentMatch['tournament_id'], $userId);
+        if ($participant === null) {
+            return;
+        }
+
+        $this->participants->setCurrentDeckCardIds((int) $participant['id'], $cardIds);
     }
 
     private function resolveMatchResult(int $tournamentId, array $tournamentMatch, int $winnerParticipantId, bool $isBye): void
@@ -734,15 +997,52 @@ final class TournamentService implements TournamentMatchObserver
             $matchesByRound[(int) $round['id']] = $this->matches->listForRound((int) $round['id']);
         }
 
+        // Booster Draft's own draft_pool_card_ids/current_deck_card_ids
+        // (issue #91 follow-up) are scrubbed from every participant
+        // row except the viewer's own -- an opponent's drafted pool or
+        // current deck is exactly the kind of scouting information a
+        // real tournament wouldn't let you see ahead of playing them.
+        $participants = array_map(
+            fn (array $p): array => (int) $p['user_id'] === $viewerUserId ? $p : [...$p, 'draft_pool_card_ids' => null, 'current_deck_card_ids' => null],
+            $this->participants->listForTournament($tournamentId),
+        );
+
         return [
             'tournament' => $tournament,
-            'participants' => $this->participants->listForTournament($tournamentId),
+            'participants' => $participants,
             'rounds' => $rounds,
             'matches_by_round' => $matchesByRound,
             'standings' => $tournament['bracket_type'] === 'swiss' && $tournament['status'] !== 'registration'
                 ? $this->swissStandings($tournamentId)
                 : null,
+            'pods' => $this->isBoosterDraft($tournament) ? $this->podsSummary($tournamentId) : null,
         ];
+    }
+
+    /** @return array[] every pod's own status/round/seated participants, for the tournament view's "drafting" progress display. */
+    private function podsSummary(int $tournamentId): array
+    {
+        $summary = [];
+        foreach ($this->pods->listPodsForTournament($tournamentId) as $pod) {
+            $seats = [];
+            foreach ($this->pods->listPodParticipants((int) $pod['id']) as $podParticipant) {
+                $participant = $this->participants->find((int) $podParticipant['participant_id']);
+                $user = $this->users->findById((int) $participant['user_id']);
+                $seats[] = [
+                    'participant_id' => (int) $podParticipant['participant_id'],
+                    'username' => $user['username'] ?? null,
+                    'seat_order' => (int) $podParticipant['seat_order'],
+                ];
+            }
+            $summary[] = [
+                'pod_number' => (int) $pod['pod_number'],
+                'status' => $pod['status'],
+                'current_round' => (int) $pod['current_round'],
+                'seats' => $seats,
+            ];
+        }
+
+        return $summary;
     }
 
     private function requireTournament(int $tournamentId): array

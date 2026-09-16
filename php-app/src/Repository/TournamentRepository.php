@@ -114,6 +114,22 @@ final class TournamentRepository
             ->execute(['id' => $id]);
     }
 
+    /** Booster Draft's own pre-bracket phase (issue #91 follow-up) -- see TournamentService::startBoosterDraftPods()'s own docblock. */
+    public function markDrafting(int $id): void
+    {
+        Connection::get()
+            ->prepare("UPDATE tournaments SET status = 'drafting', started_at = NOW() WHERE id = :id")
+            ->execute(['id' => $id]);
+    }
+
+    /** The 'drafting' -> 'in_progress' transition once every pod finishes -- started_at is already set from markDrafting(), so it's left alone here. */
+    public function markInProgressAfterDrafting(int $id): void
+    {
+        Connection::get()
+            ->prepare("UPDATE tournaments SET status = 'in_progress' WHERE id = :id")
+            ->execute(['id' => $id]);
+    }
+
     public function markCompleted(int $id, int $winnerUserId): void
     {
         Connection::get()

@@ -1184,6 +1184,7 @@
                     <option value="standard">Traditional</option>
                     <option value="draft">Draft</option>
                     <option value="sealed_deck">Sealed Deck</option>
+                    <option value="booster_draft">Booster Draft</option>
                 </select>
             </label>
 
@@ -1221,6 +1222,26 @@
         <button id="tournament-view-refresh-button" type="button">Refresh</button>
         <button id="tournament-view-start-button" type="button" hidden>Start tournament</button>
         <button id="tournament-view-cancel-button" type="button" hidden>Cancel tournament</button>
+        <!-- Booster Draft's own pre-bracket phase (issue #91 follow-up) --
+             shown only while tournament.status is 'drafting'; see
+             renderTournamentPods() in game.js. -->
+        <div id="tournament-view-pods-section" hidden>
+            <h3>Drafting</h3>
+            <ul id="tournament-view-pods-list"></ul>
+            <button id="tournament-view-continue-drafting-button" type="button" hidden>Continue drafting</button>
+        </div>
+        <!-- Booster Draft's own drafted pool/current deck (issue #91
+             follow-up), shown only for the viewer's own row -- see
+             renderMyBoosterDraftDeck() in game.js. The in-game decklist
+             submission box (POST /games/decklist) has no idea any of
+             this exists; this is purely a convenience to paste from. -->
+        <div id="tournament-view-my-pool-section" hidden>
+            <h3>Your Booster Draft pool</h3>
+            <p id="tournament-view-my-pool-count"></p>
+            <textarea id="tournament-view-my-pool-text" readonly rows="6"></textarea>
+            <p id="tournament-view-my-deck-label" hidden>Your current deck (pre-fill this into the decklist box for your next match):</p>
+            <textarea id="tournament-view-my-deck-text" readonly rows="6" hidden></textarea>
+        </div>
         <div id="tournament-view-standings-section" hidden>
             <h3>Standings</h3>
             <ol id="tournament-view-standings-list"></ol>
@@ -1228,6 +1249,36 @@
         <div id="tournament-view-bracket"></div>
         <p id="tournament-view-error" class="error" hidden></p>
         <button id="tournament-view-close-button" type="button">Close</button>
+    </dialog>
+
+    <!-- Booster Draft's own pod-drafting board (issue #91 follow-up) --
+         up to 8 players share a pod, each opening two boosters (one
+         passed left, one passed right); this shows the viewer's own
+         currently-held left/right booster (whichever they haven't yet
+         picked from this round) and their own drafted-so-far pool.
+         Polls while open, since other seats' own picks (not just the
+         viewer's) advance the shared round -- see pollPodDraftState()
+         in game.js. -->
+    <dialog id="pod-draft-dialog">
+        <h2>Booster Draft</h2>
+        <p id="pod-draft-progress"></p>
+        <div id="pod-draft-boosters">
+            <div>
+                <h3>Booster passed left</h3>
+                <div id="pod-draft-left-cards" class="deck-builder-card-grid"></div>
+                <p id="pod-draft-left-empty" hidden>Waiting on other players...</p>
+            </div>
+            <div>
+                <h3>Booster passed right</h3>
+                <div id="pod-draft-right-cards" class="deck-builder-card-grid"></div>
+                <p id="pod-draft-right-empty" hidden>Waiting on other players...</p>
+            </div>
+        </div>
+        <h3>Your pool so far (<span id="pod-draft-pool-count">0</span>/30)</h3>
+        <div id="pod-draft-pool-cards" class="deck-builder-card-grid"></div>
+        <p id="pod-draft-done-message" hidden>Your pod has finished drafting! Once every pod is done, the tournament's bracket will start automatically.</p>
+        <p id="pod-draft-error" class="error" hidden></p>
+        <button id="pod-draft-close-button" type="button">Close</button>
     </dialog>
 
     <dialog id="card-detail-dialog">

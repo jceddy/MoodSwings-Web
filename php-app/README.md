@@ -5053,6 +5053,128 @@ never `user_defined`, so `allow_sideboarding` is meaningful for every
 tournament match that opts into it (unlike the New Game dialog, where a
 `user_defined`-preset match can check the box for no effect).
 
+### Booster Draft (issue #91 follow-up)
+
+A Duel tournament's `match_params.deck_type` may also be `'booster_draft'`
+(migration 0335) -- a genuinely different way of sourcing every
+participant's deck for the whole event, rather than another preset
+alongside Structure/Power/Custom Decks: instead of playing matches with
+an algorithmic or freely-chosen deck, every joined participant first
+drafts a personal 30-card pool from real boosters (the traditional TCG
+"pack, pick, pass" mechanic), then plays the tournament's ordinary
+bracket/Swiss using a deck built and re-sideboarded from that pool every
+round. `booster_draft` is a tournament-only sentinel `startMatchGame()`
+translates away before ever calling `GameService::createGame()` -- see
+below.
+
+**Boosters** (`BoosterPackBuilder`, pure, no database access) -- 15
+cards per booster, drawn slot by slot at fixed odds rather than a fixed
+count per rarity (approximating a real booster's own weighted slots):
+slot 1 is 2/3 Mythic, 1/3 Rare; slot 2 is always Rare; slot 3 is 2/3
+Rare, 1/3 Uncommon; slots 4-7 are always Uncommon; slot 8 is 1/3
+Uncommon, 2/3 Common; slots 9-15 are always Common. No card repeats
+within a single booster (each slot draws from a shrinking working copy
+of the catalog, the same "distinct ids" convention `buildStructureDeckCardIds()`/
+`buildPowerDeckCardIds()` already follow) -- a *different* booster,
+even one opened by the same player, draws from a fresh full catalog
+copy, so the same card can still appear across a player's own two
+boosters.
+
+**Pods** (`BoosterDraftPodBuilder::podSizes()`, pure) -- up to 8
+participants draft together in a pod; a tournament with more than 8
+joined participants splits into multiple pods, sized as evenly as
+possible (differing by at most 1, e.g. 9 -> `[5, 4]`, never `[8, 1]`)
+rather than filling each pod to 8 before starting a new one. Pods exist
+purely to draft/build a deck -- no game is ever played within a pod;
+once every pod finishes, the tournament's real bracket/Swiss mixes
+players across pods freely, exactly like any other tournament.
+
+**Circulation** -- each seated participant opens two boosters, one
+passed "left" (+1 seat every round) and one passed "right" (-1 seat
+every round) -- `BoosterDraftPodBuilder::seatHoldingBooster()`/
+`openerSeatHeldBy()` are the pure round-robin math both directions
+share: a booster opened by seat *o* is held by seat `(o + (round - 1))
+mod podSize` (left) or `(o - (round - 1)) mod podSize` (right) at
+1-indexed `round`. Over the booster's own 15-round lifetime (one card removed
+every round it's held) this visits every seat in the pod, so **every
+player nets exactly 15 + 15 = 30 cards total, regardless of pod size**
+-- the property the class's own docblock derives in full. A pod
+advances its `current_round` (1-15) only once every seated participant
+has picked from *both* directions for that round (an append-only
+`tournament_pod_picks` log both records each pick and -- via `COUNT`,
+the same "derive from the handful of rows that reference it" convention
+`tournament_participants`' own win/loss counts already follow -- is how
+"has the whole pod finished this round" is determined); round 15
+finishing marks the pod `'completed'` and copies each seat's own 30
+picked cards into `tournament_participants.draft_pool_card_ids`.
+
+**Schema** (migration 0335) -- `tournaments.status` gains a `'drafting'`
+value, sitting between `'registration'` and `'in_progress'`:
+`TournamentService::startTournament()` seeds participants exactly as
+usual, but for `deck_type: 'booster_draft'` calls `startBoosterDraftPods()`
+(forms pods, deals every seat its own two boosters, sets status
+`'drafting'`) INSTEAD of materializing the bracket immediately;
+`maybeFinishDrafting()` -- checked after every pod's own round 15
+completes -- materializes the real bracket/Swiss round 1 (the exact
+same seeding/materialization `startTournament()` itself would have run
+immediately for any other deck_type) the moment every one of the
+tournament's pods is `'completed'`. `tournament_pods` (`pod_number`,
+`current_round`, `status`), `tournament_pod_participants` (`seat_order`,
+one row per seated participant, `UNIQUE` per participant -- they belong
+to at most one pod for the whole tournament), `tournament_pod_boosters`
+(one row per opened booster -- `opener_pod_participant_id`/`direction`,
+`remaining_card_ids` JSON shrinking by one every round it's picked
+from), `tournament_pod_picks` (the append-only log above).
+`tournament_participants` gains `draft_pool_card_ids` (JSON, exactly 30
+ids once drafting finishes, duplicates allowed) and
+`current_deck_card_ids` (JSON, null until this participant's first
+tournament match's own deck submission, overwritten every time they
+submit a new one after that -- see below).
+
+**Playing the bracket** -- `startMatchGame()` never passes
+`'booster_draft'` to `GameService::createGame()` itself (there's no
+algorithmic way to build "a subset of this specific player's own
+drafted pool" from a bare deck_type string the way structure/power do);
+every actual match instead plays as an ordinary `format: 'duel'`,
+`deck_type: 'custom_duel'` game (`duel_deck_rules: {preset:
+'user_defined', min_cards: 12}`, no rarity/duplicate caps of its own,
+since the drafted pool is already the only restriction that matters),
+restricted per seat via a new `createGame()` parameter,
+`perSeatAllowedCardIds` (`array<user_id, int[]>`), persisted onto
+`game_players.custom_deck_allowed_card_ids` and carried forward
+unconditionally onto every later game of a best-of-three match (a
+Booster Draft match is free to opt into `best_of_three`, same as any
+Duel; sideboarding within one match's own `game_matches.allow_sideboarding`
+is never set for it, since the "sideboard from your whole pool, every
+round" story below already supersedes it). `submitCustomDuelDeck()`
+enforces this, when a seat carries it, as a **multiset-subset check**
+(`assertWithinAllowedCardPool()`) alongside the game's own
+`DuelDeckRules::validate()` -- honoring each card's own multiplicity in
+the pool, since the same card can legitimately appear twice across a
+player's two boosters. A successful submission on a seat carrying this
+restriction also calls the new `TournamentMatchObserver::onCustomDuelDeckSubmitted()`
+hook -- silently a no-op for every ordinary `custom_duel` game, the same
+"harmless outside its own narrow scope" convention `allowSideboarding`
+already follows -- which `TournamentService` resolves back to the right
+`tournament_matches` row (exactly like `onMatchConcluded()`) and
+persists as that participant's new `current_deck_card_ids`, pre-filled
+the next time they submit one, for every subsequent match against every
+subsequent opponent, not just game 2/3 of the same best-of-three.
+
+**API** -- `GET /tournaments/pod-draft/state?tournament_id=`
+(`TournamentService::getPodDraftState()`: the viewer's own currently-
+available `left`/`right` cards, hydrated, null once picked for the
+round or once their pod is `'completed'`, plus their own drafted-so-far
+pool) and `POST /tournaments/pod-draft/pick`
+(`{tournament_id, direction, card_id}`). `GET /tournaments/state`'s own
+`participants` list scrubs `draft_pool_card_ids`/`current_deck_card_ids`
+down to `null` for every participant except the viewer's own row --
+exactly the scouting information a real tournament wouldn't let you see
+ahead of playing an opponent -- then hydrates the viewer's own copy of
+each via `CardCatalog::serialize()`. See "Booster Draft" in
+`web-static/README.md` for the pod-drafting board and the tournament
+view's own pool/deck display built on top of these.
+
 ### Power Duel sideboarding
 
 A second, narrower opt-in on top of best-of-three (migration 0228):

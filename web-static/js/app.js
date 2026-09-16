@@ -556,6 +556,19 @@ function cancelTournament(tournamentId) {
     });
 }
 
+// Booster Draft's own pod-drafting phase (issue #91 follow-up) -- see
+// TournamentService::getPodDraftState()'s own docblock.
+function getPodDraftState(tournamentId) {
+    return apiRequest(`/tournaments/pod-draft/state?tournament_id=${tournamentId}`);
+}
+
+function pickPodDraftCard(tournamentId, direction, cardId) {
+    return apiRequest('/tournaments/pod-draft/pick', {
+        method: 'POST',
+        body: JSON.stringify({ tournament_id: tournamentId, direction, card_id: cardId }),
+    });
+}
+
 // Weekly Sealed Pool's own queue (issue #520) -- a FIFO auto-pairing
 // ladder, deliberately separate from the open-lobby endpoints above (see
 // WeeklySealedPoolQueueService's own docblock). getWeeklySealedPoolQueueStatus()

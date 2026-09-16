@@ -12,12 +12,15 @@ use MoodSwings\Game\ReplayStateBuilder;
 use MoodSwings\Repository\FriendshipRepository;
 use MoodSwings\Repository\TournamentMatchRepository;
 use MoodSwings\Repository\TournamentParticipantRepository;
+use MoodSwings\Repository\TournamentPodRepository;
 use MoodSwings\Repository\TournamentRepository;
 use MoodSwings\Repository\UserDecklistRepository;
 use MoodSwings\Repository\UserRepository;
 use MoodSwings\Rules\DefaultEffectRegistry;
 use MoodSwings\Rules\MoodPlayService;
 use MoodSwings\Rules\RoundScorer;
+use MoodSwings\Tournament\BoosterDraftPodBuilder;
+use MoodSwings\Tournament\BoosterPackBuilder;
 use MoodSwings\Tournament\NotAuthorizedForTournamentException;
 use MoodSwings\Tournament\TournamentBracketBuilder;
 use MoodSwings\Tournament\TournamentService;
@@ -55,6 +58,10 @@ final class TournamentServiceIntegrationTest extends TestCase
         $pdo->exec('SET FOREIGN_KEY_CHECKS = 0');
         $pdo->exec('TRUNCATE TABLE tournament_matches');
         $pdo->exec('TRUNCATE TABLE tournament_rounds');
+        $pdo->exec('TRUNCATE TABLE tournament_pod_picks');
+        $pdo->exec('TRUNCATE TABLE tournament_pod_boosters');
+        $pdo->exec('TRUNCATE TABLE tournament_pod_participants');
+        $pdo->exec('TRUNCATE TABLE tournament_pods');
         $pdo->exec('TRUNCATE TABLE tournament_participants');
         $pdo->exec('TRUNCATE TABLE tournaments');
         $pdo->exec('TRUNCATE TABLE game_matches');
@@ -105,6 +112,9 @@ final class TournamentServiceIntegrationTest extends TestCase
             $this->games,
             new UserRepository(),
             new FriendshipRepository(),
+            new TournamentPodRepository(),
+            new BoosterPackBuilder(),
+            new BoosterDraftPodBuilder(),
         );
         $this->games->setTournamentObserver($this->tournaments);
     }
@@ -607,6 +617,135 @@ final class TournamentServiceIntegrationTest extends TestCase
         $this->expectException(TournamentStateException::class);
         $this->expectExceptionMessage('Unknown pool source');
         $this->tournaments->startTournament($tournamentId, $creator);
+    }
+
+    /**
+     * A 5-player Booster Draft tournament (fits in a single pod, since
+     * pods only split above 8 -- see BoosterDraftPodBuilderTest for the
+     * pod-splitting math itself) end to end: pod formation, drafting all
+     * 15 rounds to completion, the tournament auto-transitioning out of
+     * 'drafting' once the pod finishes, the resulting bracket's own
+     * first real match using each side's own tournament-drafted pool
+     * (deck_type 'custom_duel' + game_players.custom_deck_allowed_card_ids,
+     * never the tournament's own 'booster_draft' sentinel directly --
+     * see TournamentService::startMatchGame()'s own docblock), and
+     * GameService::submitCustomDuelDeck()'s own onCustomDuelDeckSubmitted()
+     * hook persisting each side's submission as their new
+     * tournament_participants.current_deck_card_ids.
+     */
+    public function testBoosterDraftFormsAPodDraftsToCompletionAndPlaysBracketMatches(): void
+    {
+        $userIds = [];
+        foreach (['bd_p1', 'bd_p2', 'bd_p3', 'bd_p4', 'bd_p5'] as $username) {
+            $userIds[] = $this->insertUser($username);
+        }
+        $creator = $userIds[0];
+        $others = array_slice($userIds, 1);
+
+        $tournamentId = $this->tournaments->createTournament(
+            $creator,
+            'Booster Draft Cup',
+            'single_elimination',
+            'invite_only',
+            ['format' => 'duel', 'deck_type' => 'booster_draft'],
+            swissRoundCount: null,
+            minParticipants: 2,
+            maxParticipants: null,
+            inviteUserIds: $others,
+        );
+        foreach ($others as $userId) {
+            $this->tournaments->acceptInvite($tournamentId, $userId);
+        }
+
+        $this->tournaments->startTournament($tournamentId, $creator);
+
+        $state = $this->tournaments->getState($tournamentId, $creator);
+        self::assertSame('drafting', $state['tournament']['status']);
+        self::assertCount(1, $state['pods'], '5 participants fit in a single pod');
+        self::assertCount(5, $state['pods'][0]['seats']);
+
+        // Drive the whole pod draft to completion: 15 rounds, both
+        // directions, every seat always takes the first card its own
+        // currently-held booster offers.
+        for ($round = 1; $round <= 15; $round++) {
+            foreach (['left', 'right'] as $direction) {
+                foreach ($userIds as $userId) {
+                    $podState = $this->tournaments->getPodDraftState($tournamentId, $userId);
+                    if ($podState[$direction] === null) {
+                        continue;
+                    }
+                    $this->tournaments->pickBoosterDraftCard($tournamentId, $userId, $direction, $podState[$direction][0]);
+                }
+            }
+        }
+
+        $state = $this->tournaments->getState($tournamentId, $creator);
+        self::assertSame('in_progress', $state['tournament']['status'], 'drafting done -> bracket should auto-materialize');
+        self::assertSame('completed', $state['pods'][0]['status']);
+
+        $participants = new TournamentParticipantRepository();
+        foreach ($userIds as $userId) {
+            $participant = $participants->findForUser($tournamentId, $userId);
+            self::assertCount(30, $participant['draft_pool_card_ids'], "user {$userId} should have drafted exactly 30 cards");
+            self::assertNull($participant['current_deck_card_ids'], 'no deck submitted yet');
+        }
+
+        // 5 participants -> bracket size 8: exactly one round-1 match
+        // (the two non-bye seeds) is real; the other three are byes.
+        $round1 = $this->matchRepo->listRounds($tournamentId)[0];
+        $round1Matches = $this->matchRepo->listForRound((int) $round1['id']);
+        $realMatches = array_values(array_filter($round1Matches, static fn (array $m): bool => $m['status'] === 'in_progress'));
+        self::assertCount(1, $realMatches);
+        $match = $realMatches[0];
+
+        $game = $this->fetchGame((int) $match['game_id']);
+        self::assertSame('custom_duel', $game['deck_type'], 'Booster Draft matches are ordinary custom_duel games under the hood');
+
+        $p1UserId = $this->participantUserId((int) $match['participant1_id']);
+        $p2UserId = $this->participantUserId((int) $match['participant2_id']);
+        $p1Pool = $participants->find((int) $match['participant1_id'])['draft_pool_card_ids'];
+        $p2Pool = $participants->find((int) $match['participant2_id'])['draft_pool_card_ids'];
+
+        $p1PlayerId = $this->games->gamePlayerIdFor((int) $match['game_id'], $p1UserId);
+        $p2PlayerId = $this->games->gamePlayerIdFor((int) $match['game_id'], $p2UserId);
+        $allowedStmt = $this->pdo->prepare('SELECT custom_deck_allowed_card_ids FROM game_players WHERE id = :id');
+        $allowedStmt->execute(['id' => $p1PlayerId]);
+        self::assertNotNull($allowedStmt->fetchColumn(), "seat should carry its own pool restriction");
+
+        // Each side submits a 12-card deck drawn from a prefix of their
+        // own pool -- trivially a legal subset, multiplicity included.
+        $this->games->submitCustomDuelDeck((int) $match['game_id'], $p1PlayerId, $this->decklistTextForCardIds(array_slice($p1Pool, 0, 12)));
+        $this->games->submitCustomDuelDeck((int) $match['game_id'], $p2PlayerId, $this->decklistTextForCardIds(array_slice($p2Pool, 0, 12)));
+        $this->games->startGame((int) $match['game_id']);
+
+        self::assertSame('in_progress', $this->fetchGame((int) $match['game_id'])['status']);
+
+        $p1Participant = $participants->find((int) $match['participant1_id']);
+        $p2Participant = $participants->find((int) $match['participant2_id']);
+        self::assertCount(12, $p1Participant['current_deck_card_ids'], 'submission should have persisted as this participant\'s new current deck');
+        self::assertCount(12, $p2Participant['current_deck_card_ids']);
+
+        // Resigning cascades the tournament forward same as any other format.
+        $this->loseGameAs((int) $match['game_id'], $p2UserId);
+        $state = $this->tournaments->getState($tournamentId, $creator);
+        self::assertSame('in_progress', $state['tournament']['status'], 'more rounds remain with 5 participants');
+    }
+
+    /** @param int[] $cardIds honors multiplicity (a repeated id becomes "2 Name") */
+    private function decklistTextForCardIds(array $cardIds): string
+    {
+        $counts = array_count_values($cardIds);
+        $placeholders = implode(',', array_fill(0, count($counts), '?'));
+        $stmt = $this->pdo->prepare("SELECT id, name FROM cards WHERE id IN ({$placeholders})");
+        $stmt->execute(array_keys($counts));
+        $namesById = array_column($stmt->fetchAll(), 'name', 'id');
+
+        $lines = [];
+        foreach ($counts as $cardId => $count) {
+            $lines[] = "{$count} {$namesById[$cardId]}";
+        }
+
+        return implode("\n", $lines);
     }
 
     private function participantUserId(int $participantId): int
