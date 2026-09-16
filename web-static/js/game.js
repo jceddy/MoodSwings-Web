@@ -4186,7 +4186,17 @@
             invitationsList.appendChild(item);
         }
 
-        const mineProper = mine.filter((t) => t.my_participant_status !== 'invited' && t.my_participant_status !== 'declined');
+        // 'withdrawn' is excluded the same way 'declined' already is --
+        // there's nothing left to do with either (no button this list
+        // renders for either status, and joinOpenTournament()'s own
+        // findForUser() check means you can never rejoin a tournament
+        // you've withdrawn from any more than one you've declined), so
+        // leaving it in just left a withdrawn tournament looking
+        // indistinguishable from a joined one -- this list only ever
+        // displays the tournament's own status, never the viewer's own
+        // participant status, so the sole visible difference was a
+        // vanished Withdraw button, easy to miss entirely.
+        const mineProper = mine.filter((t) => t.my_participant_status !== 'invited' && t.my_participant_status !== 'declined' && t.my_participant_status !== 'withdrawn');
         const mineList = document.getElementById('tournaments-mine-list');
         mineList.innerHTML = '';
         document.getElementById('tournaments-mine-empty').hidden = mineProper.length > 0;
