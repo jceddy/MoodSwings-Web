@@ -1859,31 +1859,37 @@ button inside `#tournaments-dialog`) collects: a name; the bracket type
 (`#new-tournament-bracket-type` -- single elimination, double
 elimination, or Swiss rounds, with a Swiss-only round-count field,
 `updateNewTournamentSwissRoundCountVisibility()`, blank meaning "let the
-server pick" via `TournamentService`'s own `ceil(log2(n))` default);
-registration mode (the same "Invite friends"/open-lobby radio-pair
-shape `#new-game-mode-fields` uses, `updateNewTournamentRegistrationModeFields()`
-swapping a friend-checkbox picker for a required max-participants
-field); and a deliberately curated subset of the New Game dialog's own
-match settings -- just a single format select (Power Duel/Traditional/
-Grid Draft/Sealed Deck/Booster Draft, no team formats, since a
-tournament match is always exactly 2 players -- see
-`TournamentService::ALLOWED_FORMATS`). Every one of these five options
-is now its own fully-determined `format`/`deck_type` combination with
-nothing left to choose underneath it (`effectiveNewTournamentFormat()`/
-`effectiveNewTournamentDeckType()` compute both directly from the one
-select's value) -- there is no second "Deck"/"Draft type" select, no
-Best of Three checkbox, and no Allow Sideboarding checkbox visible by
-default; the dialog shows only what a given format actually still needs
+server pick" via `TournamentService`'s own `ceil(log2(n))` default --
+hidden and forced to Single elimination for Grid Draft's own "Pods with
+playoffs" option, see below); registration mode (the same "Invite
+friends"/open-lobby radio-pair shape `#new-game-mode-fields` uses); a
+minimum and maximum participant count (`#new-tournament-min-participants`/
+`#new-tournament-max-participants`, both always-visible required
+`<select>` lists of 4-16 populated by
+`populateNewTournamentParticipantRangeSelects()` -- every tournament,
+regardless of registration mode, is capped to that range for now, see
+"Tournaments" in `php-app/README.md`, so there's nothing outside it to
+type into a free-entry field anyway); and a deliberately curated subset
+of the New Game dialog's own match settings -- just a single format
+select (Power Duel/Traditional/Grid Draft/Sealed Deck/Booster Draft, no
+team formats, since a tournament match is always exactly 2 players --
+see `TournamentService::ALLOWED_FORMATS`). Every one of these five
+options is now its own fully-determined `format`/`deck_type`
+combination with nothing left to choose underneath it
+(`effectiveNewTournamentFormat()`/`effectiveNewTournamentDeckType()`
+compute both directly from the format select's value) -- no Best of
+Three checkbox, and no Allow Sideboarding checkbox visible by default;
+the dialog shows only what a given format actually still needs
 deciding; every match is always best-of-three (see below), and every
 `#new-game-deck-type` option other than these five is still reachable
 per match indirectly, e.g. Custom Decklist via each matchup's own normal
 decklist-submission flow, just not offered as a dedicated field here.
-"Grid Draft" is `#new-tournament-format`'s own `draft` option relabeled
--- Quick Draft was removed as a tournament choice entirely (it's still
-offered, unchanged, from the New Game dialog above), leaving Grid Draft
-as the only draft type a tournament can pick, so
-`effectiveNewTournamentDeckType()` returns `deck_type: 'grid_draft'`
-outright for it. Sealed Deck is `#new-tournament-format`'s own UI-only
+Grid Draft is the one format with something left to choose underneath
+it -- see "Grid Draft 'Pods with playoffs'" below for its own second
+"Draft type" select. "Grid Draft" is `#new-tournament-format`'s own
+`draft` option relabeled -- Quick Draft was removed as a tournament
+choice entirely (it's still offered, unchanged, from the New Game
+dialog above). Sealed Deck is `#new-tournament-format`'s own UI-only
 option (mirroring `#new-game-format`'s identical
 `sealed_pool_of_the_day` sentinel, see `effectiveNewGameFormat()`) --
 `effectiveNewTournamentFormat()` resolves it to `format: 'draft'` on
@@ -2048,12 +2054,109 @@ fields hydrated for the VIEWER's own participant row (every other row's
 are `null`, so an opponent's pool/deck is never visible ahead of playing
 them -- see `TournamentService::getState()`'s own docblock).
 
+**Grid Draft "Pod draft (once)" / "Pods with playoffs"** (issue #91
+follow-up) -- `#new-tournament-format`'s own `draft` option (Grid Draft)
+now shows a second select, `#new-tournament-grid-draft-mode`, right
+below it, with three options: "Fresh draft each match" (`grid_draft`,
+unchanged -- every bracket match is its own independent 2-player Grid
+Draft), "Pod draft (once)" (`grid_draft_pod`), and "Pods with playoffs"
+(`grid_draft_pod_playoff` -- `effectiveNewTournamentDeckType()`'s own
+`'draft'` case reads whichever this select is set to). Only shown while
+Grid Draft itself is the chosen format
+(`updateNewTournamentGridDraftModeVisibility()`, mirroring
+`updateNewTournamentAllowSideboardingVisibility()`'s own "only relevant
+for this one format" pattern) -- each option's own description
+paragraph (`GRID_DRAFT_MODE_DESCRIPTIONS`) explains the choice inline,
+the same "description text next to the select" convention the New Game
+dialog's own format/deck_type selects already use. Choosing "Pods with
+playoffs" also hides and forces `#new-tournament-bracket-type` to Single
+elimination (`#new-tournament-bracket-type-forced-description` explains
+why in its place) -- every pod's own bracket, and the final bracket
+among pod winners, are always single elimination regardless of what
+that field would otherwise say (`TournamentService::createTournament()`'s
+own docblock in `php-app/README.md`), so leaving it open to choose would
+just be misleading.
+
+`grid_draft_pod` mirrors Booster Draft's own structure above almost
+exactly -- participants split into pods (up to 4 this time, Grid
+Draft's own drafting cap, vs. Booster Draft's 8) that each draft a
+personal pool before the bracket starts, then the tournament's real
+matches mix players across pods freely, always best-of-three like every
+other format now, with the sideboarding checkbox never applicable for
+the same reason it doesn't apply to Booster Draft. The one real
+difference: a pod's own drafting happens through an ordinary Grid Draft
+game rather than a dedicated pod-draft dialog -- see below.
+`grid_draft_pod_playoff` forms pods the exact same way, but each pod
+plays its own bracket instead of feeding one shared bracket -- see
+"Grid Draft 'Pods with playoffs'" below for how the tournament view
+renders that.
+
+`tournamentMatchSummary()` shows `grid_draft_pod` as bare "Grid Draft
+(Pod)" and `grid_draft_pod_playoff` as bare "Grid Draft (Pod Playoffs)"
+(same "no `Draft – ` prefix" reasoning as `grid_draft`/`sealed_deck`
+already follow, since these are among the only things the Grid Draft
+option under Format offers any more).
+
+**Continuing a Grid Draft pod's own drafting** -- `#tournament-view-dialog`'s
+own pods section (`renderTournamentPods()`, shown whenever `GET
+/tournaments/state`'s own `pods` field is non-null -- true for
+`grid_draft_pod`/`grid_draft_pod_playoff` tournaments exactly as for a
+`booster_draft` one) lists every pod's own progress the same way for
+all of them, and shows a "Continue drafting" button whenever the
+viewer's own username appears in a pod's own seats while that pod's own
+`status` is still `'drafting'` (a "Pods with playoffs" pod moves on to
+`'playing'` its own bracket -- see below -- the moment drafting
+finishes, with nothing left to "continue" there). Clicking it routes
+based on `pod.game_id` (non-null only for a Grid Draft pod, since a
+Booster Draft pod has no single backing game of its own): a Grid Draft
+pod closes `#tournament-view-dialog`/`#tournaments-dialog` and hands off
+straight to `showBoard(pod.game_id)` -- the exact same drafting board a
+3-4 player ad hoc Grid Draft game already uses, nothing
+tournament-specific to build -- while a Booster Draft pod still opens
+`#pod-draft-dialog` as before. Once the pod's own game has every seat's
+deck submitted, the pod moves on on its own (no further UI action
+needed) and the "Continue drafting" button simply stops appearing for
+it next refresh.
+
+Once a Grid Draft pod's own drafting finishes, the viewer's drafted pool
+and current match deck show up in the very same section Booster Draft's
+own pool uses (`renderMyBoosterDraftDeck()`, `#tournament-view-my-pool-section`,
+now titled "Your drafted pool" rather than "Your Booster Draft pool"
+since it covers both) -- everything from "a read-only textarea listing
+every drafted card" onward in "Booster Draft" above applies identically
+here; the two options only ever differ in how the pool gets built, never
+in how it's shown or used to submit a match deck. For "Pods with
+playoffs", this section reflects whichever pod the viewer is CURRENTLY
+seated in at the time -- their own regular pod's pool at first, then
+(if they reach the finals) the finals' own fresh pool once that
+overwrites it, same as the backend column itself.
+
+**Grid Draft "Pods with playoffs"** -- `grid_draft_pod_playoff`'s own
+pods (both the regular pods formed at tournament start and the single
+final pod formed once they're all done) additionally carry their own
+`bracket_rounds` in `GET /tournaments/state`'s own `pods` field (empty
+for `grid_draft_pod`/`booster_draft`, which have no bracket of their
+own at all). `renderTournamentPods()` renders each pod's own line the
+same way (progress reads `winner: <username>` once `status` is
+`'completed'`, or "playing its own bracket" while `status` is
+`'playing'`), and, whenever `bracket_rounds` is non-empty, renders that
+pod's own mini bracket directly beneath its line using the exact same
+`renderBracketRounds()` helper the tournament's own top-level bracket
+uses below -- same headings, same "Go to game"/"View game" buttons,
+just scoped to that one pod's own seats and matches. The final pod
+(`pod.kind === 'final'`, formed once every regular pod has its own
+winner) is labeled "Finals" instead of "Pod N", since by then there's
+only ever the one. The tournament's own top-level `rounds`/
+`matches_by_round` (below) are simply empty for this option -- every
+round belongs to some pod's own bracket, never to a shared top-level
+one, so there's nothing left for that section to show.
+
 **Tournament view dialog** (`#tournament-view-dialog`) shows the
 tournament's name/status, a Start button (creator only, still in
 `registration`, at least `min_participants` joined -- calls
 `startTournament()`) and a Cancel button (creator only, not yet
-`completed`/`cancelled` -- `cancelTournament()`), Booster Draft's own
-drafting-progress/pool/deck sections above, a standings list for a
+`completed`/`cancelled` -- `cancelTournament()`), Booster Draft's/Grid
+Draft Pod's own drafting-progress/pool/deck sections above, a standings list for a
 Swiss event once it's left `registration` (`GET /tournaments/state`'s
 own `standings`, ranked by win count already server-side), and the
 bracket itself: every round (`TOURNAMENT_BRACKET_LABELS` -- "Round" for
@@ -2066,10 +2169,12 @@ closes both this dialog and `#tournaments-dialog` before handing off to
 handoff. Refreshed by its own Refresh button rather than a poll -- a
 tournament only ever advances when one of its games finishes, not
 continuously, so there's nothing to gain from polling it open-ended
-while someone's just looking (Booster Draft's own pod-drafting phase is
-the one part of a tournament that genuinely needs live updates while
-open, which is why `#pod-draft-dialog` polls on its own rather than
-piggybacking on this dialog's Refresh button).
+while someone's just looking (a pod's own drafting phase, for either
+Booster Draft or Grid Draft Pod, is the one part of a tournament that
+genuinely needs live updates while open, which is why `#pod-draft-dialog`
+and, for Grid Draft Pod, `showBoard()`'s own existing poll each handle
+that on their own rather than piggybacking on this dialog's Refresh
+button).
 
 - `index.html` (`/`) — Login form. If the visitor already has an active
   session (checked via `GET /app/me`), they're redirected straight to

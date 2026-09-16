@@ -52,6 +52,9 @@ final class TournamentService implements TournamentMatchObserver
     /** How many cards a Booster Draft deck must have at minimum -- see submitCustomDuelDeck()'s own pool-membership check. */
     public const BOOSTER_DRAFT_MIN_DECK_SIZE = 12;
 
+    /** How many cards a Grid Draft "Pod draft (once)" deck must have at minimum -- see submitCustomDuelDeck()'s own pool-membership check. Same floor as Booster Draft's, coincidentally -- GameService's own GRID_DRAFT_MIN_DECK_SIZE ordinary Grid Draft games use -- but a dedicated constant since the two are conceptually independent. */
+    public const GRID_DRAFT_POD_MIN_DECK_SIZE = 12;
+
     public function __construct(
         private readonly TournamentRepository $tournaments,
         private readonly TournamentParticipantRepository $participants,
@@ -63,6 +66,7 @@ final class TournamentService implements TournamentMatchObserver
         private readonly TournamentPodRepository $pods,
         private readonly BoosterPackBuilder $boosterPackBuilder,
         private readonly BoosterDraftPodBuilder $podBuilder,
+        private readonly GridDraftPodBuilder $gridDraftPodBuilder,
     ) {
     }
 
@@ -140,10 +144,17 @@ final class TournamentService implements TournamentMatchObserver
             $matchParams['deck_type'] = 'custom_duel';
             $matchParams['duel_deck_rules'] = ['preset' => 'power'];
         }
+        // Grid Draft's third option (issue #91 follow-up, migration
+        // 0337): every pod's own bracket, and the final pod's own
+        // bracket that decides the champion, are always single
+        // elimination regardless of whatever bracket_type was actually
+        // chosen -- see startPodBracket()'s own docblock for why. Forced
+        // here (rather than left as whatever the creator picked) so the
+        // stored value matches what the tournament will actually do.
+        if ($format === 'draft' && ($matchParams['deck_type'] ?? null) === 'grid_draft_pod_playoff') {
+            $bracketType = 'single_elimination';
+        }
         if ($registrationMode === 'open') {
-            if ($maxParticipants === null) {
-                throw new TournamentStateException('An open-registration tournament needs a maximum participant count');
-            }
             // Same discoverability gate MatchmakingService::postOpenGame()
             // already requires of an open-lobby listing's own creator --
             // without it, listOpenFor()'s own matchmaking_discoverable
@@ -154,13 +165,23 @@ final class TournamentService implements TournamentMatchObserver
                 throw new TournamentStateException('You must enable "Discoverable for open games" in Settings before creating an open-registration tournament.');
             }
         }
-        if ($minParticipants < 2) {
-            throw new TournamentStateException('A tournament needs at least 2 participants');
+        // Every tournament, regardless of registration mode or format,
+        // is now capped to 4-16 joined participants (for now -- may be
+        // relaxed later): the New Tournament dialog's min/max fields are
+        // both required <select> lists of 4-16 rather than free-entry
+        // numbers, so this is the actual server-side contract rather
+        // than merely the frontend's own range. This also keeps Grid
+        // Draft's "Pods with playoffs" option's own math simple: pods of
+        // <=4 (GridDraftPodBuilder) means at most 4 pods for any allowed
+        // participant count, so the final pod (one winner per pod) never
+        // exceeds Grid Draft's own 4-drafter cap either.
+        if ($minParticipants < 4 || $minParticipants > 16) {
+            throw new TournamentStateException('min_participants must be between 4 and 16');
         }
-        if ($bracketType === 'double_elimination' && $minParticipants < 4) {
-            $minParticipants = 4;
+        if ($maxParticipants === null || $maxParticipants < 4 || $maxParticipants > 16) {
+            throw new TournamentStateException('max_participants must be between 4 and 16');
         }
-        if ($maxParticipants !== null && $maxParticipants < $minParticipants) {
+        if ($maxParticipants < $minParticipants) {
             throw new TournamentStateException('max_participants cannot be less than min_participants');
         }
 
@@ -314,6 +335,13 @@ final class TournamentService implements TournamentMatchObserver
             return;
         }
 
+        if ($this->isGridDraftPod($tournament) || $this->isGridDraftPodPlayoff($tournament)) {
+            $this->tournaments->markDrafting($tournamentId);
+            $this->startGridDraftPods($tournamentId, array_values($seedToParticipantId), $tournament);
+
+            return;
+        }
+
         $this->tournaments->markStarted($tournamentId);
         $this->materializeBracket($tournament, $seedToParticipantId);
     }
@@ -321,6 +349,17 @@ final class TournamentService implements TournamentMatchObserver
     private function isBoosterDraft(array $tournament): bool
     {
         return (string) ($tournament['match_params']['deck_type'] ?? '') === 'booster_draft';
+    }
+
+    private function isGridDraftPod(array $tournament): bool
+    {
+        return (string) ($tournament['match_params']['deck_type'] ?? '') === 'grid_draft_pod';
+    }
+
+    /** Grid Draft's third option (issue #91 follow-up) -- see startPodBracket()'s own docblock. */
+    private function isGridDraftPodPlayoff(array $tournament): bool
+    {
+        return (string) ($tournament['match_params']['deck_type'] ?? '') === 'grid_draft_pod_playoff';
     }
 
     private function materializeBracket(array $tournament, array $seedToParticipantId): void
@@ -368,6 +407,69 @@ final class TournamentService implements TournamentMatchObserver
                 $this->pods->createBooster($podId, $podParticipantId, 'right', $this->boosterPackBuilder->buildBooster($cardIdsByRarity));
             }
             $offset += $podSize;
+        }
+    }
+
+    /**
+     * Grid Draft's "Pod draft (once)" AND "Pods with playoffs" tournament
+     * options (issue #91 follow-up) share this exact same pod-forming
+     * step: splits $participantIds into pods of <=4
+     * (GridDraftPodBuilder::podSizes(), as even as possible -- Grid
+     * Draft's own drafting mechanic only supports up to 4 simultaneous
+     * drafters at all), assigns each a random seat_order within its own
+     * pod (same "nothing about seeding should predict who drafts with
+     * whom" rationale startBoosterDraftPods() already follows), and
+     * creates one ordinary Grid Draft game per pod (kind left at its own
+     * 'regular' default either way), seating exactly that pod's own
+     * members -- GameService::createGame() itself deals the grid
+     * immediately (Grid Draft's own drafting phase begins as part of
+     * game creation, not a later startGame() call), so there's nothing
+     * further to do here. The tournament sits in 'drafting' status until
+     * every pod's own game has every seat's deck submitted (see
+     * GameService::submitDraftDeck()'s own onDraftDeckSubmitted() hook,
+     * and this class's own implementation of it below) -- what happens
+     * next is the one place the two options actually diverge: "Pod draft
+     * (once)" materializes the real bracket/Swiss round 1 once every pod
+     * is done, mixing players across pods freely, while "Pods with
+     * playoffs" instead starts THIS pod's own bracket immediately
+     * (startPodBracket()), independent of every other pod's own
+     * progress.
+     *
+     * @param int[] $participantIds tournament_participants ids
+     */
+    private function startGridDraftPods(int $tournamentId, array $participantIds, array $tournament): void
+    {
+        $poolSource = (string) ($tournament['match_params']['grid_draft_pool_source'] ?? 'random_48');
+
+        shuffle($participantIds);
+        $podSizes = $this->gridDraftPodBuilder->podSizes(count($participantIds));
+
+        $offset = 0;
+        foreach ($podSizes as $podIndex => $podSize) {
+            $podParticipantIds = array_slice($participantIds, $offset, $podSize);
+            $offset += $podSize;
+
+            $userIds = [];
+            foreach ($podParticipantIds as $participantId) {
+                $userIds[] = (int) $this->participants->find($participantId)['user_id'];
+            }
+
+            try {
+                $gameId = $this->games->createGame(
+                    createdByUserId: $userIds[0],
+                    userIds: $userIds,
+                    format: 'draft',
+                    deckType: 'grid_draft',
+                    gridDraftPoolSource: $poolSource,
+                );
+            } catch (GameStateException $e) {
+                throw new TournamentStateException("Couldn't start a Grid Draft pod: {$e->getMessage()}", previous: $e);
+            }
+
+            $podId = $this->pods->createPod($tournamentId, $podIndex + 1, $gameId);
+            foreach ($podParticipantIds as $seat => $participantId) {
+                $this->pods->addParticipant($podId, $participantId, $seat);
+            }
         }
     }
 
@@ -524,10 +626,21 @@ final class TournamentService implements TournamentMatchObserver
         $this->materializeBracket($tournament, $seedToParticipantId);
     }
 
-    private function materializeEliminationBracket(array $tournament, array $seedToParticipantId): void
+    /**
+     * $podId ties every round this materializes to one Grid Draft "Pods
+     * with playoffs" pod's own bracket (see startPodBracket()'s own
+     * docblock) -- null (the default) for a tournament's own single
+     * shared bracket. A pod's own bracket is always single elimination
+     * regardless of $tournament['bracket_type'] (forced here, not just
+     * at creation time, since createTournament() only forces the STORED
+     * value to match -- this is what actually decides which
+     * TournamentBracketBuilder method runs).
+     */
+    private function materializeEliminationBracket(array $tournament, array $seedToParticipantId, ?int $podId = null): void
     {
         $tournamentId = (int) $tournament['id'];
-        $plan = $tournament['bracket_type'] === 'double_elimination'
+        $bracketType = $podId !== null ? 'single_elimination' : $tournament['bracket_type'];
+        $plan = $bracketType === 'double_elimination'
             ? $this->bracketBuilder->buildDoubleElimination(count($seedToParticipantId))
             : $this->bracketBuilder->buildSingleElimination(count($seedToParticipantId));
 
@@ -538,7 +651,7 @@ final class TournamentService implements TournamentMatchObserver
         $matchIdByCoordinate = [];
         $matchRowById = [];
         foreach ($plan['rounds'] as $round) {
-            $roundId = $this->matches->createRound($tournamentId, $round['bracket'], $round['round_number']);
+            $roundId = $this->matches->createRound($tournamentId, $round['bracket'], $round['round_number'], $podId);
             foreach ($round['matches'] as $match) {
                 $participant1Id = $round['round_number'] === 1 && $match['seed1'] !== null ? $seedToParticipantId[$match['seed1']] : null;
                 $participant2Id = $round['round_number'] === 1 && $match['seed2'] !== null ? $seedToParticipantId[$match['seed2']] : null;
@@ -634,6 +747,15 @@ final class TournamentService implements TournamentMatchObserver
         $format = (string) ($params['format'] ?? 'standard');
         $deckType = (string) ($params['deck_type'] ?? 'structure');
         $isBoosterDraft = $deckType === 'booster_draft';
+        $isGridDraftPod = $deckType === 'grid_draft_pod';
+        $isGridDraftPodPlayoff = $deckType === 'grid_draft_pod_playoff';
+        // Booster Draft, Grid Draft's own "Pod draft (once)" option, AND
+        // Grid Draft's own "Pods with playoffs" option (every one of a
+        // pod's own bracket matches, not just the finals') all play
+        // their real matches as ordinary 'custom_duel' games restricted
+        // to each side's own tournament-drafted pool -- see the
+        // $duelDeckRules/$perSeatAllowedCardIds docblock just below.
+        $isPodDraft = $isBoosterDraft || $isGridDraftPod || $isGridDraftPodPlayoff;
         // See createTournament()'s own docblock -- Traditional's fixed,
         // once-per-tournament Structure deck (structure_deck_card_ids),
         // generated there rather than left for GameService to build a
@@ -641,8 +763,9 @@ final class TournamentService implements TournamentMatchObserver
         // non-tournament Traditional game still does.
         $isFixedStructureDeck = $deckType === 'structure' && isset($params['structure_deck_card_ids']);
 
-        // Booster Draft's own match_params.deck_type is a tournament-only
-        // sentinel -- GameService has no idea what it means (there's no
+        // Booster Draft's and Grid Draft's own "Pod draft (once)" option
+        // are both tournament-only match_params.deck_type sentinels --
+        // GameService has no idea what either means (there's no
         // algorithmic way to build "a subset of this specific player's
         // own drafted pool" from a bare deck_type string the way
         // structure/power/etc. do). Every actual match instead plays as
@@ -651,10 +774,12 @@ final class TournamentService implements TournamentMatchObserver
         // via $perSeatAllowedCardIds -- see GameService::createGame()'s
         // own docblock for that param, and submitCustomDuelDeck()'s own
         // pool-membership check.
-        $duelDeckRules = $isBoosterDraft
-            ? ['preset' => 'user_defined', 'min_cards' => self::BOOSTER_DRAFT_MIN_DECK_SIZE]
-            : ($params['duel_deck_rules'] ?? null);
-        $perSeatAllowedCardIds = $isBoosterDraft
+        $duelDeckRules = match (true) {
+            $isBoosterDraft => ['preset' => 'user_defined', 'min_cards' => self::BOOSTER_DRAFT_MIN_DECK_SIZE],
+            $isGridDraftPod || $isGridDraftPodPlayoff => ['preset' => 'user_defined', 'min_cards' => self::GRID_DRAFT_POD_MIN_DECK_SIZE],
+            default => $params['duel_deck_rules'] ?? null,
+        };
+        $perSeatAllowedCardIds = $isPodDraft
             ? [$user1Id => $participant1['draft_pool_card_ids'], $user2Id => $participant2['draft_pool_card_ids']]
             : null;
 
@@ -662,9 +787,9 @@ final class TournamentService implements TournamentMatchObserver
             $gameId = $this->games->createGame(
                 createdByUserId: $user1Id,
                 userIds: [$user1Id, $user2Id],
-                format: $isBoosterDraft ? 'duel' : $format,
+                format: $isPodDraft ? 'duel' : $format,
                 winsNeeded: (int) ($params['wins_needed'] ?? 3),
-                deckType: $isBoosterDraft ? 'custom_duel' : ($isFixedStructureDeck ? 'custom' : $deckType),
+                deckType: $isPodDraft ? 'custom_duel' : ($isFixedStructureDeck ? 'custom' : $deckType),
                 decklistText: $params['decklist_text'] ?? null,
                 duelDeckRules: $duelDeckRules,
                 quickDraftPoolSource: $params['quick_draft_pool_source'] ?? null,
@@ -759,6 +884,190 @@ final class TournamentService implements TournamentMatchObserver
         $this->participants->setCurrentDeckCardIds((int) $participant['id'], $cardIds);
     }
 
+    /**
+     * Grid Draft's own "Pod draft (once)" AND "Pods with playoffs"
+     * tournament options (issue #91 follow-up) -- see the interface's
+     * own docblock for when GameService actually calls this. A no-op for
+     * any draft match that isn't a Grid Draft pod's own backing game at
+     * all (findPodByGameId() returns null for an ordinary ad hoc drafted
+     * game), and for one whose pod already finished drafting (idempotent
+     * against $everyoneSubmitted staying true on a later resubmission,
+     * or two submissions racing -- whichever request's own query sees
+     * the pod already past 'drafting' simply does nothing). Once every
+     * seat's deck is in: copies each seat's own final drafted_card_ids
+     * into tournament_participants.draft_pool_card_ids (the exact same
+     * field Booster Draft's own pod-completion uses -- overwriting
+     * whatever this participant's own pod-stage pool held before is
+     * exactly right for the FINAL pod of a "Pods with playoffs"
+     * tournament, since by the time the finals even start every one of
+     * their own earlier pod-stage matches has already resolved) and
+     * abandons the now-superfluous backing game (it only ever existed to
+     * run the shared drafting UI -- see GameService::abandonDraftGame()'s
+     * own docblock for why it's never actually played).
+     *
+     * What happens next is the one place the two options diverge: "Pod
+     * draft (once)" marks the pod 'completed' outright and checks
+     * whether every pod for this tournament is now done
+     * (maybeFinishDrafting()) to materialize the one shared bracket;
+     * "Pods with playoffs" has no shared bracket at all -- THIS pod
+     * (regular or final, doesn't matter) instead starts playing its own
+     * (startPodBracket()), entirely independent of every other pod's own
+     * progress.
+     */
+    public function onDraftDeckSubmitted(int $gameId, int $draftMatchId, bool $everyoneSubmitted): void
+    {
+        if (!$everyoneSubmitted) {
+            return;
+        }
+
+        $pod = $this->pods->findPodByGameId($gameId);
+        if ($pod === null || $pod['status'] !== 'drafting') {
+            return;
+        }
+
+        $draftedCardIdsByUserId = $this->games->draftedCardIdsByUserForDraftMatch($draftMatchId);
+        $podParticipants = $this->pods->listPodParticipants((int) $pod['id']);
+        foreach ($podParticipants as $podParticipant) {
+            $participant = $this->participants->find((int) $podParticipant['participant_id']);
+            $userId = (int) $participant['user_id'];
+            $this->participants->setDraftPoolCardIds((int) $podParticipant['participant_id'], $draftedCardIdsByUserId[$userId] ?? []);
+        }
+        $this->games->abandonDraftGame($gameId);
+
+        $tournament = $this->requireTournament((int) $pod['tournament_id']);
+        if ($this->isGridDraftPodPlayoff($tournament)) {
+            $this->startPodBracket($tournament, $pod, $podParticipants);
+
+            return;
+        }
+
+        $this->pods->markCompleted((int) $pod['id']);
+        $this->maybeFinishDrafting((int) $pod['tournament_id']);
+    }
+
+    /**
+     * Grid Draft's "Pods with playoffs" tournament option (issue #91
+     * follow-up): once a pod (regular or final -- both play out their
+     * own bracket identically) finishes drafting, its own seats play a
+     * single-elimination bracket among themselves, restricted to their
+     * own just-drafted pools exactly like "Pod draft (once)"'s own
+     * shared bracket restricts every match (see startMatchGame()'s own
+     * docblock -- $isGridDraftPodPlayoff there covers this too). Always
+     * single elimination regardless of the tournament's own bracket_type
+     * (createTournament() already forces the STORED value to match, but
+     * materializeEliminationBracket() is what actually enforces it) --
+     * pods only ever have 2-4 players, where double elimination/Swiss
+     * add real complexity for no benefit. Seeded independently of the
+     * top-level tournament seeding -- nothing about which pod someone
+     * landed in, or their seat within it, should predict their own
+     * pod's own bracket strength, same rationale every other random
+     * seeding in this class already follows.
+     */
+    private function startPodBracket(array $tournament, array $pod, array $podParticipants): void
+    {
+        $this->pods->markPlaying((int) $pod['id']);
+
+        $participantIds = array_map(static fn (array $pp): int => (int) $pp['participant_id'], $podParticipants);
+        shuffle($participantIds);
+        $seedToParticipantId = [];
+        foreach ($participantIds as $index => $participantId) {
+            $seedToParticipantId[$index + 1] = $participantId;
+        }
+
+        $this->materializeEliminationBracket($tournament, $seedToParticipantId, (int) $pod['id']);
+    }
+
+    /**
+     * Grid Draft's "Pods with playoffs" tournament option (issue #91
+     * follow-up): one pod's own bracket (regular or final) has just
+     * decided its own winner -- see resolveMatchResult()'s own "which
+     * bracket was this" branch for when this actually fires. The FINAL
+     * pod's own winner is the tournament champion outright, nothing left
+     * to decide. Otherwise this was one of the REGULAR pods formed at
+     * tournament start: once every one of them has its own winner,
+     * either that lone winner is the champion already (a tournament
+     * small enough to fit in a single pod never needed a finals stage at
+     * all) or every regular pod's own winner drafts together, once, in
+     * one new FINAL pod (startGridDraftPodPlayoffFinals()) whose own
+     * bracket -- always <=4 players, since a tournament is capped at 16
+     * participants / pods of <=4 -- decides the tournament outright.
+     */
+    private function onPodBracketFinished(int $tournamentId, int $podId, int $winnerParticipantId): void
+    {
+        $this->pods->recordWinner($podId, $winnerParticipantId);
+        $pod = $this->pods->findPod($podId);
+
+        if ($pod['kind'] === 'final') {
+            $this->finishTournament($tournamentId, $winnerParticipantId);
+
+            return;
+        }
+
+        $regularPods = array_values(array_filter(
+            $this->pods->listPodsForTournament($tournamentId),
+            static fn (array $p): bool => $p['kind'] === 'regular'
+        ));
+        foreach ($regularPods as $regularPod) {
+            if ($regularPod['status'] !== 'completed') {
+                return;
+            }
+        }
+
+        if (count($regularPods) === 1) {
+            $this->finishTournament($tournamentId, (int) $regularPods[0]['winner_participant_id']);
+
+            return;
+        }
+
+        $tournament = $this->requireTournament($tournamentId);
+        $finalistParticipantIds = array_map(static fn (array $p): int => (int) $p['winner_participant_id'], $regularPods);
+        $this->startGridDraftPodPlayoffFinals($tournamentId, $finalistParticipantIds, $tournament, count($regularPods) + 1);
+    }
+
+    /**
+     * Grid Draft's "Pods with playoffs" tournament option (issue #91
+     * follow-up): every regular pod's own winner drafts together, once,
+     * in a single new FINAL pod (kind: 'final') -- mirrors
+     * startGridDraftPods() almost exactly (one ordinary Grid Draft game,
+     * seating every named participant, drafting begins immediately as
+     * part of game creation), just seating a specific already-decided
+     * roster instead of splitting a fresh field into multiple pods,
+     * since there is only ever exactly one final pod. Once every one of
+     * these finalists submits their own deck, onDraftDeckSubmitted()
+     * starts this pod's own bracket (startPodBracket()) exactly like any
+     * other pod's -- onPodBracketFinished() is what actually recognizes
+     * kind: 'final' and ends the tournament there.
+     *
+     * @param int[] $finalistParticipantIds every regular pod's own winner
+     */
+    private function startGridDraftPodPlayoffFinals(int $tournamentId, array $finalistParticipantIds, array $tournament, int $podNumber): void
+    {
+        $poolSource = (string) ($tournament['match_params']['grid_draft_pool_source'] ?? 'random_48');
+
+        shuffle($finalistParticipantIds);
+        $userIds = [];
+        foreach ($finalistParticipantIds as $participantId) {
+            $userIds[] = (int) $this->participants->find($participantId)['user_id'];
+        }
+
+        try {
+            $gameId = $this->games->createGame(
+                createdByUserId: $userIds[0],
+                userIds: $userIds,
+                format: 'draft',
+                deckType: 'grid_draft',
+                gridDraftPoolSource: $poolSource,
+            );
+        } catch (GameStateException $e) {
+            throw new TournamentStateException("Couldn't start the Grid Draft pod playoff finals: {$e->getMessage()}", previous: $e);
+        }
+
+        $podId = $this->pods->createPod($tournamentId, $podNumber, $gameId, kind: 'final');
+        foreach ($finalistParticipantIds as $seat => $participantId) {
+            $this->pods->addParticipant($podId, $participantId, $seat);
+        }
+    }
+
     private function resolveMatchResult(int $tournamentId, array $tournamentMatch, int $winnerParticipantId, bool $isBye): void
     {
         $matchId = (int) $tournamentMatch['id'];
@@ -792,8 +1101,15 @@ final class TournamentService implements TournamentMatchObserver
             $this->advanceInto($tournamentId, (int) $tournamentMatch['winner_advances_to_match_id'], (int) $tournamentMatch['winner_advances_to_slot'], $winnerParticipantId);
         } elseif ($round['bracket'] === 'single') {
             // No further advance target and we're in the single
-            // (single-elimination) bracket -- this was the final.
-            $this->finishTournament($tournamentId, $winnerParticipantId);
+            // (single-elimination) bracket -- this was the final. For
+            // Grid Draft's "Pods with playoffs" (round['pod_id'] set --
+            // see startPodBracket()'s own docblock), that decides one
+            // pod's own winner, not necessarily the whole tournament's.
+            if ($round['pod_id'] !== null) {
+                $this->onPodBracketFinished($tournamentId, (int) $round['pod_id'], $winnerParticipantId);
+            } else {
+                $this->finishTournament($tournamentId, $winnerParticipantId);
+            }
         }
 
         if (!$isBye && $loserParticipantId !== null && $tournamentMatch['loser_advances_to_match_id'] !== null) {
@@ -1062,17 +1378,33 @@ final class TournamentService implements TournamentMatchObserver
             'standings' => $tournament['bracket_type'] === 'swiss' && $tournament['status'] !== 'registration'
                 ? $this->swissStandings($tournamentId)
                 : null,
-            'pods' => $this->isBoosterDraft($tournament) ? $this->podsSummary($tournamentId) : null,
+            'pods' => ($this->isBoosterDraft($tournament) || $this->isGridDraftPod($tournament) || $this->isGridDraftPodPlayoff($tournament)) ? $this->podsSummary($tournamentId) : null,
         ];
     }
 
-    /** @return array[] every pod's own status/round/seated participants, for the tournament view's "drafting" progress display. */
+    /**
+     * @return array[] every pod's own status/round/seated participants,
+     *     for the tournament view's "drafting" progress display. `game_id`
+     *     is Grid Draft's own "Pod draft (once)"/"Pods with playoffs"
+     *     pods' backing game (null for a Booster Draft pod, which has no
+     *     single backing game) -- the frontend uses it to route
+     *     "Continue drafting" to that ordinary game's own board rather
+     *     than Booster Draft's own dedicated pod-draft dialog. `kind`
+     *     ('regular'/'final') and `winner_username` are only ever
+     *     meaningful for "Pods with playoffs" (always 'regular' and null
+     *     respectively otherwise); `bracket_rounds` is that same option's
+     *     own per-pod bracket (see TournamentMatchRepository::listRoundsForPod()),
+     *     empty for every other pod -- the frontend renders it exactly
+     *     like the tournament's own top-level bracket, just scoped to
+     *     this pod's own seats.
+     */
     private function podsSummary(int $tournamentId): array
     {
         $summary = [];
         foreach ($this->pods->listPodsForTournament($tournamentId) as $pod) {
+            $podId = (int) $pod['id'];
             $seats = [];
-            foreach ($this->pods->listPodParticipants((int) $pod['id']) as $podParticipant) {
+            foreach ($this->pods->listPodParticipants($podId) as $podParticipant) {
                 $participant = $this->participants->find((int) $podParticipant['participant_id']);
                 $user = $this->users->findById((int) $participant['user_id']);
                 $seats[] = [
@@ -1081,11 +1413,32 @@ final class TournamentService implements TournamentMatchObserver
                     'seat_order' => (int) $podParticipant['seat_order'],
                 ];
             }
+
+            $bracketRounds = [];
+            foreach ($this->matches->listRoundsForPod($podId) as $round) {
+                $bracketRounds[] = [
+                    'id' => (int) $round['id'],
+                    'bracket' => $round['bracket'],
+                    'round_number' => (int) $round['round_number'],
+                    'matches' => $this->matches->listForRound((int) $round['id']),
+                ];
+            }
+
+            $winnerUsername = null;
+            if ($pod['winner_participant_id'] !== null) {
+                $winnerParticipant = $this->participants->find((int) $pod['winner_participant_id']);
+                $winnerUsername = $this->users->findById((int) $winnerParticipant['user_id'])['username'] ?? null;
+            }
+
             $summary[] = [
                 'pod_number' => (int) $pod['pod_number'],
+                'kind' => $pod['kind'],
                 'status' => $pod['status'],
                 'current_round' => (int) $pod['current_round'],
+                'game_id' => $pod['game_id'] !== null ? (int) $pod['game_id'] : null,
                 'seats' => $seats,
+                'bracket_rounds' => $bracketRounds,
+                'winner_username' => $winnerUsername,
             ];
         }
 

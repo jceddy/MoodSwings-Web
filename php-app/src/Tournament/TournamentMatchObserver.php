@@ -49,4 +49,25 @@ interface TournamentMatchObserver
      * @param int[] $cardIds
      */
     public function onCustomDuelDeckSubmitted(int $gameId, ?int $gameMatchId, int $gamePlayerId, int $userId, array $cardIds): void;
+
+    /**
+     * Grid Draft's own "Pod draft (once)" tournament option (issue #91
+     * follow-up): called by GameService::submitDraftDeck() every time it
+     * successfully stores a draft-family seat's own deck, once
+     * $everyoneSubmitted is true for the first time (every seat in this
+     * draft_match now has a deck_card_ids of their own) -- a harmless
+     * no-op for every draft match this doesn't apply to (an ordinary ad
+     * hoc drafted game, or one already resolved), via
+     * TournamentPodRepository::findPodByGameId() returning null.
+     * $everyoneSubmitted stays true on every later resubmission too
+     * (sideboarding, for a draft type that allows it) once it first goes
+     * true, so the pod-completion side (marking the pod 'completed',
+     * copying each seat's own drafted_card_ids into
+     * tournament_participants.draft_pool_card_ids, and abandoning this
+     * game via GameService::abandonDraftGame() -- see that method's own
+     * docblock for why it's never actually played) only ever needs to
+     * check the pod's own still-'drafting' status to stay idempotent
+     * against a second call.
+     */
+    public function onDraftDeckSubmitted(int $gameId, int $draftMatchId, bool $everyoneSubmitted): void;
 }

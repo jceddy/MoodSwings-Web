@@ -14,12 +14,13 @@ use MoodSwings\Database\Connection;
  */
 final class TournamentMatchRepository
 {
-    public function createRound(int $tournamentId, string $bracket, int $roundNumber): int
+    /** $podId ties this round to one Grid Draft "Pods with playoffs" pod's own bracket (see migration 0337's own docblock) -- null (the default) for every other tournament's own single shared bracket. */
+    public function createRound(int $tournamentId, string $bracket, int $roundNumber, ?int $podId = null): int
     {
         $stmt = Connection::get()->prepare(
-            'INSERT INTO tournament_rounds (tournament_id, bracket, round_number) VALUES (:tournament_id, :bracket, :round_number)'
+            'INSERT INTO tournament_rounds (tournament_id, pod_id, bracket, round_number) VALUES (:tournament_id, :pod_id, :bracket, :round_number)'
         );
-        $stmt->execute(['tournament_id' => $tournamentId, 'bracket' => $bracket, 'round_number' => $roundNumber]);
+        $stmt->execute(['tournament_id' => $tournamentId, 'pod_id' => $podId, 'bracket' => $bracket, 'round_number' => $roundNumber]);
 
         return (int) Connection::get()->lastInsertId();
     }
@@ -44,12 +45,24 @@ final class TournamentMatchRepository
         return $row === false ? null : $row;
     }
 
+    /** The tournament's own single shared bracket/Swiss rounds only -- excludes every Grid Draft "Pods with playoffs" pod's own bracket rounds (pod_id set), which podsSummary() surfaces separately via listRoundsForPod() instead. */
     public function listRounds(int $tournamentId): array
     {
         $stmt = Connection::get()->prepare(
-            'SELECT * FROM tournament_rounds WHERE tournament_id = :tournament_id ORDER BY bracket ASC, round_number ASC'
+            'SELECT * FROM tournament_rounds WHERE tournament_id = :tournament_id AND pod_id IS NULL ORDER BY bracket ASC, round_number ASC'
         );
         $stmt->execute(['tournament_id' => $tournamentId]);
+
+        return $stmt->fetchAll();
+    }
+
+    /** One Grid Draft "Pods with playoffs" pod's own bracket rounds, in play order -- see createRound()'s own docblock. */
+    public function listRoundsForPod(int $podId): array
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT * FROM tournament_rounds WHERE pod_id = :pod_id ORDER BY round_number ASC'
+        );
+        $stmt->execute(['pod_id' => $podId]);
 
         return $stmt->fetchAll();
     }

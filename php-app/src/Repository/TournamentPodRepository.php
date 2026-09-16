@@ -11,16 +11,33 @@ use MoodSwings\Database\Connection;
  * tournament_pod_boosters/tournament_pod_picks -- Booster Draft's own
  * pod-drafting phase (see BoosterDraftPodBuilder/BoosterPackBuilder for
  * the pure math this operates on, and TournamentService for the
- * orchestration).
+ * orchestration) -- and, via tournament_pods.game_id, Grid Draft's own
+ * "Pod draft (once)" option (see GridDraftPodBuilder), whose pods have
+ * no booster/pick rows of their own at all, just a single backing Grid
+ * Draft game (an ordinary `games`/`draft_matches` row, entirely
+ * GameService's own to manage) -- and Grid Draft's third "Pods with
+ * playoffs" option (grid_draft_pod_playoff), whose pods are formed and
+ * drafted the exact same way but each go on to play their OWN bracket
+ * (kind/winner_participant_id below) rather than feeding one bracket
+ * shared across every pod.
  */
 final class TournamentPodRepository
 {
-    public function createPod(int $tournamentId, int $podNumber): int
+    /**
+     * $gameId is Grid Draft pods' own backing game (see this class's own
+     * docblock) -- null for a Booster Draft pod, which has no single
+     * backing game. $kind is 'final' only for Grid Draft "Pods with
+     * playoffs" (grid_draft_pod_playoff) own single winners' pod (see
+     * TournamentService::startGridDraftPodPlayoffFinals()) -- 'regular'
+     * (the default) for every other pod, including every
+     * grid_draft_pod_playoff pod formed at tournament start.
+     */
+    public function createPod(int $tournamentId, int $podNumber, ?int $gameId = null, string $kind = 'regular'): int
     {
         $stmt = Connection::get()->prepare(
-            'INSERT INTO tournament_pods (tournament_id, pod_number) VALUES (:tournament_id, :pod_number)'
+            'INSERT INTO tournament_pods (tournament_id, pod_number, game_id, kind) VALUES (:tournament_id, :pod_number, :game_id, :kind)'
         );
-        $stmt->execute(['tournament_id' => $tournamentId, 'pod_number' => $podNumber]);
+        $stmt->execute(['tournament_id' => $tournamentId, 'pod_number' => $podNumber, 'game_id' => $gameId, 'kind' => $kind]);
 
         return (int) Connection::get()->lastInsertId();
     }
@@ -29,6 +46,16 @@ final class TournamentPodRepository
     {
         $stmt = Connection::get()->prepare('SELECT * FROM tournament_pods WHERE id = :id');
         $stmt->execute(['id' => $podId]);
+        $row = $stmt->fetch();
+
+        return $row === false ? null : $row;
+    }
+
+    /** The Grid Draft pod (see this class's own docblock) backed by $gameId, if any -- null for a game that isn't a tournament pod's own backing game at all. */
+    public function findPodByGameId(int $gameId): ?array
+    {
+        $stmt = Connection::get()->prepare('SELECT * FROM tournament_pods WHERE game_id = :game_id');
+        $stmt->execute(['game_id' => $gameId]);
         $row = $stmt->fetch();
 
         return $row === false ? null : $row;
@@ -57,6 +84,22 @@ final class TournamentPodRepository
         Connection::get()
             ->prepare("UPDATE tournament_pods SET status = 'completed', completed_at = NOW() WHERE id = :id")
             ->execute(['id' => $podId]);
+    }
+
+    /** Grid Draft "Pods with playoffs" only (issue #91 follow-up): drafting has finished and this pod's own bracket is now being played -- see TournamentService::startPodBracket(). */
+    public function markPlaying(int $podId): void
+    {
+        Connection::get()
+            ->prepare("UPDATE tournament_pods SET status = 'playing' WHERE id = :id")
+            ->execute(['id' => $podId]);
+    }
+
+    /** Grid Draft "Pods with playoffs" only: this pod's own bracket has resolved -- see TournamentService::onPodBracketFinished(). */
+    public function recordWinner(int $podId, int $winnerParticipantId): void
+    {
+        Connection::get()
+            ->prepare("UPDATE tournament_pods SET status = 'completed', completed_at = NOW(), winner_participant_id = :winner WHERE id = :id")
+            ->execute(['winner' => $winnerParticipantId, 'id' => $podId]);
     }
 
     public function addParticipant(int $podId, int $participantId, int $seatOrder): int

@@ -12488,6 +12488,61 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * Grid Draft's own "Pod draft (once)" tournament option (issue #91
+     * follow-up): abandonDraftGame() is TournamentService's own way of
+     * retiring a pod's backing game once every seat has submitted a deck
+     * -- see its own docblock for why it's never actually played.
+     */
+    public function testAbandonDraftGameMarksTheGameAbandonedAndTheDraftMatchCompletedWithNoWinner(): void
+    {
+        $fixture = $this->buildGridDraftFixture();
+        $this->driveGridDraftToDeckBuilding($fixture['gameId'], $fixture['u1'], $fixture['u2']);
+        $this->submitFullGridDraftDeck($fixture['gameId'], $fixture['u1']);
+        $this->submitFullGridDraftDeck($fixture['gameId'], $fixture['u2']);
+
+        $draftMatchId = (int) $this->fetchGame($fixture['gameId'])['draft_match_id'];
+
+        $this->games->abandonDraftGame($fixture['gameId']);
+
+        self::assertSame('abandoned', $this->fetchGame($fixture['gameId'])['status']);
+        $match = $this->fetchDraftMatch($draftMatchId);
+        self::assertSame('completed', $match['status']);
+        self::assertNull($match['winner_user_id']);
+    }
+
+    public function testAbandonDraftGameRejectsANonDraftGame(): void
+    {
+        $creator = $this->insertUser('abandon-nondraft-alice');
+        $bob = $this->insertUser('abandon-nondraft-bob');
+        $gameId = $this->games->createGame($creator, [$creator, $bob]);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('is not a draft game');
+        $this->games->abandonDraftGame($gameId);
+    }
+
+    /**
+     * Grid Draft's own "Pod draft (once)" tournament option (issue #91
+     * follow-up): draftedCardIdsByUserForDraftMatch() is
+     * TournamentService's own way of reading back each pod participant's
+     * own final drafted pool, to copy into
+     * tournament_participants.draft_pool_card_ids.
+     */
+    public function testDraftedCardIdsByUserForDraftMatchReturnsEachPlayersOwnDraftedPool(): void
+    {
+        $fixture = $this->buildGridDraftFixture();
+        $this->driveGridDraftToDeckBuilding($fixture['gameId'], $fixture['u1'], $fixture['u2']);
+
+        $draftMatchId = (int) $this->fetchGame($fixture['gameId'])['draft_match_id'];
+        $draftedCardIdsByUserId = $this->games->draftedCardIdsByUserForDraftMatch($draftMatchId);
+
+        self::assertEqualsCanonicalizing([$fixture['u1'], $fixture['u2']], array_keys($draftedCardIdsByUserId));
+        $u1State = $this->games->getState($fixture['gameId'], $fixture['u1']);
+        $expectedU1CardIds = array_column($u1State['grid_draft']['deck_building']['drafted_cards'], 'card_id');
+        self::assertEqualsCanonicalizing($expectedU1CardIds, $draftedCardIdsByUserId[$fixture['u1']]);
+    }
+
+    /**
      * @param int $playerCount
      * @return array{gameId:int, userIds:int[]}
      */

@@ -4911,6 +4911,21 @@ exactly the same reason -- team formats need a full known roster (a
 chosen partner) that has no natural meaning against a lone bracket
 opponent.
 
+Every tournament, regardless of format or registration mode, is capped
+to 4-16 joined participants for now (may be relaxed later --
+`TournamentService::createTournament()` rejects anything outside that
+range for either `min_participants` or `max_participants`, and
+`max_participants` is now always required, not just for
+`registration_mode: 'open'`). The New Tournament dialog's own min/max
+fields are `<select>` lists of 4-16 rather than free-entry numbers,
+since nothing outside that range is ever accepted anyway -- see "New
+Tournament dialog" in `web-static/README.md`. This also keeps Grid
+Draft's "Pods with playoffs" option's own math simple: pods of <=4
+(`GridDraftPodBuilder`) means at most 4 pods for any allowed participant
+count, so its own final pod (one winner per regular pod) never exceeds
+Grid Draft's own 4-drafter cap either -- see "Grid Draft \"Pods with
+playoffs\"" below.
+
 **Schema** (migration 0334) -- `tournaments` (`bracket_type`,
 `registration_mode`, `match_params` JSON -- the exact same
 `createGame()`-argument shape `open_game_listings.create_game_params`
@@ -5216,6 +5231,193 @@ ahead of playing an opponent -- then hydrates the viewer's own copy of
 each via `CardCatalog::serialize()`. See "Booster Draft" in
 `web-static/README.md` for the pod-drafting board and the tournament
 view's own pool/deck display built on top of these.
+
+### Grid Draft "Pod draft (once)" (issue #91 follow-up)
+
+A Grid Draft tournament's New Tournament dialog offers a second choice
+alongside deck_type `grid_draft` itself ("Fresh draft each match" --
+unchanged, every bracket match is its own independent 2-player Grid
+Draft game): `match_params.deck_type` `'grid_draft_pod'` (migration
+0336), "Pod draft (once)" -- every joined participant drafts a personal
+pool once, up front, sharing a single Grid Draft game with a handful of
+other participants, then plays the tournament's ordinary bracket/Swiss
+using a deck built from that pool every round. It mirrors Booster
+Draft's own structure above almost exactly -- pods drafted before the
+bracket materializes, matches played from a fixed personal pool -- but
+deliberately reuses Grid Draft's own EXISTING drafting engine as each
+pod's "backing game" rather than building bespoke pod/pick tables the
+way Booster Draft's own `BoosterPackBuilder`/`tournament_pod_boosters`/
+`tournament_pod_picks` do. `grid_draft_pod` is, like `booster_draft`, a
+tournament-only sentinel `startMatchGame()` translates away before ever
+calling `GameService::createGame()` for a real match -- see below.
+
+**Pods** (`GridDraftPodBuilder::podSizes()`, pure -- same algorithm as
+`BoosterDraftPodBuilder::podSizes()`, just a lower cap) -- up to 4
+participants draft together in a pod, since Grid Draft's own drafting
+mechanic only ever supports up to 4 simultaneous drafters at all (a 3x3
+grid for 2-3 players, 4x4 for exactly 4 -- see
+`GameService::gridDraftRounds()`); a tournament with more than 4 joined
+participants splits into multiple pods, sized as evenly as possible,
+same "differing by at most 1" convention Booster Draft's own pods
+follow.
+
+**The backing game** -- `startGridDraftPods()` creates one ordinary
+`format: 'draft'`, `deck_type: 'grid_draft'` game per pod via the
+regular `GameService::createGame()`, seating exactly that pod's own
+members and carrying the tournament's own `grid_draft_pool_source`
+choice. Nothing further is needed to start it: unlike `custom_duel`/
+Booster-Draft-style games, Grid Draft's own `createGame()` already
+begins drafting as part of game creation (`initializeGridDraft()`), so
+`games.status` stays `'waiting'` for the whole drafting+deck-building
+phase and there's no separate `startGame()` call to make here. Players
+draft and build a deck through the exact same board/UI as any other
+Grid Draft game -- nothing about the pod's own drafting experience is
+special-cased at all.
+
+**Finishing a pod** -- a pod's backing game is never actually played
+out. `GameService::submitDraftDeck()` reports every deck submission,
+for any drafted deck_type, to `TournamentMatchObserver::onDraftDeckSubmitted()`
+(`$everyoneSubmitted` says whether this submission was the pod's last)
+-- harmlessly a no-op for an ordinary ad hoc drafted game, since
+`TournamentPodRepository::findPodByGameId()` returns null for it.
+`TournamentService::onDraftDeckSubmitted()`, once every seat's deck is
+in, copies each seat's own final `drafted_card_ids`
+(`GameService::draftedCardIdsByUserForDraftMatch()`) into
+`tournament_participants.draft_pool_card_ids` (the exact same column
+Booster Draft's own pod-completion uses), marks the pod `'completed'`,
+and retires the now-superfluous backing game via the new
+`GameService::abandonDraftGame()` (the same `draft_matches.status =
+'completed'` / `games.status = 'abandoned'` mechanism already used for
+mid-draft resignations and Winston Draft's too-short finish, just
+invoked directly rather than via a player leaving) -- then checks
+whether every pod for this tournament is now done
+(`maybeFinishDrafting()`), materializing the real bracket/Swiss round 1
+the moment it is, exactly like Booster Draft's own pod completion does.
+
+**Schema** (migration 0336) -- `tournament_pods` gains `game_id`
+(nullable, `FOREIGN KEY ... ON DELETE SET NULL` against `games.id`):
+the pod's own backing Grid Draft game, null for a Booster Draft
+tournament's own pods (which have no single backing game of their own).
+No other new tables -- a Grid Draft pod's drafting state lives entirely
+in that backing game's own existing `draft_matches`/`games` rows, not
+in anything tournament-specific.
+
+**Playing the bracket** -- exactly Booster Draft's own approach:
+`startMatchGame()` never passes `'grid_draft_pod'` to
+`GameService::createGame()` itself; every actual match instead plays as
+an ordinary `format: 'duel'`, `deck_type: 'custom_duel'` game
+(`duel_deck_rules: {preset: 'user_defined', min_cards:
+TournamentService::GRID_DRAFT_POD_MIN_DECK_SIZE}`, currently the same
+floor as Booster Draft's own `BOOSTER_DRAFT_MIN_DECK_SIZE` -- a
+dedicated constant since the two are conceptually independent),
+restricted per seat to that participant's own drafted pool via the same
+`perSeatAllowedCardIds` mechanism (`$isPodDraft = $isBoosterDraft ||
+$isGridDraftPod || $isGridDraftPodPlayoff` picks between the three
+`duel_deck_rules` shapes above and shares everything else --
+`custom_deck_allowed_card_ids`, `assertWithinAllowedCardPool()`'s
+multiset-subset check, `onCustomDuelDeckSubmitted()`'s
+`current_deck_card_ids` carry-forward across every subsequent match --
+unchanged from Booster Draft's own description above).
+
+**API** -- no new endpoints: a Grid Draft pod's drafting happens through
+the ordinary Grid Draft game endpoints (`GET`/`POST` under
+`/games/{id}`) using its `game_id` from `GET /tournaments/state`'s own
+`pods` summary, rather than through Booster Draft's own dedicated
+`/tournaments/pod-draft/*` endpoints. See "Grid Draft (Pod)" in
+`web-static/README.md` for how the tournament view routes "Continue
+drafting" to that game's own board.
+
+### Grid Draft "Pods with playoffs" (issue #91 follow-up)
+
+Grid Draft's third tournament option, `match_params.deck_type`
+`'grid_draft_pod_playoff'` (migration 0337): pods are formed and drafted
+exactly like "Pod draft (once)" above (same `GridDraftPodBuilder` pod
+sizing, same backing Grid Draft game per pod), but instead of feeding
+one bracket shared across every pod, **each pod plays its own
+single-elimination bracket to completion**, and the winner of every one
+of those pods then drafts again, together, in one final pod, whose own
+single-elimination bracket decides the tournament champion outright. A
+tournament small enough to fit in a single pod (4 participants or fewer)
+skips the second draft/bracket entirely -- that lone pod's own winner
+already is the champion, nothing left to decide.
+
+Every pod's own bracket, and the final pod's own bracket, are **always
+single elimination**, regardless of whatever `bracket_type` the
+tournament itself was created with (never consulted for this deck_type
+at all -- `createTournament()` forces the stored value to match so it's
+never misleading, and `materializeEliminationBracket()`'s own `$podId`
+parameter is what actually enforces it). Pods only ever have 2-4
+players, where double elimination's losers-bracket machinery or Swiss's
+standings-based pairing would add real complexity for no benefit.
+
+**Schema** (migration 0337) -- `tournament_rounds` gains `pod_id`
+(nullable, `FOREIGN KEY ... ON DELETE CASCADE` against `tournament_pods.id`),
+so that e.g. pod 1's own "single" round 1 and pod 2's own "single" round
+1 can coexist for the same tournament without colliding (the unique key
+becomes `(tournament_id, pod_id, bracket, round_number)`) -- `NULL` for
+every other tournament's own single shared bracket, including "Pod draft
+(once)"'s own (which has no bracket of its own at all; every match plays
+through the tournament's ordinary top-level bracket instead).
+`tournament_pods.status` gains a `'playing'` value, sitting between
+`'drafting'` and `'completed'` for this option only (a `grid_draft_pod`/
+`booster_draft` pod still goes straight from `'drafting'` to
+`'completed'`, no bracket of its own to play); `tournament_pods` also
+gains `kind` (`'regular'`/`'final'` -- always `'regular'` for the other
+two draft-family options) and `winner_participant_id` (that pod's own
+bracket champion, set the moment its bracket resolves). The migration
+also loosens `tournament_pod_participants`' own unique key from
+`participant_id` alone to `(pod_id, participant_id)` -- this is the one
+tournament option where a single participant legitimately seats in TWO
+pods over the course of the event (their own regular pod, and the final
+pod if they win it), which Booster Draft/"Pod draft (once)" never do.
+
+**Orchestration** (`TournamentService`) -- `startTournament()` forms
+regular pods exactly the same way "Pod draft (once)" does
+(`startGridDraftPods()`, shared by both options, pods left at their own
+`kind: 'regular'` default). Once a pod's own backing game has every
+seat's deck submitted, `onDraftDeckSubmitted()` branches on the
+tournament's own deck_type: "Pod draft (once)" marks the pod
+`'completed'` outright and checks whether the whole tournament is done
+drafting; "Pods with playoffs" instead calls `startPodBracket()` --
+marks the pod `'playing'` and materializes ITS OWN single-elimination
+bracket (`materializeEliminationBracket()`'s own `$podId` argument,
+seeded independently of the top-level tournament seeding, same "nothing
+about draw order should predict bracket strength" rationale every other
+random seeding in this class follows) from just that pod's own seated
+participants. A pod's own bracket match plays exactly like "Pod draft
+(once)"'s own bracket matches do -- an ordinary `custom_duel` game
+restricted to each side's own (pod-scoped) drafted pool.
+
+When a pod's own bracket resolves its final match,
+`resolveMatchResult()`'s own "no further advance target, single
+elimination" branch checks `round['pod_id']`: non-null means this was a
+POD's own bracket finishing, not the whole tournament, so it calls
+`onPodBracketFinished()` instead of `finishTournament()`. That method
+records the pod's own winner (`TournamentPodRepository::recordWinner()`
+-- `status: 'completed'`, `winner_participant_id` set) and, if this was
+the FINAL pod, the tournament is over outright. Otherwise it checks
+whether every REGULAR pod now has its own winner; if only one regular
+pod ever existed, that pod's own winner is the champion already (no
+finals needed); otherwise `startGridDraftPodPlayoffFinals()` forms one
+new pod (`kind: 'final'`, always <=4 players by construction -- see this
+section's own opening paragraph) seating every regular pod's own winner,
+mirroring `startGridDraftPods()` almost exactly except it seats an
+already-decided roster instead of splitting a fresh field into multiple
+pods. That pod's own drafting/bracket then follows the exact same path
+as any other pod, converging back on `onPodBracketFinished()` once more
+-- this time recognizing `kind: 'final'` and ending the tournament.
+
+**API** -- no new endpoints, same as "Pod draft (once)" above:
+`GET /tournaments/state`'s own `pods` summary now also carries `kind`,
+`winner_username`, and (for this option only) `bracket_rounds` -- each
+pod's own mini bracket, in the exact same `{bracket, round_number,
+matches}` shape the tournament's own top-level `rounds`/
+`matches_by_round` already use, just pre-joined onto the pod itself
+rather than returned as a separate flat list (the top-level `rounds`
+field is simply empty for this option, since every round belongs to
+some pod's own `pod_id` and never to the tournament's own bracket
+directly). See "Grid Draft (Pod Playoffs)" in `web-static/README.md`
+for how the tournament view renders each pod's own bracket inline.
 
 ### Power Duel sideboarding
 
