@@ -3432,6 +3432,12 @@
             checkbox.checked = false;
         }
         document.getElementById('new-game-synchronous-description').hidden = !show || !checkbox.checked;
+        // TEMPORARY cross-promo (see its own comment in index.html) -- tied
+        // purely to the feature flag, not the format/player-count checks
+        // above, since the point is "this site can't do it yet at all",
+        // not "not for this particular format". Remove alongside the
+        // promo markup itself once the flag is gone.
+        document.getElementById('new-game-synchronous-promo').hidden = synchronousModeEnabled;
     }
 
     // Synchronous mode is mutually exclusive with the idle time-out/
