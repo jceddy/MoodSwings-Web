@@ -179,6 +179,28 @@ final class TournamentMatchRepository
             ->execute(['participant_id' => $participantId, 'id' => $matchId]);
     }
 
+    /**
+     * How many other matches' winner_advances_to_match_id/
+     * loser_advances_to_match_id ever point at $matchId -- 2 for an
+     * ordinary match awaiting both slots, 1 for a double-elimination
+     * losers-bracket slot that will only ever receive a single
+     * participant (a "future bye": its other structural input was a
+     * winners-bracket bye producing no loser to send at all -- see
+     * TournamentBracketBuilder::buildDoubleElimination()'s own
+     * docblock). Every round-1 match (participants assigned directly,
+     * never via an edge) has none pointing at it, so this is only ever
+     * consulted for round 2+.
+     */
+    public function countInboundAdvances(int $matchId): int
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT COUNT(*) FROM tournament_matches WHERE winner_advances_to_match_id = :id OR loser_advances_to_match_id = :id2'
+        );
+        $stmt->execute(['id' => $matchId, 'id2' => $matchId]);
+
+        return (int) $stmt->fetchColumn();
+    }
+
     public function markGameCreated(int $matchId, int $gameId, ?int $gameMatchId, ?int $draftMatchId): void
     {
         $stmt = Connection::get()->prepare(

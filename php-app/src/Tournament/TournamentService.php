@@ -26,14 +26,18 @@ use MoodSwings\Repository\UserRepository;
  * formats need a full known roster (a chosen partner) that has no
  * natural meaning against a lone bracket opponent.
  *
- * Double elimination is further scoped to an exact power-of-two
- * participant count at start time (4, 8, 16, ...). A non-power-of-two
- * field needs byes in BOTH the winners and losers bracket, and a
- * winners-bracket bye produces no loser to drop down at all -- which
- * bracket slot that "phantom" loser would have occupied can itself end
- * up needing a bye, cascading arbitrarily deep for an unlucky field
- * size. Single elimination has no such problem (a bye's winner simply
- * advances, nothing else to resolve), so it accepts any count >= 2.
+ * Double elimination accepts any participant count >= 4, same as single
+ * elimination -- a non-power-of-two field needs byes in the LOSERS
+ * bracket too, not just the winners bracket (a winners-bracket bye
+ * produces no loser to drop down at all), which
+ * TournamentBracketBuilder::buildDoubleElimination() handles by
+ * computing, structurally, exactly how many real entrants (0, 1, or 2)
+ * reach every losers-bracket slot; see that method's own docblock for
+ * the exact recursion. A slot with only 1 real entrant is a genuine bye
+ * once that lone participant actually arrives (advanceInto() below
+ * resolves it the moment its one and only inbound edge fires, rather
+ * than waiting forever for a second slot that will never fill); a slot
+ * with 0 is never even created.
  */
 final class TournamentService implements TournamentMatchObserver
 {
@@ -243,9 +247,6 @@ final class TournamentService implements TournamentMatchObserver
         if ($count < (int) $tournament['min_participants']) {
             throw new TournamentStateException("This tournament needs at least {$tournament['min_participants']} joined participants to start (has {$count})");
         }
-        if ($tournament['bracket_type'] === 'double_elimination' && ($count & ($count - 1)) !== 0) {
-            throw new TournamentStateException("Double elimination currently requires an exact power-of-two participant count (4, 8, 16, ...) -- has {$count}");
-        }
 
         // Random seeding: nothing about registration/invite-accept order
         // should predict bracket strength.
@@ -313,11 +314,21 @@ final class TournamentService implements TournamentMatchObserver
             );
         }
 
-        // Phase 3: resolve round-1 byes (single elimination only ever
-        // creates these -- see this class's own docblock for why double
-        // elimination's exact-power-of-two requirement rules them out
-        // there) and create every round-1 game that already has both
-        // participants.
+        // Phase 3: resolve round-1 byes (winners-bracket round 1 for
+        // both single and double elimination -- the only round whose
+        // participants were assigned directly above rather than via an
+        // advance edge) and create every round-1 game that already has
+        // both participants. Iterated in $plan['rounds']' own insertion
+        // order (winners round 1 first), so by the time this loop
+        // reaches any losers-bracket match, every winners-bracket
+        // round-1 bye above it has already cascaded through
+        // resolveMatchResult()/advanceInto() and filled whatever losers
+        // slot it feeds -- a losers-bracket match's OWN entry in
+        // $matchRowById is deliberately left at its stale phase-1
+        // snapshot (participant1_id/participant2_id null, since losers
+        // matches never get seeds directly), so this loop correctly
+        // does nothing more for one that's already been resolved (or
+        // already had its game started) by that cascade.
         foreach ($matchRowById as $matchId => $row) {
             if ($row['participant1_id'] !== null && $row['participant2_id'] === null) {
                 $this->resolveMatchResult($tournamentId, $this->matches->find($matchId), (int) $row['participant1_id'], isBye: true);
@@ -480,13 +491,39 @@ final class TournamentService implements TournamentMatchObserver
     }
 
     /** Fills one player slot of a not-yet-fully-known match, and starts its game once both slots are filled. */
+    /**
+     * Fills one player slot of a not-yet-fully-known match. Most matches
+     * expect two inbound edges (both slots must fill before anything
+     * starts) -- but a double-elimination losers-bracket slot can be a
+     * "future bye" that structurally only ever gets ONE edge at all (its
+     * other input was a winners-bracket bye producing no loser to send
+     * -- see TournamentBracketBuilder::buildDoubleElimination()'s own
+     * docblock), so waiting for a second slot that will never fill
+     * would strand it forever. TournamentMatchRepository::countInboundAdvances()
+     * says how many edges this match was ever going to receive; once
+     * that many have actually fired, it resolves -- immediately as a
+     * bye if only one was ever expected, otherwise starts the real game.
+     */
     private function advanceInto(int $tournamentId, int $targetMatchId, int $slot, int $participantId): void
     {
         $this->matches->fillSlot($targetMatchId, $slot, $participantId);
         $target = $this->matches->find($targetMatchId);
 
-        if ($target['participant1_id'] !== null && $target['participant2_id'] !== null && $target['status'] === 'pending') {
-            $tournament = $this->requireTournament($tournamentId);
+        if ($target['status'] !== 'pending') {
+            return;
+        }
+
+        $filledCount = ($target['participant1_id'] !== null ? 1 : 0) + ($target['participant2_id'] !== null ? 1 : 0);
+        $expectedCount = $this->matches->countInboundAdvances($targetMatchId);
+        if ($filledCount < $expectedCount) {
+            return;
+        }
+
+        $tournament = $this->requireTournament($tournamentId);
+        if ($expectedCount <= 1) {
+            $loneParticipantId = $target['participant1_id'] !== null ? (int) $target['participant1_id'] : (int) $target['participant2_id'];
+            $this->resolveMatchResult($tournamentId, $target, $loneParticipantId, isBye: true);
+        } else {
             $this->startMatchGame($tournament, $target);
         }
     }

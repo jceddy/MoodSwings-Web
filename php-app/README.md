@@ -4949,15 +4949,30 @@ against the next winners-bracket round's own fresh losers), converging
 on a losers-bracket final that meets the winners-bracket champion in a
 two-match grand final slot (round 2 only actually gets played out if
 the losers-bracket finalist wins round 1 -- see
-`onGrandFinalResolved()`). **Double elimination is scoped to an exact
-power-of-two participant count** at start time (4, 8, 16, ...) --
-`TournamentService::startTournament()` rejects anything else. A
-non-power-of-two field needs byes in BOTH brackets, and a
-winners-bracket bye produces no loser to drop down at all; which
-losers-bracket slot that "phantom" loser would have occupied can itself
-need a bye, cascading arbitrarily deep for an unlucky field size. Single
-elimination has no such problem (a bye's winner simply advances,
-nothing else to resolve), so it accepts any count >= 2. Swiss pairing
+`onGrandFinalResolved()`).
+
+Double elimination accepts any participant count >= 4, same as single
+elimination. A non-power-of-two field needs byes in the LOSERS bracket
+too, not just the winners bracket -- a winners-bracket bye produces no
+loser to drop down at all, so `buildDoubleElimination()` computes,
+structurally (from the participant count alone, before any game is
+ever played), exactly how many real entrants (0, 1, or 2) reach every
+losers-bracket slot: a winners-bracket round-1 match contributes a
+loser only if it's real (a bye contributes nothing); a losers "minor"
+round slot sums two contributing sources; a losers "major" round slot
+sums one contributing losers-bracket source plus one GUARANTEED
+winners-bracket loser (so a major-round slot is never 0 -- only a minor
+round can be). A slot totaling 0 never gets a row at all (nor an
+outgoing edge -- whatever it would have fed simply receives one fewer
+inbound edge); a slot totaling 1 gets a row that resolves as a genuine
+bye the moment its lone participant actually arrives; a slot totaling 2
+is an ordinary real match. `TournamentMatchRepository::countInboundAdvances()`
+(literally counting how many other matches' `winner_advances_to_match_id`/
+`loser_advances_to_match_id` point at a given match) is how
+`TournamentService::advanceInto()` tells a "will only ever get one
+participant" slot apart from an ordinary one at runtime -- once that
+many edges have actually fired, it resolves immediately as a bye rather
+than waiting forever for a second slot that was never coming. Swiss pairing
 (`swissPairings()`) groups remaining participants by current win count
 and pairs within/adjacent to their own group, skipping any pairing
 already played (falling back to the closest-standing opponent anyway
