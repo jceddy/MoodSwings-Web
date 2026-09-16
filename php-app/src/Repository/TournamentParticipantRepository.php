@@ -30,7 +30,7 @@ final class TournamentParticipantRepository
         $stmt->execute(['id' => $id]);
         $row = $stmt->fetch();
 
-        return $row === false ? null : $row;
+        return $row === false ? null : $this->decode($row);
     }
 
     public function findForUser(int $tournamentId, int $userId): ?array
@@ -41,7 +41,7 @@ final class TournamentParticipantRepository
         $stmt->execute(['tournament_id' => $tournamentId, 'user_id' => $userId]);
         $row = $stmt->fetch();
 
-        return $row === false ? null : $row;
+        return $row === false ? null : $this->decode($row);
     }
 
     /** @return array[] every row for this tournament, joined to the participant's username, ordered by seed then join time */
@@ -56,7 +56,7 @@ final class TournamentParticipantRepository
         );
         $stmt->execute(['tournament_id' => $tournamentId]);
 
-        return $stmt->fetchAll();
+        return array_map($this->decode(...), $stmt->fetchAll());
     }
 
     public function updateStatus(int $id, string $status): void
@@ -72,5 +72,47 @@ final class TournamentParticipantRepository
         Connection::get()
             ->prepare('UPDATE tournament_participants SET seed = :seed WHERE id = :id')
             ->execute(['seed' => $seed, 'id' => $id]);
+    }
+
+    /**
+     * Booster Draft (issue #91 follow-up): a participant's own 30-card
+     * drafted pool, set once their pod finishes drafting -- see
+     * TournamentPodRepository's own docblock.
+     *
+     * @param int[] $cardIds
+     */
+    public function setDraftPoolCardIds(int $id, array $cardIds): void
+    {
+        Connection::get()
+            ->prepare('UPDATE tournament_participants SET draft_pool_card_ids = :card_ids WHERE id = :id')
+            ->execute(['card_ids' => json_encode($cardIds, JSON_THROW_ON_ERROR), 'id' => $id]);
+    }
+
+    /**
+     * Booster Draft's own persistent deck -- overwritten every time this
+     * participant submits a new one, for every tournament match they
+     * play (see GameService::submitCustomDuelDeck()'s own
+     * onCustomDuelDeckSubmitted() hook) -- null until their first.
+     *
+     * @param int[] $cardIds
+     */
+    public function setCurrentDeckCardIds(int $id, array $cardIds): void
+    {
+        Connection::get()
+            ->prepare('UPDATE tournament_participants SET current_deck_card_ids = :card_ids WHERE id = :id')
+            ->execute(['card_ids' => json_encode($cardIds, JSON_THROW_ON_ERROR), 'id' => $id]);
+    }
+
+    /** draft_pool_card_ids/current_deck_card_ids are both null until Booster Draft's own pod-drafting/match-deck-submission flow sets them. */
+    private function decode(array $row): array
+    {
+        $row['draft_pool_card_ids'] = $row['draft_pool_card_ids'] !== null
+            ? json_decode((string) $row['draft_pool_card_ids'], true, 512, JSON_THROW_ON_ERROR)
+            : null;
+        $row['current_deck_card_ids'] = $row['current_deck_card_ids'] !== null
+            ? json_decode((string) $row['current_deck_card_ids'], true, 512, JSON_THROW_ON_ERROR)
+            : null;
+
+        return $row;
     }
 }

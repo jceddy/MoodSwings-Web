@@ -4091,8 +4091,10 @@
         const params = tournament.match_params;
         const deckType = params.deck_type === 'custom_duel'
             ? 'Power (Custom Decks)'
-            : NEW_GAME_DECK_TYPE_LABELS[params.deck_type] || params.deck_type;
-        const format = params.deck_type === 'sealed_deck'
+            : params.deck_type === 'booster_draft'
+                ? 'Booster Draft'
+                : NEW_GAME_DECK_TYPE_LABELS[params.deck_type] || params.deck_type;
+        const format = params.deck_type === 'sealed_deck' || params.deck_type === 'booster_draft'
             ? deckType
             : `${NEW_GAME_FORMAT_LABELS[params.format] || params.format} – ${deckType}`;
         return `${TOURNAMENT_BRACKET_TYPE_LABELS[tournament.bracket_type] || tournament.bracket_type} – ${format}`;
@@ -4229,27 +4231,39 @@
 
     // -- New tournament dialog --
 
-    // #new-tournament-format's own 'sealed_deck' option is a UI-only
-    // sentinel, mirroring #new-game-format's identical
+    // #new-tournament-format's own 'sealed_deck'/'booster_draft' options
+    // are both UI-only sentinels, mirroring #new-game-format's identical
     // 'sealed_pool_of_the_day' trick (see effectiveNewGameFormat()'s own
     // docblock) -- Sealed Deck is `format: 'draft'`/`deck_type:
     // 'sealed_deck'` under the hood (issue #392), but showing it as its
     // own top-level format (rather than a deck choice nested under
     // "Draft") means never asking someone to pick "Draft" and then
-    // "Sealed Deck" as if those were two independent decisions. 'draft'
-    // itself is left meaning exactly Quick Draft here -- see
-    // #new-tournament-dialog's own docblock for why the full exhaustive
-    // deck_type list isn't offered.
+    // "Sealed Deck" as if those were two independent decisions. Booster
+    // Draft (issue #91 follow-up) is `format: 'duel'`/`deck_type:
+    // 'booster_draft'` for exactly the same reason -- it's really a
+    // 'custom_duel' match once the pod-drafting phase hands each player
+    // their own deck (see TournamentService::startMatchGame()'s own
+    // docblock), but showing it as its own Format choice, not a Duel
+    // deck option, matches how it actually reads to a tournament
+    // creator: an entirely different way of sourcing everyone's deck,
+    // not a preset alongside Structure/Power. 'draft' itself is left
+    // meaning exactly Quick Draft here -- see #new-tournament-dialog's
+    // own docblock for why the full exhaustive deck_type list isn't
+    // offered.
     function effectiveNewTournamentFormat() {
         const raw = document.getElementById('new-tournament-format').value;
+        if (raw === 'sealed_deck') { return 'draft'; }
+        if (raw === 'booster_draft') { return 'duel'; }
 
-        return raw === 'sealed_deck' ? 'draft' : raw;
+        return raw;
     }
 
     function effectiveNewTournamentDeckType() {
         const raw = document.getElementById('new-tournament-format').value;
+        if (raw === 'sealed_deck') { return 'sealed_deck'; }
+        if (raw === 'booster_draft') { return 'booster_draft'; }
 
-        return raw === 'sealed_deck' ? 'sealed_deck' : document.getElementById('new-tournament-deck-type').value;
+        return document.getElementById('new-tournament-deck-type').value;
     }
 
     // Draft reuses this same field for its own choice of draft type
@@ -4263,7 +4277,7 @@
     function updateNewTournamentDeckTypeOptions() {
         const format = document.getElementById('new-tournament-format').value;
         const deckTypeLabel = document.getElementById('new-tournament-deck-type-label');
-        deckTypeLabel.hidden = format === 'sealed_deck';
+        deckTypeLabel.hidden = format === 'sealed_deck' || format === 'booster_draft';
         if (deckTypeLabel.hidden) {
             return;
         }
@@ -4454,6 +4468,67 @@
         return result;
     }
 
+    // Booster Draft's own pre-bracket phase (issue #91 follow-up) --
+    // shown only while pods is non-null (tournament.match_params.deck_type
+    // === 'booster_draft', see TournamentService::getState()'s own
+    // docblock), listing every pod's own round progress and, for the
+    // viewer's own pod, a "Continue drafting" button opening
+    // #pod-draft-dialog.
+    // Booster Draft's own drafted pool/current deck (issue #91
+    // follow-up) -- only the viewer's own participant row ever carries
+    // these two fields hydrated (every other row is scrubbed to null
+    // server-side, see TournamentService::getState()'s own docblock), so
+    // this only ever shows the viewer's own cards, never an opponent's.
+    function renderMyBoosterDraftDeck(participants) {
+        const section = document.getElementById('tournament-view-my-pool-section');
+        const mine = participants.find((p) => p.user_id === user.id && p.draft_pool_card_ids);
+        section.hidden = !mine;
+        if (!mine) {
+            return;
+        }
+
+        document.getElementById('tournament-view-my-pool-count').textContent = `${mine.draft_pool_card_ids.length} card(s) drafted so far.`;
+        document.getElementById('tournament-view-my-pool-text').value =
+            formatDecklistCardLines(mine.draft_pool_card_ids).join('\n');
+
+        const deckLabel = document.getElementById('tournament-view-my-deck-label');
+        const deckText = document.getElementById('tournament-view-my-deck-text');
+        const hasCurrentDeck = mine.current_deck_card_ids !== null;
+        deckLabel.hidden = !hasCurrentDeck;
+        deckText.hidden = !hasCurrentDeck;
+        if (hasCurrentDeck) {
+            deckText.value = formatDecklistCardLines(mine.current_deck_card_ids).join('\n');
+        }
+    }
+
+    function renderTournamentPods(tournament, pods) {
+        const section = document.getElementById('tournament-view-pods-section');
+        section.hidden = !pods;
+        if (!pods) {
+            return;
+        }
+
+        const list = document.getElementById('tournament-view-pods-list');
+        list.innerHTML = '';
+        let viewerHasActivePod = false;
+        for (const pod of pods) {
+            const item = document.createElement('li');
+            const seatNames = pod.seats.map((seat) => seat.username).join(', ');
+            const progress = pod.status === 'completed' ? 'done drafting' : `round ${pod.current_round}/15`;
+            item.textContent = `Pod ${pod.pod_number} (${progress}): ${seatNames}`;
+            list.appendChild(item);
+            if (pod.status !== 'completed' && pod.seats.some((seat) => seat.username === user.username)) {
+                viewerHasActivePod = true;
+            }
+        }
+
+        document.getElementById('tournament-view-continue-drafting-button').hidden = !viewerHasActivePod;
+    }
+
+    document.getElementById('tournament-view-continue-drafting-button').addEventListener('click', () => {
+        openPodDraftDialog(currentTournamentViewId);
+    });
+
     async function openTournamentView(tournamentId) {
         currentTournamentViewId = tournamentId;
         tournamentViewError.hidden = true;
@@ -4472,7 +4547,7 @@
             return;
         }
 
-        const { tournament, participants, rounds, matches_by_round: matchesByRound, standings } = body;
+        const { tournament, participants, rounds, matches_by_round: matchesByRound, standings, pods } = body;
         document.getElementById('tournament-view-title').textContent = tournament.name;
         document.getElementById('tournament-view-status').textContent =
             `${TOURNAMENT_BRACKET_TYPE_LABELS[tournament.bracket_type] || tournament.bracket_type} — ${TOURNAMENT_STATUS_LABELS[tournament.status] || tournament.status}`;
@@ -4488,6 +4563,9 @@
             !(isCreator && tournament.status === 'registration' && joinedCount >= tournament.min_participants);
         document.getElementById('tournament-view-cancel-button').hidden =
             !(isCreator && (tournament.status === 'registration' || tournament.status === 'in_progress'));
+
+        renderTournamentPods(tournament, pods);
+        renderMyBoosterDraftDeck(participants);
 
         const standingsSection = document.getElementById('tournament-view-standings-section');
         const standingsList = document.getElementById('tournament-view-standings-list');
@@ -4556,6 +4634,91 @@
 
     document.getElementById('tournament-view-close-button').addEventListener('click', () => {
         tournamentViewDialog.close();
+    });
+
+    // -- Booster Draft's own pod-drafting board (issue #91 follow-up) --
+
+    const podDraftDialog = document.getElementById('pod-draft-dialog');
+    const podDraftError = document.getElementById('pod-draft-error');
+    let podDraftTournamentId = null;
+    let podDraftPollTimer = null;
+
+    function renderPodDraftBoosterColumn(direction, cards) {
+        const container = document.getElementById(`pod-draft-${direction}-cards`);
+        const emptyMessage = document.getElementById(`pod-draft-${direction}-empty`);
+        container.innerHTML = '';
+        emptyMessage.hidden = cards !== null;
+        if (cards === null) {
+            return;
+        }
+        for (const card of cards) {
+            container.appendChild(buildCardThumb(card, {
+                onClick: async () => {
+                    podDraftError.hidden = true;
+                    const { ok, body } = await pickPodDraftCard(podDraftTournamentId, direction, card.card_id);
+                    if (!ok) {
+                        podDraftError.textContent = body.message || 'Could not pick that card.';
+                        podDraftError.hidden = false;
+                        return;
+                    }
+                    await refreshPodDraftState();
+                },
+            }));
+        }
+    }
+
+    async function refreshPodDraftState() {
+        if (podDraftTournamentId === null) {
+            return;
+        }
+        const { ok, body } = await getPodDraftState(podDraftTournamentId);
+        if (!ok) {
+            podDraftError.textContent = body.message || 'Could not load your pod.';
+            podDraftError.hidden = false;
+            return;
+        }
+
+        document.getElementById('pod-draft-progress').textContent = body.pod_status === 'completed'
+            ? 'Drafting complete'
+            : `Round ${body.current_round} of ${body.total_rounds}`;
+        renderPodDraftBoosterColumn('left', body.left);
+        renderPodDraftBoosterColumn('right', body.right);
+
+        const poolContainer = document.getElementById('pod-draft-pool-cards');
+        poolContainer.innerHTML = '';
+        for (const card of body.drafted_cards) {
+            poolContainer.appendChild(buildCardThumb(card));
+        }
+        document.getElementById('pod-draft-pool-count').textContent = body.drafted_cards.length;
+        document.getElementById('pod-draft-done-message').hidden = body.pod_status !== 'completed';
+
+        if (body.pod_status === 'completed' && podDraftPollTimer) {
+            clearInterval(podDraftPollTimer);
+            podDraftPollTimer = null;
+        }
+    }
+
+    async function openPodDraftDialog(tournamentId) {
+        podDraftTournamentId = tournamentId;
+        podDraftError.hidden = true;
+        podDraftDialog.showModal();
+        await refreshPodDraftState();
+        if (podDraftPollTimer) {
+            clearInterval(podDraftPollTimer);
+        }
+        // Other seats' own picks (not just the viewer's) advance the
+        // pod's shared round, so this polls even while the viewer isn't
+        // clicking anything themselves -- same rationale showBoard()'s
+        // own pollTimer already follows for an opponent's turn.
+        podDraftPollTimer = setInterval(refreshPodDraftState, 4000);
+    }
+
+    document.getElementById('pod-draft-close-button').addEventListener('click', () => {
+        if (podDraftPollTimer) {
+            clearInterval(podDraftPollTimer);
+            podDraftPollTimer = null;
+        }
+        podDraftDialog.close();
     });
 
     // Weekly Sealed Pool's own queue/standings dialog (issue #520) -- see

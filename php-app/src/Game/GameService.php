@@ -1682,6 +1682,20 @@ final class GameService
         // so a clear rejection is more honest than quietly dropping the
         // flag).
         bool $synchronousMode = false,
+        // Booster Draft tournament matches only (issue #91 follow-up):
+        // TournamentService's own way of restricting a 'custom_duel'
+        // seat's submittable deck to a specific pool of card ids, keyed
+        // by user id -- @param array<int, int[]> $perSeatAllowedCardIds
+        // -- rather than the ordinary DuelDeckRules rarity/duplicate caps
+        // every other custom_duel preset uses (a drafted pool has no
+        // uniform rarity shape to cap). Persisted per seat as
+        // game_players.custom_deck_allowed_card_ids; silently ignored
+        // (not an error) for any user id missing from the map or any
+        // deck_type other than 'custom_duel', the same "harmless no-op
+        // outside its own narrow scope" convention every other
+        // creation-time opt-in here already follows. See
+        // submitCustomDuelDeck()'s own pool-membership check.
+        ?array $perSeatAllowedCardIds = null,
     ): int {
         if (count($userIds) > self::MAX_PLAYERS) {
             throw new GameStateException('A game cannot have more than ' . self::MAX_PLAYERS . ' players');
@@ -2143,7 +2157,8 @@ final class GameService
             $gameId = (int) $pdo->lastInsertId();
 
             $insertPlayer = $pdo->prepare(
-                'INSERT INTO game_players (game_id, user_id, seat_order, team_id) VALUES (:game_id, :user_id, :seat_order, :team_id)'
+                'INSERT INTO game_players (game_id, user_id, seat_order, team_id, custom_deck_allowed_card_ids)
+                 VALUES (:game_id, :user_id, :seat_order, :team_id, :custom_deck_allowed_card_ids)'
             );
             $seatedUserIds = match ($format) {
                 'team' => $this->seatOrderForTeamGame($createdByUserId, (int) $partnerUserId, $userIds),
@@ -2163,6 +2178,9 @@ final class GameService
                     'user_id' => $userId,
                     'seat_order' => $seatOrder,
                     'team_id' => $teamId,
+                    'custom_deck_allowed_card_ids' => ($deckType === 'custom_duel' && isset($perSeatAllowedCardIds[$userId]))
+                        ? json_encode($perSeatAllowedCardIds[$userId])
+                        : null,
                 ]);
                 if (in_array($userId, $botUserIds, true)) {
                     $botGamePlayerIdsByUserId[$userId] = (int) $pdo->lastInsertId();
@@ -2829,14 +2847,19 @@ final class GameService
 
         // Widened from "SELECT COUNT(*)" to also return user_id -- needed
         // as the default $accessCheckUserId for a $savedDecklistId lookup
-        // below.
-        $ownerStmt = Connection::get()->prepare('SELECT user_id FROM game_players WHERE id = :id AND game_id = :game_id');
+        // below -- and custom_deck_allowed_card_ids, Booster Draft
+        // tournament matches' own per-seat pool restriction (issue #91
+        // follow-up, see this method's own docblock further down).
+        $ownerStmt = Connection::get()->prepare('SELECT user_id, custom_deck_allowed_card_ids FROM game_players WHERE id = :id AND game_id = :game_id');
         $ownerStmt->execute(['id' => $gamePlayerId, 'game_id' => $gameId]);
         $ownerRow = $ownerStmt->fetch();
         if ($ownerRow === false) {
             throw new GameStateException("Player {$gamePlayerId} is not seated in game {$gameId}");
         }
         $ownerUserId = (int) $ownerRow['user_id'];
+        $allowedCardIds = $ownerRow['custom_deck_allowed_card_ids'] !== null
+            ? json_decode((string) $ownerRow['custom_deck_allowed_card_ids'], true, 512, JSON_THROW_ON_ERROR)
+            : null;
 
         $catalog = $this->loadCardCatalog();
 
@@ -2869,6 +2892,22 @@ final class GameService
             [$mainCardIds, $sideboardCardIds] = $this->validateAndStorePowerDuelSideboardSwap($gameMatchId, $ownerUserId, $parsed['cardIds'], $rules, $catalog['rowsById']);
         }
 
+        // Booster Draft tournament matches only (issue #91 follow-up):
+        // this seat's own submission must be drawn entirely from its own
+        // tournament-drafted pool -- $allowedCardIds honors each card's
+        // own multiplicity in that pool (the same card can legitimately
+        // appear twice across a player's two boosters), so this is a
+        // multiset-subset check, not a plain "every id is somewhere in
+        // the pool" one. Runs IN ADDITION to $rules->validate() above,
+        // which only ever enforces this preset's own (permissive, no
+        // rarity/duplicate caps of its own) min_cards floor for this
+        // deck_type -- see TournamentService::startMatchGame()'s own
+        // duel_deck_rules for why no further cap is meaningful here, the
+        // pool itself already being the only restriction that matters.
+        if ($allowedCardIds !== null) {
+            $this->assertWithinAllowedCardPool($mainCardIds, $allowedCardIds);
+        }
+
         $update = Connection::get()->prepare(
             'UPDATE game_players SET custom_deck_name = :name, custom_deck_card_ids = :card_ids, custom_deck_sideboard_card_ids = :sideboard_card_ids WHERE id = :id'
         );
@@ -2878,6 +2917,25 @@ final class GameService
             'sideboard_card_ids' => $sideboardCardIds !== [] ? json_encode($sideboardCardIds) : null,
             'id' => $gamePlayerId,
         ]);
+
+        if ($allowedCardIds !== null) {
+            $this->tournamentObserver?->onCustomDuelDeckSubmitted($gameId, $gameMatchId, $gamePlayerId, $ownerUserId, $mainCardIds);
+        }
+    }
+
+    /**
+     * @param int[] $cardIds a submitted deck
+     * @param int[] $allowedCardIds the submitting seat's own drafted pool -- see submitCustomDuelDeck()'s own docblock
+     */
+    private function assertWithinAllowedCardPool(array $cardIds, array $allowedCardIds): void
+    {
+        $allowedCounts = array_count_values($allowedCardIds);
+        $submittedCounts = array_count_values($cardIds);
+        foreach ($submittedCounts as $cardId => $count) {
+            if ($count > ($allowedCounts[$cardId] ?? 0)) {
+                throw new GameStateException("Card id {$cardId} is not in your own drafted pool (or you've used more copies of it than you drafted)");
+            }
+        }
     }
 
     /**
@@ -11636,7 +11694,7 @@ final class GameService
         // Harmlessly fetched for every other seat too, rather than a
         // second, deck-type-conditional query.
         $seatStmt = $pdo->prepare(
-            'SELECT gp.user_id, gp.seat_order, gp.team_id, gp.custom_deck_name, gp.custom_deck_card_ids, gp.custom_deck_sideboard_card_ids, gp.active_seconds_used, u.is_bot
+            'SELECT gp.user_id, gp.seat_order, gp.team_id, gp.custom_deck_name, gp.custom_deck_card_ids, gp.custom_deck_sideboard_card_ids, gp.custom_deck_allowed_card_ids, gp.active_seconds_used, u.is_bot
              FROM game_players gp JOIN users u ON u.id = gp.user_id
              WHERE gp.game_id = :game_id ORDER BY gp.seat_order ASC'
         );
@@ -11706,8 +11764,8 @@ final class GameService
         $nextGameId = (int) $pdo->lastInsertId();
 
         $insertPlayer = $pdo->prepare(
-            'INSERT INTO game_players (game_id, user_id, seat_order, team_id, custom_deck_name, custom_deck_card_ids, custom_deck_sideboard_card_ids, active_seconds_used)
-             VALUES (:game_id, :user_id, :seat_order, :team_id, :custom_deck_name, :custom_deck_card_ids, :custom_deck_sideboard_card_ids, :active_seconds_used)'
+            'INSERT INTO game_players (game_id, user_id, seat_order, team_id, custom_deck_name, custom_deck_card_ids, custom_deck_sideboard_card_ids, custom_deck_allowed_card_ids, active_seconds_used)
+             VALUES (:game_id, :user_id, :seat_order, :team_id, :custom_deck_name, :custom_deck_card_ids, :custom_deck_sideboard_card_ids, :custom_deck_allowed_card_ids, :active_seconds_used)'
         );
         $humanCustomDuelSeatUserIds = [];
         $markBotReady = $pdo->prepare('UPDATE game_players SET ready_at = NOW() WHERE id = :id');
@@ -11722,6 +11780,13 @@ final class GameService
                 'custom_deck_name' => $carryForwardCustomDeck ? $seat['custom_deck_name'] : null,
                 'custom_deck_card_ids' => $carryForwardCustomDeck ? $seat['custom_deck_card_ids'] : null,
                 'custom_deck_sideboard_card_ids' => $carryForwardCustomDeck ? $seat['custom_deck_sideboard_card_ids'] : null,
+                // Booster Draft's own pool restriction (issue #91
+                // follow-up) always carries forward, regardless of
+                // sideboarding/bot status -- every game of a Booster
+                // Draft match must keep restricting this seat to the
+                // same tournament-drafted pool, not just the locked
+                // Power Duel/bot cases above.
+                'custom_deck_allowed_card_ids' => $seat['custom_deck_allowed_card_ids'],
                 // Synchronous mode's own match-wide chess clock (increment
                 // 4) -- unlike total_time_limit_minutes' own PER-GAME
                 // active_seconds_used (deliberately reset for each match

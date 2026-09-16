@@ -56,6 +56,7 @@ use MoodSwings\Repository\QueuedNotificationRepository;
 use MoodSwings\Repository\SessionRepository;
 use MoodSwings\Repository\TournamentMatchRepository;
 use MoodSwings\Repository\TournamentParticipantRepository;
+use MoodSwings\Repository\TournamentPodRepository;
 use MoodSwings\Repository\TournamentRepository;
 use MoodSwings\Repository\UserDecklistRepository;
 use MoodSwings\Repository\UserRepository;
@@ -68,6 +69,8 @@ use MoodSwings\Rules\MoodPlayService;
 use MoodSwings\Rules\RoundScorer;
 use MoodSwings\SiteUrl;
 use MoodSwings\Stats\CardStatsService;
+use MoodSwings\Tournament\BoosterDraftPodBuilder;
+use MoodSwings\Tournament\BoosterPackBuilder;
 use MoodSwings\Tournament\NotAuthorizedForTournamentException;
 use MoodSwings\Tournament\TournamentBracketBuilder;
 use MoodSwings\Tournament\TournamentNotFoundException;
@@ -830,7 +833,7 @@ $matchmaking = new MatchmakingService(new OpenGameListingRepository(), new UserR
 $weeklySealedPoolQueue = new WeeklySealedPoolQueueService($games);
 // Issue #91 -- see TournamentMatchObserver's own docblock for why this
 // is a setter rather than a constructor dependency on $games.
-$tournaments = new TournamentService(new TournamentRepository(), new TournamentParticipantRepository(), new TournamentMatchRepository(), new TournamentBracketBuilder(), $games, new UserRepository(), new FriendshipRepository());
+$tournaments = new TournamentService(new TournamentRepository(), new TournamentParticipantRepository(), new TournamentMatchRepository(), new TournamentBracketBuilder(), $games, new UserRepository(), new FriendshipRepository(), new TournamentPodRepository(), new BoosterPackBuilder(), new BoosterDraftPodBuilder());
 $games->setTournamentObserver($tournaments);
 
 // Lifetime game/match wins-losses (issue #106) -- see
@@ -1475,7 +1478,27 @@ if ($path === '/tournaments/state' && $method === 'GET') {
     $tournamentId = (int) ($_GET['id'] ?? 0);
 
     try {
-        respond(200, ['status' => 'ok', ...$tournaments->getState($tournamentId, (int) $currentUser['id'])]);
+        $state = $tournaments->getState($tournamentId, (int) $currentUser['id']);
+        // Booster Draft's own drafted pool/current deck (issue #91
+        // follow-up) -- TournamentService::getState() already scrubs
+        // every OTHER participant's own copy of these two fields down to
+        // null, so hydrating unconditionally here never leaks an
+        // opponent's cards, only ever the viewer's own row (if they have
+        // one at all).
+        foreach ($state['participants'] as &$participant) {
+            if ((int) $participant['user_id'] !== (int) $currentUser['id']) {
+                continue;
+            }
+            $participant['draft_pool_card_ids'] = $participant['draft_pool_card_ids'] !== null
+                ? CardCatalog::serialize($participant['draft_pool_card_ids'])
+                : null;
+            $participant['current_deck_card_ids'] = $participant['current_deck_card_ids'] !== null
+                ? CardCatalog::serialize($participant['current_deck_card_ids'])
+                : null;
+        }
+        unset($participant);
+
+        respond(200, ['status' => 'ok', ...$state]);
     } catch (TournamentNotFoundException $e) {
         respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
     } catch (NotAuthorizedForTournamentException $e) {
@@ -1580,6 +1603,54 @@ if ($path === '/tournaments/cancel' && $method === 'POST') {
         respond(200, ['status' => 'ok']);
     } catch (TournamentNotFoundException $e) {
         respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAuthorizedForTournamentException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (TournamentStateException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+// Booster Draft's own pod-drafting phase (issue #91 follow-up) -- see
+// TournamentService::getPodDraftState()'s own docblock. left/right are
+// each either null (already picked this round, or the pod isn't
+// 'drafting') or this seat's own currently-available cards for that
+// direction, hydrated the same way every other draft's own board state
+// hydrates its pool.
+if ($path === '/tournaments/pod-draft/state' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $tournamentId = (int) ($_GET['tournament_id'] ?? 0);
+
+    try {
+        $state = $tournaments->getPodDraftState($tournamentId, (int) $currentUser['id']);
+        respond(200, [
+            'status' => 'ok',
+            'pod_status' => $state['pod_status'],
+            'current_round' => $state['current_round'],
+            'total_rounds' => $state['total_rounds'],
+            'pod_size' => $state['pod_size'],
+            'drafted_cards' => CardCatalog::serialize($state['drafted_card_ids']),
+            'left' => $state['left'] !== null ? CardCatalog::serialize($state['left']) : null,
+            'right' => $state['right'] !== null ? CardCatalog::serialize($state['right']) : null,
+        ]);
+    } catch (NotAuthorizedForTournamentException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (TournamentStateException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/tournaments/pod-draft/pick' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $tournaments->pickBoosterDraftCard(
+            (int) ($body['tournament_id'] ?? 0),
+            (int) $currentUser['id'],
+            (string) ($body['direction'] ?? ''),
+            (int) ($body['card_id'] ?? 0),
+        );
+        respond(200, ['status' => 'ok']);
     } catch (NotAuthorizedForTournamentException $e) {
         respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
     } catch (TournamentStateException $e) {

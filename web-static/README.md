@@ -1942,11 +1942,65 @@ tournaments list (`tournamentMatchSummary()`) shows this option as
 generic "Custom Decklists (Duel)" label, since the tournament dialog
 only ever offers it under the "power" preset.
 
+**Booster Draft** (issue #91 follow-up) -- `#new-tournament-format`'s
+own `booster_draft` option, another UI-only sentinel alongside Sealed
+Deck's (`effectiveNewTournamentFormat()`/`effectiveNewTournamentDeckType()`
+resolve it to `format: 'duel'`/`deck_type: 'booster_draft'` on submit,
+never touching `#new-tournament-deck-type` at all -- see
+`updateNewTournamentDeckTypeOptions()`'s own docblock for why the field
+disappears entirely for it, same as Sealed Deck). Every joined
+participant first drafts a personal 30-card pool from real boosters
+(pack/pick/pass, up to 8 players per pod -- see "Booster Draft" in
+`php-app/README.md` for the full mechanic and schema), then the
+tournament's ordinary bracket/Swiss plays out using a deck built from
+that pool. Best of Three stays available and meaningful here (unlike
+Draft/Sealed Deck) since a Booster Draft match is an ordinary Duel
+underneath; the sideboarding checkbox never applies (its own visibility
+check only ever fires for the `custom_duel` OPTION under Format
+`duel`, which this sentinel bypasses entirely) since Booster Draft's own
+"sideboard from your whole pool every round" story (below) already
+supersedes it.
+
+`#pod-draft-dialog` is the actual drafting board, opened via
+`#tournament-view-dialog`'s own "Continue drafting" button (shown by
+`renderTournamentPods()` whenever the viewer's own username appears in
+a still-`drafting` pod's own seats -- `GET /tournaments/state`'s own
+`pods` field, `null` for every non-Booster-Draft tournament) -- shows
+the viewer's own currently-available left/right boosters (`GET
+/tournaments/pod-draft/state`, hydrated card objects reused via the
+same `buildCardThumb()` every other card grid in the app already uses;
+`null` for a direction once picked for the round, rendered as a "Waiting
+on other players..." message instead of an empty grid) and their own
+drafted-so-far pool, growing toward 30. Clicking a card calls `POST
+/tournaments/pod-draft/pick`, then immediately re-fetches state; a
+`setInterval` poll (`podDraftPollTimer`, 4 seconds, the same cadence
+`showBoard()`'s own opponent-turn poll uses) keeps the dialog current
+even when it's some other seat's own pick that advances the shared
+round, stopped once the viewer's own pod reaches `'completed'`.
+
+Once a Booster Draft participant has a drafted pool at all,
+`#tournament-view-dialog` also shows it directly (`renderMyBoosterDraftDeck()`,
+`#tournament-view-my-pool-section`) -- a read-only textarea listing
+every drafted card as `"N Name (SET) NUMBER"` lines (`formatDecklistCardLines()`,
+the exact same decklist-text format the Decks dialog's own Edit/Download
+flows already produce), and, once they've submitted a deck for at least
+one match, a second textarea with their current one -- there to be
+copied into the in-game decklist submission box (`POST /games/decklist`,
+the same one every other `custom_duel` match already uses) when their
+next match's game is ready; the board itself has no special Booster
+Draft affordance of its own; the only extra behavior is `GameService`
+rejecting any submission that isn't actually drawn from that seat's own
+drafted pool. `GET /tournaments/state` only ever returns these two
+fields hydrated for the VIEWER's own participant row (every other row's
+are `null`, so an opponent's pool/deck is never visible ahead of playing
+them -- see `TournamentService::getState()`'s own docblock).
+
 **Tournament view dialog** (`#tournament-view-dialog`) shows the
 tournament's name/status, a Start button (creator only, still in
 `registration`, at least `min_participants` joined -- calls
 `startTournament()`) and a Cancel button (creator only, not yet
-`completed`/`cancelled` -- `cancelTournament()`), a standings list for a
+`completed`/`cancelled` -- `cancelTournament()`), Booster Draft's own
+drafting-progress/pool/deck sections above, a standings list for a
 Swiss event once it's left `registration` (`GET /tournaments/state`'s
 own `standings`, ranked by win count already server-side), and the
 bracket itself: every round (`TOURNAMENT_BRACKET_LABELS` -- "Round" for
@@ -1959,7 +2013,10 @@ closes both this dialog and `#tournaments-dialog` before handing off to
 handoff. Refreshed by its own Refresh button rather than a poll -- a
 tournament only ever advances when one of its games finishes, not
 continuously, so there's nothing to gain from polling it open-ended
-while someone's just looking.
+while someone's just looking (Booster Draft's own pod-drafting phase is
+the one part of a tournament that genuinely needs live updates while
+open, which is why `#pod-draft-dialog` polls on its own rather than
+piggybacking on this dialog's Refresh button).
 
 - `index.html` (`/`) — Login form. If the visitor already has an active
   session (checked via `GET /app/me`), they're redirected straight to
