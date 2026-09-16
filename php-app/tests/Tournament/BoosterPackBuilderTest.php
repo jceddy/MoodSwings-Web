@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace MoodSwings\Tests\Tournament;
 
 use MoodSwings\Tournament\BoosterPackBuilder;
+use MoodSwings\Tournament\TournamentStateException;
 use PHPUnit\Framework\TestCase;
 
 final class BoosterPackBuilderTest extends TestCase
@@ -33,14 +34,7 @@ final class BoosterPackBuilderTest extends TestCase
         self::assertCount(15, array_unique($booster), 'no card should repeat within a single booster');
     }
 
-    /**
-     * Slots are fixed-rarity or fixed-odds (see the class's own
-     * docblock) -- runs many boosters and asserts every card landed in
-     * an EXPECTED rarity for its own slot, then separately (since a
-     * single run could get unlucky) that both branches of each
-     * probabilistic slot show up somewhere across the whole run.
-     */
-    public function testSlotRaritiesMatchTheDocumentedOdds(): void
+    public function testBoosterHasTheGuaranteedRarityCounts(): void
     {
         $rarityOf = [];
         foreach ($this->cardIdsByRarity as $rarity => $ids) {
@@ -49,31 +43,23 @@ final class BoosterPackBuilderTest extends TestCase
             }
         }
 
-        $slot1Rarities = [];
-        $slot3Rarities = [];
-        $slot8Rarities = [];
+        $booster = $this->builder->buildBooster($this->cardIdsByRarity);
 
-        for ($i = 0; $i < 300; $i++) {
-            $booster = $this->builder->buildBooster($this->cardIdsByRarity);
-
-            self::assertContains($rarityOf[$booster[0]], ['mythic', 'rare'], 'slot 1 must be mythic or rare');
-            self::assertSame('rare', $rarityOf[$booster[1]], 'slot 2 is always rare');
-            self::assertContains($rarityOf[$booster[2]], ['rare', 'uncommon'], 'slot 3 must be rare or uncommon');
-            for ($slot = 3; $slot < 7; $slot++) {
-                self::assertSame('uncommon', $rarityOf[$booster[$slot]], "slot " . ($slot + 1) . " is always uncommon");
-            }
-            self::assertContains($rarityOf[$booster[7]], ['uncommon', 'common'], 'slot 8 must be uncommon or common');
-            for ($slot = 8; $slot < 15; $slot++) {
-                self::assertSame('common', $rarityOf[$booster[$slot]], "slot " . ($slot + 1) . " is always common");
-            }
-
-            $slot1Rarities[$rarityOf[$booster[0]]] = true;
-            $slot3Rarities[$rarityOf[$booster[2]]] = true;
-            $slot8Rarities[$rarityOf[$booster[7]]] = true;
+        $counts = ['mythic' => 0, 'rare' => 0, 'uncommon' => 0, 'common' => 0];
+        foreach ($booster as $cardId) {
+            $counts[$rarityOf[$cardId]]++;
         }
 
-        self::assertCount(2, $slot1Rarities, 'both mythic and rare should appear in slot 1 across 300 boosters');
-        self::assertCount(2, $slot3Rarities, 'both rare and uncommon should appear in slot 3 across 300 boosters');
-        self::assertCount(2, $slot8Rarities, 'both uncommon and common should appear in slot 8 across 300 boosters');
+        self::assertSame(['mythic' => 1, 'rare' => 2, 'uncommon' => 4, 'common' => 8], $counts);
+    }
+
+    public function testRejectsAPoolTooSmallForARarity(): void
+    {
+        $this->cardIdsByRarity['mythic'] = [1];
+        $this->cardIdsByRarity['rare'] = [101];
+
+        $this->expectException(TournamentStateException::class);
+        $this->expectExceptionMessage('Not enough rare cards');
+        $this->builder->buildBooster($this->cardIdsByRarity);
     }
 }

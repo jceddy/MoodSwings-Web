@@ -1,7 +1,7 @@
 -- Booster Draft: a tournament-only draft format. Up to 8 players per
--- "pod" each open two 15-card boosters (1 mythic/2 rare/4 uncommon/8
--- common on average -- see BoosterPackBuilder's own docblock for the
--- exact per-slot rarity odds) and draft them the traditional way: the
+-- "pod" each open two 15-card boosters (a guaranteed 1 mythic/2 rare/
+-- 4 uncommon/8 common -- see BoosterPackBuilder's own docblock) and
+-- draft them the traditional way: the
 -- first booster passed left, the second passed right, one card taken
 -- from whichever booster reaches you each round until both are fully
 -- drafted (15 rounds, 2 picks per round -- see TournamentPodRepository's

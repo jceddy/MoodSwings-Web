@@ -5068,17 +5068,14 @@ translates away before ever calling `GameService::createGame()` -- see
 below.
 
 **Boosters** (`BoosterPackBuilder`, pure, no database access) -- 15
-cards per booster, drawn slot by slot at fixed odds rather than a fixed
-count per rarity (approximating a real booster's own weighted slots):
-slot 1 is 2/3 Mythic, 1/3 Rare; slot 2 is always Rare; slot 3 is 2/3
-Rare, 1/3 Uncommon; slots 4-7 are always Uncommon; slot 8 is 1/3
-Uncommon, 2/3 Common; slots 9-15 are always Common. No card repeats
-within a single booster (each slot draws from a shrinking working copy
-of the catalog, the same "distinct ids" convention `buildStructureDeckCardIds()`/
-`buildPowerDeckCardIds()` already follow) -- a *different* booster,
-even one opened by the same player, draws from a fresh full catalog
-copy, so the same card can still appear across a player's own two
-boosters.
+cards per booster, a guaranteed 1 Mythic, 2 Rares, 4 Uncommons, and 8
+Commons, each drawn uniformly at random within its own rarity. No card
+repeats within a single booster (`array_rand($pool, $count)` picks
+distinct keys within each rarity's own pool, the same "distinct ids"
+convention `buildStructureDeckCardIds()`/`buildPowerDeckCardIds()`
+already follow) -- a *different* booster, even one opened by the same
+player, draws from its own fresh full catalog copy, so the same card
+can still appear across a player's own two boosters.
 
 **Pods** (`BoosterDraftPodBuilder::podSizes()`, pure) -- up to 8
 participants draft together in a pod; a tournament with more than 8
