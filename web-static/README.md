@@ -1916,6 +1916,16 @@ Submitting calls `createTournament()` with all of the above
 (`invite_user_ids` from the checked friend checkboxes) and closes the
 dialog on success, refreshing `#tournaments-dialog` underneath it.
 
+**Invite-only minimum invite count** -- since the creator auto-joins as
+one of `max_participants`' own seats the moment the tournament is created
+(`TournamentService::createTournament()` adds them as `'joined'` up
+front, before any invitees), the submit handler blocks submission
+client-side (`newTournamentError`, without ever calling `createTournament()`)
+whenever `registration_mode` is `invite_only` and fewer than
+`max_participants - 1` friend checkboxes are checked -- otherwise the
+tournament could never actually fill up to its own configured max. Open
+registration has no such check; anyone can still join up to the cap.
+
 Grid Draft always submits a fixed `'random_48'` pool source
 (`grid_draft_pool_source`) -- its own pool-source picker isn't offered
 here, matching every other draft-family field this dialog already

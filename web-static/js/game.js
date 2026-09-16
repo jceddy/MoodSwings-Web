@@ -4519,6 +4519,21 @@
             ? Array.from(tournamentInviteCheckboxes.querySelectorAll('input[type=checkbox]:checked')).map((cb) => parseInt(cb.value, 10))
             : [];
 
+        const maxParticipants = parseInt(document.getElementById('new-tournament-max-participants').value, 10);
+
+        // The creator already auto-joins as one of max_participants seats
+        // (TournamentService::createTournament() adds them as 'joined' up
+        // front), so an invite-only tournament needs at least
+        // max_participants - 1 invitees to have any chance of actually
+        // filling up. Catch this client-side rather than letting the
+        // creator find out only after the tournament sits half-empty.
+        if (registrationMode === 'invite_only' && inviteUserIds.length < maxParticipants - 1) {
+            newTournamentError.textContent = `Invite at least ${maxParticipants - 1} friend(s) to fill this tournament (up to ${maxParticipants} participants including you).`;
+            newTournamentError.hidden = false;
+            submitButton.disabled = false;
+            return;
+        }
+
         const deckType = effectiveNewTournamentDeckType();
 
         const params = {
@@ -4531,7 +4546,7 @@
             // populateNewTournamentParticipantRangeSelects()'s own
             // docblock.
             min_participants: parseInt(document.getElementById('new-tournament-min-participants').value, 10),
-            max_participants: parseInt(document.getElementById('new-tournament-max-participants').value, 10),
+            max_participants: maxParticipants,
             invite_user_ids: inviteUserIds,
             format,
             deck_type: deckType,
