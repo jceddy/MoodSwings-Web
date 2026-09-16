@@ -4077,11 +4077,16 @@
     // Reuses NEW_GAME_FORMAT_LABELS/NEW_GAME_DECK_TYPE_LABELS (New Game
     // dialog, above) -- tournaments use the exact same format/deck_type
     // value strings, just a curated subset of them (see #new-tournament-dialog's
-    // own docblock).
+    // own docblock). Sealed Deck is `format: 'draft'` under the hood
+    // (issue #392) but has no actual drafting phase of its own, so
+    // (same special case openGameSummary() already makes) it's shown as
+    // just "Sealed Deck" rather than "Draft – Sealed Deck".
     function tournamentMatchSummary(tournament) {
         const params = tournament.match_params;
         const deckType = NEW_GAME_DECK_TYPE_LABELS[params.deck_type] || params.deck_type;
-        const format = `${NEW_GAME_FORMAT_LABELS[params.format] || params.format} – ${deckType}`;
+        const format = params.deck_type === 'sealed_deck'
+            ? deckType
+            : `${NEW_GAME_FORMAT_LABELS[params.format] || params.format} – ${deckType}`;
         return `${TOURNAMENT_BRACKET_TYPE_LABELS[tournament.bracket_type] || tournament.bracket_type} – ${format}`;
     }
 
@@ -4216,34 +4221,69 @@
 
     // -- New tournament dialog --
 
+    // #new-tournament-format's own 'sealed_deck' option is a UI-only
+    // sentinel, mirroring #new-game-format's identical
+    // 'sealed_pool_of_the_day' trick (see effectiveNewGameFormat()'s own
+    // docblock) -- Sealed Deck is `format: 'draft'`/`deck_type:
+    // 'sealed_deck'` under the hood (issue #392), but showing it as its
+    // own top-level format (rather than a deck choice nested under
+    // "Draft") means never asking someone to pick "Draft" and then
+    // "Sealed Deck" as if those were two independent decisions. 'draft'
+    // itself is left meaning exactly Quick Draft here -- see
+    // #new-tournament-dialog's own docblock for why the full exhaustive
+    // deck_type list isn't offered.
+    function effectiveNewTournamentFormat() {
+        const raw = document.getElementById('new-tournament-format').value;
+
+        return raw === 'sealed_deck' ? 'draft' : raw;
+    }
+
+    function effectiveNewTournamentDeckType() {
+        const raw = document.getElementById('new-tournament-format').value;
+        if (raw === 'sealed_deck') {
+            return 'sealed_deck';
+        }
+        if (raw === 'draft') {
+            return 'quick_draft';
+        }
+
+        return document.getElementById('new-tournament-deck-type').value;
+    }
+
     function updateNewTournamentDeckTypeOptions() {
         const format = document.getElementById('new-tournament-format').value;
+        const deckTypeLabel = document.getElementById('new-tournament-deck-type-label');
+        // Draft (Quick Draft) and Sealed Deck each fully determine their
+        // own deck_type on their own -- nothing left to choose, so the
+        // field disappears entirely rather than showing a single-option
+        // select.
+        deckTypeLabel.hidden = format === 'draft' || format === 'sealed_deck';
+        if (deckTypeLabel.hidden) {
+            return;
+        }
+
         const deckTypeSelect = document.getElementById('new-tournament-deck-type');
-        // A curated subset of #new-game-deck-type's own options -- see
-        // #new-tournament-dialog's own docblock for why the full
-        // exhaustive list isn't offered here.
-        const draftOptions = { quick_draft: 'Quick Draft', sealed_deck: 'Sealed Deck' };
         const constructedOptions = { structure: 'Structure', power: 'Power', jceddys_75: "jceddy's 75 Card", one_of_each: 'One of Each Card' };
-        const options = format === 'draft' ? draftOptions : constructedOptions;
 
         const previousValue = deckTypeSelect.value;
         deckTypeSelect.innerHTML = '';
-        for (const [value, label] of Object.entries(options)) {
+        for (const [value, label] of Object.entries(constructedOptions)) {
             const option = document.createElement('option');
             option.value = value;
             option.textContent = label;
             deckTypeSelect.appendChild(option);
         }
-        deckTypeSelect.value = options[previousValue] ? previousValue : Object.keys(options)[0];
+        deckTypeSelect.value = constructedOptions[previousValue] ? previousValue : Object.keys(constructedOptions)[0];
     }
 
     function updateNewTournamentBestOfThreeVisibility() {
         const format = document.getElementById('new-tournament-format').value;
-        // Draft-family matches are already potentially multi-game on
-        // their own (GameService::draftGamesToWin(), always best-of-three
-        // at 2 players) -- best_of_three is only ever a meaningful
-        // opt-in for Duel/Traditional. See createGame()'s own docblock.
-        document.getElementById('new-tournament-best-of-three-label').hidden = format === 'draft';
+        // Draft-family matches (Draft/Sealed Deck) are already
+        // potentially multi-game on their own (GameService::draftGamesToWin(),
+        // always best-of-three at 2 players) -- best_of_three is only
+        // ever a meaningful opt-in for Duel/Traditional. See
+        // createGame()'s own docblock.
+        document.getElementById('new-tournament-best-of-three-label').hidden = format === 'draft' || format === 'sealed_deck';
     }
 
     function updateNewTournamentRegistrationModeFields() {
@@ -4302,7 +4342,7 @@
 
         const registrationMode = document.getElementById('new-tournament-registration-mode-open').checked ? 'open' : 'invite_only';
         const bracketType = document.getElementById('new-tournament-bracket-type').value;
-        const format = document.getElementById('new-tournament-format').value;
+        const format = effectiveNewTournamentFormat();
         const swissRoundCountRaw = document.getElementById('new-tournament-swiss-round-count').value;
         const maxParticipantsRaw = document.getElementById('new-tournament-max-participants').value;
 
@@ -4319,7 +4359,7 @@
             max_participants: registrationMode === 'open' && maxParticipantsRaw ? parseInt(maxParticipantsRaw, 10) : null,
             invite_user_ids: inviteUserIds,
             format,
-            deck_type: document.getElementById('new-tournament-deck-type').value,
+            deck_type: effectiveNewTournamentDeckType(),
             best_of_three: format !== 'draft' && document.getElementById('new-tournament-best-of-three').checked,
         };
 
