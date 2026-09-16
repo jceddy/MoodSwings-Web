@@ -5038,8 +5038,15 @@ creator needs for `registration_mode: 'open'`, seats the creator as an
 already-`joined` participant, and seats each `invite_user_ids` entry as
 `'invited'` for `registration_mode: 'invite_only'`), `invite()`/
 `acceptInvite()`/`declineInvite()`, `joinOpenTournament()` (same
-discoverability/blocked-pair gating as `MatchmakingService::joinOpenGame()`)/
-`withdraw()`, `startTournament()` (creator-only, requires
+discoverability/blocked-pair gating as `MatchmakingService::joinOpenGame()`;
+a `'withdrawn'` row is the one existing-participant status that doesn't
+reject the call -- room permitting, `withdraw()`ing and rejoining an
+open-registration tournament is allowed any number of times, reusing
+that same row via `updateStatus()` rather than inserting a second one,
+which `uq_tournament_participants_user` would reject outright. A
+`'declined'` invite-only row still can't be un-declined this way -- this
+path is `registration_mode: 'open'`-only)/`withdraw()`,
+`startTournament()` (creator-only, requires
 `min_participants` joined; randomly seeds every joined participant --
 nothing about registration/invite-accept order should predict bracket
 strength -- then materializes the whole bracket tree at once for

@@ -1856,25 +1856,28 @@ own accept/decline step via `acceptTournamentInvite()`/
 `declineTournamentInvite()`; an open-registration tournament never puts
 a viewer in that status at all, so the section stays hidden for those.
 "Your tournaments" (the same response, filtered to exclude `invited`,
-`declined`, AND `withdrawn` -- there's nothing left to do with any of
-the three, and `joinOpenTournament()`'s own `findForUser()` check means
-you can never rejoin a tournament you've withdrawn from any more than
-one you've declined) shows a View button (opens `#tournament-view-dialog`,
-see below) and, for a still-in-registration tournament the viewer joined
-but didn't create, a Withdraw button (`withdrawFromTournament()`).
-Excluding `withdrawn` here matters because this list only ever displays
-the *tournament's* own status (e.g. "Registration open"), never the
-viewer's own participant status -- without the exclusion, a withdrawn
-tournament looked visually identical to one you're still joined to, with
-the vanished Withdraw button the only (easy to miss) difference.
-"Open to join" (`GET
+`declined`, AND `withdrawn`) shows a View button (opens
+`#tournament-view-dialog`, see below) and, for a still-in-registration
+tournament the viewer joined but didn't create, a Withdraw button
+(`withdrawFromTournament()`). Excluding `withdrawn` here matters because
+this list only ever displays the *tournament's* own status (e.g.
+"Registration open"), never the viewer's own participant status --
+without the exclusion, a withdrawn tournament looked visually identical
+to one you're still joined to, with the vanished Withdraw button the
+only (easy to miss) difference. Unlike `declined`, `withdrawn` isn't a
+dead end: `joinOpenTournament()`'s own `findForUser()` check lets a
+`withdrawn` row (and only that status) rejoin, room permitting, so a
+withdrawn-from tournament reappears in "Open to join" below instead of
+vanishing from both lists for good. "Open to join" (`GET
 /tournaments`, no `?mine=1`) lists every open-registration tournament
 visible to the current user with a Join button
 (`joinTournament()`) -- same `matchmaking_discoverable`/blocked-pair
 gating `#open-games-dialog`'s own "Available to join" section already
 uses, since `TournamentService::listOpenFor()` is built the same way
 `OpenGameListingRepository::listOpenFor()` is (see "Tournaments" in
-`php-app/README.md`).
+`php-app/README.md`), plus one exception that gate doesn't have: a
+tournament you've withdrawn from stays visible here (it's excluded from
+"Your tournaments" instead) since rejoining is allowed, room permitting.
 
 **New tournament dialog** (`#new-tournament-dialog`, opened by its own
 button inside `#tournaments-dialog`) collects: a name; the bracket type
