@@ -1864,20 +1864,29 @@ registration mode (the same "Invite friends"/open-lobby radio-pair
 shape `#new-game-mode-fields` uses, `updateNewTournamentRegistrationModeFields()`
 swapping a friend-checkbox picker for a required max-participants
 field); and a deliberately curated subset of the New Game dialog's own
-match settings -- format (Duel/Traditional/Draft only, no team formats,
-since a tournament match is always exactly 2 players -- see
-`TournamentService::ALLOWED_FORMATS`), a deck select
-(`updateNewTournamentDeckTypeOptions()` swaps its whole option set
-between Structure/Power/jceddy's 75/One of Each for Duel/Traditional and
-Quick Draft/Sealed Deck for Draft -- every OTHER `#new-game-deck-type`
-option is still reachable per match indirectly, e.g. Custom Decklist
-via each matchup's own normal decklist-submission flow, just not
-offered as a dedicated field here), and a Best of Three checkbox
-(`updateNewTournamentBestOfThreeVisibility()` hides it for Draft, whose
-matches are already potentially multi-game on their own via
-`GameService::draftGamesToWin()`). Submitting calls `createTournament()`
-with all of the above (`invite_user_ids` from the checked friend
-checkboxes) and closes the dialog on success, refreshing
+match settings -- format (Duel/Traditional/Draft/Sealed Deck, no team
+formats, since a tournament match is always exactly 2 players -- see
+`TournamentService::ALLOWED_FORMATS`), a deck select shown only for
+Duel/Traditional (`updateNewTournamentDeckTypeOptions()` -- Structure/
+Power/jceddy's 75/One of Each; every OTHER `#new-game-deck-type` option
+is still reachable per match indirectly, e.g. Custom Decklist via each
+matchup's own normal decklist-submission flow, just not offered as a
+dedicated field here), and a Best of Three checkbox
+(`updateNewTournamentBestOfThreeVisibility()` hides it for Draft/Sealed
+Deck, whose matches are already potentially multi-game on their own via
+`GameService::draftGamesToWin()`). Sealed Deck is `#new-tournament-format`'s
+own UI-only option (mirroring `#new-game-format`'s identical
+`sealed_pool_of_the_day` sentinel, see `effectiveNewGameFormat()`) --
+`effectiveNewTournamentFormat()`/`effectiveNewTournamentDeckType()`
+resolve it to `format: 'draft'`/`deck_type: 'sealed_deck'` on submit
+(and `'draft'` itself always means Quick Draft here, `deck_type:
+'quick_draft'`), so it shows up as its own top-level choice rather than
+a deck picked after first choosing "Draft" -- there's no drafting phase
+to speak of, so nesting it under that label would misname what it
+actually is, the exact same reasoning `openGameSummary()`'s own
+Sealed-Deck special case already documents. Submitting calls
+`createTournament()` with all of the above (`invite_user_ids` from the
+checked friend checkboxes) and closes the dialog on success, refreshing
 `#tournaments-dialog` underneath it.
 
 **Tournament view dialog** (`#tournament-view-dialog`) shows the
