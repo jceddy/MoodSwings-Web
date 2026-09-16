@@ -1190,6 +1190,51 @@
 
             <label class="dialog-field" id="new-tournament-allow-sideboarding-label" hidden><input type="checkbox" id="new-tournament-allow-sideboarding"> Allow sideboarding</label>
 
+            <label class="dialog-field" id="new-tournament-timeout-enabled-label"><input type="checkbox" id="new-tournament-timeout-enabled"> Automatically resolve an idle turn/response</label>
+            <div id="new-tournament-timeout-fields" hidden>
+                <label class="dialog-field">After being idle for
+                    <select id="new-tournament-timeout-minutes">
+                        <option value="30">30 minutes</option>
+                        <option value="60">1 hour</option>
+                        <option value="120">2 hours</option>
+                        <option value="360">6 hours</option>
+                        <option value="720">12 hours</option>
+                        <option value="1440">1 day</option>
+                        <option value="2880">2 days</option>
+                        <option value="4320">3 days</option>
+                        <option value="10080">7 days</option>
+                    </select>
+                </label>
+                <label class="dialog-field">
+                    <select id="new-tournament-timeout-action">
+                        <option value="auto_play">Automatically play a move for them</option>
+                        <option value="skip">Skip their turn/response</option>
+                        <option value="resign">Resign them from the game/match</option>
+                    </select>
+                </label>
+                <p>Checked periodically (at most every 15 minutes), so an idle turn/response may take a little longer than the chosen duration to actually resolve.</p>
+            </div>
+
+            <label class="dialog-field" id="new-tournament-total-time-limit-enabled-label"><input type="checkbox" id="new-tournament-total-time-limit-enabled"> Auto-resign after too much total time in a match</label>
+            <div id="new-tournament-total-time-limit-fields" hidden>
+                <label class="dialog-field">Total time allowed per player
+                    <select id="new-tournament-total-time-limit-minutes">
+                        <option value="60">1 hour</option>
+                        <option value="120">2 hours</option>
+                        <option value="240">4 hours</option>
+                        <option value="480">8 hours</option>
+                        <option value="720">12 hours</option>
+                        <option value="1440" selected>24 hours</option>
+                        <option value="2880">48 hours</option>
+                        <option value="4320">72 hours</option>
+                    </select>
+                </label>
+                <p>A hard cap, separate from the idle time-out above: however long each player has spent actually taking their own turns and responses, added up over the whole game, before they're automatically resigned. Also checked at most every 15 minutes.</p>
+            </div>
+
+            <label class="dialog-field" id="new-tournament-synchronous-enabled-label"><input type="checkbox" id="new-tournament-synchronous-enabled"> Synchronous mode (play live, right now)</label>
+            <p id="new-tournament-synchronous-description" hidden>Both players must be ready before each match's game (or draft) deals. Each action/pick has a short timer, and each player has a 30-minute chess clock for the whole match (deck-building/sideboarding time counts against it) -- automatic loss if it runs out. Mutually exclusive with the idle time-out/total-time-limit options above.</p>
+
             <button type="submit" id="new-tournament-submit-button">Create tournament</button>
             <button type="button" id="new-tournament-cancel-button">Cancel</button>
             <p id="new-tournament-error" class="error" hidden></p>

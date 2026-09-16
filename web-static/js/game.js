@@ -4296,6 +4296,58 @@
         }
     }
 
+    // Issue #85's own turn/decision timeout opt-in, and issue #85
+    // follow-up's own full-game time-limit mode, mirrored from the New
+    // Game dialog's own updateTimeoutFieldVisibility()/
+    // updateTotalTimeLimitFieldVisibility() -- unlike that dialog,
+    // there's no TIMEOUT_EXCLUDED_DECK_TYPES check needed here: neither
+    // excluded deck_type (sealed_pool_of_the_day/weekly_sealed_pool) is
+    // ever a tournament format (TournamentService::ALLOWED_FORMATS), so
+    // both checkboxes are simply always available. Each sub-fields block
+    // shows only once its own checkbox is checked.
+    function updateNewTournamentTimeoutFieldVisibility() {
+        document.getElementById('new-tournament-timeout-fields').hidden =
+            !document.getElementById('new-tournament-timeout-enabled').checked;
+    }
+
+    function updateNewTournamentTotalTimeLimitFieldVisibility() {
+        document.getElementById('new-tournament-total-time-limit-fields').hidden =
+            !document.getElementById('new-tournament-total-time-limit-enabled').checked;
+    }
+
+    // Reported live: "synchronous" mode -- mirrored from the New Game
+    // dialog's own updateSynchronousFieldVisibility(). No
+    // SYNCHRONOUS_MODE_ALLOWED_FORMATS/player-count check needed here
+    // either: every tournament match is always exactly 2 players
+    // (TournamentService's own 1v1 scoping) using one of 'duel'/
+    // 'standard'/'draft' (effectiveNewTournamentFormat()'s own range,
+    // including Booster Draft's own 'duel' translation) -- exactly
+    // GameService::SYNCHRONOUS_MODE_ALLOWED_FORMATS, so the checkbox is
+    // always available regardless of which format is picked.
+    function updateNewTournamentSynchronousFieldVisibility() {
+        const checked = document.getElementById('new-tournament-synchronous-enabled').checked;
+        document.getElementById('new-tournament-synchronous-description').hidden = !checked;
+    }
+
+    // Synchronous mode is mutually exclusive with the idle time-out/
+    // total-time-limit checkboxes above (see createGame()'s own
+    // validation) -- mirrors the New Game dialog's own
+    // enforceSynchronousExclusivityFrom*() pair.
+    function enforceNewTournamentSynchronousExclusivityFromSynchronousCheckbox() {
+        if (document.getElementById('new-tournament-synchronous-enabled').checked) {
+            document.getElementById('new-tournament-timeout-enabled').checked = false;
+            document.getElementById('new-tournament-total-time-limit-enabled').checked = false;
+            updateNewTournamentTimeoutFieldVisibility();
+            updateNewTournamentTotalTimeLimitFieldVisibility();
+        }
+    }
+    function enforceNewTournamentSynchronousExclusivityFromAsyncCheckboxes() {
+        if (document.getElementById('new-tournament-timeout-enabled').checked || document.getElementById('new-tournament-total-time-limit-enabled').checked) {
+            document.getElementById('new-tournament-synchronous-enabled').checked = false;
+            updateNewTournamentSynchronousFieldVisibility();
+        }
+    }
+
     function updateNewTournamentRegistrationModeFields() {
         const isOpen = document.getElementById('new-tournament-registration-mode-open').checked;
         document.getElementById('new-tournament-invite-fields').hidden = isOpen;
@@ -4311,6 +4363,12 @@
     document.getElementById('new-tournament-registration-mode-invite').addEventListener('change', updateNewTournamentRegistrationModeFields);
     document.getElementById('new-tournament-registration-mode-open').addEventListener('change', updateNewTournamentRegistrationModeFields);
     document.getElementById('new-tournament-bracket-type').addEventListener('change', updateNewTournamentSwissRoundCountVisibility);
+    document.getElementById('new-tournament-timeout-enabled').addEventListener('change', updateNewTournamentTimeoutFieldVisibility);
+    document.getElementById('new-tournament-total-time-limit-enabled').addEventListener('change', updateNewTournamentTotalTimeLimitFieldVisibility);
+    document.getElementById('new-tournament-synchronous-enabled').addEventListener('change', updateNewTournamentSynchronousFieldVisibility);
+    document.getElementById('new-tournament-synchronous-enabled').addEventListener('change', enforceNewTournamentSynchronousExclusivityFromSynchronousCheckbox);
+    document.getElementById('new-tournament-timeout-enabled').addEventListener('change', enforceNewTournamentSynchronousExclusivityFromAsyncCheckboxes);
+    document.getElementById('new-tournament-total-time-limit-enabled').addEventListener('change', enforceNewTournamentSynchronousExclusivityFromAsyncCheckboxes);
 
     async function openNewTournamentDialog() {
         newTournamentError.hidden = true;
@@ -4318,6 +4376,9 @@
         updateNewTournamentAllowSideboardingVisibility();
         updateNewTournamentRegistrationModeFields();
         updateNewTournamentSwissRoundCountVisibility();
+        updateNewTournamentTimeoutFieldVisibility();
+        updateNewTournamentTotalTimeLimitFieldVisibility();
+        updateNewTournamentSynchronousFieldVisibility();
 
         const { ok, body } = await listFriends();
         const friends = ok ? body.friends : [];
@@ -4391,6 +4452,25 @@
             // createGame()'s own $bestOfThree docblock.
             best_of_three: true,
             allow_sideboarding: document.getElementById('new-tournament-allow-sideboarding').checked,
+            // Issue #85's own turn/decision timeout opt-in -- same
+            // "undefined means don't send this at all" convention the New
+            // Game dialog's own submit handler uses; timeout_minutes/
+            // timeout_action are only sent once the checkbox is actually
+            // checked.
+            timeout_minutes: document.getElementById('new-tournament-timeout-enabled').checked
+                ? Number(document.getElementById('new-tournament-timeout-minutes').value) : undefined,
+            timeout_action: document.getElementById('new-tournament-timeout-enabled').checked
+                ? document.getElementById('new-tournament-timeout-action').value : undefined,
+            // Issue #85 follow-up's own full-game time-limit mode -- same
+            // convention, fully independent of the idle timeout above.
+            total_time_limit_minutes: document.getElementById('new-tournament-total-time-limit-enabled').checked
+                ? Number(document.getElementById('new-tournament-total-time-limit-minutes').value) : undefined,
+            // Reported live: "synchronous" mode -- mutually exclusive with
+            // the two above (enforced both by the checkboxes' own mutual
+            // exclusivity and, ultimately, createGame()'s own validation).
+            // undefined (not false) when unchecked, same "don't send this
+            // at all" convention as every other optional field here.
+            synchronous_mode: document.getElementById('new-tournament-synchronous-enabled').checked ? true : undefined,
         };
 
         const { ok, body } = await createTournament(params);

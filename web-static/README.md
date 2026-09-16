@@ -1920,6 +1920,42 @@ Draft), which already run their own best-of-three-at-2-players story via
 `GameService::draftGamesToWin()` -- see `createGame()`'s own
 `$bestOfThree` docblock.
 
+**Timing options** -- the New Tournament dialog now also offers the same
+three opt-ins the New Game dialog does, applied to every match the
+tournament ever plays rather than negotiated per game: the idle
+turn/response timeout (`#new-tournament-timeout-enabled`, its own
+duration/action sub-fields in `#new-tournament-timeout-fields`), the
+full-game total time limit (`#new-tournament-total-time-limit-enabled`,
+`#new-tournament-total-time-limit-fields`), and Synchronous mode
+(`#new-tournament-synchronous-enabled`). All three are format-independent
+here -- unlike the New Game dialog's own `updateTimeoutFieldVisibility()`/
+`updateTotalTimeLimitFieldVisibility()`/`updateSynchronousFieldVisibility()`,
+none of the three tournament-side equivalents
+(`updateNewTournamentTimeoutFieldVisibility()`/
+`updateNewTournamentTotalTimeLimitFieldVisibility()`/
+`updateNewTournamentSynchronousFieldVisibility()`) need a format/deck_type
+exclusion check, since neither of the New Game dialog's own exclusions
+ever applies to a tournament: the idle-timeout/total-time-limit pair is
+only ever excluded for Sealed Pool of the Day/Weekly Sealed Pool (never
+tournament formats at all -- `TournamentService::ALLOWED_FORMATS`), and
+Synchronous mode's own `GameService::SYNCHRONOUS_MODE_ALLOWED_FORMATS`
+(`standard`/`duel`/`draft`) plus its exactly-2-players requirement are
+both unconditionally true for every tournament match already (every
+`effectiveNewTournamentFormat()` value falls in that list, and a
+tournament match is always exactly 2 players by design). Synchronous
+mode stays mutually exclusive with the other two, enforced by the same
+three-way checkbox wiring (`enforceNewTournamentSynchronousExclusivityFromSynchronousCheckbox()`/
+`enforceNewTournamentSynchronousExclusivityFromAsyncCheckboxes()`) the
+New Game dialog uses. The submit handler sends all three with the same
+"undefined means don't send this at all" convention as the New Game
+dialog's own submit handler -- `openGameCreateParamsFromRequestBody()`
+(shared with `POST /open-games`) already extracted `timeout_minutes`/
+`timeout_action`/`total_time_limit_minutes`/`synchronous_mode` from the
+request body into `match_params` before this feature existed, and
+`TournamentService::startMatchGame()` already threaded all four through
+to every match's own `createGame()` call -- so this was a pure frontend
+gap, no backend change needed.
+
 **Power Duel** -- `#new-tournament-format`'s `duel` option, relabeled
 from the plain "Duel" it used to be: using custom decks is no longer a
 choice, it's simply what this format is, so
