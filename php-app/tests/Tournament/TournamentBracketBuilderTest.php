@@ -99,36 +99,113 @@ final class TournamentBracketBuilderTest extends TestCase
         self::assertCount(1, $byBracket['grand_final'][1]['matches']);
         self::assertCount(1, $byBracket['grand_final'][2]['matches']);
 
-        foreach ($byBracket['losers'] as $roundNumber => $round) {
-            $j = (int) ceil($roundNumber / 2);
-            $expected = $size / (2 ** ($j + 1));
-            self::assertCount((int) $expected, $round['matches'], "losers round {$roundNumber} match count");
-        }
-
         $this->assertNoCoordinateCollisions($plan['advances']);
 
-        // Every losers-bracket match, and every winners-bracket match
-        // beyond round 1, must have exactly one inbound advance per
-        // player slot -- nothing left permanently unfillable, nothing
-        // double-targeted. Grand final round 2 (the conditional bracket
-        // reset) is populated dynamically by TournamentService, not by
-        // static wiring, so it's excluded here.
-        $this->assertEveryLaterMatchFullyWired($byBracket['single'], $plan['advances'], ['single']);
-        $this->assertEveryLaterMatchFullyWired($byBracket['losers'], $plan['advances'], ['single', 'losers']);
+        // Independently re-derive, from $participantCount/$size alone
+        // (the same recursion TournamentBracketBuilder's own docblock
+        // describes, reasoned through fresh here rather than copied from
+        // its implementation), exactly which losers-bracket slots should
+        // exist at all and how many real entrants (1 = a bye, 2 = a real
+        // match) each one structurally expects -- then cross-check the
+        // builder's actual output against it, slot by slot.
+        $wbRound1EntrantCount = [];
+        foreach ($byBracket['single'][1]['matches'] as $match) {
+            $wbRound1EntrantCount[$match['slot']] = ($match['seed1'] !== null ? 1 : 0) + ($match['seed2'] !== null ? 1 : 0);
+        }
 
-        // Every winners-bracket match (all rounds, including round 1)
-        // has an outgoing 'loser' edge into the losers bracket.
+        $expectedLbCounts = [];
+        for ($lbRound = 1; $lbRound <= $loserRoundCount; $lbRound++) {
+            $j = (int) ceil($lbRound / 2);
+            $matchCount = $size / (2 ** ($j + 1));
+            $isMinor = $lbRound % 2 === 1;
+            $counts = [];
+            for ($slot = 1; $slot <= $matchCount; $slot++) {
+                if ($isMinor) {
+                    if ($lbRound === 1) {
+                        $a = $wbRound1EntrantCount[2 * $slot - 1] === 2 ? 1 : 0;
+                        $b = $wbRound1EntrantCount[2 * $slot] === 2 ? 1 : 0;
+                    } else {
+                        $prevMajor = $expectedLbCounts[$lbRound - 1];
+                        $a = ($prevMajor[2 * $slot - 1] ?? 0) >= 1 ? 1 : 0;
+                        $b = ($prevMajor[2 * $slot] ?? 0) >= 1 ? 1 : 0;
+                    }
+                    $counts[$slot] = $a + $b;
+                } else {
+                    $prevMinor = $expectedLbCounts[$lbRound - 1];
+                    $counts[$slot] = (($prevMinor[$slot] ?? 0) >= 1 ? 1 : 0) + 1;
+                }
+            }
+            $expectedLbCounts[$lbRound] = $counts;
+        }
+
+        // Major rounds (the ones fed by a guaranteed winners-bracket
+        // loser) can never be empty; only a minor round can be.
+        foreach ($expectedLbCounts as $lbRound => $counts) {
+            if ($lbRound % 2 === 0) {
+                foreach ($counts as $slot => $count) {
+                    self::assertGreaterThanOrEqual(1, $count, "losers round {$lbRound} slot {$slot} (a major round) must never be empty");
+                }
+            }
+        }
+
+        foreach ($expectedLbCounts as $lbRound => $counts) {
+            $actualSlots = array_map(static fn (array $m): int => $m['slot'], $byBracket['losers'][$lbRound]['matches']);
+            sort($actualSlots);
+            $expectedSlots = array_keys(array_filter($counts, static fn (int $c): bool => $c > 0));
+            sort($expectedSlots);
+            self::assertSame($expectedSlots, $actualSlots, "losers round {$lbRound}'s existing slots");
+        }
+
+        // Inbound-edge count per (bracket, round, slot) target, across
+        // ALL advances (winner and loser edges alike).
+        $inboundCount = [];
+        foreach ($plan['advances'] as $advance) {
+            $key = "{$advance['to']['bracket']}:{$advance['to']['round_number']}:{$advance['to']['slot']}";
+            $inboundCount[$key] = ($inboundCount[$key] ?? 0) + 1;
+        }
+
+        // Winners-bracket round 2+ matches are always real (2 inbound edges).
+        for ($wbRound = 2; $wbRound <= $winnerRounds; $wbRound++) {
+            foreach ($byBracket['single'][$wbRound]['matches'] as $match) {
+                $key = "single:{$wbRound}:{$match['slot']}";
+                self::assertSame(2, $inboundCount[$key] ?? 0, "{$key} must have exactly 2 inbound edges");
+            }
+        }
+
+        // Every existing losers-bracket slot's actual inbound edge count
+        // must match its independently-derived expected entrant count.
+        foreach ($expectedLbCounts as $lbRound => $counts) {
+            foreach ($counts as $slot => $expectedCount) {
+                if ($expectedCount === 0) {
+                    continue;
+                }
+                $key = "losers:{$lbRound}:{$slot}";
+                self::assertSame($expectedCount, $inboundCount[$key] ?? 0, "{$key} inbound edge count");
+            }
+        }
+
+        // Every winners-bracket REAL match (round 1 real matches, and
+        // every round 2+ match unconditionally) has an outgoing 'loser'
+        // edge; a round-1 BYE match must not.
         $loserEdgesFrom = [];
         foreach ($plan['advances'] as $advance) {
             if ($advance['on'] === 'loser') {
                 $loserEdgesFrom[] = "{$advance['from']['bracket']}:{$advance['from']['round_number']}:{$advance['from']['slot']}";
             }
         }
-        $winnersMatchCount = 0;
-        foreach ($byBracket['single'] as $round) {
-            $winnersMatchCount += count($round['matches']);
+        foreach ($byBracket['single'][1]['matches'] as $match) {
+            $key = "single:1:{$match['slot']}";
+            if ($wbRound1EntrantCount[$match['slot']] === 2) {
+                self::assertContains($key, $loserEdgesFrom, "{$key} (a real round-1 match) must feed a loser into the losers bracket");
+            } else {
+                self::assertNotContains($key, $loserEdgesFrom, "{$key} (a bye) must not produce a loser");
+            }
         }
-        self::assertCount($winnersMatchCount, array_unique($loserEdgesFrom));
+        for ($wbRound = 2; $wbRound <= $winnerRounds; $wbRound++) {
+            foreach ($byBracket['single'][$wbRound]['matches'] as $match) {
+                self::assertContains("single:{$wbRound}:{$match['slot']}", $loserEdgesFrom);
+            }
+        }
 
         // The grand final is fed by exactly the winners-bracket champion
         // (player 1) and the losers-bracket champion (player 2).
@@ -144,7 +221,7 @@ final class TournamentBracketBuilderTest extends TestCase
 
     public static function doubleEliminationParticipantCounts(): array
     {
-        return array_map(static fn (int $n): array => [$n], [4, 5, 6, 7, 8, 9, 16]);
+        return array_map(static fn (int $n): array => [$n], [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
     }
 
     public function testDoubleEliminationRejectsFewerThanFour(): void

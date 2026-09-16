@@ -314,18 +314,75 @@ final class TournamentServiceIntegrationTest extends TestCase
         self::assertSame($wbFinalP1, (int) $finalState['tournament']['winner_user_id']);
     }
 
-    public function testDoubleEliminationRejectsNonPowerOfTwoAtStart(): void
+    /**
+     * 5 participants pads to a size-8 bracket with 3 byes -- exercises
+     * the exact shape hand-traced in TournamentBracketBuilder's own
+     * docblock: one losers-bracket slot ends up a genuine bye (a lone
+     * winners-bracket-round-1 bye-winner's eventual loser has no
+     * opponent waiting), and another ends up entirely EMPTY (both its
+     * would-be sources were themselves winners-bracket byes) -- neither
+     * of which existed before non-power-of-two support. Drives the
+     * whole bracket to completion by always resigning whichever seat is
+     * NOT participant1 of each newly-in_progress match, in a loop until
+     * nothing is left in_progress, then asserts the tournament actually
+     * reaches 'completed' (not stuck waiting on a slot that can never
+     * fill) and that at least one losers-bracket match resolved via a
+     * genuine bye (status 'bye', never got a game of its own).
+     */
+    public function testDoubleEliminationWithFiveParticipantsUsesLosersBracketByes(): void
     {
-        $creator = $this->insertUser('nonpow2_p1');
-        $p2 = $this->insertUser('nonpow2_p2');
-        $p3 = $this->insertUser('nonpow2_p3');
+        $creator = $this->insertUser('de5_p1');
+        $invitees = [
+            $this->insertUser('de5_p2'),
+            $this->insertUser('de5_p3'),
+            $this->insertUser('de5_p4'),
+            $this->insertUser('de5_p5'),
+        ];
 
-        $tournamentId = $this->createDuelTournament($creator, [$p2, $p3], 'double_elimination');
-        $this->tournaments->acceptInvite($tournamentId, $p2);
-        $this->tournaments->acceptInvite($tournamentId, $p3);
-
-        $this->expectException(TournamentStateException::class);
+        $tournamentId = $this->createDuelTournament($creator, $invitees, 'double_elimination');
+        foreach ($invitees as $invitee) {
+            $this->tournaments->acceptInvite($tournamentId, $invitee);
+        }
         $this->tournaments->startTournament($tournamentId, $creator);
+
+        for ($i = 0; $i < 20; $i++) {
+            $resolvedAny = false;
+            foreach ($this->matchRepo->listForTournament($tournamentId) as $match) {
+                if ($match['status'] === 'in_progress' && $match['game_id'] !== null) {
+                    $loserUserId = $this->participantUserId((int) $match['participant2_id']);
+                    $this->loseGameAs((int) $match['game_id'], $loserUserId);
+                    $resolvedAny = true;
+                }
+            }
+            if (!$resolvedAny) {
+                break;
+            }
+        }
+
+        $finalState = $this->tournaments->getState($tournamentId, $creator);
+        self::assertSame('completed', $finalState['tournament']['status'], 'the bracket must not get stuck on an unfillable slot');
+        self::assertNotNull($finalState['tournament']['winner_user_id']);
+
+        $byeCount = 0;
+        $lbMatchesExisting = 0;
+        foreach ($finalState['rounds'] as $round) {
+            if ($round['bracket'] !== 'losers') {
+                continue;
+            }
+            foreach ($finalState['matches_by_round'][$round['id']] as $match) {
+                $lbMatchesExisting++;
+                if ($match['status'] === 'bye') {
+                    $byeCount++;
+                }
+            }
+        }
+        self::assertGreaterThan(0, $byeCount, 'at least one losers-bracket slot should have resolved as a genuine bye');
+        // 5 participants, size 8: losers bracket has 4 rounds' worth of
+        // slot capacity but one slot is structurally EMPTY (both
+        // winners-round-1 sources were byes) -- see this test's own
+        // docblock -- so strictly fewer rows exist than the full
+        // power-of-two shape would have.
+        self::assertLessThan(6, $lbMatchesExisting, 'the structurally-empty losers-bracket slot must never get a row at all');
     }
 
     public function testSwissFourPlayersTwoRoundsToCompletion(): void

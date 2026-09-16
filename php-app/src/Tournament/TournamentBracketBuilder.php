@@ -89,10 +89,34 @@ final class TournamentBracketBuilder
      * lose only once across the whole event to be eliminated -- see
      * TournamentService's own handling of round 2 there).
      *
-     * Requires at least 4 participants: with fewer, a losers bracket
-     * has no matches of its own to speak of and the whole "drop down,
-     * fight back" shape degenerates into something not meaningfully
-     * different from single elimination.
+     * Non-power-of-two fields need byes in the LOSERS bracket too, not
+     * just the winners bracket -- a winners-bracket bye produces no
+     * loser to drop down at all, so whichever losers-bracket slot would
+     * have received that "phantom" loser needs to skip waiting for it.
+     * This is handled by computing, structurally (from $participantCount
+     * alone, independent of any actual game result), how many real
+     * entrants (0, 1, or 2) arrive at every losers-bracket slot:
+     *
+     * - A winners-bracket round-1 match contributes a loser only if it's
+     *   REAL (both seeds present); a bye contributes nothing. Every
+     *   winners-bracket round beyond round 1 is always real (a bye's own
+     *   winner is still one real advancing player, so round 2 onward
+     *   always receives two real inputs -- see buildSingleElimination()'s
+     *   own docblock), so it always contributes a loser.
+     * - A losers "minor" round slot sums two contributing sources (each
+     *   0 or 1); a losers "major" round slot sums one contributing
+     *   losers-bracket source (0 or 1) plus one GUARANTEED winners-bracket
+     *   loser (always 1) -- so a major-round slot is never 0.
+     *
+     * A slot totaling 0 is skipped entirely (no row, no outgoing edge --
+     * downstream slots simply receive one fewer inbound edge, which is
+     * exactly how TournamentService::advanceInto() tells a bye slot
+     * (still short one participant once its only edge fires, permanently)
+     * apart from a real one (two edges, both must fire). A slot totaling
+     * 1 still gets a row -- a genuine bye once its lone participant
+     * actually arrives -- but only one inbound edge; a slot totaling 2
+     * is an ordinary real match with two inbound edges (or, for winners
+     * round 1 only, two real seeds assigned directly).
      */
     public function buildDoubleElimination(int $participantCount): array
     {
@@ -114,13 +138,54 @@ final class TournamentBracketBuilder
             $advances[] = $advance;
         }
 
+        // Winners-bracket round 1's own entrant count per slot (2 = real,
+        // produces a loser; 1 = bye, produces none) -- read straight off
+        // the seeds buildSingleElimination() already assigned.
+        $wbRound1EntrantCount = [];
+        foreach ($winners['rounds'][0]['matches'] as $match) {
+            $wbRound1EntrantCount[$match['slot']] = ($match['seed1'] !== null ? 1 : 0) + ($match['seed2'] !== null ? 1 : 0);
+        }
+
         $losersRoundCount = 2 * $winnerBracketRounds - 2;
-        $loserRounds = [];
+
+        // Forward pass: derive every losers-bracket slot's own entrant
+        // count from earlier rounds' counts (and, for major rounds, the
+        // always-real winners-bracket loser feeding in) before creating
+        // a single row -- see this method's own docblock for the exact
+        // recursion.
+        $lbEntrantCounts = [];
         for ($lbRound = 1; $lbRound <= $losersRoundCount; $lbRound++) {
             $j = (int) ceil($lbRound / 2);
             $matchCount = $size / (2 ** ($j + 1));
-            $matches = [];
+            $isMinor = $lbRound % 2 === 1;
+            $counts = [];
             for ($slot = 1; $slot <= $matchCount; $slot++) {
+                if ($isMinor) {
+                    if ($lbRound === 1) {
+                        $a = $wbRound1EntrantCount[2 * $slot - 1] === 2 ? 1 : 0;
+                        $b = $wbRound1EntrantCount[2 * $slot] === 2 ? 1 : 0;
+                    } else {
+                        $prevMajor = $lbEntrantCounts[$lbRound - 1];
+                        $a = ($prevMajor[2 * $slot - 1] ?? 0) >= 1 ? 1 : 0;
+                        $b = ($prevMajor[2 * $slot] ?? 0) >= 1 ? 1 : 0;
+                    }
+                    $counts[$slot] = $a + $b;
+                } else {
+                    $prevMinor = $lbEntrantCounts[$lbRound - 1];
+                    $fromLosers = ($prevMinor[$slot] ?? 0) >= 1 ? 1 : 0;
+                    $counts[$slot] = $fromLosers + 1; // + the guaranteed winners-bracket loser
+                }
+            }
+            $lbEntrantCounts[$lbRound] = $counts;
+        }
+
+        $loserRounds = [];
+        for ($lbRound = 1; $lbRound <= $losersRoundCount; $lbRound++) {
+            $matches = [];
+            foreach ($lbEntrantCounts[$lbRound] as $slot => $count) {
+                if ($count === 0) {
+                    continue; // no real entrant will ever reach this slot -- no row at all
+                }
                 $matches[] = ['slot' => $slot, 'seed1' => null, 'seed2' => null];
             }
             $loserRounds[] = ['bracket' => 'losers', 'round_number' => $lbRound, 'matches' => $matches];
@@ -129,15 +194,18 @@ final class TournamentBracketBuilder
 
         // Winners-bracket round r's losers feed the losers bracket.
         // Round 1's losers feed LB round 1 (a "minor" round pairing
-        // them against each other); every later WB round r's losers
-        // feed the matching "major" LB round instead (see the class
-        // docblock's j/r correspondence).
+        // them against each other) -- but only from a REAL round-1
+        // match; a bye produces no loser to send at all. Every later WB
+        // round r's losers feed the matching "major" LB round instead
+        // (see the class docblock's j/r correspondence), always real.
         for ($wbRound = 1; $wbRound <= $winnerBracketRounds; $wbRound++) {
             $wbMatchCount = $size / (2 ** $wbRound);
 
             if ($wbRound === 1) {
-                // Pairs of WB round 1 losers feed LB round 1 directly.
                 for ($slot = 1; $slot <= $wbMatchCount; $slot++) {
+                    if ($wbRound1EntrantCount[$slot] < 2) {
+                        continue; // a bye -- no loser produced
+                    }
                     $advances[] = [
                         'from' => ['bracket' => 'single', 'round_number' => 1, 'slot' => $slot],
                         'to' => ['bracket' => 'losers', 'round_number' => 1, 'slot' => (int) ceil($slot / 2), 'player' => $slot % 2 === 1 ? 1 : 2],
@@ -164,11 +232,15 @@ final class TournamentBracketBuilder
         // feeds the very next (major) round's player 1 slot one-to-one;
         // a major round's winner feeds the next minor round (halving)
         // exactly like single elimination's own winner-only wiring.
+        // Skipped for any slot with a 0 entrant count above -- it has no
+        // row (and so nothing to advance a winner FROM) at all.
         for ($lbRound = 1; $lbRound < $losersRoundCount; $lbRound++) {
             $isMinor = $lbRound % 2 === 1;
-            $matchCountThisRound = count($loserRounds[$lbRound - 1]['matches']);
 
-            for ($slot = 1; $slot <= $matchCountThisRound; $slot++) {
+            foreach ($lbEntrantCounts[$lbRound] as $slot => $count) {
+                if ($count === 0) {
+                    continue;
+                }
                 $advances[] = [
                     'from' => ['bracket' => 'losers', 'round_number' => $lbRound, 'slot' => $slot],
                     'to' => $isMinor
