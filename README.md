@@ -187,6 +187,16 @@ skips it, so a broken deploy is never announced as if it succeeded.
      `siteRootUrl()` in `php-app/README.md`'s "Discord" section. If unset,
      the app derives it from `APP_URL` instead, so this is optional but
      recommended.
+   - `SYNCHRONOUS_MODE_ENABLED` — a feature flag for the New Game/New
+     Tournament dialogs' own Synchronous mode ("play live, right now")
+     opt-in checkbox, `false`/unset by default (the checkbox stays
+     hidden). Set to `true` (or `1`/`yes`/`on`) to show it — no code
+     change or redeploy of anything but this variable needed either way,
+     since the app reads it fresh from `.env` on every request
+     (`Config::getBool()`). Only hides the UI; every backend/API code
+     path for a synchronous game/match/tournament someone already knows
+     how to request keeps working regardless — see "Synchronous mode" in
+     `php-app/README.md`.
    - `DISCORD_ANNOUNCE_CHANNEL_ID` — the id of the Discord channel to post
      production deploy announcements into (right-click the channel in
      Discord with Developer Mode on → **Copy Channel ID**). Not sensitive
@@ -253,7 +263,12 @@ emails going out from the same already-configured sender isn't a concern.
    separate `DEV_MIGRATION_DEPLOY_KEY` is needed — `deploy-dev.yml` reuses
    the same `MIGRATION_DEPLOY_KEY` secret from production's own step 3
    above, so if that's already set, dev's migrations already auto-apply
-   too.
+   too. `DEV_SYNCHRONOUS_MODE_ENABLED` is the one deliberate exception to
+   "same variable name, `DEV_`-prefixed" here: unlike `PHP_CLI_BINARY`
+   (shared — a property of the hosting account, not the environment), a
+   feature flag is exactly the kind of thing you'd want to turn on for
+   dev testing before flipping production's own separate
+   `SYNCHRONOUS_MODE_ENABLED`.
 4. Create a **separate** database for the dev domain (do not point it at
    the production database) and apply `database/migrations/` to it the same
    way as production's step 5 — the two environments' data should stay

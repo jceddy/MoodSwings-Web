@@ -5,6 +5,19 @@
         return;
     }
 
+    // Feature flag (Config::getBool('SYNCHRONOUS_MODE_ENABLED'), defaults
+    // to disabled) gating the New Game/New Tournament dialogs' own
+    // Synchronous mode checkbox -- fetched once here rather than per
+    // dialog open, read synchronously from this module-level flag by
+    // updateSynchronousFieldVisibility()/updateNewTournamentSynchronousFieldVisibility()
+    // below. A fetch failure (network error, older deployment without
+    // this route yet) leaves it at its own safe default, false.
+    let synchronousModeEnabled = false;
+    {
+        const { ok, body } = await getSynchronousModeEnabled();
+        synchronousModeEnabled = ok && body.enabled === true;
+    }
+
     document.getElementById('username').textContent = user.username;
     document.getElementById('game-main').hidden = false;
     startVersionWatcher();
@@ -3403,11 +3416,15 @@
     // requires exactly 2 total players (currentNewGamePlayerCount()),
     // the one restriction that isn't itself a format/deck_type check.
     // Same "unchecked, not just hidden, whenever it goes out of view"
-    // treatment as the two async timeout checkboxes above.
+    // treatment as the two async timeout checkboxes above. Also gated on
+    // the synchronousModeEnabled feature flag fetched once at page load
+    // above -- disabled entirely (never shown, whatever the format/
+    // player count) until a maintainer opts in via the
+    // SYNCHRONOUS_MODE_ENABLED repository variable.
     const SYNCHRONOUS_MODE_ALLOWED_FORMATS = ['standard', 'duel', 'draft'];
     function updateSynchronousFieldVisibility() {
         const format = effectiveNewGameFormat();
-        const show = SYNCHRONOUS_MODE_ALLOWED_FORMATS.includes(format) && currentNewGamePlayerCount() === 2;
+        const show = synchronousModeEnabled && SYNCHRONOUS_MODE_ALLOWED_FORMATS.includes(format) && currentNewGamePlayerCount() === 2;
         const checkboxLabel = document.getElementById('new-game-synchronous-enabled-label');
         checkboxLabel.hidden = !show;
         const checkbox = document.getElementById('new-game-synchronous-enabled');
@@ -4367,11 +4384,21 @@
     // (TournamentService's own 1v1 scoping) using one of 'duel'/
     // 'standard'/'draft' (effectiveNewTournamentFormat()'s own range,
     // including Booster Draft's own 'duel' translation) -- exactly
-    // GameService::SYNCHRONOUS_MODE_ALLOWED_FORMATS, so the checkbox is
-    // always available regardless of which format is picked.
+    // GameService::SYNCHRONOUS_MODE_ALLOWED_FORMATS, so the checkbox
+    // would otherwise always be available regardless of which format is
+    // picked -- gated instead on the same synchronousModeEnabled feature
+    // flag the New Game dialog's own checkbox is (fetched once at page
+    // load, see the top of this file), hidden entirely and force-unchecked
+    // until a maintainer opts in via the SYNCHRONOUS_MODE_ENABLED
+    // repository variable.
     function updateNewTournamentSynchronousFieldVisibility() {
-        const checked = document.getElementById('new-tournament-synchronous-enabled').checked;
-        document.getElementById('new-tournament-synchronous-description').hidden = !checked;
+        const label = document.getElementById('new-tournament-synchronous-enabled-label');
+        label.hidden = !synchronousModeEnabled;
+        const checkbox = document.getElementById('new-tournament-synchronous-enabled');
+        if (!synchronousModeEnabled) {
+            checkbox.checked = false;
+        }
+        document.getElementById('new-tournament-synchronous-description').hidden = !synchronousModeEnabled || !checkbox.checked;
     }
 
     // Synchronous mode is mutually exclusive with the idle time-out/
