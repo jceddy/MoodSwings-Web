@@ -1868,10 +1868,11 @@ match settings -- format (Duel/Traditional/Draft/Sealed Deck, no team
 formats, since a tournament match is always exactly 2 players -- see
 `TournamentService::ALLOWED_FORMATS`), a deck select shown only for
 Duel/Traditional (`updateNewTournamentDeckTypeOptions()` -- Structure/
-Power/jceddy's 75/One of Each; every OTHER `#new-game-deck-type` option
-is still reachable per match indirectly, e.g. Custom Decklist via each
-matchup's own normal decklist-submission flow, just not offered as a
-dedicated field here), and a Best of Three checkbox
+Power/jceddy's 75/One of Each, plus a Duel-only "Power (Custom Decks)"
+option (`custom_duel`, see below); every OTHER `#new-game-deck-type`
+option is still reachable per match indirectly, e.g. Custom Decklist via
+each matchup's own normal decklist-submission flow, just not offered as
+a dedicated field here), and a Best of Three checkbox
 (`updateNewTournamentBestOfThreeVisibility()` hides it for Draft/Sealed
 Deck, whose matches are already potentially multi-game on their own via
 `GameService::draftGamesToWin()`). Sealed Deck is `#new-tournament-format`'s
@@ -1888,6 +1889,37 @@ Sealed-Deck special case already documents. Submitting calls
 `createTournament()` with all of the above (`invite_user_ids` from the
 checked friend checkboxes) and closes the dialog on success, refreshing
 `#tournaments-dialog` underneath it.
+
+**Power (Custom Decks)** -- `#new-tournament-deck-type`'s `custom_duel`
+option, only ever offered for format `duel` (`updateNewTournamentDeckTypeOptions()`
+omits it entirely for Traditional, matching `GameService::createGame()`'s
+own "only supported for duel games" restriction on this deck_type):
+each match's two players submit their own decklist, validated against
+the "power" `duel_deck_rules` preset, rather than one deck
+algorithmically assembled for the whole event -- see "Power Duel
+sideboarding" in `php-app/README.md`. Selecting it sends
+`duel_deck_rules: {preset: 'power'}` alongside `deck_type: 'custom_duel'`
+(`effectiveNewTournamentDeckType()` passes `custom_duel` straight
+through unchanged, unlike Sealed Deck's own translation, since it's
+already the real deck_type value); the tournament dialog never exposes
+the full `user_defined` rule fields the New Game dialog offers for this
+same deck_type, only this one fixed preset. Checking Best of Three then
+reveals `#new-tournament-allow-sideboarding-label`
+(`updateNewTournamentAllowSideboardingVisibility()`, the same
+format/deck_type/best-of-three condition the New Game dialog's own
+`updateAllowSideboardingFieldVisibility()` uses, minus its preset check
+since Power is the only preset offered here) -- checking it sends
+`allow_sideboarding: true`, threaded through by
+`TournamentService::startMatchGame()`'s own `createGame()` call exactly
+like `best_of_three`. Because the game this creates needs each player's
+decklist submitted before it can start, `startMatchGame()`'s own
+`startGame()` call fails harmlessly and is left for the same
+per-player decklist-submission flow an ordinary ad hoc Power Duel match
+already uses (see `TournamentService`'s own class docblock). The
+tournaments list (`tournamentMatchSummary()`) shows this option as
+"Power (Custom Decks)" rather than `NEW_GAME_DECK_TYPE_LABELS`'s own
+generic "Custom Decklists (Duel)" label, since the tournament dialog
+only ever offers it under the "power" preset.
 
 **Tournament view dialog** (`#tournament-view-dialog`) shows the
 tournament's name/status, a Start button (creator only, still in

@@ -4080,10 +4080,18 @@
     // own docblock). Sealed Deck is `format: 'draft'` under the hood
     // (issue #392) but has no actual drafting phase of its own, so
     // (same special case openGameSummary() already makes) it's shown as
-    // just "Sealed Deck" rather than "Draft – Sealed Deck".
+    // just "Sealed Deck" rather than "Draft – Sealed Deck". 'custom_duel'
+    // is shown as "Power (Custom Decks)" rather than
+    // NEW_GAME_DECK_TYPE_LABELS's own generic "Custom Decklists (Duel)"
+    // -- the tournament dialog only ever offers it under the "power"
+    // duel_deck_rules preset (see #new-tournament-deck-type-label's own
+    // option), unlike the New Game dialog which also offers user-defined
+    // rules under that same deck_type.
     function tournamentMatchSummary(tournament) {
         const params = tournament.match_params;
-        const deckType = NEW_GAME_DECK_TYPE_LABELS[params.deck_type] || params.deck_type;
+        const deckType = params.deck_type === 'custom_duel'
+            ? 'Power (Custom Decks)'
+            : NEW_GAME_DECK_TYPE_LABELS[params.deck_type] || params.deck_type;
         const format = params.deck_type === 'sealed_deck'
             ? deckType
             : `${NEW_GAME_FORMAT_LABELS[params.format] || params.format} – ${deckType}`;
@@ -4264,6 +4272,14 @@
 
         const deckTypeSelect = document.getElementById('new-tournament-deck-type');
         const constructedOptions = { structure: 'Structure', power: 'Power', jceddys_75: "jceddy's 75 Card", one_of_each: 'One of Each Card' };
+        // 'custom_duel' (each player submits their own decklist, built
+        // under the "Power Duel" duel_deck_rules preset -- see
+        // updateNewTournamentAllowSideboardingVisibility()) is only ever
+        // valid for format 'duel' -- GameService::createGame() itself
+        // rejects it for 'standard' ("only supported for duel games").
+        if (format === 'duel') {
+            constructedOptions.custom_duel = 'Power (Custom Decks)';
+        }
 
         const previousValue = deckTypeSelect.value;
         deckTypeSelect.innerHTML = '';
@@ -4286,6 +4302,24 @@
         document.getElementById('new-tournament-best-of-three-label').hidden = format === 'draft' || format === 'sealed_deck';
     }
 
+    // Mirrors the New Game dialog's own updateAllowSideboardingFieldVisibility()
+    // condition (see its docblock): sideboarding only ever actually takes
+    // effect for a best-of-three 'duel' match built under deck_type
+    // 'custom_duel' with the "power" duel_deck_rules preset -- the one
+    // preset the tournament dialog offers under that option, so no
+    // separate preset check is needed here the way the New Game dialog's
+    // (which also offers 'user_defined') does.
+    function updateNewTournamentAllowSideboardingVisibility() {
+        const format = document.getElementById('new-tournament-format').value;
+        const deckType = document.getElementById('new-tournament-deck-type').value;
+        const bestOfThreeChecked = document.getElementById('new-tournament-best-of-three').checked;
+        const show = format === 'duel' && deckType === 'custom_duel' && bestOfThreeChecked;
+        document.getElementById('new-tournament-allow-sideboarding-label').hidden = !show;
+        if (!show) {
+            document.getElementById('new-tournament-allow-sideboarding').checked = false;
+        }
+    }
+
     function updateNewTournamentRegistrationModeFields() {
         const isOpen = document.getElementById('new-tournament-registration-mode-open').checked;
         document.getElementById('new-tournament-invite-fields').hidden = isOpen;
@@ -4299,6 +4333,9 @@
 
     document.getElementById('new-tournament-format').addEventListener('change', updateNewTournamentDeckTypeOptions);
     document.getElementById('new-tournament-format').addEventListener('change', updateNewTournamentBestOfThreeVisibility);
+    document.getElementById('new-tournament-format').addEventListener('change', updateNewTournamentAllowSideboardingVisibility);
+    document.getElementById('new-tournament-deck-type').addEventListener('change', updateNewTournamentAllowSideboardingVisibility);
+    document.getElementById('new-tournament-best-of-three').addEventListener('change', updateNewTournamentAllowSideboardingVisibility);
     document.getElementById('new-tournament-registration-mode-invite').addEventListener('change', updateNewTournamentRegistrationModeFields);
     document.getElementById('new-tournament-registration-mode-open').addEventListener('change', updateNewTournamentRegistrationModeFields);
     document.getElementById('new-tournament-bracket-type').addEventListener('change', updateNewTournamentSwissRoundCountVisibility);
@@ -4308,6 +4345,7 @@
         newTournamentForm.reset();
         updateNewTournamentDeckTypeOptions();
         updateNewTournamentBestOfThreeVisibility();
+        updateNewTournamentAllowSideboardingVisibility();
         updateNewTournamentRegistrationModeFields();
         updateNewTournamentSwissRoundCountVisibility();
 
@@ -4350,6 +4388,9 @@
             ? Array.from(tournamentInviteCheckboxes.querySelectorAll('input[type=checkbox]:checked')).map((cb) => parseInt(cb.value, 10))
             : [];
 
+        const deckType = effectiveNewTournamentDeckType();
+        const bestOfThree = format !== 'draft' && document.getElementById('new-tournament-best-of-three').checked;
+
         const params = {
             name: document.getElementById('new-tournament-name').value,
             bracket_type: bracketType,
@@ -4359,8 +4400,14 @@
             max_participants: registrationMode === 'open' && maxParticipantsRaw ? parseInt(maxParticipantsRaw, 10) : null,
             invite_user_ids: inviteUserIds,
             format,
-            deck_type: effectiveNewTournamentDeckType(),
-            best_of_three: format !== 'draft' && document.getElementById('new-tournament-best-of-three').checked,
+            deck_type: deckType,
+            // Only the "power" duel_deck_rules preset is offered here --
+            // see #new-tournament-deck-type-label's own "Power (Custom
+            // Decks)" option and updateNewTournamentAllowSideboardingVisibility()'s
+            // own docblock.
+            duel_deck_rules: deckType === 'custom_duel' ? { preset: 'power' } : undefined,
+            best_of_three: bestOfThree,
+            allow_sideboarding: bestOfThree && document.getElementById('new-tournament-allow-sideboarding').checked,
         };
 
         const { ok, body } = await createTournament(params);
