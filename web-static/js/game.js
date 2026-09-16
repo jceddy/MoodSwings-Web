@@ -4080,13 +4080,16 @@
     // own docblock). Sealed Deck is `format: 'draft'` under the hood
     // (issue #392) but has no actual drafting phase of its own, so
     // (same special case openGameSummary() already makes) it's shown as
-    // just "Sealed Deck" rather than "Draft – Sealed Deck". 'custom_duel'
-    // is shown as "Power (Custom Decks)" rather than
-    // NEW_GAME_DECK_TYPE_LABELS's own generic "Custom Decklists (Duel)"
-    // -- the tournament dialog only ever offers it under the "power"
-    // duel_deck_rules preset (see #new-tournament-deck-type-label's own
-    // option), unlike the New Game dialog which also offers user-defined
-    // rules under that same deck_type.
+    // just "Sealed Deck" rather than "Draft – Sealed Deck". Grid Draft is
+    // shown the same bare way -- it's the only draft type the tournament
+    // dialog offers any more (Quick Draft was removed), so "Draft – Grid
+    // Draft" would be redundant. 'custom_duel' is shown as "Power (Custom
+    // Decks)" rather than NEW_GAME_DECK_TYPE_LABELS's own generic "Custom
+    // Decklists (Duel)" -- the tournament dialog only ever offers it
+    // under the "power" duel_deck_rules preset (see
+    // #new-tournament-deck-type-label's own option), unlike the New Game
+    // dialog which also offers user-defined rules under that same
+    // deck_type.
     function tournamentMatchSummary(tournament) {
         const params = tournament.match_params;
         const deckType = params.deck_type === 'custom_duel'
@@ -4094,7 +4097,7 @@
             : params.deck_type === 'booster_draft'
                 ? 'Booster Draft'
                 : NEW_GAME_DECK_TYPE_LABELS[params.deck_type] || params.deck_type;
-        const format = params.deck_type === 'sealed_deck' || params.deck_type === 'booster_draft'
+        const format = params.deck_type === 'sealed_deck' || params.deck_type === 'booster_draft' || params.deck_type === 'grid_draft'
             ? deckType
             : `${NEW_GAME_FORMAT_LABELS[params.format] || params.format} – ${deckType}`;
         return `${TOURNAMENT_BRACKET_TYPE_LABELS[tournament.bracket_type] || tournament.bracket_type} – ${format}`;
@@ -4247,9 +4250,9 @@
     // deck option, matches how it actually reads to a tournament
     // creator: an entirely different way of sourcing everyone's deck,
     // not a preset alongside Structure/Power. 'draft' itself is left
-    // meaning exactly Quick Draft here -- see #new-tournament-dialog's
-    // own docblock for why the full exhaustive deck_type list isn't
-    // offered.
+    // meaning exactly Grid Draft here (Quick Draft is no longer offered
+    // as a tournament option at all) -- see #new-tournament-dialog's own
+    // docblock for why the full exhaustive deck_type list isn't offered.
     function effectiveNewTournamentFormat() {
         const raw = document.getElementById('new-tournament-format').value;
         if (raw === 'sealed_deck') { return 'draft'; }
@@ -4262,44 +4265,35 @@
         const raw = document.getElementById('new-tournament-format').value;
         if (raw === 'sealed_deck') { return 'sealed_deck'; }
         if (raw === 'booster_draft') { return 'booster_draft'; }
+        if (raw === 'draft') { return 'grid_draft'; }
 
         return document.getElementById('new-tournament-deck-type').value;
     }
 
-    // Draft reuses this same field for its own choice of draft type
-    // (Quick Draft/Grid Draft, both 2-4 players and, at exactly 2, a
-    // best-of-three match -- see either's own description in the New Game
-    // dialog above) rather than a deck algorithmically assembled up
-    // front, relabeling it "Draft type" since "Deck" doesn't fit; Sealed
-    // Deck still fully determines its own deck_type on its own -- nothing
-    // left to choose, so the field disappears entirely rather than
-    // showing a single-option select.
+    // Sealed Deck/Booster Draft/Draft (now exactly Grid Draft -- see
+    // effectiveNewTournamentDeckType()) all fully determine their own
+    // deck_type on their own -- nothing left to choose, so the field
+    // disappears entirely rather than showing a single-option select.
     function updateNewTournamentDeckTypeOptions() {
         const format = document.getElementById('new-tournament-format').value;
         const deckTypeLabel = document.getElementById('new-tournament-deck-type-label');
-        deckTypeLabel.hidden = format === 'sealed_deck' || format === 'booster_draft';
+        deckTypeLabel.hidden = format === 'sealed_deck' || format === 'booster_draft' || format === 'draft';
         if (deckTypeLabel.hidden) {
             return;
         }
 
         const deckTypeSelect = document.getElementById('new-tournament-deck-type');
         const labelText = document.getElementById('new-tournament-deck-type-label-text');
-        let options;
-        if (format === 'draft') {
-            labelText.textContent = 'Draft type';
-            options = { quick_draft: 'Quick Draft', grid_draft: 'Grid Draft' };
-        } else {
-            labelText.textContent = 'Deck';
-            options = { structure: 'Structure', power: 'Power', jceddys_75: "jceddy's 75 Card", one_of_each: 'One of Each Card' };
-            // 'custom_duel' (each player submits their own decklist,
-            // built under the "Power Duel" duel_deck_rules preset -- see
-            // updateNewTournamentAllowSideboardingVisibility()) is only
-            // ever valid for format 'duel' -- GameService::createGame()
-            // itself rejects it for 'standard' ("only supported for duel
-            // games").
-            if (format === 'duel') {
-                options.custom_duel = 'Power (Custom Decks)';
-            }
+        labelText.textContent = 'Deck';
+        const options = { structure: 'Structure', power: 'Power', jceddys_75: "jceddy's 75 Card", one_of_each: 'One of Each Card' };
+        // 'custom_duel' (each player submits their own decklist,
+        // built under the "Power Duel" duel_deck_rules preset -- see
+        // updateNewTournamentAllowSideboardingVisibility()) is only
+        // ever valid for format 'duel' -- GameService::createGame()
+        // itself rejects it for 'standard' ("only supported for duel
+        // games").
+        if (format === 'duel') {
+            options.custom_duel = 'Power (Custom Decks)';
         }
 
         const previousValue = deckTypeSelect.value;
@@ -4315,7 +4309,7 @@
 
     function updateNewTournamentBestOfThreeVisibility() {
         const format = document.getElementById('new-tournament-format').value;
-        // Draft-family matches (Draft/Sealed Deck) are already
+        // Draft-family matches (Grid Draft/Sealed Deck) are already
         // potentially multi-game on their own (GameService::draftGamesToWin(),
         // always best-of-three at 2 players) -- best_of_three is only
         // ever a meaningful opt-in for Duel/Traditional. See
@@ -4427,14 +4421,12 @@
             // Decks)" option and updateNewTournamentAllowSideboardingVisibility()'s
             // own docblock.
             duel_deck_rules: deckType === 'custom_duel' ? { preset: 'power' } : undefined,
-            // Neither draft type's own pool-source picker is offered here
-            // (see #new-tournament-deck-type-label's own "Draft type"
-            // options) -- always a random pool, GameService::createGame()'s
-            // own default-feeling choice (#new-game-quick-draft-pool-source's
+            // Grid Draft's own pool-source picker isn't offered here --
+            // always a random pool, GameService::createGame()'s own
+            // default-feeling choice (#new-game-grid-draft-pool-source's
             // own first/default option). Without this, createGame() would
             // reject the match with 'Unknown pool source ""' the moment
             // the tournament actually tried to start it.
-            quick_draft_pool_source: deckType === 'quick_draft' ? 'random_48' : undefined,
             grid_draft_pool_source: deckType === 'grid_draft' ? 'random_48' : undefined,
             best_of_three: bestOfThree,
             allow_sideboarding: bestOfThree && document.getElementById('new-tournament-allow-sideboarding').checked,
