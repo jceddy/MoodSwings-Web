@@ -5041,6 +5041,18 @@ omitted for open-registration tournaments visible to browse),
 `web-static/README.md` for the New Tournament dialog and the
 bracket/standings view built on top of these.
 
+A Duel tournament's `match_params` may also set `deck_type: 'custom_duel'`
+(each player submits their own decklist for every match, rather than one
+algorithmically assembled deck for the whole event) same as any other
+Duel game -- `duel_deck_rules`/`allow_sideboarding` pass straight through
+`startMatchGame()`'s own `createGame()` call same as every other
+`match_params` key. See "Power Duel sideboarding" below for what
+`allow_sideboarding` actually does; the New Tournament dialog only ever
+offers it under the "power" preset (its "Power (Custom Decks)" option),
+never `user_defined`, so `allow_sideboarding` is meaningful for every
+tournament match that opts into it (unlike the New Game dialog, where a
+`user_defined`-preset match can check the box for no effect).
+
 ### Power Duel sideboarding
 
 A second, narrower opt-in on top of best-of-three (migration 0228):

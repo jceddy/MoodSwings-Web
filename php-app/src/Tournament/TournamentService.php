@@ -398,6 +398,7 @@ final class TournamentService implements TournamentMatchObserver
                 tieredRotisserieDraftMode: $params['tiered_rotisserie_draft_mode'] ?? null,
                 tieredRotisserieDraftTiers: $params['tiered_rotisserie_draft_tiers'] ?? null,
                 bestOfThree: (bool) ($params['best_of_three'] ?? false),
+                allowSideboarding: (bool) ($params['allow_sideboarding'] ?? false),
                 diagnosticMode: (bool) ($params['diagnostic_mode'] ?? false),
                 timeoutMinutes: isset($params['timeout_minutes']) ? (int) $params['timeout_minutes'] : null,
                 timeoutAction: isset($params['timeout_action']) ? (string) $params['timeout_action'] : null,

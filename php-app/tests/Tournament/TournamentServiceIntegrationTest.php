@@ -469,10 +469,95 @@ final class TournamentServiceIntegrationTest extends TestCase
         $this->tournaments->startTournament($tournamentId, $p2);
     }
 
+    /**
+     * A Duel tournament may use deck_type 'custom_duel' under the "power"
+     * duel_deck_rules preset (each player submits their own decklist,
+     * validated against DuelDeckRules::forPreset('power')) instead of one
+     * of the algorithmically-assembled deck types -- see the New
+     * Tournament dialog's "Power (Custom Decks)" option. startMatchGame()
+     * creates the game up front same as any other match, but it starts
+     * out 'waiting' rather than 'in_progress' since neither player has
+     * submitted a decklist yet -- exactly the same tolerance the class
+     * docblock already describes for draft matches. best_of_three plus
+     * allow_sideboarding here also proves TournamentService threads
+     * 'allow_sideboarding' through to the created game_match wrapper,
+     * previously missing from startMatchGame()'s createGame() call
+     * entirely (silently defaulting to false for every tournament match,
+     * since nothing could ever opt into it before this option existed).
+     */
+    public function testDuelTournamentSupportsCustomDuelPowerDecksWithSideboarding(): void
+    {
+        $creator = $this->insertUser('power_p1');
+        $p2 = $this->insertUser('power_p2');
+
+        $tournamentId = $this->tournaments->createTournament(
+            $creator,
+            'Power Cup',
+            'single_elimination',
+            'invite_only',
+            [
+                'format' => 'duel',
+                'deck_type' => 'custom_duel',
+                'duel_deck_rules' => ['preset' => 'power'],
+                'best_of_three' => true,
+                'allow_sideboarding' => true,
+            ],
+            swissRoundCount: null,
+            minParticipants: 2,
+            maxParticipants: null,
+            inviteUserIds: [$p2],
+        );
+        $this->tournaments->acceptInvite($tournamentId, $p2);
+        $this->tournaments->startTournament($tournamentId, $creator);
+
+        $round1 = $this->matchRepo->listRounds($tournamentId)[0];
+        $match = $this->matchRepo->listForRound((int) $round1['id'])[0];
+        self::assertNotNull($match['game_id'], 'a custom_duel match should still create its game up front, left waiting on decklists');
+
+        $game = $this->fetchGame((int) $match['game_id']);
+        self::assertSame('waiting', $game['status'], "a custom_duel game can't start until both players submit a decklist");
+        self::assertSame('custom_duel', $game['deck_type']);
+        self::assertNotNull($game['game_match_id']);
+        self::assertTrue((bool) $this->fetchGameMatch((int) $game['game_match_id'])['allow_sideboarding']);
+
+        $decklistText = implode("\n", array_map(static fn (string $name): string => "1 {$name}", $this->fetchNonMythicCardNames(15)));
+        $this->games->submitCustomDuelDeck((int) $match['game_id'], $this->games->gamePlayerIdFor((int) $match['game_id'], $creator), $decklistText);
+        $this->games->submitCustomDuelDeck((int) $match['game_id'], $this->games->gamePlayerIdFor((int) $match['game_id'], $p2), $decklistText);
+        $this->games->startGame((int) $match['game_id']);
+
+        self::assertSame('in_progress', $this->fetchGame((int) $match['game_id'])['status']);
+    }
+
     private function participantUserId(int $participantId): int
     {
         $participant = (new TournamentParticipantRepository())->find($participantId);
 
         return (int) $participant['user_id'];
+    }
+
+    private function fetchGame(int $gameId): array
+    {
+        $stmt = $this->pdo->prepare('SELECT * FROM games WHERE id = :id');
+        $stmt->execute(['id' => $gameId]);
+
+        return $stmt->fetch();
+    }
+
+    private function fetchGameMatch(int $gameMatchId): array
+    {
+        $stmt = $this->pdo->prepare('SELECT * FROM game_matches WHERE id = :id');
+        $stmt->execute(['id' => $gameMatchId]);
+
+        return $stmt->fetch();
+    }
+
+    /** @return string[] */
+    private function fetchNonMythicCardNames(int $count): array
+    {
+        $stmt = $this->pdo->prepare("SELECT name FROM cards WHERE rarity != 'mythic' ORDER BY id LIMIT :count");
+        $stmt->bindValue('count', $count, PDO::PARAM_INT);
+        $stmt->execute();
+
+        return $stmt->fetchAll(PDO::FETCH_COLUMN);
     }
 }
