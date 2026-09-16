@@ -712,6 +712,11 @@
 
             <label class="new-game-field" id="new-game-synchronous-enabled-label"><input type="checkbox" id="new-game-synchronous-enabled"> Synchronous mode (play live, right now)</label>
             <p id="new-game-synchronous-description" hidden>Both players must be ready before the game (or draft) deals. Each action/pick has a short timer, and each player has a 30-minute chess clock for the whole match (deck-building/sideboarding time counts against it) -- automatic loss if it runs out. Mutually exclusive with the idle time-out/total-time-limit options above.</p>
+            <!-- TEMPORARY cross-promo, remove once SYNCHRONOUS_MODE_ENABLED
+                 defaults on (or this feature flag is retired) -- shown only
+                 while the checkbox above is hidden by that flag, see
+                 updateSynchronousFieldVisibility() in game.js. -->
+            <p id="new-game-synchronous-promo" hidden>Looking for synchronous play? Check out <a href="https://moodygg.fly.dev/" target="_blank" rel="noopener noreferrer">moodygg</a>!</p>
 
             <div id="new-game-decklist-fields" hidden>
                 <label>Use a saved deck
@@ -1933,6 +1938,7 @@
             <li><a href="https://discord.gg/GgHFEBAd6C" target="_blank" rel="noopener noreferrer">Discord</a></li>
             <li><a href="https://www.reddit.com/r/moodswingstcg/" target="_blank" rel="noopener noreferrer">Reddit</a></li>
             <li><a href="https://github.com/jceddy/MoodSwings-Web" target="_blank" rel="noopener noreferrer">GitHub repository</a></li>
+            <li>Looking for synchronous play? Check out <a href="https://moodygg.fly.dev/" target="_blank" rel="noopener noreferrer">moodygg</a>!</li>
         </ul>
         <script type="text/javascript" src="https://cdnjs.buymeacoffee.com/1.0.0/button.prod.min.js" data-name="bmc-button" data-slug="jceddy" data-color="#FFDD00" data-emoji="" data-font="Cookie" data-text="Buy me a coffee" data-outline-color="#000000" data-font-color="#000000" data-coffee-color="#ffffff"></script>
     </dialog>

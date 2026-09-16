@@ -74,6 +74,17 @@ jobs:
           # background script directly on this host. A plain path, not a
           # secret -- e.g. cPanel's own EasyApache CLI binary path.
           PHP_CLI_BINARY: ${{ vars.PHP_CLI_BINARY }}
+          # Feature flag (Config::getBool()) gating the New Game/New
+          # Tournament dialogs' own Synchronous mode opt-in -- unset (the
+          # default) reads as disabled, so this ships dark until set to
+          # "true"/"1"/"yes"/"on" from this repo's own Settings -> Secrets
+          # and variables -> Actions -> Variables, no code change needed
+          # either way. Deliberately a plain (not DEV_-prefixed) variable
+          # here vs. deploy-dev.yml's own DEV_SYNCHRONOUS_MODE_ENABLED --
+          # a feature flag is exactly the kind of thing to flip on dev
+          # first, independently of production, unlike PHP_CLI_BINARY's
+          # own "shared hosting account" reasoning above.
+          SYNCHRONOUS_MODE_ENABLED: ${{ vars.SYNCHRONOUS_MODE_ENABLED }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
@@ -169,6 +180,7 @@ jobs:
           write_env_var APP_URL "$APP_URL"
           write_env_var SITE_URL "$SITE_URL"
           write_env_var PHP_CLI_BINARY "$PHP_CLI_BINARY"
+          write_env_var SYNCHRONOUS_MODE_ENABLED "$SYNCHRONOUS_MODE_ENABLED"
           write_env_var SMTP_HOST "$SMTP_HOST"
           write_env_var SMTP_PORT "$SMTP_PORT"
           write_env_var SMTP_USERNAME "$SMTP_USERNAME"

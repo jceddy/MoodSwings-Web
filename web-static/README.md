@@ -1698,13 +1698,26 @@ actually about.
 
 ### Synchronous mode (reported live)
 
+Gated behind a feature flag, off by default: neither `#new-game-synchronous-enabled-label`
+nor `#new-tournament-synchronous-enabled-label` (both described below)
+ever shows at all unless `GET /config/synchronous-mode-enabled` (backed
+by the `SYNCHRONOUS_MODE_ENABLED` repository variable, see "Synchronous
+mode" in `php-app/README.md`) says `enabled: true` -- fetched once, at
+page load (`getSynchronousModeEnabled()` in `app.js`, cached in a
+module-level `synchronousModeEnabled` flag game.js's own
+`updateSynchronousFieldVisibility()`/`updateNewTournamentSynchronousFieldVisibility()`
+both read synchronously rather than re-fetching on every dialog open or
+checkbox change). A UI-only gate -- nothing about how a synchronous
+game/match/tournament actually plays changes, or needs to; this purely
+controls whether either dialog offers the opt-in in the first place.
+
 `#new-game-synchronous-enabled-label` (right after the full-game
 time-limit checkbox) opts into a THIRD, mutually exclusive mode --
 checking it unchecks (and re-hides the sub-fields of) both async
 checkboxes above, and vice versa (`enforceSynchronousExclusivityFromSynchronousCheckbox()`/
 `enforceSynchronousExclusivityFromAsyncCheckboxes()`), matching
 `createGame()`'s own validation that a game never combines them. Shown
-for exactly 2 players in Traditional/Duel/Draft
+(feature flag aside) for exactly 2 players in Traditional/Duel/Draft
 (`SYNCHRONOUS_MODE_ALLOWED_FORMATS`, mirroring `GameService::SYNCHRONOUS_MODE_ALLOWED_FORMATS`
 exactly -- Draft covers all five draft-family deck_types plus Sealed
 Deck/Sealed Pool of the Day/Weekly Sealed Pool) --
@@ -1948,8 +1961,14 @@ Synchronous mode's own `GameService::SYNCHRONOUS_MODE_ALLOWED_FORMATS`
 (`standard`/`duel`/`draft`) plus its exactly-2-players requirement are
 both unconditionally true for every tournament match already (every
 `effectiveNewTournamentFormat()` value falls in that list, and a
-tournament match is always exactly 2 players by design). Synchronous
-mode stays mutually exclusive with the other two, enforced by the same
+tournament match is always exactly 2 players by design).
+`updateNewTournamentSynchronousFieldVisibility()` does still gate on one
+thing regardless of format, though -- the same `synchronousModeEnabled`
+feature flag the New Game dialog's own checkbox reads (see this
+section's own opening paragraph above), hiding
+`#new-tournament-synchronous-enabled-label` entirely and
+force-unchecking the box whenever it's off. Synchronous mode stays
+mutually exclusive with the other two, enforced by the same
 three-way checkbox wiring (`enforceNewTournamentSynchronousExclusivityFromSynchronousCheckbox()`/
 `enforceNewTournamentSynchronousExclusivityFromAsyncCheckboxes()`) the
 New Game dialog uses. The submit handler sends all three with the same

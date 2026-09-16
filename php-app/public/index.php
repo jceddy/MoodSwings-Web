@@ -634,6 +634,22 @@ if ($path === '/notifications/vapid-public-key' && $method === 'GET') {
     respond(200, ['status' => 'ok', 'public_key' => Config::get('VAPID_PUBLIC_KEY', '')]);
 }
 
+// Synchronous mode's own New Game/New Tournament dialog opt-ins are
+// gated behind this repository variable (SYNCHRONOUS_MODE_ENABLED --
+// see .github/workflows/deploy*.yml's own write_env_var() calls and
+// Config::getBool()'s own docblock), defaulting to disabled so the
+// feature ships dark until a maintainer flips it from GitHub's own repo
+// settings -- no code change needed either way. This is a pure UI
+// availability toggle: every backend/API synchronous-mode code path
+// (GameService::createGame()'s own $synchronousMode param and
+// everything downstream of it) is completely unaffected -- a request
+// that already knows to send synchronous_mode: true still works
+// regardless of this flag. Not secret, no auth required, same
+// reasoning as /notifications/vapid-public-key just above.
+if ($path === '/config/synchronous-mode-enabled' && $method === 'GET') {
+    respond(200, ['status' => 'ok', 'enabled' => Config::getBool('SYNCHRONOUS_MODE_ENABLED', false)]);
+}
+
 if ($path === '/notifications/subscribe' && $method === 'POST') {
     $currentUser = requireAuth($auth);
     $body = requestBody();

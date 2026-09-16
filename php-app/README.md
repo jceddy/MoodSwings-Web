@@ -4895,6 +4895,31 @@ own chess clock as it always was for `total_time_limit_minutes`'. See
 "Synchronous mode" in `web-static/README.md` for the board's own
 chess-clock stat, reused for this.
 
+**Gated behind a feature flag in the UI only** -- the New Game/New
+Tournament dialogs' own Synchronous mode checkbox is hidden entirely
+unless `SYNCHRONOUS_MODE_ENABLED` (a repository variable, not a code
+change -- GitHub's own Settings -> Secrets and variables -> Actions ->
+Variables, written into the deployed `.env` by
+`.github/workflows/deploy*.yml`'s own `write_env_var` calls, `false` by
+default when unset) is set to a truthy value
+(`Config::getBool()`, recognizing `1`/`true`/`yes`/`on` case-
+insensitively). `GET /config/synchronous-mode-enabled` (no auth
+required, same reasoning as `/notifications/vapid-public-key`) exposes
+it to the frontend, which fetches it once at page load and caches the
+result (see "New Game dialog"/"New Tournament dialog" in
+`web-static/README.md`). This is a pure UI availability toggle --
+`createGame()`'s own `$synchronousMode` parameter and everything
+downstream of it (the ready check, action/draft-pick timers, match
+clock, `TournamentService`'s own threading of the opt-in through) are
+completely unaffected either way, so a request that already knows to
+send `synchronous_mode: true` (a saved bookmark, a script, a stale
+client) still works regardless of whether the dialogs currently offer
+it. Deliberately a separate repository variable per environment
+(`SYNCHRONOUS_MODE_ENABLED` for production, `DEV_SYNCHRONOUS_MODE_ENABLED`
+for dev) rather than shared the way `PHP_CLI_BINARY` is -- a feature
+flag is exactly the kind of setting you'd want to flip on dev first,
+independently of production.
+
 ### Tournaments (issue #91)
 
 Single elimination, double elimination, or Swiss-round tournaments on

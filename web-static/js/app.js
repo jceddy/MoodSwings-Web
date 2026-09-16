@@ -927,6 +927,14 @@ function getVapidPublicKey() {
     return apiRequest('/notifications/vapid-public-key');
 }
 
+// Feature flag gating the New Game/New Tournament dialogs' own
+// Synchronous mode opt-in (defaults to disabled -- see Config::getBool()'s
+// own docblock in index.php) -- game.js fetches this once at page load
+// and caches the result rather than calling it again per dialog open.
+function getSynchronousModeEnabled() {
+    return apiRequest('/config/synchronous-mode-enabled');
+}
+
 function subscribeToPush(subscription) {
     return apiRequest('/notifications/subscribe', {
         method: 'POST',

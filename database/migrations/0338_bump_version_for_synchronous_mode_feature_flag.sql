@@ -1,0 +1,18 @@
+-- Synchronous mode's own New Game/New Tournament dialog opt-ins are now
+-- gated behind a repository variable (SYNCHRONOUS_MODE_ENABLED, read via
+-- Config::getBool(), exposed to the frontend via
+-- GET /config/synchronous-mode-enabled) rather than always being offered
+-- -- defaults to disabled (no repo variable set at all) so this ships
+-- dark until a maintainer opts in from the GitHub repo's own Settings ->
+-- Secrets and variables -> Actions -> Variables, no code change needed
+-- to flip it later. Every existing backend/API synchronous-mode code
+-- path (GameService::createGame()'s own $synchronousMode param, the
+-- ready-check/action-timer/match-clock machinery, TournamentService's
+-- own threading of it through) is completely unchanged -- a request
+-- that already knows to send synchronous_mode: true still works exactly
+-- as before, this only controls whether the dialogs themselves offer
+-- the checkbox.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.50.1' WHERE id = 1;
