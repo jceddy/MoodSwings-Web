@@ -71,8 +71,11 @@ final class TournamentRepository
 
     /**
      * Every 'open' tournament still in 'registration' that $viewerUserId
-     * could join -- not already a participant, and (same discoverability
-     * gate open_game_listings itself uses) the creator has opted into
+     * could join -- not already an active participant (a 'withdrawn' row
+     * doesn't count -- TournamentService::joinOpenTournament() lets you
+     * rejoin one of those, room permitting, so it must still surface
+     * here or there'd be no way back in), and (same discoverability gate
+     * open_game_listings itself uses) the creator has opted into
      * matchmaking_discoverable and neither side has blocked the other.
      */
     public function listOpenFor(int $viewerUserId): array
@@ -93,7 +96,7 @@ final class TournamentRepository
                      AND f.user_high_id = GREATEST(t.created_by_user_id, :viewer_user_id_high)
                )
                AND NOT EXISTS (
-                   SELECT 1 FROM tournament_participants tp2 WHERE tp2.tournament_id = t.id AND tp2.user_id = :viewer_user_id_joined
+                   SELECT 1 FROM tournament_participants tp2 WHERE tp2.tournament_id = t.id AND tp2.user_id = :viewer_user_id_joined AND tp2.status != 'withdrawn'
                )
              ORDER BY t.created_at ASC"
         );

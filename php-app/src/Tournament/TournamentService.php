@@ -261,7 +261,16 @@ final class TournamentService implements TournamentMatchObserver
         if ($tournament['registration_mode'] !== 'open') {
             throw new TournamentStateException('This tournament is invite-only');
         }
-        if ($this->participants->findForUser($tournamentId, $userId) !== null) {
+        // A 'withdrawn' row is the one exception to "you already have a
+        // row here" -- rejoining after withdrawing is allowed (as long as
+        // there's still room, checked below the same as anyone else),
+        // unlike 'joined' (already in) or 'invited' (irrelevant here,
+        // this is the open-registration path). Reuse the existing row
+        // rather than inserting a second one for the same
+        // (tournament_id, user_id) pair, which uq_tournament_participants_user
+        // would reject outright.
+        $existingParticipant = $this->participants->findForUser($tournamentId, $userId);
+        if ($existingParticipant !== null && $existingParticipant['status'] !== 'withdrawn') {
             throw new TournamentStateException('You have already joined this tournament');
         }
         $creator = $this->users->findById((int) $tournament['created_by_user_id']);
@@ -274,7 +283,11 @@ final class TournamentService implements TournamentMatchObserver
         }
         $this->assertRoomAvailable($tournament);
 
-        $this->participants->add($tournamentId, $userId, 'joined');
+        if ($existingParticipant !== null) {
+            $this->participants->updateStatus((int) $existingParticipant['id'], 'joined');
+        } else {
+            $this->participants->add($tournamentId, $userId, 'joined');
+        }
     }
 
     public function withdraw(int $tournamentId, int $userId): void

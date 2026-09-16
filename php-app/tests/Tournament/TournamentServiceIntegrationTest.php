@@ -655,6 +655,70 @@ final class TournamentServiceIntegrationTest extends TestCase
         $this->tournaments->joinOpenTournament($tournamentId, $fourthJoiner);
     }
 
+    public function testWithdrawnParticipantCanRejoinOpenTournamentIfRoomRemains(): void
+    {
+        $creator = $this->insertUser('rejoin_p1');
+        (new UserRepository())->setMatchmakingDiscoverable($creator, true);
+        $joiner = $this->insertUser('rejoin_p2');
+        $tournamentId = $this->tournaments->createTournament(
+            $creator,
+            'Rejoin Cup',
+            'single_elimination',
+            'open',
+            ['format' => 'standard'],
+            null,
+            minParticipants: 4,
+            maxParticipants: 4,
+        );
+
+        $this->tournaments->joinOpenTournament($tournamentId, $joiner);
+        $this->tournaments->withdraw($tournamentId, $joiner);
+
+        // Withdrawn shouldn't count against capacity, and the room it
+        // freed up should be visible to rejoin -- the tournament reappears
+        // in listOpenFor() for this exact user despite their own
+        // (withdrawn) row already existing.
+        $openListings = $this->tournaments->listOpenFor($joiner);
+        self::assertNotEmpty(array_filter($openListings, static fn (array $t): bool => (int) $t['id'] === $tournamentId));
+
+        $this->tournaments->joinOpenTournament($tournamentId, $joiner);
+
+        $participant = (new TournamentParticipantRepository())->findForUser($tournamentId, $joiner);
+        self::assertSame('joined', $participant['status']);
+    }
+
+    public function testWithdrawnParticipantCannotRejoinAFullOpenTournament(): void
+    {
+        $creator = $this->insertUser('rejoin_full_p1');
+        (new UserRepository())->setMatchmakingDiscoverable($creator, true);
+        $joiner1 = $this->insertUser('rejoin_full_p2');
+        $joiner2 = $this->insertUser('rejoin_full_p3');
+        $joiner3 = $this->insertUser('rejoin_full_p4');
+        $tournamentId = $this->tournaments->createTournament(
+            $creator,
+            'Rejoin Full Cup',
+            'single_elimination',
+            'open',
+            ['format' => 'standard'],
+            null,
+            minParticipants: 4,
+            maxParticipants: 4,
+        );
+
+        $this->tournaments->joinOpenTournament($tournamentId, $joiner1);
+        $this->tournaments->withdraw($tournamentId, $joiner1);
+        // Someone else takes the now-open seat, filling the tournament
+        // back up to its own max_participants (creator + joiner2 + joiner3
+        // + a fresh joiner1 replacement) before joiner1 tries to come back.
+        $this->tournaments->joinOpenTournament($tournamentId, $joiner2);
+        $this->tournaments->joinOpenTournament($tournamentId, $joiner3);
+        $joiner4 = $this->insertUser('rejoin_full_p5');
+        $this->tournaments->joinOpenTournament($tournamentId, $joiner4);
+
+        $this->expectException(TournamentStateException::class);
+        $this->tournaments->joinOpenTournament($tournamentId, $joiner1);
+    }
+
     public function testNonCreatorCannotStartTournament(): void
     {
         $creator = $this->insertUser('auth_p1');
