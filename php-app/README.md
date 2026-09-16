@@ -138,6 +138,17 @@ the `sessions` table (see `database/migrations/0001_baseline.sql`), so a databas
 can't be used to log in. Sessions last 30 days and slide forward on each
 authenticated request.
 
+Every response (JSON or not) carries `Cache-Control: no-store, no-cache,
+must-revalidate` and `Pragma: no-cache`, set once at the top of
+`public/index.php` alongside the shared `Content-Type: application/json`.
+Since these responses are keyed only by URL and session cookie, without this
+a cache sitting between the browser and this server -- a CDN, a corporate
+proxy, or even the browser's own cache under some conditions -- has no
+signal that a given response is scoped to one session, and could serve one
+user's own response body (tournament/game/friend state, `/me`, etc.) back to
+a different user who later requests the identical URL with a different
+session cookie.
+
 Verification links are single-use and expire after 24 hours; email is sent
 via SMTP (PHPMailer) using the `SMTP_*` variables in `.env` (see
 `.env.example`). `APP_URL` (no trailing slash) is used to build the link,
