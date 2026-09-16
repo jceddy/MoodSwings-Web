@@ -1866,29 +1866,50 @@ swapping a friend-checkbox picker for a required max-participants
 field); and a deliberately curated subset of the New Game dialog's own
 match settings -- format (Duel/Traditional/Draft/Sealed Deck, no team
 formats, since a tournament match is always exactly 2 players -- see
-`TournamentService::ALLOWED_FORMATS`), a deck select shown only for
-Duel/Traditional (`updateNewTournamentDeckTypeOptions()` -- Structure/
-Power/jceddy's 75/One of Each, plus a Duel-only "Power (Custom Decks)"
-option (`custom_duel`, see below); every OTHER `#new-game-deck-type`
-option is still reachable per match indirectly, e.g. Custom Decklist via
-each matchup's own normal decklist-submission flow, just not offered as
-a dedicated field here), and a Best of Three checkbox
-(`updateNewTournamentBestOfThreeVisibility()` hides it for Draft/Sealed
-Deck, whose matches are already potentially multi-game on their own via
-`GameService::draftGamesToWin()`). Sealed Deck is `#new-tournament-format`'s
-own UI-only option (mirroring `#new-game-format`'s identical
-`sealed_pool_of_the_day` sentinel, see `effectiveNewGameFormat()`) --
-`effectiveNewTournamentFormat()`/`effectiveNewTournamentDeckType()`
-resolve it to `format: 'draft'`/`deck_type: 'sealed_deck'` on submit
-(and `'draft'` itself always means Quick Draft here, `deck_type:
-'quick_draft'`), so it shows up as its own top-level choice rather than
-a deck picked after first choosing "Draft" -- there's no drafting phase
-to speak of, so nesting it under that label would misname what it
-actually is, the exact same reasoning `openGameSummary()`'s own
-Sealed-Deck special case already documents. Submitting calls
-`createTournament()` with all of the above (`invite_user_ids` from the
-checked friend checkboxes) and closes the dialog on success, refreshing
+`TournamentService::ALLOWED_FORMATS`), a second select reusing the same
+field for either a deck (Duel/Traditional) or a draft type (Draft) --
+`updateNewTournamentDeckTypeOptions()` swaps both its option set and its
+own label text (`#new-tournament-deck-type-label-text`, "Deck" vs "Draft
+type") by format: Structure/Power/jceddy's 75/One of Each for
+Duel/Traditional, plus a Duel-only "Power (Custom Decks)" option
+(`custom_duel`, see below); Quick Draft/Grid Draft for Draft (both 2-4
+player draft deck types that, like every other tournament format, play a
+best-of-three match at the fixed 2 players every tournament match seats
+-- see either's own description in the New Game dialog above). Every
+OTHER `#new-game-deck-type` option is still reachable per match
+indirectly, e.g. Custom Decklist via each matchup's own normal
+decklist-submission flow, just not offered as a dedicated field here.
+Best of Three (`updateNewTournamentBestOfThreeVisibility()` hides it for
+Draft/Sealed Deck, whose matches are already potentially multi-game on
+their own via `GameService::draftGamesToWin()`) rounds out the match
+settings. Sealed Deck is `#new-tournament-format`'s own UI-only option
+(mirroring `#new-game-format`'s identical `sealed_pool_of_the_day`
+sentinel, see `effectiveNewGameFormat()`) -- `effectiveNewTournamentFormat()`
+resolves it to `format: 'draft'` on submit (`effectiveNewTournamentDeckType()`
+supplies its own fixed `deck_type: 'sealed_deck'` the same way, entirely
+independent of whatever the now-hidden `#new-tournament-deck-type` last
+held), so it shows up as its own top-level choice rather than a deck
+picked after first choosing "Draft" -- there's no drafting phase to
+speak of, so nesting it under that label would misname what it actually
+is, the exact same reasoning `openGameSummary()`'s own Sealed-Deck
+special case already documents. Submitting calls `createTournament()`
+with all of the above (`invite_user_ids` from the checked friend
+checkboxes) and closes the dialog on success, refreshing
 `#tournaments-dialog` underneath it.
+
+Whichever draft type Draft format picks always submits a fixed
+`'random_48'` pool source (`quick_draft_pool_source`/`grid_draft_pool_source`,
+whichever applies) -- neither draft type's own pool-source picker is
+offered here, matching every other draft-family field this dialog
+already leaves at a sensible fixed default rather than exposing. This
+isn't optional the way it looks: `GameService::createGame()` has no
+default of its own for an omitted pool source (it resolves to an empty
+string, which its pool-building `match` rejects with `Unknown pool
+source ""`), so leaving it out entirely -- as this dialog did before
+Grid Draft was added, since Quick Draft's own field was never wired up
+either -- meant a Draft-format tournament's own match could never
+actually start once fixed match settings actually got used against real
+opponents.
 
 **Power (Custom Decks)** -- `#new-tournament-deck-type`'s `custom_duel`
 option, only ever offered for format `duel` (`updateNewTournamentDeckTypeOptions()`

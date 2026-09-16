@@ -4248,48 +4248,55 @@
 
     function effectiveNewTournamentDeckType() {
         const raw = document.getElementById('new-tournament-format').value;
-        if (raw === 'sealed_deck') {
-            return 'sealed_deck';
-        }
-        if (raw === 'draft') {
-            return 'quick_draft';
-        }
 
-        return document.getElementById('new-tournament-deck-type').value;
+        return raw === 'sealed_deck' ? 'sealed_deck' : document.getElementById('new-tournament-deck-type').value;
     }
 
+    // Draft reuses this same field for its own choice of draft type
+    // (Quick Draft/Grid Draft, both 2-4 players and, at exactly 2, a
+    // best-of-three match -- see either's own description in the New Game
+    // dialog above) rather than a deck algorithmically assembled up
+    // front, relabeling it "Draft type" since "Deck" doesn't fit; Sealed
+    // Deck still fully determines its own deck_type on its own -- nothing
+    // left to choose, so the field disappears entirely rather than
+    // showing a single-option select.
     function updateNewTournamentDeckTypeOptions() {
         const format = document.getElementById('new-tournament-format').value;
         const deckTypeLabel = document.getElementById('new-tournament-deck-type-label');
-        // Draft (Quick Draft) and Sealed Deck each fully determine their
-        // own deck_type on their own -- nothing left to choose, so the
-        // field disappears entirely rather than showing a single-option
-        // select.
-        deckTypeLabel.hidden = format === 'draft' || format === 'sealed_deck';
+        deckTypeLabel.hidden = format === 'sealed_deck';
         if (deckTypeLabel.hidden) {
             return;
         }
 
         const deckTypeSelect = document.getElementById('new-tournament-deck-type');
-        const constructedOptions = { structure: 'Structure', power: 'Power', jceddys_75: "jceddy's 75 Card", one_of_each: 'One of Each Card' };
-        // 'custom_duel' (each player submits their own decklist, built
-        // under the "Power Duel" duel_deck_rules preset -- see
-        // updateNewTournamentAllowSideboardingVisibility()) is only ever
-        // valid for format 'duel' -- GameService::createGame() itself
-        // rejects it for 'standard' ("only supported for duel games").
-        if (format === 'duel') {
-            constructedOptions.custom_duel = 'Power (Custom Decks)';
+        const labelText = document.getElementById('new-tournament-deck-type-label-text');
+        let options;
+        if (format === 'draft') {
+            labelText.textContent = 'Draft type';
+            options = { quick_draft: 'Quick Draft', grid_draft: 'Grid Draft' };
+        } else {
+            labelText.textContent = 'Deck';
+            options = { structure: 'Structure', power: 'Power', jceddys_75: "jceddy's 75 Card", one_of_each: 'One of Each Card' };
+            // 'custom_duel' (each player submits their own decklist,
+            // built under the "Power Duel" duel_deck_rules preset -- see
+            // updateNewTournamentAllowSideboardingVisibility()) is only
+            // ever valid for format 'duel' -- GameService::createGame()
+            // itself rejects it for 'standard' ("only supported for duel
+            // games").
+            if (format === 'duel') {
+                options.custom_duel = 'Power (Custom Decks)';
+            }
         }
 
         const previousValue = deckTypeSelect.value;
         deckTypeSelect.innerHTML = '';
-        for (const [value, label] of Object.entries(constructedOptions)) {
+        for (const [value, label] of Object.entries(options)) {
             const option = document.createElement('option');
             option.value = value;
             option.textContent = label;
             deckTypeSelect.appendChild(option);
         }
-        deckTypeSelect.value = constructedOptions[previousValue] ? previousValue : Object.keys(constructedOptions)[0];
+        deckTypeSelect.value = options[previousValue] ? previousValue : Object.keys(options)[0];
     }
 
     function updateNewTournamentBestOfThreeVisibility() {
@@ -4406,6 +4413,15 @@
             // Decks)" option and updateNewTournamentAllowSideboardingVisibility()'s
             // own docblock.
             duel_deck_rules: deckType === 'custom_duel' ? { preset: 'power' } : undefined,
+            // Neither draft type's own pool-source picker is offered here
+            // (see #new-tournament-deck-type-label's own "Draft type"
+            // options) -- always a random pool, GameService::createGame()'s
+            // own default-feeling choice (#new-game-quick-draft-pool-source's
+            // own first/default option). Without this, createGame() would
+            // reject the match with 'Unknown pool source ""' the moment
+            // the tournament actually tried to start it.
+            quick_draft_pool_source: deckType === 'quick_draft' ? 'random_48' : undefined,
+            grid_draft_pool_source: deckType === 'grid_draft' ? 'random_48' : undefined,
             best_of_three: bestOfThree,
             allow_sideboarding: bestOfThree && document.getElementById('new-tournament-allow-sideboarding').checked,
         };
