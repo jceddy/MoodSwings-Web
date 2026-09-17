@@ -99,6 +99,32 @@ namespace MoodSwings\Rules;
  *                            // hand_mood_ids mix the two; afterPlayingFields() below excludes
  *                            // these when building Duplicity's repeat sub-form, since a repeat
  *                            // only ever re-invokes afterPlaying(), never the cost again.
+ *     optional_if_no_targets?: bool, // mood/player field only: a mandatory afterPlaying()
+ *                            // target ("choose an opponent's mood," never "you may") that
+ *                            // still shouldn't block playing the card at all when literally
+ *                            // no legal target exists -- Regret/Guile's own scope: 'other'
+ *                            // target_mood_id (reported live: "Players should be able to
+ *                            // play Regret even if there are no legal targets... Similarly
+ *                            // with Guile"), unlike a mandatory *cost* (Regret's own
+ *                            // hand_mood_ids/Guile's own discard_card_ids, whose 'stage' =>
+ *                            // 'cost' above already keeps canPayToPlayCost() blocking the
+ *                            // card outright when unpayable -- a real "if you can't, you
+ *                            // can't" clause, not this). game.js's own
+ *                            // updatePlayButtonEnabled() skips this field's own
+ *                            // required-value check once fieldOptions() for it comes back
+ *                            // empty (which the frontend can determine on its own, from the
+ *                            // exact same currentState.in_play/scope/excludes_teammate rules
+ *                            // fieldOptions() already applies -- no server-side "are there
+ *                            // any legal targets" computation needed); RegretEffect's/
+ *                            // GuileEffect's own afterPlaying() then treat a missing
+ *                            // target_mood_id as a no-op fizzle rather than throwing, the
+ *                            // same tolerance MaliceEffect's own optional target_player_id
+ *                            // (this flag isn't needed there -- a 'player' field, unlike
+ *                            // 'mood', is essentially always satisfiable in a real match, so
+ *                            // it's simply 'required' => false unconditionally) already has.
+ *                            // A field that DOES have a legal target stays exactly as
+ *                            // mandatory as its printed text says -- this only ever relaxes
+ *                            // the impossible case.
  *     requires_mode?: string, // this field only does anything once the card's own OPTIONAL 'mode'
  *                            // field (a separate entry in this same array) is actually set to this
  *                            // exact value -- Contempt/Hesitation/Guilt's own target_mood_id, whose
@@ -190,7 +216,7 @@ final class CardChoiceSchema
         ],
         'guile' => [
             ['key' => 'discard_card_ids', 'type' => 'hand_card', 'multi' => true, 'required' => true, 'label' => 'Exactly 2 cards to discard (cost to play this card)', 'count' => ['min' => 2, 'max' => 2], 'stage' => 'cost'],
-            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'other', 'required' => true, 'label' => "An opponent's mood to take", 'excludes_teammate' => true],
+            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'other', 'required' => true, 'label' => "An opponent's mood to take", 'excludes_teammate' => true, 'optional_if_no_targets' => true],
         ],
         'envy' => [
             ['key' => 'discard_mood_id', 'type' => 'mood', 'scope' => 'own', 'required' => true, 'label' => 'Your mood to put into the discard pile (cost to play this card)'],
@@ -250,7 +276,7 @@ final class CardChoiceSchema
         ],
         'regret' => [
             ['key' => 'hand_mood_ids', 'type' => 'mood', 'scope' => 'own', 'multi' => true, 'required' => true, 'label' => 'Exactly 2 of your moods to return to hand (cost to play this card)', 'count' => ['min' => 2, 'max' => 2], 'stage' => 'cost'],
-            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'other', 'required' => true, 'label' => "An opponent's mood to steal into your hand", 'excludes_teammate' => true],
+            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'other', 'required' => true, 'label' => "An opponent's mood to steal into your hand", 'excludes_teammate' => true, 'optional_if_no_targets' => true],
         ],
         'cruelty' => [
             ['key' => 'opponent_player_ids', 'type' => 'player', 'scope' => 'other', 'multi' => true, 'required' => false, 'label' => 'Opponents to target (each must have 2+ moods)', 'filter' => ['min_mood_count' => 2], 'excludes_teammate' => true],

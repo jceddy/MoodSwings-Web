@@ -10946,8 +10946,17 @@
             return;
         }
 
+        // optional_if_no_targets (CardChoiceSchema.php's own docblock,
+        // reported live: "Players should be able to play Regret even if
+        // there are no legal targets... Similarly with Guile") -- a
+        // mandatory target that's genuinely impossible to fill (no legal
+        // candidates at all, per this same fieldOptions() every dropdown
+        // it renders already uses) shouldn't gate the Play button; the
+        // effect just fizzles server-side instead. A field with any legal
+        // candidate at all stays exactly as mandatory as before.
         const allRequiredFilled = selectedCard.choice_fields
             .filter((field) => field.required)
+            .filter((field) => !(field.optional_if_no_targets && fieldOptions(field, selectedCard).length === 0))
             .every((field) => fieldHasValue(document.getElementById('choice-field-' + field.key), field));
 
         let firstError = null;
