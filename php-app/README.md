@@ -5090,6 +5090,26 @@ Buchholz, then seed, as tiebreaks -- deliberately not a fully optimal
 Swiss tiebreak system, which is overkill for a casual TCG tournament
 tool).
 
+Whenever `onMatchConcluded()` immediately starts the next slot's own
+match (the common case, both its seats already filled), `startMatchGame()`'s
+`createGame()` call runs from deep inside whichever transaction the game
+that JUST finished is still holding open -- `resignGame()`'s own
+completion path (`completeGameByResignation()`) never opens one, but
+`pass()`/`playMood()`'s real round-scoring path (`scoreRoundAndAdvance()`)
+does, wrapping the entire score-then-advance sequence in one atomic
+transaction. `createGame()` therefore has to be safe to call either as
+the outermost operation (an ordinary `POST /games`) or nested inside an
+already-open one here -- it joins the existing transaction rather than
+attempting a second, unsupported nested `beginTransaction()` on the same
+connection, and only commits/rolls back the one it actually opened
+itself (see `createGame()`'s own docblock). Reported live: without this,
+a match that concluded via real round scoring (not a resignation) with
+its winner's next match ready to start immediately threw "There is
+already an active transaction" -- uncaught, that unwound all the way out
+through `scoreRoundAndAdvance()`'s own catch block, rolling back the
+entire round-completion transaction and leaving the match stuck "in
+progress" forever, its winner never actually advanced.
+
 **API** -- `POST /tournaments` (create), `GET /tournaments`
 (`?mine=1` for the current user's own/invited/joined tournaments,
 omitted for open-registration tournaments visible to browse),

@@ -2105,7 +2105,32 @@ final class GameService
         $totalTimeLimitMinutesForGame = array_key_exists($deckType, self::PERIODIC_SEALED_POOL_DECK_TYPES) ? null : $totalTimeLimitMinutes;
 
         $pdo = Connection::get();
-        $pdo->beginTransaction();
+        // Reentrant, not unconditional: createGame() is usually the
+        // outermost caller (a plain POST /games request), but a
+        // tournament match's own next round is created from deep inside
+        // scoreRoundAndAdvance()'s already-open transaction --
+        // TournamentService::advanceInto()'s own startMatchGame() call,
+        // triggered by advanceTournamentMatch()/onMatchConcluded() the
+        // moment the PREVIOUS match's last game finishes. A second,
+        // unconditional beginTransaction() on the same PDO connection
+        // there threw "There is already an active transaction"
+        // (reported live: a tournament match stuck "in progress" forever,
+        // its winner never advanced, after the deadlocked player's
+        // opponent's own auto-played turn crashed here) -- uncaught, that
+        // exception unwound all the way out through
+        // scoreRoundAndAdvance()'s own catch block, rolling back the
+        // entire round-completion transaction along with it, including
+        // the very game-over state that triggered the advance in the
+        // first place. Joining the existing transaction when one's
+        // already open (and only committing/rolling back the one THIS
+        // call actually started) makes createGame() safe to call either
+        // way, matching the "caller owns the transaction it opened"
+        // convention finishScoringAndAdvance()'s own docblock already
+        // documents for itself.
+        $startedTransaction = !$pdo->inTransaction();
+        if ($startedTransaction) {
+            $pdo->beginTransaction();
+        }
 
         try {
             $draftMatchId = null;
@@ -2310,9 +2335,13 @@ final class GameService
                 }
             }
 
-            $pdo->commit();
+            if ($startedTransaction) {
+                $pdo->commit();
+            }
         } catch (Throwable $e) {
-            $pdo->rollBack();
+            if ($startedTransaction) {
+                $pdo->rollBack();
+            }
             throw $e;
         }
 

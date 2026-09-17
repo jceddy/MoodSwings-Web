@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace MoodSwings\Tests\Game;
 
+use MoodSwings\Database\Connection;
 use MoodSwings\Deck\NotAuthorizedToAccessDecklistException;
 use MoodSwings\Deck\UserDecklistService;
 use MoodSwings\Friends\FriendshipService;
@@ -357,6 +358,47 @@ final class GameServiceIntegrationTest extends TestCase
             'rare' => 6,
             'mythic' => 2,
         ], array_map(intval(...), $countsByRarity));
+    }
+
+    /**
+     * Reported live: a tournament match's own winner auto-advancing into
+     * their next bracket match (TournamentService::advanceInto() ->
+     * startMatchGame() -> createGame()) runs from deep inside
+     * scoreRoundAndAdvance()'s already-open transaction, once the match
+     * concludes via real round scoring rather than a resignation (the
+     * existing bracket-progression tests all use resignGame(), whose own
+     * completeGameByResignation() never wraps a transaction at all, so
+     * they never exercised this). createGame()'s own unconditional
+     * beginTransaction() threw "There is already an active transaction",
+     * an uncaught PDOException that unwound all the way out through
+     * scoreRoundAndAdvance()'s own catch block, rolling back the entire
+     * round-completion transaction -- leaving the match stuck "in
+     * progress" forever, its winner never actually seated into the next
+     * round. Exercised directly here (rather than replaying an entire
+     * tournament bracket to a real round-scored conclusion, which needs
+     * no bug-specific setup of its own) since the fix is entirely inside
+     * createGame() itself: it must now join an already-open transaction
+     * instead of always starting its own.
+     */
+    public function testCreateGameJoinsAnAlreadyOpenTransactionWithoutCommittingIt(): void
+    {
+        $creator = $this->insertUser('nested-txn-alice');
+        $bob = $this->insertUser('nested-txn-bob');
+
+        $pdo = Connection::get();
+        $pdo->beginTransaction();
+        $gameId = $this->games->createGame($creator, [$creator, $bob]);
+        self::assertGreaterThan(0, $gameId, 'createGame() must not throw when a transaction is already open');
+
+        // Rolling back the OUTER transaction must undo createGame()'s own
+        // writes too -- proving it joined this transaction rather than
+        // silently committing its own nested one, which would have left
+        // an orphaned game row behind here.
+        $pdo->rollBack();
+
+        $stmt = $this->pdo->prepare('SELECT COUNT(*) FROM games WHERE id = :id');
+        $stmt->execute(['id' => $gameId]);
+        self::assertSame(0, (int) $stmt->fetchColumn());
     }
 
     public function testCreateGameCanRequestThePowerDeckInstead(): void
