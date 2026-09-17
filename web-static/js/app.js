@@ -514,10 +514,14 @@ function inviteToTournament(tournamentId, userId) {
     });
 }
 
-function acceptTournamentInvite(tournamentId) {
+// deckParams ({decklist_text} or {saved_decklist_id}) is only required
+// when the tournament is Power Duel (deck_type 'custom_duel') -- see
+// TournamentService::acceptInvite()'s own docblock; omitted (or ignored
+// server-side) for every other tournament.
+function acceptTournamentInvite(tournamentId, deckParams = {}) {
     return apiRequest('/tournaments/accept-invite', {
         method: 'POST',
-        body: JSON.stringify({ tournament_id: tournamentId }),
+        body: JSON.stringify({ tournament_id: tournamentId, ...deckParams }),
     });
 }
 
@@ -528,10 +532,24 @@ function declineTournamentInvite(tournamentId) {
     });
 }
 
-function joinTournament(tournamentId) {
+// deckParams -- see acceptTournamentInvite()'s own docblock just above.
+function joinTournament(tournamentId, deckParams = {}) {
     return apiRequest('/tournaments/join', {
         method: 'POST',
-        body: JSON.stringify({ tournament_id: tournamentId }),
+        body: JSON.stringify({ tournament_id: tournamentId, ...deckParams }),
+    });
+}
+
+// Power Duel's own join-time deck (issue reported live: "the deck
+// submission should happen when the player joins the tournament --
+// players use the same submitted deck for the entire tournament"),
+// resubmitted/edited standalone before the tournament starts -- see
+// TournamentService::submitTournamentDeck()'s own docblock. deckParams
+// is {decklist_text} or {saved_decklist_id}.
+function submitTournamentDeck(tournamentId, deckParams) {
+    return apiRequest('/tournaments/submit-deck', {
+        method: 'POST',
+        body: JSON.stringify({ tournament_id: tournamentId, ...deckParams }),
     });
 }
 

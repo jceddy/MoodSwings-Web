@@ -1,0 +1,19 @@
+-- Power Duel tournaments: reported live, "the deck submission should
+-- happen when the player joins the tournament -- players use the same
+-- submitted deck for the entire tournament." createTournament()'s own
+-- auto-join for the creator, joinOpenTournament(), and acceptInvite()
+-- now require (and atomically validate) a decklist up front for any
+-- custom_duel tournament, storing it on migration 0345's own
+-- tournament_participants.deck_* columns; TournamentService::
+-- startMatchGame() carries that deck straight onto each new match's
+-- own game 1 so it starts immediately, with no further per-match
+-- submission needed. A new submitTournamentDeck() (POST
+-- /tournaments/submit-deck) lets an already-joined participant change
+-- their mind until the tournament actually starts. A legacy
+-- tournament predating this feature (deck_card_ids still null) falls
+-- back to the original per-game submission flow unmodified.
+--
+-- No schema change of its own (migration 0345 already added the
+-- columns this uses) -- just the version bump MaintenanceGate needs to
+-- see this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.50.8' WHERE id = 1;

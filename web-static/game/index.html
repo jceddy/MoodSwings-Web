@@ -1211,6 +1211,31 @@
 
             <label class="dialog-field" id="new-tournament-allow-sideboarding-label" hidden><input type="checkbox" id="new-tournament-allow-sideboarding"> Allow sideboarding</label>
 
+            <!-- Power Duel's own join-time deck (issue reported live: "the
+                 deck submission should happen when the player joins the
+                 tournament -- players use the same submitted deck for the
+                 entire tournament") -- shown only for deck_type
+                 'custom_duel', same as #new-tournament-allow-sideboarding-label
+                 just above. This is the creator's own deck, submitted
+                 here as their own "join" (TournamentService::createTournament()
+                 auto-joins them) -- everyone else submits theirs the same
+                 way, from #tournament-deck-dialog, when they join/accept. -->
+            <div id="new-tournament-decklist-fields" hidden>
+                <label>Use a saved deck
+                    <select id="new-tournament-saved-decklist">
+                        <option value="">Paste/upload a decklist instead</option>
+                    </select>
+                </label>
+                <div id="new-tournament-decklist-paste-fields">
+                    <label>Upload a decklist file
+                        <input type="file" id="new-tournament-decklist-file" accept=".txt,text/plain">
+                    </label>
+                    <label>Or paste your decklist
+                        <textarea id="new-tournament-decklist-text" class="decklist-textarea" rows="10"></textarea>
+                    </label>
+                </div>
+            </div>
+
             <label class="dialog-field" id="new-tournament-timeout-enabled-label"><input type="checkbox" id="new-tournament-timeout-enabled"> Automatically resolve an idle turn/response</label>
             <div id="new-tournament-timeout-fields" hidden>
                 <label class="dialog-field">After being idle for
@@ -1259,6 +1284,35 @@
             <button type="submit" id="new-tournament-submit-button">Create tournament</button>
             <button type="button" id="new-tournament-cancel-button">Cancel</button>
             <p id="new-tournament-error" class="error" hidden></p>
+        </form>
+    </dialog>
+
+    <!-- Power Duel's own join-time deck (issue reported live: "the deck
+         submission should happen when the player joins the tournament --
+         players use the same submitted deck for the entire tournament")
+         -- shared by joining an open tournament, accepting an invite, and
+         editing your deck before the tournament starts (submitTournamentDeck()
+         in game.js decides which API call to make, based on how the
+         dialog was opened -- see openTournamentDeckDialog()). -->
+    <dialog id="tournament-deck-dialog">
+        <form id="tournament-deck-form">
+            <h2>Submit your deck</h2>
+            <label>Use a saved deck
+                <select id="tournament-deck-saved-decklist">
+                    <option value="">Paste/upload a decklist instead</option>
+                </select>
+            </label>
+            <div id="tournament-deck-paste-fields">
+                <label>Upload a decklist file
+                    <input type="file" id="tournament-deck-file" accept=".txt,text/plain">
+                </label>
+                <label>Or paste your decklist
+                    <textarea id="tournament-deck-text" class="decklist-textarea" rows="10"></textarea>
+                </label>
+            </div>
+            <button type="submit" id="tournament-deck-submit-button">Submit</button>
+            <button type="button" id="tournament-deck-cancel-button">Cancel</button>
+            <p id="tournament-deck-error" class="error" hidden></p>
         </form>
     </dialog>
 

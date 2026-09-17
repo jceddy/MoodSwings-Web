@@ -3690,6 +3690,17 @@
         document.getElementById('new-game-decklist-text').value = await file.text();
     });
 
+    // Same pattern as #new-game-decklist-file above, for the New
+    // Tournament dialog's own creator decklist fields.
+    document.getElementById('new-tournament-decklist-file').addEventListener('change', async (event) => {
+        const file = event.target.files[0];
+        if (!file) {
+            return;
+        }
+
+        document.getElementById('new-tournament-decklist-text').value = await file.text();
+    });
+
     // Reads the four rarity rows' own optional "max total"/"max
     // duplicates" fields for the User-Defined preset -- a blank field
     // means "no restriction for that rarity" (matches DuelDeckRules's own
@@ -4114,6 +4125,65 @@
     // unlike the New Game dialog's own generic "Custom Decklists (Duel)"
     // label, which still needs to say so since it's one option among
     // several there.
+    // -- Tournament deck submission dialog (join/accept-invite/edit) --
+
+    // Power Duel's own join-time deck (issue reported live: "the deck
+    // submission should happen when the player joins the tournament --
+    // players use the same submitted deck for the entire tournament") --
+    // one shared dialog for all three places a decklist is needed:
+    // joining an open tournament, accepting an invite, and editing an
+    // already-submitted deck before the tournament starts. onSubmit is
+    // called with {decklist_text} or {saved_decklist_id} (never both) and
+    // must return the {ok, body} shape apiRequest() itself returns; the
+    // dialog closes and onSuccess() runs once it resolves ok, otherwise
+    // onSubmit's own error message is shown and the dialog stays open.
+    const tournamentDeckDialog = document.getElementById('tournament-deck-dialog');
+    const tournamentDeckForm = document.getElementById('tournament-deck-form');
+    const tournamentDeckError = document.getElementById('tournament-deck-error');
+
+    document.getElementById('tournament-deck-file').addEventListener('change', async (event) => {
+        const file = event.target.files[0];
+        if (!file) {
+            return;
+        }
+
+        document.getElementById('tournament-deck-text').value = await file.text();
+    });
+
+    document.getElementById('tournament-deck-cancel-button').addEventListener('click', () => {
+        tournamentDeckDialog.close();
+    });
+
+    async function openTournamentDeckDialog(onSubmit, onSuccess) {
+        tournamentDeckError.hidden = true;
+        tournamentDeckForm.reset();
+        await populateSavedDecklistSelect(document.getElementById('tournament-deck-saved-decklist'));
+
+        tournamentDeckForm.onsubmit = async (e) => {
+            e.preventDefault();
+            const submitButton = document.getElementById('tournament-deck-submit-button');
+            submitButton.disabled = true;
+
+            const savedDecklistId = document.getElementById('tournament-deck-saved-decklist').value;
+            const deckParams = savedDecklistId !== ''
+                ? { saved_decklist_id: Number(savedDecklistId) }
+                : { decklist_text: document.getElementById('tournament-deck-text').value };
+
+            const { ok, body } = await onSubmit(deckParams);
+            submitButton.disabled = false;
+            if (!ok) {
+                tournamentDeckError.textContent = body.message || 'Could not submit this deck.';
+                tournamentDeckError.hidden = false;
+                return;
+            }
+
+            tournamentDeckDialog.close();
+            await onSuccess();
+        };
+
+        tournamentDeckDialog.showModal();
+    }
+
     function tournamentMatchSummary(tournament) {
         const params = tournament.match_params;
         const deckType = params.deck_type === 'custom_duel'
@@ -4155,6 +4225,17 @@
             acceptButton.type = 'button';
             acceptButton.textContent = 'Accept';
             acceptButton.addEventListener('click', async () => {
+                // Power Duel's own join-time deck (issue reported live:
+                // "the deck submission should happen when the player
+                // joins the tournament") -- collected here before
+                // actually accepting, same as the Join button below.
+                if (tournament.match_params.deck_type === 'custom_duel') {
+                    await openTournamentDeckDialog(
+                        (deckParams) => acceptTournamentInvite(tournament.id, deckParams),
+                        loadTournamentsDialog,
+                    );
+                    return;
+                }
                 acceptButton.disabled = true;
                 const { ok, body } = await acceptTournamentInvite(tournament.id);
                 if (!ok) {
@@ -4211,6 +4292,26 @@
             viewButton.addEventListener('click', () => openTournamentView(tournament.id));
             item.appendChild(viewButton);
 
+            // Power Duel's own join-time deck (issue reported live: "the
+            // deck submission should happen when the player joins the
+            // tournament -- players use the same submitted deck for the
+            // entire tournament") -- editable until the tournament
+            // actually starts (submitTournamentDeck()'s own docblock),
+            // for the creator too (their own deck was collected in the
+            // New Tournament dialog, but can still change their mind).
+            if (tournament.status === 'registration' && tournament.match_params.deck_type === 'custom_duel' && tournament.my_participant_status === 'joined') {
+                const editDeckButton = document.createElement('button');
+                editDeckButton.type = 'button';
+                editDeckButton.textContent = 'Edit deck';
+                editDeckButton.addEventListener('click', async () => {
+                    await openTournamentDeckDialog(
+                        (deckParams) => submitTournamentDeck(tournament.id, deckParams),
+                        loadTournamentsDialog,
+                    );
+                });
+                item.appendChild(editDeckButton);
+            }
+
             const isCreator = tournament.created_by_user_id === user.id;
             if (tournament.status === 'registration' && !isCreator && tournament.my_participant_status === 'joined') {
                 const withdrawButton = document.createElement('button');
@@ -4246,6 +4347,19 @@
             joinButton.type = 'button';
             joinButton.textContent = 'Join';
             joinButton.addEventListener('click', async () => {
+                // Power Duel's own join-time deck (issue reported live:
+                // "the deck submission should happen when the player
+                // joins the tournament -- players use the same submitted
+                // deck for the entire tournament") -- collected here
+                // before actually joining; every other tournament type
+                // joins immediately, same as before.
+                if (tournament.match_params.deck_type === 'custom_duel') {
+                    await openTournamentDeckDialog(
+                        (deckParams) => joinTournament(tournament.id, deckParams),
+                        loadTournamentsDialog,
+                    );
+                    return;
+                }
                 joinButton.disabled = true;
                 const { ok, body } = await joinTournament(tournament.id);
                 if (!ok) {
@@ -4374,6 +4488,18 @@
         }
     }
 
+    // Power Duel's own join-time deck (issue reported live: "the deck
+    // submission should happen when the player joins the tournament --
+    // players use the same submitted deck for the entire tournament") --
+    // the creator's own deck, collected right here since createTournament()
+    // auto-joins them; same condition as updateNewTournamentAllowSideboardingVisibility()'s
+    // own (deck_type 'custom_duel' is exactly "Power Duel" -- see
+    // effectiveNewTournamentDeckType()'s own docblock).
+    function updateNewTournamentDecklistFieldVisibility() {
+        const show = effectiveNewTournamentDeckType() === 'custom_duel';
+        document.getElementById('new-tournament-decklist-fields').hidden = !show;
+    }
+
     // Issue #85's own turn/decision timeout opt-in, and issue #85
     // follow-up's own full-game time-limit mode, mirrored from the New
     // Game dialog's own updateTimeoutFieldVisibility()/
@@ -4467,6 +4593,7 @@
     }
 
     document.getElementById('new-tournament-format').addEventListener('change', updateNewTournamentAllowSideboardingVisibility);
+    document.getElementById('new-tournament-format').addEventListener('change', updateNewTournamentDecklistFieldVisibility);
     document.getElementById('new-tournament-format').addEventListener('change', updateNewTournamentGridDraftModeVisibility);
     document.getElementById('new-tournament-grid-draft-mode').addEventListener('change', updateNewTournamentGridDraftModeVisibility);
     document.getElementById('new-tournament-registration-mode-invite').addEventListener('change', updateNewTournamentRegistrationModeFields);
@@ -4484,12 +4611,14 @@
         newTournamentForm.reset();
         populateNewTournamentParticipantRangeSelects();
         updateNewTournamentAllowSideboardingVisibility();
+        updateNewTournamentDecklistFieldVisibility();
         updateNewTournamentGridDraftModeVisibility();
         updateNewTournamentRegistrationModeFields();
         updateNewTournamentSwissRoundCountVisibility();
         updateNewTournamentTimeoutFieldVisibility();
         updateNewTournamentTotalTimeLimitFieldVisibility();
         updateNewTournamentSynchronousFieldVisibility();
+        await populateSavedDecklistSelect(document.getElementById('new-tournament-saved-decklist'));
 
         const { ok, body } = await listFriends();
         const friends = ok ? body.friends : [];
@@ -4564,6 +4693,17 @@
             // preset -- see effectiveNewTournamentDeckType()'s own
             // docblock and updateNewTournamentAllowSideboardingVisibility()'s.
             duel_deck_rules: deckType === 'custom_duel' ? { preset: 'power' } : undefined,
+            // Power Duel's own join-time deck (issue reported live: "the
+            // deck submission should happen when the player joins the
+            // tournament") -- the creator's own deck, since
+            // createTournament() auto-joins them; ignored server-side for
+            // any other deck_type. Same "use a saved deck, else fall back
+            // to the pasted/uploaded text" convention as every other
+            // decklist field in this file.
+            decklist_text: deckType === 'custom_duel' && document.getElementById('new-tournament-saved-decklist').value === ''
+                ? document.getElementById('new-tournament-decklist-text').value : undefined,
+            saved_decklist_id: deckType === 'custom_duel'
+                ? Number(document.getElementById('new-tournament-saved-decklist').value) || undefined : undefined,
             // Grid Draft's own pool-source picker isn't offered here --
             // always a random pool, GameService::createGame()'s own
             // default-feeling choice (#new-game-grid-draft-pool-source's

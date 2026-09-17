@@ -2009,9 +2009,6 @@ choice, it's simply what this format is, so
 `effectiveNewTournamentDeckType()` returns `deck_type: 'custom_duel'`
 outright for it (no second select involved at all) and the submit
 handler pairs it with `duel_deck_rules: {preset: 'power'}` unconditionally.
-Each match's two players submit their own decklist, validated against
-that "power" preset, rather than one deck algorithmically assembled for
-the whole event -- see "Power Duel sideboarding" in `php-app/README.md`.
 The tournament dialog never exposes the full `user_defined` rule fields
 the New Game dialog offers for this same deck_type, only this one fixed
 preset. Selecting "Power Duel" reveals `#new-tournament-allow-sideboarding-label`
@@ -2020,17 +2017,54 @@ off the format select's value, since deck_type/best-of-three are no
 longer independent variables here) -- checking it sends
 `allow_sideboarding: true`, threaded through by
 `TournamentService::startMatchGame()`'s own `createGame()` call exactly
-like `best_of_three`. Because the game this creates needs each player's
-decklist submitted before it can start, `startMatchGame()`'s own
-`startGame()` call fails harmlessly and is left for the same
-per-player decklist-submission flow an ordinary ad hoc Power Duel match
-already uses (see `TournamentService`'s own class docblock). The
-tournaments list (`tournamentMatchSummary()`) shows this option as bare
-"Power Duel" rather than `NEW_GAME_DECK_TYPE_LABELS`'s own generic
-"Custom Decklists (Duel)" label, and without the "Duel – " prefix every
-other non-sentinel format/deck_type combination gets, the same "it's the
-only thing this format offers any more" reasoning Grid Draft's own label
-follows.
+like `best_of_three`. The tournaments list (`tournamentMatchSummary()`)
+shows this option as bare "Power Duel" rather than
+`NEW_GAME_DECK_TYPE_LABELS`'s own generic "Custom Decklists (Duel)"
+label, and without the "Duel – " prefix every other non-sentinel
+format/deck_type combination gets, the same "it's the only thing this
+format offers any more" reasoning Grid Draft's own label follows.
+
+**Join-time deck submission** (reported live: "the deck submission
+should happen when the player joins the tournament -- players use the
+same submitted deck for the entire tournament" -- see "Tournaments" in
+`php-app/README.md` for the full backend flow) -- selecting "Power
+Duel" also reveals `#new-tournament-decklist-fields`
+(`updateNewTournamentDecklistFieldVisibility()`), the creator's own
+deck: a "use a saved deck" `<select>` (`populateSavedDecklistSelect()`,
+the same helper the New Game dialog's own saved-decklist picker uses)
+falling back to an upload-a-file-or-paste-text pair when left on its
+default "Paste/upload a decklist instead" option, identical in shape to
+`#new-game-decklist-fields` (deck_type `'custom'`) even though the two
+are wired to completely different submit-time fields. The submit
+handler sends whichever of `decklist_text`/`saved_decklist_id` applies
+alongside everything else in the `createTournament()` body -- required
+server-side since `createTournament()`'s own auto-join for the creator
+now needs a decklist up front for any `custom_duel` tournament,
+validated before the tournament is even created.
+
+Everyone else's own join-time deck is collected by a second, shared
+dialog, `#tournament-deck-dialog` (`openTournamentDeckDialog()` in
+game.js) -- the exact same saved-deck-select-or-paste/upload shape as
+`#new-tournament-decklist-fields` above, just reused across three call
+sites instead of duplicated: clicking "Join" on an open Power Duel
+tournament (`#tournaments-open-list`) or "Accept" on a Power Duel
+invitation (`#tournaments-invitations-list`) opens this dialog instead
+of calling `joinTournament()`/`acceptTournamentInvite()` immediately,
+and only submits once a deck is entered (checked via
+`tournament.match_params.deck_type === 'custom_duel'` on the
+tournament object each list item already has); every other tournament
+type still joins/accepts immediately, unchanged. A joined Power Duel
+participant can also change their mind any time before the tournament
+starts -- "Your tournaments" shows an "Edit deck" button (alongside
+"View"/"Withdraw") for exactly that window
+(`tournament.status === 'registration'`), opening the same dialog one
+more time and calling the new `submitTournamentDeck()` helper
+(`POST /tournaments/submit-deck`) instead of joining/accepting.
+`openTournamentDeckDialog()` takes the actual API call to make
+(`onSubmit`) and what to refresh on success (`onSuccess`, always
+`loadTournamentsDialog()` here) as parameters rather than hard-coding
+either, so all three call sites share one dialog, one saved-decklist
+populate, and one error-display path.
 
 **Traditional's fixed Structure deck** -- `#new-tournament-format`'s
 `standard` option always implies `deck_type: 'structure'`

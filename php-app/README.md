@@ -5115,18 +5115,71 @@ progress" forever, its winner never actually advanced.
 omitted for open-registration tournaments visible to browse),
 `GET /tournaments/state?id=` (participants/rounds/matches/standings),
 `POST /tournaments/invite`, `/accept-invite`, `/decline-invite`,
-`/join`, `/withdraw`, `/start`, `/cancel`. See "Tournaments" in
-`web-static/README.md` for the New Tournament dialog and the
-bracket/standings view built on top of these.
+`/join`, `/submit-deck`, `/withdraw`, `/start`, `/cancel`. See
+"Tournaments" in `web-static/README.md` for the New Tournament dialog
+and the bracket/standings view built on top of these.
 
 A Duel tournament ("Power Duel" in the New Tournament dialog) always
 sets `deck_type: 'custom_duel'` under the "power" `duel_deck_rules`
 preset now -- using custom decks is no longer one deck_type option among
-several for `format: 'duel'`, it's simply what a Duel tournament is:
-each player submits their own decklist for every match, rather than one
-algorithmically assembled deck for the whole event, validated against
-that fixed preset -- `duel_deck_rules`/`allow_sideboarding` pass straight
-through `startMatchGame()`'s own `createGame()` call same as every other
+several for `format: 'duel'`, it's simply what a Duel tournament is.
+
+**The deck is submitted once, at join time, and used for the whole
+event** (migration 0345, reported live: "the deck submission should
+happen when the player joins the tournament -- players use the same
+submitted deck for the entire tournament" -- previously every match's
+own game 1 asked for a fresh decklist, resetting every round).
+`createTournament()`'s own auto-join for the creator, `joinOpenTournament()`,
+and `acceptInvite()` all now require (and, for `registration_mode: 'open'`/
+`invite_only`, atomically validate before touching any row -- a bad or
+missing decklist fails the join outright, same as any other validation
+error) a `decklist_text` or `saved_decklist_id`, but only when
+`match_params.deck_type` resolves to `'custom_duel'` -- every other
+tournament type (including Booster Draft's own `'booster_draft'`
+sentinel and Grid Draft's pod options) ignores both fields entirely,
+since neither has a join-time deck of its own to collect this way.
+`GameService::resolvePowerDuelTournamentDeck()` does the actual
+resolving/validating (`DecklistParser`/`UserDecklistService::cardIdsForUse()`
+for the raw cardIds, `DuelDeckRules::forPreset('power')` -- always
+`'power'`, never `'user_defined'`, since a tournament's own
+`duel_deck_rules` is fixed by `createTournament()` -- for validation,
+`validateAndStorePowerDuelSideboardPool()` to also declare a sideboard
+when `match_params.allow_sideboarding` is set, exactly like an ordinary
+ad hoc Power Duel match's own game-1 submission does; see "Power Duel
+sideboarding" below), and `TournamentParticipantRepository::setDeck()`
+stores the result on the participant's own `tournament_participants`
+row (`deck_name`/`deck_card_ids`/`deck_sideboard_card_ids`, all `NULL`
+until submitted, and for every non-`custom_duel` tournament). It's
+editable any number of times before the bracket locks --
+`TournamentService::submitTournamentDeck()` (`POST /tournaments/submit-deck`)
+re-validates and overwrites it the same way, as long as the tournament
+is still `'registration'`; `startTournament()` seeding the bracket locks
+every participant's deck in place from that point on, the same way an
+ordinary `custom_duel` game's own deck locks once submitted for a
+"locked" (non-sideboarding) match.
+
+`TournamentService::startMatchGame()` carries a participant's own
+join-time deck straight onto their seat's `game_players` row
+(`GameService::seedCustomDuelDeckFromTournament()`) the moment each new
+match's own game 1 is created, so `startGame()` immediately after
+succeeds with no further action from either player -- a stark contrast
+to every other `custom_duel` deck_type (draft-family pod matches
+excepted, which already source from a drafted pool, not a join-time
+deck), where the match starts `'waiting'` on a fresh per-game
+submission. A participant who joined before this feature existed
+(migration 0345 predates them, so `deck_card_ids` is still `NULL`) is
+left untouched here -- their match falls back to the original per-game
+`submitCustomDuelDeck()` flow exactly as before, no backfill required.
+Games 2/3 of a locked (non-sideboarding) match still carry the deck
+forward automatically via `advanceGameMatch()`, and games 2/3 of a
+sideboarding match still resubmit a swap via the ordinary
+`submitCustomDuelDeck()`/`validateAndStorePowerDuelSideboardSwap()`
+path -- neither needed any change, since both already just read
+whatever's sitting in that match's own game-1 `game_players` row,
+populated one step earlier than before now.
+
+`duel_deck_rules`/`allow_sideboarding` still pass straight through
+`startMatchGame()`'s own `createGame()` call same as every other
 `match_params` key. See "Power Duel sideboarding" below for what
 `allow_sideboarding` actually does; the New Tournament dialog never
 offers `user_defined`, so `allow_sideboarding` is meaningful for every
@@ -5498,6 +5551,21 @@ Traditional-at-2-players restriction already established.
 whole match; `game_players.custom_deck_sideboard_card_ids` (`JSON`,
 nullable) holds a seated player's own currently-benched cards, alongside
 the existing `custom_deck_card_ids`.
+
+For a Power Duel TOURNAMENT specifically (as opposed to an ordinary ad
+hoc match), "declaring the pool" below happens once, at join time, via
+`tournament_participants.deck_sideboard_card_ids` -- see the
+"Tournaments" section above for the full join-time deck flow -- rather
+than at match 1's own game 1 the way an ad hoc match still works;
+`startMatchGame()` seeds each new match's own game-1 `game_players` row
+straight from that stored pool, so everything from "swapping within the
+pool" onward below is unaffected either way.
+
+**Skip ahead:** the rest of this section (main-deck-plus-bench
+"declaring the pool" mechanics, `POWER_DUEL_SIDEBOARD_MAX_CARDS`,
+`validateAndStorePowerDuelSideboardPool()`) describes an ad hoc match's
+own game-1 submission; a tournament match's own game 1 already has this
+done for it by the time either player looks, as just described above.
 
 **Why this needed its own opt-in, not just reusing custom_duel's
 existing free resubmission** -- every other `custom_duel` best-of-three

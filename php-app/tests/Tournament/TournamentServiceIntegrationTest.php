@@ -295,6 +295,7 @@ final class TournamentServiceIntegrationTest extends TestCase
             swissRoundCount: null,
             minParticipants: 4,
             maxParticipants: 16,
+            creatorDecklistText: $this->powerDuelDecklistText(),
         );
         $duelParams = $tournaments->find($duelId)['match_params'];
         self::assertSame('custom_duel', $duelParams['deck_type']);
@@ -733,25 +734,38 @@ final class TournamentServiceIntegrationTest extends TestCase
     /**
      * A Duel tournament ("Power Duel" in the New Tournament dialog)
      * always uses deck_type 'custom_duel' under the "power"
-     * duel_deck_rules preset now (each player submits their own
-     * decklist, validated against DuelDeckRules::forPreset('power'))
-     * rather than one of the algorithmically-assembled deck types --
-     * createTournament() forces this itself (see its own docblock)
-     * regardless of what's passed in, which this test proves by passing
-     * neither 'deck_type' nor 'duel_deck_rules' at all. startMatchGame()
-     * creates the game up front same as any other match, but it starts
-     * out 'waiting' rather than 'in_progress' since neither player has
-     * submitted a decklist yet -- exactly the same tolerance the class
-     * docblock already describes for draft matches. allow_sideboarding
-     * here also proves TournamentService threads it through to the
-     * created game_match wrapper.
+     * duel_deck_rules preset now, rather than one of the
+     * algorithmically-assembled deck types -- createTournament() forces
+     * this itself (see its own docblock) regardless of what's passed in,
+     * which this test proves by passing neither 'deck_type' nor
+     * 'duel_deck_rules' at all.
+     *
+     * Issue reported live: "the deck submission should happen when the
+     * player joins the tournament -- players use the same submitted
+     * deck for the entire tournament" -- every participant's own
+     * decklist (validated against DuelDeckRules::forPreset('power')) is
+     * now required at join time (createTournament()'s own auto-join for
+     * the creator, acceptInvite() here) rather than per-match, so
+     * startMatchGame() carries it straight onto the freshly-created
+     * game's own game_players row and the game starts 'in_progress'
+     * immediately -- no separate per-match decklist submission needed
+     * any more (see testPowerDuelLegacyParticipantFallsBackToPerGameSubmission()
+     * for a participant predating this feature, whose deck still has to
+     * be submitted the old way). allow_sideboarding here also proves
+     * TournamentService threads both the game_match wrapper's own flag
+     * and each participant's own declared sideboard pool through.
      */
-    public function testDuelTournamentSupportsCustomDuelPowerDecksWithSideboarding(): void
+    public function testDuelTournamentCarriesJoinTimeDeckIntoMatchOneImmediately(): void
     {
         $creator = $this->insertUser('power_p1');
         $p2 = $this->insertUser('power_p2');
         $p3 = $this->insertUser('power_p3');
         $p4 = $this->insertUser('power_p4');
+
+        $mainDeck = $this->fetchNonMythicCardNames(15);
+        $sideboardCard = $this->fetchNonMythicCardNames(16)[15];
+        $decklistText = implode("\n", array_map(static fn (string $name): string => "1 {$name}", $mainDeck))
+            . "\n\nSideboard\n1 {$sideboardCard}";
 
         $tournamentId = $this->tournaments->createTournament(
             $creator,
@@ -766,30 +780,186 @@ final class TournamentServiceIntegrationTest extends TestCase
             minParticipants: 4,
             maxParticipants: 16,
             inviteUserIds: [$p2, $p3, $p4],
+            creatorDecklistText: $decklistText,
         );
         foreach ([$p2, $p3, $p4] as $invitee) {
-            $this->tournaments->acceptInvite($tournamentId, $invitee);
+            $this->tournaments->acceptInvite($tournamentId, $invitee, $decklistText);
         }
         $this->tournaments->startTournament($tournamentId, $creator);
 
         $round1 = $this->matchRepo->listRounds($tournamentId)[0];
         $match = $this->matchRepo->listForRound((int) $round1['id'])[0];
-        self::assertNotNull($match['game_id'], 'a custom_duel match should still create its game up front, left waiting on decklists');
+        self::assertNotNull($match['game_id'], 'a custom_duel match should still create its game up front');
 
         $game = $this->fetchGame((int) $match['game_id']);
-        self::assertSame('waiting', $game['status'], "a custom_duel game can't start until both players submit a decklist");
         self::assertSame('custom_duel', $game['deck_type']);
         self::assertNotNull($game['game_match_id']);
         self::assertTrue((bool) $this->fetchGameMatch((int) $game['game_match_id'])['allow_sideboarding']);
+        self::assertSame(
+            'in_progress',
+            $game['status'],
+            'both seats already have their join-time deck carried forward, so the game should need no further decklist submission to start'
+        );
+
+        $p1UserId = $this->participantUserId((int) $match['participant1_id']);
+        $p1GamePlayer = $this->fetchGamePlayer((int) $match['game_id'], $p1UserId);
+        self::assertCount(15, json_decode((string) $p1GamePlayer['custom_deck_card_ids'], true));
+        self::assertSame(
+            [$sideboardCard],
+            array_map(
+                fn (int $cardId): string => $this->cardName($cardId),
+                json_decode((string) $p1GamePlayer['custom_deck_sideboard_card_ids'], true)
+            )
+        );
+    }
+
+    /**
+     * A participant who joined before this feature existed (migration
+     * 0345) has a null tournament_participants.deck_card_ids -- their
+     * match still gets created the same way, but startMatchGame() has
+     * nothing to carry forward, so the game is left 'waiting' on the
+     * original per-game submitCustomDuelDeck() flow exactly as before,
+     * proving legacy tournaments keep working unmodified.
+     */
+    public function testPowerDuelLegacyParticipantFallsBackToPerGameSubmission(): void
+    {
+        $creator = $this->insertUser('legacy_p1');
+        $p2 = $this->insertUser('legacy_p2');
+        $p3 = $this->insertUser('legacy_p3');
+        $p4 = $this->insertUser('legacy_p4');
+
+        $decklistText = $this->powerDuelDecklistText();
+
+        $tournamentId = $this->tournaments->createTournament(
+            $creator,
+            'Legacy Power Cup',
+            'single_elimination',
+            'invite_only',
+            ['format' => 'duel'],
+            swissRoundCount: null,
+            minParticipants: 4,
+            maxParticipants: 16,
+            inviteUserIds: [$p2, $p3, $p4],
+            creatorDecklistText: $decklistText,
+        );
+        foreach ([$p2, $p3, $p4] as $invitee) {
+            $this->tournaments->acceptInvite($tournamentId, $invitee, $decklistText);
+        }
+
+        // Simulates every participant having joined before migration
+        // 0345 -- nothing in the public API can produce this state any
+        // more (a decklist is now required to join a custom_duel
+        // tournament at all), so it's fabricated directly.
+        $this->pdo->exec('UPDATE tournament_participants SET deck_card_ids = NULL, deck_sideboard_card_ids = NULL');
+
+        $this->tournaments->startTournament($tournamentId, $creator);
+
+        $round1 = $this->matchRepo->listRounds($tournamentId)[0];
+        $match = $this->matchRepo->listForRound((int) $round1['id'])[0];
+        $game = $this->fetchGame((int) $match['game_id']);
+        self::assertSame('waiting', $game['status'], "a legacy participant's match still waits on the old per-game submission flow");
 
         $p1UserId = $this->participantUserId((int) $match['participant1_id']);
         $p2UserId = $this->participantUserId((int) $match['participant2_id']);
-        $decklistText = implode("\n", array_map(static fn (string $name): string => "1 {$name}", $this->fetchNonMythicCardNames(15)));
         $this->games->submitCustomDuelDeck((int) $match['game_id'], $this->games->gamePlayerIdFor((int) $match['game_id'], $p1UserId), $decklistText);
         $this->games->submitCustomDuelDeck((int) $match['game_id'], $this->games->gamePlayerIdFor((int) $match['game_id'], $p2UserId), $decklistText);
         $this->games->startGame((int) $match['game_id']);
 
         self::assertSame('in_progress', $this->fetchGame((int) $match['game_id'])['status']);
+    }
+
+    /**
+     * createTournament()/acceptInvite() both require a valid decklist
+     * atomically for a custom_duel tournament -- a missing/invalid one
+     * fails the whole call, leaving no half-joined participant behind.
+     */
+    public function testPowerDuelRequiresAValidDeckToCreateOrJoin(): void
+    {
+        $creator = $this->insertUser('nodeck_p1');
+        $invitee = $this->insertUser('nodeck_p2');
+
+        try {
+            $this->tournaments->createTournament(
+                $creator,
+                'No Deck Cup',
+                'single_elimination',
+                'invite_only',
+                ['format' => 'duel'],
+                swissRoundCount: null,
+                minParticipants: 4,
+                maxParticipants: 16,
+            );
+            self::fail('Expected a GameStateException for the missing creator decklist');
+        } catch (\MoodSwings\Game\Exceptions\GameStateException $e) {
+            self::assertSame('A decklist is required', $e->getMessage());
+        }
+
+        $tournamentId = $this->tournaments->createTournament(
+            $creator,
+            'Deck Required Cup',
+            'single_elimination',
+            'invite_only',
+            ['format' => 'duel'],
+            swissRoundCount: null,
+            minParticipants: 4,
+            maxParticipants: 16,
+            inviteUserIds: [$invitee],
+            creatorDecklistText: $this->powerDuelDecklistText(),
+        );
+
+        try {
+            $this->tournaments->acceptInvite($tournamentId, $invitee);
+            self::fail('Expected a GameStateException for the missing invitee decklist');
+        } catch (\MoodSwings\Game\Exceptions\GameStateException $e) {
+            self::assertSame('A decklist is required', $e->getMessage());
+        }
+        self::assertSame('invited', (new TournamentParticipantRepository())->findForUser($tournamentId, $invitee)['status'], 'a failed accept must not leave the participant joined');
+    }
+
+    /**
+     * submitTournamentDeck() lets an already-joined participant change
+     * their mind before the bracket locks, and is refused once the
+     * tournament has actually started.
+     */
+    public function testSubmitTournamentDeckAllowsEditingUntilStart(): void
+    {
+        $creator = $this->insertUser('editdeck_p1');
+        $p2 = $this->insertUser('editdeck_p2');
+        $p3 = $this->insertUser('editdeck_p3');
+        $p4 = $this->insertUser('editdeck_p4');
+
+        $decklistText = $this->powerDuelDecklistText();
+        $tournamentId = $this->tournaments->createTournament(
+            $creator,
+            'Edit Deck Cup',
+            'single_elimination',
+            'invite_only',
+            ['format' => 'duel'],
+            swissRoundCount: null,
+            minParticipants: 4,
+            maxParticipants: 16,
+            inviteUserIds: [$p2, $p3, $p4],
+            creatorDecklistText: $decklistText,
+        );
+        foreach ([$p2, $p3, $p4] as $invitee) {
+            $this->tournaments->acceptInvite($tournamentId, $invitee, $decklistText);
+        }
+
+        $participants = new TournamentParticipantRepository();
+        $creatorParticipant = $participants->findForUser($tournamentId, $creator);
+        self::assertSame(15, count($creatorParticipant['deck_card_ids']));
+
+        $newDeckNames = array_slice($this->fetchNonMythicCardNames(20), 5, 15);
+        $newDecklistText = implode("\n", array_map(static fn (string $name): string => "1 {$name}", $newDeckNames));
+        $this->tournaments->submitTournamentDeck($tournamentId, $creator, $newDecklistText);
+
+        $updatedParticipant = $participants->findForUser($tournamentId, $creator);
+        self::assertNotSame($creatorParticipant['deck_card_ids'], $updatedParticipant['deck_card_ids']);
+
+        $this->tournaments->startTournament($tournamentId, $creator);
+
+        $this->expectException(TournamentStateException::class);
+        $this->tournaments->submitTournamentDeck($tournamentId, $creator, $decklistText);
     }
 
     /**
@@ -1425,6 +1595,22 @@ final class TournamentServiceIntegrationTest extends TestCase
         return $stmt->fetch();
     }
 
+    private function fetchGamePlayer(int $gameId, int $userId): array
+    {
+        $stmt = $this->pdo->prepare('SELECT * FROM game_players WHERE game_id = :game_id AND user_id = :user_id');
+        $stmt->execute(['game_id' => $gameId, 'user_id' => $userId]);
+
+        return $stmt->fetch();
+    }
+
+    private function cardName(int $cardId): string
+    {
+        $stmt = $this->pdo->prepare('SELECT name FROM cards WHERE id = :id');
+        $stmt->execute(['id' => $cardId]);
+
+        return (string) $stmt->fetchColumn();
+    }
+
     /** @return string[] */
     private function fetchNonMythicCardNames(int $count): array
     {
@@ -1433,5 +1619,17 @@ final class TournamentServiceIntegrationTest extends TestCase
         $stmt->execute();
 
         return $stmt->fetchAll(PDO::FETCH_COLUMN);
+    }
+
+    /**
+     * A plain-text decklist satisfying DuelDeckRules::forPreset('power')
+     * (15 singleton non-mythic cards) -- every Power Duel tournament
+     * test needs one of these now that a decklist is required at join
+     * time (issue reported live: "the deck submission should happen
+     * when the player joins the tournament").
+     */
+    private function powerDuelDecklistText(): string
+    {
+        return implode("\n", array_map(static fn (string $name): string => "1 {$name}", $this->fetchNonMythicCardNames(15)));
     }
 }
