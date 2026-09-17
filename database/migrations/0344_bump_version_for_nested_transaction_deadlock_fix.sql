@@ -1,0 +1,13 @@
+-- GameService::createGame() now joins an already-open transaction
+-- rather than always starting its own -- a tournament match's winner
+-- auto-advancing into their next bracket match (startMatchGame() ->
+-- createGame()) runs from deep inside scoreRoundAndAdvance()'s
+-- already-open transaction whenever the match concludes via real round
+-- scoring, and a second, unconditional beginTransaction() there threw
+-- "There is already an active transaction" -- uncaught, that rolled
+-- back the whole round-completion transaction, leaving the match stuck
+-- "in progress" forever with its winner never actually advanced.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.50.7' WHERE id = 1;
