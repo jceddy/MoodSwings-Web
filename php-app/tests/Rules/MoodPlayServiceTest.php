@@ -632,6 +632,33 @@ final class MoodPlayServiceTest extends TestCase
         ]));
     }
 
+    /**
+     * Reported live: "Players should be able to play Regret even if there
+     * are no legal targets for the 'After playing this mood' effect.
+     * Similarly with Guile" -- with no opponent mood in play at all (its
+     * own cost is still payable, and its own "to play" cost -- discarding
+     * two hand cards -- is a real "if you can't, you can't" clause that's
+     * unaffected), submitting with no target_mood_id at all (exactly what
+     * game.js's own buildChoicesFromFields() sends once
+     * optional_if_no_targets tells updatePlayButtonEnabled() not to block
+     * the Play button on an impossible-to-fill required field) should
+     * still let Guile enter play, just fizzling its own after-playing
+     * effect -- see CardChoiceSchema's own optional_if_no_targets
+     * docblock.
+     */
+    public function testGuileCanBePlayedWithNoOpponentMoodInPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [40, 55, 106]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 40, new PlayerChoices([
+            'discard_card_ids' => [55, 106],
+        ]));
+
+        self::assertTrue($state->isInPlay(40));
+        self::assertEqualsCanonicalizing([55, 106], $state->discardPile());
+    }
+
     public function testEnvyCannotBePlayedWithNoMoodsAlreadyInPlay(): void
     {
         $state = $this->boardState(hands: [1 => [64]]);
@@ -1794,6 +1821,30 @@ final class MoodPlayServiceTest extends TestCase
 
         $this->expectException(InvalidChoiceException::class);
         $this->plays->playMood($state, 1, 50, new PlayerChoices(['hand_mood_ids' => [3, 7], 'target_mood_id' => 9]));
+    }
+
+    /**
+     * Reported live: "Players should be able to play Regret even if there
+     * are no legal targets for the 'After playing this mood' effect" --
+     * Regret's own cost (returning two of its own owner's moods to hand)
+     * is still payable here and stays a real "if you can't, you can't"
+     * gate, unaffected; it's only the after-playing target -- with no
+     * opponent mood in play at all -- that should stop blocking the whole
+     * play. See testGuileCanBePlayedWithNoOpponentMoodInPlay()'s own
+     * docblock for the exact game.js mechanics this exercises.
+     */
+    public function testRegretCanBePlayedWithNoOpponentMoodInPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [50, 3, 7]]);
+        $state->moveHandToInPlay(1, 3);
+        $state->moveHandToInPlay(1, 7);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 50, new PlayerChoices(['hand_mood_ids' => [3, 7]]));
+
+        self::assertTrue($state->isInPlay(50));
+        self::assertTrue($state->isInHand(1, 3));
+        self::assertTrue($state->isInHand(1, 7));
     }
 
     public function testRegretCannotBePlayedWithFewerThanTwoMoods(): void
