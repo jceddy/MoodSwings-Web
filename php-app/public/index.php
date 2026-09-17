@@ -1478,10 +1478,18 @@ if ($path === '/tournaments' && $method === 'POST') {
             isset($body['min_participants']) ? (int) $body['min_participants'] : 4,
             isset($body['max_participants']) ? (int) $body['max_participants'] : null,
             array_map(intval(...), (array) ($body['invite_user_ids'] ?? [])),
+            isset($body['decklist_text']) ? (string) $body['decklist_text'] : null,
+            isset($body['saved_decklist_id']) ? (int) $body['saved_decklist_id'] : null,
         );
         respond(201, ['status' => 'ok', 'tournament_id' => $tournamentId]);
     } catch (TournamentStateException $e) {
         respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (GameStateException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (DecklistNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAuthorizedToAccessDecklistException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
     }
 }
 
@@ -1554,12 +1562,23 @@ if ($path === '/tournaments/accept-invite' && $method === 'POST') {
     $body = requestBody();
 
     try {
-        $tournaments->acceptInvite((int) ($body['tournament_id'] ?? 0), (int) $currentUser['id']);
+        $tournaments->acceptInvite(
+            (int) ($body['tournament_id'] ?? 0),
+            (int) $currentUser['id'],
+            isset($body['decklist_text']) ? (string) $body['decklist_text'] : null,
+            isset($body['saved_decklist_id']) ? (int) $body['saved_decklist_id'] : null,
+        );
         respond(200, ['status' => 'ok']);
     } catch (TournamentNotFoundException $e) {
         respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
     } catch (TournamentStateException $e) {
         respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (GameStateException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (DecklistNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAuthorizedToAccessDecklistException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
     }
 }
 
@@ -1580,7 +1599,12 @@ if ($path === '/tournaments/join' && $method === 'POST') {
     $body = requestBody();
 
     try {
-        $tournaments->joinOpenTournament((int) ($body['tournament_id'] ?? 0), (int) $currentUser['id']);
+        $tournaments->joinOpenTournament(
+            (int) ($body['tournament_id'] ?? 0),
+            (int) $currentUser['id'],
+            isset($body['decklist_text']) ? (string) $body['decklist_text'] : null,
+            isset($body['saved_decklist_id']) ? (int) $body['saved_decklist_id'] : null,
+        );
         respond(200, ['status' => 'ok']);
     } catch (TournamentNotFoundException $e) {
         respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
@@ -1588,6 +1612,44 @@ if ($path === '/tournaments/join' && $method === 'POST') {
         respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
     } catch (TournamentStateException $e) {
         respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (GameStateException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (DecklistNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAuthorizedToAccessDecklistException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+// Power Duel's own join-time deck (issue reported live: "the deck
+// submission should happen when the player joins the tournament --
+// players use the same submitted deck for the entire tournament"),
+// resubmitted/edited standalone before the tournament starts -- see
+// TournamentService::submitTournamentDeck()'s own docblock.
+// createTournament()/joinOpenTournament()/acceptInvite() already
+// require+store this same deck atomically with joining.
+if ($path === '/tournaments/submit-deck' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $tournaments->submitTournamentDeck(
+            (int) ($body['tournament_id'] ?? 0),
+            (int) $currentUser['id'],
+            isset($body['decklist_text']) ? (string) $body['decklist_text'] : null,
+            isset($body['saved_decklist_id']) ? (int) $body['saved_decklist_id'] : null,
+        );
+        respond(200, ['status' => 'ok']);
+    } catch (TournamentNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (TournamentStateException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (GameStateException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (DecklistNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAuthorizedToAccessDecklistException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
     }
 }
 

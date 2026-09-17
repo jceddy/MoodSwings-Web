@@ -103,7 +103,31 @@ final class TournamentParticipantRepository
             ->execute(['card_ids' => json_encode($cardIds, JSON_THROW_ON_ERROR), 'id' => $id]);
     }
 
-    /** draft_pool_card_ids/current_deck_card_ids are both null until Booster Draft's own pod-drafting/match-deck-submission flow sets them. */
+    /**
+     * Power Duel's own join-time deck (issue reported live: "the deck
+     * submission should happen when the player joins the tournament --
+     * players use the same submitted deck for the entire tournament") --
+     * see TournamentService::submitTournamentDeck()'s own docblock for
+     * validation. $sideboardCardIds is only ever non-null when this
+     * tournament opted into sideboarding; $name mirrors game_players'
+     * own custom_deck_name, purely for display.
+     *
+     * @param int[] $cardIds
+     * @param int[]|null $sideboardCardIds
+     */
+    public function setDeck(int $id, ?string $name, array $cardIds, ?array $sideboardCardIds): void
+    {
+        Connection::get()->prepare(
+            'UPDATE tournament_participants SET deck_name = :name, deck_card_ids = :card_ids, deck_sideboard_card_ids = :sideboard_card_ids WHERE id = :id'
+        )->execute([
+            'name' => $name,
+            'card_ids' => json_encode($cardIds, JSON_THROW_ON_ERROR),
+            'sideboard_card_ids' => $sideboardCardIds !== null ? json_encode($sideboardCardIds, JSON_THROW_ON_ERROR) : null,
+            'id' => $id,
+        ]);
+    }
+
+    /** draft_pool_card_ids/current_deck_card_ids/deck_card_ids/deck_sideboard_card_ids are all null until their own respective flow sets them. */
     private function decode(array $row): array
     {
         $row['draft_pool_card_ids'] = $row['draft_pool_card_ids'] !== null
@@ -111,6 +135,12 @@ final class TournamentParticipantRepository
             : null;
         $row['current_deck_card_ids'] = $row['current_deck_card_ids'] !== null
             ? json_decode((string) $row['current_deck_card_ids'], true, 512, JSON_THROW_ON_ERROR)
+            : null;
+        $row['deck_card_ids'] = $row['deck_card_ids'] !== null
+            ? json_decode((string) $row['deck_card_ids'], true, 512, JSON_THROW_ON_ERROR)
+            : null;
+        $row['deck_sideboard_card_ids'] = $row['deck_sideboard_card_ids'] !== null
+            ? json_decode((string) $row['deck_sideboard_card_ids'], true, 512, JSON_THROW_ON_ERROR)
             : null;
 
         return $row;

@@ -79,6 +79,15 @@ final class TournamentService implements TournamentMatchObserver
      * @param int[] $inviteUserIds only meaningful for registrationMode
      *   'invite_only' -- seated as 'invited' rows the invitee still has
      *   to accept (see acceptInvite()); ignored for 'open'.
+     * @param ?string $creatorDecklistText the creator's own Power Duel
+     *   decklist (issue reported live: "the deck submission should
+     *   happen when the player joins the tournament") -- required, and
+     *   validated before anything is created, whenever $matchParams
+     *   resolves to deck_type 'custom_duel' (every 'duel'-format
+     *   tournament except Booster Draft); ignored otherwise. See
+     *   submitTournamentDeck()'s own docblock.
+     * @param ?int $creatorSavedDecklistId an alternative to
+     *   $creatorDecklistText, loading a previously-saved decklist.
      */
     public function createTournament(
         int $createdByUserId,
@@ -90,6 +99,8 @@ final class TournamentService implements TournamentMatchObserver
         int $minParticipants,
         ?int $maxParticipants,
         array $inviteUserIds = [],
+        ?string $creatorDecklistText = null,
+        ?int $creatorSavedDecklistId = null,
     ): int {
         if (!in_array($bracketType, self::BRACKET_TYPES, true)) {
             throw new TournamentStateException("Unknown tournament bracket type \"{$bracketType}\"");
@@ -184,6 +195,11 @@ final class TournamentService implements TournamentMatchObserver
         if ($maxParticipants < $minParticipants) {
             throw new TournamentStateException('max_participants cannot be less than min_participants');
         }
+        // Resolved+validated before anything is created, same as every
+        // other validation above -- a bad/missing creator decklist fails
+        // the whole createTournament() call rather than leaving behind a
+        // half-created tournament nobody can actually play in.
+        $creatorDeck = $this->resolveJoinTimeDeck($matchParams, $createdByUserId, $creatorDecklistText, $creatorSavedDecklistId);
 
         $tournamentId = $this->tournaments->create(
             $createdByUserId,
@@ -196,7 +212,10 @@ final class TournamentService implements TournamentMatchObserver
             $maxParticipants,
         );
 
-        $this->participants->add($tournamentId, $createdByUserId, 'joined');
+        $creatorParticipantId = $this->participants->add($tournamentId, $createdByUserId, 'joined');
+        if ($creatorDeck !== null) {
+            $this->participants->setDeck($creatorParticipantId, $creatorDeck['name'], $creatorDeck['cardIds'], $creatorDeck['sideboardCardIds']);
+        }
 
         if ($registrationMode === 'invite_only') {
             foreach (array_unique($inviteUserIds) as $inviteeUserId) {
@@ -231,7 +250,7 @@ final class TournamentService implements TournamentMatchObserver
         $this->participants->add($tournamentId, $inviteeUserId, 'invited');
     }
 
-    public function acceptInvite(int $tournamentId, int $userId): void
+    public function acceptInvite(int $tournamentId, int $userId, ?string $decklistText = null, ?int $savedDecklistId = null): void
     {
         $tournament = $this->requireTournament($tournamentId);
         $this->requireRegistrationOpen($tournament);
@@ -240,8 +259,12 @@ final class TournamentService implements TournamentMatchObserver
             throw new TournamentStateException('You have no pending invite to this tournament');
         }
         $this->assertRoomAvailable($tournament);
+        $deck = $this->resolveJoinTimeDeck($tournament['match_params'], $userId, $decklistText, $savedDecklistId);
 
         $this->participants->updateStatus((int) $participant['id'], 'joined');
+        if ($deck !== null) {
+            $this->participants->setDeck((int) $participant['id'], $deck['name'], $deck['cardIds'], $deck['sideboardCardIds']);
+        }
     }
 
     public function declineInvite(int $tournamentId, int $userId): void
@@ -254,7 +277,7 @@ final class TournamentService implements TournamentMatchObserver
         $this->participants->updateStatus((int) $participant['id'], 'declined');
     }
 
-    public function joinOpenTournament(int $tournamentId, int $userId): void
+    public function joinOpenTournament(int $tournamentId, int $userId, ?string $decklistText = null, ?int $savedDecklistId = null): void
     {
         $tournament = $this->requireTournament($tournamentId);
         $this->requireRegistrationOpen($tournament);
@@ -282,12 +305,74 @@ final class TournamentService implements TournamentMatchObserver
             throw new NotAuthorizedForTournamentException('You cannot join this tournament');
         }
         $this->assertRoomAvailable($tournament);
+        $deck = $this->resolveJoinTimeDeck($tournament['match_params'], $userId, $decklistText, $savedDecklistId);
 
         if ($existingParticipant !== null) {
             $this->participants->updateStatus((int) $existingParticipant['id'], 'joined');
+            $participantId = (int) $existingParticipant['id'];
         } else {
-            $this->participants->add($tournamentId, $userId, 'joined');
+            $participantId = $this->participants->add($tournamentId, $userId, 'joined');
         }
+        if ($deck !== null) {
+            $this->participants->setDeck($participantId, $deck['name'], $deck['cardIds'], $deck['sideboardCardIds']);
+        }
+    }
+
+    /**
+     * Power Duel's own join-time deck (issue reported live: "the deck
+     * submission should happen when the player joins the tournament --
+     * players use the same submitted deck for the entire tournament"),
+     * resubmitted/edited standalone -- createTournament()/
+     * joinOpenTournament()/acceptInvite() already require+store this
+     * same deck atomically with joining (see resolveJoinTimeDeck()),
+     * this is purely for changing your mind before the bracket locks:
+     * only while still 'registration' (startTournament() locks every
+     * participant's deck into the bracket it seeds, exactly the way an
+     * ordinary custom_duel game's own deck locks once submitted for a
+     * "locked" non-sideboarding match), and only for a tournament that
+     * actually uses custom_duel decklists in the first place.
+     */
+    public function submitTournamentDeck(int $tournamentId, int $userId, ?string $decklistText, ?int $savedDecklistId = null): void
+    {
+        $tournament = $this->requireTournament($tournamentId);
+        $this->requireRegistrationOpen($tournament);
+        $participant = $this->participants->findForUser($tournamentId, $userId);
+        if ($participant === null || $participant['status'] !== 'joined') {
+            throw new TournamentStateException('You have not joined this tournament');
+        }
+
+        $deck = $this->resolveJoinTimeDeck($tournament['match_params'], $userId, $decklistText, $savedDecklistId);
+        if ($deck === null) {
+            throw new TournamentStateException('This tournament does not use custom duel decklists');
+        }
+
+        $this->participants->setDeck((int) $participant['id'], $deck['name'], $deck['cardIds'], $deck['sideboardCardIds']);
+    }
+
+    /**
+     * Shared by createTournament()'s own creator auto-join,
+     * joinOpenTournament(), acceptInvite(), and submitTournamentDeck() --
+     * returns null (nothing to validate, nothing to store) for any
+     * tournament whose match_params.deck_type isn't 'custom_duel' (every
+     * format/deck_type besides Power Duel), so every join-time call site
+     * can treat this uniformly regardless of tournament type. See
+     * GameService::resolvePowerDuelTournamentDeck()'s own docblock for
+     * the actual validation.
+     *
+     * @return array{name: ?string, cardIds: int[], sideboardCardIds: int[]|null}|null
+     */
+    private function resolveJoinTimeDeck(array $matchParams, int $userId, ?string $decklistText, ?int $savedDecklistId): ?array
+    {
+        if (($matchParams['deck_type'] ?? null) !== 'custom_duel') {
+            return null;
+        }
+
+        return $this->games->resolvePowerDuelTournamentDeck(
+            $userId,
+            $decklistText,
+            $savedDecklistId,
+            (bool) ($matchParams['allow_sideboarding'] ?? false),
+        );
     }
 
     public function withdraw(int $tournamentId, int $userId): void
@@ -313,6 +398,20 @@ final class TournamentService implements TournamentMatchObserver
         }
 
         $this->tournaments->markCancelled($tournamentId);
+    }
+
+    /**
+     * Reported live: clean up tournaments a week after being cancelled/
+     * completed -- see bin/expire_and_delete_stale_games.php (the
+     * existing game/match cleanup cron this is folded into) and
+     * TournamentRepository::deleteStale()'s own docblock for exactly
+     * what gets deleted and why it's always safe to.
+     *
+     * @return int how many tournaments were deleted
+     */
+    public function deleteStaleTournaments(int $olderThanDays = 7): int
+    {
+        return $this->tournaments->deleteStale($olderThanDays);
     }
 
     public function startTournament(int $tournamentId, int $requestingUserId): void
@@ -833,6 +932,36 @@ final class TournamentService implements TournamentMatchObserver
 
         $wrapperIds = $this->games->gameMatchWrapperIds($gameId);
         $this->matches->markGameCreated((int) $tournamentMatch['id'], $gameId, $wrapperIds['game_match_id'], $wrapperIds['draft_match_id']);
+
+        // Power Duel's own join-time deck (issue reported live: "the
+        // deck submission should happen when the player joins the
+        // tournament -- players use the same submitted deck for the
+        // entire tournament") -- carried forward onto this match's own
+        // game 1 the moment it's created, straight from each
+        // participant's own tournament_participants row (already
+        // validated once, at join time, by resolveJoinTimeDeck()), so
+        // startGame() below can succeed immediately instead of waiting
+        // on a fresh per-match submission. $isPodDraft is excluded --
+        // Booster/Grid Draft's own 'custom_duel' games always draw from
+        // a per-tournament-match drafted pool, never a join-time deck
+        // (tournament_participants.deck_card_ids stays null for them).
+        // A legacy tournament predating this feature (joined before
+        // migration 0345, deck_card_ids still null) is left untouched
+        // here, falling back to the original per-game submission flow
+        // exactly as before.
+        if ($deckType === 'custom_duel' && !$isPodDraft) {
+            foreach ([[$user1Id, $participant1], [$user2Id, $participant2]] as [$seatUserId, $seatParticipant]) {
+                if ($seatParticipant['deck_card_ids'] !== null) {
+                    $this->games->seedCustomDuelDeckFromTournament(
+                        $gameId,
+                        $seatUserId,
+                        $seatParticipant['deck_name'],
+                        $seatParticipant['deck_card_ids'],
+                        $seatParticipant['deck_sideboard_card_ids'],
+                    );
+                }
+            }
+        }
 
         try {
             // Every game createGame() itself produces starts out

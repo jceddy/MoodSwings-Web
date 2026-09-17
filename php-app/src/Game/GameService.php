@@ -2973,6 +2973,89 @@ final class GameService
     }
 
     /**
+     * Power Duel tournaments' own join-time deck submission (issue
+     * reported live: "the deck submission should happen when the player
+     * joins the tournament -- players use the same submitted deck for
+     * the entire tournament") -- see TournamentService::
+     * submitTournamentDeck(). Resolves+validates a decklist against the
+     * fixed 'power' DuelDeckRules preset every custom_duel tournament
+     * uses, exactly the way submitCustomDuelDeck() resolves and
+     * validates a per-game one, but there's no games row to read rules
+     * from (or a game_players row to write into) at join time -- the
+     * caller (TournamentService) is responsible for persisting the
+     * result onto tournament_participants.
+     *
+     * $allowSideboarding mirrors a sideboarding match's own game-1
+     * submission (validateAndStorePowerDuelSideboardPool()): declares an
+     * optional sideboard of up to POWER_DUEL_SIDEBOARD_MAX_CARDS extra
+     * cards alongside the main deck. When false, the sideboard is always
+     * empty, same as an ordinary non-sideboarding custom_duel game.
+     *
+     * @return array{name: ?string, cardIds: int[], sideboardCardIds: int[]|null}
+     */
+    public function resolvePowerDuelTournamentDeck(int $userId, ?string $decklistText, ?int $savedDecklistId, bool $allowSideboarding): array
+    {
+        $catalog = $this->loadCardCatalog();
+
+        if ($savedDecklistId !== null) {
+            $parsed = $this->userDecklists->cardIdsForUse($userId, $savedDecklistId);
+        } else {
+            if ($decklistText === null || trim($decklistText) === '') {
+                throw new GameStateException('A decklist is required');
+            }
+            $parsed = (new DecklistParser($catalog['idsByName']))->parse($decklistText);
+        }
+
+        $rules = DuelDeckRules::forPreset('power');
+
+        if ($allowSideboarding) {
+            [$mainCardIds, $sideboardCardIds] = $this->validateAndStorePowerDuelSideboardPool($parsed, $rules, $catalog['rowsById']);
+        } else {
+            $rules->validate($parsed['cardIds'], $catalog['rowsById'], 'Your decklist');
+            $mainCardIds = $parsed['cardIds'];
+            $sideboardCardIds = [];
+        }
+
+        return [
+            'name' => $parsed['name'],
+            'cardIds' => $mainCardIds,
+            'sideboardCardIds' => $sideboardCardIds !== [] ? $sideboardCardIds : null,
+        ];
+    }
+
+    /**
+     * Power Duel tournaments' own match-creation-time deck carry-forward
+     * (see TournamentService::startMatchGame()) -- writes a seat's
+     * already-validated join-time tournament deck
+     * (resolvePowerDuelTournamentDeck()/TournamentParticipantRepository::
+     * setDeck()) directly onto that seat's freshly-created game_players
+     * row for this match's game 1, the same columns
+     * submitCustomDuelDeck() itself writes. No re-validation needed here
+     * -- it was already validated once, at join time, against the exact
+     * same 'power' DuelDeckRules preset every custom_duel tournament
+     * match uses. Games 2/3 of a locked (non-sideboarding) match still
+     * carry this same deck forward automatically via advanceGameMatch(),
+     * and games 2/3 of a sideboarding match still resubmit a swap via
+     * the ordinary submitCustomDuelDeck() flow -- both already read from
+     * this game's own row, so neither needs any change.
+     *
+     * @param int[] $cardIds
+     * @param int[]|null $sideboardCardIds
+     */
+    public function seedCustomDuelDeckFromTournament(int $gameId, int $userId, ?string $name, array $cardIds, ?array $sideboardCardIds): void
+    {
+        Connection::get()->prepare(
+            'UPDATE game_players SET custom_deck_name = :name, custom_deck_card_ids = :card_ids, custom_deck_sideboard_card_ids = :sideboard_card_ids WHERE game_id = :game_id AND user_id = :user_id'
+        )->execute([
+            'name' => $name,
+            'card_ids' => json_encode($cardIds, JSON_THROW_ON_ERROR),
+            'sideboard_card_ids' => $sideboardCardIds !== null ? json_encode($sideboardCardIds, JSON_THROW_ON_ERROR) : null,
+            'game_id' => $gameId,
+            'user_id' => $userId,
+        ]);
+    }
+
+    /**
      * @param int[] $cardIds a submitted deck
      * @param int[] $allowedCardIds the submitting seat's own drafted pool -- see submitCustomDuelDeck()'s own docblock
      */
@@ -16509,6 +16592,35 @@ final class GameService
         // "see any bot's decklist" feature.
         $isCreator = $viewerUserId !== null && $viewerUserId === (int) $game['created_by_user_id'];
 
+        // Reported live: no "Rematch" button for a tournament match --
+        // a tournament's own bracket already decides who plays whom
+        // next, so offering to spin up an unrelated ad hoc rematch
+        // against the same opponent(s) right on its board is just
+        // confusing (and wouldn't affect the tournament itself at all).
+        // A game is a tournament match if a tournament_matches row
+        // points at it via any of the three ways one can (a bare single
+        // game's own game_id, a best-of-three match's game_match_id, or
+        // a draft match's draft_match_id) -- mirrors
+        // advanceTournamentMatch()'s own three-way lookup, just checking
+        // existence rather than resolving a winner. Only computed for
+        // the creator -- canRematch() (web-static/js/game.js) already
+        // hides Rematch from everyone else, the only consumer of this
+        // field, so there's no reason to spend the query otherwise.
+        $isTournamentMatch = false;
+        if ($isCreator) {
+            $tournamentMatchStmt = $pdo->prepare(
+                'SELECT 1 FROM tournament_matches
+                 WHERE game_id = :game_id OR game_match_id = :game_match_id OR draft_match_id = :draft_match_id
+                 LIMIT 1'
+            );
+            $tournamentMatchStmt->execute([
+                'game_id' => $gameId,
+                'game_match_id' => $game['game_match_id'],
+                'draft_match_id' => $game['draft_match_id'],
+            ]);
+            $isTournamentMatch = $tournamentMatchStmt->fetchColumn() !== false;
+        }
+
         // The same Rematch prefill idea, for a HUMAN creator's own
         // deck_type 'custom' decklist (issue #398 follow-up) -- unlike
         // 'custom_duel', 'custom' is a single table-wide shared deck
@@ -16735,6 +16847,10 @@ final class GameService
                 // needed the frontend's help distinguishing the creator,
                 // and no other feature has asked for this before now.
                 'created_by_user_id' => (int) $game['created_by_user_id'],
+                // See $isTournamentMatch's own comment above -- exists
+                // purely so the frontend can hide the "Rematch" button
+                // for a tournament match.
+                'is_tournament_match' => $isTournamentMatch,
                 'format' => $game['format'],
                 'deck_type' => $game['deck_type'],
                 'custom_deck_name' => $game['custom_deck_name'],

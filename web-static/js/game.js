@@ -3690,6 +3690,17 @@
         document.getElementById('new-game-decklist-text').value = await file.text();
     });
 
+    // Same pattern as #new-game-decklist-file above, for the New
+    // Tournament dialog's own creator decklist fields.
+    document.getElementById('new-tournament-decklist-file').addEventListener('change', async (event) => {
+        const file = event.target.files[0];
+        if (!file) {
+            return;
+        }
+
+        document.getElementById('new-tournament-decklist-text').value = await file.text();
+    });
+
     // Reads the four rarity rows' own optional "max total"/"max
     // duplicates" fields for the User-Defined preset -- a blank field
     // means "no restriction for that rarity" (matches DuelDeckRules's own
@@ -4114,6 +4125,82 @@
     // unlike the New Game dialog's own generic "Custom Decklists (Duel)"
     // label, which still needs to say so since it's one option among
     // several there.
+    // -- Tournament deck submission dialog (join/accept-invite/edit) --
+
+    // Power Duel's own join-time deck (issue reported live: "the deck
+    // submission should happen when the player joins the tournament --
+    // players use the same submitted deck for the entire tournament") --
+    // one shared dialog for all three places a decklist is needed:
+    // joining an open tournament, accepting an invite, and editing an
+    // already-submitted deck before the tournament starts. onSubmit is
+    // called with {decklist_text} or {saved_decklist_id} (never both) and
+    // must return the {ok, body} shape apiRequest() itself returns; the
+    // dialog closes and onSuccess() runs once it resolves ok, otherwise
+    // onSubmit's own error message is shown and the dialog stays open.
+    const tournamentDeckDialog = document.getElementById('tournament-deck-dialog');
+    const tournamentDeckForm = document.getElementById('tournament-deck-form');
+    const tournamentDeckError = document.getElementById('tournament-deck-error');
+
+    document.getElementById('tournament-deck-file').addEventListener('change', async (event) => {
+        const file = event.target.files[0];
+        if (!file) {
+            return;
+        }
+
+        document.getElementById('tournament-deck-text').value = await file.text();
+    });
+
+    document.getElementById('tournament-deck-cancel-button').addEventListener('click', () => {
+        tournamentDeckDialog.close();
+    });
+
+    async function openTournamentDeckDialog(onSubmit, onSuccess) {
+        tournamentDeckError.hidden = true;
+        tournamentDeckForm.reset();
+        await populateSavedDecklistSelect(document.getElementById('tournament-deck-saved-decklist'));
+
+        tournamentDeckForm.onsubmit = async (e) => {
+            e.preventDefault();
+            const submitButton = document.getElementById('tournament-deck-submit-button');
+            submitButton.disabled = true;
+
+            const savedDecklistId = document.getElementById('tournament-deck-saved-decklist').value;
+            const deckParams = savedDecklistId !== ''
+                ? { saved_decklist_id: Number(savedDecklistId) }
+                : { decklist_text: document.getElementById('tournament-deck-text').value };
+
+            const { ok, body } = await onSubmit(deckParams);
+            submitButton.disabled = false;
+            if (!ok) {
+                tournamentDeckError.textContent = body.message || 'Could not submit this deck.';
+                tournamentDeckError.hidden = false;
+                return;
+            }
+
+            tournamentDeckDialog.close();
+            await onSuccess();
+        };
+
+        tournamentDeckDialog.showModal();
+    }
+
+    // Reported live: show the winner on the tournaments display --
+    // winner_username (TournamentRepository::listForUser()'s own LEFT
+    // JOIN onto users) is null until a tournament actually reaches
+    // 'completed' (winner_user_id itself stays null until then too), so
+    // this only ever adds anything for that one status. Shared by both
+    // "Your tournaments" and the collapsible "Cancelled tournaments"
+    // list below -- a cancelled tournament is never 'completed', so the
+    // suffix is simply never shown there, but the label itself is
+    // identical otherwise.
+    function tournamentListItemLabel(tournament) {
+        const winnerSuffix = tournament.status === 'completed' && tournament.winner_username
+            ? ` (winner: ${tournament.winner_username})`
+            : '';
+
+        return `${tournament.name} — ${tournamentMatchSummary(tournament)} — ${TOURNAMENT_STATUS_LABELS[tournament.status] || tournament.status}${winnerSuffix} `;
+    }
+
     function tournamentMatchSummary(tournament) {
         const params = tournament.match_params;
         const deckType = params.deck_type === 'custom_duel'
@@ -4155,6 +4242,17 @@
             acceptButton.type = 'button';
             acceptButton.textContent = 'Accept';
             acceptButton.addEventListener('click', async () => {
+                // Power Duel's own join-time deck (issue reported live:
+                // "the deck submission should happen when the player
+                // joins the tournament") -- collected here before
+                // actually accepting, same as the Join button below.
+                if (tournament.match_params.deck_type === 'custom_duel') {
+                    await openTournamentDeckDialog(
+                        (deckParams) => acceptTournamentInvite(tournament.id, deckParams),
+                        loadTournamentsDialog,
+                    );
+                    return;
+                }
                 acceptButton.disabled = true;
                 const { ok, body } = await acceptTournamentInvite(tournament.id);
                 if (!ok) {
@@ -4195,21 +4293,43 @@
         // indistinguishable from a joined one -- this list only ever
         // displays the tournament's own status, never the viewer's own
         // participant status, so the sole visible difference was a
-        // vanished Withdraw button, easy to miss entirely.
-        const mineProper = mine.filter((t) => t.my_participant_status !== 'invited' && t.my_participant_status !== 'declined' && t.my_participant_status !== 'withdrawn');
+        // vanished Withdraw button, easy to miss entirely. 'cancelled'
+        // (reported live) is excluded the same way -- tucked into its
+        // own collapsible section below instead of cluttering this one.
+        const mineProper = mine.filter((t) => t.my_participant_status !== 'invited' && t.my_participant_status !== 'declined' && t.my_participant_status !== 'withdrawn' && t.status !== 'cancelled');
         const mineList = document.getElementById('tournaments-mine-list');
         mineList.innerHTML = '';
         document.getElementById('tournaments-mine-empty').hidden = mineProper.length > 0;
 
         for (const tournament of mineProper) {
             const item = document.createElement('li');
-            item.append(`${tournament.name} — ${tournamentMatchSummary(tournament)} — ${TOURNAMENT_STATUS_LABELS[tournament.status] || tournament.status} `);
+            item.append(tournamentListItemLabel(tournament));
 
             const viewButton = document.createElement('button');
             viewButton.type = 'button';
             viewButton.textContent = 'View';
             viewButton.addEventListener('click', () => openTournamentView(tournament.id));
             item.appendChild(viewButton);
+
+            // Power Duel's own join-time deck (issue reported live: "the
+            // deck submission should happen when the player joins the
+            // tournament -- players use the same submitted deck for the
+            // entire tournament") -- editable until the tournament
+            // actually starts (submitTournamentDeck()'s own docblock),
+            // for the creator too (their own deck was collected in the
+            // New Tournament dialog, but can still change their mind).
+            if (tournament.status === 'registration' && tournament.match_params.deck_type === 'custom_duel' && tournament.my_participant_status === 'joined') {
+                const editDeckButton = document.createElement('button');
+                editDeckButton.type = 'button';
+                editDeckButton.textContent = 'Edit deck';
+                editDeckButton.addEventListener('click', async () => {
+                    await openTournamentDeckDialog(
+                        (deckParams) => submitTournamentDeck(tournament.id, deckParams),
+                        loadTournamentsDialog,
+                    );
+                });
+                item.appendChild(editDeckButton);
+            }
 
             const isCreator = tournament.created_by_user_id === user.id;
             if (tournament.status === 'registration' && !isCreator && tournament.my_participant_status === 'joined') {
@@ -4233,6 +4353,32 @@
             mineList.appendChild(item);
         }
 
+        // Reported live: hide cancelled tournaments from the main list,
+        // tucked into their own collapsible section instead -- same
+        // 'invited'/'declined'/'withdrawn' participant-status exclusion
+        // as mineProper above, just kept to 'cancelled' tournaments only.
+        // Nothing left to do with a cancelled tournament (no
+        // Withdraw/Edit deck button makes sense once it's cancelled), so
+        // View is the only action offered here.
+        const cancelled = mine.filter((t) => t.status === 'cancelled' && t.my_participant_status !== 'invited' && t.my_participant_status !== 'declined' && t.my_participant_status !== 'withdrawn');
+        const cancelledSection = document.getElementById('tournaments-cancelled-section');
+        const cancelledList = document.getElementById('tournaments-cancelled-list');
+        cancelledList.innerHTML = '';
+        cancelledSection.hidden = cancelled.length === 0;
+
+        for (const tournament of cancelled) {
+            const item = document.createElement('li');
+            item.append(tournamentListItemLabel(tournament));
+
+            const viewButton = document.createElement('button');
+            viewButton.type = 'button';
+            viewButton.textContent = 'View';
+            viewButton.addEventListener('click', () => openTournamentView(tournament.id));
+            item.appendChild(viewButton);
+
+            cancelledList.appendChild(item);
+        }
+
         const open = openResp.ok ? openResp.body.tournaments : [];
         const openList = document.getElementById('tournaments-open-list');
         openList.innerHTML = '';
@@ -4246,6 +4392,19 @@
             joinButton.type = 'button';
             joinButton.textContent = 'Join';
             joinButton.addEventListener('click', async () => {
+                // Power Duel's own join-time deck (issue reported live:
+                // "the deck submission should happen when the player
+                // joins the tournament -- players use the same submitted
+                // deck for the entire tournament") -- collected here
+                // before actually joining; every other tournament type
+                // joins immediately, same as before.
+                if (tournament.match_params.deck_type === 'custom_duel') {
+                    await openTournamentDeckDialog(
+                        (deckParams) => joinTournament(tournament.id, deckParams),
+                        loadTournamentsDialog,
+                    );
+                    return;
+                }
                 joinButton.disabled = true;
                 const { ok, body } = await joinTournament(tournament.id);
                 if (!ok) {
@@ -4374,6 +4533,18 @@
         }
     }
 
+    // Power Duel's own join-time deck (issue reported live: "the deck
+    // submission should happen when the player joins the tournament --
+    // players use the same submitted deck for the entire tournament") --
+    // the creator's own deck, collected right here since createTournament()
+    // auto-joins them; same condition as updateNewTournamentAllowSideboardingVisibility()'s
+    // own (deck_type 'custom_duel' is exactly "Power Duel" -- see
+    // effectiveNewTournamentDeckType()'s own docblock).
+    function updateNewTournamentDecklistFieldVisibility() {
+        const show = effectiveNewTournamentDeckType() === 'custom_duel';
+        document.getElementById('new-tournament-decklist-fields').hidden = !show;
+    }
+
     // Issue #85's own turn/decision timeout opt-in, and issue #85
     // follow-up's own full-game time-limit mode, mirrored from the New
     // Game dialog's own updateTimeoutFieldVisibility()/
@@ -4467,6 +4638,7 @@
     }
 
     document.getElementById('new-tournament-format').addEventListener('change', updateNewTournamentAllowSideboardingVisibility);
+    document.getElementById('new-tournament-format').addEventListener('change', updateNewTournamentDecklistFieldVisibility);
     document.getElementById('new-tournament-format').addEventListener('change', updateNewTournamentGridDraftModeVisibility);
     document.getElementById('new-tournament-grid-draft-mode').addEventListener('change', updateNewTournamentGridDraftModeVisibility);
     document.getElementById('new-tournament-registration-mode-invite').addEventListener('change', updateNewTournamentRegistrationModeFields);
@@ -4484,12 +4656,14 @@
         newTournamentForm.reset();
         populateNewTournamentParticipantRangeSelects();
         updateNewTournamentAllowSideboardingVisibility();
+        updateNewTournamentDecklistFieldVisibility();
         updateNewTournamentGridDraftModeVisibility();
         updateNewTournamentRegistrationModeFields();
         updateNewTournamentSwissRoundCountVisibility();
         updateNewTournamentTimeoutFieldVisibility();
         updateNewTournamentTotalTimeLimitFieldVisibility();
         updateNewTournamentSynchronousFieldVisibility();
+        await populateSavedDecklistSelect(document.getElementById('new-tournament-saved-decklist'));
 
         const { ok, body } = await listFriends();
         const friends = ok ? body.friends : [];
@@ -4564,6 +4738,17 @@
             // preset -- see effectiveNewTournamentDeckType()'s own
             // docblock and updateNewTournamentAllowSideboardingVisibility()'s.
             duel_deck_rules: deckType === 'custom_duel' ? { preset: 'power' } : undefined,
+            // Power Duel's own join-time deck (issue reported live: "the
+            // deck submission should happen when the player joins the
+            // tournament") -- the creator's own deck, since
+            // createTournament() auto-joins them; ignored server-side for
+            // any other deck_type. Same "use a saved deck, else fall back
+            // to the pasted/uploaded text" convention as every other
+            // decklist field in this file.
+            decklist_text: deckType === 'custom_duel' && document.getElementById('new-tournament-saved-decklist').value === ''
+                ? document.getElementById('new-tournament-decklist-text').value : undefined,
+            saved_decklist_id: deckType === 'custom_duel'
+                ? Number(document.getElementById('new-tournament-saved-decklist').value) || undefined : undefined,
             // Grid Draft's own pool-source picker isn't offered here --
             // always a random pool, GameService::createGame()'s own
             // default-feeling choice (#new-game-grid-draft-pool-source's
@@ -8581,6 +8766,14 @@
     // the way.
     function canRematch(state) {
         if (isReadOnlyView() || user.id !== state.game.created_by_user_id) {
+            return false;
+        }
+        // Reported live: no Rematch for a tournament match -- the
+        // bracket already decides who plays whom next, so offering an
+        // unrelated ad hoc rematch against the same opponent(s) right
+        // here would just be confusing (see GameService::buildGameState()'s
+        // own docblock for how this is computed).
+        if (state.game.is_tournament_match) {
             return false;
         }
         if (state.game.status !== 'completed') {

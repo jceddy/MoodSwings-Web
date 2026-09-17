@@ -54,13 +54,17 @@ final class TournamentRepository
      * they only created but never joined themselves) -- the frontend
      * needs this to know whether to offer Accept/Decline, Withdraw, or
      * nothing at all, without a separate per-tournament lookup.
+     * winner_username (reported live: show the winner on the
+     * tournaments display) is NULL until a tournament actually reaches
+     * 'completed' -- winner_user_id itself stays NULL until then too.
      */
     public function listForUser(int $userId): array
     {
         $stmt = Connection::get()->prepare(
-            'SELECT DISTINCT t.*, tp.id AS my_participant_id, tp.status AS my_participant_status
+            'SELECT DISTINCT t.*, tp.id AS my_participant_id, tp.status AS my_participant_status, w.username AS winner_username
              FROM tournaments t
              LEFT JOIN tournament_participants tp ON tp.tournament_id = t.id AND tp.user_id = :user_id
+             LEFT JOIN users w ON w.id = t.winner_user_id
              WHERE t.created_by_user_id = :user_id_created OR tp.id IS NOT NULL
              ORDER BY t.created_at DESC'
         );
@@ -143,8 +147,42 @@ final class TournamentRepository
     public function markCancelled(int $id): void
     {
         Connection::get()
-            ->prepare("UPDATE tournaments SET status = 'cancelled' WHERE id = :id")
+            ->prepare("UPDATE tournaments SET status = 'cancelled', cancelled_at = NOW() WHERE id = :id")
             ->execute(['id' => $id]);
+    }
+
+    /**
+     * Reported live: clean up tournaments a week after being cancelled/
+     * completed, folded into the existing game/match cleanup cron -- see
+     * bin/expire_and_delete_stale_games.php and
+     * GameService::deleteStaleCompletedGames()'s own docblock for the
+     * identical staleness idea applied to bare games. A still-'registration'/
+     * 'in_progress'/'drafting' tournament is never touched here, however
+     * old -- only a genuinely finished (one way or the other) one has
+     * nothing left worth keeping around. `DELETE FROM tournaments`
+     * cascades to every child table (tournament_participants/
+     * tournament_rounds/tournament_matches/tournament_pods and its own
+     * further children -- all ON DELETE CASCADE from tournaments, see
+     * migrations 0334/0335/0337), so no manual per-table cleanup is
+     * needed. The underlying `games`/`game_matches`/`draft_matches` rows
+     * a tournament's own matches created are NOT touched here at all --
+     * nothing in tournament_matches is an enforced foreign key back to
+     * them (see migration 0334's own docblock), so this never orphans
+     * anything there; they're cleaned up independently, on their own
+     * per-game staleness clock, by deleteStaleCompletedGames() above.
+     *
+     * @return int how many tournaments were deleted
+     */
+    public function deleteStale(int $olderThanDays = 7): int
+    {
+        $stmt = Connection::get()->prepare(
+            "DELETE FROM tournaments
+             WHERE (status = 'completed' AND completed_at < (NOW() - INTERVAL :days_completed DAY))
+                OR (status = 'cancelled' AND cancelled_at < (NOW() - INTERVAL :days_cancelled DAY))"
+        );
+        $stmt->execute(['days_completed' => $olderThanDays, 'days_cancelled' => $olderThanDays]);
+
+        return $stmt->rowCount();
     }
 
     private function decode(array $row): array
