@@ -8723,6 +8723,14 @@
         if (isReadOnlyView() || user.id !== state.game.created_by_user_id) {
             return false;
         }
+        // Reported live: no Rematch for a tournament match -- the
+        // bracket already decides who plays whom next, so offering an
+        // unrelated ad hoc rematch against the same opponent(s) right
+        // here would just be confusing (see GameService::buildGameState()'s
+        // own docblock for how this is computed).
+        if (state.game.is_tournament_match) {
+            return false;
+        }
         if (state.game.status !== 'completed') {
             return false;
         }

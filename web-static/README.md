@@ -3496,9 +3496,15 @@ button).
     unless `canRematch(state)` says yes: you're this game's own creator
     (`user.id === state.game.created_by_user_id`, `GameService::
     buildGameState()`'s own new field -- see "Rematch" in
-    `../php-app/README.md`), the game is genuinely `'completed'` (nobody
-    resigned, `winner_usernames` non-empty -- an expired game has
-    neither), and, for a match of any kind, only once the whole match
+    `../php-app/README.md`), it isn't a tournament match (reported live:
+    the bracket already decides who plays whom next, so an ad hoc
+    rematch button there would just be confusing --
+    `state.game.is_tournament_match`, also from `buildGameState()`, only
+    ever computed truthfully for the creator since that's the only
+    viewer who reaches this check at all), the game is genuinely
+    `'completed'` (nobody resigned, `winner_usernames` non-empty -- an
+    expired game has neither), and, for a match of any kind, only once
+    the whole match
     itself has completed too (the same `draftState.status === 'completed'`
     check `renderDraftMatchScoreline()` reads, via the identical
     `state.quick_draft || state.winston_draft || ... || state.game_match`

@@ -16592,6 +16592,35 @@ final class GameService
         // "see any bot's decklist" feature.
         $isCreator = $viewerUserId !== null && $viewerUserId === (int) $game['created_by_user_id'];
 
+        // Reported live: no "Rematch" button for a tournament match --
+        // a tournament's own bracket already decides who plays whom
+        // next, so offering to spin up an unrelated ad hoc rematch
+        // against the same opponent(s) right on its board is just
+        // confusing (and wouldn't affect the tournament itself at all).
+        // A game is a tournament match if a tournament_matches row
+        // points at it via any of the three ways one can (a bare single
+        // game's own game_id, a best-of-three match's game_match_id, or
+        // a draft match's draft_match_id) -- mirrors
+        // advanceTournamentMatch()'s own three-way lookup, just checking
+        // existence rather than resolving a winner. Only computed for
+        // the creator -- canRematch() (web-static/js/game.js) already
+        // hides Rematch from everyone else, the only consumer of this
+        // field, so there's no reason to spend the query otherwise.
+        $isTournamentMatch = false;
+        if ($isCreator) {
+            $tournamentMatchStmt = $pdo->prepare(
+                'SELECT 1 FROM tournament_matches
+                 WHERE game_id = :game_id OR game_match_id = :game_match_id OR draft_match_id = :draft_match_id
+                 LIMIT 1'
+            );
+            $tournamentMatchStmt->execute([
+                'game_id' => $gameId,
+                'game_match_id' => $game['game_match_id'],
+                'draft_match_id' => $game['draft_match_id'],
+            ]);
+            $isTournamentMatch = $tournamentMatchStmt->fetchColumn() !== false;
+        }
+
         // The same Rematch prefill idea, for a HUMAN creator's own
         // deck_type 'custom' decklist (issue #398 follow-up) -- unlike
         // 'custom_duel', 'custom' is a single table-wide shared deck
@@ -16818,6 +16847,10 @@ final class GameService
                 // needed the frontend's help distinguishing the creator,
                 // and no other feature has asked for this before now.
                 'created_by_user_id' => (int) $game['created_by_user_id'],
+                // See $isTournamentMatch's own comment above -- exists
+                // purely so the frontend can hide the "Rematch" button
+                // for a tournament match.
+                'is_tournament_match' => $isTournamentMatch,
                 'format' => $game['format'],
                 'deck_type' => $game['deck_type'],
                 'custom_deck_name' => $game['custom_deck_name'],

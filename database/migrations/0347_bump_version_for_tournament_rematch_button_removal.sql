@@ -1,0 +1,12 @@
+-- Reported live: remove the "Rematch" button for tournament matches --
+-- a tournament's own bracket already decides who plays whom next, so
+-- offering to spin up an unrelated ad hoc rematch against the same
+-- opponent(s) right on its board was just confusing.
+-- GameService::buildGameState() now exposes 'game.is_tournament_match'
+-- (creator-only, computed from whether a tournament_matches row points
+-- at the game), and canRematch() (web-static/js/game.js) hides the
+-- button whenever it's true.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.50.9' WHERE id = 1;

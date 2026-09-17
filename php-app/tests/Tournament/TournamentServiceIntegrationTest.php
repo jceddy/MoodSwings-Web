@@ -380,6 +380,49 @@ final class TournamentServiceIntegrationTest extends TestCase
     }
 
     /**
+     * Reported live: no "Rematch" button for a tournament match -- the
+     * bracket already decides who plays whom next. `canRematch()`
+     * (web-static/js/game.js) reads `getState()['game']['is_tournament_match']`
+     * to hide it, computed by `GameService::buildGameState()` from
+     * whether a `tournament_matches` row points at the game -- true for
+     * a tournament match (this test's own Traditional match, whose
+     * `deck_type` is `'custom'` under the hood, same as any other
+     * `game_id`-linked single game), false for an ordinary ad hoc game
+     * that never touches the tournament system at all.
+     */
+    public function testGameStateExposesIsTournamentMatchForRematchButtonVisibility(): void
+    {
+        $creator = $this->insertUser('tourney_game_p1');
+        $p2 = $this->insertUser('tourney_game_p2');
+        $p3 = $this->insertUser('tourney_game_p3');
+        $p4 = $this->insertUser('tourney_game_p4');
+
+        $tournamentId = $this->createStandardTournament($creator, [$p2, $p3, $p4], 'single_elimination');
+        foreach ([$p2, $p3, $p4] as $invitee) {
+            $this->tournaments->acceptInvite($tournamentId, $invitee);
+        }
+        $this->tournaments->startTournament($tournamentId, $creator);
+
+        $round1 = $this->matchRepo->listRounds($tournamentId)[0];
+        $match = $this->matchRepo->listForRound((int) $round1['id'])[0];
+        $tournamentGameId = (int) $match['game_id'];
+        // is_tournament_match is only ever computed for a game's own
+        // creator (see buildGameState()'s own comment) -- whichever of
+        // this match's two participants happened to seed first, not
+        // necessarily the tournament's own creator.
+        $tournamentGameCreatorUserId = (int) $this->fetchGame($tournamentGameId)['created_by_user_id'];
+
+        $tournamentGameState = $this->games->getState($tournamentGameId, $tournamentGameCreatorUserId);
+        self::assertTrue($tournamentGameState['game']['is_tournament_match']);
+
+        $opponent = $this->insertUser('tourney_game_opponent');
+        $adHocGameId = $this->games->createGame($creator, [$creator, $opponent]);
+
+        $adHocGameState = $this->games->getState($adHocGameId, $creator);
+        self::assertFalse($adHocGameState['game']['is_tournament_match']);
+    }
+
+    /**
      * 5 participants (the smallest odd count >= the new 4-participant
      * floor) pads to a size-8 bracket, needing byes in round 1 -- same
      * "auto-advance a bye winner straight into round 2" story as before,

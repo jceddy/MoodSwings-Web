@@ -11784,25 +11784,39 @@ existing fields:
   `CardCatalog::serialize()` reconstruction, `null` for every other
   `deck_type` (only `'custom'` ever writes `games.custom_deck_card_ids`
   at all) or for a non-creator viewer.
+- `game.is_tournament_match` (reported live: no Rematch button for a
+  tournament match at all -- a tournament's own bracket already decides
+  who plays whom next, so offering to spin up an unrelated ad hoc
+  rematch against the same opponent(s) right on its board is just
+  confusing) -- `true` when a `tournament_matches` row points at this
+  game via any of the three ways one can (a bare single game's own
+  `game_id`, a best-of-three match's `game_match_id`, or a draft match's
+  `draft_match_id` -- mirrors `advanceTournamentMatch()`'s own
+  three-way lookup, just checking existence rather than resolving a
+  winner), `false` otherwise. Only ever computed for the creator (the
+  only viewer `canRematch()` below lets get this far at all) -- `false`,
+  without running the query, for anyone else.
 
 **Whether to even show the button** is computed entirely client-side
 (`canRematch(state)` in `web-static/js/game.js`) from fields already in
-`state` -- there's no dedicated backend "can this game be rematched"
-flag, since the action itself (`POST /games`, ordinary `createGame()`)
-is independently validated server-side regardless of what the button's
-own visibility logic decided, the same way `#draft-match-next-game-button`'s
-own visibility is just a convenience, not a security boundary. Gated on:
-`status === 'completed'`, no seated player `resigned` (a resignation
-always leaves `status: 'completed'` too -- see "Game timestamps" below
-for how resignation/expiry are actually distinguished, since there's no
-separate `'abandoned'` status for either), `winner_usernames` non-empty
-(an expired, 7+-day-stale game has neither a winner nor a resignation --
-see `expireStaleActiveGames()`), and, for a draft-based `deck_type`, the
-whole best-of-three MATCH must have completed too (`state.quick_draft`/
-`state.winston_draft`/etc.'s own `status` field, not just this one
-game's) -- an individual game can (and, for game 1/2 of 3, normally
-does) reach `status: 'completed'` while the match itself continues, and
-that case is already `#draft-match-next-game-button`'s own domain
+`state` -- the action itself (`POST /games`, ordinary `createGame()`) is
+independently validated server-side regardless of what the button's own
+visibility logic decided, the same way `#draft-match-next-game-button`'s
+own visibility is just a convenience, not a security boundary; even
+`is_tournament_match` above is just one more such field, not a
+dedicated "can this game be rematched" endpoint of its own. Gated on:
+`status === 'completed'`, `is_tournament_match` false, no seated player
+`resigned` (a resignation always leaves `status: 'completed'` too --
+see "Game timestamps" below for how resignation/expiry are actually
+distinguished, since there's no separate `'abandoned'` status for
+either), `winner_usernames` non-empty (an expired, 7+-day-stale game has
+neither a winner nor a resignation -- see `expireStaleActiveGames()`),
+and, for a draft-based `deck_type`, the whole best-of-three MATCH must
+have completed too (`state.quick_draft`/`state.winston_draft`/etc.'s own
+`status` field, not just this one game's) -- an individual game can
+(and, for game 1/2 of 3, normally does) reach `status: 'completed'`
+while the match itself continues, and that case is already
+`#draft-match-next-game-button`'s own domain
 (confirmed by the maintainer -- offering Rematch there too would just be
 confusing, since there's already a next game to go play, not a new one
 to create).
