@@ -23,6 +23,26 @@ final class Config
         return $envValue !== false ? $envValue : $default;
     }
 
+    /**
+     * A feature-flag-style boolean config value -- e.g. a repository
+     * variable a maintainer sets from GitHub's own Settings -> Secrets
+     * and variables -> Actions -> Variables (see .github/workflows/deploy*.yml's
+     * own write_env_var() calls), rather than a code change, so it can
+     * be flipped on a later deploy with nothing to redeploy but the
+     * variable itself. Unset (the common case -- nothing written to
+     * .env at all) or any value other than the truthy ones below reads
+     * as $default.
+     */
+    public static function getBool(string $key, bool $default = false): bool
+    {
+        $value = self::get($key);
+        if ($value === null) {
+            return $default;
+        }
+
+        return in_array(strtolower(trim($value)), ['1', 'true', 'yes', 'on'], true);
+    }
+
     private static function load(): array
     {
         $path = dirname(__DIR__) . '/.env';

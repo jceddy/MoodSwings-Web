@@ -72,6 +72,12 @@ jobs:
           # something that differs between this dev subdomain and
           # production -- both share the same cPanel account.
           PHP_CLI_BINARY: ${{ vars.PHP_CLI_BINARY }}
+          # DEV_-prefixed (unlike PHP_CLI_BINARY above) since a feature
+          # flag is exactly the kind of thing to flip on dev first,
+          # independently of production -- see deploy.yml's own
+          # SYNCHRONOUS_MODE_ENABLED for the plain production variable
+          # and Config::getBool()'s own docblock for how it's read.
+          SYNCHRONOUS_MODE_ENABLED: ${{ vars.DEV_SYNCHRONOUS_MODE_ENABLED }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
@@ -167,6 +173,7 @@ jobs:
           write_env_var APP_URL "$APP_URL"
           write_env_var SITE_URL "$SITE_URL"
           write_env_var PHP_CLI_BINARY "$PHP_CLI_BINARY"
+          write_env_var SYNCHRONOUS_MODE_ENABLED "$SYNCHRONOUS_MODE_ENABLED"
           write_env_var SMTP_HOST "$SMTP_HOST"
           write_env_var SMTP_PORT "$SMTP_PORT"
           write_env_var SMTP_USERNAME "$SMTP_USERNAME"

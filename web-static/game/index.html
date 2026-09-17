@@ -101,16 +101,19 @@
                 <button id="new-game-button" type="button">New game</button>
                 <button id="open-games-button" type="button">Open games</button>
                 <button id="weekly-sealed-pool-button" type="button">Weekly Sealed Pool</button>
-                <button id="past-games-button" type="button">Past games</button>
-                <!-- "Is there a way I can replay these in the dev site using
-                     the game export json files?" -- a completed game's own
-                     exported data (GET /games/export, downloaded from
-                     wherever it was actually played) fed straight into the
-                     same step-through replay viewer "Watch replay" already
-                     uses, without needing a row for it in this database at
-                     all -- see showImportedReplayBoard() in game.js. -->
-                <button id="import-replay-button" type="button">Import replay</button>
-                <input type="file" id="import-replay-file-input" accept=".json,application/json" hidden>
+                <button id="tournaments-button" type="button">Tournaments</button>
+                <div id="lobby-secondary-actions">
+                    <button id="past-games-button" type="button">Past games</button>
+                    <!-- "Is there a way I can replay these in the dev site using
+                         the game export json files?" -- a completed game's own
+                         exported data (GET /games/export, downloaded from
+                         wherever it was actually played) fed straight into the
+                         same step-through replay viewer "Watch replay" already
+                         uses, without needing a row for it in this database at
+                         all -- see showImportedReplayBoard() in game.js. -->
+                    <button id="import-replay-button" type="button">Import replay</button>
+                    <input type="file" id="import-replay-file-input" accept=".json,application/json" hidden>
+                </div>
                 <ul id="games-list"></ul>
                 <p id="games-empty" hidden>No games yet &mdash; start one!</p>
             </div>
@@ -139,6 +142,28 @@
             <button id="spectate-share-button" type="button" hidden>Share spectate code</button>
             <h2 id="board-title"></h2>
             <p id="board-round-status"></p>
+            <!-- Synchronous mode's own live 30-second action timer
+                 (reported live: "which should be visible in the game
+                 display") -- a client-side ticking countdown (see
+                 tickSynchronousActionTimer() in game.js), corrected
+                 every ~4 seconds by the ordinary state poll the way
+                 every other live value on this page already is. Only
+                 shown while state.game.synchronous_mode is true AND the
+                 game is in_progress. -->
+            <p id="synchronous-action-timer" hidden></p>
+            <!-- Synchronous mode's own pre-game ready check (reported
+                 live) -- shown only while state.game.status === 'waiting'
+                 AND state.game.synchronous_mode is true, replacing the
+                 ordinary "Waiting for the game to start" text for that
+                 one case. #ready-check-status lists each seat's own
+                 ready/not-ready state; #ready-check-button calls
+                 markReady() for the viewer's own seat and hides itself
+                 once they've clicked it. See renderBoard() in game.js. -->
+            <div id="ready-check-panel" hidden>
+                <p>Both players must confirm they're ready before this game deals.</p>
+                <ul id="ready-check-status"></ul>
+                <button id="ready-check-button" type="button">I'm ready</button>
+            </div>
             <p id="draft-match-scoreline" hidden></p>
             <button id="draft-match-next-game-button" type="button" hidden>Go to next game &rarr;</button>
             <!-- Rematch (issue #398): offered only to this game's own
@@ -643,6 +668,56 @@
             </label>
             <p id="new-game-deck-type-description"></p>
 
+            <label class="new-game-field" id="new-game-timeout-enabled-label"><input type="checkbox" id="new-game-timeout-enabled"> Automatically resolve an idle turn/response</label>
+            <div id="new-game-timeout-fields" hidden>
+                <label class="new-game-field">After being idle for
+                    <select id="new-game-timeout-minutes">
+                        <option value="30">30 minutes</option>
+                        <option value="60">1 hour</option>
+                        <option value="120">2 hours</option>
+                        <option value="360">6 hours</option>
+                        <option value="720">12 hours</option>
+                        <option value="1440">1 day</option>
+                        <option value="2880">2 days</option>
+                        <option value="4320">3 days</option>
+                        <option value="10080">7 days</option>
+                    </select>
+                </label>
+                <label class="new-game-field">
+                    <select id="new-game-timeout-action">
+                        <option value="auto_play">Automatically play a move for them</option>
+                        <option value="skip">Skip their turn/response</option>
+                        <option value="resign">Resign them from the game/match</option>
+                    </select>
+                </label>
+                <p>Checked periodically (at most every 15 minutes), so an idle turn/response may take a little longer than the chosen duration to actually resolve.</p>
+            </div>
+
+            <label class="new-game-field" id="new-game-total-time-limit-enabled-label"><input type="checkbox" id="new-game-total-time-limit-enabled"> Auto-resign after too much total time in this game</label>
+            <div id="new-game-total-time-limit-fields" hidden>
+                <label class="new-game-field">Total time allowed per player
+                    <select id="new-game-total-time-limit-minutes">
+                        <option value="60">1 hour</option>
+                        <option value="120">2 hours</option>
+                        <option value="240">4 hours</option>
+                        <option value="480">8 hours</option>
+                        <option value="720">12 hours</option>
+                        <option value="1440" selected>24 hours</option>
+                        <option value="2880">48 hours</option>
+                        <option value="4320">72 hours</option>
+                    </select>
+                </label>
+                <p>A hard cap, separate from the idle time-out above: however long each player has spent actually taking their own turns and responses, added up over the whole game, before they're automatically resigned. Also checked at most every 15 minutes.</p>
+            </div>
+
+            <label class="new-game-field" id="new-game-synchronous-enabled-label"><input type="checkbox" id="new-game-synchronous-enabled"> Synchronous mode (play live, right now)</label>
+            <p id="new-game-synchronous-description" hidden>Both players must be ready before the game (or draft) deals. Each action/pick has a short timer, and each player has a 30-minute chess clock for the whole match (deck-building/sideboarding time counts against it) -- automatic loss if it runs out. Mutually exclusive with the idle time-out/total-time-limit options above.</p>
+            <!-- TEMPORARY cross-promo, remove once SYNCHRONOUS_MODE_ENABLED
+                 defaults on (or this feature flag is retired) -- shown only
+                 while the checkbox above is hidden by that flag, see
+                 updateSynchronousFieldVisibility() in game.js. -->
+            <p id="new-game-synchronous-promo" hidden>Looking for synchronous play? Check out <a href="https://moodygg.fly.dev/" target="_blank" rel="noopener noreferrer">moodygg</a>!</p>
+
             <div id="new-game-decklist-fields" hidden>
                 <label>Use a saved deck
                     <select id="new-game-saved-decklist">
@@ -1029,6 +1104,308 @@
         <button id="weekly-sealed-pool-close-button" type="button">Close</button>
     </dialog>
 
+    <!-- Issue #91: tournaments -- single/double elimination or Swiss-round
+         events, built on top of the same single-game/best-of-three/draft
+         match machinery every other format already uses (see
+         TournamentService's own docblock). Mirrors #open-games-dialog's
+         own three-section layout (available/waiting/mine), just with a
+         fourth "Invitations" section up top for invite-only tournaments'
+         own accept/decline step -- open-registration tournaments never
+         populate that one, there's nothing to accept. -->
+    <dialog id="tournaments-dialog">
+        <h2>Tournaments</h2>
+        <button id="new-tournament-button" type="button">New tournament</button>
+        <section id="tournaments-invitations-section" hidden>
+            <h3>Invitations</h3>
+            <ul id="tournaments-invitations-list"></ul>
+        </section>
+        <section>
+            <h3>Your tournaments</h3>
+            <ul id="tournaments-mine-list"></ul>
+            <p id="tournaments-mine-empty" hidden>You haven't created or joined any tournaments yet.</p>
+        </section>
+        <!-- Reported live: hide cancelled tournaments from the main
+             list, tucked away in a collapsible <details> instead --
+             collapsed by default (no "open" attribute), and hidden
+             entirely (not just an empty list) when there aren't any. -->
+        <details id="tournaments-cancelled-section" hidden>
+            <summary>Cancelled tournaments</summary>
+            <ul id="tournaments-cancelled-list"></ul>
+        </details>
+        <section>
+            <h3>Open to join</h3>
+            <ul id="tournaments-open-list"></ul>
+            <p id="tournaments-open-empty" hidden>No open tournaments right now.</p>
+        </section>
+        <p id="tournaments-error" class="error" hidden></p>
+        <button id="tournaments-close-button" type="button">Close</button>
+    </dialog>
+
+    <!-- match_params fields here are deliberately a curated subset of
+         #new-game-dialog's own exhaustive per-deck_type options (issue
+         #91 is scoped to Duel/Standard/Draft played 2-player, using
+         whichever of that subset's deck types don't themselves need a
+         setting no single fixed match_params blob could sensibly carry
+         for every future matchup -- e.g. a duel_deck_rules preset or a
+         custom draft pool are still just as available per-match via
+         'custom_duel'/'custom pool' text if an organizer really wants
+         one, just not exposed as their own dedicated fields here). -->
+    <dialog id="new-tournament-dialog">
+        <h2>New tournament</h2>
+        <form id="new-tournament-form">
+            <label class="dialog-field">Name
+                <input type="text" id="new-tournament-name" required maxlength="120">
+            </label>
+
+            <label class="dialog-field" id="new-tournament-bracket-type-label">Bracket
+                <select id="new-tournament-bracket-type">
+                    <option value="single_elimination">Single elimination</option>
+                    <option value="double_elimination">Double elimination</option>
+                    <option value="swiss">Swiss rounds</option>
+                </select>
+            </label>
+            <p id="new-tournament-bracket-type-forced-description" hidden>Every pod, and the final playoff among each pod's own winner, always plays single elimination -- there's nothing to choose here for this draft type.</p>
+
+            <label class="dialog-field" id="new-tournament-swiss-round-count-label" hidden>Number of rounds (blank = automatic)
+                <input type="number" id="new-tournament-swiss-round-count" min="1">
+            </label>
+
+            <fieldset id="new-tournament-registration-mode-fields">
+                <legend>Registration</legend>
+                <label><input type="radio" name="new-tournament-registration-mode" id="new-tournament-registration-mode-invite" value="invite_only" checked> Invite specific friends</label>
+                <label><input type="radio" name="new-tournament-registration-mode" id="new-tournament-registration-mode-open" value="open"> Open to anyone (requires "Discoverable for open games" in Settings)</label>
+            </fieldset>
+
+            <div id="new-tournament-invite-fields">
+                <p>Choose friends to invite:</p>
+                <div id="tournament-invite-checkboxes"></div>
+                <p id="tournament-invite-checkboxes-empty" hidden>
+                    You don't have any friends yet &mdash; add some from the Friends dialog first.
+                </p>
+            </div>
+
+            <!-- For now (may be relaxed later), every tournament is
+                 capped to 4-16 joined participants -- see
+                 TournamentService::createTournament()'s own docblock --
+                 so both of these are fixed <select> lists of that range
+                 rather than free-entry numbers; there's nothing outside
+                 4-16 the server would ever accept anyway. -->
+            <label class="dialog-field">Maximum participants
+                <select id="new-tournament-max-participants"></select>
+            </label>
+
+            <label class="dialog-field">Minimum participants to start
+                <select id="new-tournament-min-participants"></select>
+            </label>
+
+            <label class="dialog-field">Format
+                <select id="new-tournament-format">
+                    <option value="duel">Power Duel</option>
+                    <option value="standard">Traditional</option>
+                    <option value="draft">Grid Draft</option>
+                    <option value="sealed_deck">Sealed Deck</option>
+                    <option value="booster_draft">Booster Draft</option>
+                </select>
+            </label>
+
+            <label class="dialog-field" id="new-tournament-grid-draft-mode-label" hidden>Draft type
+                <select id="new-tournament-grid-draft-mode">
+                    <option value="grid_draft">Fresh draft each match</option>
+                    <option value="grid_draft_pod">Pod draft (once)</option>
+                    <option value="grid_draft_pod_playoff">Pods with playoffs</option>
+                </select>
+            </label>
+            <p id="new-tournament-grid-draft-mode-description" hidden></p>
+
+            <label class="dialog-field" id="new-tournament-allow-sideboarding-label" hidden><input type="checkbox" id="new-tournament-allow-sideboarding"> Allow sideboarding</label>
+
+            <!-- Power Duel's own join-time deck (issue reported live: "the
+                 deck submission should happen when the player joins the
+                 tournament -- players use the same submitted deck for the
+                 entire tournament") -- shown only for deck_type
+                 'custom_duel', same as #new-tournament-allow-sideboarding-label
+                 just above. This is the creator's own deck, submitted
+                 here as their own "join" (TournamentService::createTournament()
+                 auto-joins them) -- everyone else submits theirs the same
+                 way, from #tournament-deck-dialog, when they join/accept. -->
+            <div id="new-tournament-decklist-fields" hidden>
+                <label>Use a saved deck
+                    <select id="new-tournament-saved-decklist">
+                        <option value="">Paste/upload a decklist instead</option>
+                    </select>
+                </label>
+                <div id="new-tournament-decklist-paste-fields">
+                    <label>Upload a decklist file
+                        <input type="file" id="new-tournament-decklist-file" accept=".txt,text/plain">
+                    </label>
+                    <br>
+                    <label>Or paste your decklist
+                        <br>
+                        <textarea id="new-tournament-decklist-text" class="decklist-textarea" rows="10"></textarea>
+                    </label>
+                </div>
+            </div>
+
+            <label class="dialog-field" id="new-tournament-timeout-enabled-label"><input type="checkbox" id="new-tournament-timeout-enabled"> Automatically resolve an idle turn/response</label>
+            <div id="new-tournament-timeout-fields" hidden>
+                <label class="dialog-field">After being idle for
+                    <select id="new-tournament-timeout-minutes">
+                        <option value="30">30 minutes</option>
+                        <option value="60">1 hour</option>
+                        <option value="120">2 hours</option>
+                        <option value="360">6 hours</option>
+                        <option value="720">12 hours</option>
+                        <option value="1440">1 day</option>
+                        <option value="2880">2 days</option>
+                        <option value="4320">3 days</option>
+                        <option value="10080">7 days</option>
+                    </select>
+                </label>
+                <label class="dialog-field">
+                    <select id="new-tournament-timeout-action">
+                        <option value="auto_play">Automatically play a move for them</option>
+                        <option value="skip">Skip their turn/response</option>
+                        <option value="resign">Resign them from the game/match</option>
+                    </select>
+                </label>
+                <p>Checked periodically (at most every 15 minutes), so an idle turn/response may take a little longer than the chosen duration to actually resolve.</p>
+            </div>
+
+            <label class="dialog-field" id="new-tournament-total-time-limit-enabled-label"><input type="checkbox" id="new-tournament-total-time-limit-enabled"> Auto-resign after too much total time in a match</label>
+            <div id="new-tournament-total-time-limit-fields" hidden>
+                <label class="dialog-field">Total time allowed per player
+                    <select id="new-tournament-total-time-limit-minutes">
+                        <option value="60">1 hour</option>
+                        <option value="120">2 hours</option>
+                        <option value="240">4 hours</option>
+                        <option value="480">8 hours</option>
+                        <option value="720">12 hours</option>
+                        <option value="1440" selected>24 hours</option>
+                        <option value="2880">48 hours</option>
+                        <option value="4320">72 hours</option>
+                    </select>
+                </label>
+                <p>A hard cap, separate from the idle time-out above: however long each player has spent actually taking their own turns and responses, added up over the whole game, before they're automatically resigned. Also checked at most every 15 minutes.</p>
+            </div>
+
+            <label class="dialog-field" id="new-tournament-synchronous-enabled-label"><input type="checkbox" id="new-tournament-synchronous-enabled"> Synchronous mode (play live, right now)</label>
+            <p id="new-tournament-synchronous-description" hidden>Both players must be ready before each match's game (or draft) deals. Each action/pick has a short timer, and each player has a 30-minute chess clock for the whole match (deck-building/sideboarding time counts against it) -- automatic loss if it runs out. Mutually exclusive with the idle time-out/total-time-limit options above.</p>
+
+            <button type="submit" id="new-tournament-submit-button">Create tournament</button>
+            <button type="button" id="new-tournament-cancel-button">Cancel</button>
+            <p id="new-tournament-error" class="error" hidden></p>
+        </form>
+    </dialog>
+
+    <!-- Power Duel's own join-time deck (issue reported live: "the deck
+         submission should happen when the player joins the tournament --
+         players use the same submitted deck for the entire tournament")
+         -- shared by joining an open tournament, accepting an invite, and
+         editing your deck before the tournament starts (submitTournamentDeck()
+         in game.js decides which API call to make, based on how the
+         dialog was opened -- see openTournamentDeckDialog()). -->
+    <dialog id="tournament-deck-dialog">
+        <form id="tournament-deck-form">
+            <h2>Submit your deck</h2>
+            <label>Use a saved deck
+                <select id="tournament-deck-saved-decklist">
+                    <option value="">Paste/upload a decklist instead</option>
+                </select>
+            </label>
+            <div id="tournament-deck-paste-fields">
+                <label>Upload a decklist file
+                    <input type="file" id="tournament-deck-file" accept=".txt,text/plain">
+                </label>
+                <br>
+                <label>Or paste your decklist
+                    <br>
+                    <textarea id="tournament-deck-text" class="decklist-textarea" rows="10"></textarea>
+                </label>
+            </div>
+            <button type="submit" id="tournament-deck-submit-button">Submit</button>
+            <button type="button" id="tournament-deck-cancel-button">Cancel</button>
+            <p id="tournament-deck-error" class="error" hidden></p>
+        </form>
+    </dialog>
+
+    <!-- The bracket/standings view for one specific tournament -- opened
+         from a "View" button on a #tournaments-dialog row, stacking on
+         top of it the same way e.g. Deck View stacks on top of Decks
+         (see the dialog-stack docblock in game.js). Refreshed on open
+         and on a plain button click rather than its own poll -- a
+         tournament advances only when one of its own games finishes,
+         not continuously, so there's nothing to gain from polling while
+         someone's just looking at it. -->
+    <dialog id="tournament-view-dialog">
+        <h2 id="tournament-view-title"></h2>
+        <p id="tournament-view-status"></p>
+        <button id="tournament-view-refresh-button" type="button">Refresh</button>
+        <button id="tournament-view-start-button" type="button" hidden>Start tournament</button>
+        <button id="tournament-view-cancel-button" type="button" hidden>Cancel tournament</button>
+        <!-- Booster Draft's, Grid Draft's own "Pod draft (once)"
+             option's, and Grid Draft's own "Pods with playoffs" option's
+             pod structure (issue #91 follow-up) -- shown only while
+             tournament.status is 'drafting' (every one of these three
+             options stays 'drafting' for its own whole pod stage, even
+             once a "Pods with playoffs" pod moves on to playing its own
+             bracket -- see renderTournamentPods() in game.js). -->
+        <div id="tournament-view-pods-section" hidden>
+            <h3>Pods</h3>
+            <ul id="tournament-view-pods-list"></ul>
+            <button id="tournament-view-continue-drafting-button" type="button" hidden>Continue drafting</button>
+        </div>
+        <!-- Booster Draft's, and Grid Draft's own "Pod draft (once)"
+             option's, drafted pool/current deck (issue #91 follow-up),
+             shown only for the viewer's own row -- see
+             renderMyBoosterDraftDeck() in game.js. The in-game decklist
+             submission box (POST /games/decklist) has no idea any of
+             this exists; this is purely a convenience to paste from. -->
+        <div id="tournament-view-my-pool-section" hidden>
+            <h3>Your drafted pool</h3>
+            <p id="tournament-view-my-pool-count"></p>
+            <textarea id="tournament-view-my-pool-text" readonly rows="6"></textarea>
+            <p id="tournament-view-my-deck-label" hidden>Your current deck (pre-fill this into the decklist box for your next match):</p>
+            <textarea id="tournament-view-my-deck-text" readonly rows="6" hidden></textarea>
+        </div>
+        <div id="tournament-view-standings-section" hidden>
+            <h3>Standings</h3>
+            <ol id="tournament-view-standings-list"></ol>
+        </div>
+        <div id="tournament-view-bracket"></div>
+        <p id="tournament-view-error" class="error" hidden></p>
+        <button id="tournament-view-close-button" type="button">Close</button>
+    </dialog>
+
+    <!-- Booster Draft's own pod-drafting board (issue #91 follow-up) --
+         up to 8 players share a pod, each opening two boosters (one
+         passed left, one passed right); this shows the viewer's own
+         currently-held left/right booster (whichever they haven't yet
+         picked from this round) and their own drafted-so-far pool.
+         Polls while open, since other seats' own picks (not just the
+         viewer's) advance the shared round -- see pollPodDraftState()
+         in game.js. -->
+    <dialog id="pod-draft-dialog">
+        <h2>Booster Draft</h2>
+        <p id="pod-draft-progress"></p>
+        <div id="pod-draft-boosters">
+            <div>
+                <h3>Booster passed left</h3>
+                <div id="pod-draft-left-cards" class="deck-builder-card-grid"></div>
+                <p id="pod-draft-left-empty" hidden>Waiting on other players...</p>
+            </div>
+            <div>
+                <h3>Booster passed right</h3>
+                <div id="pod-draft-right-cards" class="deck-builder-card-grid"></div>
+                <p id="pod-draft-right-empty" hidden>Waiting on other players...</p>
+            </div>
+        </div>
+        <h3>Your pool so far (<span id="pod-draft-pool-count">0</span>/30)</h3>
+        <div id="pod-draft-pool-cards" class="deck-builder-card-grid"></div>
+        <p id="pod-draft-done-message" hidden>Your pod has finished drafting! Once every pod is done, the tournament's bracket will start automatically.</p>
+        <p id="pod-draft-error" class="error" hidden></p>
+        <button id="pod-draft-close-button" type="button">Close</button>
+    </dialog>
+
     <dialog id="card-detail-dialog">
         <img id="card-detail-art" class="card-detail-art">
         <div id="card-detail-deck-builder-actions" hidden></div>
@@ -1040,6 +1417,7 @@
         <p id="card-detail-affected-by" hidden></p>
         <p id="card-detail-affecting" hidden></p>
         <p id="card-detail-bliss-color" hidden></p>
+        <p id="card-detail-wonder-colors" hidden></p>
         <p id="card-detail-unused-grant" hidden></p>
         <button id="card-detail-select-button" type="button" hidden>Select</button>
         <button id="card-detail-close-button" type="button">Close</button>
@@ -1333,6 +1711,7 @@
                     <label><input type="checkbox" id="notify-friend-request-checkbox"> I receive a friend request</label>
                     <label><input type="checkbox" id="notify-game-finished-checkbox"> One of my games finishes</label>
                     <label><input type="checkbox" id="notify-chat-message-checkbox"> I receive an in-game chat message</label>
+                    <label><input type="checkbox" id="notify-timeout-warning-checkbox"> A turn or full-game timeout is less than 15 minutes away</label>
                     <label><input type="checkbox" id="disable-cooldown-checkbox"> Send every notification immediately (disable the 5-minute cooldown)</label>
                 </fieldset>
             </div>
@@ -1625,6 +2004,7 @@
             <li><a href="https://discord.gg/GgHFEBAd6C" target="_blank" rel="noopener noreferrer">Discord</a></li>
             <li><a href="https://www.reddit.com/r/moodswingstcg/" target="_blank" rel="noopener noreferrer">Reddit</a></li>
             <li><a href="https://github.com/jceddy/MoodSwings-Web" target="_blank" rel="noopener noreferrer">GitHub repository</a></li>
+            <li>Looking for synchronous play? Check out <a href="https://moodygg.fly.dev/" target="_blank" rel="noopener noreferrer">moodygg</a>!</li>
         </ul>
         <script type="text/javascript" src="https://cdnjs.buymeacoffee.com/1.0.0/button.prod.min.js" data-name="bmc-button" data-slug="jceddy" data-color="#FFDD00" data-emoji="" data-font="Cookie" data-text="Buy me a coffee" data-outline-color="#000000" data-font-color="#000000" data-coffee-color="#ffffff"></script>
     </dialog>

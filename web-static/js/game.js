@@ -5,6 +5,19 @@
         return;
     }
 
+    // Feature flag (Config::getBool('SYNCHRONOUS_MODE_ENABLED'), defaults
+    // to disabled) gating the New Game/New Tournament dialogs' own
+    // Synchronous mode checkbox -- fetched once here rather than per
+    // dialog open, read synchronously from this module-level flag by
+    // updateSynchronousFieldVisibility()/updateNewTournamentSynchronousFieldVisibility()
+    // below. A fetch failure (network error, older deployment without
+    // this route yet) leaves it at its own safe default, false.
+    let synchronousModeEnabled = false;
+    {
+        const { ok, body } = await getSynchronousModeEnabled();
+        synchronousModeEnabled = ok && body.enabled === true;
+    }
+
     document.getElementById('username').textContent = user.username;
     document.getElementById('game-main').hidden = false;
     startVersionWatcher();
@@ -228,6 +241,7 @@
         const friendRequestCheckbox = document.getElementById('notify-friend-request-checkbox');
         const gameFinishedCheckbox = document.getElementById('notify-game-finished-checkbox');
         const chatMessageCheckbox = document.getElementById('notify-chat-message-checkbox');
+        const timeoutWarningCheckbox = document.getElementById('notify-timeout-warning-checkbox');
         const disableCooldownCheckbox = document.getElementById('disable-cooldown-checkbox');
 
         const supported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
@@ -255,6 +269,7 @@
                     friendRequestCheckbox.checked = body.preferences.notify_friend_request;
                     gameFinishedCheckbox.checked = body.preferences.notify_game_finished;
                     chatMessageCheckbox.checked = body.preferences.notify_chat_message;
+                    timeoutWarningCheckbox.checked = body.preferences.notify_timeout_warning;
                     disableCooldownCheckbox.checked = body.preferences.disable_cooldown;
                 }
             }
@@ -504,6 +519,7 @@
                 notify_friend_request: friendRequestCheckbox.checked,
                 notify_game_finished: gameFinishedCheckbox.checked,
                 notify_chat_message: chatMessageCheckbox.checked,
+                notify_timeout_warning: timeoutWarningCheckbox.checked,
                 disable_cooldown: disableCooldownCheckbox.checked,
             });
         }
@@ -511,6 +527,7 @@
         friendRequestCheckbox.addEventListener('change', savePreferences);
         gameFinishedCheckbox.addEventListener('change', savePreferences);
         chatMessageCheckbox.addEventListener('change', savePreferences);
+        timeoutWarningCheckbox.addEventListener('change', savePreferences);
         disableCooldownCheckbox.addEventListener('change', savePreferences);
     }
 
@@ -1473,6 +1490,17 @@
     let currentGameId = null;
     let currentState = null;
     let pollTimer = null;
+    // Synchronous mode's own live action timer (reported live: "which
+    // should be visible in the game display") -- a separate 1-second
+    // interval from pollTimer above, since a 30-second countdown needs
+    // to visibly tick between polls, not just jump every ~4 seconds.
+    // synchronousDeadlineInfo holds the latest server-reported deadline;
+    // tickSynchronousActionTimer() (called every second) recomputes the
+    // remaining time purely from Date.now() against it, self-correcting
+    // whenever the next poll updates synchronousDeadlineInfo again. See
+    // renderBoard()'s own call site for when this starts/stops.
+    let synchronousActionTimerInterval = null;
+    let synchronousDeadlineInfo = null;
     // Spectator mode (issue #128) -- true for the rest of this page's
     // lifetime once a ?spectate_game_id= URL param is detected at
     // bootstrap (see the very bottom of this file); never toggled back to
@@ -1574,6 +1602,7 @@
             clearInterval(pollTimer);
             pollTimer = null;
         }
+        stopSynchronousActionTimer();
         // Watch game replay (issue #240) -- unlike isSpectating (never
         // reset; a spectator leaves this page entirely instead), a replay
         // session ends back at this same in-page lobby, so its own state
@@ -2467,6 +2496,9 @@
             deckTypeSelect.value = isSealedDeckFormat ? 'sealed_deck' : 'sealed_pool_of_the_day';
             updateDeckTypeDescription();
             updateOpponentSelectionLimit();
+            updateTimeoutFieldVisibility();
+            updateTotalTimeLimitFieldVisibility();
+            updateSynchronousFieldVisibility();
             return;
         }
 
@@ -2494,6 +2526,9 @@
         // isn't left capped at 1 opponent from whatever deck_type was
         // selected a moment ago.
         updateOpponentSelectionLimit();
+        updateTimeoutFieldVisibility();
+        updateTotalTimeLimitFieldVisibility();
+        updateSynchronousFieldVisibility();
     }
 
     // Shows the partner picker only for Open Team Play, populated from
@@ -3326,6 +3361,106 @@
         }
     }
 
+    // Issue #85's own turn/decision timeout opt-in -- see
+    // GameService::createGame()'s own $timeoutMinutes docblock for why
+    // Sealed Pool of the Day/Weekly Sealed Pool never get this option
+    // (always played same-day/same-week against a live opponent, with no
+    // "pick this back up later" story). weekly_sealed_pool never
+    // actually appears in #new-game-deck-type's own option list (that
+    // format is only ever entered through WeeklySealedPoolQueueService's
+    // own separate queue/pairing flow, never this dialog), but the check
+    // stays deck-type-generic rather than hardcoding
+    // 'sealed_pool_of_the_day' alone, matching createGame()'s own
+    // PERIODIC_SEALED_POOL_DECK_TYPES-keyed exclusion exactly. Unchecked
+    // (not just hidden) whenever it goes out of view, same as every
+    // other conditionally-shown New Game field; the two sub-fields
+    // (#new-game-timeout-fields) are shown only once the checkbox
+    // itself is both visible AND checked.
+    const TIMEOUT_EXCLUDED_DECK_TYPES = ['sealed_pool_of_the_day', 'weekly_sealed_pool'];
+    function updateTimeoutFieldVisibility() {
+        const deckType = document.getElementById('new-game-deck-type').value;
+        const show = !TIMEOUT_EXCLUDED_DECK_TYPES.includes(deckType);
+        const checkboxLabel = document.getElementById('new-game-timeout-enabled-label');
+        checkboxLabel.hidden = !show;
+        if (!show) {
+            document.getElementById('new-game-timeout-enabled').checked = false;
+        }
+        document.getElementById('new-game-timeout-fields').hidden =
+            !show || !document.getElementById('new-game-timeout-enabled').checked;
+    }
+
+    // Issue #85 follow-up's own full-game time-limit mode -- a second,
+    // independent opt-in from the idle turn/decision timeout above (a
+    // game may have either, both, or neither). Same
+    // TIMEOUT_EXCLUDED_DECK_TYPES exclusion and "unchecked, not just
+    // hidden, whenever it goes out of view" treatment as
+    // updateTimeoutFieldVisibility() above.
+    function updateTotalTimeLimitFieldVisibility() {
+        const deckType = document.getElementById('new-game-deck-type').value;
+        const show = !TIMEOUT_EXCLUDED_DECK_TYPES.includes(deckType);
+        const checkboxLabel = document.getElementById('new-game-total-time-limit-enabled-label');
+        checkboxLabel.hidden = !show;
+        if (!show) {
+            document.getElementById('new-game-total-time-limit-enabled').checked = false;
+        }
+        document.getElementById('new-game-total-time-limit-fields').hidden =
+            !show || !document.getElementById('new-game-total-time-limit-enabled').checked;
+    }
+
+    // Reported live: "synchronous" mode -- see GameService::createGame()'s
+    // own $synchronousMode docblock. SYNCHRONOUS_MODE_ALLOWED_FORMATS
+    // mirrors GameService::SYNCHRONOUS_MODE_ALLOWED_FORMATS exactly
+    // (2-player Traditional/Duel/Draft -- Draft covers all five
+    // draft-family deck_types plus Sealed Deck/Sealed Pool of the Day,
+    // both mapped to 'draft' by effectiveNewGameFormat()) -- also
+    // requires exactly 2 total players (currentNewGamePlayerCount()),
+    // the one restriction that isn't itself a format/deck_type check.
+    // Same "unchecked, not just hidden, whenever it goes out of view"
+    // treatment as the two async timeout checkboxes above. Also gated on
+    // the synchronousModeEnabled feature flag fetched once at page load
+    // above -- disabled entirely (never shown, whatever the format/
+    // player count) until a maintainer opts in via the
+    // SYNCHRONOUS_MODE_ENABLED repository variable.
+    const SYNCHRONOUS_MODE_ALLOWED_FORMATS = ['standard', 'duel', 'draft'];
+    function updateSynchronousFieldVisibility() {
+        const format = effectiveNewGameFormat();
+        const show = synchronousModeEnabled && SYNCHRONOUS_MODE_ALLOWED_FORMATS.includes(format) && currentNewGamePlayerCount() === 2;
+        const checkboxLabel = document.getElementById('new-game-synchronous-enabled-label');
+        checkboxLabel.hidden = !show;
+        const checkbox = document.getElementById('new-game-synchronous-enabled');
+        if (!show) {
+            checkbox.checked = false;
+        }
+        document.getElementById('new-game-synchronous-description').hidden = !show || !checkbox.checked;
+        // TEMPORARY cross-promo (see its own comment in index.html) -- tied
+        // purely to the feature flag, not the format/player-count checks
+        // above, since the point is "this site can't do it yet at all",
+        // not "not for this particular format". Remove alongside the
+        // promo markup itself once the flag is gone.
+        document.getElementById('new-game-synchronous-promo').hidden = synchronousModeEnabled;
+    }
+
+    // Synchronous mode is mutually exclusive with the idle time-out/
+    // total-time-limit checkboxes above (see createGame()'s own
+    // validation) -- checking any one of the three unchecks the other
+    // two, wired as an extra 'change' listener on each of the three
+    // checkboxes (registered below, after each checkbox's own primary
+    // visibility-update listener).
+    function enforceSynchronousExclusivityFromSynchronousCheckbox() {
+        if (document.getElementById('new-game-synchronous-enabled').checked) {
+            document.getElementById('new-game-timeout-enabled').checked = false;
+            document.getElementById('new-game-total-time-limit-enabled').checked = false;
+            updateTimeoutFieldVisibility();
+            updateTotalTimeLimitFieldVisibility();
+        }
+    }
+    function enforceSynchronousExclusivityFromAsyncCheckboxes() {
+        if (document.getElementById('new-game-timeout-enabled').checked || document.getElementById('new-game-total-time-limit-enabled').checked) {
+            document.getElementById('new-game-synchronous-enabled').checked = false;
+            updateSynchronousFieldVisibility();
+        }
+    }
+
     // Hides (and, if checked, unchecks) every bot checkbox -- and their
     // own "Practice bots" heading -- whenever the current format/deck_type
     // combination doesn't support seating one (see botsSupportedFor()).
@@ -3380,6 +3515,10 @@
         // best-of-three checkbox depends on the current player count too
         // (see currentNewGamePlayerCount()).
         updateBestOfThreeFieldVisibility();
+        // Synchronous mode also depends on the current player count
+        // (exactly 2, see updateSynchronousFieldVisibility()'s own
+        // docblock).
+        updateSynchronousFieldVisibility();
     }
 
     // Order matters for the two bot-related listeners here: a bot
@@ -3456,6 +3595,21 @@
     document.getElementById('new-game-deck-type').addEventListener('change', updateOpponentSelectionLimit);
     document.getElementById('new-game-deck-type').addEventListener('change', updateBotCheckboxAvailability);
     document.getElementById('new-game-deck-type').addEventListener('change', updateBestOfThreeFieldVisibility);
+    document.getElementById('new-game-format').addEventListener('change', updateTimeoutFieldVisibility);
+    document.getElementById('new-game-deck-type').addEventListener('change', updateTimeoutFieldVisibility);
+    document.getElementById('new-game-timeout-enabled').addEventListener('change', updateTimeoutFieldVisibility);
+    document.getElementById('new-game-format').addEventListener('change', updateTotalTimeLimitFieldVisibility);
+    document.getElementById('new-game-deck-type').addEventListener('change', updateTotalTimeLimitFieldVisibility);
+    document.getElementById('new-game-total-time-limit-enabled').addEventListener('change', updateTotalTimeLimitFieldVisibility);
+    document.getElementById('new-game-format').addEventListener('change', updateSynchronousFieldVisibility);
+    document.getElementById('new-game-deck-type').addEventListener('change', updateSynchronousFieldVisibility);
+    document.getElementById('new-game-synchronous-enabled').addEventListener('change', updateSynchronousFieldVisibility);
+    // Mutual exclusivity (see createGame()'s own validation) -- registered
+    // after each checkbox's own primary visibility-update listener above,
+    // so this always runs last.
+    document.getElementById('new-game-synchronous-enabled').addEventListener('change', enforceSynchronousExclusivityFromSynchronousCheckbox);
+    document.getElementById('new-game-timeout-enabled').addEventListener('change', enforceSynchronousExclusivityFromAsyncCheckboxes);
+    document.getElementById('new-game-total-time-limit-enabled').addEventListener('change', enforceSynchronousExclusivityFromAsyncCheckboxes);
     document.getElementById('new-game-saved-decklist').addEventListener('change', updateDeckTypeDescription);
     document.getElementById('new-game-duel-rules-preset').addEventListener('change', updateDuelRulesPresetVisibility);
     // Power Duel sideboarding's own checkbox depends on both the current
@@ -3534,6 +3688,17 @@
         }
 
         document.getElementById('new-game-decklist-text').value = await file.text();
+    });
+
+    // Same pattern as #new-game-decklist-file above, for the New
+    // Tournament dialog's own creator decklist fields.
+    document.getElementById('new-tournament-decklist-file').addEventListener('change', async (event) => {
+        const file = event.target.files[0];
+        if (!file) {
+            return;
+        }
+
+        document.getElementById('new-tournament-decklist-text').value = await file.text();
     });
 
     // Reads the four rarity rows' own optional "max total"/"max
@@ -3924,6 +4089,1056 @@
         openGamesDialog.close();
     });
 
+    // -- Tournaments (issue #91) ---------------------------------------
+
+    const tournamentsDialog = document.getElementById('tournaments-dialog');
+    const tournamentsError = document.getElementById('tournaments-error');
+    const newTournamentDialog = document.getElementById('new-tournament-dialog');
+    const newTournamentForm = document.getElementById('new-tournament-form');
+    const newTournamentError = document.getElementById('new-tournament-error');
+    const tournamentInviteCheckboxes = document.getElementById('tournament-invite-checkboxes');
+    const tournamentViewDialog = document.getElementById('tournament-view-dialog');
+    const tournamentViewError = document.getElementById('tournament-view-error');
+    let currentTournamentViewId = null;
+
+    const TOURNAMENT_BRACKET_TYPE_LABELS = { single_elimination: 'Single elimination', double_elimination: 'Double elimination', swiss: 'Swiss rounds' };
+    const TOURNAMENT_STATUS_LABELS = { registration: 'Registration open', in_progress: 'In progress', completed: 'Completed', cancelled: 'Cancelled' };
+    // 'Round'/'winners round'/etc. prefix a plain round_number in the
+    // bracket view below -- see TournamentBracketBuilder's own docblock
+    // for what each of these three concurrent round sequences means.
+    const TOURNAMENT_BRACKET_LABELS = { single: 'Round', winners: 'Winners round', losers: 'Losers round', grand_final: 'Grand final', swiss: 'Round' };
+
+    // Reuses NEW_GAME_FORMAT_LABELS/NEW_GAME_DECK_TYPE_LABELS (New Game
+    // dialog, above) -- tournaments use the exact same format/deck_type
+    // value strings, just a curated subset of them (see #new-tournament-dialog's
+    // own docblock). Sealed Deck is `format: 'draft'` under the hood
+    // (issue #392) but has no actual drafting phase of its own, so
+    // (same special case openGameSummary() already makes) it's shown as
+    // just "Sealed Deck" rather than "Draft – Sealed Deck". Grid Draft
+    // ('grid_draft'/'grid_draft_pod'/'grid_draft_pod_playoff' all three)
+    // is shown the same bare way -- it's the only draft type the
+    // tournament dialog offers any more (Quick Draft was removed), so
+    // "Draft – Grid Draft" would be redundant. 'custom_duel' is shown as
+    // bare "Power Duel" for the same reason -- it's the only thing
+    // "Duel" tournaments offer any more (see effectiveNewTournamentDeckType()'s
+    // own docblock), so "Duel – Power Duel" would be redundant too;
+    // unlike the New Game dialog's own generic "Custom Decklists (Duel)"
+    // label, which still needs to say so since it's one option among
+    // several there.
+    // -- Tournament deck submission dialog (join/accept-invite/edit) --
+
+    // Power Duel's own join-time deck (issue reported live: "the deck
+    // submission should happen when the player joins the tournament --
+    // players use the same submitted deck for the entire tournament") --
+    // one shared dialog for all three places a decklist is needed:
+    // joining an open tournament, accepting an invite, and editing an
+    // already-submitted deck before the tournament starts. onSubmit is
+    // called with {decklist_text} or {saved_decklist_id} (never both) and
+    // must return the {ok, body} shape apiRequest() itself returns; the
+    // dialog closes and onSuccess() runs once it resolves ok, otherwise
+    // onSubmit's own error message is shown and the dialog stays open.
+    const tournamentDeckDialog = document.getElementById('tournament-deck-dialog');
+    const tournamentDeckForm = document.getElementById('tournament-deck-form');
+    const tournamentDeckError = document.getElementById('tournament-deck-error');
+
+    document.getElementById('tournament-deck-file').addEventListener('change', async (event) => {
+        const file = event.target.files[0];
+        if (!file) {
+            return;
+        }
+
+        document.getElementById('tournament-deck-text').value = await file.text();
+    });
+
+    document.getElementById('tournament-deck-cancel-button').addEventListener('click', () => {
+        tournamentDeckDialog.close();
+    });
+
+    async function openTournamentDeckDialog(onSubmit, onSuccess) {
+        tournamentDeckError.hidden = true;
+        tournamentDeckForm.reset();
+        await populateSavedDecklistSelect(document.getElementById('tournament-deck-saved-decklist'));
+
+        tournamentDeckForm.onsubmit = async (e) => {
+            e.preventDefault();
+            const submitButton = document.getElementById('tournament-deck-submit-button');
+            submitButton.disabled = true;
+
+            const savedDecklistId = document.getElementById('tournament-deck-saved-decklist').value;
+            const deckParams = savedDecklistId !== ''
+                ? { saved_decklist_id: Number(savedDecklistId) }
+                : { decklist_text: document.getElementById('tournament-deck-text').value };
+
+            const { ok, body } = await onSubmit(deckParams);
+            submitButton.disabled = false;
+            if (!ok) {
+                tournamentDeckError.textContent = body.message || 'Could not submit this deck.';
+                tournamentDeckError.hidden = false;
+                return;
+            }
+
+            tournamentDeckDialog.close();
+            await onSuccess();
+        };
+
+        tournamentDeckDialog.showModal();
+    }
+
+    // Reported live: show the winner on the tournaments display --
+    // winner_username (TournamentRepository::listForUser()'s own LEFT
+    // JOIN onto users) is null until a tournament actually reaches
+    // 'completed' (winner_user_id itself stays null until then too), so
+    // this only ever adds anything for that one status. Shared by both
+    // "Your tournaments" and the collapsible "Cancelled tournaments"
+    // list below -- a cancelled tournament is never 'completed', so the
+    // suffix is simply never shown there, but the label itself is
+    // identical otherwise.
+    function tournamentListItemLabel(tournament) {
+        const winnerSuffix = tournament.status === 'completed' && tournament.winner_username
+            ? ` (winner: ${tournament.winner_username})`
+            : '';
+
+        return `${tournament.name} — ${tournamentMatchSummary(tournament)} — ${TOURNAMENT_STATUS_LABELS[tournament.status] || tournament.status}${winnerSuffix} `;
+    }
+
+    function tournamentMatchSummary(tournament) {
+        const params = tournament.match_params;
+        const deckType = params.deck_type === 'custom_duel'
+            ? 'Power Duel'
+            : params.deck_type === 'booster_draft'
+                ? 'Booster Draft'
+                : params.deck_type === 'grid_draft_pod'
+                    ? 'Grid Draft (Pod)'
+                    : params.deck_type === 'grid_draft_pod_playoff'
+                        ? 'Grid Draft (Pod Playoffs)'
+                        : NEW_GAME_DECK_TYPE_LABELS[params.deck_type] || params.deck_type;
+        const format = ['sealed_deck', 'booster_draft', 'grid_draft', 'grid_draft_pod', 'grid_draft_pod_playoff', 'custom_duel'].includes(params.deck_type)
+            ? deckType
+            : `${NEW_GAME_FORMAT_LABELS[params.format] || params.format} – ${deckType}`;
+        return `${TOURNAMENT_BRACKET_TYPE_LABELS[tournament.bracket_type] || tournament.bracket_type} – ${format}`;
+    }
+
+    async function loadTournamentsDialog() {
+        tournamentsError.hidden = true;
+
+        const [mineResp, openResp] = await Promise.all([listTournaments(true), listTournaments(false)]);
+        const mine = mineResp.ok ? mineResp.body.tournaments : [];
+
+        // Invite-only tournaments' own accept/decline step -- an
+        // open-registration tournament never puts a viewer in 'invited'
+        // status at all (joinOpenTournament() only ever creates 'joined'
+        // rows), so this section is simply empty for those.
+        const invitations = mine.filter((t) => t.my_participant_status === 'invited');
+        const invitationsSection = document.getElementById('tournaments-invitations-section');
+        const invitationsList = document.getElementById('tournaments-invitations-list');
+        invitationsList.innerHTML = '';
+        invitationsSection.hidden = invitations.length === 0;
+
+        for (const tournament of invitations) {
+            const item = document.createElement('li');
+            item.append(`${tournament.name} (${tournamentMatchSummary(tournament)}) `);
+
+            const acceptButton = document.createElement('button');
+            acceptButton.type = 'button';
+            acceptButton.textContent = 'Accept';
+            acceptButton.addEventListener('click', async () => {
+                // Power Duel's own join-time deck (issue reported live:
+                // "the deck submission should happen when the player
+                // joins the tournament") -- collected here before
+                // actually accepting, same as the Join button below.
+                if (tournament.match_params.deck_type === 'custom_duel') {
+                    await openTournamentDeckDialog(
+                        (deckParams) => acceptTournamentInvite(tournament.id, deckParams),
+                        loadTournamentsDialog,
+                    );
+                    return;
+                }
+                acceptButton.disabled = true;
+                const { ok, body } = await acceptTournamentInvite(tournament.id);
+                if (!ok) {
+                    tournamentsError.textContent = body.message || 'Could not accept this invite.';
+                    tournamentsError.hidden = false;
+                    acceptButton.disabled = false;
+                    return;
+                }
+                await loadTournamentsDialog();
+            });
+
+            const declineButton = document.createElement('button');
+            declineButton.type = 'button';
+            declineButton.textContent = 'Decline';
+            declineButton.addEventListener('click', async () => {
+                declineButton.disabled = true;
+                const { ok, body } = await declineTournamentInvite(tournament.id);
+                if (!ok) {
+                    tournamentsError.textContent = body.message || 'Could not decline this invite.';
+                    tournamentsError.hidden = false;
+                    declineButton.disabled = false;
+                    return;
+                }
+                await loadTournamentsDialog();
+            });
+
+            item.appendChild(acceptButton);
+            item.appendChild(declineButton);
+            invitationsList.appendChild(item);
+        }
+
+        // 'withdrawn' is excluded the same way 'declined' already is --
+        // there's nothing left to do with either (no button this list
+        // renders for either status, and joinOpenTournament()'s own
+        // findForUser() check means you can never rejoin a tournament
+        // you've withdrawn from any more than one you've declined), so
+        // leaving it in just left a withdrawn tournament looking
+        // indistinguishable from a joined one -- this list only ever
+        // displays the tournament's own status, never the viewer's own
+        // participant status, so the sole visible difference was a
+        // vanished Withdraw button, easy to miss entirely. 'cancelled'
+        // (reported live) is excluded the same way -- tucked into its
+        // own collapsible section below instead of cluttering this one.
+        const mineProper = mine.filter((t) => t.my_participant_status !== 'invited' && t.my_participant_status !== 'declined' && t.my_participant_status !== 'withdrawn' && t.status !== 'cancelled');
+        const mineList = document.getElementById('tournaments-mine-list');
+        mineList.innerHTML = '';
+        document.getElementById('tournaments-mine-empty').hidden = mineProper.length > 0;
+
+        for (const tournament of mineProper) {
+            const item = document.createElement('li');
+            item.append(tournamentListItemLabel(tournament));
+
+            const viewButton = document.createElement('button');
+            viewButton.type = 'button';
+            viewButton.textContent = 'View';
+            viewButton.addEventListener('click', () => openTournamentView(tournament.id));
+            item.appendChild(viewButton);
+
+            // Power Duel's own join-time deck (issue reported live: "the
+            // deck submission should happen when the player joins the
+            // tournament -- players use the same submitted deck for the
+            // entire tournament") -- editable until the tournament
+            // actually starts (submitTournamentDeck()'s own docblock),
+            // for the creator too (their own deck was collected in the
+            // New Tournament dialog, but can still change their mind).
+            if (tournament.status === 'registration' && tournament.match_params.deck_type === 'custom_duel' && tournament.my_participant_status === 'joined') {
+                const editDeckButton = document.createElement('button');
+                editDeckButton.type = 'button';
+                editDeckButton.textContent = 'Edit deck';
+                editDeckButton.addEventListener('click', async () => {
+                    await openTournamentDeckDialog(
+                        (deckParams) => submitTournamentDeck(tournament.id, deckParams),
+                        loadTournamentsDialog,
+                    );
+                });
+                item.appendChild(editDeckButton);
+            }
+
+            const isCreator = tournament.created_by_user_id === user.id;
+            if (tournament.status === 'registration' && !isCreator && tournament.my_participant_status === 'joined') {
+                const withdrawButton = document.createElement('button');
+                withdrawButton.type = 'button';
+                withdrawButton.textContent = 'Withdraw';
+                withdrawButton.addEventListener('click', async () => {
+                    withdrawButton.disabled = true;
+                    const { ok, body } = await withdrawFromTournament(tournament.id);
+                    if (!ok) {
+                        tournamentsError.textContent = body.message || 'Could not withdraw.';
+                        tournamentsError.hidden = false;
+                        withdrawButton.disabled = false;
+                        return;
+                    }
+                    await loadTournamentsDialog();
+                });
+                item.appendChild(withdrawButton);
+            }
+
+            mineList.appendChild(item);
+        }
+
+        // Reported live: hide cancelled tournaments from the main list,
+        // tucked into their own collapsible section instead -- same
+        // 'invited'/'declined'/'withdrawn' participant-status exclusion
+        // as mineProper above, just kept to 'cancelled' tournaments only.
+        // Nothing left to do with a cancelled tournament (no
+        // Withdraw/Edit deck button makes sense once it's cancelled), so
+        // View is the only action offered here.
+        const cancelled = mine.filter((t) => t.status === 'cancelled' && t.my_participant_status !== 'invited' && t.my_participant_status !== 'declined' && t.my_participant_status !== 'withdrawn');
+        const cancelledSection = document.getElementById('tournaments-cancelled-section');
+        const cancelledList = document.getElementById('tournaments-cancelled-list');
+        cancelledList.innerHTML = '';
+        cancelledSection.hidden = cancelled.length === 0;
+
+        for (const tournament of cancelled) {
+            const item = document.createElement('li');
+            item.append(tournamentListItemLabel(tournament));
+
+            const viewButton = document.createElement('button');
+            viewButton.type = 'button';
+            viewButton.textContent = 'View';
+            viewButton.addEventListener('click', () => openTournamentView(tournament.id));
+            item.appendChild(viewButton);
+
+            cancelledList.appendChild(item);
+        }
+
+        const open = openResp.ok ? openResp.body.tournaments : [];
+        const openList = document.getElementById('tournaments-open-list');
+        openList.innerHTML = '';
+        document.getElementById('tournaments-open-empty').hidden = open.length > 0;
+
+        for (const tournament of open) {
+            const item = document.createElement('li');
+            item.append(`${tournament.creator_username}: ${tournament.name} — ${tournamentMatchSummary(tournament)} (${tournament.joined_count} of ${tournament.max_participants} joined) `);
+
+            const joinButton = document.createElement('button');
+            joinButton.type = 'button';
+            joinButton.textContent = 'Join';
+            joinButton.addEventListener('click', async () => {
+                // Power Duel's own join-time deck (issue reported live:
+                // "the deck submission should happen when the player
+                // joins the tournament -- players use the same submitted
+                // deck for the entire tournament") -- collected here
+                // before actually joining; every other tournament type
+                // joins immediately, same as before.
+                if (tournament.match_params.deck_type === 'custom_duel') {
+                    await openTournamentDeckDialog(
+                        (deckParams) => joinTournament(tournament.id, deckParams),
+                        loadTournamentsDialog,
+                    );
+                    return;
+                }
+                joinButton.disabled = true;
+                const { ok, body } = await joinTournament(tournament.id);
+                if (!ok) {
+                    tournamentsError.textContent = body.message || 'Could not join this tournament.';
+                    tournamentsError.hidden = false;
+                    joinButton.disabled = false;
+                    return;
+                }
+                await loadTournamentsDialog();
+            });
+            item.appendChild(joinButton);
+            openList.appendChild(item);
+        }
+    }
+
+    document.getElementById('tournaments-button').addEventListener('click', async () => {
+        await loadTournamentsDialog();
+        tournamentsDialog.showModal();
+    });
+
+    document.getElementById('tournaments-close-button').addEventListener('click', () => {
+        tournamentsDialog.close();
+    });
+
+    // -- New tournament dialog --
+
+    // #new-tournament-format's own 'sealed_deck'/'booster_draft' options
+    // are both UI-only sentinels, mirroring #new-game-format's identical
+    // 'sealed_pool_of_the_day' trick (see effectiveNewGameFormat()'s own
+    // docblock) -- Sealed Deck is `format: 'draft'`/`deck_type:
+    // 'sealed_deck'` under the hood (issue #392), but showing it as its
+    // own top-level format (rather than a deck choice nested under
+    // "Draft") means never asking someone to pick "Draft" and then
+    // "Sealed Deck" as if those were two independent decisions. Booster
+    // Draft (issue #91 follow-up) is `format: 'duel'`/`deck_type:
+    // 'booster_draft'` for exactly the same reason -- it's really a
+    // 'custom_duel' match once the pod-drafting phase hands each player
+    // their own deck (see TournamentService::startMatchGame()'s own
+    // docblock), but showing it as its own Format choice, not a Duel
+    // deck option, matches how it actually reads to a tournament
+    // creator: an entirely different way of sourcing everyone's deck,
+    // not a preset alongside Structure/Power. 'draft' itself is left
+    // meaning exactly Grid Draft here (Quick Draft is no longer offered
+    // as a tournament option at all) -- see #new-tournament-dialog's own
+    // docblock for why the full exhaustive deck_type list isn't offered.
+    function effectiveNewTournamentFormat() {
+        const raw = document.getElementById('new-tournament-format').value;
+        if (raw === 'sealed_deck') { return 'draft'; }
+        if (raw === 'booster_draft') { return 'duel'; }
+
+        return raw;
+    }
+
+    // Every format now fully determines its own deck_type on its own --
+    // "Power Duel" always implies deck_type 'custom_duel' under the
+    // "power" duel_deck_rules preset (see the submit handler's own
+    // duel_deck_rules line -- "using custom decks" is no longer a choice,
+    // it's simply what Duel tournaments are), and "Traditional" always
+    // implies 'structure' (TournamentService::createTournament() then
+    // generates that one random Structure deck exactly once, for the
+    // whole tournament, server-side -- see its own docblock). "Grid
+    // Draft" is the one format that still has something to choose --
+    // #new-tournament-grid-draft-mode's own "Fresh draft each match"
+    // (deck_type 'grid_draft', unchanged) vs. "Pod draft (once)"
+    // (deck_type 'grid_draft_pod', issue #91 follow-up: participants
+    // split into pods of <=4, each playing one ordinary Grid Draft game
+    // together to build a personal pool -- see
+    // TournamentService::startGridDraftPods()'s own docblock -- reused
+    // for every one of that pod's members' own real bracket matches
+    // exactly like Booster Draft's own drafted pool already is).
+    function effectiveNewTournamentDeckType() {
+        const raw = document.getElementById('new-tournament-format').value;
+        switch (raw) {
+            case 'sealed_deck': return 'sealed_deck';
+            case 'booster_draft': return 'booster_draft';
+            case 'draft': return document.getElementById('new-tournament-grid-draft-mode').value;
+            case 'duel': return 'custom_duel';
+            default: return 'structure'; // 'standard'
+        }
+    }
+
+    const GRID_DRAFT_MODE_DESCRIPTIONS = {
+        grid_draft: 'Every bracket match is its own independent 2-player Grid Draft, drafted fresh right before that match is played.',
+        grid_draft_pod: 'Participants split into pods of up to 4 and draft together once, before the bracket starts -- see "Booster Draft" for the same idea, just with a shared Grid Draft grid instead of boosters. Every pod member then plays the tournament’s real matches (mixed freely across pods) using a deck built from their own drafted pool, re-sideboardable every round.',
+        grid_draft_pod_playoff: 'Participants split into pods of up to 4 and draft together once, same as "Pod draft (once)" -- but instead of mixing everyone into one shared bracket, each pod plays its own bracket to completion first. Every pod’s own winner then drafts again, together, in one final pod, whose own bracket decides the tournament champion.',
+    };
+
+    // Shown only for Grid Draft (#new-tournament-format's own 'draft'
+    // option) -- every other format has nothing left to choose (see
+    // effectiveNewTournamentDeckType()'s own docblock). "Pods with
+    // playoffs" (grid_draft_pod_playoff) also forces the Bracket field
+    // to Single elimination and hides it -- every pod's own bracket, and
+    // the final playoff among pod winners, are always single elimination
+    // regardless of what's chosen there (TournamentService::createTournament()'s
+    // own docblock), so leaving it open to choose would just be
+    // misleading.
+    function updateNewTournamentGridDraftModeVisibility() {
+        const show = document.getElementById('new-tournament-format').value === 'draft';
+        document.getElementById('new-tournament-grid-draft-mode-label').hidden = !show;
+        const description = document.getElementById('new-tournament-grid-draft-mode-description');
+        description.hidden = !show;
+        if (show) {
+            description.textContent = GRID_DRAFT_MODE_DESCRIPTIONS[document.getElementById('new-tournament-grid-draft-mode').value];
+        }
+
+        const isPlayoffPods = show && document.getElementById('new-tournament-grid-draft-mode').value === 'grid_draft_pod_playoff';
+        document.getElementById('new-tournament-bracket-type-label').hidden = isPlayoffPods;
+        document.getElementById('new-tournament-bracket-type-forced-description').hidden = !isPlayoffPods;
+        if (isPlayoffPods) {
+            document.getElementById('new-tournament-bracket-type').value = 'single_elimination';
+            updateNewTournamentSwissRoundCountVisibility();
+        }
+    }
+
+    // Sideboarding only ever actually takes effect for a 'duel' match
+    // built under deck_type 'custom_duel' with the "power" duel_deck_rules
+    // preset -- the only combination "Power Duel" ever is now (see
+    // effectiveNewTournamentDeckType()) -- and every tournament match is
+    // best-of-three (see the submit handler's own best_of_three line), so
+    // showing this option is simply a matter of which format is picked.
+    function updateNewTournamentAllowSideboardingVisibility() {
+        const show = document.getElementById('new-tournament-format').value === 'duel';
+        document.getElementById('new-tournament-allow-sideboarding-label').hidden = !show;
+        if (!show) {
+            document.getElementById('new-tournament-allow-sideboarding').checked = false;
+        }
+    }
+
+    // Power Duel's own join-time deck (issue reported live: "the deck
+    // submission should happen when the player joins the tournament --
+    // players use the same submitted deck for the entire tournament") --
+    // the creator's own deck, collected right here since createTournament()
+    // auto-joins them; same condition as updateNewTournamentAllowSideboardingVisibility()'s
+    // own (deck_type 'custom_duel' is exactly "Power Duel" -- see
+    // effectiveNewTournamentDeckType()'s own docblock).
+    function updateNewTournamentDecklistFieldVisibility() {
+        const show = effectiveNewTournamentDeckType() === 'custom_duel';
+        document.getElementById('new-tournament-decklist-fields').hidden = !show;
+    }
+
+    // Issue #85's own turn/decision timeout opt-in, and issue #85
+    // follow-up's own full-game time-limit mode, mirrored from the New
+    // Game dialog's own updateTimeoutFieldVisibility()/
+    // updateTotalTimeLimitFieldVisibility() -- unlike that dialog,
+    // there's no TIMEOUT_EXCLUDED_DECK_TYPES check needed here: neither
+    // excluded deck_type (sealed_pool_of_the_day/weekly_sealed_pool) is
+    // ever a tournament format (TournamentService::ALLOWED_FORMATS), so
+    // both checkboxes are simply always available. Each sub-fields block
+    // shows only once its own checkbox is checked.
+    function updateNewTournamentTimeoutFieldVisibility() {
+        document.getElementById('new-tournament-timeout-fields').hidden =
+            !document.getElementById('new-tournament-timeout-enabled').checked;
+    }
+
+    function updateNewTournamentTotalTimeLimitFieldVisibility() {
+        document.getElementById('new-tournament-total-time-limit-fields').hidden =
+            !document.getElementById('new-tournament-total-time-limit-enabled').checked;
+    }
+
+    // Reported live: "synchronous" mode -- mirrored from the New Game
+    // dialog's own updateSynchronousFieldVisibility(). No
+    // SYNCHRONOUS_MODE_ALLOWED_FORMATS/player-count check needed here
+    // either: every tournament match is always exactly 2 players
+    // (TournamentService's own 1v1 scoping) using one of 'duel'/
+    // 'standard'/'draft' (effectiveNewTournamentFormat()'s own range,
+    // including Booster Draft's own 'duel' translation) -- exactly
+    // GameService::SYNCHRONOUS_MODE_ALLOWED_FORMATS, so the checkbox
+    // would otherwise always be available regardless of which format is
+    // picked -- gated instead on the same synchronousModeEnabled feature
+    // flag the New Game dialog's own checkbox is (fetched once at page
+    // load, see the top of this file), hidden entirely and force-unchecked
+    // until a maintainer opts in via the SYNCHRONOUS_MODE_ENABLED
+    // repository variable.
+    function updateNewTournamentSynchronousFieldVisibility() {
+        const label = document.getElementById('new-tournament-synchronous-enabled-label');
+        label.hidden = !synchronousModeEnabled;
+        const checkbox = document.getElementById('new-tournament-synchronous-enabled');
+        if (!synchronousModeEnabled) {
+            checkbox.checked = false;
+        }
+        document.getElementById('new-tournament-synchronous-description').hidden = !synchronousModeEnabled || !checkbox.checked;
+    }
+
+    // Synchronous mode is mutually exclusive with the idle time-out/
+    // total-time-limit checkboxes above (see createGame()'s own
+    // validation) -- mirrors the New Game dialog's own
+    // enforceSynchronousExclusivityFrom*() pair.
+    function enforceNewTournamentSynchronousExclusivityFromSynchronousCheckbox() {
+        if (document.getElementById('new-tournament-synchronous-enabled').checked) {
+            document.getElementById('new-tournament-timeout-enabled').checked = false;
+            document.getElementById('new-tournament-total-time-limit-enabled').checked = false;
+            updateNewTournamentTimeoutFieldVisibility();
+            updateNewTournamentTotalTimeLimitFieldVisibility();
+        }
+    }
+    function enforceNewTournamentSynchronousExclusivityFromAsyncCheckboxes() {
+        if (document.getElementById('new-tournament-timeout-enabled').checked || document.getElementById('new-tournament-total-time-limit-enabled').checked) {
+            document.getElementById('new-tournament-synchronous-enabled').checked = false;
+            updateNewTournamentSynchronousFieldVisibility();
+        }
+    }
+
+    function updateNewTournamentRegistrationModeFields() {
+        const isOpen = document.getElementById('new-tournament-registration-mode-open').checked;
+        document.getElementById('new-tournament-invite-fields').hidden = isOpen;
+    }
+
+    // Every tournament is capped to 4-16 joined participants for now (see
+    // TournamentService::createTournament()'s own docblock) -- populated
+    // once here rather than hard-coded as 13 <option> tags apiece.
+    // max_participants defaults to 16 (the widest allowed), min_participants
+    // to 4 (the narrowest) -- reset every time the dialog opens, same as
+    // every other field newTournamentForm.reset() doesn't already cover.
+    function populateNewTournamentParticipantRangeSelects() {
+        for (const [id, defaultValue] of [['new-tournament-min-participants', 4], ['new-tournament-max-participants', 16]]) {
+            const select = document.getElementById(id);
+            select.innerHTML = '';
+            for (let n = 4; n <= 16; n++) {
+                const option = document.createElement('option');
+                option.value = String(n);
+                option.textContent = String(n);
+                select.appendChild(option);
+            }
+            select.value = String(defaultValue);
+        }
+    }
+
+    function updateNewTournamentSwissRoundCountVisibility() {
+        const bracketType = document.getElementById('new-tournament-bracket-type').value;
+        document.getElementById('new-tournament-swiss-round-count-label').hidden = bracketType !== 'swiss';
+    }
+
+    document.getElementById('new-tournament-format').addEventListener('change', updateNewTournamentAllowSideboardingVisibility);
+    document.getElementById('new-tournament-format').addEventListener('change', updateNewTournamentDecklistFieldVisibility);
+    document.getElementById('new-tournament-format').addEventListener('change', updateNewTournamentGridDraftModeVisibility);
+    document.getElementById('new-tournament-grid-draft-mode').addEventListener('change', updateNewTournamentGridDraftModeVisibility);
+    document.getElementById('new-tournament-registration-mode-invite').addEventListener('change', updateNewTournamentRegistrationModeFields);
+    document.getElementById('new-tournament-registration-mode-open').addEventListener('change', updateNewTournamentRegistrationModeFields);
+    document.getElementById('new-tournament-bracket-type').addEventListener('change', updateNewTournamentSwissRoundCountVisibility);
+    document.getElementById('new-tournament-timeout-enabled').addEventListener('change', updateNewTournamentTimeoutFieldVisibility);
+    document.getElementById('new-tournament-total-time-limit-enabled').addEventListener('change', updateNewTournamentTotalTimeLimitFieldVisibility);
+    document.getElementById('new-tournament-synchronous-enabled').addEventListener('change', updateNewTournamentSynchronousFieldVisibility);
+    document.getElementById('new-tournament-synchronous-enabled').addEventListener('change', enforceNewTournamentSynchronousExclusivityFromSynchronousCheckbox);
+    document.getElementById('new-tournament-timeout-enabled').addEventListener('change', enforceNewTournamentSynchronousExclusivityFromAsyncCheckboxes);
+    document.getElementById('new-tournament-total-time-limit-enabled').addEventListener('change', enforceNewTournamentSynchronousExclusivityFromAsyncCheckboxes);
+
+    async function openNewTournamentDialog() {
+        newTournamentError.hidden = true;
+        newTournamentForm.reset();
+        populateNewTournamentParticipantRangeSelects();
+        updateNewTournamentAllowSideboardingVisibility();
+        updateNewTournamentDecklistFieldVisibility();
+        updateNewTournamentGridDraftModeVisibility();
+        updateNewTournamentRegistrationModeFields();
+        updateNewTournamentSwissRoundCountVisibility();
+        updateNewTournamentTimeoutFieldVisibility();
+        updateNewTournamentTotalTimeLimitFieldVisibility();
+        updateNewTournamentSynchronousFieldVisibility();
+        await populateSavedDecklistSelect(document.getElementById('new-tournament-saved-decklist'));
+
+        const { ok, body } = await listFriends();
+        const friends = ok ? body.friends : [];
+        tournamentInviteCheckboxes.innerHTML = '';
+        document.getElementById('tournament-invite-checkboxes-empty').hidden = friends.length > 0;
+
+        for (const friend of friends) {
+            const label = document.createElement('label');
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.value = friend.friend_id;
+            label.appendChild(checkbox);
+            label.append(' ' + friend.friend_username);
+            tournamentInviteCheckboxes.appendChild(label);
+        }
+
+        newTournamentDialog.showModal();
+    }
+
+    document.getElementById('new-tournament-button').addEventListener('click', openNewTournamentDialog);
+    document.getElementById('new-tournament-cancel-button').addEventListener('click', () => {
+        newTournamentDialog.close();
+    });
+
+    newTournamentForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        newTournamentError.hidden = true;
+        const submitButton = document.getElementById('new-tournament-submit-button');
+        submitButton.disabled = true;
+
+        const registrationMode = document.getElementById('new-tournament-registration-mode-open').checked ? 'open' : 'invite_only';
+        const bracketType = document.getElementById('new-tournament-bracket-type').value;
+        const format = effectiveNewTournamentFormat();
+        const swissRoundCountRaw = document.getElementById('new-tournament-swiss-round-count').value;
+
+        const inviteUserIds = registrationMode === 'invite_only'
+            ? Array.from(tournamentInviteCheckboxes.querySelectorAll('input[type=checkbox]:checked')).map((cb) => parseInt(cb.value, 10))
+            : [];
+
+        const maxParticipants = parseInt(document.getElementById('new-tournament-max-participants').value, 10);
+
+        // The creator already auto-joins as one of max_participants seats
+        // (TournamentService::createTournament() adds them as 'joined' up
+        // front), so an invite-only tournament needs at least
+        // max_participants - 1 invitees to have any chance of actually
+        // filling up. Catch this client-side rather than letting the
+        // creator find out only after the tournament sits half-empty.
+        if (registrationMode === 'invite_only' && inviteUserIds.length < maxParticipants - 1) {
+            newTournamentError.textContent = `Invite at least ${maxParticipants - 1} friend(s) to fill this tournament (up to ${maxParticipants} participants including you).`;
+            newTournamentError.hidden = false;
+            submitButton.disabled = false;
+            return;
+        }
+
+        const deckType = effectiveNewTournamentDeckType();
+
+        const params = {
+            name: document.getElementById('new-tournament-name').value,
+            bracket_type: bracketType,
+            registration_mode: registrationMode,
+            swiss_round_count: bracketType === 'swiss' && swissRoundCountRaw ? parseInt(swissRoundCountRaw, 10) : null,
+            // Every tournament is capped to 4-16 joined participants for
+            // now, both fields always required -- see
+            // populateNewTournamentParticipantRangeSelects()'s own
+            // docblock.
+            min_participants: parseInt(document.getElementById('new-tournament-min-participants').value, 10),
+            max_participants: maxParticipants,
+            invite_user_ids: inviteUserIds,
+            format,
+            deck_type: deckType,
+            // "Power Duel" always implies the "power" duel_deck_rules
+            // preset -- see effectiveNewTournamentDeckType()'s own
+            // docblock and updateNewTournamentAllowSideboardingVisibility()'s.
+            duel_deck_rules: deckType === 'custom_duel' ? { preset: 'power' } : undefined,
+            // Power Duel's own join-time deck (issue reported live: "the
+            // deck submission should happen when the player joins the
+            // tournament") -- the creator's own deck, since
+            // createTournament() auto-joins them; ignored server-side for
+            // any other deck_type. Same "use a saved deck, else fall back
+            // to the pasted/uploaded text" convention as every other
+            // decklist field in this file.
+            decklist_text: deckType === 'custom_duel' && document.getElementById('new-tournament-saved-decklist').value === ''
+                ? document.getElementById('new-tournament-decklist-text').value : undefined,
+            saved_decklist_id: deckType === 'custom_duel'
+                ? Number(document.getElementById('new-tournament-saved-decklist').value) || undefined : undefined,
+            // Grid Draft's own pool-source picker isn't offered here --
+            // always a random pool, GameService::createGame()'s own
+            // default-feeling choice (#new-game-grid-draft-pool-source's
+            // own first/default option). Without this, createGame() would
+            // reject the match with 'Unknown pool source ""' the moment
+            // the tournament (or, for 'grid_draft_pod'/'grid_draft_pod_playoff',
+            // each of its own pods, including the playoff finals' own
+            // final pod) actually tried to start it.
+            grid_draft_pool_source: ['grid_draft', 'grid_draft_pod', 'grid_draft_pod_playoff'].includes(deckType) ? 'random_48' : undefined,
+            // Every tournament match is always best-of-three now (no
+            // opt-out) -- TournamentService::createTournament() forces
+            // this server-side regardless of what's sent, so this is just
+            // documentation of that contract, not something a user picks
+            // here any more. A harmless no-op for the draft-family deck
+            // types (Grid Draft/Sealed Deck/Booster Draft), which already
+            // run their own best-of-three-at-2-players story -- see
+            // createGame()'s own $bestOfThree docblock.
+            best_of_three: true,
+            allow_sideboarding: document.getElementById('new-tournament-allow-sideboarding').checked,
+            // Issue #85's own turn/decision timeout opt-in -- same
+            // "undefined means don't send this at all" convention the New
+            // Game dialog's own submit handler uses; timeout_minutes/
+            // timeout_action are only sent once the checkbox is actually
+            // checked.
+            timeout_minutes: document.getElementById('new-tournament-timeout-enabled').checked
+                ? Number(document.getElementById('new-tournament-timeout-minutes').value) : undefined,
+            timeout_action: document.getElementById('new-tournament-timeout-enabled').checked
+                ? document.getElementById('new-tournament-timeout-action').value : undefined,
+            // Issue #85 follow-up's own full-game time-limit mode -- same
+            // convention, fully independent of the idle timeout above.
+            total_time_limit_minutes: document.getElementById('new-tournament-total-time-limit-enabled').checked
+                ? Number(document.getElementById('new-tournament-total-time-limit-minutes').value) : undefined,
+            // Reported live: "synchronous" mode -- mutually exclusive with
+            // the two above (enforced both by the checkboxes' own mutual
+            // exclusivity and, ultimately, createGame()'s own validation).
+            // undefined (not false) when unchecked, same "don't send this
+            // at all" convention as every other optional field here.
+            synchronous_mode: document.getElementById('new-tournament-synchronous-enabled').checked ? true : undefined,
+        };
+
+        const { ok, body } = await createTournament(params);
+        submitButton.disabled = false;
+        if (!ok) {
+            newTournamentError.textContent = body.message || 'Could not create this tournament.';
+            newTournamentError.hidden = false;
+            return;
+        }
+
+        newTournamentDialog.close();
+        await loadTournamentsDialog();
+    });
+
+    // -- Tournament view (bracket/standings) --
+
+    function tournamentMatchLabel(match, participantsById) {
+        const p1 = match.participant1_id ? (participantsById[match.participant1_id] || '?') : 'BYE';
+        const p2 = match.participant2_id ? (participantsById[match.participant2_id] || '?') : 'BYE';
+        let result = `${p1} vs ${p2}`;
+        if (match.status === 'completed' || match.status === 'bye') {
+            result += ` — ${participantsById[match.winner_participant_id] || '?'} won`;
+        } else if (match.status === 'in_progress') {
+            result += ' — in progress';
+        } else {
+            result += ' — waiting';
+        }
+        return result;
+    }
+
+    // Booster Draft's, and Grid Draft's own "Pod draft (once)" option's,
+    // pre-bracket phase (issue #91 follow-up) -- shown only while pods
+    // is non-null (tournament.match_params.deck_type is 'booster_draft'
+    // or 'grid_draft_pod', see TournamentService::getState()'s own
+    // docblock), listing every pod's own progress and, for the viewer's
+    // own pod, a "Continue drafting" button routing to whichever pod
+    // kind this actually is -- see renderTournamentPods()'s own
+    // docblock.
+    // Same two formats' own drafted pool/current deck (issue #91
+    // follow-up) -- only the viewer's own participant row ever carries
+    // these two fields hydrated (every other row is scrubbed to null
+    // server-side, see TournamentService::getState()'s own docblock), so
+    // this only ever shows the viewer's own cards, never an opponent's.
+    function renderMyBoosterDraftDeck(participants) {
+        const section = document.getElementById('tournament-view-my-pool-section');
+        const mine = participants.find((p) => p.user_id === user.id && p.draft_pool_card_ids);
+        section.hidden = !mine;
+        if (!mine) {
+            return;
+        }
+
+        document.getElementById('tournament-view-my-pool-count').textContent = `${mine.draft_pool_card_ids.length} card(s) drafted so far.`;
+        document.getElementById('tournament-view-my-pool-text').value =
+            formatDecklistCardLines(mine.draft_pool_card_ids).join('\n');
+
+        const deckLabel = document.getElementById('tournament-view-my-deck-label');
+        const deckText = document.getElementById('tournament-view-my-deck-text');
+        const hasCurrentDeck = mine.current_deck_card_ids !== null;
+        deckLabel.hidden = !hasCurrentDeck;
+        deckText.hidden = !hasCurrentDeck;
+        if (hasCurrentDeck) {
+            deckText.value = formatDecklistCardLines(mine.current_deck_card_ids).join('\n');
+        }
+    }
+
+    // pod.game_id (Grid Draft's own "Pod draft (once)"/"Pods with
+    // playoffs" options, issue #91 follow-up -- see
+    // TournamentService::podsSummary()'s own docblock) is non-null for a
+    // pod backed by one ordinary Grid Draft game -- Booster Draft's own
+    // pods have no single backing game at all, only their own
+    // booster/pick rows, so it's always null for those. "Continue
+    // drafting" routes to whichever this pod actually is: Grid Draft's
+    // own ordinary board (showBoard(), the exact same drafting UI a 3-4
+    // player ad hoc Grid Draft game already uses -- nothing
+    // tournament-specific to build) or Booster Draft's own dedicated
+    // #pod-draft-dialog. Only offered while pod.status is 'drafting' --
+    // a "Pods with playoffs" pod moves on to 'playing' (its own bracket)
+    // the moment drafting finishes, with nothing left to "continue"
+    // there; see renderTournamentPods()'s own bracket rendering for that
+    // instead.
+    let viewerActivePod = null;
+
+    /**
+     * Booster Draft's and Grid Draft's own "Pod draft (once)"/"Pods with
+     * playoffs" options' shared pre-bracket ("Pod draft (once)") or
+     * entirely self-contained ("Pods with playoffs") pod structure
+     * (issue #91 follow-up). Every pod gets one line naming its own
+     * seats and current progress; a "Pods with playoffs" pod
+     * (pod.bracket_rounds non-empty once drafting finishes) additionally
+     * renders its own mini bracket right there using the exact same
+     * renderBracketRounds() the tournament's own top-level bracket uses
+     * -- the final pod (pod.kind === 'final', formed once every regular
+     * pod has its own winner) is labeled "Finals" instead of "Pod N"
+     * since by then there's only ever the one.
+     */
+    function renderTournamentPods(tournament, pods, participantsById) {
+        const section = document.getElementById('tournament-view-pods-section');
+        section.hidden = !pods;
+        if (!pods) {
+            return;
+        }
+
+        const list = document.getElementById('tournament-view-pods-list');
+        list.innerHTML = '';
+        viewerActivePod = null;
+        for (const pod of pods) {
+            const item = document.createElement('li');
+            const seatNames = pod.seats.map((seat) => seat.username).join(', ');
+            const label = pod.kind === 'final' ? 'Finals' : `Pod ${pod.pod_number}`;
+            const progress = pod.status === 'completed'
+                ? `winner: ${pod.winner_username || '?'}`
+                : pod.status === 'playing'
+                    ? 'playing its own bracket'
+                    : pod.game_id !== null ? 'drafting' : `round ${pod.current_round}/15`;
+            item.textContent = `${label} (${progress}): ${seatNames}`;
+
+            if (pod.bracket_rounds.length > 0) {
+                const podBracketContainer = document.createElement('div');
+                renderBracketRounds(podBracketContainer, pod.bracket_rounds, (round) => round.matches, participantsById);
+                item.appendChild(podBracketContainer);
+            }
+
+            list.appendChild(item);
+            if (pod.status === 'drafting' && pod.seats.some((seat) => seat.username === user.username)) {
+                viewerActivePod = pod;
+            }
+        }
+
+        document.getElementById('tournament-view-continue-drafting-button').hidden = !viewerActivePod;
+    }
+
+    document.getElementById('tournament-view-continue-drafting-button').addEventListener('click', () => {
+        if (viewerActivePod === null) {
+            return;
+        }
+        if (viewerActivePod.game_id !== null) {
+            tournamentViewDialog.close();
+            tournamentsDialog.close();
+            showBoard(viewerActivePod.game_id);
+
+            return;
+        }
+        openPodDraftDialog(currentTournamentViewId);
+    });
+
+    async function openTournamentView(tournamentId) {
+        currentTournamentViewId = tournamentId;
+        tournamentViewError.hidden = true;
+        tournamentViewDialog.showModal();
+        await refreshTournamentView();
+    }
+
+    async function refreshTournamentView() {
+        if (currentTournamentViewId === null) {
+            return;
+        }
+        const { ok, body } = await getTournamentState(currentTournamentViewId);
+        if (!ok) {
+            tournamentViewError.textContent = body.message || 'Could not load this tournament.';
+            tournamentViewError.hidden = false;
+            return;
+        }
+
+        const { tournament, participants, rounds, matches_by_round: matchesByRound, standings, pods } = body;
+        document.getElementById('tournament-view-title').textContent = tournament.name;
+        document.getElementById('tournament-view-status').textContent =
+            `${TOURNAMENT_BRACKET_TYPE_LABELS[tournament.bracket_type] || tournament.bracket_type} — ${TOURNAMENT_STATUS_LABELS[tournament.status] || tournament.status}`;
+
+        const participantsById = {};
+        for (const participant of participants) {
+            participantsById[participant.id] = participant.username;
+        }
+
+        const isCreator = tournament.created_by_user_id === user.id;
+        const joinedCount = participants.filter((p) => p.status === 'joined').length;
+        document.getElementById('tournament-view-start-button').hidden =
+            !(isCreator && tournament.status === 'registration' && joinedCount >= tournament.min_participants);
+        document.getElementById('tournament-view-cancel-button').hidden =
+            !(isCreator && (tournament.status === 'registration' || tournament.status === 'in_progress'));
+
+        renderTournamentPods(tournament, pods, participantsById);
+        renderMyBoosterDraftDeck(participants);
+
+        const standingsSection = document.getElementById('tournament-view-standings-section');
+        const standingsList = document.getElementById('tournament-view-standings-list');
+        standingsList.innerHTML = '';
+        standingsSection.hidden = !standings;
+        if (standings) {
+            for (const [participantId, record] of Object.entries(standings)) {
+                const item = document.createElement('li');
+                item.textContent = `${participantsById[participantId] || '?'} — ${record.wins} win${record.wins === 1 ? '' : 's'}`;
+                standingsList.appendChild(item);
+            }
+        }
+
+        const bracketContainer = document.getElementById('tournament-view-bracket');
+        renderBracketRounds(bracketContainer, rounds, (round) => matchesByRound[round.id], participantsById);
+    }
+
+    /**
+     * Shared by the tournament's own top-level bracket/Swiss above and,
+     * for Grid Draft's "Pods with playoffs" option (issue #91
+     * follow-up), each pod's own mini bracket inside renderTournamentPods()
+     * below -- identical rendering either way, just a different round
+     * list and a different way of finding each round's own matches (the
+     * top-level bracket looks them up from GET /tournaments/state's own
+     * matches_by_round map; a pod's own bracket_rounds already carry
+     * their matches inline -- see TournamentService::podsSummary()'s own
+     * docblock).
+     */
+    function renderBracketRounds(container, rounds, getMatchesForRound, participantsById) {
+        container.innerHTML = '';
+        for (const round of rounds) {
+            const heading = document.createElement('h4');
+            heading.textContent = `${TOURNAMENT_BRACKET_LABELS[round.bracket] || round.bracket} ${round.round_number}`;
+            container.appendChild(heading);
+
+            const list = document.createElement('ul');
+            for (const match of getMatchesForRound(round) || []) {
+                const item = document.createElement('li');
+                item.append(tournamentMatchLabel(match, participantsById) + ' ');
+                if (match.game_id && (match.status === 'in_progress' || match.status === 'completed')) {
+                    const goToGameButton = document.createElement('button');
+                    goToGameButton.type = 'button';
+                    goToGameButton.textContent = match.status === 'in_progress' ? 'Go to game' : 'View game';
+                    goToGameButton.addEventListener('click', () => {
+                        tournamentViewDialog.close();
+                        tournamentsDialog.close();
+                        showBoard(match.game_id);
+                    });
+                    item.appendChild(goToGameButton);
+                }
+                list.appendChild(item);
+            }
+            container.appendChild(list);
+        }
+    }
+
+    document.getElementById('tournament-view-refresh-button').addEventListener('click', refreshTournamentView);
+
+    document.getElementById('tournament-view-start-button').addEventListener('click', async () => {
+        tournamentViewError.hidden = true;
+        const { ok, body } = await startTournament(currentTournamentViewId);
+        if (!ok) {
+            tournamentViewError.textContent = body.message || 'Could not start this tournament.';
+            tournamentViewError.hidden = false;
+            return;
+        }
+        await refreshTournamentView();
+    });
+
+    document.getElementById('tournament-view-cancel-button').addEventListener('click', async () => {
+        tournamentViewError.hidden = true;
+        const { ok, body } = await cancelTournament(currentTournamentViewId);
+        if (!ok) {
+            tournamentViewError.textContent = body.message || 'Could not cancel this tournament.';
+            tournamentViewError.hidden = false;
+            return;
+        }
+        await refreshTournamentView();
+        await loadTournamentsDialog();
+    });
+
+    document.getElementById('tournament-view-close-button').addEventListener('click', () => {
+        tournamentViewDialog.close();
+    });
+
+    // -- Booster Draft's own pod-drafting board (issue #91 follow-up) --
+
+    const podDraftDialog = document.getElementById('pod-draft-dialog');
+    const podDraftError = document.getElementById('pod-draft-error');
+    let podDraftTournamentId = null;
+    let podDraftPollTimer = null;
+
+    function renderPodDraftBoosterColumn(direction, cards) {
+        const container = document.getElementById(`pod-draft-${direction}-cards`);
+        const emptyMessage = document.getElementById(`pod-draft-${direction}-empty`);
+        container.innerHTML = '';
+        emptyMessage.hidden = cards !== null;
+        if (cards === null) {
+            return;
+        }
+        for (const card of cards) {
+            container.appendChild(buildCardThumb(card, {
+                onClick: async () => {
+                    podDraftError.hidden = true;
+                    const { ok, body } = await pickPodDraftCard(podDraftTournamentId, direction, card.card_id);
+                    if (!ok) {
+                        podDraftError.textContent = body.message || 'Could not pick that card.';
+                        podDraftError.hidden = false;
+                        return;
+                    }
+                    await refreshPodDraftState();
+                },
+            }));
+        }
+    }
+
+    async function refreshPodDraftState() {
+        if (podDraftTournamentId === null) {
+            return;
+        }
+        const { ok, body } = await getPodDraftState(podDraftTournamentId);
+        if (!ok) {
+            podDraftError.textContent = body.message || 'Could not load your pod.';
+            podDraftError.hidden = false;
+            return;
+        }
+
+        document.getElementById('pod-draft-progress').textContent = body.pod_status === 'completed'
+            ? 'Drafting complete'
+            : `Round ${body.current_round} of ${body.total_rounds}`;
+        renderPodDraftBoosterColumn('left', body.left);
+        renderPodDraftBoosterColumn('right', body.right);
+
+        const poolContainer = document.getElementById('pod-draft-pool-cards');
+        poolContainer.innerHTML = '';
+        for (const card of body.drafted_cards) {
+            poolContainer.appendChild(buildCardThumb(card));
+        }
+        document.getElementById('pod-draft-pool-count').textContent = body.drafted_cards.length;
+        document.getElementById('pod-draft-done-message').hidden = body.pod_status !== 'completed';
+
+        if (body.pod_status === 'completed' && podDraftPollTimer) {
+            clearInterval(podDraftPollTimer);
+            podDraftPollTimer = null;
+        }
+    }
+
+    async function openPodDraftDialog(tournamentId) {
+        podDraftTournamentId = tournamentId;
+        podDraftError.hidden = true;
+        podDraftDialog.showModal();
+        await refreshPodDraftState();
+        if (podDraftPollTimer) {
+            clearInterval(podDraftPollTimer);
+        }
+        // Other seats' own picks (not just the viewer's) advance the
+        // pod's shared round, so this polls even while the viewer isn't
+        // clicking anything themselves -- same rationale showBoard()'s
+        // own pollTimer already follows for an opponent's turn.
+        podDraftPollTimer = setInterval(refreshPodDraftState, 4000);
+    }
+
+    document.getElementById('pod-draft-close-button').addEventListener('click', () => {
+        if (podDraftPollTimer) {
+            clearInterval(podDraftPollTimer);
+            podDraftPollTimer = null;
+        }
+        podDraftDialog.close();
+    });
+
     // Weekly Sealed Pool's own queue/standings dialog (issue #520) -- see
     // WeeklySealedPoolQueueService's own docblock for why this is a
     // separate FIFO auto-pairing queue rather than another open-lobby
@@ -4169,6 +5384,31 @@
         // itself unchecked whenever hidden, so reading .checked
         // unconditionally here already reflects that.
         const diagnosticMode = document.getElementById('new-game-diagnostic-mode').checked;
+        // Issue #85's own turn/decision timeout opt-in -- see
+        // updateTimeoutFieldVisibility() for when the checkbox itself is
+        // shown; #new-game-timeout-enabled is itself unchecked whenever
+        // hidden, so reading .checked unconditionally here already
+        // reflects that. timeoutMinutes/timeoutAction are only sent at
+        // all once the checkbox is actually checked -- undefined (rather
+        // than the select's own always-present default value) so the
+        // request cleanly omits both when timeouts aren't wanted, the
+        // same "undefined means don't send this at all" convention every
+        // other optional field on this form already follows.
+        const timeoutEnabled = document.getElementById('new-game-timeout-enabled').checked;
+        const timeoutMinutes = timeoutEnabled ? Number(document.getElementById('new-game-timeout-minutes').value) : undefined;
+        const timeoutAction = timeoutEnabled ? document.getElementById('new-game-timeout-action').value : undefined;
+        // Issue #85 follow-up's own full-game time-limit mode -- same
+        // "undefined means don't send this at all" convention as
+        // timeoutMinutes/timeoutAction above; fully independent of them.
+        const totalTimeLimitEnabled = document.getElementById('new-game-total-time-limit-enabled').checked;
+        const totalTimeLimitMinutes = totalTimeLimitEnabled ? Number(document.getElementById('new-game-total-time-limit-minutes').value) : undefined;
+        // Reported live: "synchronous" mode -- mutually exclusive with
+        // timeoutEnabled/totalTimeLimitEnabled above (enforced both by
+        // the checkboxes' own mutual exclusivity and, ultimately,
+        // createGame()'s own validation). undefined (not false) when
+        // unchecked, same "don't send this at all" convention as every
+        // other optional field on this form.
+        const synchronousMode = document.getElementById('new-game-synchronous-enabled').checked ? true : undefined;
 
         // Issue #116: post to the open lobby instead of creating the game
         // directly -- mirrors createGame()'s own params (see above) minus
@@ -4205,6 +5445,10 @@
                 // lobby silently did nothing.
                 best_of_three: bestOfThree,
                 allow_sideboarding: allowSideboarding,
+                timeout_minutes: timeoutMinutes,
+                timeout_action: timeoutAction,
+                total_time_limit_minutes: totalTimeLimitMinutes,
+                synchronous_mode: synchronousMode,
             });
 
             if (!ok) {
@@ -4249,6 +5493,10 @@
             allowSideboarding,
             diagnosticMode,
             botDecklists,
+            timeoutMinutes,
+            timeoutAction,
+            totalTimeLimitMinutes,
+            synchronousMode,
         );
 
         if (!ok) {
@@ -4695,6 +5943,21 @@
             blissColorEl.hidden = false;
         } else {
             blissColorEl.hidden = true;
+        }
+
+        // wonder_colors only exists on an in-play Wonder card (see
+        // GameService::getState()'s in_play mapping) -- reads as
+        // undefined/empty for every other card, so this stays hidden the
+        // rest of the time. A list (not just one color) since Duplicity
+        // can repeat Wonder's own color choice, each repeat contributing
+        // its own color on top of the earlier one(s).
+        const wonderColorsEl = document.getElementById('card-detail-wonder-colors');
+        if (card.wonder_colors && card.wonder_colors.length > 0) {
+            wonderColorsEl.textContent = 'Chosen color' + (card.wonder_colors.length > 1 ? 's' : '') +
+                ': ' + card.wonder_colors.join(', ');
+            wonderColorsEl.hidden = false;
+        } else {
+            wonderColorsEl.hidden = true;
         }
 
         // has_unused_play_grant only exists (and is only ever true) on an
@@ -5805,11 +7068,38 @@
         onTurn: '<polygon points="7,4 20,12 7,20"/>',
         // A delayed decision response awaiting this player: an hourglass.
         pendingDecision: '<polygon points="6,3 18,3 12,11"/><polygon points="6,21 18,21 12,13"/>',
+        // Issue #85 follow-up's own full-game time-limit mode: a plain
+        // clock face -- outline circle plus two hands, all stroke-based
+        // rather than filled (the same outline technique presenceHidden
+        // below already uses to override the inherited `fill:
+        // currentColor`), so it reads as a distinct "clock" shape rather
+        // than another solid dot/blob among the filled icons above.
+        timeUsed: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/>'
+            + '<path d="M12 7 V12 L16 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
+        // Issue #85 follow-up's own "indicator for action timeout if it's
+        // close" -- a plain alarm bell, deliberately a different SILHOUETTE
+        // from both timeUsed's clock face just above (that one's the
+        // optional full-game time budget, always shown once configured)
+        // and pendingDecision's hourglass below (a delayed CHOICE awaiting
+        // an answer, not a countdown to an automatic one) -- distinct
+        // shapes so a row showing more than one of these at once still
+        // reads as three different things at a glance, not the same icon
+        // recolored three ways.
+        actionTimeoutWarning: '<path d="M12 2a1 1 0 0 1 1 1v.6c3.4.9 5.8 4 5.8 7.6v3.4l1.7 2.6a1 1 0 0 1-.84 1.55H4.34a1 1 0 0 1-.84-1.55l1.7-2.6V11.2c0-3.6 2.4-6.7 5.8-7.6V3a1 1 0 0 1 1-1Z"/>'
+            + '<path d="M9.2 20.2a2.8 2.8 0 0 0 5.6 0Z"/>',
         // Team affiliation (Open/Closed Team Play only, player.team_id !==
-        // null): a plain heraldic shield -- color (not shape) is what
-        // actually distinguishes "your own team" from "the opposing team",
-        // see .player-flag--teamMate/--teamOpponent in style.css.
+        // null): a heraldic shield, reported live as hard to distinguish
+        // for colorblind users when the two teams were told apart by color
+        // alone (green/red). Now BOTH color and shape carry the meaning
+        // (WCAG 1.4.1): "team" below is solid-filled for "your own team",
+        // while "teamOpponent" is the same shield outline hollowed out
+        // (fill="none", stroke instead -- same trick as presenceHidden's
+        // outline eye above) for "the opposing team" -- see
+        // .player-flag--teamMate/--teamOpponent in style.css for the
+        // accompanying blue/red recolor.
         team: '<path d="M12 2 L20 5 V11 C20 16 16.5 20 12 22 C7.5 20 4 16 4 11 V5 Z"/>',
+        teamOpponent: '<path d="M12 2 L20 5 V11 C20 16 16.5 20 12 22 C7.5 20 4 16 4 11 V5 Z" '
+            + 'fill="none" stroke="currentColor" stroke-width="2"/>',
         // Shared with friends (issue #92 follow-up): two overlapping people,
         // replacing what used to be a plain "shared with friends" text
         // clause next to a saved deck's name.
@@ -5852,9 +7142,9 @@
     // `role="img"` tells assistive tech to treat the whole span as a single
     // image-with-text-alternative rather than trying to read its
     // (redundant, aria-hidden) SVG and badge separately.
-    function buildPlayerStat(kind, value, label) {
+    function buildPlayerStat(kind, value, label, extraClass) {
         const wrapper = document.createElement('span');
-        wrapper.className = 'player-stat player-stat--' + kind;
+        wrapper.className = 'player-stat player-stat--' + kind + (extraClass ? ' ' + extraClass : '');
         wrapper.title = label;
         wrapper.setAttribute('role', 'img');
         wrapper.setAttribute('aria-label', label);
@@ -5987,6 +7277,143 @@
         }
     }
 
+    // Issue #85's own turn/decision timeout action labels -- mirrors
+    // #new-game-timeout-action's own option text in web-static/game/index.html,
+    // just phrased for a board title's parenthetical rather than a
+    // dropdown option.
+    const TIMEOUT_ACTION_LABELS = {
+        auto_play: 'auto-play',
+        skip: 'skip',
+        resign: 'resign',
+    };
+
+    // Mirrors #new-game-timeout-minutes'/#new-game-total-time-limit-minutes'
+    // own option labels -- see games.timeout_minutes'/total_time_limit_minutes'
+    // own docblocks for why each is always one of its own exact preset
+    // ladder, never an arbitrary number, so a plain lookup (falling back
+    // to "N-minute" for anything unexpected) covers every legal value of
+    // either. 240/480 (4/8 hours) are total_time_limit_minutes-only;
+    // every other entry is shared between the two ladders.
+    const TIMEOUT_DURATION_LABELS = {
+        30: '30-minute',
+        60: '1-hour',
+        120: '2-hour',
+        240: '4-hour',
+        360: '6-hour',
+        480: '8-hour',
+        720: '12-hour',
+        1440: '1-day',
+        2880: '2-day',
+        4320: '3-day',
+        10080: '7-day',
+    };
+
+    function timeoutDurationLabel(minutes) {
+        return TIMEOUT_DURATION_LABELS[minutes] || (minutes + '-minute');
+    }
+
+    // Issue #85 follow-up's own full-game time-limit mode -- "3h 12m" for
+    // the tooltip/aria-label (full precision, minutes dropped once there
+    // are none to show, e.g. a clean "2h"), reused by
+    // buildPlayerTimeUsedStat() below.
+    function formatDurationLong(totalSeconds) {
+        const totalMinutes = Math.floor(totalSeconds / 60);
+        const hours = Math.floor(totalMinutes / 60);
+        const minutes = totalMinutes % 60;
+        if (hours === 0) {
+            return minutes + 'm';
+        }
+        return hours + 'h' + (minutes > 0 ? ' ' + minutes + 'm' : '');
+    }
+
+    // The same duration, rounded down to a whole hour, for the small
+    // circular badge itself -- "3h 12m" doesn't fit that space the way
+    // every other stat's plain 1-2 digit count does, so the badge shows
+    // this compact form and the tooltip/aria-label (buildPlayerTimeUsedStat()
+    // below) carries the full formatDurationLong() precision instead, the
+    // same "badge is the compact value, title/aria-label is the full
+    // detail" split buildPlayerStat() itself already establishes.
+    function formatDurationCompact(totalSeconds) {
+        const hours = Math.floor(totalSeconds / 3600);
+        return hours === 0 ? '<1h' : hours + 'h';
+    }
+
+    // Chess-clock-style time-used indicator (reported live: "did you add
+    // any indicators ... how much time you've spent total on the game?
+    // Kind of like a chess clock display") -- only ever built once the
+    // game has actually opted into the full-game time-limit mode (see
+    // renderBoard()'s own call site), so $totalTimeLimitMinutes is never
+    // null here. Escalates color the same way the lobby's own awaiting-
+    // response styling and went-first pennant already do elsewhere on
+    // this page (--color-info -> --color-pending -> --color-error) as
+    // $activeSecondsUsed approaches the limit, rather than a plain
+    // always-blue stat that gives no visual warning before a player is
+    // suddenly auto-resigned. Deliberately a plain fraction-of-limit
+    // threshold rather than trying to project forward the way the
+    // backend's own applyTotalTimeLimitIfExceeded() sweep does -- this
+    // only ever reflects $activeSecondsUsed as of the board's last
+    // refresh (no client-side ticking), so a bar that's still comfortably
+    // under 75%/90% here can still legitimately jump past the limit
+    // between refreshes if that player's own turn runs very long; the
+    // point is an early warning, not a live countdown.
+    function buildPlayerTimeUsedStat(activeSecondsUsed, totalTimeLimitMinutes) {
+        const limitSeconds = totalTimeLimitMinutes * 60;
+        const fraction = activeSecondsUsed / limitSeconds;
+        const severityClass = fraction >= 0.9 ? 'player-stat--timeUsed-danger'
+            : fraction >= 0.75 ? 'player-stat--timeUsed-warning'
+                : null;
+        const label = formatDurationLong(activeSecondsUsed) + ' used of a ' + (totalTimeLimitMinutes / 60) + '-hour total time limit';
+
+        return buildPlayerStat('timeUsed', formatDurationCompact(activeSecondsUsed), label, severityClass);
+    }
+
+    // Synchronous mode's own match-wide chess clock (increment 4,
+    // reported live: "each player has a total 30 minutes for a match...
+    // if the user goes over the 30 minute allotment, they automatically
+    // lose"). Reuses buildPlayerTimeUsedStat()'s own icon/severity-escalation
+    // shape against player.active_seconds_used -- the exact same field
+    // total_time_limit_minutes' own stat reads, just fed a fixed 30-minute
+    // cap (SYNCHRONOUS_MATCH_TIME_LIMIT_MINUTES, mirroring
+    // GameService::SYNCHRONOUS_MATCH_TIME_LIMIT_MINUTES exactly) instead
+    // of a per-game configurable one -- the two stats are mutually
+    // exclusive on any one board the same way the settings themselves
+    // are (see renderBoard()'s own call site). Unlike
+    // formatDurationCompact()'s hour-rounded badge (built for the async
+    // feature's multi-hour scale), a 30-minute cap never reaches a whole
+    // hour, so formatDurationLong()'s own "12m" form is already compact
+    // enough for the badge itself here.
+    const SYNCHRONOUS_MATCH_TIME_LIMIT_MINUTES = 30;
+
+    function buildPlayerSynchronousMatchClockStat(activeSecondsUsed) {
+        const limitSeconds = SYNCHRONOUS_MATCH_TIME_LIMIT_MINUTES * 60;
+        const fraction = activeSecondsUsed / limitSeconds;
+        const severityClass = fraction >= 0.9 ? 'player-stat--timeUsed-danger'
+            : fraction >= 0.75 ? 'player-stat--timeUsed-warning'
+                : null;
+        const label = formatDurationLong(activeSecondsUsed) + ' used of a ' + SYNCHRONOUS_MATCH_TIME_LIMIT_MINUTES + '-minute match clock';
+
+        return buildPlayerStat('timeUsed', formatDurationLong(activeSecondsUsed), label, severityClass);
+    }
+
+    // Issue #85 follow-up: "add some kind of indicator for action timeout
+    // if it's close (like within 15 minutes)" -- $secondsRemaining only
+    // ever arrives here already inside that 15-minute window (see
+    // state.game.action_timeout_warning/buildActionTimeoutWarning() on the
+    // backend), so this is purely a display formatter, not another
+    // threshold check. Escalates to --color-error under 5 minutes left,
+    // the same --color-pending -> --color-error severity language
+    // buildPlayerTimeUsedStat() just above already established, just with
+    // only one step (there's no "comfortable" state to render here at all
+    // -- if this is showing, it's already a warning).
+    function buildActionTimeoutWarningStat(secondsRemaining) {
+        const minutes = Math.floor(secondsRemaining / 60);
+        const badge = minutes < 1 ? '<1m' : minutes + 'm';
+        const label = (minutes < 1 ? 'Less than a minute' : 'About ' + minutes + ' minute(s)') + ' left before this turn times out.';
+        const severityClass = secondsRemaining <= 300 ? 'player-stat--actionTimeoutWarning-danger' : null;
+
+        return buildPlayerStat('actionTimeoutWarning', badge, label, severityClass);
+    }
+
     function renderBoard(state) {
         // A custom decklist's own name (or "Uploaded Deck" if none was
         // specified) replaces "<deck type> deck" entirely here, rather than
@@ -6018,9 +7445,29 @@
         // row's own indicator (buildGameRow()) so it's visible once a
         // player has actually opened the board too, not just from the
         // lobby list.
+        // Issue #85's own turn/decision timeouts -- shown the same
+        // parenthetical way, so a player who wasn't the one who created
+        // the game still knows an idle turn/response won't just sit
+        // forever, and roughly how it'll be resolved if it does.
+        const timeoutDescription = state.game.timeout_minutes !== null
+            ? ', ' + timeoutDurationLabel(state.game.timeout_minutes) + ' timeout (' + TIMEOUT_ACTION_LABELS[state.game.timeout_action] + ')'
+            : '';
+        // Issue #85 follow-up's own full-game time-limit mode -- same
+        // parenthetical treatment, independent of timeoutDescription
+        // above (a game may have either, both, or neither).
+        const totalTimeLimitDescription = state.game.total_time_limit_minutes !== null
+            ? ', ' + timeoutDurationLabel(state.game.total_time_limit_minutes) + ' total time limit'
+            : '';
+        // Reported live: "synchronous" mode -- mutually exclusive with
+        // both descriptions above (a game has one of the three, never a
+        // combination -- see createGame()'s own validation).
+        const synchronousDescription = state.game.synchronous_mode ? ', synchronous' : '';
         document.getElementById('board-title').textContent =
             'Game #' + state.game.id + ' (' + formatAndDeckDescription +
-            (state.game.default_selections_mode ? ', default selections' : '') + ')';
+            (state.game.default_selections_mode ? ', default selections' : '') +
+            totalTimeLimitDescription +
+            timeoutDescription +
+            synchronousDescription + ')';
 
         // Spectator mode (issue #128)/Watch game replay (issue #240) --
         // only a real seated player can mint/share this game's own code,
@@ -6215,28 +7662,32 @@
                 // name in the Players list.
                 const isThinking = Boolean(state.bot_thinking) && state.bot_thinking.game_player_id === player.game_player_id;
                 iconsEl.appendChild(buildPresenceFlag(player.username, player.presence, isThinking));
-                // Team affiliation (Open/Closed Team Play only) -- color,
-                // not the team NUMBER, is what actually matters to the
-                // viewer at a glance: green for their own team (including
-                // their own row), red for the opposing team. This icon is
-                // the ONLY place that information appears now (there used
-                // to also be a plain "— Team N (your teammate)" text tag
-                // on the row itself) -- its title/aria-label (see
-                // buildPlayerFlag()) carries the exact same wording that
-                // text tag used to, so a screen reader (or a sighted user
-                // hovering for a reminder) still gets the full "Team N"/
-                // "your teammate" information, just via the icon instead
-                // of separate on-row text. Skipped entirely for a
-                // spectator/replay viewer (viewerTeamId === null there,
-                // since they have no team of their own) -- coloring every
-                // row red for someone with no "own team" to contrast
-                // against would just be misleading, not informative.
+                // Team affiliation (Open/Closed Team Play only) -- color
+                // AND shape, not the team NUMBER, are what actually matter
+                // to the viewer at a glance: blue solid shield for their
+                // own team (including their own row), red hollow shield
+                // for the opposing team (reported live as hard to tell
+                // apart by color alone for colorblind users -- see
+                // PLAYER_STAT_ICON_PATHS.team/.teamOpponent's own comment).
+                // This icon is the ONLY place that information appears now
+                // (there used to also be a plain "— Team N (your
+                // teammate)" text tag on the row itself) -- its
+                // title/aria-label (see buildPlayerFlag()) carries the
+                // exact same wording that text tag used to, so a screen
+                // reader (or a sighted user hovering for a reminder) still
+                // gets the full "Team N"/"your teammate" information, just
+                // via the icon instead of separate on-row text. Skipped
+                // entirely for a spectator/replay viewer (viewerTeamId ===
+                // null there, since they have no team of their own) --
+                // marking every row as "the opposing team" for someone
+                // with no "own team" to contrast against would just be
+                // misleading, not informative.
                 if (player.team_id !== null && viewerTeamId !== null) {
                     const isSameTeamAsViewer = player.team_id === viewerTeamId;
                     const teamIconLabel = 'Team ' + (player.team_id + 1) +
                         (isTeammate ? ' (your teammate)' : '');
                     iconsEl.appendChild(buildPlayerFlag(
-                        'team',
+                        isSameTeamAsViewer ? 'team' : 'teamOpponent',
                         teamIconLabel,
                         isSameTeamAsViewer ? 'player-flag--teamMate' : 'player-flag--teamOpponent'
                     ));
@@ -6249,6 +7700,33 @@
                 iconsEl.appendChild(buildPlayerStat('points', player.total_score, player.total_score + ' point(s)'));
                 iconsEl.appendChild(buildPlayerStat('wins', player.total_wins, player.total_wins + ' win(s)'));
                 iconsEl.appendChild(buildPlayerStat('hand', player.hand_count, player.hand_count + ' card(s) in hand'));
+                // Issue #85 follow-up's own full-game time-limit mode --
+                // only rendered at all once the game actually opted in
+                // (state.game.total_time_limit_minutes), same "harmless
+                // no-op outside its own narrow scope" treatment every
+                // other conditional icon on this row already follows.
+                // Chess-clock-style: reported live, "did you add any
+                // indicators ... how much time you've spent total on the
+                // game? Kind of like a chess clock display."
+                if (state.game.total_time_limit_minutes !== null) {
+                    iconsEl.appendChild(buildPlayerTimeUsedStat(player.active_seconds_used, state.game.total_time_limit_minutes));
+                } else if (state.game.synchronous_mode) {
+                    // Synchronous mode's own match-wide chess clock
+                    // (increment 4) -- mutually exclusive with
+                    // total_time_limit_minutes above, same as the
+                    // settings themselves.
+                    iconsEl.appendChild(buildPlayerSynchronousMatchClockStat(player.active_seconds_used));
+                }
+                // Issue #85 follow-up's own action-timeout warning --
+                // state.game.action_timeout_warning is null except on
+                // whichever single row is both currently idle and within
+                // 15 minutes of its own timeout_minutes clock firing (see
+                // buildActionTimeoutWarning() on the backend), so this
+                // never needs its own "is it this player's turn" check
+                // here -- the game_player_id match already is one.
+                if (state.game.action_timeout_warning !== null && state.game.action_timeout_warning.game_player_id === player.game_player_id) {
+                    iconsEl.appendChild(buildActionTimeoutWarningStat(state.game.action_timeout_warning.seconds_remaining));
+                }
                 if (wentFirst) {
                     iconsEl.appendChild(buildPlayerFlag('wentFirst', 'Went first this round'));
                 }
@@ -6304,6 +7782,7 @@
         renderTeamScores(state.teams, viewerTeamId);
 
         if (state.game.status === 'waiting') {
+            stopSynchronousActionTimer();
             inProgressArea.hidden = true;
             // #recent-events-details now lives outside #in-progress-area
             // (moved below #resign-button/#view-chat-button/
@@ -6325,6 +7804,7 @@
 
             if (state.game.deck_type === 'custom_duel') {
                 document.getElementById('board-round-status').textContent = 'Waiting for the game to start.';
+                document.getElementById('ready-check-panel').hidden = true;
                 document.getElementById('quick-draft-panel').hidden = true;
                 document.getElementById('winston-draft-panel').hidden = true;
                 document.getElementById('grid-draft-panel').hidden = true;
@@ -6333,7 +7813,26 @@
                 document.getElementById('draft-deck-building').hidden = true;
                 renderDuelDeckSubmission(state);
                 autoStartGameIfReady(state.players.every((p) => p.deck_submitted));
+            } else if (DRAFT_DECK_TYPES.includes(state.game.deck_type) && state.game.synchronous_mode && !state.players.every((p) => p.ready)) {
+                // Synchronous mode's own ready check gates drafting
+                // itself, not just the eventual hand deal (increment 3,
+                // reported live) -- the server hasn't even dealt this
+                // match's first round/pile/pool yet (see
+                // GameService::markReady()'s own docblock), so there's
+                // no state.quick_draft/winston_draft/etc. to read at all
+                // until every seat clicks Ready.
+                document.getElementById('quick-draft-panel').hidden = true;
+                document.getElementById('winston-draft-panel').hidden = true;
+                document.getElementById('grid-draft-panel').hidden = true;
+                document.getElementById('rotisserie-draft-panel').hidden = true;
+                document.getElementById('tiered-rotisserie-draft-panel').hidden = true;
+                document.getElementById('draft-deck-building').hidden = true;
+                document.getElementById('duel-deck-submission').hidden = true;
+                document.getElementById('board-round-status').textContent = '';
+                renderReadyCheckPanel(state);
+                autoStartGameIfReady(false);
             } else if (DRAFT_DECK_TYPES.includes(state.game.deck_type)) {
+                document.getElementById('ready-check-panel').hidden = true;
                 document.getElementById('duel-deck-submission').hidden = true;
                 const draftState = state.game.deck_type === 'quick_draft' || state.game.deck_type === 'chaos_draft' ? state.quick_draft
                     : state.game.deck_type === 'winston_draft' ? state.winston_draft
@@ -6344,6 +7843,26 @@
                 document.getElementById('board-round-status').textContent =
                     draftState.status === 'drafting' ? 'Drafting your deck.' : 'Building your deck.';
                 renderDraftPanel(state);
+                // Synchronous mode's own draft-pick timer (increment 3)
+                // -- same live countdown the in-progress branch further
+                // down wires from action_deadline_at/
+                // action_deadline_game_player_id, just driven from
+                // draft_pick_deadline_at/draft_pick_deadline_usernames
+                // instead (both null/empty once drafting finishes -- see
+                // GameService::buildGameState()'s own docblock -- so this
+                // naturally stops itself once deck-building begins).
+                if (state.game.synchronous_mode && state.game.draft_pick_deadline_at !== null && state.game.draft_pick_deadline_usernames.length > 0) {
+                    synchronousDeadlineInfo = {
+                        deadlineAtMs: parseUtcTimestamp(state.game.draft_pick_deadline_at).getTime(),
+                        username: state.game.draft_pick_deadline_usernames.join(' & '),
+                    };
+                    tickSynchronousActionTimer();
+                    if (synchronousActionTimerInterval === null) {
+                        synchronousActionTimerInterval = setInterval(tickSynchronousActionTimer, 1000);
+                    }
+                } else {
+                    stopSynchronousActionTimer();
+                }
                 // other_players (issue #189) covers every OTHER seated
                 // player -- for a 3-4 player Quick Draft match,
                 // opponent_submitted alone only reflects the first of them,
@@ -6359,7 +7878,6 @@
                     && everyOtherDeckSubmitted
                 );
             } else {
-                document.getElementById('board-round-status').textContent = 'Waiting for the game to start.';
                 document.getElementById('duel-deck-submission').hidden = true;
                 document.getElementById('quick-draft-panel').hidden = true;
                 document.getElementById('winston-draft-panel').hidden = true;
@@ -6367,12 +7885,21 @@
                 document.getElementById('rotisserie-draft-panel').hidden = true;
                 document.getElementById('tiered-rotisserie-draft-panel').hidden = true;
                 document.getElementById('draft-deck-building').hidden = true;
-                autoStartGameIfReady(true);
+                if (state.game.synchronous_mode) {
+                    document.getElementById('board-round-status').textContent = '';
+                    renderReadyCheckPanel(state);
+                    autoStartGameIfReady(state.players.every((p) => p.ready));
+                } else {
+                    document.getElementById('board-round-status').textContent = 'Waiting for the game to start.';
+                    document.getElementById('ready-check-panel').hidden = true;
+                    autoStartGameIfReady(true);
+                }
             }
 
             return;
         }
 
+        document.getElementById('ready-check-panel').hidden = true;
         document.getElementById('duel-deck-submission').hidden = true;
         document.getElementById('quick-draft-panel').hidden = true;
         document.getElementById('winston-draft-panel').hidden = true;
@@ -6440,6 +7967,45 @@
             } else {
                 boardRoundStatusEl.textContent = 'Round ' + state.round.round_number + turnSuffix;
             }
+        }
+
+        // Synchronous mode's own live action timer -- see
+        // tickSynchronousActionTimer()'s own docblock. Started/refreshed
+        // here on every poll; stopped (and hidden) the moment there's
+        // nobody currently on the clock (game.status !== 'in_progress'
+        // is impossible to reach this far down renderBoard(), so the
+        // only real "nothing to show" case here is a non-synchronous
+        // game or a null action_deadline_at/action_deadline_game_player_id),
+        // OR the player on the clock still has a banked timeout extension
+        // left (reported live: showing a countdown is misleading/needless
+        // anxiety while a timeout would just silently consume a banked
+        // extension and reset for another 30 seconds -- see
+        // enforceSynchronousActionDeadline()'s own extension-consumption
+        // branch on the backend). Falls back to showing it if the
+        // on-the-clock player can't be resolved at all, same "safer to
+        // show than to hide" default `onTheClock ? ... : 'Someone'` below
+        // already follows for the label itself.
+        if (
+            state.game.status === 'in_progress'
+            && state.game.synchronous_mode
+            && state.game.action_deadline_at !== null
+            && state.game.action_deadline_game_player_id !== null
+        ) {
+            const onTheClock = state.players.find((p) => p.game_player_id === state.game.action_deadline_game_player_id);
+            if (!onTheClock || onTheClock.timeout_extensions_banked === 0) {
+                synchronousDeadlineInfo = {
+                    deadlineAtMs: parseUtcTimestamp(state.game.action_deadline_at).getTime(),
+                    username: onTheClock ? onTheClock.username : 'Someone',
+                };
+                tickSynchronousActionTimer();
+                if (synchronousActionTimerInterval === null) {
+                    synchronousActionTimerInterval = setInterval(tickSynchronousActionTimer, 1000);
+                }
+            } else {
+                stopSynchronousActionTimer();
+            }
+        } else {
+            stopSynchronousActionTimer();
         }
 
         // "Pause at the start of your turn" (reported live) -- only ever
@@ -6623,15 +8189,17 @@
             const li = document.createElement('li');
             const memberNames = team.game_player_ids.map(playerLabelFor).join(' & ');
             const teamLabel = 'Team ' + (team.team_id + 1) + ' (' + memberNames + ')';
-            // No color-coding at all (left at .player-flag's own default
-            // muted gray) when there's no viewer team to compare
-            // against -- coloring both teams red for a spectator would
-            // be misleading, not informative, same reasoning the
+            // No color-coding (or shape distinction) at all -- left at the
+            // solid shield in .player-flag's own default muted gray --
+            // when there's no viewer team to compare against: marking
+            // every other team as "the opposing team" for a spectator
+            // would be misleading, not informative, same reasoning the
             // Players-list icon already follows.
             const extraClass = viewerTeamId === null
                 ? null
                 : (team.team_id === viewerTeamId ? 'player-flag--teamMate' : 'player-flag--teamOpponent');
-            li.appendChild(buildPlayerFlag('team', teamLabel, extraClass));
+            const iconKind = viewerTeamId !== null && team.team_id !== viewerTeamId ? 'teamOpponent' : 'team';
+            li.appendChild(buildPlayerFlag(iconKind, teamLabel, extraClass));
             li.append(' — ' + team.total_score + ' point(s) this round, ' + team.total_wins + ' round win(s)');
             return li;
         });
@@ -7198,6 +8766,14 @@
     // the way.
     function canRematch(state) {
         if (isReadOnlyView() || user.id !== state.game.created_by_user_id) {
+            return false;
+        }
+        // Reported live: no Rematch for a tournament match -- the
+        // bracket already decides who plays whom next, so offering an
+        // unrelated ad hoc rematch against the same opponent(s) right
+        // here would just be confusing (see GameService::buildGameState()'s
+        // own docblock for how this is computed).
+        if (state.game.is_tournament_match) {
             return false;
         }
         if (state.game.status !== 'completed') {
@@ -8473,6 +10049,86 @@
         }
     }
 
+    // Every *_deadline_at timestamp this page reads (action_deadline_at,
+    // draft_pick_deadline_at) comes from the server as a bare
+    // "YYYY-MM-DD HH:MM:SS" string (MySQL's own TIMESTAMP format, always
+    // UTC here -- Connection::get() pins the MySQL session's time_zone to
+    // '+00:00' and PHP's own default timezone to UTC, and GameService
+    // writes these deadlines with gmdate()) with no zone marker at all.
+    // `new Date(...)` on a space-separated
+    // datetime string like that is NOT one of the ECMAScript-specified
+    // formats, so browsers are free to guess -- and every major engine
+    // guesses the VIEWER's own local timezone, not UTC. Reported live:
+    // a player whose browser is ahead of UTC saw a freshly-issued
+    // deadline read as already hours in the past, so the countdown
+    // showed "0s" from the very moment it appeared (never fixing itself
+    // on a later poll, since every subsequent deadline gets misread the
+    // exact same way). Splicing in an explicit 'T'/'Z' turns it into a
+    // real ISO 8601 UTC string first, which every engine parses
+    // unambiguously the same way regardless of the viewer's own
+    // timezone.
+    function parseUtcTimestamp(mysqlTimestamp) {
+        return new Date(mysqlTimestamp.replace(' ', 'T') + 'Z');
+    }
+
+    // Synchronous mode's own live 30-second action timer (reported live:
+    // "which should be visible in the game display") -- purely a
+    // display refresh, computed from synchronousDeadlineInfo (last set
+    // by renderBoard() from the server's own action_deadline_at) against
+    // the current time; never itself decides anything expired -- that's
+    // enforceSynchronousActionDeadline()'s own job server-side, on the
+    // next ~4-second poll. Escalates to a danger style under 10 seconds
+    // remaining, the same "getting close" severity language the
+    // async action-timeout warning icon already uses elsewhere on this
+    // page.
+    function tickSynchronousActionTimer() {
+        const el = document.getElementById('synchronous-action-timer');
+        if (!synchronousDeadlineInfo) {
+            el.hidden = true;
+            return;
+        }
+
+        const secondsRemaining = Math.max(0, Math.ceil((synchronousDeadlineInfo.deadlineAtMs - Date.now()) / 1000));
+        el.hidden = false;
+        el.textContent = synchronousDeadlineInfo.username + "'s action timer: " + secondsRemaining + 's';
+        el.className = secondsRemaining <= 10 ? 'synchronous-action-timer--danger' : '';
+    }
+
+    function stopSynchronousActionTimer() {
+        if (synchronousActionTimerInterval !== null) {
+            clearInterval(synchronousActionTimerInterval);
+            synchronousActionTimerInterval = null;
+        }
+        synchronousDeadlineInfo = null;
+        document.getElementById('synchronous-action-timer').hidden = true;
+    }
+
+    // Synchronous mode's own pre-game ready check (reported live) --
+    // lists each seat's own ready/not-ready status and, if the viewer
+    // hasn't clicked Ready yet, the button to do so. Mirrors
+    // renderDuelDeckSubmission()'s own "never lets you re-submit once
+    // you already have" treatment: #ready-check-button hides itself the
+    // moment the viewer's own row reads ready, the same way that
+    // function's submission form disappears once deck_submitted is
+    // true. Start game itself stays hidden/gated until every seat is
+    // ready -- see renderBoard()'s own caller (autoStartGameIfReady()).
+    function renderReadyCheckPanel(state) {
+        const panel = document.getElementById('ready-check-panel');
+        panel.hidden = false;
+
+        const list = document.getElementById('ready-check-status');
+        list.innerHTML = '';
+        for (const player of state.players) {
+            const item = document.createElement('li');
+            item.textContent = player.username + ': ' + (player.ready ? 'Ready' : 'Not ready yet');
+            list.appendChild(item);
+        }
+
+        const you = state.players.find((p) => p.game_player_id === state.you.game_player_id);
+        const button = document.getElementById('ready-check-button');
+        button.hidden = !you || you.ready;
+    }
+
     // The 'custom_duel' waiting-room view: shows the creator's own locked-
     // in deck-building rules, both players' submission status (never the
     // decklist contents themselves -- see deck_submitted's own docblock in
@@ -8742,6 +10398,21 @@
         selectedCard = null;
         choicesPanel.hidden = true;
         announceOutcome(body);
+        await refreshBoard();
+    });
+
+    // Synchronous mode's own ready check (reported live) -- idempotent
+    // server-side (see GameService::markReady()), so no confirmation
+    // dialog the way resigning gets; the button itself hides once the
+    // viewer's own row reads ready (see renderReadyCheckPanel()).
+    document.getElementById('ready-check-button').addEventListener('click', async () => {
+        boardError.hidden = true;
+        const { ok, body } = await markReady(currentGameId);
+        if (!ok) {
+            boardError.textContent = body.message || 'Could not confirm ready.';
+            boardError.hidden = false;
+            return;
+        }
         await refreshBoard();
     });
 
@@ -9468,8 +11139,17 @@
             return;
         }
 
+        // optional_if_no_targets (CardChoiceSchema.php's own docblock,
+        // reported live: "Players should be able to play Regret even if
+        // there are no legal targets... Similarly with Guile") -- a
+        // mandatory target that's genuinely impossible to fill (no legal
+        // candidates at all, per this same fieldOptions() every dropdown
+        // it renders already uses) shouldn't gate the Play button; the
+        // effect just fizzles server-side instead. A field with any legal
+        // candidate at all stays exactly as mandatory as before.
         const allRequiredFilled = selectedCard.choice_fields
             .filter((field) => field.required)
+            .filter((field) => !(field.optional_if_no_targets && fieldOptions(field, selectedCard).length === 0))
             .every((field) => fieldHasValue(document.getElementById('choice-field-' + field.key), field));
 
         let firstError = null;

@@ -115,7 +115,16 @@ use MoodSwings\Rules\RoundScorer;
  * as Pacifism above, whenever angerTargetMoodIds() itself comes back
  * empty -- Anger's own printed value is 0, so with nothing to discard
  * it's just a worthless opening play, not worth leading with the way a
- * genuinely swing-maximizing target set would be; and sneakinessTargetPlayerId()/
+ * genuinely swing-maximizing target set would be; and isWorthPlaying()
+ * once more for Anger too (reported live, from an actual game log: a
+ * bot played out its whole hand down to Anger as its only remaining
+ * card, used a granted extra play on it with zero opponent moods in
+ * play to target, and gained nothing for it) -- the same stronger
+ * skip-entirely-and-pass treatment Pacifism gets below, rather than the
+ * weaker "still played as a last resort" sortPriorityValue() deprioritization
+ * alone, since a 0-value card played for literally no effect has
+ * nothing to gain over simply waiting for a real target on some later
+ * turn; and sneakinessTargetPlayerId()/
  * isWorthPlaying() once more (confirmed by the maintainer), which vetoes
  * Sneakiness outright (the same treatment Fury/Avoidance get above)
  * unless either a non-teammate opponent's own current round score is
@@ -489,7 +498,7 @@ final class BotPlayerService
 
         foreach ($playableCardIds as $cardId) {
             $effectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
-            if (!$this->isWorthPlaying($state, $effectKey, $botGamePlayerId)) {
+            if (!$this->isWorthPlaying($state, $effectKey, $cardId, $botGamePlayerId)) {
                 continue;
             }
 
@@ -522,30 +531,36 @@ final class BotPlayerService
      * Fury's veto does; and for Pacifism (reported live: "I still have
      * bots occasionally playing Pacifism with no target in the first
      * turn of the game - there is no reason to do that, it would be
-     * better to pass and wait for a target"), which gets this method's
-     * stronger "skip it entirely, fall through to the next candidate or
-     * an outright pass" treatment -- unlike sortPriorityValue()'s own
+     * better to pass and wait for a target") and Anger (reported live,
+     * from an actual game log: a bot played out every other card in hand,
+     * then used a granted extra play on Anger with zero opponent moods in
+     * play to target, gaining nothing -- "it would have been better to
+     * pass and hold onto Anger to use in a subsequent round when it
+     * *could* create a point swing"), which get this method's stronger
+     * "skip it entirely, fall through to the next candidate or an
+     * outright pass" treatment -- unlike sortPriorityValue()'s own
      * PHP_INT_MIN `hasGoodReasonToPlayNow()` veto elsewhere in this class
      * (Rationalization/Denial/Rejection/Shock and others -- "deprioritized
      * WHEN, never skipped outright," still played as an eventual last
-     * resort), a genuinely wasted Pacifism has nothing to gain from that
-     * fallback and a real cost to it: scoring only happens at round end,
-     * so passing and simply playing Pacifism on a LATER turn instead
-     * banks the exact same printed value with no penalty for the delay,
-     * while playing it now with no target PERMANENTLY forfeits this
-     * instance's own "put an opponent's mood back in their hand" ability
-     * for the rest of the round, for no compensating benefit. Keyed by
-     * effect key; everything not listed here is always
-     * worth playing (the default, unconditional "yes" every other
-     * effect already got before this method existed).
+     * resort), a genuinely wasted Pacifism/Anger has nothing to gain from
+     * that fallback and a real cost to it: scoring only happens at round
+     * end, so passing and simply playing the card on a LATER turn instead
+     * banks the exact same printed value (0, for Anger) with no penalty
+     * for the delay, while playing it now with no target PERMANENTLY
+     * forfeits this instance's own after-playing ability for the rest of
+     * the round, for no compensating benefit. Keyed by effect key;
+     * everything not listed here is always worth playing (the default,
+     * unconditional "yes" every other effect already got before this
+     * method existed).
      */
-    private function isWorthPlaying(BoardState $state, string $effectKey, int $botGamePlayerId): bool
+    private function isWorthPlaying(BoardState $state, string $effectKey, int $cardId, int $botGamePlayerId): bool
     {
         return match ($effectKey) {
             'fury' => $this->furyIsWorthPlaying($state, $botGamePlayerId),
             'avoidance' => $this->avoidanceHasAGoodReasonToPlay($state, $botGamePlayerId),
             'sneakiness' => $this->sneakinessTargetPlayerId($state, $botGamePlayerId) !== null,
             'pacifism' => $this->pacifismTargetMoodIds($state, $botGamePlayerId) !== [],
+            'anger' => $this->angerTargetMoodIds($state, $cardId, $botGamePlayerId) !== [],
             default => true,
         };
     }
@@ -3861,7 +3876,7 @@ final class BotPlayerService
             return $significantSwingTargetMoodIds;
         }
 
-        return $this->denialReplayTargetMoodIds($state, $botGamePlayerId) ?? [];
+        return $this->denialReplayTargetMoodIds($state, $cardId, $botGamePlayerId) ?? [];
     }
 
     /**
@@ -4038,13 +4053,30 @@ final class BotPlayerService
      * denialWinningTargetMoodIds()'s own identical convention only by
      * which caller consults it.
      *
+     * $cardId (Denial's own currently-resolving instance) is excluded
+     * from both the initial candidate pool and bestDenialReplayPartner()'s
+     * own partner search below -- Denial's printed text targets "two
+     * OTHER moods" (DenialEffect's own `$targetCardId === $cardId` guard
+     * rejects it outright), but by the time this runs $cardId is already
+     * among the bot's own in-play moods (see resolveAfterPlayingChain()'s
+     * own docblock), and -- at printed value 1 with its own
+     * hasAfterPlaying ability -- happens to satisfy
+     * qualifiesForDenialReplay() itself. A bug caught live: normally some
+     * other opponent pair already satisfies priority 1/2 first, but once
+     * this priority is actually reached with few candidates left (e.g. a
+     * Duplicity-granted repeat of this same Denial, immediately after its
+     * own first resolution already returned the only qualifying opponent
+     * moods to hand), Denial ended up choosing itself as one of its own
+     * two targets, which DenialEffect then rejected as an
+     * InvalidChoiceException.
+     *
      * @return ?int[]
      */
-    private function denialReplayTargetMoodIds(BoardState $state, int $botGamePlayerId): ?array
+    private function denialReplayTargetMoodIds(BoardState $state, int $cardId, int $botGamePlayerId): ?array
     {
         $replayCandidateIds = [];
         foreach ($state->moodsOwnedBy($botGamePlayerId) as $mood) {
-            if ($this->qualifiesForDenialReplay($state, $mood->cardId)) {
+            if ($mood->cardId !== $cardId && $this->qualifiesForDenialReplay($state, $mood->cardId)) {
                 $replayCandidateIds[] = $mood->cardId;
             }
         }
@@ -4054,7 +4086,7 @@ final class BotPlayerService
         }
 
         foreach ($replayCandidateIds as $candidateId) {
-            $partnerId = $this->bestDenialReplayPartner($state, $botGamePlayerId, $candidateId);
+            $partnerId = $this->bestDenialReplayPartner($state, $cardId, $botGamePlayerId, $candidateId);
             if ($partnerId !== null) {
                 return [$candidateId, $partnerId];
             }
@@ -4080,8 +4112,15 @@ final class BotPlayerService
      * more it's worth knocking back to their hand) over any other one of
      * the bot's own moods, so the "filler" second target never costs the
      * bot a second good card just to enable one cheap replay.
+     *
+     * $cardId (Denial's own currently-resolving instance, excluded from
+     * denialReplayTargetMoodIds()'s own $forCardId candidates already --
+     * see that method's docblock) is excluded here too: without this, a
+     * DIFFERENT cheap own mood searching for a partner could still land
+     * on Denial itself as its own "fallback own mood" pick, the same
+     * illegal self-target DenialEffect rejects.
      */
-    private function bestDenialReplayPartner(BoardState $state, int $botGamePlayerId, int $forCardId): ?int
+    private function bestDenialReplayPartner(BoardState $state, int $cardId, int $botGamePlayerId, int $forCardId): ?int
     {
         $bestOpponentId = null;
         $bestOpponentValue = -1;
@@ -4089,7 +4128,7 @@ final class BotPlayerService
 
         foreach ($state->moodsInPlay() as $mood) {
             $candidateId = $mood->cardId;
-            if ($candidateId === $forCardId || !$this->sameColorOrValue($state, $forCardId, $candidateId)) {
+            if ($candidateId === $forCardId || $candidateId === $cardId || !$this->sameColorOrValue($state, $forCardId, $candidateId)) {
                 continue;
             }
 

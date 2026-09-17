@@ -1,0 +1,13 @@
+-- Reported live, three related tournament-display/cleanup requests:
+-- (1) hide cancelled tournaments from the main "Your tournaments" list,
+-- tucked into a collapsible section instead; (2) show the winner on the
+-- tournaments display for a completed tournament
+-- (TournamentRepository::listForUser()'s own new winner_username field);
+-- (3) clean up tournaments a week after being cancelled/completed,
+-- folded into the existing game/match cleanup cron
+-- (TournamentService::deleteStaleTournaments(), migration 0348's own
+-- cancelled_at column).
+--
+-- No further schema change here -- just the version bump
+-- MaintenanceGate needs to see this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.50.10' WHERE id = 1;

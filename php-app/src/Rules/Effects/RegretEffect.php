@@ -48,6 +48,17 @@ final class RegretEffect extends AbstractMoodEffect
 
     public function afterPlaying(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices): void
     {
+        // Mandatory ("put an opponent's mood into your hand," no "you
+        // may"), but nothing to choose from is a legitimate outcome (e.g.
+        // no opponent has any mood in play yet) that shouldn't block
+        // playing Regret at all -- see CardChoiceSchema's own
+        // optional_if_no_targets docblock. Fizzles with no effect, same as
+        // MaliceEffect's own optional target_player_id already does when
+        // null.
+        if (!$choices->has('target_mood_id')) {
+            return;
+        }
+
         $targetCardId = $choices->requireInt('target_mood_id');
         if (!$state->isInPlay($targetCardId)) {
             throw new InvalidChoiceException("Card {$targetCardId} is not in play");

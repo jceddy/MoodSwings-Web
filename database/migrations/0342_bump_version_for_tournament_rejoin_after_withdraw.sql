@@ -1,0 +1,12 @@
+-- joinOpenTournament() now allows rejoining an open-registration
+-- tournament after withdrawing from it, room permitting -- a
+-- 'withdrawn' participant row (and only that status) no longer blocks
+-- a fresh join, reusing the existing row via updateStatus() rather than
+-- inserting a second one (uq_tournament_participants_user would reject
+-- that outright). listOpenFor() no longer excludes a tournament just
+-- because the viewer has a 'withdrawn' row on it, so it reappears under
+-- "Open to join" instead of being stuck invisible in both lists.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.50.5' WHERE id = 1;

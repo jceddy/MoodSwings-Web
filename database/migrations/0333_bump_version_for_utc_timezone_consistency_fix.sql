@@ -1,0 +1,27 @@
+-- Reported live on dev: a synchronous-mode match's action/draft-pick
+-- countdown could show "0s" the instant it should have started (e.g.
+-- immediately after both Sealed Deck players submitted their decks),
+-- even after the earlier client-side parseUtcTimestamp() fix (see
+-- migration 0330's own follow-up) made the browser treat every
+-- *_deadline_at string as UTC. That fix alone assumes the string it's
+-- given IS true UTC -- but two upstream layers could each independently
+-- disagree with that assumption:
+--
+-- 1. MySQL: TIMESTAMP columns convert to/from storage using the
+--    session's own `time_zone` on every read/write. Connection::get()
+--    never set one, so it defaulted to 'SYSTEM' -- silently following
+--    the host OS's local zone rather than UTC.
+-- 2. PHP: GameService's own deadline writes used date('Y-m-d H:i:s', ...),
+--    which formats using PHP's configured date.timezone rather than UTC.
+--
+-- Connection::get() now issues `SET time_zone = '+00:00'` on every
+-- connection and forces date_default_timezone_set('UTC') as its own
+-- earliest side effect, and GameService's three deadline writes
+-- (resetSynchronousActionDeadline(), enforceSynchronousActionDeadline(),
+-- resetSynchronousDraftPickDeadlineIfNeeded()) now use gmdate() instead
+-- of date(). Together with the browser fix, all three layers -- MySQL,
+-- PHP, and the browser -- are now unambiguously UTC.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.46.1' WHERE id = 1;

@@ -1524,7 +1524,758 @@ capability); opening the builder on an existing owned deck
 `sideboard_cards` back in, the same way it already did for the main
 deck's `cards`.
 
-## Pages
+### Turn and decision timeouts (issue #85)
+
+`#new-game-timeout-enabled-label` (a checkbox right after the deck-type
+description) opts a game into automatically resolving an idle turn or
+pending decision -- see "Turn and decision timeouts" in
+`php-app/README.md` for the full backend writeup (`games.timeout_minutes`/
+`timeout_action`, migration 0324, `bin/apply_game_timeouts.php`). Checking
+it reveals `#new-game-timeout-fields`: a duration `<select>`
+(`#new-game-timeout-minutes`, a fixed preset ladder from 30 minutes to 7
+days -- never an arbitrary typed number, so there's no way to
+accidentally request something below the backend's own 30-minute floor)
+and an action `<select>` (`#new-game-timeout-action`: "Automatically
+play a move for them" / "Skip their turn/response" / "Resign them from
+the game/match", values `auto_play`/`skip`/`resign`), plus a plain-text
+note that the sweep only runs every 15 minutes, so an idle turn may take
+a little longer than the chosen duration to actually resolve.
+
+`updateTimeoutFieldVisibility()` (wired to the same format/deck-type
+`change` events `updateDeckTypeAvailability()` already listens to, plus
+the checkbox's own `change`, and run from both branches of
+`updateDeckTypeAvailability()` itself so switching TO or AWAY FROM
+Sealed Pool of the Day takes effect immediately even though setting
+`<select>.value` programmatically fires no `change` event of its own)
+hides (and unchecks) the whole feature for `sealed_pool_of_the_day`/
+`weekly_sealed_pool` -- `TIMEOUT_EXCLUDED_DECK_TYPES`, kept deck-type-generic
+rather than hardcoding just the one reachable through this dialog,
+matching `createGame()`'s own `PERIODIC_SEALED_POOL_DECK_TYPES`-keyed
+exclusion exactly (`weekly_sealed_pool` never actually appears in
+`#new-game-deck-type`'s own option list at all -- that format is only
+ever entered through `WeeklySealedPoolQueueService`'s own separate
+queue/pairing flow, never this dialog). The sub-fields
+(`#new-game-timeout-fields`) stay hidden whenever the checkbox itself is
+either unchecked or not shown at all.
+
+Checking the box sends `timeout_minutes`/`timeout_action` (both
+`undefined`, so omitted from the request body entirely, whenever the
+checkbox is unchecked) to `POST /games` (`createGame()`'s own two new
+trailing parameters, both here and in `app.js`'s own wrapper) or `POST
+/open-games` (`postOpenGame()`), threaded through `create_game_params`
+to `MatchmakingService::joinOpenGame()`'s own eventual `createGame()`
+call once the roster fills -- the same "post to the open lobby" support
+`best_of_three`/`allow_sideboarding` already have.
+
+**Board display** -- `renderBoard()`'s own title line appends a third
+parenthetical, right after "default selections" (`state.game.timeout_minutes`/
+`timeout_action`, surfaced by `getState()` specifically so every seated
+player, not just whoever created the game, can see it's active): e.g.
+"Game #42 (Traditional, Structure deck, 6-hour timeout (resign))".
+`TIMEOUT_DURATION_LABELS`/`TIMEOUT_ACTION_LABELS` mirror the New Game
+dialog's own option text, just phrased for a title's parenthetical
+rather than a dropdown option. A `timeout_applied` game-log event
+(`describeEvent()`, `php-app/README.md`'s own writeup) needs no
+special-casing here at all -- like every other event type, the log view
+just displays whatever plain-text description the backend already
+rendered.
+
+**Follow-up: full-game time-limit mode** -- a second, independent
+checkbox, `#new-game-total-time-limit-enabled-label` (right after the
+per-turn timeout's own `#new-game-timeout-fields`), reveals
+`#new-game-total-time-limit-fields`: a single duration `<select>`
+(`#new-game-total-time-limit-minutes`, 1 to 72 hours -- `TOTAL_TIME_LIMIT_MIN_MINUTES`/
+`MAX_MINUTES` in `php-app/README.md`) with its own `24 hours` option
+marked `selected` by default (see `createGame()`'s own
+`$totalTimeLimitMinutes` docblock for why 24h -- reported live as a
+sensible default), and a plain-text note that this is a hard cap
+separate from the idle time-out above, also checked at most every 15
+minutes. `updateTotalTimeLimitFieldVisibility()` mirrors
+`updateTimeoutFieldVisibility()` exactly (same `TIMEOUT_EXCLUDED_DECK_TYPES`
+list, same wiring into both branches of `updateDeckTypeAvailability()`,
+same "unchecked, not just hidden, whenever it goes out of view"
+treatment) -- the two opt-ins are fully independent, so a game may have
+either, both, or neither. Checking it sends `total_time_limit_minutes`
+(`undefined` when unchecked, so omitted from the request entirely) to
+`POST /games`/`POST /open-games`, the same "post to the open lobby"
+support the per-turn timeout already has.
+
+`renderBoard()`'s own title line gets a FOURTH parenthetical for this
+one, independent of the per-turn timeout's own third (`state.game.total_time_limit_minutes`):
+e.g. "Game #42 (Traditional, Structure deck, 24-hour total time limit)".
+`TIMEOUT_DURATION_LABELS` is shared between both parentheticals (4/8
+hours -- 240/480 minutes -- are the only two entries that exist purely
+for this dropdown's own preset ladder; every other entry is shared with
+the per-turn timeout's own).
+
+**Chess-clock indicator** (reported live: "did you add any indicators on
+the displays like ... how much time you've spent total on the game?
+Kind of like a chess clock display") -- each seated player's own
+accumulated "clock" time (`game_players.active_seconds_used`,
+`php-app/README.md`'s own `touchLastMoveAt()` writeup for exactly how
+it's credited, included on `getState()`'s own `players[].active_seconds_used`)
+gets its own icon+badge stat in the Players list, `buildPlayerTimeUsedStat()`
+-- a plain clock face (`PLAYER_STAT_ICON_PATHS.timeUsed`, an outline
+circle plus two hands, the same stroke-only technique `presenceHidden`
+already uses to override the inherited `fill: currentColor`, so it reads
+as a distinct clock shape rather than another filled blob). Rendered
+right after the hand-count stat, but ONLY once `state.game.total_time_limit_minutes`
+is actually set -- the same "harmless no-op outside its own narrow
+scope" treatment every other conditional icon on this row already
+follows, so a game with only the ordinary per-turn timeout (or neither
+opt-in) shows no clock icon at all.
+
+The badge itself is deliberately compact -- `formatDurationCompact()`
+rounds down to a whole hour ("3h", or "<1h" under one) rather than
+trying to fit "3h 12m" into the same small circle every other stat's
+plain 1-2 digit count already uses -- with `formatDurationLong()`'s full
+minute-level precision ("3h 12m") carried in the tooltip/aria-label
+instead, the same "badge is the compact value, title/aria-label is the
+full detail" split `buildPlayerStat()` itself already establishes for
+points/wins/hand-count.
+
+**Color escalates as a player approaches their own limit** --
+`buildPlayerTimeUsedStat()` computes `active_seconds_used / (total_time_limit_minutes * 60)`
+and adds a modifier class once that fraction crosses a threshold:
+`--color-info` (blue, the default, `.player-stat--timeUsed`) under 75%,
+`--color-pending` (amber, `.player-stat--timeUsed-warning`) from 75% up
+to 90%, `--color-error` (red, `.player-stat--timeUsed-danger`) at 90%
+and above -- the same severity escalation the lobby's own
+awaiting-response styling and the went-first pennant already use
+elsewhere on this page, so "getting close" and "basically out of time"
+read as familiar colors rather than a new color language invented just
+for this one stat. Deliberately a plain snapshot-of-last-refresh
+fraction, not a live countdown or a projection forward the way the
+backend's own `applyTotalTimeLimitIfExceeded()` sweep does (issue #85
+follow-up's own "refresh-only, no client-side ticking" decision) -- a
+still-blue icon can legitimately jump straight to being auto-resigned
+between two refreshes if that player's own turn runs very long; the
+point is an early warning at a glance, not a precise real-time clock.
+
+**Follow-up: action-timeout warning icon + notification preference**
+(reported live: "add some kind of indicator for action timeout if it's
+close (like within 15 minutes)... also send a notification if either the
+action timeout or full game chess clock timeout becomes less than 15
+minutes left") -- a second, DIFFERENT stat icon from the chess-clock one
+above: `state.game.action_timeout_warning`
+(`{"game_player_id", "seconds_remaining"} | null`, backed by
+`GameService::buildActionTimeoutWarning()`) is only ever non-null while
+someone's currently idle turn/decision under `timeout_minutes` has 15
+minutes or less left before it fires, so the frontend never needs its
+own "is this close" threshold check -- it just renders whenever the
+field isn't null, on whichever single Players-list row matches
+`game_player_id`.
+
+`buildActionTimeoutWarningStat()` builds it via the same
+`buildPlayerStat()` icon+badge convention as every other stat on this
+row, with its own icon (`PLAYER_STAT_ICON_PATHS.actionTimeoutWarning`, a
+plain alarm bell) deliberately a different SILHOUETTE from both
+`timeUsed`'s clock face just above it (the full-game time BUDGET,
+always shown once configured) and `pendingDecision`'s hourglass flag
+(a delayed CHOICE awaiting an answer, not a countdown to an automatic
+one) -- so a row showing more than one of these at once still reads as
+three different things at a glance, not the same icon recolored three
+ways. Badge text is whole minutes (`"12m"`, `"<1m"` under one), with the
+full "About N minute(s) left before this turn times out."/"Less than a
+minute left..." wording in the tooltip/aria-label. Unlike the chess-clock
+stat, there's no "comfortable" default color here -- `.player-stat--actionTimeoutWarning`
+(amber, `--color-pending`) is the base state (since this icon only ever
+appears once it's already a warning), escalating to
+`.player-stat--actionTimeoutWarning-danger` (red, `--color-error`) under
+5 minutes remaining.
+
+**Notification preference**: a new `#notify-timeout-warning-checkbox` in
+the Settings dialog's "Notify me when..." fieldset ("A turn or full-game
+timeout is less than 15 minutes away"), wired exactly like the four
+existing `notify_*` checkboxes (`notify_timeout_warning`, migration 0327
+in `php-app/README.md`, defaults on) -- backs
+`NotificationService::notifyTimeoutWarning()`, sent from
+`GameService::sendTimeoutWarningIfClose()` (part of the same 15-minute
+`applyTimeoutsForAllActiveGames()` sweep the visual indicator's own data
+comes from) for either the per-turn timeout OR the full-game total-time
+limit crossing under 15 minutes remaining, whichever seated player it's
+actually about.
+
+### Synchronous mode (reported live)
+
+Gated behind a feature flag, off by default: neither `#new-game-synchronous-enabled-label`
+nor `#new-tournament-synchronous-enabled-label` (both described below)
+ever shows at all unless `GET /config/synchronous-mode-enabled` (backed
+by the `SYNCHRONOUS_MODE_ENABLED` repository variable, see "Synchronous
+mode" in `php-app/README.md`) says `enabled: true` -- fetched once, at
+page load (`getSynchronousModeEnabled()` in `app.js`, cached in a
+module-level `synchronousModeEnabled` flag game.js's own
+`updateSynchronousFieldVisibility()`/`updateNewTournamentSynchronousFieldVisibility()`
+both read synchronously rather than re-fetching on every dialog open or
+checkbox change). A UI-only gate -- nothing about how a synchronous
+game/match/tournament actually plays changes, or needs to; this purely
+controls whether either dialog offers the opt-in in the first place.
+
+`#new-game-synchronous-enabled-label` (right after the full-game
+time-limit checkbox) opts into a THIRD, mutually exclusive mode --
+checking it unchecks (and re-hides the sub-fields of) both async
+checkboxes above, and vice versa (`enforceSynchronousExclusivityFromSynchronousCheckbox()`/
+`enforceSynchronousExclusivityFromAsyncCheckboxes()`), matching
+`createGame()`'s own validation that a game never combines them. Shown
+(feature flag aside) for exactly 2 players in Traditional/Duel/Draft
+(`SYNCHRONOUS_MODE_ALLOWED_FORMATS`, mirroring `GameService::SYNCHRONOUS_MODE_ALLOWED_FORMATS`
+exactly -- Draft covers all five draft-family deck_types plus Sealed
+Deck/Sealed Pool of the Day/Weekly Sealed Pool) --
+`updateSynchronousFieldVisibility()` re-runs on every format/
+deck-type/opponent-checkbox change `updateBestOfThreeFieldVisibility()`
+already does, since "exactly 2 total players" depends on the same
+`currentNewGamePlayerCount()` that one already reads. The live
+30-second action timer and timeout-extension banking shipped as
+increment 2, Draft/Sealed Deck support (a 60-second-per-pick timer,
+plus the ready check gating drafting itself) as increment 3, and the
+match-wide 30-minute chess clock as increment 4 -- all three below.
+
+**Ready-check panel** (`#ready-check-panel`, shown in place of the
+ordinary "Waiting for the game to start" text once `state.game.status
+=== 'waiting'` for a `synchronous_mode` game) -- `renderReadyCheckPanel()`
+lists every seated player's own `players[].ready` flag and shows an "I'm
+ready" button (`#ready-check-button`) that calls `POST /games/ready`
+(`markReady()` in `app.js`), hiding itself the moment the viewer's own
+row reads ready (mirrors how `renderDuelDeckSubmission()`'s own
+submission form disappears once `deck_submitted` is true). No new
+push/polling infrastructure needed: the board's own existing 4-second
+`GET /games/state` poll (see "Browser push notifications"'s own presence
+docblock in `php-app/README.md`) is what notices every seat has readied
+up, at which point `renderBoard()` calls the same `autoStartGameIfReady()`
+every other "waiting" precondition on this page already uses (decklist
+submission, draft decks) -- just gated on `state.players.every((p) =>
+p.ready)` instead of that precondition's own check.
+
+The board title's own parenthetical gets a fourth, mutually-exclusive
+clause for this mode (`", synchronous"`), alongside the existing
+per-turn-timeout/total-time-limit descriptions.
+
+**Increment 2: the live action timer** (reported live: "which should be
+visible in the game display") -- `#synchronous-action-timer`, a plain
+countdown line ("Username's action timer: 12s") shown whenever
+`state.game.status === 'in_progress'` and `state.game.synchronous_mode`
+with a non-null `action_deadline_at`/`action_deadline_game_player_id`
+AND the player on the clock has no banked timeout extension left
+(reported live -- follow-up: showing a live countdown while a timeout
+would just silently consume a banked extension and reset for another 30
+seconds is misleading/needless anxiety, so `renderBoard()` now checks
+`onTheClock.timeout_extensions_banked === 0` before starting it, falling
+back to showing it if the on-the-clock player can't be resolved from
+`state.players` at all). Unlike every other "live" value on this page
+(deliberately refresh-only, no client-side ticking -- see the
+chess-clock indicator's own "Follow-up" writeup above), a 30-second
+window genuinely needs to visibly tick between the board's own
+~4-second polls, so `tickSynchronousActionTimer()` runs on its OWN
+separate 1-second `setInterval` (`synchronousActionTimerInterval`),
+purely recomputing "seconds remaining" from `Date.now()` against the
+last server-reported `action_deadline_at` (`synchronousDeadlineInfo`,
+refreshed by `renderBoard()` every poll) -- it never itself decides
+anything expired, that's still entirely server-side
+(`GameService::enforceSynchronousActionDeadline()`, called from the very
+same poll), so a client with a slow/paused tab can't game the timer by
+not ticking. Turns red under 10 seconds remaining
+(`.synchronous-action-timer--danger`), the same escalating-severity
+language the async action-timeout warning icon already established.
+`stopSynchronousActionTimer()` clears the interval and hides the line
+whenever there's nothing to show it for (a 'waiting' game -- the
+ready-check panel owns that state instead -- a banked extension still in
+hand, or leaving the board entirely via `showLobby()`).
+
+**Extensions-banked stat -- removed** (reported live: potentially
+confusing information sitting right next to the match-wide chess clock
+stat). `buildExtensionsBankedStat()`/`PLAYER_STAT_ICON_PATHS.extensionsBanked`/
+`.player-stat--extensionsBanked` are gone; `players[].timeout_extensions_banked`
+itself is unchanged on the wire (still exactly what the action timer's
+own gating above, and the backend's extension-consumption logic, read),
+just no longer rendered anywhere in the Players list.
+
+**Increment 3: Draft/Sealed Deck, and the ready check gating drafting
+itself** -- for a synchronous draft-family match, the board's own
+`'waiting'`-status branch (`DRAFT_DECK_TYPES.includes(state.game.deck_type)`)
+now checks `state.players.every((p) => p.ready)` FIRST, before ever
+touching `state.quick_draft`/`state.winston_draft`/etc.: the server
+hasn't dealt this match's first round/pile/pool at all until every seat
+clicks Ready (see `php-app/README.md`'s own `GameService::markReady()`
+writeup), so there's nothing for the usual draft panel
+(`renderDraftPanel()`) to read yet. While any seat is still unready, the
+exact same `renderReadyCheckPanel()`/`#ready-check-panel` an ordinary
+synchronous game shows takes over instead -- a synchronous draft match
+never shows its own drafting UI at all until both players are actually
+there.
+
+Once drafting begins, `#synchronous-action-timer` gets reused
+essentially unchanged for the 60-second pick timer: `renderBoard()`'s
+draft branch wires the same `tickSynchronousActionTimer()`/
+`synchronousDeadlineInfo` machinery increment 2 built, just fed from
+`state.game.draft_pick_deadline_at`/`draft_pick_deadline_usernames`
+instead of `action_deadline_at`/`action_deadline_game_player_id` --
+`draft_pick_deadline_usernames` can hold MORE than one name at once for
+Quick Draft/Chaos Draft's own simultaneous-per-stage picks (every seated
+player picks independently within a stage), joined with `" & "` for
+display (e.g. "alice & bob's action timer: 12s") rather than picking
+just one arbitrarily. Both fields go `null`/empty the moment drafting
+finishes, so the countdown naturally disappears again once deck-building
+begins (still untimed, same as an async draft) with no extra branching
+needed here.
+
+**Increment 4: the match-wide chess clock** (reported live: "each
+player has a total 30 minutes for a match... if the user goes over the
+30 minute allotment, they automatically lose") -- `buildPlayerSynchronousMatchClockStat()`
+reuses `buildPlayerTimeUsedStat()`'s own icon and severity-escalation
+shape (blue → amber past 75% → red past 90%) against
+`players[].active_seconds_used` -- the SAME field the async full-game
+time-limit mode's own stat already reads -- just against a fixed
+30-minute cap (`SYNCHRONOUS_MATCH_TIME_LIMIT_MINUTES`, mirroring
+`GameService::SYNCHRONOUS_MATCH_TIME_LIMIT_MINUTES` exactly) instead of
+a per-game configurable one. The two stats are mutually exclusive on any
+one board the same way the settings themselves are
+(`state.game.total_time_limit_minutes !== null` vs.
+`state.game.synchronous_mode`). Unlike `formatDurationCompact()`'s
+hour-rounded badge (built for the async feature's own multi-hour
+scale), a 30-minute cap never reaches a whole hour, so
+`formatDurationLong()`'s own "12m" form is already compact enough for
+the badge here -- no new formatter needed. Rendered in the same
+always-visible Players-list icon row as `hand_count`/the extensions-
+banked stat, so it's visible during deck-building/sideboarding (still
+untimed to interact with, but the elapsed time is quietly counting
+against the same 30-minute total) just as much as during actual
+gameplay.
+
+The New Game dialog's own `#new-game-synchronous-description` now
+mentions the chess clock explicitly, since opting in this way commits a
+player to a hard 30-minute budget they can't configure or turn off.
+
+### Tournaments (issue #91)
+
+A new "Tournaments" button (next to "Weekly Sealed Pool") opens
+`#tournaments-dialog` -- mirroring `#open-games-dialog`'s own
+available/waiting/mine three-section layout, plus a fourth
+"Invitations" section up top (`GET /tournaments?mine=1`, filtered to
+`my_participant_status === 'invited'`) for an invite-only tournament's
+own accept/decline step via `acceptTournamentInvite()`/
+`declineTournamentInvite()`; an open-registration tournament never puts
+a viewer in that status at all, so the section stays hidden for those.
+"Your tournaments" (the same response, filtered to exclude `invited`,
+`declined`, `withdrawn`, AND (reported live) `cancelled`) shows a View
+button (opens `#tournament-view-dialog`, see below) and, for a
+still-in-registration tournament the viewer joined but didn't create, a
+Withdraw button (`withdrawFromTournament()`). Excluding `withdrawn` here
+matters because this list only ever displays the *tournament's* own
+status (e.g. "Registration open"), never the viewer's own participant
+status -- without the exclusion, a withdrawn tournament looked visually
+identical to one you're still joined to, with the vanished Withdraw
+button the only (easy to miss) difference. Unlike `declined`,
+`withdrawn` isn't a dead end: `joinOpenTournament()`'s own
+`findForUser()` check lets a `withdrawn` row (and only that status)
+rejoin, room permitting, so a withdrawn-from tournament reappears in
+"Open to join" below instead of vanishing from both lists for good.
+
+**Cancelled tournaments** (reported live: hide these from the main
+list, in a collapsible element) live in their own `#tournaments-cancelled-section`
+-- a bare `<details>`/`<summary>` (unstyled, the same native
+collapsible widget `#recent-events-details` on the board already uses),
+collapsed by default and hidden entirely (not just an empty list) when
+`tournament.status === 'cancelled'` matches nothing. Its own
+`#tournaments-cancelled-list` uses the identical row shape "Your
+tournaments" does (`tournamentListItemLabel()`, extracted so both
+lists render a tournament exactly the same way) but only ever offers a
+View button -- there's nothing left to do with a cancelled tournament
+(no Withdraw/Edit deck action makes sense once it's cancelled).
+
+**Winner display** (reported live: show the winner on the tournaments
+display) -- `tournamentListItemLabel()` appends " (winner: `username`)"
+whenever `tournament.status === 'completed'` and `winner_username` is
+set (`TournamentRepository::listForUser()`'s own new field, see
+"Tournaments" in `php-app/README.md`) -- `null`/not `'completed'` simply
+adds nothing. In practice this only ever shows in "Your tournaments"
+(a tournament is `'cancelled'` or `'completed'`, never both, so the
+cancelled section's own rows never actually have a winner to show) --
+sharing `tournamentListItemLabel()` between both lists just means
+neither has to duplicate the status-label-plus-name formatting, not
+that both are expected to use every part of it.
+
+"Open to join" (`GET
+/tournaments`, no `?mine=1`) lists every open-registration tournament
+visible to the current user with a Join button
+(`joinTournament()`) -- same `matchmaking_discoverable`/blocked-pair
+gating `#open-games-dialog`'s own "Available to join" section already
+uses, since `TournamentService::listOpenFor()` is built the same way
+`OpenGameListingRepository::listOpenFor()` is (see "Tournaments" in
+`php-app/README.md`), plus one exception that gate doesn't have: a
+tournament you've withdrawn from stays visible here (it's excluded from
+"Your tournaments" instead) since rejoining is allowed, room permitting.
+
+**New tournament dialog** (`#new-tournament-dialog`, opened by its own
+button inside `#tournaments-dialog`) collects: a name; the bracket type
+(`#new-tournament-bracket-type` -- single elimination, double
+elimination, or Swiss rounds, with a Swiss-only round-count field,
+`updateNewTournamentSwissRoundCountVisibility()`, blank meaning "let the
+server pick" via `TournamentService`'s own `ceil(log2(n))` default --
+hidden and forced to Single elimination for Grid Draft's own "Pods with
+playoffs" option, see below); registration mode (the same "Invite
+friends"/open-lobby radio-pair shape `#new-game-mode-fields` uses); a
+minimum and maximum participant count (`#new-tournament-min-participants`/
+`#new-tournament-max-participants`, both always-visible required
+`<select>` lists of 4-16 populated by
+`populateNewTournamentParticipantRangeSelects()` -- every tournament,
+regardless of registration mode, is capped to that range for now, see
+"Tournaments" in `php-app/README.md`, so there's nothing outside it to
+type into a free-entry field anyway); and a deliberately curated subset
+of the New Game dialog's own match settings -- just a single format
+select (Power Duel/Traditional/Grid Draft/Sealed Deck/Booster Draft, no
+team formats, since a tournament match is always exactly 2 players --
+see `TournamentService::ALLOWED_FORMATS`). Every one of these five
+options is now its own fully-determined `format`/`deck_type`
+combination with nothing left to choose underneath it
+(`effectiveNewTournamentFormat()`/`effectiveNewTournamentDeckType()`
+compute both directly from the format select's value) -- no Best of
+Three checkbox, and no Allow Sideboarding checkbox visible by default;
+the dialog shows only what a given format actually still needs
+deciding; every match is always best-of-three (see below), and every
+`#new-game-deck-type` option other than these five is still reachable
+per match indirectly, e.g. Custom Decklist via each matchup's own normal
+decklist-submission flow, just not offered as a dedicated field here.
+Grid Draft is the one format with something left to choose underneath
+it -- see "Grid Draft 'Pods with playoffs'" below for its own second
+"Draft type" select. "Grid Draft" is `#new-tournament-format`'s own
+`draft` option relabeled -- Quick Draft was removed as a tournament
+choice entirely (it's still offered, unchanged, from the New Game
+dialog above). Sealed Deck is `#new-tournament-format`'s own UI-only
+option (mirroring `#new-game-format`'s identical
+`sealed_pool_of_the_day` sentinel, see `effectiveNewGameFormat()`) --
+`effectiveNewTournamentFormat()` resolves it to `format: 'draft'` on
+submit (`effectiveNewTournamentDeckType()` supplies its own fixed
+`deck_type: 'sealed_deck'` the same way), so it shows up as its own
+top-level choice rather than a deck picked after first choosing "Grid
+Draft" -- there's no drafting phase to speak of, so nesting it under
+that label would misname what it actually is, the exact same reasoning
+`openGameSummary()`'s own Sealed-Deck special case already documents.
+Submitting calls `createTournament()` with all of the above
+(`invite_user_ids` from the checked friend checkboxes) and closes the
+dialog on success, refreshing `#tournaments-dialog` underneath it.
+
+**Invite-only minimum invite count** -- since the creator auto-joins as
+one of `max_participants`' own seats the moment the tournament is created
+(`TournamentService::createTournament()` adds them as `'joined'` up
+front, before any invitees), the submit handler blocks submission
+client-side (`newTournamentError`, without ever calling `createTournament()`)
+whenever `registration_mode` is `invite_only` and fewer than
+`max_participants - 1` friend checkboxes are checked -- otherwise the
+tournament could never actually fill up to its own configured max. Open
+registration has no such check; anyone can still join up to the cap.
+
+Grid Draft always submits a fixed `'random_48'` pool source
+(`grid_draft_pool_source`) -- its own pool-source picker isn't offered
+here, matching every other draft-family field this dialog already
+leaves at a sensible fixed default rather than exposing. This isn't
+optional the way it looks: `GameService::createGame()` has no default of
+its own for an omitted pool source (it resolves to an empty string,
+which its pool-building `match` rejects with `Unknown pool source ""`),
+so leaving it out entirely -- as this dialog did before Grid Draft was
+added, since Quick Draft's own field was never wired up either -- meant
+a Draft-format tournament's own match could never actually start once
+fixed match settings actually got used against real opponents.
+
+**Best of Three (always on)** -- every tournament match is best-of-three
+now; there is no longer a checkbox for it. The submit handler sends
+`best_of_three: true` unconditionally, and `TournamentService::createTournament()`
+enforces the same thing server-side regardless of what a caller sends
+(see its own docblock in `php-app/README.md`), so this is a genuine
+contract rather than merely today's frontend default. It's a harmless
+no-op for the draft-family deck types (Grid Draft/Sealed Deck/Booster
+Draft), which already run their own best-of-three-at-2-players story via
+`GameService::draftGamesToWin()` -- see `createGame()`'s own
+`$bestOfThree` docblock.
+
+**Timing options** -- the New Tournament dialog now also offers the same
+three opt-ins the New Game dialog does, applied to every match the
+tournament ever plays rather than negotiated per game: the idle
+turn/response timeout (`#new-tournament-timeout-enabled`, its own
+duration/action sub-fields in `#new-tournament-timeout-fields`), the
+full-game total time limit (`#new-tournament-total-time-limit-enabled`,
+`#new-tournament-total-time-limit-fields`), and Synchronous mode
+(`#new-tournament-synchronous-enabled`). All three are format-independent
+here -- unlike the New Game dialog's own `updateTimeoutFieldVisibility()`/
+`updateTotalTimeLimitFieldVisibility()`/`updateSynchronousFieldVisibility()`,
+none of the three tournament-side equivalents
+(`updateNewTournamentTimeoutFieldVisibility()`/
+`updateNewTournamentTotalTimeLimitFieldVisibility()`/
+`updateNewTournamentSynchronousFieldVisibility()`) need a format/deck_type
+exclusion check, since neither of the New Game dialog's own exclusions
+ever applies to a tournament: the idle-timeout/total-time-limit pair is
+only ever excluded for Sealed Pool of the Day/Weekly Sealed Pool (never
+tournament formats at all -- `TournamentService::ALLOWED_FORMATS`), and
+Synchronous mode's own `GameService::SYNCHRONOUS_MODE_ALLOWED_FORMATS`
+(`standard`/`duel`/`draft`) plus its exactly-2-players requirement are
+both unconditionally true for every tournament match already (every
+`effectiveNewTournamentFormat()` value falls in that list, and a
+tournament match is always exactly 2 players by design).
+`updateNewTournamentSynchronousFieldVisibility()` does still gate on one
+thing regardless of format, though -- the same `synchronousModeEnabled`
+feature flag the New Game dialog's own checkbox reads (see this
+section's own opening paragraph above), hiding
+`#new-tournament-synchronous-enabled-label` entirely and
+force-unchecking the box whenever it's off. Synchronous mode stays
+mutually exclusive with the other two, enforced by the same
+three-way checkbox wiring (`enforceNewTournamentSynchronousExclusivityFromSynchronousCheckbox()`/
+`enforceNewTournamentSynchronousExclusivityFromAsyncCheckboxes()`) the
+New Game dialog uses. The submit handler sends all three with the same
+"undefined means don't send this at all" convention as the New Game
+dialog's own submit handler -- `openGameCreateParamsFromRequestBody()`
+(shared with `POST /open-games`) already extracted `timeout_minutes`/
+`timeout_action`/`total_time_limit_minutes`/`synchronous_mode` from the
+request body into `match_params` before this feature existed, and
+`TournamentService::startMatchGame()` already threaded all four through
+to every match's own `createGame()` call -- so this was a pure frontend
+gap, no backend change needed.
+
+**Power Duel** -- `#new-tournament-format`'s `duel` option, relabeled
+from the plain "Duel" it used to be: using custom decks is no longer a
+choice, it's simply what this format is, so
+`effectiveNewTournamentDeckType()` returns `deck_type: 'custom_duel'`
+outright for it (no second select involved at all) and the submit
+handler pairs it with `duel_deck_rules: {preset: 'power'}` unconditionally.
+The tournament dialog never exposes the full `user_defined` rule fields
+the New Game dialog offers for this same deck_type, only this one fixed
+preset. Selecting "Power Duel" reveals `#new-tournament-allow-sideboarding-label`
+(`updateNewTournamentAllowSideboardingVisibility()`, now simply keyed
+off the format select's value, since deck_type/best-of-three are no
+longer independent variables here) -- checking it sends
+`allow_sideboarding: true`, threaded through by
+`TournamentService::startMatchGame()`'s own `createGame()` call exactly
+like `best_of_three`. The tournaments list (`tournamentMatchSummary()`)
+shows this option as bare "Power Duel" rather than
+`NEW_GAME_DECK_TYPE_LABELS`'s own generic "Custom Decklists (Duel)"
+label, and without the "Duel – " prefix every other non-sentinel
+format/deck_type combination gets, the same "it's the only thing this
+format offers any more" reasoning Grid Draft's own label follows.
+
+**Join-time deck submission** (reported live: "the deck submission
+should happen when the player joins the tournament -- players use the
+same submitted deck for the entire tournament" -- see "Tournaments" in
+`php-app/README.md` for the full backend flow) -- selecting "Power
+Duel" also reveals `#new-tournament-decklist-fields`
+(`updateNewTournamentDecklistFieldVisibility()`), the creator's own
+deck: a "use a saved deck" `<select>` (`populateSavedDecklistSelect()`,
+the same helper the New Game dialog's own saved-decklist picker uses)
+falling back to an upload-a-file-or-paste-text pair when left on its
+default "Paste/upload a decklist instead" option, identical in shape to
+`#new-game-decklist-fields` (deck_type `'custom'`) even though the two
+are wired to completely different submit-time fields. The submit
+handler sends whichever of `decklist_text`/`saved_decklist_id` applies
+alongside everything else in the `createTournament()` body -- required
+server-side since `createTournament()`'s own auto-join for the creator
+now needs a decklist up front for any `custom_duel` tournament,
+validated before the tournament is even created.
+
+Everyone else's own join-time deck is collected by a second, shared
+dialog, `#tournament-deck-dialog` (`openTournamentDeckDialog()` in
+game.js) -- the exact same saved-deck-select-or-paste/upload shape as
+`#new-tournament-decklist-fields` above, just reused across three call
+sites instead of duplicated: clicking "Join" on an open Power Duel
+tournament (`#tournaments-open-list`) or "Accept" on a Power Duel
+invitation (`#tournaments-invitations-list`) opens this dialog instead
+of calling `joinTournament()`/`acceptTournamentInvite()` immediately,
+and only submits once a deck is entered (checked via
+`tournament.match_params.deck_type === 'custom_duel'` on the
+tournament object each list item already has); every other tournament
+type still joins/accepts immediately, unchanged. A joined Power Duel
+participant can also change their mind any time before the tournament
+starts -- "Your tournaments" shows an "Edit deck" button (alongside
+"View"/"Withdraw") for exactly that window
+(`tournament.status === 'registration'`), opening the same dialog one
+more time and calling the new `submitTournamentDeck()` helper
+(`POST /tournaments/submit-deck`) instead of joining/accepting.
+`openTournamentDeckDialog()` takes the actual API call to make
+(`onSubmit`) and what to refresh on success (`onSuccess`, always
+`loadTournamentsDialog()` here) as parameters rather than hard-coding
+either, so all three call sites share one dialog, one saved-decklist
+populate, and one error-display path.
+
+**Traditional's fixed Structure deck** -- `#new-tournament-format`'s
+`standard` option always implies `deck_type: 'structure'`
+(`effectiveNewTournamentDeckType()`'s own `default` case) -- there is no
+longer a Structure/Power/jceddy's 75/One of Each choice for Traditional
+tournaments. Unlike an ordinary non-tournament Traditional game (which
+gets a fresh random Structure deck every single game, including game 2/3
+of its own best-of-three match), a Traditional tournament generates its
+one Structure deck exactly once, server-side, at tournament-creation
+time, and every match's every game for the whole event deals from that
+identical pool -- see `TournamentService::createTournament()`'s own
+docblock and `GameService::generateStructureDeckCardIds()`/`createGame()`'s
+own `$fixedCustomDeckCardIds` param in `php-app/README.md` for how.
+
+**Booster Draft** (issue #91 follow-up) -- `#new-tournament-format`'s
+own `booster_draft` option, another UI-only sentinel alongside Sealed
+Deck's (`effectiveNewTournamentFormat()`/`effectiveNewTournamentDeckType()`
+resolve it to `format: 'duel'`/`deck_type: 'booster_draft'` on submit).
+Every joined participant first drafts a personal 30-card pool from real
+boosters (pack/pick/pass, up to 8 players per pod -- see "Booster Draft"
+in `php-app/README.md` for the full mechanic and schema), then the
+tournament's ordinary bracket/Swiss plays out using a deck built from
+that pool, always best-of-three like every other format now (see "Best
+of Three (always on)" above) since a Booster Draft match is an ordinary
+Duel underneath; the sideboarding checkbox never applies (its own
+visibility check only ever fires for the `duel` OPTION under Format,
+which this sentinel bypasses entirely) since Booster Draft's own
+"sideboard from your whole pool every round" story (below) already
+supersedes it.
+
+`#pod-draft-dialog` is the actual drafting board, opened via
+`#tournament-view-dialog`'s own "Continue drafting" button (shown by
+`renderTournamentPods()` whenever the viewer's own username appears in
+a still-`drafting` pod's own seats -- `GET /tournaments/state`'s own
+`pods` field, `null` for every non-Booster-Draft tournament) -- shows
+the viewer's own currently-available left/right boosters (`GET
+/tournaments/pod-draft/state`, hydrated card objects reused via the
+same `buildCardThumb()` every other card grid in the app already uses;
+`null` for a direction once picked for the round, rendered as a "Waiting
+on other players..." message instead of an empty grid) and their own
+drafted-so-far pool, growing toward 30. Clicking a card calls `POST
+/tournaments/pod-draft/pick`, then immediately re-fetches state; a
+`setInterval` poll (`podDraftPollTimer`, 4 seconds, the same cadence
+`showBoard()`'s own opponent-turn poll uses) keeps the dialog current
+even when it's some other seat's own pick that advances the shared
+round, stopped once the viewer's own pod reaches `'completed'`.
+
+Once a Booster Draft participant has a drafted pool at all,
+`#tournament-view-dialog` also shows it directly (`renderMyBoosterDraftDeck()`,
+`#tournament-view-my-pool-section`) -- a read-only textarea listing
+every drafted card as `"N Name (SET) NUMBER"` lines (`formatDecklistCardLines()`,
+the exact same decklist-text format the Decks dialog's own Edit/Download
+flows already produce), and, once they've submitted a deck for at least
+one match, a second textarea with their current one -- there to be
+copied into the in-game decklist submission box (`POST /games/decklist`,
+the same one every other `custom_duel` match already uses) when their
+next match's game is ready; the board itself has no special Booster
+Draft affordance of its own; the only extra behavior is `GameService`
+rejecting any submission that isn't actually drawn from that seat's own
+drafted pool. `GET /tournaments/state` only ever returns these two
+fields hydrated for the VIEWER's own participant row (every other row's
+are `null`, so an opponent's pool/deck is never visible ahead of playing
+them -- see `TournamentService::getState()`'s own docblock).
+
+**Grid Draft "Pod draft (once)" / "Pods with playoffs"** (issue #91
+follow-up) -- `#new-tournament-format`'s own `draft` option (Grid Draft)
+now shows a second select, `#new-tournament-grid-draft-mode`, right
+below it, with three options: "Fresh draft each match" (`grid_draft`,
+unchanged -- every bracket match is its own independent 2-player Grid
+Draft), "Pod draft (once)" (`grid_draft_pod`), and "Pods with playoffs"
+(`grid_draft_pod_playoff` -- `effectiveNewTournamentDeckType()`'s own
+`'draft'` case reads whichever this select is set to). Only shown while
+Grid Draft itself is the chosen format
+(`updateNewTournamentGridDraftModeVisibility()`, mirroring
+`updateNewTournamentAllowSideboardingVisibility()`'s own "only relevant
+for this one format" pattern) -- each option's own description
+paragraph (`GRID_DRAFT_MODE_DESCRIPTIONS`) explains the choice inline,
+the same "description text next to the select" convention the New Game
+dialog's own format/deck_type selects already use. Choosing "Pods with
+playoffs" also hides and forces `#new-tournament-bracket-type` to Single
+elimination (`#new-tournament-bracket-type-forced-description` explains
+why in its place) -- every pod's own bracket, and the final bracket
+among pod winners, are always single elimination regardless of what
+that field would otherwise say (`TournamentService::createTournament()`'s
+own docblock in `php-app/README.md`), so leaving it open to choose would
+just be misleading.
+
+`grid_draft_pod` mirrors Booster Draft's own structure above almost
+exactly -- participants split into pods (up to 4 this time, Grid
+Draft's own drafting cap, vs. Booster Draft's 8) that each draft a
+personal pool before the bracket starts, then the tournament's real
+matches mix players across pods freely, always best-of-three like every
+other format now, with the sideboarding checkbox never applicable for
+the same reason it doesn't apply to Booster Draft. The one real
+difference: a pod's own drafting happens through an ordinary Grid Draft
+game rather than a dedicated pod-draft dialog -- see below.
+`grid_draft_pod_playoff` forms pods the exact same way, but each pod
+plays its own bracket instead of feeding one shared bracket -- see
+"Grid Draft 'Pods with playoffs'" below for how the tournament view
+renders that.
+
+`tournamentMatchSummary()` shows `grid_draft_pod` as bare "Grid Draft
+(Pod)" and `grid_draft_pod_playoff` as bare "Grid Draft (Pod Playoffs)"
+(same "no `Draft – ` prefix" reasoning as `grid_draft`/`sealed_deck`
+already follow, since these are among the only things the Grid Draft
+option under Format offers any more).
+
+**Continuing a Grid Draft pod's own drafting** -- `#tournament-view-dialog`'s
+own pods section (`renderTournamentPods()`, shown whenever `GET
+/tournaments/state`'s own `pods` field is non-null -- true for
+`grid_draft_pod`/`grid_draft_pod_playoff` tournaments exactly as for a
+`booster_draft` one) lists every pod's own progress the same way for
+all of them, and shows a "Continue drafting" button whenever the
+viewer's own username appears in a pod's own seats while that pod's own
+`status` is still `'drafting'` (a "Pods with playoffs" pod moves on to
+`'playing'` its own bracket -- see below -- the moment drafting
+finishes, with nothing left to "continue" there). Clicking it routes
+based on `pod.game_id` (non-null only for a Grid Draft pod, since a
+Booster Draft pod has no single backing game of its own): a Grid Draft
+pod closes `#tournament-view-dialog`/`#tournaments-dialog` and hands off
+straight to `showBoard(pod.game_id)` -- the exact same drafting board a
+3-4 player ad hoc Grid Draft game already uses, nothing
+tournament-specific to build -- while a Booster Draft pod still opens
+`#pod-draft-dialog` as before. Once the pod's own game has every seat's
+deck submitted, the pod moves on on its own (no further UI action
+needed) and the "Continue drafting" button simply stops appearing for
+it next refresh.
+
+Once a Grid Draft pod's own drafting finishes, the viewer's drafted pool
+and current match deck show up in the very same section Booster Draft's
+own pool uses (`renderMyBoosterDraftDeck()`, `#tournament-view-my-pool-section`,
+now titled "Your drafted pool" rather than "Your Booster Draft pool"
+since it covers both) -- everything from "a read-only textarea listing
+every drafted card" onward in "Booster Draft" above applies identically
+here; the two options only ever differ in how the pool gets built, never
+in how it's shown or used to submit a match deck. For "Pods with
+playoffs", this section reflects whichever pod the viewer is CURRENTLY
+seated in at the time -- their own regular pod's pool at first, then
+(if they reach the finals) the finals' own fresh pool once that
+overwrites it, same as the backend column itself.
+
+**Grid Draft "Pods with playoffs"** -- `grid_draft_pod_playoff`'s own
+pods (both the regular pods formed at tournament start and the single
+final pod formed once they're all done) additionally carry their own
+`bracket_rounds` in `GET /tournaments/state`'s own `pods` field (empty
+for `grid_draft_pod`/`booster_draft`, which have no bracket of their
+own at all). `renderTournamentPods()` renders each pod's own line the
+same way (progress reads `winner: <username>` once `status` is
+`'completed'`, or "playing its own bracket" while `status` is
+`'playing'`), and, whenever `bracket_rounds` is non-empty, renders that
+pod's own mini bracket directly beneath its line using the exact same
+`renderBracketRounds()` helper the tournament's own top-level bracket
+uses below -- same headings, same "Go to game"/"View game" buttons,
+just scoped to that one pod's own seats and matches. The final pod
+(`pod.kind === 'final'`, formed once every regular pod has its own
+winner) is labeled "Finals" instead of "Pod N", since by then there's
+only ever the one. The tournament's own top-level `rounds`/
+`matches_by_round` (below) are simply empty for this option -- every
+round belongs to some pod's own bracket, never to a shared top-level
+one, so there's nothing left for that section to show.
+
+**Tournament view dialog** (`#tournament-view-dialog`) shows the
+tournament's name/status, a Start button (creator only, still in
+`registration`, at least `min_participants` joined -- calls
+`startTournament()`) and a Cancel button (creator only, not yet
+`completed`/`cancelled` -- `cancelTournament()`), Booster Draft's/Grid
+Draft Pod's own drafting-progress/pool/deck sections above, a standings list for a
+Swiss event once it's left `registration` (`GET /tournaments/state`'s
+own `standings`, ranked by win count already server-side), and the
+bracket itself: every round (`TOURNAMENT_BRACKET_LABELS` -- "Round" for
+single elimination/Swiss, "Winners round"/"Losers round"/"Grand final"
+for double elimination) listing each of its matches as
+`<participant> vs <participant> — <status>`, with a "Go to game"/"View
+game" button once a match's own game has actually been created --
+closes both this dialog and `#tournaments-dialog` before handing off to
+`showBoard()`, the same as `#open-games-dialog`'s own join-success
+handoff. Refreshed by its own Refresh button rather than a poll -- a
+tournament only ever advances when one of its games finishes, not
+continuously, so there's nothing to gain from polling it open-ended
+while someone's just looking (a pod's own drafting phase, for either
+Booster Draft or Grid Draft Pod, is the one part of a tournament that
+genuinely needs live updates while open, which is why `#pod-draft-dialog`
+and, for Grid Draft Pod, `showBoard()`'s own existing poll each handle
+that on their own rather than piggybacking on this dialog's Refresh
+button).
 
 - `index.html` (`/`) — Login form. If the visitor already has an active
   session (checked via `GET /app/me`), they're redirected straight to
@@ -2771,9 +3522,15 @@ deck's `cards`.
     unless `canRematch(state)` says yes: you're this game's own creator
     (`user.id === state.game.created_by_user_id`, `GameService::
     buildGameState()`'s own new field -- see "Rematch" in
-    `../php-app/README.md`), the game is genuinely `'completed'` (nobody
-    resigned, `winner_usernames` non-empty -- an expired game has
-    neither), and, for a match of any kind, only once the whole match
+    `../php-app/README.md`), it isn't a tournament match (reported live:
+    the bracket already decides who plays whom next, so an ad hoc
+    rematch button there would just be confusing --
+    `state.game.is_tournament_match`, also from `buildGameState()`, only
+    ever computed truthfully for the creator since that's the only
+    viewer who reaches this check at all), the game is genuinely
+    `'completed'` (nobody resigned, `winner_usernames` non-empty -- an
+    expired game has neither), and, for a match of any kind, only once
+    the whole match
     itself has completed too (the same `draftState.status === 'completed'`
     check `renderDraftMatchScoreline()` reads, via the identical
     `state.quick_draft || state.winston_draft || ... || state.game_match`
@@ -4234,34 +4991,46 @@ deck's `cards`.
     fields on this page already follow.
 
     **Team affiliation icon.** For Open/Closed Team Play (`player.team_id
-    !== null`), each row gets a plain heraldic shield icon
-    (`buildPlayerFlag('team', ..., 'player-flag--teamMate'/'--teamOpponent')`)
+    !== null`), each row gets a heraldic shield icon
+    (`buildPlayerFlag('team'/'teamOpponent', ..., 'player-flag--teamMate'/'--teamOpponent')`)
     right after its presence dot -- the ONLY place team affiliation
     appears on the row now; there used to also be a plain "— Team N (your
     teammate)" text tag appended after the username, removed once the
     icon existed to cover the same information, so it isn't shown twice.
-    Color, not the shield's shape, is what actually carries the "which
-    side" information: green (`--color-success`) for every row sharing
-    the *viewer's own* `team_id` — including the viewer's own row — and
-    red (`--color-error`) for the opposing team's two rows, so which side
-    is "us" vs. "them" reads at a glance without needing to read each
-    row's team number. The removed text tag's own wording didn't just
-    vanish, though -- the icon's `title`/`aria-label` (`teamIconLabel`,
-    same `buildPlayerFlag()` tooltip/accessible-label convention every
-    other icon on this row already uses) carries the exact same "Team N"/
-    "(your teammate)" text a screen reader or a sighted user hovering for
-    a reminder would have gotten from the old text tag, just moved onto
-    the icon instead of sitting separately on the row. Computed once,
-    right before the `players-list` `renderList()` call, as
-    `viewerTeamId` (`you ? you.team_id : null`, `you` being the same
-    viewer's-own-row lookup the board title/hand section already use) —
-    `null` for every non-team format (the icon is skipped outright, same
-    as the old text tag already was) and also for a spectator/replay
-    viewer, who has no `team_id` of their own to color the icon relative
-    to (coloring every row red for someone with no "own team" to contrast
-    against would be misleading, not informative, so the icon just
-    doesn't render for them at all rather than defaulting to one color or
-    the other).
+    Reported live as hard to tell apart for colorblind users back when
+    color alone (green vs. red) carried the "which side" information --
+    red-green is the worst possible pairing for the most common forms of
+    color blindness -- so both color *and* shape now carry it (WCAG
+    1.4.1, "Use of Color"): blue (`--color-info`, already used elsewhere
+    on this page and clearly distinguishable from red under essentially
+    all common forms of color blindness) with a solid-filled shield for
+    every row sharing the *viewer's own* `team_id` — including the
+    viewer's own row — and red (`--color-error`) with the same shield
+    outline hollowed out instead (`PLAYER_STAT_ICON_PATHS.teamOpponent`,
+    `fill="none" stroke="currentColor"`, the same technique the
+    presence-hidden icon below already uses to override the inherited
+    `fill: currentColor`) for the opposing team's two rows, so which side
+    is "us" vs. "them" reads at a glance even with no color perception at
+    all, not just without needing to read each row's team number. The
+    removed text tag's own wording didn't just vanish, though -- the
+    icon's `title`/`aria-label` (`teamIconLabel`, same `buildPlayerFlag()`
+    tooltip/accessible-label convention every other icon on this row
+    already uses) carries the exact same "Team N"/"(your teammate)" text
+    a screen reader or a sighted user hovering for a reminder would have
+    gotten from the old text tag, just moved onto the icon instead of
+    sitting separately on the row. Computed once, right before the
+    `players-list` `renderList()` call, as `viewerTeamId` (`you ?
+    you.team_id : null`, `you` being the same viewer's-own-row lookup the
+    board title/hand section already use) — `null` for every non-team
+    format (the icon is skipped outright, same as the old text tag
+    already was) and also for a spectator/replay viewer, who has no
+    `team_id` of their own to compare against (marking every row as "the
+    opposing team" for someone with no "own team" to contrast against
+    would be misleading, not informative, so the icon just doesn't render
+    for them at all rather than defaulting to one team's look or the
+    other). The Team Scores panel's own per-team icon
+    (`renderTeamScores()`) follows the identical solid-blue/hollow-red
+    convention, using `'team'`/`'teamOpponent'` the same way.
 
     `'after_scoring_order'`'s own field (`type: 'card_order'`) is the one
     pending-decision field that isn't a `<select>`-backed widget at all —

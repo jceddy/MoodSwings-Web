@@ -139,7 +139,7 @@ function getCardStats() {
     return apiRequest('/stats/cards');
 }
 
-function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId, defaultSelectionsMode, botDecklistText, botSavedDecklistId, randomTeams, rotisserieDraftPoolSource, rotisserieDraftCustomPoolText, rotisserieDraftCutoffCount, tieredRotisserieDraftMode, tieredRotisserieDraftTiers, botGoesFirst, bestOfThree, allowSideboarding, diagnosticMode, botDecklists) {
+function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId, defaultSelectionsMode, botDecklistText, botSavedDecklistId, randomTeams, rotisserieDraftPoolSource, rotisserieDraftCustomPoolText, rotisserieDraftCutoffCount, tieredRotisserieDraftMode, tieredRotisserieDraftTiers, botGoesFirst, bestOfThree, allowSideboarding, diagnosticMode, botDecklists, timeoutMinutes, timeoutAction, totalTimeLimitMinutes, synchronousMode) {
     return apiRequest('/games', {
         method: 'POST',
         body: JSON.stringify({
@@ -223,6 +223,21 @@ function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText,
             // uses_tactical_ai) -- see "Diagnostic mode" in
             // web-static/README.md.
             diagnostic_mode: diagnosticMode,
+            // Issue #85's own opt-in turn/decision timeouts -- undefined
+            // (omitted from the request body entirely) means off. See
+            // "Turn and decision timeouts" in web-static/README.md.
+            timeout_minutes: timeoutMinutes,
+            timeout_action: timeoutAction,
+            // Issue #85 follow-up's own full-game time-limit mode --
+            // undefined means off; fully independent of timeout_minutes/
+            // timeout_action above. See "Turn and decision timeouts" in
+            // web-static/README.md.
+            total_time_limit_minutes: totalTimeLimitMinutes,
+            // Reported live: "synchronous" mode -- undefined means off;
+            // mutually exclusive with timeout_minutes/
+            // total_time_limit_minutes above. See "Synchronous mode" in
+            // web-static/README.md.
+            synchronous_mode: synchronousMode,
         }),
     });
 }
@@ -464,6 +479,111 @@ function cancelOpenGame(listingId) {
     return apiRequest('/open-games/cancel', {
         method: 'POST',
         body: JSON.stringify({ id: listingId }),
+    });
+}
+
+// Issue #91: tournaments -- single/double elimination or Swiss-round
+// events on top of the same createGame()-shaped match_params
+// open-games listings already use. createTournament() takes the
+// tournament fields (name/bracket_type/registration_mode/
+// swiss_round_count/min_participants/max_participants/
+// invite_user_ids) spread alongside the same match-setting keys
+// openGameCreateParamsFromRequestBody() (index.php) reads for a POST
+// /games body -- see the New Tournament dialog's own submit handler in
+// game.js for exactly which of those it actually sends.
+function createTournament(params) {
+    return apiRequest('/tournaments', { method: 'POST', body: JSON.stringify(params) });
+}
+
+// mine=false (the default) lists open-registration tournaments visible
+// to browse and join; mine=true lists every tournament this user
+// created, was invited to, or has joined -- see GET /tournaments'
+// own docblock.
+function listTournaments(mine = false) {
+    return apiRequest(`/tournaments${mine ? '?mine=1' : ''}`);
+}
+
+function getTournamentState(tournamentId) {
+    return apiRequest(`/tournaments/state?id=${tournamentId}`);
+}
+
+function inviteToTournament(tournamentId, userId) {
+    return apiRequest('/tournaments/invite', {
+        method: 'POST',
+        body: JSON.stringify({ tournament_id: tournamentId, user_id: userId }),
+    });
+}
+
+// deckParams ({decklist_text} or {saved_decklist_id}) is only required
+// when the tournament is Power Duel (deck_type 'custom_duel') -- see
+// TournamentService::acceptInvite()'s own docblock; omitted (or ignored
+// server-side) for every other tournament.
+function acceptTournamentInvite(tournamentId, deckParams = {}) {
+    return apiRequest('/tournaments/accept-invite', {
+        method: 'POST',
+        body: JSON.stringify({ tournament_id: tournamentId, ...deckParams }),
+    });
+}
+
+function declineTournamentInvite(tournamentId) {
+    return apiRequest('/tournaments/decline-invite', {
+        method: 'POST',
+        body: JSON.stringify({ tournament_id: tournamentId }),
+    });
+}
+
+// deckParams -- see acceptTournamentInvite()'s own docblock just above.
+function joinTournament(tournamentId, deckParams = {}) {
+    return apiRequest('/tournaments/join', {
+        method: 'POST',
+        body: JSON.stringify({ tournament_id: tournamentId, ...deckParams }),
+    });
+}
+
+// Power Duel's own join-time deck (issue reported live: "the deck
+// submission should happen when the player joins the tournament --
+// players use the same submitted deck for the entire tournament"),
+// resubmitted/edited standalone before the tournament starts -- see
+// TournamentService::submitTournamentDeck()'s own docblock. deckParams
+// is {decklist_text} or {saved_decklist_id}.
+function submitTournamentDeck(tournamentId, deckParams) {
+    return apiRequest('/tournaments/submit-deck', {
+        method: 'POST',
+        body: JSON.stringify({ tournament_id: tournamentId, ...deckParams }),
+    });
+}
+
+function withdrawFromTournament(tournamentId) {
+    return apiRequest('/tournaments/withdraw', {
+        method: 'POST',
+        body: JSON.stringify({ tournament_id: tournamentId }),
+    });
+}
+
+function startTournament(tournamentId) {
+    return apiRequest('/tournaments/start', {
+        method: 'POST',
+        body: JSON.stringify({ tournament_id: tournamentId }),
+    });
+}
+
+function cancelTournament(tournamentId) {
+    return apiRequest('/tournaments/cancel', {
+        method: 'POST',
+        body: JSON.stringify({ tournament_id: tournamentId }),
+    });
+}
+
+// Booster Draft's own pod-drafting phase (issue #91 follow-up) -- see
+// TournamentService::getPodDraftState()'s own docblock.
+function getPodDraftState(tournamentId) {
+    return apiRequest(`/tournaments/pod-draft/state?tournament_id=${tournamentId}`);
+}
+
+function pickPodDraftCard(tournamentId, direction, cardId) {
+    return apiRequest('/tournaments/pod-draft/pick', {
+        method: 'POST',
+        body: JSON.stringify({ tournament_id: tournamentId, direction, card_id: cardId }),
     });
 }
 
@@ -740,6 +860,17 @@ function startGame(gameId) {
     });
 }
 
+// Reported live: synchronous mode's own pre-game ready check -- see
+// "Synchronous mode" in web-static/README.md. Idempotent; the caller
+// keeps polling GET /games/state the same way it already does for
+// decklist submission.
+function markReady(gameId) {
+    return apiRequest('/games/ready', {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId }),
+    });
+}
+
 function playCard(gameId, cardId, choices) {
     return apiRequest('/games/play', {
         method: 'POST',
@@ -812,6 +943,14 @@ function respondToDecision(gameId, choices) {
 // these back, and PushNotificationChannel.php for what actually gets sent.
 function getVapidPublicKey() {
     return apiRequest('/notifications/vapid-public-key');
+}
+
+// Feature flag gating the New Game/New Tournament dialogs' own
+// Synchronous mode opt-in (defaults to disabled -- see Config::getBool()'s
+// own docblock in index.php) -- game.js fetches this once at page load
+// and caches the result rather than calling it again per dialog open.
+function getSynchronousModeEnabled() {
+    return apiRequest('/config/synchronous-mode-enabled');
 }
 
 function subscribeToPush(subscription) {

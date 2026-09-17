@@ -1,0 +1,18 @@
+-- Reported live: "The 'shield' team identifier colors are not easily
+-- identifiable for colorblind users. Is there a way we can shift their
+-- colors/designs to make them more easily distinguishable?"
+--
+-- Open/Closed Team Play's per-row and per-team "shield" icon used to
+-- distinguish "your own team" from "the opposing team" by color alone
+-- (green/red via --color-success/--color-error) -- red-green is the
+-- worst possible pairing for the most common forms of color blindness.
+-- Recolored to blue (--color-info) vs. red (--color-error), and gave the
+-- opposing team's shield a hollow/outline variant of the same shape
+-- (PLAYER_STAT_ICON_PATHS.teamOpponent in game.js) instead of a second
+-- solid-filled shield, so the two sides are now distinguishable by shape
+-- alone too (WCAG 1.4.1, "Use of Color"). See web-static/README.md's
+-- "Team affiliation icon" writeup for the full details.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.40.15' WHERE id = 1;

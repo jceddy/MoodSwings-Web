@@ -727,8 +727,13 @@ dialog#resources-dialog #resources-close-button {
     margin-bottom: 0.5rem;
 }
 
-#past-games-button {
-    margin-left: 0.5rem;
+/* Past games/Import replay wrap onto their own line below the main
+   action row (New game/Open games/Weekly Sealed Pool/Tournaments)
+   rather than just flowing inline with them, with some breathing room
+   above (between it and that row) and below (between it and
+   #games-list). */
+#lobby-secondary-actions {
+    margin-top: 0.5rem;
     margin-bottom: 0.5rem;
 }
 
@@ -2102,6 +2107,52 @@ body.game-page {
     color: var(--color-gold);
 }
 
+/* Issue #85 follow-up's own full-game time-limit mode -- only rendered
+   at all once games.total_time_limit_minutes is set (see renderBoard()).
+   --color-info (blue) by default, same "a little color per stat kind"
+   treatment as hand/points/wins above; overridden by one of the two
+   modifier classes below, added dynamically by buildPlayerTimeUsedStat()
+   once a player's own game_players.active_seconds_used crosses a
+   fraction of the limit worth calling out -- the same --color-pending/
+   --color-error escalation the lobby's own awaiting-response styling and
+   went-first pennant already use elsewhere on this page, so "getting
+   close" and "basically out of time" read as familiar severities rather
+   than a new color language just for this one stat. */
+.player-stat--timeUsed {
+    color: var(--color-info);
+}
+
+.player-stat--timeUsed-warning {
+    color: var(--color-pending);
+}
+
+.player-stat--timeUsed-danger {
+    color: var(--color-error);
+}
+
+/* Issue #85 follow-up's own action-timeout warning icon -- only ever
+   rendered while it's already inside the 15-minute warning window (see
+   buildActionTimeoutWarningStat()), so there's no "comfortable" default
+   the way .player-stat--timeUsed has -- --color-pending (amber) is the
+   base state here, escalating to --color-error under 5 minutes left. */
+.player-stat--actionTimeoutWarning {
+    color: var(--color-pending);
+}
+
+.player-stat--actionTimeoutWarning-danger {
+    color: var(--color-error);
+}
+
+/* Synchronous mode's own live 30-second action timer (reported live) --
+   plain text color by default, escalating to --color-error under 10
+   seconds remaining (tickSynchronousActionTimer() in game.js), the same
+   severity language every other "getting close" indicator on this page
+   already uses. */
+#synchronous-action-timer.synchronous-action-timer--danger {
+    color: var(--color-error);
+    font-weight: bold;
+}
+
 .player-flag--wentFirst {
     color: var(--color-error);
 }
@@ -2156,14 +2207,20 @@ body.game-page {
 }
 
 /* Team affiliation (Open/Closed Team Play only, player.team_id !== null --
-   see buildPlayerFlag('team', ...) in game.js): green for the viewer's
-   own team (including their own row), red for the opposing team -- the
-   same --color-success/--color-error pairing already used for "good"/
-   "went first" elsewhere on this page, just repurposed here as "mine" vs
-   "theirs" rather than "good" vs "bad" (the opposing team isn't a bad
-   thing, just the other side). */
+   see buildPlayerFlag('team'/'teamOpponent', ...) in game.js): reported
+   live as hard to tell apart for colorblind users when the green/red
+   (--color-success/--color-error) pairing this used to have was the only
+   thing distinguishing "mine" from "theirs" -- red-green is the worst
+   possible pair for the most common forms of color blindness. Now blue
+   (--color-info, already used elsewhere on this page and clearly
+   distinguishable from red under essentially all common forms of color
+   blindness) for the viewer's own team, paired with a solid-filled
+   shield shape; --color-error/red stays for the opposing team, now paired
+   with a hollow/outline shield shape (see PLAYER_STAT_ICON_PATHS.team vs
+   .teamOpponent in game.js) so the two are distinguishable by shape alone
+   too, per WCAG 1.4.1 (never rely on color alone). */
 .player-flag--teamMate {
-    color: var(--color-success);
+    color: var(--color-info);
 }
 
 .player-flag--teamOpponent {
@@ -2250,6 +2307,19 @@ dialog#confirm-dialog {
    itself a <select>'s own <option> (never affected by this rule at all),
    so this is the first .new-game-field to need its own explicit fix. */
 .new-game-field[hidden] {
+    display: none;
+}
+
+/* Same block/spacing treatment as .new-game-field above, generalized for
+   every other dialog's own plain <label>-wrapped fields (issue #91's New
+   Tournament dialog is the first of these) rather than reusing a
+   "new-game"-prefixed class outside that one dialog. */
+.dialog-field {
+    display: block;
+    margin-bottom: 0.5rem;
+}
+
+.dialog-field[hidden] {
     display: none;
 }
 

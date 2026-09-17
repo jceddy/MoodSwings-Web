@@ -1,0 +1,14 @@
+-- Reported live: "did you add any indicators on the displays like when
+-- your time is close to being up or how much time you've spent total
+-- on the game? Kind of like a chess clock display" -- the full-game
+-- time-limit mode (migration 0325) tracked game_players.active_seconds_used
+-- and exposed it via getState(), but nothing rendered it. The Players
+-- list now shows a clock-icon stat per player (only once
+-- games.total_time_limit_minutes is set), with the icon's own color
+-- escalating (blue -> amber -> red) as that player's own used time
+-- approaches the limit. See web-static/README.md's "Turn and decision
+-- timeouts" writeup for the full details.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.42.1' WHERE id = 1;

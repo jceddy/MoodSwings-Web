@@ -1,0 +1,12 @@
+-- "Your tournaments" now also excludes 'withdrawn' participant rows, the
+-- same as 'invited'/'declined' already were -- there's nothing left to
+-- do with any of the three (joinOpenTournament()'s own findForUser()
+-- check blocks rejoining a tournament you've withdrawn from, same as
+-- one you've declined), and this list only ever displays the
+-- tournament's own status, never the viewer's own participant status,
+-- so a withdrawn tournament previously looked indistinguishable from a
+-- joined one except for a vanished Withdraw button.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.50.4' WHERE id = 1;
