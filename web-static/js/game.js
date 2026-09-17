@@ -4184,6 +4184,23 @@
         tournamentDeckDialog.showModal();
     }
 
+    // Reported live: show the winner on the tournaments display --
+    // winner_username (TournamentRepository::listForUser()'s own LEFT
+    // JOIN onto users) is null until a tournament actually reaches
+    // 'completed' (winner_user_id itself stays null until then too), so
+    // this only ever adds anything for that one status. Shared by both
+    // "Your tournaments" and the collapsible "Cancelled tournaments"
+    // list below -- a cancelled tournament is never 'completed', so the
+    // suffix is simply never shown there, but the label itself is
+    // identical otherwise.
+    function tournamentListItemLabel(tournament) {
+        const winnerSuffix = tournament.status === 'completed' && tournament.winner_username
+            ? ` (winner: ${tournament.winner_username})`
+            : '';
+
+        return `${tournament.name} — ${tournamentMatchSummary(tournament)} — ${TOURNAMENT_STATUS_LABELS[tournament.status] || tournament.status}${winnerSuffix} `;
+    }
+
     function tournamentMatchSummary(tournament) {
         const params = tournament.match_params;
         const deckType = params.deck_type === 'custom_duel'
@@ -4276,15 +4293,17 @@
         // indistinguishable from a joined one -- this list only ever
         // displays the tournament's own status, never the viewer's own
         // participant status, so the sole visible difference was a
-        // vanished Withdraw button, easy to miss entirely.
-        const mineProper = mine.filter((t) => t.my_participant_status !== 'invited' && t.my_participant_status !== 'declined' && t.my_participant_status !== 'withdrawn');
+        // vanished Withdraw button, easy to miss entirely. 'cancelled'
+        // (reported live) is excluded the same way -- tucked into its
+        // own collapsible section below instead of cluttering this one.
+        const mineProper = mine.filter((t) => t.my_participant_status !== 'invited' && t.my_participant_status !== 'declined' && t.my_participant_status !== 'withdrawn' && t.status !== 'cancelled');
         const mineList = document.getElementById('tournaments-mine-list');
         mineList.innerHTML = '';
         document.getElementById('tournaments-mine-empty').hidden = mineProper.length > 0;
 
         for (const tournament of mineProper) {
             const item = document.createElement('li');
-            item.append(`${tournament.name} — ${tournamentMatchSummary(tournament)} — ${TOURNAMENT_STATUS_LABELS[tournament.status] || tournament.status} `);
+            item.append(tournamentListItemLabel(tournament));
 
             const viewButton = document.createElement('button');
             viewButton.type = 'button';
@@ -4332,6 +4351,32 @@
             }
 
             mineList.appendChild(item);
+        }
+
+        // Reported live: hide cancelled tournaments from the main list,
+        // tucked into their own collapsible section instead -- same
+        // 'invited'/'declined'/'withdrawn' participant-status exclusion
+        // as mineProper above, just kept to 'cancelled' tournaments only.
+        // Nothing left to do with a cancelled tournament (no
+        // Withdraw/Edit deck button makes sense once it's cancelled), so
+        // View is the only action offered here.
+        const cancelled = mine.filter((t) => t.status === 'cancelled' && t.my_participant_status !== 'invited' && t.my_participant_status !== 'declined' && t.my_participant_status !== 'withdrawn');
+        const cancelledSection = document.getElementById('tournaments-cancelled-section');
+        const cancelledList = document.getElementById('tournaments-cancelled-list');
+        cancelledList.innerHTML = '';
+        cancelledSection.hidden = cancelled.length === 0;
+
+        for (const tournament of cancelled) {
+            const item = document.createElement('li');
+            item.append(tournamentListItemLabel(tournament));
+
+            const viewButton = document.createElement('button');
+            viewButton.type = 'button';
+            viewButton.textContent = 'View';
+            viewButton.addEventListener('click', () => openTournamentView(tournament.id));
+            item.appendChild(viewButton);
+
+            cancelledList.appendChild(item);
         }
 
         const open = openResp.ok ? openResp.body.tournaments : [];

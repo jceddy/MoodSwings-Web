@@ -1856,19 +1856,45 @@ own accept/decline step via `acceptTournamentInvite()`/
 `declineTournamentInvite()`; an open-registration tournament never puts
 a viewer in that status at all, so the section stays hidden for those.
 "Your tournaments" (the same response, filtered to exclude `invited`,
-`declined`, AND `withdrawn`) shows a View button (opens
-`#tournament-view-dialog`, see below) and, for a still-in-registration
-tournament the viewer joined but didn't create, a Withdraw button
-(`withdrawFromTournament()`). Excluding `withdrawn` here matters because
-this list only ever displays the *tournament's* own status (e.g.
-"Registration open"), never the viewer's own participant status --
-without the exclusion, a withdrawn tournament looked visually identical
-to one you're still joined to, with the vanished Withdraw button the
-only (easy to miss) difference. Unlike `declined`, `withdrawn` isn't a
-dead end: `joinOpenTournament()`'s own `findForUser()` check lets a
-`withdrawn` row (and only that status) rejoin, room permitting, so a
-withdrawn-from tournament reappears in "Open to join" below instead of
-vanishing from both lists for good. "Open to join" (`GET
+`declined`, `withdrawn`, AND (reported live) `cancelled`) shows a View
+button (opens `#tournament-view-dialog`, see below) and, for a
+still-in-registration tournament the viewer joined but didn't create, a
+Withdraw button (`withdrawFromTournament()`). Excluding `withdrawn` here
+matters because this list only ever displays the *tournament's* own
+status (e.g. "Registration open"), never the viewer's own participant
+status -- without the exclusion, a withdrawn tournament looked visually
+identical to one you're still joined to, with the vanished Withdraw
+button the only (easy to miss) difference. Unlike `declined`,
+`withdrawn` isn't a dead end: `joinOpenTournament()`'s own
+`findForUser()` check lets a `withdrawn` row (and only that status)
+rejoin, room permitting, so a withdrawn-from tournament reappears in
+"Open to join" below instead of vanishing from both lists for good.
+
+**Cancelled tournaments** (reported live: hide these from the main
+list, in a collapsible element) live in their own `#tournaments-cancelled-section`
+-- a bare `<details>`/`<summary>` (unstyled, the same native
+collapsible widget `#recent-events-details` on the board already uses),
+collapsed by default and hidden entirely (not just an empty list) when
+`tournament.status === 'cancelled'` matches nothing. Its own
+`#tournaments-cancelled-list` uses the identical row shape "Your
+tournaments" does (`tournamentListItemLabel()`, extracted so both
+lists render a tournament exactly the same way) but only ever offers a
+View button -- there's nothing left to do with a cancelled tournament
+(no Withdraw/Edit deck action makes sense once it's cancelled).
+
+**Winner display** (reported live: show the winner on the tournaments
+display) -- `tournamentListItemLabel()` appends " (winner: `username`)"
+whenever `tournament.status === 'completed'` and `winner_username` is
+set (`TournamentRepository::listForUser()`'s own new field, see
+"Tournaments" in `php-app/README.md`) -- `null`/not `'completed'` simply
+adds nothing. In practice this only ever shows in "Your tournaments"
+(a tournament is `'cancelled'` or `'completed'`, never both, so the
+cancelled section's own rows never actually have a winner to show) --
+sharing `tournamentListItemLabel()` between both lists just means
+neither has to duplicate the status-label-plus-name formatting, not
+that both are expected to use every part of it.
+
+"Open to join" (`GET
 /tournaments`, no `?mine=1`) lists every open-registration tournament
 visible to the current user with a Join button
 (`joinTournament()`) -- same `matchmaking_discoverable`/blocked-pair

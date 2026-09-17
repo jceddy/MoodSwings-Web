@@ -4967,7 +4967,11 @@ playoffs\"" below.
 `createGame()`-argument shape `open_game_listings.create_game_params`
 already uses, minus identity params, just fixed once for the whole
 event rather than negotiated per game -- `swiss_round_count`,
-`min_participants`/`max_participants`, `status`, `winner_user_id`);
+`min_participants`/`max_participants`, `status`, `winner_user_id`,
+`completed_at`/`cancelled_at` -- migration 0348 added the latter,
+reported live, so the cleanup cron below can judge how long a
+cancelled tournament has been sitting around the same way it already
+could for a completed one);
 `tournament_participants` (one row per invited/registered/joined user;
 win/loss counts are never stored, the same `game_matches` convention of
 recomputing from whatever few rows reference a participant, here
@@ -5117,7 +5121,12 @@ omitted for open-registration tournaments visible to browse),
 `POST /tournaments/invite`, `/accept-invite`, `/decline-invite`,
 `/join`, `/submit-deck`, `/withdraw`, `/start`, `/cancel`. See
 "Tournaments" in `web-static/README.md` for the New Tournament dialog
-and the bracket/standings view built on top of these.
+and the bracket/standings view built on top of these. `GET /tournaments?mine=1`'s
+own rows (`TournamentRepository::listForUser()`) also carry
+`winner_username` now (reported live: show the winner on the
+tournaments display) -- a plain `LEFT JOIN` onto `users` by
+`winner_user_id`, `null` until a tournament actually reaches
+`'completed'` (`winner_user_id` itself stays `null` until then too).
 
 A Duel tournament ("Power Duel" in the New Tournament dialog) always
 sets `deck_type: 'custom_duel'` under the "power" `duel_deck_rules`
@@ -6175,9 +6184,12 @@ through originally.
 Past games alone doesn't actually delete anything -- an old game just
 moves to a different list forever. `bin/expire_and_delete_stale_games.php`
 (meant to run once a day via cron) is the follow-up that actually cleans
-up the database, in two passes over the same staleness definition every
-other "how stale is this game" check in this file already uses
-(`COALESCE(last_move_at, started_at, created_at)`):
+up the database, in three passes -- the first two over the same
+staleness definition every other "how stale is this game" check in this
+file already uses (`COALESCE(last_move_at, started_at, created_at)`),
+the third (reported live: "make sure tournaments get cleaned up after
+being cancelled/completed for a week") over tournaments' own simpler
+`completed_at`/`cancelled_at` columns:
 
 1. **`GameService::deleteStaleCompletedGames(int $olderThanDays = 7)`** --
    permanently `DELETE`s every `'completed'` game whose last activity is
@@ -6223,8 +6235,27 @@ other "how stale is this game" check in this file already uses
    second time from inside `withGameLock()` right before mutating it, in
    case a player's own action raced with the cron between the initial
    `SELECT` and the lock being acquired.
+3. **`TournamentService::deleteStaleTournaments(int $olderThanDays = 7)`**
+   (`TournamentRepository::deleteStale()`) -- permanently `DELETE`s every
+   tournament that's been sitting `'completed'` or `'cancelled'` for
+   more than `$olderThanDays`, judged by `completed_at`/`cancelled_at`
+   respectively (`markCancelled()` only started recording the latter as
+   of migration 0348 -- backfilled to that migration's own run time for
+   every tournament already cancelled before then, so none of them sit
+   around forever uncleaned). A tournament still `'registration'`/
+   `'in_progress'`/`'drafting'` is never touched here, however old --
+   only a genuinely finished one (either way) has nothing left worth
+   keeping. `DELETE FROM tournaments` cascades (`ON DELETE CASCADE`) to
+   `tournament_participants`/`tournament_rounds`/`tournament_matches`/
+   `tournament_pods` and its own further children (migrations
+   0334/0335/0337) -- see "Tournaments" above. Deliberately does NOT
+   touch the underlying `games`/`game_matches`/`draft_matches` rows a
+   tournament's own matches created -- nothing in `tournament_matches`
+   is an enforced foreign key back to them, so cascading away the
+   tournament orphans nothing there; those clean up independently, on
+   their own per-game staleness clock, via passes 1/2 above.
 
-Both methods return an `int` count of games affected, and
+All three methods return an `int` count of rows affected, and
 `bin/expire_and_delete_stale_games.php` prints a one-line summary.
 Example crontab line (once daily, 3am):
 

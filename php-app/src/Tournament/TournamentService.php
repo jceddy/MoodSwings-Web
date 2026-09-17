@@ -400,6 +400,20 @@ final class TournamentService implements TournamentMatchObserver
         $this->tournaments->markCancelled($tournamentId);
     }
 
+    /**
+     * Reported live: clean up tournaments a week after being cancelled/
+     * completed -- see bin/expire_and_delete_stale_games.php (the
+     * existing game/match cleanup cron this is folded into) and
+     * TournamentRepository::deleteStale()'s own docblock for exactly
+     * what gets deleted and why it's always safe to.
+     *
+     * @return int how many tournaments were deleted
+     */
+    public function deleteStaleTournaments(int $olderThanDays = 7): int
+    {
+        return $this->tournaments->deleteStale($olderThanDays);
+    }
+
     public function startTournament(int $tournamentId, int $requestingUserId): void
     {
         $tournament = $this->requireTournament($tournamentId);

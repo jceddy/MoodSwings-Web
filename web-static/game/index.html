@@ -1124,6 +1124,14 @@
             <ul id="tournaments-mine-list"></ul>
             <p id="tournaments-mine-empty" hidden>You haven't created or joined any tournaments yet.</p>
         </section>
+        <!-- Reported live: hide cancelled tournaments from the main
+             list, tucked away in a collapsible <details> instead --
+             collapsed by default (no "open" attribute), and hidden
+             entirely (not just an empty list) when there aren't any. -->
+        <details id="tournaments-cancelled-section" hidden>
+            <summary>Cancelled tournaments</summary>
+            <ul id="tournaments-cancelled-list"></ul>
+        </details>
         <section>
             <h3>Open to join</h3>
             <ul id="tournaments-open-list"></ul>
