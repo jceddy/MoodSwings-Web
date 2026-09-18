@@ -5126,7 +5126,14 @@ own rows (`TournamentRepository::listForUser()`) also carry
 `winner_username` now (reported live: show the winner on the
 tournaments display) -- a plain `LEFT JOIN` onto `users` by
 `winner_user_id`, `null` until a tournament actually reaches
-`'completed'` (`winner_user_id` itself stays `null` until then too).
+`'completed'` (`winner_user_id` itself stays `null` until then too) --
+and `joined_count` (reported live: show the tournament's number of
+players joined on the tournaments display, for the tournament's own
+creator), the same `COUNT(*) ... WHERE status = 'joined'` subquery
+`listOpenFor()`'s own "Open to join" rows already carry, returned for
+every row regardless of who's asking (the frontend decides who actually
+gets shown it -- creator-only, see "Tournaments" in
+`web-static/README.md`).
 
 A Duel tournament ("Power Duel" in the New Tournament dialog) always
 sets `deck_type: 'custom_duel'` under the "power" `duel_deck_rules`
