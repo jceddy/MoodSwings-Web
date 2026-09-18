@@ -57,16 +57,25 @@ final class TournamentRepository
      * winner_username (reported live: show the winner on the
      * tournaments display) is NULL until a tournament actually reaches
      * 'completed' -- winner_user_id itself stays NULL until then too.
+     * joined_count (reported live: show the number of players joined on
+     * the tournaments display, for the tournament's own creator) is the
+     * same "how many 'joined' participants right now" count
+     * listOpenFor() already computes for the open-to-browse list --
+     * returned here for every row regardless of viewer/creator, same as
+     * every other field on this response; it's the frontend's job to
+     * decide who actually gets shown it (see tournamentListItemLabel()
+     * in web-static/js/game.js).
      */
     public function listForUser(int $userId): array
     {
         $stmt = Connection::get()->prepare(
-            'SELECT DISTINCT t.*, tp.id AS my_participant_id, tp.status AS my_participant_status, w.username AS winner_username
+            "SELECT DISTINCT t.*, tp.id AS my_participant_id, tp.status AS my_participant_status, w.username AS winner_username,
+                    (SELECT COUNT(*) FROM tournament_participants tp2 WHERE tp2.tournament_id = t.id AND tp2.status = 'joined') AS joined_count
              FROM tournaments t
              LEFT JOIN tournament_participants tp ON tp.tournament_id = t.id AND tp.user_id = :user_id
              LEFT JOIN users w ON w.id = t.winner_user_id
              WHERE t.created_by_user_id = :user_id_created OR tp.id IS NOT NULL
-             ORDER BY t.created_at DESC'
+             ORDER BY t.created_at DESC"
         );
         $stmt->execute(['user_id' => $userId, 'user_id_created' => $userId]);
 

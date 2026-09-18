@@ -1894,6 +1894,18 @@ sharing `tournamentListItemLabel()` between both lists just means
 neither has to duplicate the status-label-plus-name formatting, not
 that both are expected to use every part of it.
 
+**Joined-count display** (reported live: show the tournament's number
+of players joined on the tournaments display, for the tournament's own
+creator) -- `tournamentListItemLabel()` also appends " (`joined_count`
+of `max_participants` joined)" whenever `tournament.created_by_user_id
+=== user.id`, using the same `joined_count` field the "Open to join"
+list's own row text already reads (`TournamentRepository::listForUser()`'s
+new subquery, see "Tournaments" in `php-app/README.md`). Creator-only
+by choice, not by what the API returns (`joined_count` is present for
+every viewer) -- an ordinary joined participant already sees the full
+roster once they open the tournament view itself, so repeating the
+count here would just be noise for them.
+
 "Open to join" (`GET
 /tournaments`, no `?mine=1`) lists every open-registration tournament
 visible to the current user with a Join button
