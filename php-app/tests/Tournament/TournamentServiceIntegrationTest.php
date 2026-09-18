@@ -702,6 +702,14 @@ final class TournamentServiceIntegrationTest extends TestCase
         $this->tournaments->joinOpenTournament($tournamentId, $joiner2);
         $this->tournaments->joinOpenTournament($tournamentId, $joiner3);
 
+        // Reported live: show the number of players joined on the
+        // tournaments display, for the tournament's own creator --
+        // listMine()'s own joined_count field (TournamentRepository::
+        // listForUser()'s new subquery).
+        $listed = array_values(array_filter($this->tournaments->listMine($creator), static fn (array $t): bool => (int) $t['id'] === $tournamentId))[0];
+        self::assertSame(4, (int) $listed['joined_count']);
+        self::assertSame(4, (int) $listed['max_participants']);
+
         $fourthJoiner = $this->insertUser('open_p5');
         $this->expectException(TournamentStateException::class);
         $this->tournaments->joinOpenTournament($tournamentId, $fourthJoiner);

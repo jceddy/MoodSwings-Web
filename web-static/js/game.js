@@ -4193,12 +4193,23 @@
     // list below -- a cancelled tournament is never 'completed', so the
     // suffix is simply never shown there, but the label itself is
     // identical otherwise.
+    //
+    // Reported live: also show the number of players joined, for the
+    // tournament's own creator -- joined_count is returned for every
+    // viewer (same subquery listOpenFor()'s own "Open to join" list
+    // already uses), but only meaningful as an at-a-glance stat to the
+    // one person deciding whether/when to start the event; an ordinary
+    // joined participant already sees the full roster in the tournament
+    // view itself once they open it.
     function tournamentListItemLabel(tournament) {
         const winnerSuffix = tournament.status === 'completed' && tournament.winner_username
             ? ` (winner: ${tournament.winner_username})`
             : '';
+        const joinedSuffix = tournament.created_by_user_id === user.id
+            ? ` (${tournament.joined_count} of ${tournament.max_participants} joined)`
+            : '';
 
-        return `${tournament.name} — ${tournamentMatchSummary(tournament)} — ${TOURNAMENT_STATUS_LABELS[tournament.status] || tournament.status}${winnerSuffix} `;
+        return `${tournament.name} — ${tournamentMatchSummary(tournament)} — ${TOURNAMENT_STATUS_LABELS[tournament.status] || tournament.status}${joinedSuffix}${winnerSuffix} `;
     }
 
     function tournamentMatchSummary(tournament) {

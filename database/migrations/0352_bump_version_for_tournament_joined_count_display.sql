@@ -1,0 +1,11 @@
+-- Reported live: show the tournament's number of players joined on the
+-- main tournament view, for the tournament's own creator.
+-- TournamentRepository::listForUser() now also returns joined_count
+-- (the same subquery listOpenFor()'s own "Open to join" rows already
+-- use), and tournamentListItemLabel() (web-static/js/game.js) appends
+-- "(N of M joined)" whenever the viewer is the tournament's own
+-- creator.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.50.13' WHERE id = 1;
