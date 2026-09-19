@@ -13314,23 +13314,32 @@ final class GameService
      * see BoardState::$skipScoringThisRound's/$awardsExtraWinThisRound's
      * own docblocks.
      *
-     * The `swapScoreWithPlayerId` clear is NOT legacy, though -- a real
-     * bug, reported live: Sneakiness's "this round, after scoring, swap
-     * your score..." is explicitly THIS round's own one-time effect,
-     * normally cleared by applyScoreSwaps() the moment it's actually
-     * applied -- but that never runs on this (skipped-scoring) path,
-     * since this method entirely bypasses finishScoringAndAdvance(),
-     * where it lives. Playing Sneakiness in the SAME round as Awe used to
-     * leave its own tag sitting on the card indefinitely (it commonly
-     * stays in play well past the round it was played), so it'd keep
-     * showing in "How scoring will be affected"
+     * The `swapScoreWithPlayerId`/`afterScoring`/`returnsToOwnerAfterScoring`
+     * clears are NOT legacy, though -- a real bug, reported live: Awe's own
+     * printed text is explicit that "after-scoring effects don't happen"
+     * for the round it cancels, and a rules clarification confirmed that
+     * means never, not just a deferral to the next round that actually
+     * scores. Sneakiness's "this round, after scoring, swap your score...",
+     * Bashfulness/Recklessness's own self-tag, and Betrayal/Recklessness's
+     * foreign 'returnsToOwnerAfterScoring' tag on a given-away/taken mood
+     * are each normally cleared by applyScoreSwaps()/applyAfterScoringHooks()
+     * the moment they're actually applied -- but neither of those ever runs
+     * on this (skipped-scoring) path, since this method entirely bypasses
+     * finishScoringAndAdvance(), where they live. Playing any of these in
+     * the SAME round as Awe used to leave their own tag sitting on the card
+     * indefinitely (they commonly stay in play well past the round they
+     * were played), so it'd keep showing in "How scoring will be affected"
      * (scoringEffectEntries()) forever after -- and, far worse than a
      * cosmetic display bug, actually fire for real on whatever LATER round
-     * eventually does score normally, silently swapping that unrelated
-     * round's own outcome. Clearing it here matches "no one wins or loses
-     * this round" at face value: if there's no scoring, there's nothing
-     * for it to modify, so it shouldn't survive to ambush a round it was
-     * never meant to touch.
+     * eventually does score normally, silently swapping/moving/returning a
+     * mood that unrelated later round was never supposed to touch. Clearing
+     * them all here matches "after-scoring effects don't happen" at face
+     * value: if there's no scoring, there's nothing for any of them to
+     * trigger from, so none should survive to ambush a round they were
+     * never meant to touch. (Betrayal/Recklessness's given-away/taken mood
+     * simply stays with whoever currently holds it -- the tag is dropped,
+     * not fired, so no "return to original owner" happens either now or
+     * later; that's the effect never triggering, not triggering early.)
      *
      * @return array{round_scored: bool, game_completed: bool}
      */
@@ -13352,6 +13361,12 @@ final class GameService
             }
             if ($state->effectState($mood->cardId, 'swapScoreWithPlayerId') !== null) {
                 $state->clearEffectState($mood->cardId, 'swapScoreWithPlayerId');
+            }
+            if ($state->effectState($mood->cardId, 'afterScoring') !== null) {
+                $state->clearEffectState($mood->cardId, 'afterScoring');
+            }
+            if ($state->effectState($mood->cardId, 'returnsToOwnerAfterScoring') !== null) {
+                $state->clearEffectState($mood->cardId, 'returnsToOwnerAfterScoring');
             }
             // Legacy per-card marker, kept purely for backward
             // compatibility with a game whose Corruption resolved before

@@ -1009,7 +1009,26 @@ finally did score normally. `skipScoringAndAdvance()` clears both
 (Corruption's now via `BoardState::clearAwardsExtraWinThisRound()`)
 itself, alongside its own Awe-specific state, matching "no one wins or
 loses this round" — if there's no scoring, there's nothing left for
-either effect to modify. None of this is hidden information
+either effect to modify.
+
+A rules clarification extended this same fix to the OTHER "after
+scoring" hook, `applyAfterScoringHooks()` (Bashfulness/Betrayal/
+Gluttony/Insecurity/Recklessness's own `'afterScoring'`/
+`'returnsToOwnerAfterScoring'` `effectState` tags): our implementation
+already skipped these for the round Awe itself cancelled, but let them
+survive to fire for real on whatever LATER round genuinely scored --
+wrongly bottoming Bashfulness/Recklessness for a draw, or handing a
+Betrayal/Recklessness-held mood back, well after the round that would
+have triggered it never scored at all. Awe's own printed text
+("after-scoring effects don't happen") means never, not deferred, so
+`skipScoringAndAdvance()` now clears these two tags too, the same
+unconditional way it clears `swapScoreWithPlayerId` -- see
+`testRecklessnessAfterScoringAndReturnsToOwnerTagsDoNotFireOnAFutureRoundWhenSkippedByAwe`/
+`testBashfulnessAfterScoringSelfTagDoesNotFireOnAFutureRoundWhenSkippedByAwe`.
+A dropped `returnsToOwnerAfterScoring` tag means the given-away/taken
+mood simply stays with whoever currently holds it forever -- the
+"return to original owner" never happens, rather than happening late.
+None of this is hidden information
 — an in-play card and the choice it was played with are both already
 public — so every viewer sees the same list. The `effect_key` lookup goes
 through `BoardState::effectiveCardId()`, mirroring `RoundScorer::score()`'s
