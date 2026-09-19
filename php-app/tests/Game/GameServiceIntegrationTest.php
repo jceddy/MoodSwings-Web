@@ -5763,6 +5763,131 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * A rules clarification, following the same bug class as
+     * testSneakinessDoesNotSwapAFutureRoundsScoreWhenItsOwnRoundWasSkippedByAwe
+     * above but for the OTHER "after scoring" hook, applyAfterScoringHooks()
+     * (Bashfulness/Betrayal/Recklessness/Gluttony/Insecurity): our
+     * implementation already got "no after-scoring effect fires for the
+     * round Awe skipped" right, but not that those effects also never fire
+     * on a LATER round either -- Awe's own printed text ("after-scoring
+     * effects don't happen") means never, not just deferred past the round
+     * it cancels. Recklessness tags itself with the unconditional
+     * ('always') self 'afterScoring' key AND tags the mood it took with the
+     * foreign 'returnsToOwnerAfterScoring' key -- both used to survive
+     * skipScoringAndAdvance() untouched and then fire for real the next
+     * time a round genuinely scores, wrongly bottoming Recklessness for a
+     * draw and wrongly handing the taken mood back.
+     */
+    public function testRecklessnessAfterScoringAndReturnsToOwnerTagsDoNotFireOnAFutureRoundWhenSkippedByAwe(): void
+    {
+        $u1 = $this->insertUser('recklessawe1');
+        $u2 = $this->insertUser('recklessawe2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $recklessnessId = $this->insertGameCard($gameId, 100, 'hand', $p1); // Recklessness, value 0
+        $victimId = $this->insertGameCard($gameId, 44, 'in_play', $p2); // Indifference -- p2's mood to be taken
+        $aweId = $this->insertGameCard($gameId, 107, 'hand', $p2); // Awe, value 4
+        $complacencyId = $this->insertGameCard($gameId, 5, 'hand', $p1); // vanilla common, value 4 -- round 2
+        $indifference2Id = $this->insertGameCard($gameId, 44, 'hand', $p2); // vanilla common, value 4 -- round 2
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        // Round 1: p1 plays Recklessness, taking p2's mood (tagging both
+        // Recklessness itself and the taken mood), then p2 plays Awe
+        // (skipping round 1's own scoring entirely).
+        $this->games->playMood($gameId, $p1, $recklessnessId, ['target_mood_id' => $victimId]);
+
+        $victimZone = $this->pdo->prepare('SELECT owner_game_player_id FROM game_cards WHERE id = :id');
+        $victimZone->execute(['id' => $victimId]);
+        self::assertSame($p1, (int) $victimZone->fetch()['owner_game_player_id'], 'Recklessness takes the mood immediately');
+
+        $this->games->playMood($gameId, $p2, $aweId, ['target_player_id' => $p1]);
+
+        $round2 = $this->fetchRound($gameId);
+        self::assertSame(2, (int) $round2['round_number']);
+
+        // The taken mood's temporary-ownership tag should already be gone
+        // -- Awe skipping the round means there's no "after scoring" left
+        // for it to hook into, ever.
+        $inPlay = $this->games->getState($gameId, $u1)['in_play'];
+        self::assertNull(self::findByCardId($inPlay, $victimId)['temporary_ownership'] ?? null);
+
+        // Round 2 scores for real -- Recklessness's own 'always'-conditioned
+        // self-tag would trivially re-fire here if it survived Awe's skip.
+        $this->games->playMood($gameId, $p1, $complacencyId, []);
+        $result = $this->games->playMood($gameId, $p2, $indifference2Id, []);
+        self::assertTrue($result['round_scored']);
+
+        $recklessnessZone = $this->pdo->prepare('SELECT zone FROM game_cards WHERE id = :id');
+        $recklessnessZone->execute(['id' => $recklessnessId]);
+        self::assertSame('in_play', $recklessnessZone->fetch()['zone'], 'Recklessness should NOT bottom-and-draw for round 1\'s skipped scoring');
+
+        $victimZone->execute(['id' => $victimId]);
+        self::assertSame($p1, (int) $victimZone->fetch()['owner_game_player_id'], 'the taken mood should stay with p1 -- it never reverts once its "after scoring" was skipped');
+    }
+
+    /**
+     * Same rules clarification as
+     * testRecklessnessAfterScoringAndReturnsToOwnerTagsDoNotFireOnAFutureRoundWhenSkippedByAwe
+     * above, but for the CONDITIONAL flavor of the self 'afterScoring' tag
+     * (Bashfulness's own "if you won the round"): the condition must never
+     * be evaluated against a later round that scores for real, even when
+     * that later round's outcome would have satisfied it.
+     */
+    public function testBashfulnessAfterScoringSelfTagDoesNotFireOnAFutureRoundWhenSkippedByAwe(): void
+    {
+        $u1 = $this->insertUser('bashfulawe1');
+        $u2 = $this->insertUser('bashfulawe2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $bashfulnessId = $this->insertGameCard($gameId, 30, 'hand', $p1); // Bashfulness, value 6
+        $aweId = $this->insertGameCard($gameId, 107, 'hand', $p2); // Awe, value 4
+        $complacencyId = $this->insertGameCard($gameId, 5, 'hand', $p1); // vanilla common, value 4 -- round 2
+        $indifferenceId = $this->insertGameCard($gameId, 44, 'hand', $p2); // vanilla common, value 4 -- round 2
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        // Round 1: p1 plays Bashfulness, then p2 plays Awe -- choosing p1
+        // to go first next round, so p1 wins round 2 for real too.
+        $this->games->playMood($gameId, $p1, $bashfulnessId, []);
+        $this->games->playMood($gameId, $p2, $aweId, ['target_player_id' => $p1]);
+
+        $round2 = $this->fetchRound($gameId);
+        self::assertSame(2, (int) $round2['round_number']);
+        self::assertSame($p1, (int) $round2['first_game_player_id']);
+
+        // Round 2 scores for real, and p1 (Bashfulness's owner) wins it --
+        // the exact condition that would make Bashfulness's tag fire, IF it
+        // were (wrongly) still evaluated against this round instead of the
+        // one Awe skipped.
+        $this->games->playMood($gameId, $p1, $complacencyId, []);
+        $result = $this->games->playMood($gameId, $p2, $indifferenceId, []);
+        self::assertTrue($result['round_scored']);
+
+        $winnerStmt = $this->pdo->prepare('SELECT winner_game_player_id FROM game_rounds WHERE id = :id');
+        $winnerStmt->execute(['id' => $round2['id']]);
+        self::assertSame($p1, (int) $winnerStmt->fetch()['winner_game_player_id'], 'p1 (6+4=10) beats p2 (4+4=8) in round 2');
+
+        $bashfulnessZone = $this->pdo->prepare('SELECT zone FROM game_cards WHERE id = :id');
+        $bashfulnessZone->execute(['id' => $bashfulnessId]);
+        self::assertSame('in_play', $bashfulnessZone->fetch()['zone'], 'Bashfulness should NOT bottom-and-draw -- its own tag belonged to round 1, which Awe skipped, not round 2');
+    }
+
+    /**
      * A bug caught live: Awe's own effect triggers "after playing" -- its
      * choice of who goes first next round is already fully locked in the
      * instant it resolves, unlike Honor's genuinely "while in play"
