@@ -1,0 +1,12 @@
+-- Rules clarification: Awe's "after-scoring effects don't happen" for the
+-- round it cancels means never, not just deferred to a later round that
+-- actually scores. skipScoringAndAdvance() (GameService) now also clears
+-- the 'afterScoring' and 'returnsToOwnerAfterScoring' effectState tags set
+-- by Bashfulness/Betrayal/Gluttony/Insecurity/Recklessness, matching the
+-- 'swapScoreWithPlayerId' clear already in place for Sneakiness -- these
+-- used to survive Awe's skip and wrongly fire on whatever later round
+-- eventually scores for real.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.50.14' WHERE id = 1;
