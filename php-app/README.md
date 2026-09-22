@@ -3514,18 +3514,38 @@ with `random_48`-style random sampling, rather than only ever getting one
 or the other. When set, `buildRotisserieDraftPool()` passes
 `truncateToTarget: true` (instead of its usual `false`) into
 `buildDraftPool()`, so the chosen source's own full pool -- already
-through whatever doubling/swap-up decision the floor triggers above -- is
-shuffled and sliced down to exactly `rotisserieDraftMinPoolSize()` cards
-before drafting starts, the same truncation Quick/Winston/Grid Draft's
-own pool sources already get unconditionally. This happens strictly
-*after* the doubling/swap-up decision, not before: a randomized
-`jceddys_75` pool at a floor over 75 samples from the full 150-card
-`jceddys_150` pool, not the original 75-card one. A no-op in practice for
-`random_48` itself (already sized exactly to the floor either way).
-Purely an input-time decision with nothing persisted about it -- the
-resulting `draft_matches.pool_card_ids` already reflects whichever cards
-were actually chosen, the same as any other pool source, so there's
-nothing else to carry forward once the pool is built.
+through whatever doubling/swap-up decision the sample size triggers below
+-- is shuffled and sliced down to `$sampleSize` cards before drafting
+starts, the same truncation Quick/Winston/Grid Draft's own pool sources
+already get unconditionally. A no-op in practice for `random_48` itself
+(already sized exactly to `$sampleSize` either way). Purely an input-time
+decision with nothing persisted about it -- the resulting
+`draft_matches.pool_card_ids` already reflects whichever cards were
+actually chosen, the same as any other pool source, so there's nothing
+else to carry forward once the pool is built.
+
+**`rotisserie_draft_randomize_sample_size` (issue #462 follow-up)** --
+only meaningful alongside `rotisserie_draft_randomize_pool`: lets the
+creator sample MORE than the floor (`rotisserieDraftMinPoolSize()`)
+instead of always exactly the floor. `$sampleSize` is
+`$randomizeSampleSize` when given, otherwise defaults to `$minPoolSize`
+exactly as before this param existed; a given value below `$minPoolSize`
+is a `GameStateException` (the draft can't proceed on fewer cards than
+every player's own cutoff needs), but a value larger than what the pool
+source can actually provide is NOT an error -- `buildDraftPool()`
+already returns the pool as-is (still checked against `$minPoolSize`
+afterward) rather than padding it out, the same way an oversized
+`truncateToTarget` request always has. `$sampleSize` (not `$minPoolSize`)
+is what now drives the Structure-doubling/jceddy's-150-swap thresholds
+too, so a larger sample from a small named pool still reaches for the
+bigger underlying pool it actually needs to sample from -- e.g. a
+randomized `jceddys_75` pool with a sample size over 75 samples from the
+full 150-card `jceddys_150` pool, not the original 75-card one, the same
+way a floor over 75 already did before this param existed. The New Game
+dialog's own number input for this is pre-filled with the current floor
+(`currentRotisserieDraftMinPoolSize()`) as its default value, editable
+up -- see "Rotisserie Draft's own drafting phase" in
+`web-static/README.md`.
 
 **Pick order -- snaking with a rotating starter, alternating every two
 rounds** -- `rotisserieDraftPickUserId($userIds, $pickIndex)` computes,

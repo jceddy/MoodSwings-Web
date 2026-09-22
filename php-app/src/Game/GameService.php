@@ -1488,20 +1488,37 @@ final class GameService
      *        meaningful when $deckType is 'rotisserie_draft' -- when true,
      *        $rotisserieDraftPoolSource's own pool (already built at its
      *        own natural full size, including any Structure/jceddy's 75
-     *        doubling-up) is randomly narrowed down to exactly
-     *        rotisserieDraftMinPoolSize() cards before drafting starts,
-     *        the same "shuffle + take N" truncation Quick/Winston/Grid
-     *        Draft's own pool sources already get unconditionally (see
-     *        buildDraftPool()'s own $truncateToTarget param) -- rather
+     *        doubling-up) is randomly narrowed down to
+     *        $rotisserieDraftRandomizeSampleSize cards before drafting
+     *        starts, the same "shuffle + take N" truncation Quick/Winston/
+     *        Grid Draft's own pool sources already get unconditionally
+     *        (see buildDraftPool()'s own $truncateToTarget param) -- rather
      *        than the "lay the whole thing out face-up, leftovers simply
      *        never drafted" default buildRotisserieDraftPool() otherwise
      *        always uses. Lets a creator combine a specific named pool
      *        (a saved deck, jceddy's 75, etc.) with 'random_48'-style
      *        random sampling instead of only ever getting one or the
-     *        other. A no-op in practice for 'random_48' itself, which
-     *        already returns exactly rotisserieDraftMinPoolSize() cards
-     *        either way. Defaults to false (the pre-existing "lay it all
+     *        other. Defaults to false (the pre-existing "lay it all
      *        out" behavior), so every existing caller is unaffected.
+     * @param ?int $rotisserieDraftRandomizeSampleSize issue #462 follow-up:
+     *        only meaningful when $rotisserieDraftRandomizePool is true --
+     *        how many cards to sample, instead of always sampling exactly
+     *        rotisserieDraftMinPoolSize() (the floor). Null (the default)
+     *        falls back to that floor, matching the original behavior. A
+     *        non-null value below the floor is an error (the draft can't
+     *        proceed with fewer than every player's own cutoff needs); a
+     *        value larger than the pool source can actually provide is NOT
+     *        an error -- buildDraftPool() already returns the pool as-is
+     *        (still at least the floor) rather than padding it out, the
+     *        same way an oversized $truncateToTarget request always has.
+     *        Also raises the Structure-doubling/jceddy's-150-swap
+     *        thresholds (both keyed off the same effective target) when it
+     *        exceeds the floor, so a larger sample from a small named pool
+     *        still gets the bigger underlying pool to actually sample from.
+     *        Silently ignored (not an error) whenever
+     *        $rotisserieDraftRandomizePool is false, the same "harmless
+     *        no-op outside its own narrow scope" convention every other
+     *        creation-time opt-in here already follows.
      * @param ?string $tieredRotisserieDraftMode only meaningful (and
      *        required) when $deckType is 'tiered_rotisserie_draft' --
      *        'rarity' (the fixed reference scheme, no further fields
@@ -1620,6 +1637,7 @@ final class GameService
         ?string $rotisserieDraftCustomPoolText = null,
         int $rotisserieDraftCutoffCount = self::ROTISSERIE_DRAFT_DEFAULT_CUTOFF,
         bool $rotisserieDraftRandomizePool = false,
+        ?int $rotisserieDraftRandomizeSampleSize = null,
         ?string $tieredRotisserieDraftMode = null,
         ?array $tieredRotisserieDraftTiers = null,
         bool $botGoesFirst = false,
@@ -2054,7 +2072,7 @@ final class GameService
             'quick_draft', 'chaos_draft' => $this->buildQuickDraftPool((string) $quickDraftPoolSource, $quickDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds)),
             'winston_draft' => $this->buildWinstonDraftPool((string) $winstonDraftPoolSource, $winstonDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds)),
             'grid_draft' => $this->buildGridDraftPool((string) $gridDraftPoolSource, $gridDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds)),
-            'rotisserie_draft' => $this->buildRotisserieDraftPool((string) $rotisserieDraftPoolSource, $rotisserieDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds), $rotisserieDraftCutoffCount, $rotisserieDraftRandomizePool),
+            'rotisserie_draft' => $this->buildRotisserieDraftPool((string) $rotisserieDraftPoolSource, $rotisserieDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds), $rotisserieDraftCutoffCount, $rotisserieDraftRandomizePool, $rotisserieDraftRandomizeSampleSize),
             'tiered_rotisserie_draft' => array_merge(...array_map(static fn (array $tier): array => $tier['pool_card_ids'], $tieredRotisserieDraftTierPools)),
             // The flattened union of every player's own individual pool --
             // draftMatchPoolView()'s own undraftedCardIds computation
@@ -4470,26 +4488,46 @@ final class GameService
      *
      *         $randomizePool (issue #454) flips $truncateToTarget to true
      *         instead, so the pool source's own full (already doubled/
-     *         swapped-up) card list is randomly narrowed down to exactly
-     *         $minPoolSize cards -- the same shuffle-and-slice every
-     *         other draft type's own pool already always gets. This
-     *         happens AFTER the doubling/swap-up decision above, not
-     *         before: a randomized 'jceddys_75' pool at a floor over 75,
-     *         for instance, samples from the full 150-card
-     *         'jceddys_150' pool, not the original 75-card one.
+     *         swapped-up) card list is randomly narrowed down to
+     *         $sampleSize cards -- the same shuffle-and-slice every
+     *         other draft type's own pool already always gets.
+     *         $sampleSize itself (issue #462 follow-up) is
+     *         $randomizeSampleSize when given (validated below to be no
+     *         smaller than $minPoolSize -- the draft can't proceed on
+     *         fewer cards than every player's own cutoff needs), otherwise
+     *         defaults to $minPoolSize exactly as before. It's used as
+     *         $targetSize for the doubling/swap-up decision too (not just
+     *         the final truncation), so a randomize-with-a-larger-sample
+     *         request still reaches for the bigger underlying pool it
+     *         actually needs to sample from -- e.g. a randomized
+     *         'jceddys_75' pool with a sample size over 75 samples from
+     *         the full 150-card 'jceddys_150' pool, not the original
+     *         75-card one, the same way a floor over 75 already did before
+     *         this param existed. $randomizeSampleSize is silently ignored
+     *         whenever $randomizePool is false ($sampleSize just reduces
+     *         to $minPoolSize, same as $targetSize always was previously).
      */
-    private function buildRotisserieDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $playerCount, int $cutoffCount, bool $randomizePool = false): array
+    private function buildRotisserieDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $playerCount, int $cutoffCount, bool $randomizePool = false, ?int $randomizeSampleSize = null): array
     {
         $minPoolSize = self::rotisserieDraftMinPoolSize($cutoffCount, $playerCount);
+
+        $sampleSize = $randomizePool ? ($randomizeSampleSize ?? $minPoolSize) : $minPoolSize;
+
+        if ($randomizePool && $randomizeSampleSize !== null && $randomizeSampleSize < $minPoolSize) {
+            throw new GameStateException(
+                "The randomize-pool sample size ({$randomizeSampleSize}) can't be smaller than the "
+                . "{$minPoolSize}-card minimum Rotisserie Draft with {$playerCount} players and a {$cutoffCount}-card cutoff requires"
+            );
+        }
 
         $cardIds = $this->buildDraftPool(
             $poolSource,
             $customPoolText,
             $savedDecklistId,
             $requestingUserId,
+            $sampleSize,
             $minPoolSize,
-            $minPoolSize,
-            doubleStructureForMultiplayer: $minPoolSize > 45,
+            doubleStructureForMultiplayer: $sampleSize > 45,
             truncateToTarget: $randomizePool,
         );
 

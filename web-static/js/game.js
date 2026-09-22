@@ -2175,6 +2175,49 @@
             rotisserieStructureOptionLabel(rotisserieMinPoolSize);
         rotisserieSelect.querySelector('option[value="jceddys_75"]').textContent =
             rotisserieJceddys75OptionLabel(rotisserieMinPoolSize);
+        refreshRotisserieDraftRandomizeSampleSizeDefault();
+    }
+
+    // Issue #462 follow-up: whether the creator has typed their own value
+    // into #new-game-rotisserie-draft-randomize-sample-size -- once true,
+    // refreshRotisserieDraftRandomizeSampleSizeDefault() stops overwriting
+    // it on every cutoff-count/opponent-selection change, the same
+    // "don't clobber a deliberate edit" concern a live-recomputed default
+    // always has. Reset back to false whenever the randomize checkbox is
+    // unchecked, so checking it again later starts from a fresh default
+    // rather than remembering a stale manual value from earlier in the
+    // same dialog session.
+    let rotisserieDraftRandomizeSampleSizeUserEdited = false;
+
+    // Keeps #new-game-rotisserie-draft-randomize-sample-size pre-filled
+    // with the current minimum pool size (the same value
+    // currentRotisserieDraftMinPoolSize() feeds the pool-source option
+    // labels above) whenever the creator hasn't already typed their own
+    // number in -- called from updateDraftPoolSourceOptionLabels() (so it
+    // stays current on every cutoff-count/opponent-selection change) and
+    // from updateRotisserieDraftRandomizeSampleSizeVisibility() (so
+    // checking the box for the first time seeds a sensible starting
+    // point rather than an empty field).
+    function refreshRotisserieDraftRandomizeSampleSizeDefault() {
+        const input = document.getElementById('new-game-rotisserie-draft-randomize-sample-size');
+        const minPoolSize = currentRotisserieDraftMinPoolSize(currentDraftPlayerCount());
+        input.min = String(minPoolSize);
+        if (!rotisserieDraftRandomizeSampleSizeUserEdited) {
+            input.value = String(minPoolSize);
+        }
+    }
+
+    // Shows/hides the "cards to sample" field alongside the randomize
+    // checkbox -- mirrors every other conditional-field toggle on this
+    // form (updateQuickDraftPoolSourceVisibility() and friends).
+    function updateRotisserieDraftRandomizeSampleSizeVisibility() {
+        const randomizeChecked = document.getElementById('new-game-rotisserie-draft-randomize-pool').checked;
+        document.getElementById('new-game-rotisserie-draft-randomize-sample-size-label').hidden = !randomizeChecked;
+        if (!randomizeChecked) {
+            rotisserieDraftRandomizeSampleSizeUserEdited = false;
+        } else {
+            refreshRotisserieDraftRandomizeSampleSizeDefault();
+        }
     }
 
     const RARITIES = ['common', 'uncommon', 'rare', 'mythic'];
@@ -3626,6 +3669,14 @@
     // same option-label refresh a checked-opponent/format change already
     // triggers via updateOpponentSelectionLimit().
     document.getElementById('new-game-rotisserie-draft-cutoff-count').addEventListener('input', updateDraftPoolSourceOptionLabels);
+    // Issue #462 follow-up: shows/hides the "cards to sample" field
+    // alongside the checkbox, and marks it user-edited once the creator
+    // types their own value in -- see refreshRotisserieDraftRandomizeSampleSizeDefault()'s
+    // own docblock for why that stops future auto-refills.
+    document.getElementById('new-game-rotisserie-draft-randomize-pool').addEventListener('change', updateRotisserieDraftRandomizeSampleSizeVisibility);
+    document.getElementById('new-game-rotisserie-draft-randomize-sample-size').addEventListener('input', () => {
+        rotisserieDraftRandomizeSampleSizeUserEdited = true;
+    });
     document.getElementById('new-game-tiered-rotisserie-draft-mode').addEventListener('change', updateTieredRotisserieDraftModeVisibility);
     document.getElementById('new-game-tiered-rotisserie-draft-tier-count').addEventListener('change', updateTieredRotisserieDraftTierCountVisibility);
     [1, 2, 3, 4].forEach((n) => {
@@ -3782,6 +3833,14 @@
         // plain HTML default, so this runs after it.
         document.getElementById('new-game-default-selections').checked =
             prefill ? prefill.defaultSelectionsMode : user.default_selections_mode_preference;
+        // form.reset() above already unchecked the randomize-pool checkbox
+        // (so #new-game-rotisserie-draft-randomize-sample-size-label is
+        // moot this time regardless), but this flag itself lives outside
+        // the form and would otherwise survive into a LATER session where
+        // deck_type is picked back to 'rotisserie_draft' and the checkbox
+        // is checked again -- reset it here too, same reasoning as the
+        // default-selections checkbox just above.
+        rotisserieDraftRandomizeSampleSizeUserEdited = false;
         const submitButton = document.getElementById('new-game-submit-button');
         submitButton.disabled = false;
         // form.reset() above already put the mode radios back to "Invite
@@ -5331,6 +5390,12 @@
             && document.getElementById('new-game-rotisserie-draft-randomize-pool').checked
             ? true
             : undefined;
+        // Issue #462 follow-up: only meaningful alongside
+        // rotisserieDraftRandomizePool -- same "don't send this at all"
+        // convention when it isn't applicable.
+        const rotisserieDraftRandomizeSampleSize = rotisserieDraftRandomizePool
+            ? Number(document.getElementById('new-game-rotisserie-draft-randomize-sample-size').value) || undefined
+            : undefined;
         const tieredRotisserieDraftMode = deckType === 'tiered_rotisserie_draft'
             ? document.getElementById('new-game-tiered-rotisserie-draft-mode').value
             : undefined;
@@ -5458,6 +5523,7 @@
                 rotisserie_draft_custom_pool_text: rotisserieDraftCustomPoolText,
                 rotisserie_draft_cutoff_count: rotisserieDraftCutoffCount,
                 rotisserie_draft_randomize_pool: rotisserieDraftRandomizePool,
+                rotisserie_draft_randomize_sample_size: rotisserieDraftRandomizeSampleSize,
                 tiered_rotisserie_draft_mode: tieredRotisserieDraftMode,
                 tiered_rotisserie_draft_tiers: tieredRotisserieDraftTiers,
                 // Issue #90 follow-up: was missing here entirely, so
@@ -5507,6 +5573,7 @@
             rotisserieDraftCustomPoolText,
             rotisserieDraftCutoffCount,
             rotisserieDraftRandomizePool,
+            rotisserieDraftRandomizeSampleSize,
             tieredRotisserieDraftMode,
             tieredRotisserieDraftTiers,
             botGoesFirst,
