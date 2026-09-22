@@ -3028,6 +3028,48 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame(['white'], $scornField['filter']['colors']);
     }
 
+    /**
+     * Reported live: selecting an in-play Creativity-copy-of-a-mood (e.g.
+     * "Intimidation [Creativity copy]") as the target for a NEW Creativity
+     * showed the copy_card_id picker a second time instead of the copied
+     * mood's own after-playing fields (Intimidation's target_player_id).
+     * copy_simulation's extra_fields has to resolve the candidate's own
+     * schema through the whole copy chain (effectiveCardId()), not just
+     * the candidate's raw printed effect_key -- which, for a Creativity
+     * copy, is always just 'creativity' (copy_card_id) regardless of what
+     * it's actually copying.
+     */
+    public function testCopySimulationOffersTheCopiedEffectsOwnFieldsWhenTheCandidateIsItselfACreativityCopy(): void
+    {
+        $u1 = $this->insertUser('copysimnested1');
+        $u2 = $this->insertUser('copysimnested2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $intimidationId = $this->insertGameCard($gameId, 67, 'in_play', $p1); // Intimidation
+        $creativity1Id = $this->insertGameCard($gameId, 32, 'in_play', $p2); // Creativity, already copying Intimidation
+        $stmt = $this->pdo->prepare('UPDATE game_cards SET copied_card_id = :copied WHERE id = :id');
+        $stmt->execute(['copied' => $intimidationId, 'id' => $creativity1Id]);
+        $creativity2Id = $this->insertGameCard($gameId, 32, 'hand', $p1); // A second Creativity, about to be played
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $hand = $this->games->getState($gameId, $u1)['you']['hand'];
+        $creativity2 = self::findByCardId($hand, $creativity2Id);
+
+        $extraFields = $creativity2['copy_simulation'][$creativity1Id]['extra_fields'];
+        self::assertNull(self::findFieldByKey($extraFields, 'copy_card_id'), 'must not offer a second copy-target picker');
+        $targetField = self::findFieldByKey($extraFields, 'target_player_id');
+        self::assertNotNull($targetField, "Intimidation's own target_player_id field must be offered");
+        self::assertSame('player', $targetField['type']);
+    }
+
     public function testCopySimulationNeverOffersAValidationReactionSinceItsGrantIsUnconditional(): void
     {
         $u1 = $this->insertUser('copysimvalid1');

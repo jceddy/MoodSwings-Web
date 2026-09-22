@@ -1,0 +1,14 @@
+-- Reported live: selecting an in-play Creativity-copy-of-a-mood as the
+-- target for a NEW Creativity showed the copy_card_id picker a second
+-- time instead of the copied mood's own after-playing fields (e.g.
+-- Intimidation's target_player_id). GameService::creativityCopySimulation()'s
+-- extra_fields now includes CardChoiceSchema::forEffectKey() resolved
+-- through effectiveCardId() -- the candidate's true effective identity --
+-- instead of leaving the client to reuse the candidate's own raw
+-- choice_fields (always just 'creativity' for a Creativity-copy candidate).
+-- game.js's handleCreativityCopyChange() now relies on copy_simulation's
+-- extra_fields alone, since that already covers the non-nested case too.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.50.17' WHERE id = 1;

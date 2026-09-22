@@ -10528,23 +10528,28 @@
     let selectedCard = null;
 
     // Creativity's copy_card_id is the only field whose choice changes what
-    // OTHER fields the panel needs to show. Two different things happen
-    // once a copy target is picked, both mirroring exactly what
-    // MoodPlayService reads once the play actually reaches the server:
+    // OTHER fields the panel needs to show. Once a copy target is picked,
+    // its own field list comes entirely from copy_simulation (from
+    // GameService::creativityCopySimulation()), which bundles two things
+    // that both mirror exactly what MoodPlayService reads once the play
+    // actually reaches the server:
     //  1) the copied mood's OWN fields -- its "to play" cost (e.g. Guile's
     //     discard_card_ids) and its own after-playing choices (e.g.
-    //     Compulsion's target_player_id, Dignity's discard_card_id) -- read
-    //     from the exact same flat, top-level choices bag a normal play of
-    //     that card would use. These are already sitting on the candidate's
-    //     own serialized choice_fields (currentState.in_play), computed the
-    //     same way for every card -- no new data needed, just reused as-is.
+    //     Compulsion's target_player_id, Dignity's discard_card_id) --
+    //     resolved server-side through effectiveCardId(), NOT read from the
+    //     candidate's own serialized choice_fields (currentState.in_play):
+    //     for a candidate that's itself an in-play Creativity copy, THAT
+    //     always describes playing bare Creativity (just its own
+    //     copy_card_id picker) regardless of what it's actually copying, so
+    //     reusing it directly used to show a second, spurious copy-target
+    //     dropdown instead of the real card's fields (e.g. Intimidation's
+    //     target_player_id) when copying a copy.
     //  2) reactions to the play from the ACTING PLAYER's own OTHER cards --
     //     Duplicity's repeat-with-fresh-choices, Scorn's/Validation's
     //     reactions -- which depend on board state (do you have Duplicity/
     //     Scorn/Validation in play?) the client would otherwise have to
     //     duplicate the checks for, so these come precomputed per candidate
-    //     from the server instead (copy_simulation, from
-    //     GameService::creativityCopySimulation()).
+    //     from the server instead too.
     // creativityBaseFields is just the copy_card_id field itself -- rendered
     // once, as a static row, and never rebuilt. Everything else Creativity's
     // own serialized choice_fields carries (its own baseline Scorn/
@@ -10582,8 +10587,17 @@
 
         let extras;
         if (copiedCard) {
+            // simulation.extra_fields is already the copy target's full
+            // own field list (cost + after-playing), resolved server-side
+            // through the whole copy chain (GameService::
+            // creativityCopySimulation()) -- copiedCard.choice_fields
+            // itself must NOT be reused here too: for a candidate that's
+            // itself an in-play Creativity copy, that describes playing
+            // bare Creativity (just its own copy_card_id picker), not
+            // whatever it's actually copying, and would show a second,
+            // spurious copy-target dropdown alongside the real fields.
             const simulation = selectedCard.copy_simulation[copiedCardId];
-            extras = [...copiedCard.choice_fields, ...(simulation ? simulation.extra_fields : [])];
+            extras = simulation ? simulation.extra_fields : [];
             selectedCard.copy_cost_payable = simulation ? simulation.cost_payable : true;
         } else {
             extras = creativityNoCopyExtraFields;

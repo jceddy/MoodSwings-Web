@@ -19847,7 +19847,20 @@ final class GameService
         foreach ($state->moodsInPlay() as $candidateCardId => $mood) {
             $candidateRow = $state->catalogRow($state->effectiveCardId($candidateCardId));
             $simulation[$candidateCardId] = [
-                'extra_fields' => $this->reactionFields($state, $viewerId, $candidateRow['color']),
+                // The candidate's own after-playing/cost fields, keyed by
+                // its EFFECTIVE effect_key -- not the candidate's own
+                // serialized choice_fields (game.js used to reuse those
+                // directly), which for a candidate that's itself an in-play
+                // Creativity copy describes playing bare Creativity (its
+                // raw printed identity's schema is just copy_card_id),
+                // never whatever it's actually copying. Resolving through
+                // effectiveCardId() here means copying a Creativity-that's-
+                // copying-Intimidation offers Intimidation's own
+                // target_player_id field, not another copy_card_id picker.
+                'extra_fields' => [
+                    ...CardChoiceSchema::forEffectKey($candidateRow['effectKey']),
+                    ...$this->reactionFields($state, $viewerId, $candidateRow['color']),
+                ],
                 'cost_payable' => $this->plays->canPayCopiedToPlayCost($state, $viewerId, $creativityCardId, $candidateCardId),
             ];
         }
