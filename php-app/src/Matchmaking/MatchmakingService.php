@@ -266,6 +266,7 @@ final class MatchmakingService
                     $params['rotisserie_draft_pool_source'] ?? null,
                     $params['rotisserie_draft_custom_pool_text'] ?? null,
                     (int) ($params['rotisserie_draft_cutoff_count'] ?? 14),
+                    (bool) ($params['rotisserie_draft_randomize_pool'] ?? false),
                     $params['tiered_rotisserie_draft_mode'] ?? null,
                     $params['tiered_rotisserie_draft_tiers'] ?? null,
                     false,

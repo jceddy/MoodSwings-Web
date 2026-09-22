@@ -3507,6 +3507,26 @@ match can ever actually cross that line (a 19-20 cutoff, floor 76-80) --
 2-3 players max out at 40/60, both comfortably under 75, so they always
 stay on the 75-card pool regardless of cutoff.
 
+**`rotisserie_draft_randomize_pool` (issue #454)** -- an opt-in checkbox
+next to the pool-source dropdown that lets a creator combine a *specific*
+pool (`structure`, `jceddys_75`, `custom`, `saved_deck`, `one_of_each`)
+with `random_48`-style random sampling, rather than only ever getting one
+or the other. When set, `buildRotisserieDraftPool()` passes
+`truncateToTarget: true` (instead of its usual `false`) into
+`buildDraftPool()`, so the chosen source's own full pool -- already
+through whatever doubling/swap-up decision the floor triggers above -- is
+shuffled and sliced down to exactly `rotisserieDraftMinPoolSize()` cards
+before drafting starts, the same truncation Quick/Winston/Grid Draft's
+own pool sources already get unconditionally. This happens strictly
+*after* the doubling/swap-up decision, not before: a randomized
+`jceddys_75` pool at a floor over 75 samples from the full 150-card
+`jceddys_150` pool, not the original 75-card one. A no-op in practice for
+`random_48` itself (already sized exactly to the floor either way).
+Purely an input-time decision with nothing persisted about it -- the
+resulting `draft_matches.pool_card_ids` already reflects whichever cards
+were actually chosen, the same as any other pool source, so there's
+nothing else to carry forward once the pool is built.
+
 **Pick order -- snaking with a rotating starter, alternating every two
 rounds** -- `rotisserieDraftPickUserId($userIds, $pickIndex)` computes,
 from a 0-indexed global pick counter, which seat picks next. Every 2

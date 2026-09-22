@@ -5323,6 +5323,14 @@
         const rotisserieDraftCutoffCount = deckType === 'rotisserie_draft'
             ? Number(document.getElementById('new-game-rotisserie-draft-cutoff-count').value) || undefined
             : undefined;
+        // Issue #454: only meaningful for deck_type 'rotisserie_draft' --
+        // undefined (not false) when unchecked/not applicable, same
+        // "don't send this at all" convention as every other optional
+        // field on this form.
+        const rotisserieDraftRandomizePool = deckType === 'rotisserie_draft'
+            && document.getElementById('new-game-rotisserie-draft-randomize-pool').checked
+            ? true
+            : undefined;
         const tieredRotisserieDraftMode = deckType === 'tiered_rotisserie_draft'
             ? document.getElementById('new-game-tiered-rotisserie-draft-mode').value
             : undefined;
@@ -5449,6 +5457,7 @@
                 rotisserie_draft_pool_source: rotisserieDraftPoolSource,
                 rotisserie_draft_custom_pool_text: rotisserieDraftCustomPoolText,
                 rotisserie_draft_cutoff_count: rotisserieDraftCutoffCount,
+                rotisserie_draft_randomize_pool: rotisserieDraftRandomizePool,
                 tiered_rotisserie_draft_mode: tieredRotisserieDraftMode,
                 tiered_rotisserie_draft_tiers: tieredRotisserieDraftTiers,
                 // Issue #90 follow-up: was missing here entirely, so
@@ -5497,6 +5506,7 @@
             rotisserieDraftPoolSource,
             rotisserieDraftCustomPoolText,
             rotisserieDraftCutoffCount,
+            rotisserieDraftRandomizePool,
             tieredRotisserieDraftMode,
             tieredRotisserieDraftTiers,
             botGoesFirst,

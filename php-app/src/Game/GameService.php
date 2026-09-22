@@ -1484,6 +1484,24 @@ final class GameService
      *        ROTISSERIE_DRAFT_MAX_CUTOFF (13-20), defaulting to
      *        ROTISSERIE_DRAFT_DEFAULT_CUTOFF (14). Fixed for the whole
      *        match once chosen, the same shape as $winsNeeded.
+     * @param bool $rotisserieDraftRandomizePool issue #454: only
+     *        meaningful when $deckType is 'rotisserie_draft' -- when true,
+     *        $rotisserieDraftPoolSource's own pool (already built at its
+     *        own natural full size, including any Structure/jceddy's 75
+     *        doubling-up) is randomly narrowed down to exactly
+     *        rotisserieDraftMinPoolSize() cards before drafting starts,
+     *        the same "shuffle + take N" truncation Quick/Winston/Grid
+     *        Draft's own pool sources already get unconditionally (see
+     *        buildDraftPool()'s own $truncateToTarget param) -- rather
+     *        than the "lay the whole thing out face-up, leftovers simply
+     *        never drafted" default buildRotisserieDraftPool() otherwise
+     *        always uses. Lets a creator combine a specific named pool
+     *        (a saved deck, jceddy's 75, etc.) with 'random_48'-style
+     *        random sampling instead of only ever getting one or the
+     *        other. A no-op in practice for 'random_48' itself, which
+     *        already returns exactly rotisserieDraftMinPoolSize() cards
+     *        either way. Defaults to false (the pre-existing "lay it all
+     *        out" behavior), so every existing caller is unaffected.
      * @param ?string $tieredRotisserieDraftMode only meaningful (and
      *        required) when $deckType is 'tiered_rotisserie_draft' --
      *        'rarity' (the fixed reference scheme, no further fields
@@ -1601,6 +1619,7 @@ final class GameService
         ?string $rotisserieDraftPoolSource = null,
         ?string $rotisserieDraftCustomPoolText = null,
         int $rotisserieDraftCutoffCount = self::ROTISSERIE_DRAFT_DEFAULT_CUTOFF,
+        bool $rotisserieDraftRandomizePool = false,
         ?string $tieredRotisserieDraftMode = null,
         ?array $tieredRotisserieDraftTiers = null,
         bool $botGoesFirst = false,
@@ -2035,7 +2054,7 @@ final class GameService
             'quick_draft', 'chaos_draft' => $this->buildQuickDraftPool((string) $quickDraftPoolSource, $quickDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds)),
             'winston_draft' => $this->buildWinstonDraftPool((string) $winstonDraftPoolSource, $winstonDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds)),
             'grid_draft' => $this->buildGridDraftPool((string) $gridDraftPoolSource, $gridDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds)),
-            'rotisserie_draft' => $this->buildRotisserieDraftPool((string) $rotisserieDraftPoolSource, $rotisserieDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds), $rotisserieDraftCutoffCount),
+            'rotisserie_draft' => $this->buildRotisserieDraftPool((string) $rotisserieDraftPoolSource, $rotisserieDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds), $rotisserieDraftCutoffCount, $rotisserieDraftRandomizePool),
             'tiered_rotisserie_draft' => array_merge(...array_map(static fn (array $tier): array => $tier['pool_card_ids'], $tieredRotisserieDraftTierPools)),
             // The flattened union of every player's own individual pool --
             // draftMatchPoolView()'s own undraftedCardIds computation
@@ -4422,14 +4441,15 @@ final class GameService
     /**
      * @return int[] Rotisserie Draft's own pool -- unlike Quick/Winston/
      *         Grid Draft, this is a FLOOR (rotisserieDraftMinPoolSize()),
-     *         not an exact target: $truncateToTarget is false, so anything
-     *         over the floor is laid out in full rather than randomly cut
-     *         down first (see buildDraftPool()'s own docblock). The
-     *         'random_48' source is the one exception in practice --
-     *         buildRandomDraftCardIds() already returns exactly
-     *         $minPoolSize cards, so there's never anything to truncate
-     *         either way -- matching "N random cards, where N is the
-     *         minimum pool size" (the maintainer's own words) exactly.
+     *         not an exact target: $truncateToTarget is false by default
+     *         (unless $randomizePool -- issue #454, see below), so
+     *         anything over the floor is laid out in full rather than
+     *         randomly cut down first (see buildDraftPool()'s own
+     *         docblock). The 'random_48' source is the one exception in
+     *         practice -- buildRandomDraftCardIds() already returns
+     *         exactly $minPoolSize cards, so there's never anything to
+     *         truncate either way -- matching "N random cards, where N is
+     *         the minimum pool size" (the maintainer's own words) exactly.
      *         'structure' is doubled whenever the floor itself exceeds a
      *         single 45-card copy -- a different condition than Quick/
      *         Winston Draft's own $playerCount > 2 (see
@@ -4447,8 +4467,18 @@ final class GameService
      *         18-card cutoff (72) still fits but a 19-card one (76) tips
      *         over into needing the 150-card pool -- see
      *         buildDraftPool()'s own docblock.
+     *
+     *         $randomizePool (issue #454) flips $truncateToTarget to true
+     *         instead, so the pool source's own full (already doubled/
+     *         swapped-up) card list is randomly narrowed down to exactly
+     *         $minPoolSize cards -- the same shuffle-and-slice every
+     *         other draft type's own pool already always gets. This
+     *         happens AFTER the doubling/swap-up decision above, not
+     *         before: a randomized 'jceddys_75' pool at a floor over 75,
+     *         for instance, samples from the full 150-card
+     *         'jceddys_150' pool, not the original 75-card one.
      */
-    private function buildRotisserieDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $playerCount, int $cutoffCount): array
+    private function buildRotisserieDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $playerCount, int $cutoffCount, bool $randomizePool = false): array
     {
         $minPoolSize = self::rotisserieDraftMinPoolSize($cutoffCount, $playerCount);
 
@@ -4460,7 +4490,7 @@ final class GameService
             $minPoolSize,
             $minPoolSize,
             doubleStructureForMultiplayer: $minPoolSize > 45,
-            truncateToTarget: false,
+            truncateToTarget: $randomizePool,
         );
 
         if (count($cardIds) < $minPoolSize) {

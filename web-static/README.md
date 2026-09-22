@@ -3983,7 +3983,19 @@ button).
       source select's own option labels (e.g. "39 random cards") on every
       change to either the cutoff count or the opponent selection, the
       same dynamic-relabeling pattern Quick/Winston/Grid Draft's own pool
-      pickers already use.
+      pickers already use. Issue #454: a `#new-game-rotisserie-draft-
+      randomize-pool` checkbox sits just below the pool-source picker's own
+      description paragraph -- "Randomly sample just the minimum needed
+      from this pool, instead of laying it out in full." Checking it sends
+      `rotisserie_draft_randomize_pool: true` alongside whichever pool
+      source is chosen, letting a creator combine a specific named pool
+      (a saved deck, jceddy's 75, etc.) with `random_48`-style random
+      sampling instead of only ever getting one or the other -- see
+      `buildRotisserieDraftPool()`'s own docblock in
+      `php-app/README.md`'s "Rotisserie Draft". No visibility logic of its
+      own: it lives inside `#new-game-rotisserie-draft-fields`, which
+      already shows/hides as a whole with every other Rotisserie Draft
+      field whenever the deck type selection changes.
     - **Tiered Rotisserie Draft's own drafting phase** (`#tiered-rotisserie-
       draft-panel` > `#tiered-rotisserie-draft-drafting`,
       `renderTieredRotisserieDraftDrafting()`, shown while

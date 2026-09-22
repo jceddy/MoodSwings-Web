@@ -1183,6 +1183,8 @@ if ($path === '/games' && $method === 'POST') {
     $rotisserieDraftCustomPoolText = isset($body['rotisserie_draft_custom_pool_text']) ? (string) $body['rotisserie_draft_custom_pool_text'] : null;
     // 14 matches createGame()'s own ROTISSERIE_DRAFT_DEFAULT_CUTOFF, same as $winsNeeded's literal 3 above matching its own default.
     $rotisserieDraftCutoffCount = isset($body['rotisserie_draft_cutoff_count']) ? (int) $body['rotisserie_draft_cutoff_count'] : 14;
+    // Issue #454: only meaningful for deck_type 'rotisserie_draft' -- see createGame()'s own docblock.
+    $rotisserieDraftRandomizePool = (bool) ($body['rotisserie_draft_randomize_pool'] ?? false);
     // Only meaningful (and required) for deck_type 'tiered_rotisserie_draft' -- see createGame()'s own docblock.
     $tieredRotisserieDraftMode = isset($body['tiered_rotisserie_draft_mode']) ? (string) $body['tiered_rotisserie_draft_mode'] : null;
     // Only meaningful when $tieredRotisserieDraftMode is 'custom' -- each
@@ -1231,6 +1233,7 @@ if ($path === '/games' && $method === 'POST') {
             $rotisserieDraftPoolSource,
             $rotisserieDraftCustomPoolText,
             $rotisserieDraftCutoffCount,
+            $rotisserieDraftRandomizePool,
             $tieredRotisserieDraftMode,
             $tieredRotisserieDraftTiers,
             $botGoesFirst,
@@ -1281,6 +1284,8 @@ function openGameCreateParamsFromRequestBody(array $body): array
         'rotisserie_draft_pool_source' => isset($body['rotisserie_draft_pool_source']) ? (string) $body['rotisserie_draft_pool_source'] : null,
         'rotisserie_draft_custom_pool_text' => isset($body['rotisserie_draft_custom_pool_text']) ? (string) $body['rotisserie_draft_custom_pool_text'] : null,
         'rotisserie_draft_cutoff_count' => isset($body['rotisserie_draft_cutoff_count']) ? (int) $body['rotisserie_draft_cutoff_count'] : 14,
+        // Issue #454: see createGame()'s own docblock.
+        'rotisserie_draft_randomize_pool' => (bool) ($body['rotisserie_draft_randomize_pool'] ?? false),
         'tiered_rotisserie_draft_mode' => isset($body['tiered_rotisserie_draft_mode']) ? (string) $body['tiered_rotisserie_draft_mode'] : null,
         'tiered_rotisserie_draft_tiers' => is_array($body['tiered_rotisserie_draft_tiers'] ?? null)
             ? array_map(static function ($tier): array {

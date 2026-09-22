@@ -16862,6 +16862,68 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertCount(40, json_decode((string) $this->fetchRotisserieState($draftMatchId)['pool_card_ids'], true));
     }
 
+    /**
+     * Issue #454: rotisserieDraftRandomizePool flips buildDraftPool()'s own
+     * $truncateToTarget to true, so an oversized pool source is randomly
+     * narrowed down to exactly the floor instead of laid out in full --
+     * the opposite of testCreateGameRotisserieDraftCustomPoolAboveMinimumIsLaidOutInFullNotTruncated
+     * above (same 40-card pool, same 26-card floor).
+     */
+    public function testCreateGameRotisserieDraftRandomizePoolNarrowsAnOversizedCustomPoolDownToTheFloor(): void
+    {
+        $userIds = $this->insertUsers('rotrandomizecustom-' . uniqid() . '-', 2);
+        $poolText = implode("\n", array_fill(0, 40, '1 Charity')) . "\n"; // 40 cards, well above the 26-card floor
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'draft',
+            deckType: 'rotisserie_draft',
+            rotisserieDraftPoolSource: 'custom',
+            rotisserieDraftCustomPoolText: $poolText,
+            rotisserieDraftCutoffCount: 13,
+            rotisserieDraftRandomizePool: true,
+        );
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        self::assertCount(26, json_decode((string) $this->fetchRotisserieState($draftMatchId)['pool_card_ids'], true));
+    }
+
+    /**
+     * Issue #454: randomizing happens AFTER the doubling/swap-up decision,
+     * not before -- a randomized 'structure' pool at a floor exceeding 45
+     * samples from the doubled 90-card pool, still landing on exactly the
+     * floor (48 here), not the original single 45-card copy.
+     */
+    public function testCreateGameRotisserieDraftRandomizePoolSamplesFromTheDoubledStructurePool(): void
+    {
+        $userIds = $this->insertUsers('rotrandomizestruct-' . uniqid() . '-', 3);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'draft',
+            deckType: 'rotisserie_draft',
+            rotisserieDraftPoolSource: 'structure',
+            rotisserieDraftCutoffCount: 16, // 3 players * 16 = 48 > 45, doubles to 90 before sampling
+            rotisserieDraftRandomizePool: true,
+        );
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        self::assertCount(48, json_decode((string) $this->fetchRotisserieState($draftMatchId)['pool_card_ids'], true));
+    }
+
+    /**
+     * Issue #454: a no-op in practice for 'random_48', which already
+     * returns exactly the floor's worth of cards regardless of this flag.
+     */
+    public function testCreateGameRotisserieDraftRandomizePoolIsANoOpForRandomPoolSource(): void
+    {
+        $userIds = $this->insertUsers('rotrandomizerandom-' . uniqid() . '-', 2);
+        $gameId = $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'rotisserie_draft', rotisserieDraftPoolSource: 'random_48', rotisserieDraftCutoffCount: 13, rotisserieDraftRandomizePool: true);
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        self::assertCount(26, json_decode((string) $this->fetchRotisserieState($draftMatchId)['pool_card_ids'], true));
+    }
+
     public function testRotisserieDraftDealsTheFullPoolFaceUpAndPicksARandomFirstPicker(): void
     {
         $fixture = $this->buildRotisserieDraftFixture(playerCount: 2, cutoffCount: 13);
