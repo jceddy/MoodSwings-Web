@@ -1,0 +1,13 @@
+-- Issue #454: Rotisserie Draft's New Game dialog now has a "randomize
+-- this pool" checkbox alongside the pool-source picker, letting a
+-- creator combine a specific named pool (a saved deck, jceddy's 75,
+-- etc.) with random_48-style random sampling instead of only ever
+-- getting one or the other. GameService::buildRotisserieDraftPool()'s
+-- new $randomizePool param flips buildDraftPool()'s own
+-- $truncateToTarget to true when set, narrowing the chosen pool source's
+-- own full (already doubled/swapped-up) card list down to exactly the
+-- floor before drafting starts.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.50.15' WHERE id = 1;
