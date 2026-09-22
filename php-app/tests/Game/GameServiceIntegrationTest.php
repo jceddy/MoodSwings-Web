@@ -16924,6 +16924,150 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertCount(26, json_decode((string) $this->fetchRotisserieState($draftMatchId)['pool_card_ids'], true));
     }
 
+    /**
+     * Issue #462 follow-up: rotisserieDraftRandomizeSampleSize lets the
+     * creator sample MORE than the floor, instead of always exactly the
+     * floor (rotisserieDraftMinPoolSize()).
+     */
+    public function testCreateGameRotisserieDraftRandomizeSampleSizeSamplesMoreThanTheFloor(): void
+    {
+        $userIds = $this->insertUsers('rotsamplesizecustom-' . uniqid() . '-', 2);
+        $poolText = implode("\n", array_fill(0, 50, '1 Charity')) . "\n"; // 50 cards, well above both the 26-card floor and the 40-card sample
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'draft',
+            deckType: 'rotisserie_draft',
+            rotisserieDraftPoolSource: 'custom',
+            rotisserieDraftCustomPoolText: $poolText,
+            rotisserieDraftCutoffCount: 13, // floor = 26
+            rotisserieDraftRandomizePool: true,
+            rotisserieDraftRandomizeSampleSize: 40,
+        );
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        self::assertCount(40, json_decode((string) $this->fetchRotisserieState($draftMatchId)['pool_card_ids'], true));
+    }
+
+    public function testCreateGameRotisserieDraftRandomizeSampleSizeBelowTheFloorIsRejected(): void
+    {
+        $userIds = $this->insertUsers('rotsamplesizelow-' . uniqid() . '-', 2);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage("can't be smaller than the 26-card minimum");
+
+        $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'draft',
+            deckType: 'rotisserie_draft',
+            rotisserieDraftPoolSource: 'random_48',
+            rotisserieDraftCutoffCount: 13, // floor = 26
+            rotisserieDraftRandomizePool: true,
+            rotisserieDraftRandomizeSampleSize: 20,
+        );
+    }
+
+    /**
+     * Issue #462 follow-up: the sample size (not just the floor) drives
+     * the Structure-doubling decision -- a floor of 26 alone would stay on
+     * a single 45-card copy (see testCreateGameRotisserieDraftStructurePoolDoublesOnlyWhenTheFloorExceedsFortyFive
+     * above), but asking to sample 60 cards needs the doubled 90-card pool
+     * to actually have that many to sample from.
+     */
+    public function testCreateGameRotisserieDraftRandomizeSampleSizeTriggersStructureDoubling(): void
+    {
+        $userIds = $this->insertUsers('rotsamplesizestruct-' . uniqid() . '-', 2);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'draft',
+            deckType: 'rotisserie_draft',
+            rotisserieDraftPoolSource: 'structure',
+            rotisserieDraftCutoffCount: 13, // floor = 26, alone would NOT double
+            rotisserieDraftRandomizePool: true,
+            rotisserieDraftRandomizeSampleSize: 60,
+        );
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        self::assertCount(60, json_decode((string) $this->fetchRotisserieState($draftMatchId)['pool_card_ids'], true));
+    }
+
+    /**
+     * Issue #462 follow-up: same idea as the Structure-doubling test above,
+     * but for jceddy's 75/150 swap -- a floor of 26 alone would stay on the
+     * 75-card pool, but asking to sample 100 cards needs the 150-card pool.
+     */
+    public function testCreateGameRotisserieDraftRandomizeSampleSizeTriggersJceddys150Swap(): void
+    {
+        $userIds = $this->insertUsers('rotsamplesizejceddys-' . uniqid() . '-', 2);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'draft',
+            deckType: 'rotisserie_draft',
+            rotisserieDraftPoolSource: 'jceddys_75',
+            rotisserieDraftCutoffCount: 13, // floor = 26, alone would NOT swap
+            rotisserieDraftRandomizePool: true,
+            rotisserieDraftRandomizeSampleSize: 100,
+        );
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        self::assertCount(100, json_decode((string) $this->fetchRotisserieState($draftMatchId)['pool_card_ids'], true));
+    }
+
+    /**
+     * Issue #462 follow-up: a sample size larger than what the pool source
+     * can actually provide is NOT an error -- buildDraftPool() already
+     * returns the pool as-is (still at least the floor) rather than
+     * padding it out, the same way an oversized truncateToTarget request
+     * always has.
+     */
+    public function testCreateGameRotisserieDraftRandomizeSampleSizeLargerThanThePoolReturnsWhateverIsAvailable(): void
+    {
+        $userIds = $this->insertUsers('rotsamplesizeoversized-' . uniqid() . '-', 2);
+        $poolText = implode("\n", array_fill(0, 40, '1 Charity')) . "\n"; // 40 cards -- above the 26-card floor, below the requested 100-card sample
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'draft',
+            deckType: 'rotisserie_draft',
+            rotisserieDraftPoolSource: 'custom',
+            rotisserieDraftCustomPoolText: $poolText,
+            rotisserieDraftCutoffCount: 13,
+            rotisserieDraftRandomizePool: true,
+            rotisserieDraftRandomizeSampleSize: 100,
+        );
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        self::assertCount(40, json_decode((string) $this->fetchRotisserieState($draftMatchId)['pool_card_ids'], true));
+    }
+
+    /**
+     * Issue #462 follow-up: silently ignored (not an error) whenever
+     * rotisserieDraftRandomizePool is false, the same "harmless no-op
+     * outside its own narrow scope" convention every other creation-time
+     * opt-in already follows -- the pool is still laid out in full.
+     */
+    public function testCreateGameRotisserieDraftRandomizeSampleSizeIgnoredWhenNotRandomizing(): void
+    {
+        $userIds = $this->insertUsers('rotsamplesizeignored-' . uniqid() . '-', 2);
+        $poolText = implode("\n", array_fill(0, 40, '1 Charity')) . "\n";
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'draft',
+            deckType: 'rotisserie_draft',
+            rotisserieDraftPoolSource: 'custom',
+            rotisserieDraftCustomPoolText: $poolText,
+            rotisserieDraftCutoffCount: 13,
+            rotisserieDraftRandomizeSampleSize: 10, // below the floor -- would be an error if it weren't ignored
+        );
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        self::assertCount(40, json_decode((string) $this->fetchRotisserieState($draftMatchId)['pool_card_ids'], true));
+    }
+
     public function testRotisserieDraftDealsTheFullPoolFaceUpAndPicksARandomFirstPicker(): void
     {
         $fixture = $this->buildRotisserieDraftFixture(playerCount: 2, cutoffCount: 13);

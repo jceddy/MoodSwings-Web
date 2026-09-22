@@ -139,7 +139,7 @@ function getCardStats() {
     return apiRequest('/stats/cards');
 }
 
-function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId, defaultSelectionsMode, botDecklistText, botSavedDecklistId, randomTeams, rotisserieDraftPoolSource, rotisserieDraftCustomPoolText, rotisserieDraftCutoffCount, rotisserieDraftRandomizePool, tieredRotisserieDraftMode, tieredRotisserieDraftTiers, botGoesFirst, bestOfThree, allowSideboarding, diagnosticMode, botDecklists, timeoutMinutes, timeoutAction, totalTimeLimitMinutes, synchronousMode) {
+function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId, defaultSelectionsMode, botDecklistText, botSavedDecklistId, randomTeams, rotisserieDraftPoolSource, rotisserieDraftCustomPoolText, rotisserieDraftCutoffCount, rotisserieDraftRandomizePool, rotisserieDraftRandomizeSampleSize, tieredRotisserieDraftMode, tieredRotisserieDraftTiers, botGoesFirst, bestOfThree, allowSideboarding, diagnosticMode, botDecklists, timeoutMinutes, timeoutAction, totalTimeLimitMinutes, synchronousMode) {
     return apiRequest('/games', {
         method: 'POST',
         body: JSON.stringify({
@@ -201,9 +201,13 @@ function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText,
             rotisserie_draft_custom_pool_text: rotisserieDraftCustomPoolText,
             rotisserie_draft_cutoff_count: rotisserieDraftCutoffCount,
             // Issue #454: randomly narrow rotisserieDraftPoolSource's own
-            // pool down to just the minimum needed, instead of laying it
-            // out in full -- see "Rotisserie Draft" in web-static/README.md.
+            // pool down to a sample, instead of laying it out in full --
+            // see "Rotisserie Draft" in web-static/README.md.
             rotisserie_draft_randomize_pool: rotisserieDraftRandomizePool,
+            // Issue #462 follow-up: only meaningful alongside
+            // rotisserie_draft_randomize_pool -- how many cards to sample;
+            // undefined falls back to the minimum needed.
+            rotisserie_draft_randomize_sample_size: rotisserieDraftRandomizeSampleSize,
             // Only meaningful for deck_type 'tiered_rotisserie_draft' -- see
             // "Tiered Rotisserie Draft" in web-static/README.md.
             tiered_rotisserie_draft_mode: tieredRotisserieDraftMode,

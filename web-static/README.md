@@ -3985,17 +3985,32 @@ button).
       same dynamic-relabeling pattern Quick/Winston/Grid Draft's own pool
       pickers already use. Issue #454: a `#new-game-rotisserie-draft-
       randomize-pool` checkbox sits just below the pool-source picker's own
-      description paragraph -- "Randomly sample just the minimum needed
-      from this pool, instead of laying it out in full." Checking it sends
+      description paragraph -- "Randomly sample cards from this pool,
+      instead of laying it out in full." Checking it sends
       `rotisserie_draft_randomize_pool: true` alongside whichever pool
       source is chosen, letting a creator combine a specific named pool
       (a saved deck, jceddy's 75, etc.) with `random_48`-style random
       sampling instead of only ever getting one or the other -- see
       `buildRotisserieDraftPool()`'s own docblock in
-      `php-app/README.md`'s "Rotisserie Draft". No visibility logic of its
-      own: it lives inside `#new-game-rotisserie-draft-fields`, which
-      already shows/hides as a whole with every other Rotisserie Draft
-      field whenever the deck type selection changes.
+      `php-app/README.md`'s "Rotisserie Draft". Checking it also reveals a
+      `#new-game-rotisserie-draft-randomize-sample-size-label` number
+      input (issue #462 follow-up) pre-filled with
+      `currentRotisserieDraftMinPoolSize()`'s own current value -- editable
+      up to sample MORE than the floor instead of always exactly the
+      floor, sent as `rotisserie_draft_randomize_sample_size`.
+      `refreshRotisserieDraftRandomizeSampleSizeDefault()` keeps that
+      pre-fill current on every cutoff-count/opponent-selection change
+      (same trigger as the option-label refresh above) as long as the
+      creator hasn't typed their own number in yet
+      (`rotisserieDraftRandomizeSampleSizeUserEdited`) -- an edit permanently
+      opts that dialog session out of the auto-refill, the same
+      "don't clobber a deliberate edit" rule a live-recomputed default
+      always needs, until the checkbox is unchecked and rechecked (or the
+      dialog is reopened), which resets it. Neither field has visibility
+      logic of its own beyond that: both live inside
+      `#new-game-rotisserie-draft-fields`, which already shows/hides as a
+      whole with every other Rotisserie Draft field whenever the deck type
+      selection changes.
     - **Tiered Rotisserie Draft's own drafting phase** (`#tiered-rotisserie-
       draft-panel` > `#tiered-rotisserie-draft-drafting`,
       `renderTieredRotisserieDraftDrafting()`, shown while
