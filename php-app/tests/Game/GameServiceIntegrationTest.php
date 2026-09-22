@@ -3055,6 +3055,59 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertNull(self::findFieldByKey($creativity['copy_simulation'][$dignityId]['extra_fields'], 'validation_extra_play'));
     }
 
+    /**
+     * Reported live: a Creativity copying another Creativity, whose OWN
+     * copy target has since left play (discarded by Anger), used to
+     * resolve to plain Creativity instead of continuing the chain to
+     * whatever the first Creativity was still recorded as copying.
+     */
+    public function testCreativityCopyingACreativityWhoseOwnCopyTargetHasLeftPlayStillResolvesTransitively(): void
+    {
+        $u1 = $this->insertUser('creativitychain1');
+        $u2 = $this->insertUser('creativitychain2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $paranoiaId = $this->insertGameCard($gameId, 71, 'hand', $p1); // Paranoia, value 2
+        $joyId = $this->insertGameCard($gameId, 125, 'hand', $p1); // Joy, value 3
+        $creativity1Id = $this->insertGameCard($gameId, 32, 'hand', $p2); // Creativity #1
+        $angerId = $this->insertGameCard($gameId, 80, 'hand', $p2); // Anger
+        $creativity2Id = $this->insertGameCard($gameId, 32, 'hand', $p2); // Creativity #2
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $paranoiaId, []); // Paranoia, declining its own optional effect
+        $this->games->playMood($gameId, $p2, $creativity1Id, ['copy_card_id' => $paranoiaId]); // Creativity #1 copies Paranoia
+        $this->games->playMood($gameId, $p1, $joyId, []);
+        // Anger discards BOTH of player 1's moods (2 + 3 = 5) -- Paranoia's
+        // own original instance leaves play entirely, while Creativity #1
+        // (player 2's own mood) is untouched.
+        // Anger's own play is round 2's second (and last) play -- the round
+        // scores immediately, and round 3 starts with player 2 up first.
+        $this->games->playMood($gameId, $p2, $angerId, ['target_mood_ids' => [$paranoiaId, $joyId]]);
+
+        $inPlayBeforeSecondCopy = $this->games->getState($gameId, $u1)['in_play'];
+        self::assertNotContains($paranoiaId, array_column($inPlayBeforeSecondCopy, 'card_id'), 'Paranoia itself should have left play, discarded by Anger');
+        $creativity1BeforeSecondCopy = self::findByCardId($inPlayBeforeSecondCopy, $creativity1Id);
+        self::assertSame('Paranoia', $creativity1BeforeSecondCopy['name'], 'Creativity #1 still displays as Paranoia even after the real Paranoia was discarded');
+
+        // Creativity #2 copies Creativity #1, itself still recorded as
+        // copying the now-discarded Paranoia -- should resolve through the
+        // WHOLE chain to Paranoia, not fall back to plain Creativity.
+        $this->games->playMood($gameId, $p2, $creativity2Id, ['copy_card_id' => $creativity1Id]);
+
+        $creativity2 = self::findByCardId($this->games->getState($gameId, $u1)['in_play'], $creativity2Id);
+        self::assertSame('Paranoia', $creativity2['name']);
+        self::assertSame('paranoia', $creativity2['effect_key']);
+        self::assertTrue($creativity2['is_creativity_copy']);
+    }
+
     public function testInPlayCreativityCopyDisplaysAsTheCopiedMoodWithACopyIndicator(): void
     {
         $u1 = $this->insertUser('creativitydisplay1');
