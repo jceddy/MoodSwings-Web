@@ -7,6 +7,7 @@ namespace MoodSwings\Discord;
 use DateTimeImmutable;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
+use MoodSwings\Achievements\AchievementService;
 use MoodSwings\Config;
 use MoodSwings\Repository\DiscordAccountRepository;
 use MoodSwings\Repository\DiscordOAuthStateRepository;
@@ -39,6 +40,7 @@ final class DiscordOAuthService
         private readonly DiscordAccountRepository $accounts,
         private readonly DiscordOAuthStateRepository $states,
         private readonly Client $http = new Client(),
+        private readonly AchievementService $achievements = new AchievementService(),
     ) {
     }
 
@@ -108,6 +110,7 @@ final class DiscordOAuthService
         }
 
         $this->accounts->link($expectedUserId, $discordUserId, $discordUsername);
+        $this->achievements->onDiscordLinked($expectedUserId);
 
         return ['discord_user_id' => $discordUserId, 'discord_username' => $discordUsername];
     }

@@ -12413,3 +12413,66 @@ migration's own name, and clean themselves out of the shared
 The test suite truncates `users`/`sessions`/`email_verifications`/
 `friendships` in that database before each test, so never point it at a
 database with real data.
+
+## Achievements
+
+Phase 1 of a 108-entry catalog (design doc: "MoodSwings-Web Achievements
+-- Draft List"), covering every achievement whose condition is knowable
+at game-completion or tournament-completion time, plus the four meta
+rows. `achievements` (migration 0357) is static reference data --
+`slug`/`category`/`title`/`description`/`tier`/`target`/`hidden`, one row
+per catalog entry, seeded once at migration time and never touched again
+by application code. `user_achievements` is the per-user progress table
+(`progress`, `unlocked_at`), lazily created and bumped the same
+`INSERT ... ON DUPLICATE KEY UPDATE` way `user_lifetime_stats`/
+`card_stats` already work -- necessary for the same reason those are
+incremental: a completed game is deleted after 7 days
+(`deleteStaleCompletedGames()`), so nothing here can ever be recomputed
+retroactively. No backfill from existing `user_lifetime_stats`: every
+counter starts at zero from this deploy forward.
+
+`AchievementService` (`src/Achievements/AchievementService.php`) is the
+whole system. Three generic primitives cover nearly every row: `unlock()`
+(a direct one-shot condition), `bumpProgress()` (a cumulative counter
+that auto-unlocks at `target`), and `setProgressLevel()` (a high-water
+mark for a value that can also go back down, e.g. friend count -- only
+ever raises `progress`). `onGameCompleted()` is called from
+`GameService::recordGameCompletionStats()` -- the same single call site
+every completion path already funnels through -- and covers Volume,
+Format, Deck Type, Color/Rarity (including the six synonym-cluster and
+six card-cycle rows), and most In-Game Skill/Card Feat achievements.
+`onBestOfThreeMatchCompleted()` is called from `advanceGameMatch()` for
+the handful of achievements about the *overall* best-of-three match
+rather than any one game in it (Match Point/Match Maker/Grand Champion/
+Comeback Kid/Flawless Victory). `onTournamentCompleted()`/
+`onTournamentJoined()`/`onTournamentStarted()` are called from
+`TournamentService` for the Tournaments category. A handful of account/
+social achievements are wired from their own natural call sites
+(`FriendshipService::respondToInvite()`, `UserDecklistService::create()`/
+`update()`, `DiscordOAuthService::handleCallback()`); the remainder
+(Spectator Sport, Replay Enthusiast, Bot Wrangler, Card Counter, Marathon
+Session, Rematch!, Sharing is Caring) still need their own hooks wired in
+a follow-up pass.
+
+Known simplifications, worth revisiting if they ever matter enough:
+color-majority/Rainbow Connection/Common Touch/David vs. Goliath read
+final-board cards' *printed* color/base_value/rarity straight off the
+`cards` catalog via `game_cards.card_id`, not a live `BoardState`'s
+*effective* values (so a Creativity copy, an Imagination color override,
+or a chosen dice/alt value isn't reflected). Betrayer/Sneak Attack unlock
+on simply having played Betrayal/Sneakiness and won, rather than
+confirming the reclaim/swap specifically happened (both are effectively
+unconditional parts of playing those cards, so this is a reasonable stand-in
+rather than a real gap). The Copycat only checks a DIRECT Creativity-copies-a-
+Creativity chain (via `game_cards.copied_card_id` once), not the full
+transitive chain `BoardState::effectiveCardId()` would walk. Chain Reaction
+and Deadline Dodger are not yet implemented: `game_events` has no
+turn-boundary marker for the former, and the timeout warning shown mid-game
+is purely computed-on-read (`buildActionTimeoutWarning()`), never
+persisted, so there's nothing left to check by completion time.
+
+Not yet built: unlock notifications (`NotificationService` already has
+the exact `notifyTimeoutWarning()`-style pattern to follow), a
+`GET /user/achievements` endpoint, and any frontend display at all --
+achievements unlock silently server-side today. See the design doc's own
+"Suggested build order" for the intended next steps.
