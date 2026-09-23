@@ -1,0 +1,12 @@
+-- Requested: when a game finishes, remove any delayed (queued)
+-- notifications still pending for it, not just the acting player's own
+-- row. NotificationService::clearQueuedForFinishedGame()
+-- (QueuedNotificationRepository::clearForGame()) now clears every
+-- seated player's queued_notifications row for that game's scope,
+-- called from GameService::recordGameCompletionStats() (every ordinary
+-- win/loss/resignation completion) and from expireStaleActiveGames()
+-- (a stale game force-completed with no winner, which never calls
+-- recordGameCompletionStats() at all). No schema change -- just the
+-- version bump MaintenanceGate needs to see this deploy as caught up
+-- with the code.
+UPDATE schema_version SET version = '1.51.9' WHERE id = 1;

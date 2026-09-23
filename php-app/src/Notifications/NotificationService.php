@@ -40,7 +40,10 @@ use MoodSwings\Repository\QueuedNotificationRepository;
  * cron. GameService::clearQueuedNotificationForGamePlayer()/
  * clearQueuedForGame()/clearQueuedFriendRequest() delete a queued row
  * early if the player takes the action it would have reminded them about
- * before the flush ever runs.
+ * before the flush ever runs. clearQueuedForFinishedGame() is the
+ * game-wide counterpart, called once a game itself is over (see its own
+ * docblock) to clear every seated player's row for that game at once,
+ * not just whoever's own action ended it.
  *
  * A user can opt out of this cooldown/queue behavior entirely via their
  * own disable_cooldown preference (migration 0051, off by default) --
@@ -171,6 +174,12 @@ final class NotificationService
     public function clearQueuedForGame(int $userId, int $gameId): void
     {
         $this->queuedNotifications->clearForGameIfMatches($userId, $gameId);
+    }
+
+    /** GameService::recordGameCompletionStats()/expireStaleActiveGames()'s own passthrough -- see QueuedNotificationRepository::clearForGame()'s docblock. */
+    public function clearQueuedForFinishedGame(int $gameId): void
+    {
+        $this->queuedNotifications->clearForGame($gameId);
     }
 
     /** The `/friends/respond` route's own passthrough, mirroring clearQueuedForGame() for the one non-game scope. */

@@ -7259,6 +7259,21 @@ stale "it's your turn" for a turn already taken.
 `friend_request`), so clearing one game's queued reminder can never touch
 a different game's, or a friend request's.
 
+The above only ever clears the *acting* player's own row -- a game
+ending doesn't always mean the player it would have reminded ever acted
+themselves (an opponent's resignation, or the game simply going stale
+and getting force-completed). `NotificationService::clearQueuedForFinishedGame()`
+(`QueuedNotificationRepository::clearForGame()`) is the game-wide
+counterpart: it deletes *every* seated player's queued row for that
+game's scope at once, called from `GameService::recordGameCompletionStats()`
+(every ordinary win/loss/resignation completion) and separately from
+`expireStaleActiveGames()` (which never calls `recordGameCompletionStats()`
+at all -- see that method's own docblock -- but is exactly the case most
+likely to still have a stale reminder queued, since that's presumably why
+the game went stale in the first place). Without this, a "waiting on you"
+reminder queued for a player who never got to act could otherwise sit
+around and eventually fire for a game that's already over.
+
 **Opting out of the cooldown entirely**: a `disable_cooldown` preference
 (migration `0051`, defaulting `false` -- the cooldown stays on for every
 existing user until they explicitly turn it off) lets a player receive

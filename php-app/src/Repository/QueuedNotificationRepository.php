@@ -136,4 +136,21 @@ final class QueuedNotificationRepository
     {
         $this->delete($userId, NotificationScope::FRIEND_REQUEST);
     }
+
+    /**
+     * Clears EVERY player's queued notification for $gameId, not just one
+     * user's -- called once the game itself is over (see
+     * GameService::recordGameCompletionStats()), when a "waiting on you"
+     * reminder still queued for anyone (a player who never took the
+     * action that ended the game -- an opponent's resignation, an
+     * auto-loss, etc. -- so clearForGameIfMatches() never ran for them)
+     * would otherwise sit in the queue and eventually fire for a game
+     * that's already finished.
+     */
+    public function clearForGame(int $gameId): void
+    {
+        Connection::get()->prepare(
+            'DELETE FROM queued_notifications WHERE scope = :scope'
+        )->execute(['scope' => NotificationScope::forGame($gameId)]);
+    }
 }
