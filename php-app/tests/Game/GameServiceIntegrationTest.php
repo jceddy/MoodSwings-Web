@@ -2794,6 +2794,37 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame('hidden', $bobRow['presence']);
     }
 
+    /**
+     * The board's own trophy-icon indicator (highest_achievement_tier) --
+     * see AchievementService::highestUnlockedTiersFor(). A player with no
+     * unlocked achievements at all reads as null (frontend omits the
+     * icon), matching presence/hand_count's own "always present, harmless
+     * default" treatment above rather than the field being missing.
+     */
+    public function testGetStateExposesHighestUnlockedAchievementTierPerPlayer(): void
+    {
+        $creator = $this->insertUser('trophy-alice');
+        $bob = $this->insertUser('trophy-bob');
+
+        $gameId = $this->games->createGame($creator, [$creator, $bob]);
+        $this->games->startGame($gameId);
+
+        $stateBeforeAnyUnlocks = $this->games->getState($gameId, $creator);
+        foreach ($stateBeforeAnyUnlocks['players'] as $player) {
+            self::assertNull($player['highest_achievement_tier']);
+        }
+
+        $achievements = new \MoodSwings\Achievements\AchievementService();
+        $achievements->unlock($creator, 'first-steps'); // Bronze
+        $achievements->unlock($bob, 'grand-champion'); // Gold
+
+        $state = $this->games->getState($gameId, $creator);
+        $creatorRow = array_values(array_filter($state['players'], fn (array $p) => $p['user_id'] === $creator))[0];
+        $bobRow = array_values(array_filter($state['players'], fn (array $p) => $p['user_id'] === $bob))[0];
+        self::assertSame('Bronze', $creatorRow['highest_achievement_tier']);
+        self::assertSame('Gold', $bobRow['highest_achievement_tier']);
+    }
+
     public function testGetStateExposesBaseValueAndAltValueDistinctFromLiveValue(): void
     {
         $u1 = $this->insertUser('printedvalues1');

@@ -12535,6 +12535,20 @@ Achievements page. The first-ever poll on a given browser baselines both
 markers to whatever's already unlocked rather than toasting/flagging a
 player's entire existing history the moment this shipped.
 
+The in-game board's own Players list shows a trophy icon to the left of
+each seated player's name, colored by that specific player's highest
+currently-unlocked achievement tier (`AchievementService::highestUnlockedTiersFor()`,
+batched once per `GameService::buildGameState()` call the same way
+`$presenceStatuses`/`$handCounts` already are, rather than one query per
+seat). `players[].highest_achievement_tier` is `null` for a player with
+zero unlocked achievements, in which case the frontend
+(`buildAchievementTrophyFlag()` in `game.js`) omits the icon entirely
+rather than showing a neutral/empty trophy. The five tier colors
+(`.player-flag--tier-bronze/silver/gold/platinum/diamond` in `style.css`)
+are kept in sync by hand with `achievements.css`'s own
+`.achievement-tier-*` badge colors, since the game board doesn't load
+that stylesheet.
+
 Known simplifications, worth revisiting if they ever matter enough:
 color-majority/Rainbow Connection/Common Touch/David vs. Goliath read
 final-board cards' *printed* color/base_value/rarity straight off the
