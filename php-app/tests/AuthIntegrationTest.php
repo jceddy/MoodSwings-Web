@@ -255,6 +255,50 @@ final class AuthIntegrationTest extends TestCase
         self::assertSame('below_hand', $currentAfterOptIn['user']['board_layout_preference']);
     }
 
+    /**
+     * users.timezone (issue: "the timed achievements aren't calculating
+     * local time correctly") is opportunistically kept in sync with
+     * whatever IANA identifier the browser sends as currentUser()'s own
+     * $timezone param -- same "touched on every authenticated request"
+     * treatment as sessions.last_seen_at, not a one-time Settings field.
+     */
+    public function testCurrentUserPersistsAValidBrowserReportedTimezone(): void
+    {
+        $registered = $this->registerAndVerify('olga');
+        $result = $this->auth->login('olga', 'correcthorsebattery', null, null);
+        $userId = (int) $registered['user']['id'];
+
+        self::assertNull((new UserRepository())->findById($userId)['timezone']);
+
+        $this->auth->currentUser($result['token'], 'America/Los_Angeles');
+        self::assertSame('America/Los_Angeles', (new UserRepository())->findById($userId)['timezone']);
+
+        // A later request in a different zone (e.g. the player travelling,
+        // or simply a stale first read before the browser's own value
+        // settles) overwrites it, exactly like last_seen_at would.
+        $this->auth->currentUser($result['token'], 'Europe/Berlin');
+        self::assertSame('Europe/Berlin', (new UserRepository())->findById($userId)['timezone']);
+    }
+
+    /**
+     * Guards against a stale client, a non-browser API caller, or a
+     * tampered header ever reaching DateTimeZone with garbage -- absent,
+     * empty, and not-a-real-IANA-identifier are all silently ignored
+     * rather than stored or thrown.
+     */
+    public function testCurrentUserIgnoresMissingOrInvalidTimezone(): void
+    {
+        $registered = $this->registerAndVerify('petra');
+        $result = $this->auth->login('petra', 'correcthorsebattery', null, null);
+        $userId = (int) $registered['user']['id'];
+
+        $this->auth->currentUser($result['token'], null);
+        $this->auth->currentUser($result['token'], '');
+        $this->auth->currentUser($result['token'], 'Not/A/Real/Zone');
+
+        self::assertNull((new UserRepository())->findById($userId)['timezone']);
+    }
+
     public function testResendVerificationIssuesNewTokenAndRevokesOld(): void
     {
         $registered = $this->auth->register('henry', 'henry@example.com', 'correcthorsebattery', null);

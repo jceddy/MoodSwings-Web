@@ -399,16 +399,50 @@ final class AchievementService
         }
     }
 
+    /**
+     * This user's own browser-reported IANA identifier (users.timezone,
+     * kept in sync by AuthService::currentUser() on every authenticated
+     * request), or UTC for a user it isn't known for yet (never logged in
+     * since this shipped, or a bot -- bot games never reach here at all,
+     * see onGameCompleted()'s own $containsBot early return).
+     */
+    private function timezoneFor(int $userId): \DateTimeZone
+    {
+        $stmt = Connection::get()->prepare('SELECT timezone FROM users WHERE id = :u');
+        $stmt->execute(['u' => $userId]);
+        $timezone = $stmt->fetchColumn();
+
+        if (is_string($timezone) && $timezone !== '') {
+            try {
+                return new \DateTimeZone($timezone);
+            } catch (\Exception $e) {
+                // Shouldn't happen -- AuthService validates before storing
+                // it -- but fall through to UTC rather than blow up an
+                // entire game-completion request over a stale/bad value.
+            }
+        }
+
+        return new \DateTimeZone('UTC');
+    }
+
+    // "A single calendar day" (marathon-session's own catalog wording) means
+    // the PLAYER's calendar day, same "your local time" intent as Night
+    // Owl/Early Bird just below -- so this computes play_date from the
+    // current moment converted into their own timezone rather than
+    // CURDATE(), which reflects the DB session's fixed UTC (see
+    // Connection::get()) regardless of who's actually playing.
     private function checkMarathonSession(int $userId): void
     {
+        $today = (new \DateTimeImmutable('now', $this->timezoneFor($userId)))->format('Y-m-d');
+
         $pdo = Connection::get();
         $pdo->prepare(
-            'INSERT INTO user_daily_game_counts (user_id, play_date, games_played) VALUES (:u, CURDATE(), 1)
+            'INSERT INTO user_daily_game_counts (user_id, play_date, games_played) VALUES (:u, :d, 1)
              ON DUPLICATE KEY UPDATE games_played = games_played + 1'
-        )->execute(['u' => $userId]);
+        )->execute(['u' => $userId, 'd' => $today]);
 
-        $stmt = $pdo->prepare('SELECT games_played FROM user_daily_game_counts WHERE user_id = :u AND play_date = CURDATE()');
-        $stmt->execute(['u' => $userId]);
+        $stmt = $pdo->prepare('SELECT games_played FROM user_daily_game_counts WHERE user_id = :u AND play_date = :d');
+        $stmt->execute(['u' => $userId, 'd' => $today]);
         $this->setProgressLevel($userId, 'marathon-session', (int) $stmt->fetchColumn());
     }
 
@@ -488,9 +522,15 @@ final class AchievementService
             $this->unlock($userId, 'clockwork');
         }
 
+        // Both catalog rows say "your local time" explicitly, so
+        // completed_at (a plain UTC timestamp -- see Connection::get()'s
+        // own SET time_zone = '+00:00') is converted into THIS user's own
+        // timezone before reading the hour, not read as a bare UTC hour.
         $completedAt = $game['completed_at'] ?? null;
         if (is_string($completedAt)) {
-            $hour = (int) (new \DateTimeImmutable($completedAt))->format('G');
+            $hour = (int) (new \DateTimeImmutable($completedAt, new \DateTimeZone('UTC')))
+                ->setTimezone($this->timezoneFor($userId))
+                ->format('G');
             if ($hour >= 0 && $hour < 4) {
                 $this->unlock($userId, 'night-owl');
             } elseif ($hour >= 5 && $hour < 7) {

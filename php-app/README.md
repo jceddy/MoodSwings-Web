@@ -12465,6 +12465,23 @@ Sharing is Caring, the last on `visibility === 'friends'`),
 `GET /stats/cards` in `public/index.php` (Spectator Sport/Replay
 Enthusiast/Card Counter).
 
+Night Owl/Early Bird/Marathon Session ("...your local time"/"a single
+calendar day") need each player's own timezone, which the server has no
+other way to learn -- every timestamp it deals in
+(`games.completed_at`, `CURDATE()`) is plain UTC (`Connection::get()`'s
+own `SET time_zone = '+00:00'`). `app.js`'s `apiRequest()` sends the
+browser's IANA identifier (`Intl.DateTimeFormat().resolvedOptions().timeZone`)
+as an `X-Timezone` header on every request; `AuthService::currentUser()`
+validates it (a bare `new DateTimeZone($timezone)`, rejecting anything
+not real) and persists it to `users.timezone` (migration 0361) --
+opportunistic, the same "kept in sync on every authenticated request"
+treatment `sessions.last_seen_at` already gets, not a one-time Settings
+field. `AchievementService::timezoneFor($userId)` reads it back (falling
+back to UTC for a user it isn't known for yet) and both
+`checkVolumeAndFormatWins()`'s Night Owl/Early Bird hour check and
+`checkMarathonSession()`'s calendar-day computation convert through it
+per-user, rather than reading a single shared UTC value for everyone.
+
 Unlock notifications reuse `NotificationService`'s existing channel
 fan-out exactly like `notifyTimeoutWarning()` does:
 `notifyAchievementUnlocked()`, a `notify_achievement_unlocked` preference
@@ -12480,9 +12497,25 @@ left-joined against the viewer's own progress, grouped by category; a
 to a generic `"???"` placeholder until actually unlocked. The frontend
 (`web-static/achievements/`, linked from the lobby's own "Achievements"
 button) renders that response grouped by category with a tier badge,
-progress bar, and unlocked checkmark per row -- no other achievements-side
-UI exists yet (no toast/banner at the moment of unlock, just the
-notification and the page reflecting it next visit).
+progress bar, and unlocked checkmark per row, plus a "hide locked
+achievements" toggle (a pure client-side filter, persisted to
+`localStorage`, over the already-fetched catalog -- no extra round trip).
+
+The lobby itself surfaces an unlock without the player needing to open the
+page at all: `checkAchievementNotification()` in `game.js` polls
+`GET /user/achievements` every 15 seconds (same cadence as the existing
+friend-request check) and compares each row's `unlocked_at` against two
+`localStorage` timestamps -- `achievementsSeenAt` (bumped only when the
+player actually opens the Achievements page; drives a small dot on
+`#achievements-button`, the same treatment as the friend-request/unread-chat
+dots) and `achievementsToastedThroughAt` (bumped on every toast shown, and
+also on page visit, so a still-unseen unlock doesn't re-toast on every
+poll). A newly-detected unlock also fires a `showToast()` (`app.js`'s
+generic bottom-corner toast helper, its own lazily-created
+`#toast-container`) naming the achievement, clickable through to the
+Achievements page. The first-ever poll on a given browser baselines both
+markers to whatever's already unlocked rather than toasting/flagging a
+player's entire existing history the moment this shipped.
 
 Known simplifications, worth revisiting if they ever matter enough:
 color-majority/Rainbow Connection/Common Touch/David vs. Goliath read

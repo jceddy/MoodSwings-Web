@@ -216,7 +216,7 @@ function clearSessionCookie(): void
 function requireAuth(AuthService $auth): array
 {
     $token = $_COOKIE[AuthService::COOKIE_NAME] ?? null;
-    $result = $token !== null ? $auth->currentUser($token) : null;
+    $result = $token !== null ? $auth->currentUser($token, $_SERVER['HTTP_X_TIMEZONE'] ?? null) : null;
 
     if ($result === null) {
         respond(401, ['status' => 'error', 'message' => 'Not authenticated']);
@@ -541,7 +541,7 @@ if ($path === '/logout' && $method === 'POST') {
 
 if ($path === '/me' && $method === 'GET') {
     $token = $_COOKIE[AuthService::COOKIE_NAME] ?? null;
-    $result = $token !== null ? $auth->currentUser($token) : null;
+    $result = $token !== null ? $auth->currentUser($token, $_SERVER['HTTP_X_TIMEZONE'] ?? null) : null;
 
     if ($result === null) {
         respond(401, ['status' => 'error', 'message' => 'Not authenticated']);

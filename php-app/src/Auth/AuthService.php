@@ -251,14 +251,30 @@ final class AuthService
     }
 
     /**
+     * $timezone is the browser's own IANA identifier (e.g.
+     * 'America/Los_Angeles'), sent as the X-Timezone header on every
+     * apiRequest() call (see app.js) and opportunistically persisted here
+     * -- same "kept in sync on every authenticated request" treatment as
+     * sessions.last_seen_at just below, rather than a one-time Settings
+     * field the player would have to notice and set themselves. Silently
+     * ignored if absent, empty, or not a real IANA identifier (an older
+     * client, a non-browser API caller, or a tampered header) -- this
+     * never blocks login/auth, it only feeds AchievementService's Night
+     * Owl/Early Bird/Marathon Session checks, which fall back to UTC for
+     * any user whose timezone isn't known yet.
+     *
      * @return array{user: array{id: int, username: string, email: string, phone_number: ?string, share_presence: bool, default_selections_mode_preference: bool, auto_pass_on_empty_hand: bool, auto_apply_scoring_bonuses: bool, pause_before_own_turn: bool, board_layout_preference: string, allow_custom_content: bool, matchmaking_discoverable: bool}, expiresAt: DateTimeImmutable}|null
      */
-    public function currentUser(string $token): ?array
+    public function currentUser(string $token, ?string $timezone = null): ?array
     {
         $session = $this->sessions->findValidByTokenHash(hash('sha256', $token));
 
         if ($session === null) {
             return null;
+        }
+
+        if ($timezone !== null && $timezone !== '' && $timezone !== $session['timezone'] && self::isValidTimezone($timezone)) {
+            $this->users->updateTimezone((int) $session['user_id'], $timezone);
         }
 
         $expiresAt = new DateTimeImmutable('+' . self::SESSION_TTL_DAYS . ' days');
@@ -342,5 +358,22 @@ final class AuthService
             ],
             'expiresAt' => $expiresAt,
         ];
+    }
+
+    /**
+     * Guards users.timezone against anything but a real IANA identifier
+     * DateTimeZone itself will accept -- the X-Timezone header is
+     * ordinary client input (a stale build, a non-browser API caller, or
+     * a deliberately tampered request), never trusted as-is.
+     */
+    private static function isValidTimezone(string $timezone): bool
+    {
+        try {
+            new \DateTimeZone($timezone);
+
+            return true;
+        } catch (\Exception $e) {
+            return false;
+        }
     }
 }
