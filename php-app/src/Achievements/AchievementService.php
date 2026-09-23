@@ -146,6 +146,48 @@ final class AchievementService
         return $byCategory;
     }
 
+    /**
+     * The in-game board's own trophy-icon indicator (issue tracker: "trophy
+     * cup by name") -- one query for every seated player at once, batched
+     * the same way buildGameState()'s own $presenceStatuses/$handCounts
+     * are, rather than one query per row. Ties (a user with several
+     * unlocked achievements at their best tier) don't matter here: we only
+     * want the single best tier name, not which achievement earned it.
+     *
+     * @param list<int> $userIds
+     * @return array<int, string> user_id => highest unlocked tier ('Diamond' > 'Platinum' > 'Gold' > 'Silver' > 'Bronze'), missing entry means no unlocked achievements at all
+     */
+    public function highestUnlockedTiersFor(array $userIds): array
+    {
+        $userIds = array_values(array_unique(array_map(intval(...), $userIds)));
+        if ($userIds === []) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($userIds), '?'));
+        $stmt = Connection::get()->prepare(
+            "SELECT ua.user_id, a.tier
+             FROM user_achievements ua
+             JOIN achievements a ON a.id = ua.achievement_id
+             WHERE ua.unlocked_at IS NOT NULL AND ua.user_id IN ({$placeholders})
+             ORDER BY FIELD(a.tier, 'Diamond', 'Platinum', 'Gold', 'Silver', 'Bronze')"
+        );
+        $stmt->execute($userIds);
+
+        $tiersByUserId = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $userId = (int) $row['user_id'];
+            // First row seen per user is that user's best tier, thanks to
+            // the FIELD() ordering above -- later rows for the same user
+            // are always equal-or-worse, so just skip them.
+            if (!isset($tiersByUserId[$userId])) {
+                $tiersByUserId[$userId] = $row['tier'];
+            }
+        }
+
+        return $tiersByUserId;
+    }
+
     // ---------------------------------------------------------------
     // Generic primitives
     // ---------------------------------------------------------------

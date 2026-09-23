@@ -5084,6 +5084,25 @@ button).
     (`renderTeamScores()`) follows the identical solid-blue/hollow-red
     convention, using `'team'`/`'teamOpponent'` the same way.
 
+    **Achievement-tier trophy icon.** To the LEFT of the name (not folded
+    into the `.player-icons` wrapper above, which is about this round/
+    game's own live stats, not the player's all-time achievements) sits a
+    trophy icon colored by that player's own highest currently-unlocked
+    achievement tier (`player.highest_achievement_tier` — see
+    `AchievementService::highestUnlockedTiersFor()` in `php-app/README.md`'s
+    Achievements section). `buildAchievementTrophyFlag()` returns `null`
+    (rendering nothing) for a player with zero unlocked achievements,
+    rather than a neutral/empty trophy placeholder. It reuses the exact
+    same trophy-cup silhouette as the `wins` stat icon on the right side of
+    the row (`PLAYER_STAT_ICON_PATHS.achievementTier`) — deliberately, since
+    this is also literally a trophy — distinguished from `wins` by position
+    (left of the name vs. among the round stats) and color (one of five
+    tier colors, `.player-flag--tier-bronze/silver/gold/platinum/diamond`
+    in `style.css`, vs. `wins`'s fixed `--color-gold`) rather than shape.
+    Those five colors are the same ones `achievements.css`'s own
+    `.achievement-tier-*` badge classes use, kept in sync by hand since the
+    game board doesn't load that stylesheet.
+
     `'after_scoring_order'`'s own field (`type: 'card_order'`) is the one
     pending-decision field that isn't a `<select>`-backed widget at all —
     `buildFieldWidget()` renders `field.cards` (already in the server's own

@@ -706,6 +706,47 @@ final class AchievementServiceIntegrationTest extends TestCase
         self::assertNull($gettingTheHang['unlocked_at']);
     }
 
+    public function testHighestUnlockedTiersForPicksTheBestTierNotTheMostRecentUnlock(): void
+    {
+        $userId = $this->insertUser('trophyplayer');
+        $achievements = new AchievementService();
+
+        // Unlocked in ascending order on purpose -- the highest tier must
+        // win regardless of unlock order, not just whichever row sorts
+        // last by unlocked_at/id.
+        $achievements->unlock($userId, 'first-steps'); // Bronze
+        $achievements->unlock($userId, 'grand-champion'); // Gold
+
+        $tiers = $achievements->highestUnlockedTiersFor([$userId]);
+
+        self::assertSame('Gold', $tiers[$userId]);
+    }
+
+    public function testHighestUnlockedTiersForOmitsAUserWithNoUnlockedAchievements(): void
+    {
+        $userId = $this->insertUser('trophyplayernone');
+        $achievements = new AchievementService();
+
+        $tiers = $achievements->highestUnlockedTiersFor([$userId]);
+
+        self::assertArrayNotHasKey($userId, $tiers);
+    }
+
+    public function testHighestUnlockedTiersForBatchesSeveralUsersInOneCall(): void
+    {
+        $goldUserId = $this->insertUser('trophygold');
+        $bronzeUserId = $this->insertUser('trophybronze');
+        $achievements = new AchievementService();
+
+        $achievements->unlock($goldUserId, 'grand-champion'); // Gold
+        $achievements->unlock($bronzeUserId, 'first-steps'); // Bronze
+
+        $tiers = $achievements->highestUnlockedTiersFor([$goldUserId, $bronzeUserId]);
+
+        self::assertSame('Gold', $tiers[$goldUserId]);
+        self::assertSame('Bronze', $tiers[$bronzeUserId]);
+    }
+
     /** @param array<int, array<string, mixed>> $rows */
     private static function findBySlug(array $rows, string $slug): array
     {

@@ -72,6 +72,7 @@
 .achievement-tier-silver { background: #c0c0c0; }
 .achievement-tier-gold { background: #d4af37; }
 .achievement-tier-platinum { background: #a8d0e6; }
+.achievement-tier-diamond { background: #b9f2ff; }
 
 /* Not a plain .achievement-progress-wrap { display: flex } -- an author
    stylesheet's display always wins over the UA stylesheet's [hidden]

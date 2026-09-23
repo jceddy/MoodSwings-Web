@@ -7239,6 +7239,15 @@
         // Round wins: a trophy cup on a stem and base.
         wins: '<polygon points="6,4 18,4 15,13 9,13"/>'
             + '<rect x="11" y="13" width="2" height="4"/><rect x="8" y="18" width="8" height="2"/>',
+        // Highest unlocked achievement tier: the same trophy-cup silhouette
+        // as `wins` above -- reused deliberately, since this is also
+        // literally a trophy, just recolored per-tier (see
+        // .player-flag--tier-* in style.css) rather than always gold.
+        // Distinguished from `wins` at a glance by position (to the LEFT
+        // of the name, not among the other stats to its right) rather
+        // than shape.
+        achievementTier: '<polygon points="6,4 18,4 15,13 9,13"/>'
+            + '<rect x="11" y="13" width="2" height="4"/><rect x="8" y="18" width="8" height="2"/>',
         // Hand size: two overlapping cards, echoing the printed cards'
         // own portrait shape elsewhere on this page.
         hand: '<rect x="4" y="7" width="10" height="14" rx="1.5" transform="rotate(-8 9 14)"/>'
@@ -7374,6 +7383,20 @@
             isThinking ? 'player-flag--presenceThinking' : null,
         ].filter(Boolean).join(' ');
         return buildPlayerFlag('presence', label, extraClasses || null);
+    }
+
+    // Trophy icon shown to the LEFT of a player's name, colored by their
+    // highest currently-unlocked achievement tier (player.highest_achievement_tier
+    // -- see AchievementService::highestUnlockedTiersFor()). Returns null
+    // for a player with no unlocked achievements at all, in which case the
+    // caller omits the icon entirely rather than showing an empty/neutral
+    // placeholder trophy.
+    function buildAchievementTrophyFlag(username, tier) {
+        if (!tier) {
+            return null;
+        }
+        const label = username + "'s highest unlocked achievement tier: " + tier;
+        return buildPlayerFlag('achievementTier', label, 'player-flag--tier-' + tier.toLowerCase());
     }
 
     async function refreshBoard() {
@@ -7812,6 +7835,14 @@
                     deckNameEl.className = 'player-deck-name';
                     deckNameEl.textContent = deckName;
                     nameBlock.appendChild(deckNameEl);
+                }
+                // To the left of the name (li's own flex order), not
+                // folded into .player-icons -- that box lives to the
+                // RIGHT of the name and is about this round/game's own
+                // live stats, not the player's all-time achievements.
+                const trophyFlag = buildAchievementTrophyFlag(player.username, player.highest_achievement_tier);
+                if (trophyFlag) {
+                    li.appendChild(trophyFlag);
                 }
                 li.appendChild(nameBlock);
 

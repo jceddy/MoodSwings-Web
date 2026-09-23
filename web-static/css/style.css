@@ -2285,6 +2285,34 @@ body.game-page {
     color: var(--color-error);
 }
 
+/* Achievement-tier trophy (left of the player's name -- see
+   buildAchievementTrophyFlag() in game.js): same five tier colors as
+   .achievement-tier-* in achievements.css, kept in sync by hand since the
+   game board doesn't load that stylesheet. Unlike .achievement-tier-badge
+   (a solid pill with dark #222 text baked in for contrast against every
+   one of these), this is just `color` on an SVG using `fill: currentColor`
+   sitting on the page's own background, so no separate text-contrast
+   color is needed here. */
+.player-flag--tier-bronze {
+    color: #cd7f32;
+}
+
+.player-flag--tier-silver {
+    color: #c0c0c0;
+}
+
+.player-flag--tier-gold {
+    color: #d4af37;
+}
+
+.player-flag--tier-platinum {
+    color: #a8d0e6;
+}
+
+.player-flag--tier-diamond {
+    color: #b9f2ff;
+}
+
 /* -- Hurt Feelings art thumbnail (players list) ---------------------- */
 
 .hurt-feelings-thumb {

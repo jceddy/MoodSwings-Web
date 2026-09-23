@@ -16665,6 +16665,11 @@ final class GameService
         }
         $presenceStatuses = $this->presence->statusesFor($sharePresenceByUserId);
 
+        // Trophy-icon indicator next to each player's name -- see
+        // AchievementService::highestUnlockedTiersFor()'s own docblock.
+        // Batched the same way as $presenceStatuses just above.
+        $highestAchievementTiers = $this->achievements->highestUnlockedTiersFor(array_keys($sharePresenceByUserId));
+
         $handCounts = [];
         if ($game['status'] === 'in_progress' || $game['status'] === 'completed') {
             $handCountStmt = $pdo->prepare(
@@ -16879,6 +16884,11 @@ final class GameService
                 // player considering whether to opt into a rematch with
                 // the same settings can see how close everyone got.
                 'active_seconds_used' => (int) $row['active_seconds_used'],
+                // Trophy icon shown next to this player's name on the
+                // board (see AchievementService::highestUnlockedTiersFor())
+                // -- null for a player with zero unlocked achievements, in
+                // which case the frontend omits the icon entirely.
+                'highest_achievement_tier' => $highestAchievementTiers[(int) $row['user_id']] ?? null,
             ];
         }
 

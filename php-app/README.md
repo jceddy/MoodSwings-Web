@@ -12507,7 +12507,12 @@ coalescing them into one. `GET /user/achievements`
 (`AchievementService::catalogForUser()`) returns the full catalog
 left-joined against the viewer's own progress, grouped by category; a
 `hidden` row (Mood Ring/Completionist) has its title/description redacted
-to a generic `"???"` placeholder until actually unlocked. The frontend
+to a generic `"???"` placeholder until actually unlocked. `achievements.tier`
+is `ENUM('Bronze', 'Silver', 'Gold', 'Platinum', 'Diamond')` (migration
+0364) -- Diamond is reserved for Completionist alone, so the one
+achievement that requires unlocking every other one stands out with its
+own tier rather than sharing Platinum's badge color with ordinary
+(non-meta) rows like Legend/Draft Completionist. The frontend
 (`web-static/achievements/`, linked from the lobby's own "Achievements"
 button) renders that response grouped by category with a tier badge,
 progress bar, and unlocked checkmark per row, plus a "hide locked
@@ -12529,6 +12534,20 @@ generic bottom-corner toast helper, its own lazily-created
 Achievements page. The first-ever poll on a given browser baselines both
 markers to whatever's already unlocked rather than toasting/flagging a
 player's entire existing history the moment this shipped.
+
+The in-game board's own Players list shows a trophy icon to the left of
+each seated player's name, colored by that specific player's highest
+currently-unlocked achievement tier (`AchievementService::highestUnlockedTiersFor()`,
+batched once per `GameService::buildGameState()` call the same way
+`$presenceStatuses`/`$handCounts` already are, rather than one query per
+seat). `players[].highest_achievement_tier` is `null` for a player with
+zero unlocked achievements, in which case the frontend
+(`buildAchievementTrophyFlag()` in `game.js`) omits the icon entirely
+rather than showing a neutral/empty trophy. The five tier colors
+(`.player-flag--tier-bronze/silver/gold/platinum/diamond` in `style.css`)
+are kept in sync by hand with `achievements.css`'s own
+`.achievement-tier-*` badge colors, since the game board doesn't load
+that stylesheet.
 
 Known simplifications, worth revisiting if they ever matter enough:
 color-majority/Rainbow Connection/Common Touch/David vs. Goliath read
