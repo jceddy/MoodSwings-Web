@@ -1259,6 +1259,40 @@ function closeDialogOnBackdropClick(dialog) {
 // (game.js) -- not login.js/register.js, which don't stay open long
 // enough for this to matter and redirect away as soon as a session exists
 // anyway.
+// A small transient message in the bottom corner of the screen, for
+// "something happened while you weren't looking" events (e.g. an
+// achievement unlocking -- see checkAchievementNotification() in game.js)
+// that don't warrant a dialog or a page navigation. Lazily creates its own
+// fixed-position container the first time it's called, so no page needs to
+// remember to include one in its markup; every caller just gets the same
+// look regardless of which page it's on. Optional onClick navigates/acts
+// when the toast itself is clicked, same as the service worker's own
+// notificationclick handling for OS-level push notifications.
+function showToast(message, { durationMs = 6000, onClick = null } = {}) {
+    let container = document.getElementById('toast-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'toast-container';
+        container.setAttribute('role', 'status');
+        container.setAttribute('aria-live', 'polite');
+        document.body.appendChild(container);
+    }
+
+    const toast = document.createElement('div');
+    toast.className = 'toast';
+    toast.textContent = message;
+    if (onClick) {
+        toast.classList.add('toast-clickable');
+        toast.addEventListener('click', onClick);
+    }
+    container.appendChild(toast);
+
+    setTimeout(() => {
+        toast.classList.add('toast-dismissing');
+        toast.addEventListener('transitionend', () => toast.remove(), { once: true });
+    }, durationMs);
+}
+
 function startVersionWatcher(intervalMs = 60000) {
     let versionAtLoad = null;
     fetchDeployedVersion().then((version) => { versionAtLoad = version; });

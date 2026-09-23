@@ -23,6 +23,8 @@
     startVersionWatcher();
     checkFriendRequestNotification();
     setInterval(checkFriendRequestNotification, 15000);
+    checkAchievementNotification();
+    setInterval(checkAchievementNotification, 15000);
     initSettings();
 
     document.getElementById('logout-button').addEventListener('click', async () => {
@@ -120,6 +122,91 @@
         if (ok) {
             setFriendRequestNotification(body.incoming.length > 0);
         }
+    }
+
+    // Achievement unlock indication (#achievements-button dot + a toast --
+    // see showToast() in app.js). Unlike the friend-request dot above,
+    // "has one" isn't the right test here -- almost every player has SOME
+    // unlocked achievement, so this tracks "unlocked more recently than
+    // the player last looked" via a pair of localStorage timestamps rather
+    // than a plain boolean:
+    //  - achievementsSeenAt: bumped only by achievements.js when the
+    //    player actually opens the Achievements page -- drives the dot.
+    //  - achievementsToastedThroughAt: bumped here (and by
+    //    achievements.js, on page visit) every time an unlock has been
+    //    toasted -- keeps a still-unseen unlock from re-toasting on every
+    //    15-second poll until the player finally opens the page.
+    // Both keys are shared with achievements.js (not game.js-local), same
+    // localStorage-key-as-contract approach as CHAT_LAST_SEEN_STORAGE_PREFIX.
+    const ACHIEVEMENTS_SEEN_STORAGE_KEY = 'achievementsSeenAt';
+    const ACHIEVEMENTS_TOASTED_THROUGH_STORAGE_KEY = 'achievementsToastedThroughAt';
+
+    function getStoredAchievementTimestamp(key) {
+        try {
+            return localStorage.getItem(key);
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function setStoredAchievementTimestamp(key, value) {
+        try {
+            localStorage.setItem(key, value);
+        } catch (e) {
+            // ignore -- this marker just won't persist across reloads
+        }
+    }
+
+    function setAchievementNotification(hasNew) {
+        document.getElementById('achievements-button').classList.toggle('has-new-achievement', hasNew);
+    }
+
+    async function checkAchievementNotification() {
+        const { ok, body } = await getAchievements();
+        if (!ok) {
+            return;
+        }
+
+        const unlocked = Object.values(body.achievements)
+            .flat()
+            .filter((achievement) => achievement.unlocked_at !== null);
+
+        let seenAt = getStoredAchievementTimestamp(ACHIEVEMENTS_SEEN_STORAGE_KEY);
+        let toastedThroughAt = getStoredAchievementTimestamp(ACHIEVEMENTS_TOASTED_THROUGH_STORAGE_KEY);
+
+        // First time either marker has ever been set on this browser --
+        // treat everything unlocked so far as a known baseline rather than
+        // "brand new," so a player who already has a dozen achievements
+        // doesn't get a dozen toasts (and a lit-up dot) the moment this
+        // feature ships.
+        if (seenAt === null || toastedThroughAt === null) {
+            const latestSoFar = unlocked.reduce(
+                (max, achievement) => (achievement.unlocked_at > max ? achievement.unlocked_at : max),
+                ''
+            );
+            seenAt = seenAt === null ? latestSoFar : seenAt;
+            toastedThroughAt = toastedThroughAt === null ? latestSoFar : toastedThroughAt;
+            setStoredAchievementTimestamp(ACHIEVEMENTS_SEEN_STORAGE_KEY, seenAt);
+            setStoredAchievementTimestamp(ACHIEVEMENTS_TOASTED_THROUGH_STORAGE_KEY, toastedThroughAt);
+        }
+
+        const newlyUnlocked = unlocked
+            .filter((achievement) => achievement.unlocked_at > toastedThroughAt)
+            .sort((a, b) => (a.unlocked_at < b.unlocked_at ? -1 : 1));
+
+        for (const achievement of newlyUnlocked) {
+            showToast(`Achievement unlocked: ${achievement.title}`, {
+                onClick: () => {
+                    window.location.href = '../achievements/';
+                },
+            });
+        }
+        if (newlyUnlocked.length > 0) {
+            toastedThroughAt = newlyUnlocked[newlyUnlocked.length - 1].unlocked_at;
+            setStoredAchievementTimestamp(ACHIEVEMENTS_TOASTED_THROUGH_STORAGE_KEY, toastedThroughAt);
+        }
+
+        setAchievementNotification(unlocked.some((achievement) => achievement.unlocked_at > seenAt));
     }
 
     // Browser push notifications (issue #108): Push API + Notifications API
