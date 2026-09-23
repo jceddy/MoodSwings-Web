@@ -12507,7 +12507,12 @@ coalescing them into one. `GET /user/achievements`
 (`AchievementService::catalogForUser()`) returns the full catalog
 left-joined against the viewer's own progress, grouped by category; a
 `hidden` row (Mood Ring/Completionist) has its title/description redacted
-to a generic `"???"` placeholder until actually unlocked. The frontend
+to a generic `"???"` placeholder until actually unlocked. `achievements.tier`
+is `ENUM('Bronze', 'Silver', 'Gold', 'Platinum', 'Diamond')` (migration
+0364) -- Diamond is reserved for Completionist alone, so the one
+achievement that requires unlocking every other one stands out with its
+own tier rather than sharing Platinum's badge color with ordinary
+(non-meta) rows like Legend/Draft Completionist. The frontend
 (`web-static/achievements/`, linked from the lobby's own "Achievements"
 button) renders that response grouped by category with a tier badge,
 progress bar, and unlocked checkmark per row, plus a "hide locked
