@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace MoodSwings\Game;
 
+use MoodSwings\Achievements\AchievementService;
 use MoodSwings\Bot\BotChoiceResolver;
 use MoodSwings\Bot\BotPlayerService;
 use MoodSwings\Bot\SearchBotPlayerService;
@@ -1364,6 +1365,7 @@ final class GameService
         private readonly PresenceService $presence = new PresenceService(new SessionRepository()),
         private readonly GameNoteRepository $notes = new GameNoteRepository(),
         private readonly CardStatsService $cardStats = new CardStatsService(),
+        private readonly AchievementService $achievements = new AchievementService(),
         private readonly GameChatRepository $chat = new GameChatRepository(),
         private readonly BotPlayerService $bots = new BotPlayerService(new BotChoiceResolver()),
         private readonly ChaosEffectRegistry $chaosRegistry = new ChaosEffectRegistry(),
@@ -2380,6 +2382,18 @@ final class GameService
                 $pdo->rollBack();
             }
             throw $e;
+        }
+
+        $botSeatCount = 0;
+        $userStmt = Connection::get()->prepare('SELECT is_bot FROM users WHERE id = :id');
+        foreach ($seatedUserIds as $seatedUserId) {
+            $userStmt->execute(['id' => $seatedUserId]);
+            if ((bool) $userStmt->fetchColumn()) {
+                $botSeatCount++;
+            }
+        }
+        if ($botSeatCount >= 2) {
+            $this->achievements->onBotGameCreated($createdByUserId);
         }
 
         return $gameId;
@@ -11068,11 +11082,13 @@ final class GameService
         // submitQuickDraftPick()'s own recordQuickDraftPick() guard for
         // the draft pick-position half (Chaos Draft's own drafting phase
         // reuses Quick Draft's pick mechanic verbatim).
-        if (!$containsBot && $this->fetchGame($gameId)['deck_type'] !== 'chaos_draft') {
+        $game = $this->fetchGame($gameId);
+        if (!$containsBot && $game['deck_type'] !== 'chaos_draft') {
             $this->bumpLifetimeStats($winningUserIds, 'game_wins');
             $this->bumpLifetimeStats($losingUserIds, 'game_losses');
             $this->cardStats->recordGameCompletion($gameId, $winningUserIds, $losingUserIds);
         }
+        $this->achievements->onGameCompleted($gameId, $game, $winningUserIds, $losingUserIds, $containsBot);
 
         foreach ($winningUserIds as $userId) {
             if ($userId === $excludeUserId) {
@@ -11958,6 +11974,7 @@ final class GameService
             $pdo->prepare(
                 "UPDATE game_matches SET status = 'completed', winner_user_id = :winner, completed_at = NOW() WHERE id = :id"
             )->execute(['winner' => $winnerUserId, 'id' => $gameMatchId]);
+            $this->achievements->onBestOfThreeMatchCompleted($gameMatchId, self::isTeamFormat($game['format']));
 
             return;
         }

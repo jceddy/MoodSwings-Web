@@ -329,6 +329,10 @@ function getUserStats() {
     return apiRequest('/user/stats');
 }
 
+function getAchievements() {
+    return apiRequest('/user/achievements');
+}
+
 // Online/presence indicator (issue #110) -- write-only; the current value
 // already rides on getCurrentUser()'s own user.share_presence field, so
 // there's no matching getPresencePreference().

@@ -49,6 +49,12 @@
         window.location.href = '../stats/';
     });
 
+    // Achievements -- same real-page-navigation pattern as
+    // #user-info-button/#spectate-button/#stats-button above.
+    document.getElementById('achievements-button').addEventListener('click', () => {
+        window.location.href = '../achievements/';
+    });
+
     const friendsDialog = document.getElementById('friends-dialog');
     const friendInviteForm = document.getElementById('friend-invite-form');
     const friendInviteInput = document.getElementById('friend-invite-input');
