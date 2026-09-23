@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 require dirname(__DIR__) . '/vendor/autoload.php';
 
+use MoodSwings\Achievements\AchievementService;
 use MoodSwings\Auth\AuthService;
 use MoodSwings\Auth\DuplicateEmailException;
 use MoodSwings\Auth\DuplicateUsernameException;
@@ -565,8 +566,9 @@ $notifications = new NotificationService($notificationPreferences, $queuedNotifi
     new PushNotificationChannel($pushSubscriptions),
     new DiscordNotificationChannel($discordAccounts),
 ]);
+$achievements = new AchievementService($notifications);
 
-$friendships = new FriendshipService(new UserRepository(), new FriendshipRepository());
+$friendships = new FriendshipService(new UserRepository(), new FriendshipRepository(), achievements: $achievements);
 
 if ($path === '/friends' && $method === 'GET') {
     $currentUser = requireAuth($auth);
@@ -698,14 +700,15 @@ if ($path === '/notifications/preferences' && $method === 'POST') {
         (bool) ($body['notify_game_finished'] ?? true),
         (bool) ($body['disable_cooldown'] ?? false),
         (bool) ($body['notify_chat_message'] ?? true),
-        (bool) ($body['notify_timeout_warning'] ?? true)
+        (bool) ($body['notify_timeout_warning'] ?? true),
+        (bool) ($body['notify_achievement_unlocked'] ?? true)
     );
     respond(200, ['status' => 'ok', 'preferences' => $notificationPreferences->forUser((int) $currentUser['id'])]);
 }
 
 // $discordAccounts itself was already constructed above, alongside
 // $notifications.
-$discordOAuth = new DiscordOAuthService($discordAccounts, new DiscordOAuthStateRepository());
+$discordOAuth = new DiscordOAuthService($discordAccounts, new DiscordOAuthStateRepository(), achievements: $achievements);
 $discordInteractions = new DiscordInteractionsService();
 
 if ($path === '/discord/status' && $method === 'GET') {
@@ -763,7 +766,7 @@ if ($path === '/discord/interactions' && $method === 'POST') {
     respond(200, $discordInteractions->handle(is_array($payload) ? $payload : []));
 }
 
-$userDecklists = new UserDecklistService(new UserDecklistRepository(), $friendships);
+$userDecklists = new UserDecklistService(new UserDecklistRepository(), $friendships, $achievements);
 
 // Every printed card, for the deck builder's (issue #93) own catalog-
 // browsing panel -- filtering/sorting/searching all happen client-side
@@ -855,12 +858,12 @@ if ($path === '/decklists/delete' && $method === 'POST') {
 $gameRegistry = DefaultEffectRegistry::build();
 $chaosRegistry = ChaosDefaultEffectRegistry::build();
 $cardStats = new CardStatsService();
-$games = new GameService(new BoardStateRepository($gameRegistry, $chaosRegistry), new MoodPlayService($gameRegistry, $chaosRegistry), new RoundScorer(), $userDecklists, new ReplayStateBuilder($gameRegistry), notifications: $notifications, cardStats: $cardStats, chaosRegistry: $chaosRegistry);
+$games = new GameService(new BoardStateRepository($gameRegistry, $chaosRegistry), new MoodPlayService($gameRegistry, $chaosRegistry), new RoundScorer(), $userDecklists, new ReplayStateBuilder($gameRegistry), notifications: $notifications, cardStats: $cardStats, achievements: $achievements, chaosRegistry: $chaosRegistry);
 $matchmaking = new MatchmakingService(new OpenGameListingRepository(), new UserRepository(), new FriendshipRepository(), $games);
 $weeklySealedPoolQueue = new WeeklySealedPoolQueueService($games);
 // Issue #91 -- see TournamentMatchObserver's own docblock for why this
 // is a setter rather than a constructor dependency on $games.
-$tournaments = new TournamentService(new TournamentRepository(), new TournamentParticipantRepository(), new TournamentMatchRepository(), new TournamentBracketBuilder(), $games, new UserRepository(), new FriendshipRepository(), new TournamentPodRepository(), new BoosterPackBuilder(), new BoosterDraftPodBuilder(), new GridDraftPodBuilder());
+$tournaments = new TournamentService(new TournamentRepository(), new TournamentParticipantRepository(), new TournamentMatchRepository(), new TournamentBracketBuilder(), $games, new UserRepository(), new FriendshipRepository(), new TournamentPodRepository(), new BoosterPackBuilder(), new BoosterDraftPodBuilder(), new GridDraftPodBuilder(), $achievements);
 $games->setTournamentObserver($tournaments);
 
 // Lifetime game/match wins-losses (issue #106) -- see
@@ -878,6 +881,15 @@ if ($path === '/user/stats' && $method === 'GET') {
         // GameService::priorWeeklySealedPoolEventsFor()'s own docblock.
         'prior_weekly_sealed_pool_events' => $games->priorWeeklySealedPoolEventsFor((int) $currentUser['id']),
     ]);
+}
+
+// Achievements (design doc: "MoodSwings-Web Achievements -- Draft List").
+// Grouped by category letter (A-I), each with the viewer's own progress/
+// unlocked_at -- see AchievementService::catalogForUser()'s own docblock
+// for the hidden-row redaction.
+if ($path === '/user/achievements' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    respond(200, ['status' => 'ok', 'achievements' => $achievements->catalogForUser((int) $currentUser['id'])]);
 }
 
 // Online/presence indicator (issue #110): lets a user opt out of sharing
@@ -1814,7 +1826,8 @@ if ($path === '/games/past' && $method === 'GET') {
 // requires an account), no game/friendship check. See
 // CardStatsService::allCardStats()'s own docblock.
 if ($path === '/stats/cards' && $method === 'GET') {
-    requireAuth($auth);
+    $currentUser = requireAuth($auth);
+    $achievements->onCardStatsPageViewed((int) $currentUser['id']);
     respond(200, ['status' => 'ok', 'cards' => $cardStats->allCardStats()]);
 }
 
@@ -1968,7 +1981,9 @@ if ($path === '/games/spectate/state' && $method === 'GET') {
     }
 
     try {
-        respond(200, ['status' => 'ok', ...$games->getSpectatorState($gameId)]);
+        $state = $games->getSpectatorState($gameId);
+        $achievements->onGameSpectated((int) $currentUser['id']);
+        respond(200, ['status' => 'ok', ...$state]);
     } catch (GameStateException $e) {
         respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
     }
@@ -2043,7 +2058,7 @@ if ($path === '/games/replay/state' && $method === 'GET') {
 // step list into the same response, since there's no per-game GET
 // /games/log to separately reuse the way the live route above does.
 if ($path === '/games/replay/import' && $method === 'POST') {
-    requireAuth($auth);
+    $currentUser = requireAuth($auth);
     $body = requestBody();
     $export = $body['export'] ?? null;
     $eventId = (int) ($body['event_id'] ?? 0);
@@ -2054,6 +2069,7 @@ if ($path === '/games/replay/import' && $method === 'POST') {
 
     try {
         $result = $games->replayFromExport($export, $eventId);
+        $achievements->onReplayImported((int) $currentUser['id']);
         respond(200, ['status' => 'ok', 'steps' => $result['steps'], ...$result['snapshot']]);
     } catch (GameStateException $e) {
         respond(400, ['status' => 'error', 'message' => $e->getMessage()]);

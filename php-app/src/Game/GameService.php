@@ -2384,6 +2384,18 @@ final class GameService
             throw $e;
         }
 
+        $botSeatCount = 0;
+        $userStmt = Connection::get()->prepare('SELECT is_bot FROM users WHERE id = :id');
+        foreach ($seatedUserIds as $seatedUserId) {
+            $userStmt->execute(['id' => $seatedUserId]);
+            if ((bool) $userStmt->fetchColumn()) {
+                $botSeatCount++;
+            }
+        }
+        if ($botSeatCount >= 2) {
+            $this->achievements->onBotGameCreated($createdByUserId);
+        }
+
         return $gameId;
     }
 

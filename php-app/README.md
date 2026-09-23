@@ -12416,10 +12416,11 @@ database with real data.
 
 ## Achievements
 
-Phase 1 of a 108-entry catalog (design doc: "MoodSwings-Web Achievements
--- Draft List"), covering every achievement whose condition is knowable
-at game-completion or tournament-completion time, plus the four meta
-rows. `achievements` (migration 0357) is static reference data --
+A 108-entry catalog (design doc: "MoodSwings-Web Achievements -- Draft
+List"), covering every achievement whose condition is knowable at
+game-completion or tournament-completion time, the four meta rows, and
+every account/social trigger with a real call site. `achievements`
+(migration 0357) is static reference data --
 `slug`/`category`/`title`/`description`/`tier`/`target`/`hidden`, one row
 per catalog entry, seeded once at migration time and never touched again
 by application code. `user_achievements` is the per-user progress table
@@ -12429,7 +12430,14 @@ by application code. `user_achievements` is the per-user progress table
 incremental: a completed game is deleted after 7 days
 (`deleteStaleCompletedGames()`), so nothing here can ever be recomputed
 retroactively. No backfill from existing `user_lifetime_stats`: every
-counter starts at zero from this deploy forward.
+counter starts at zero from this deploy forward. Three small supporting
+tables exist purely because a single running `progress` integer can't
+express what they need: `user_played_mythic_cards` (Rarity Collector's
+distinct-set-of-15 tracking), `user_format_play_counts` (Format Purist's
+*per-format* count, so switching formats between games doesn't silently
+count toward the same total), and `user_daily_game_counts`/
+`user_opponent_game_counts` (Marathon Session's per-calendar-day count
+and Rematch!'s per-opponent count, both day/pair-scoped the same way).
 
 `AchievementService` (`src/Achievements/AchievementService.php`) is the
 whole system. Three generic primitives cover nearly every row: `unlock()`
@@ -12440,19 +12448,41 @@ ever raises `progress`). `onGameCompleted()` is called from
 `GameService::recordGameCompletionStats()` -- the same single call site
 every completion path already funnels through -- and covers Volume,
 Format, Deck Type, Color/Rarity (including the six synonym-cluster and
-six card-cycle rows), and most In-Game Skill/Card Feat achievements.
-`onBestOfThreeMatchCompleted()` is called from `advanceGameMatch()` for
-the handful of achievements about the *overall* best-of-three match
-rather than any one game in it (Match Point/Match Maker/Grand Champion/
-Comeback Kid/Flawless Victory). `onTournamentCompleted()`/
-`onTournamentJoined()`/`onTournamentStarted()` are called from
-`TournamentService` for the Tournaments category. A handful of account/
-social achievements are wired from their own natural call sites
-(`FriendshipService::respondToInvite()`, `UserDecklistService::create()`/
-`update()`, `DiscordOAuthService::handleCallback()`); the remainder
-(Spectator Sport, Replay Enthusiast, Bot Wrangler, Card Counter, Marathon
-Session, Rematch!, Sharing is Caring) still need their own hooks wired in
-a follow-up pass.
+six card-cycle rows), most In-Game Skill/Card Feat achievements, and the
+Marathon Session/Rematch! counters. `onBestOfThreeMatchCompleted()` is
+called from `advanceGameMatch()` for the handful of achievements about
+the *overall* best-of-three match rather than any one game in it (Match
+Point/Match Maker/Grand Champion/Comeback Kid/Flawless Victory).
+`onTournamentCompleted()`/`onTournamentJoined()`/`onTournamentStarted()`
+are called from `TournamentService` for the Tournaments category. Every
+account/social achievement is wired from its own natural call site:
+`FriendshipService::respondToInvite()` (Making Friends/Social Butterfly),
+`UserDecklistService::create()`/`update()` (Deck Curator/Deck Doctor/
+Sharing is Caring, the last on `visibility === 'friends'`),
+`DiscordOAuthService::handleCallback()` (Discord Connected),
+`GameService::createGame()` (Bot Wrangler, 2+ bot seats) and
+`GET /games/spectate/state`/`POST /games/replay/import`/
+`GET /stats/cards` in `public/index.php` (Spectator Sport/Replay
+Enthusiast/Card Counter).
+
+Unlock notifications reuse `NotificationService`'s existing channel
+fan-out exactly like `notifyTimeoutWarning()` does:
+`notifyAchievementUnlocked()`, a `notify_achievement_unlocked` preference
+column (migration 0359, defaults on), and its own
+`NotificationScope::forAchievement($slug)` -- scoped per-achievement
+rather than sharing one bucket, so a burst of several unlocks at once
+(a meta row cascading right after the row that completed it, say) still
+notifies about each individually instead of the 5-minute cooldown
+coalescing them into one. `GET /user/achievements`
+(`AchievementService::catalogForUser()`) returns the full catalog
+left-joined against the viewer's own progress, grouped by category; a
+`hidden` row (Mood Ring/Completionist) has its title/description redacted
+to a generic `"???"` placeholder until actually unlocked. The frontend
+(`web-static/achievements/`, linked from the lobby's own "Achievements"
+button) renders that response grouped by category with a tier badge,
+progress bar, and unlocked checkmark per row -- no other achievements-side
+UI exists yet (no toast/banner at the moment of unlock, just the
+notification and the page reflecting it next visit).
 
 Known simplifications, worth revisiting if they ever matter enough:
 color-majority/Rainbow Connection/Common Touch/David vs. Goliath read
@@ -12470,9 +12500,3 @@ and Deadline Dodger are not yet implemented: `game_events` has no
 turn-boundary marker for the former, and the timeout warning shown mid-game
 is purely computed-on-read (`buildActionTimeoutWarning()`), never
 persisted, so there's nothing left to check by completion time.
-
-Not yet built: unlock notifications (`NotificationService` already has
-the exact `notifyTimeoutWarning()`-style pattern to follow), a
-`GET /user/achievements` endpoint, and any frontend display at all --
-achievements unlock silently server-side today. See the design doc's own
-"Suggested build order" for the intended next steps.

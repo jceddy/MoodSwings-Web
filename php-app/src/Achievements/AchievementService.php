@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace MoodSwings\Achievements;
 
 use MoodSwings\Database\Connection;
+use MoodSwings\Notifications\NotificationService;
 
 /**
  * Phase 1 of the achievements design doc (see the "MoodSwings-Web
@@ -93,10 +94,57 @@ final class AchievementService
 
     private const TOTAL_MYTHIC_CARDS = 15;
 
-    /** @var array<string, array{id:int, target:?int}>|null */
+    /** @var array<string, array{id:int, target:?int, title:string, tier:string}>|null */
     private ?array $bySlug = null;
 
     private ?int $totalAchievementCount = null;
+
+    public function __construct(private readonly ?NotificationService $notifications = null)
+    {
+    }
+
+    /**
+     * GET /user/achievements' own data source: the full static catalog
+     * (achievements) left-joined against this one viewer's own progress
+     * (user_achievements) -- a user with no row yet for a given
+     * achievement reads as progress 0/not unlocked, the same "lazily
+     * created" convention the rest of this class writes under. A hidden
+     * row (Mood Ring/Completionist -- spoiler-y meta achievements) has
+     * its title/description redacted to a generic "???" placeholder
+     * until the viewer actually earns it, so the list still hints at
+     * something to find without spoiling what it is.
+     *
+     * @return array<string, array<int, array{slug:string, title:string, description:string, tier:string, target:?int, progress:int, unlocked_at:?string, hidden:bool}>> category letter => achievements in catalog order
+     */
+    public function catalogForUser(int $userId): array
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT a.slug, a.category, a.title, a.description, a.tier, a.target, a.hidden,
+                    COALESCE(ua.progress, 0) AS progress, ua.unlocked_at
+             FROM achievements a
+             LEFT JOIN user_achievements ua ON ua.achievement_id = a.id AND ua.user_id = :u
+             ORDER BY a.category, a.id'
+        );
+        $stmt->execute(['u' => $userId]);
+
+        $byCategory = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $hidden = (bool) $row['hidden'];
+            $unlocked = $row['unlocked_at'] !== null;
+            $byCategory[$row['category']][] = [
+                'slug' => $row['slug'],
+                'title' => ($hidden && !$unlocked) ? '???' : $row['title'],
+                'description' => ($hidden && !$unlocked) ? 'A hidden achievement -- keep playing to find out.' : $row['description'],
+                'tier' => $row['tier'],
+                'target' => $row['target'] !== null ? (int) $row['target'] : null,
+                'progress' => (int) $row['progress'],
+                'unlocked_at' => $row['unlocked_at'],
+                'hidden' => $hidden,
+            ];
+        }
+
+        return $byCategory;
+    }
 
     // ---------------------------------------------------------------
     // Generic primitives
@@ -175,6 +223,9 @@ final class AchievementService
 
     private function onUnlocked(int $userId, string $slug): void
     {
+        $meta = $this->meta($slug);
+        $this->notifications?->notifyAchievementUnlocked($userId, $slug, $meta['title'], $meta['tier']);
+
         if (!in_array($slug, self::META_SLUGS, true)) {
             $this->evaluateMeta($userId);
         }
@@ -310,12 +361,15 @@ final class AchievementService
 
         // Win-or-lose completion counters -- every seated user, not just
         // the winner(s).
-        foreach ([...$winningUserIds, ...$losingUserIds] as $userId) {
+        $allUserIds = [...$winningUserIds, ...$losingUserIds];
+        foreach ($allUserIds as $userId) {
             $this->unlock($userId, 'foot-in-the-door');
             $this->bumpProgress($userId, 'regular');
             $this->bumpProgress($userId, 'no-days-off');
             $this->checkFormatPurist($userId, (string) $game['format']);
+            $this->checkMarathonSession($userId);
         }
+        $this->checkRematch($allUserIds);
 
         foreach ($winningUserIds as $userId) {
             $this->checkVolumeAndFormatWins($userId, $game);
@@ -342,6 +396,44 @@ final class AchievementService
         $stmt->execute(['u' => $userId]);
         if ((int) $stmt->fetchColumn() >= 100) {
             $this->unlock($userId, 'format-purist');
+        }
+    }
+
+    private function checkMarathonSession(int $userId): void
+    {
+        $pdo = Connection::get();
+        $pdo->prepare(
+            'INSERT INTO user_daily_game_counts (user_id, play_date, games_played) VALUES (:u, CURDATE(), 1)
+             ON DUPLICATE KEY UPDATE games_played = games_played + 1'
+        )->execute(['u' => $userId]);
+
+        $stmt = $pdo->prepare('SELECT games_played FROM user_daily_game_counts WHERE user_id = :u AND play_date = CURDATE()');
+        $stmt->execute(['u' => $userId]);
+        $this->setProgressLevel($userId, 'marathon-session', (int) $stmt->fetchColumn());
+    }
+
+    /** @param int[] $allUserIds every user seated in the just-completed game */
+    private function checkRematch(array $allUserIds): void
+    {
+        if (count($allUserIds) < 2) {
+            return;
+        }
+
+        $pdo = Connection::get();
+        $insert = $pdo->prepare(
+            'INSERT INTO user_opponent_game_counts (user_id, opponent_user_id, games_played) VALUES (:u, :o, 1)
+             ON DUPLICATE KEY UPDATE games_played = games_played + 1'
+        );
+        $maxStmt = $pdo->prepare('SELECT MAX(games_played) FROM user_opponent_game_counts WHERE user_id = :u');
+
+        foreach ($allUserIds as $userId) {
+            foreach ($allUserIds as $opponentUserId) {
+                if ($opponentUserId !== $userId) {
+                    $insert->execute(['u' => $userId, 'o' => $opponentUserId]);
+                }
+            }
+            $maxStmt->execute(['u' => $userId]);
+            $this->setProgressLevel($userId, 'rematch', (int) $maxStmt->fetchColumn());
         }
     }
 
@@ -839,12 +931,6 @@ final class AchievementService
         $this->unlock($userId, 'sharing-is-caring');
     }
 
-    /** Called from GameService::createGame() once the opponent's identity is known. */
-    public function onGameCreatedAgainst(int $userId, int $winsAgainstThisOpponent): void
-    {
-        $this->setProgressLevel($userId, 'rematch', $winsAgainstThisOpponent);
-    }
-
     public function onGameSpectated(int $userId): void
     {
         $this->unlock($userId, 'spectator-sport');
@@ -870,16 +956,11 @@ final class AchievementService
         $this->unlock($userId, 'card-counter');
     }
 
-    public function onGamesCompletedToday(int $userId, int $countToday): void
-    {
-        $this->setProgressLevel($userId, 'marathon-session', $countToday);
-    }
-
     // ---------------------------------------------------------------
     // Lookup
     // ---------------------------------------------------------------
 
-    /** @return array{id:int, target:?int} */
+    /** @return array{id:int, target:?int, title:string, tier:string} */
     private function meta(string $slug): array
     {
         $this->bySlug ??= $this->loadAll();
@@ -887,13 +968,18 @@ final class AchievementService
         return $this->bySlug[$slug] ?? throw new \RuntimeException("Unknown achievement slug '{$slug}'");
     }
 
-    /** @return array<string, array{id:int, target:?int}> */
+    /** @return array<string, array{id:int, target:?int, title:string, tier:string}> */
     private function loadAll(): array
     {
-        $stmt = Connection::get()->query('SELECT id, slug, target FROM achievements');
+        $stmt = Connection::get()->query('SELECT id, slug, target, title, tier FROM achievements');
         $out = [];
         foreach ($stmt->fetchAll() as $row) {
-            $out[$row['slug']] = ['id' => (int) $row['id'], 'target' => $row['target'] !== null ? (int) $row['target'] : null];
+            $out[$row['slug']] = [
+                'id' => (int) $row['id'],
+                'target' => $row['target'] !== null ? (int) $row['target'] : null,
+                'title' => $row['title'],
+                'tier' => $row['tier'],
+            ];
         }
 
         return $out;

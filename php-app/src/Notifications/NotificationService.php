@@ -156,6 +156,17 @@ final class NotificationService
         ]);
     }
 
+    /** AchievementService::onUnlocked()'s own passthrough -- $slug scopes the cooldown per-achievement (see NotificationScope::forAchievement()'s own docblock for why). */
+    public function notifyAchievementUnlocked(int $userId, string $slug, string $title, string $tier): void
+    {
+        $this->notify($userId, NotificationScope::forAchievement($slug), 'notify_achievement_unlocked', [
+            'title' => 'Achievement unlocked!',
+            'body' => "{$title} ({$tier})",
+            'url' => '/achievements/',
+            'tag' => "achievement-{$slug}",
+        ]);
+    }
+
     /** GameService::clearQueuedNotificationForGamePlayer()'s own passthrough -- see that method's docblock. */
     public function clearQueuedForGame(int $userId, int $gameId): void
     {

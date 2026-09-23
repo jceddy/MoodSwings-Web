@@ -43,6 +43,9 @@ final class UserDecklistService
 
         $decklistId = $this->decklists->create($userId, $name, $cardIds, $sideboardCardIds, $visibility);
         $this->achievements->onDecklistSaved($userId, count($this->decklists->listForUser($userId)));
+        if ($visibility === 'friends') {
+            $this->achievements->onDecklistShared($userId);
+        }
 
         return $decklistId;
     }
@@ -60,6 +63,9 @@ final class UserDecklistService
 
         $this->decklists->update($decklistId, $name, $cardIds, $sideboardCardIds, $visibility);
         $this->achievements->onDecklistEdited($userId);
+        if ($visibility === 'friends') {
+            $this->achievements->onDecklistShared($userId);
+        }
     }
 
     public function delete(int $userId, int $decklistId): void

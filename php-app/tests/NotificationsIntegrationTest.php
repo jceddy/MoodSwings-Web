@@ -113,14 +113,14 @@ final class NotificationsIntegrationTest extends TestCase
         $userId = $this->insertUser('prefs-default');
 
         self::assertSame(
-            ['notify_your_turn' => true, 'notify_friend_request' => true, 'notify_game_finished' => true, 'notify_chat_message' => true, 'notify_timeout_warning' => true, 'disable_cooldown' => false],
+            ['notify_your_turn' => true, 'notify_friend_request' => true, 'notify_game_finished' => true, 'notify_chat_message' => true, 'notify_timeout_warning' => true, 'notify_achievement_unlocked' => true, 'disable_cooldown' => false],
             $this->preferences->forUser($userId)
         );
 
         $this->preferences->save($userId, false, true, false);
 
         self::assertSame(
-            ['notify_your_turn' => false, 'notify_friend_request' => true, 'notify_game_finished' => false, 'notify_chat_message' => true, 'notify_timeout_warning' => true, 'disable_cooldown' => false],
+            ['notify_your_turn' => false, 'notify_friend_request' => true, 'notify_game_finished' => false, 'notify_chat_message' => true, 'notify_timeout_warning' => true, 'notify_achievement_unlocked' => true, 'disable_cooldown' => false],
             $this->preferences->forUser($userId)
         );
     }
@@ -133,7 +133,7 @@ final class NotificationsIntegrationTest extends TestCase
         $this->preferences->save($userId, true, true, true);
 
         self::assertSame(
-            ['notify_your_turn' => true, 'notify_friend_request' => true, 'notify_game_finished' => true, 'notify_chat_message' => true, 'notify_timeout_warning' => true, 'disable_cooldown' => false],
+            ['notify_your_turn' => true, 'notify_friend_request' => true, 'notify_game_finished' => true, 'notify_chat_message' => true, 'notify_timeout_warning' => true, 'notify_achievement_unlocked' => true, 'disable_cooldown' => false],
             $this->preferences->forUser($userId)
         );
     }
@@ -152,7 +152,7 @@ final class NotificationsIntegrationTest extends TestCase
         $this->preferences->save($userId, true, true, true, false, false);
 
         self::assertSame(
-            ['notify_your_turn' => true, 'notify_friend_request' => true, 'notify_game_finished' => true, 'notify_chat_message' => false, 'notify_timeout_warning' => true, 'disable_cooldown' => false],
+            ['notify_your_turn' => true, 'notify_friend_request' => true, 'notify_game_finished' => true, 'notify_chat_message' => false, 'notify_timeout_warning' => true, 'notify_achievement_unlocked' => true, 'disable_cooldown' => false],
             $this->preferences->forUser($userId)
         );
     }
@@ -171,7 +171,7 @@ final class NotificationsIntegrationTest extends TestCase
         $this->preferences->save($userId, true, true, true, true);
 
         self::assertSame(
-            ['notify_your_turn' => true, 'notify_friend_request' => true, 'notify_game_finished' => true, 'notify_chat_message' => true, 'notify_timeout_warning' => true, 'disable_cooldown' => true],
+            ['notify_your_turn' => true, 'notify_friend_request' => true, 'notify_game_finished' => true, 'notify_chat_message' => true, 'notify_timeout_warning' => true, 'notify_achievement_unlocked' => true, 'disable_cooldown' => true],
             $this->preferences->forUser($userId)
         );
 

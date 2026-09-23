@@ -96,6 +96,8 @@ final class GameServiceIntegrationTest extends TestCase
         $pdo->exec('TRUNCATE TABLE user_achievements');
         $pdo->exec('TRUNCATE TABLE user_played_mythic_cards');
         $pdo->exec('TRUNCATE TABLE user_format_play_counts');
+        $pdo->exec('TRUNCATE TABLE user_daily_game_counts');
+        $pdo->exec('TRUNCATE TABLE user_opponent_game_counts');
         $pdo->exec('TRUNCATE TABLE friendships');
         $pdo->exec('TRUNCATE TABLE users');
         $pdo->exec('SET FOREIGN_KEY_CHECKS = 1');

@@ -28,4 +28,10 @@ final class NotificationScope
     {
         return "game:{$gameId}";
     }
+
+    /** One scope per achievement slug -- unlocking several at once (a burst of meta rows, say) still notifies about each independently rather than the cooldown coalescing them into one. */
+    public static function forAchievement(string $slug): string
+    {
+        return "achievement:{$slug}";
+    }
 }

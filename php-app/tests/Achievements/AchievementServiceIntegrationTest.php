@@ -11,7 +11,12 @@ use MoodSwings\Friends\FriendshipService;
 use MoodSwings\Game\BoardStateRepository;
 use MoodSwings\Game\GameService;
 use MoodSwings\Game\ReplayStateBuilder;
+use MoodSwings\Notifications\NotificationChannel;
+use MoodSwings\Notifications\NotificationService;
 use MoodSwings\Repository\FriendshipRepository;
+use MoodSwings\Repository\NotificationCooldownRepository;
+use MoodSwings\Repository\NotificationPreferenceRepository;
+use MoodSwings\Repository\QueuedNotificationRepository;
 use MoodSwings\Repository\UserDecklistRepository;
 use MoodSwings\Repository\UserRepository;
 use MoodSwings\Rules\DefaultEffectRegistry;
@@ -64,6 +69,11 @@ final class AchievementServiceIntegrationTest extends TestCase
         $pdo->exec('TRUNCATE TABLE user_achievements');
         $pdo->exec('TRUNCATE TABLE user_played_mythic_cards');
         $pdo->exec('TRUNCATE TABLE user_format_play_counts');
+        $pdo->exec('TRUNCATE TABLE user_daily_game_counts');
+        $pdo->exec('TRUNCATE TABLE user_opponent_game_counts');
+        $pdo->exec('TRUNCATE TABLE notification_preferences');
+        $pdo->exec('TRUNCATE TABLE notification_cooldowns');
+        $pdo->exec('TRUNCATE TABLE queued_notifications');
         $pdo->exec('TRUNCATE TABLE users');
         $pdo->exec('SET FOREIGN_KEY_CHECKS = 1');
 
@@ -395,5 +405,166 @@ final class AchievementServiceIntegrationTest extends TestCase
         }
 
         self::assertTrue($this->isUnlocked($userId, 'completionist'));
+    }
+
+    public function testRematchUnlocksAfterFiveGamesAgainstTheSameOpponent(): void
+    {
+        $userAId = $this->insertUser('achrematchA');
+        $userBId = $this->insertUser('achrematchB');
+
+        for ($i = 0; $i < 5; $i++) {
+            $stmt = $this->pdo->prepare(
+                "INSERT INTO games (format, deck_type, status, created_by_user_id, wins_needed) VALUES ('standard', 'structure', 'in_progress', :created_by, 1)"
+            );
+            $stmt->execute(['created_by' => $userAId]);
+            $gameId = (int) $this->pdo->lastInsertId();
+
+            $aGamePlayerId = $this->insertGamePlayer($gameId, $userAId, 0);
+            $bGamePlayerId = $this->insertGamePlayer($gameId, $userBId, 1);
+            $this->insertGameRound($gameId, 1, $aGamePlayerId, $aGamePlayerId);
+            $this->games->resignGame($gameId, $bGamePlayerId);
+        }
+
+        self::assertTrue($this->isUnlocked($userAId, 'rematch'));
+        self::assertTrue($this->isUnlocked($userBId, 'rematch'), 'the losing side played the same 5 games too');
+    }
+
+    public function testMarathonSessionUnlocksAfterThreeGamesCompletedTheSameDay(): void
+    {
+        $winnerUserId = $this->insertUser('achmarathonw');
+
+        for ($i = 0; $i < 3; $i++) {
+            $loserUserId = $this->insertUser("achmarathonl{$i}");
+            $stmt = $this->pdo->prepare(
+                "INSERT INTO games (format, deck_type, status, created_by_user_id, wins_needed) VALUES ('standard', 'structure', 'in_progress', :created_by, 1)"
+            );
+            $stmt->execute(['created_by' => $winnerUserId]);
+            $gameId = (int) $this->pdo->lastInsertId();
+
+            $winnerGamePlayerId = $this->insertGamePlayer($gameId, $winnerUserId, 0);
+            $loserGamePlayerId = $this->insertGamePlayer($gameId, $loserUserId, 1);
+            $this->insertGameRound($gameId, 1, $winnerGamePlayerId, $winnerGamePlayerId);
+            $this->games->resignGame($gameId, $loserGamePlayerId);
+        }
+
+        self::assertTrue($this->isUnlocked($winnerUserId, 'marathon-session'));
+    }
+
+    public function testBotWranglerUnlocksWhenCreatingAGameWithTwoOrMoreBots(): void
+    {
+        $humanUserId = $this->insertUser('achbotwrangler1');
+        $bot1UserId = $this->insertUser('achbot1');
+        $bot2UserId = $this->insertUser('achbot2');
+        $this->pdo->prepare('UPDATE users SET is_bot = 1 WHERE id IN (:b1, :b2)')
+            ->execute(['b1' => $bot1UserId, 'b2' => $bot2UserId]);
+
+        $gameId = $this->games->createGame(
+            $humanUserId,
+            [$humanUserId, $bot1UserId, $bot2UserId],
+        );
+        self::assertGreaterThan(0, $gameId);
+
+        self::assertTrue($this->isUnlocked($humanUserId, 'bot-wrangler'));
+    }
+
+    public function testUnlockingAnAchievementDeliversANotification(): void
+    {
+        $userId = $this->insertUser('achnotify1');
+
+        $channel = new class implements NotificationChannel {
+            /** @var array<int, array{userId:int, payload:array}> */
+            public array $sent = [];
+
+            public function send(int $userId, array $payload): bool
+            {
+                $this->sent[] = ['userId' => $userId, 'payload' => $payload];
+
+                return true;
+            }
+        };
+        $notifications = new NotificationService(
+            new NotificationPreferenceRepository(),
+            new QueuedNotificationRepository(),
+            new NotificationCooldownRepository(),
+            [$channel],
+        );
+        $achievements = new AchievementService($notifications);
+
+        $achievements->unlock($userId, 'first-steps');
+
+        self::assertCount(1, $channel->sent);
+        self::assertSame($userId, $channel->sent[0]['userId']);
+        self::assertStringContainsString('First Steps', $channel->sent[0]['payload']['body']);
+    }
+
+    public function testAchievementNotificationsRespectTheOptOutPreference(): void
+    {
+        $userId = $this->insertUser('achnotify2');
+        (new NotificationPreferenceRepository())->save($userId, true, true, true, false, true, true, false);
+
+        $channel = new class implements NotificationChannel {
+            public int $calls = 0;
+
+            public function send(int $userId, array $payload): bool
+            {
+                $this->calls++;
+
+                return true;
+            }
+        };
+        $notifications = new NotificationService(
+            new NotificationPreferenceRepository(),
+            new QueuedNotificationRepository(),
+            new NotificationCooldownRepository(),
+            [$channel],
+        );
+        $achievements = new AchievementService($notifications);
+
+        $achievements->unlock($userId, 'first-steps');
+
+        self::assertSame(0, $channel->calls);
+    }
+
+    public function testCatalogForUserRedactsHiddenAchievementsUntilUnlockedAndRevealsThemAfter(): void
+    {
+        $userId = $this->insertUser('achcatalog1');
+        $achievements = new AchievementService();
+
+        $catalog = $achievements->catalogForUser($userId);
+        self::assertArrayHasKey('H', $catalog);
+        $moodRing = self::findBySlug($catalog['H'], 'mood-ring');
+        self::assertSame('???', $moodRing['title']);
+        self::assertFalse($moodRing['unlocked_at'] !== null);
+
+        $achievements->unlock($userId, 'mood-ring');
+
+        $catalogAfter = $achievements->catalogForUser($userId);
+        $moodRingAfter = self::findBySlug($catalogAfter['H'], 'mood-ring');
+        self::assertSame('Mood Ring', $moodRingAfter['title']);
+        self::assertNotNull($moodRingAfter['unlocked_at']);
+    }
+
+    public function testCatalogForUserReflectsRealProgressForACounterAchievement(): void
+    {
+        $result = $this->playAndWinAStandardGame('achcatalog2', 'achcatalog2l');
+        $achievements = new AchievementService();
+
+        $catalog = $achievements->catalogForUser($result['winnerUserId']);
+        $gettingTheHang = self::findBySlug($catalog['A'], 'getting-the-hang-of-it');
+        self::assertSame(1, $gettingTheHang['progress']);
+        self::assertSame(10, $gettingTheHang['target']);
+        self::assertNull($gettingTheHang['unlocked_at']);
+    }
+
+    /** @param array<int, array<string, mixed>> $rows */
+    private static function findBySlug(array $rows, string $slug): array
+    {
+        foreach ($rows as $row) {
+            if ($row['slug'] === $slug) {
+                return $row;
+            }
+        }
+
+        self::fail("no achievement with slug {$slug} found");
     }
 }
