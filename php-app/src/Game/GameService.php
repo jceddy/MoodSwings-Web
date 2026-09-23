@@ -11090,6 +11090,19 @@ final class GameService
         }
         $this->achievements->onGameCompleted($gameId, $game, $winningUserIds, $losingUserIds, $containsBot);
 
+        // The game is over, so any "waiting on you" reminder still queued
+        // for this game (see NotificationScope::forGame()) is now stale --
+        // clear it for every seated player, not just whoever's own action
+        // just finished the game (clearQueuedNotificationForGamePlayer()
+        // only ever clears the ACTING player's own row, so a resignation/
+        // auto-loss/timeout ending the game out from under someone who
+        // never acted themselves would otherwise leave their own queued
+        // reminder to fire later for a game that's already done). Done
+        // before the notifyGameFinished() calls below so it can never
+        // wipe out a game-finished notification that a cooldown just
+        // queued for this same scope.
+        $this->notifications?->clearQueuedForFinishedGame($gameId);
+
         foreach ($winningUserIds as $userId) {
             if ($userId === $excludeUserId) {
                 continue;
@@ -13919,6 +13932,16 @@ final class GameService
                 Connection::get()->prepare(
                     "UPDATE games SET status = 'completed', completed_at = NOW() WHERE id = :id"
                 )->execute(['id' => $gameId]);
+
+                // Doesn't go through recordGameCompletionStats() (no
+                // winner, no stats, no "game finished" notification -- see
+                // this method's own docblock), but a stale game like this
+                // is exactly the case most likely to still have a
+                // "waiting on you" reminder sitting in the queue (that's
+                // presumably WHY nobody ever acted), so it still needs
+                // clearing here or it'll eventually fire for a game that's
+                // now over.
+                $this->notifications?->clearQueuedForFinishedGame($gameId);
 
                 return true;
             });
