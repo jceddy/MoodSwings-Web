@@ -1590,6 +1590,91 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertContains($benevolenceId, $state->deck($p1)); // Zeal's own hand-card cost bottomed into p1's own deck
     }
 
+    /**
+     * Reported live: "when I went to play a card (Zeal), instead of
+     * playing it returned an error message that 'it's not <user id>'s
+     * turn'... After refreshing the site, I saw that the card had been
+     * played and the turn advanced to my opponent" -- during a real turn
+     * chaining Validation -> Hope -> Determination -> Panic -> Zeal via
+     * several stacked extra-play grants. Prime suspect:
+     * advanceAutomatedTurns()'s own "has this player got a legal play"
+     * check (run on every GET /games/state poll for a game with anyone
+     * on the default auto_pass_on_empty_hand -- true for virtually every
+     * human -- see autoPassEmptyHandGamePlayerIds()) misjudging a player
+     * mid-combo as having none, and auto-passing their turn (and ending
+     * the round) out from under a still-pending manual play, moments
+     * before that play's own request reaches the same per-game lock.
+     *
+     * This drives Validation then Hope (Hope's own bonus is
+     * requiresSourceInPlay-restricted, unlike Validation's plain one --
+     * exactly the kind of grant-shape mix a legal-play scan could get
+     * wrong) and, with Zeal still sitting in hand usable via a banked
+     * grant, calls advanceAutomatedTurns() directly -- standing in for a
+     * concurrent poll landing in that exact gap -- before ever
+     * submitting Zeal itself.
+     */
+    public function testAdvanceAutomatedTurnsNeverAutoPassesAPlayerMidComboWhoStillHasALegalPlay(): void
+    {
+        $u1 = $this->insertUser('extraplayrace1');
+        $u2 = $this->insertUser('extraplayrace2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('duel', 'in_progress', :created_by, 1)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        // The exact 5-card chain from the report: Validation (plain
+        // grant), Hope (requiresSourceInPlay grant), Determination (no
+        // grant of its own -- filler, matches the log showing none after
+        // it), Panic (bounces Apathy back to p2's hand), Zeal (the play
+        // that failed).
+        $validationId = $this->insertGameCard($gameId, 26, 'hand', $p1); // Validation
+        $hopeId = $this->insertGameCard($gameId, 124, 'hand', $p1); // Hope
+        $determinationId = $this->insertGameCard($gameId, 112, 'hand', $p1); // Determination
+        $panicId = $this->insertGameCard($gameId, 48, 'hand', $p1); // Panic
+        $zealId = $this->insertGameCard($gameId, 106, 'hand', $p1); // Zeal
+        $apathyId = $this->insertGameCard($gameId, 55, 'in_play', $p2); // Apathy, already in play for Panic to bounce
+        for ($i = 0; $i < 5; $i++) {
+            $this->insertGameCard($gameId, 7, 'deck', $p1, $i);
+            $this->insertGameCard($gameId, 8, 'deck', $p2, $i);
+        }
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        // A concurrent poll (advanceAutomatedTurns()) after EVERY single
+        // play in the chain, not just once before Zeal -- if the "has a
+        // legal play" scan is ever wrong for ANY intermediate state here,
+        // this catches it at the earliest point, not just the specific
+        // step the live report happened to be caught at.
+        $assertStillP1sTurn = function () use ($gameId, $p1): void {
+            $this->games->advanceAutomatedTurns($gameId);
+            $round = $this->pdo->query("SELECT current_turn_game_player_id FROM game_rounds WHERE game_id = {$gameId} ORDER BY id DESC LIMIT 1")->fetch();
+            self::assertSame(
+                $p1,
+                (int) $round['current_turn_game_player_id'],
+                'p1 still has at least one legal play banked -- a concurrent poll must never auto-pass them away from it'
+            );
+        };
+
+        $this->games->playMood($gameId, $p1, $validationId, []);
+        $assertStillP1sTurn();
+
+        $this->games->playMood($gameId, $p1, $hopeId, []);
+        $assertStillP1sTurn();
+
+        $this->games->playMood($gameId, $p1, $determinationId, []);
+        $assertStillP1sTurn();
+
+        $this->games->playMood($gameId, $p1, $panicId, ['target_mood_ids' => [$apathyId]]);
+        $assertStillP1sTurn();
+
+        // The player's own actual submission must still succeed.
+        $this->games->playMood($gameId, $p1, $zealId, []);
+    }
+
     public function testMoveInPlayToBottomOfDeckInADuelBottomsIntoTheTargetMoodsOwnersDeck(): void
     {
         $u1 = $this->insertUser('duelconv1');
