@@ -11771,6 +11771,7 @@ final class GameService
                 "UPDATE draft_matches SET status = 'completed', winner_user_id = :winner, completed_at = NOW() WHERE id = :id"
             )->execute(['winner' => $winnerUserId, 'id' => $draftMatchId]);
             $this->recordMatchCompletionStats($draftMatchId, $winnerUserId);
+            $this->achievements->onDraftMatchCompleted($draftMatchId, $winnerUserId);
 
             return;
         }

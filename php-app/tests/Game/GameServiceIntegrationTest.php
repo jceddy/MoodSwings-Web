@@ -2072,6 +2072,76 @@ final class GameServiceIntegrationTest extends TestCase
         }
     }
 
+    /**
+     * Reported live: "Comeback Kid did not die when it should have" (did
+     * not UNLOCK when it should have) for a Sealed Deck match won 2-1
+     * after losing game 1. Root cause: advanceDraftMatch() -- the
+     * draft_match_id counterpart to advanceGameMatch() -- never called
+     * any AchievementService hook at all on match completion, so Match
+     * Point/Match Maker/Grand Champion/Comeback Kid/Flawless Victory
+     * were silently never checked for ANY draft-family match (Sealed
+     * Deck/Sealed Pool of the Day/Weekly Sealed Pool/Quick Draft/Booster
+     * Draft/Rotisserie Draft), only ever wired for game_match_id
+     * (Duel/Team Play/Traditional). Quick Draft stands in for the whole
+     * draft_match_id family here since it's this file's own
+     * already-established, fully public-API-driven fixture.
+     */
+    public function testComebackKidUnlocksForADraftMatchWonAfterLosingGameOne(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture(winsNeeded: 1);
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+        $this->submitFullQuickDraftDeck($gameId, $u1);
+        $this->submitFullQuickDraftDeck($gameId, $u2);
+        $this->games->startGame($gameId);
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        // Game 1: whoever this decides is the eventual COMEBACK winner's
+        // opponent -- i.e. the eventual match winner loses this one.
+        $game1WinnerUserId = $this->completeQuickDraftGameByPassing($gameId);
+        $comebackUserId = $game1WinnerUserId === $u1 ? $u2 : $u1;
+
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE draft_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $draftMatchId]);
+        $game2Id = (int) $nextGameStmt->fetchColumn();
+
+        $this->submitFullQuickDraftDeck($game2Id, $u1);
+        $this->submitFullQuickDraftDeck($game2Id, $u2);
+        $this->games->startGame($game2Id);
+        // Game 1's loser (the eventual comeback winner) opts to go first
+        // this time, which (per completeQuickDraftGameByPassing()'s own
+        // docblock) hands them game 2.
+        $this->games->setPlayFirstNextMatchGame($game2Id, $comebackUserId, true);
+        $game2WinnerUserId = $this->completeQuickDraftGameByPassing($game2Id);
+        self::assertSame($comebackUserId, $game2WinnerUserId, 'sanity check: game 1 is now tied 1-1');
+
+        $nextGameStmt->execute(['match_id' => $draftMatchId]);
+        $game3Id = (int) $nextGameStmt->fetchColumn();
+
+        $this->submitFullQuickDraftDeck($game3Id, $u1);
+        $this->submitFullQuickDraftDeck($game3Id, $u2);
+        $this->games->startGame($game3Id);
+        // Game 2's loser (game 1's original winner) declines, so the
+        // comeback player goes first again and takes the decisive game 3.
+        $this->games->setPlayFirstNextMatchGame($game3Id, $game1WinnerUserId, false);
+        $game3WinnerUserId = $this->completeQuickDraftGameByPassing($game3Id);
+        self::assertSame($comebackUserId, $game3WinnerUserId, 'sanity check: the comeback player wins the match 2-1');
+
+        self::assertSame('completed', $this->fetchDraftMatch($draftMatchId)['status']);
+
+        $stmt = $this->pdo->prepare(
+            'SELECT ua.unlocked_at FROM user_achievements ua JOIN achievements a ON a.id = ua.achievement_id
+             WHERE ua.user_id = :u AND a.slug = :slug'
+        );
+        $stmt->execute(['u' => $comebackUserId, 'slug' => 'comeback-kid']);
+        self::assertNotFalse($stmt->fetchColumn(), 'the match winner lost game 1, so Comeback Kid must unlock');
+
+        $stmt->execute(['u' => $comebackUserId, 'slug' => 'flawless-victory']);
+        self::assertFalse($stmt->fetchColumn(), 'they lost a game, so this is NOT also a flawless victory');
+    }
+
     // Issue #90's own non-draft best-of-three match wrapper (game_matches/
     // games.game_match_id) needs the exact same listGamesForUser()/
     // listPastGamesForUser() carve-out testListGamesForUserKeepsACompletedDraftMatchGameVisibleWhileASiblingGameIsStillInProgress()
