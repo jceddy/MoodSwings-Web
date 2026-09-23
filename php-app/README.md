@@ -1120,28 +1120,37 @@ after the rest of `choice_fields` has already been computed against
 Creativity's own (ability-less) raw catalog row -- the server additionally
 precomputes, per candidate mood currently in play,
 `copy_simulation[$candidateCardId] = {extra_fields, cost_payable}`
-(`GameService::creativityCopySimulation()`), reusing the exact same
-`reactionFields()` (Scorn) this class already calls for an
-ordinary hand card, parameterized by the candidate's *effective*
-color/catalog row (`catalogRow(effectiveCardId($candidateCardId))`) --
-Duplicity's own repeat is no longer part of this precomputed bundle at
-all, since it's now a post-play pause rather than a field on the play
-itself. `cost_payable` mirrors `MoodPlayService::playMood()`'s own
-to-play-cost check (`canPayCopiedToPlayCost()`, also resolved through
-`effectiveCardId()` the same way), passing Creativity's own card id --
-not the candidate's -- as the effect's `$cardId`, matching what
-`payMood()` itself does (`GuileEffect`/`BlissEffect` exclude that id
+(`GameService::creativityCopySimulation()`). `extra_fields` is the
+candidate's own after-playing/cost fields (`CardChoiceSchema::
+forEffectKey()`, e.g. Compulsion's/Intimidation's own `target_player_id`,
+Guile's/Dignity's own discard fields) plus the exact same `reactionFields()`
+(Scorn) this class already calls for an ordinary hand card -- both keyed
+by the candidate's *effective* effect_key/color/catalog row
+(`catalogRow(effectiveCardId($candidateCardId))`), never the candidate's
+own raw printed identity: for a candidate that's itself an in-play
+Creativity copy, the raw identity is always just `creativity`
+(`copy_card_id`), so resolving through `effectiveCardId()` here is what
+lets copying a Creativity-that's-copying-Intimidation offer Intimidation's
+own `target_player_id` instead of a second, spurious copy-target picker --
+see `web-static/README.md` for the client-side bug this fixed
+(`handleCreativityCopyChange()` used to additionally reuse the
+candidate's own already-serialized `choice_fields`, which for a
+Creativity-copy candidate is exactly that wrong raw-identity schema; it
+now relies on `extra_fields` alone, since that already covers the
+non-copy case too). Duplicity's own repeat is no longer part of this
+precomputed bundle at all, since it's now a post-play pause rather than a
+field on the play itself. `cost_payable` mirrors `MoodPlayService::
+playMood()`'s own to-play-cost check (`canPayCopiedToPlayCost()`, also
+resolved through `effectiveCardId()` the same way), passing Creativity's
+own card id -- not the candidate's -- as the effect's `$cardId`, matching
+what `payMood()` itself does (`GuileEffect`/`BlissEffect` exclude that id
 from the hand, and Creativity is what's actually occupying that hand
-slot). The client swaps in the matching bundle, plus the candidate's own
-already-serialized `choice_fields` (its own "to play" cost and
-after-playing choices, read from the same flat top-level `choices` bag a
-normal play of that card would use), as `copy_card_id` changes -- see
-`web-static/README.md`. `MoodPlayService`'s repeat/reaction/pending-decision
-machinery needed no changes at all to support this: it was already
-effective-aware end to end (`BoardState::effectiveCardId()`), so a
-Creativity copy of, say, Compulsion already paused for the target's own
-real choice the same way a real Compulsion would, even before the panel
-could offer `target_player_id` to ask for one.
+slot). `MoodPlayService`'s repeat/reaction/pending-decision machinery
+needed no changes at all to support this: it was already effective-aware
+end to end (`BoardState::effectiveCardId()`), so a Creativity copy of,
+say, Compulsion already paused for the target's own real choice the same
+way a real Compulsion would, even before the panel could offer
+`target_player_id` to ask for one.
 
 Copying a Creativity that's itself copying something resolves through
 the WHOLE chain, per a rules judge ruling: "an exact copy of that
@@ -3506,6 +3515,46 @@ capped at `ROTISSERIE_DRAFT_MAX_CUTOFF * playerCount`, only a 4-player
 match can ever actually cross that line (a 19-20 cutoff, floor 76-80) --
 2-3 players max out at 40/60, both comfortably under 75, so they always
 stay on the 75-card pool regardless of cutoff.
+
+**`rotisserie_draft_randomize_pool` (issue #454)** -- an opt-in checkbox
+next to the pool-source dropdown that lets a creator combine a *specific*
+pool (`structure`, `jceddys_75`, `custom`, `saved_deck`, `one_of_each`)
+with `random_48`-style random sampling, rather than only ever getting one
+or the other. When set, `buildRotisserieDraftPool()` passes
+`truncateToTarget: true` (instead of its usual `false`) into
+`buildDraftPool()`, so the chosen source's own full pool -- already
+through whatever doubling/swap-up decision the sample size triggers below
+-- is shuffled and sliced down to `$sampleSize` cards before drafting
+starts, the same truncation Quick/Winston/Grid Draft's own pool sources
+already get unconditionally. A no-op in practice for `random_48` itself
+(already sized exactly to `$sampleSize` either way). Purely an input-time
+decision with nothing persisted about it -- the resulting
+`draft_matches.pool_card_ids` already reflects whichever cards were
+actually chosen, the same as any other pool source, so there's nothing
+else to carry forward once the pool is built.
+
+**`rotisserie_draft_randomize_sample_size` (issue #462 follow-up)** --
+only meaningful alongside `rotisserie_draft_randomize_pool`: lets the
+creator sample MORE than the floor (`rotisserieDraftMinPoolSize()`)
+instead of always exactly the floor. `$sampleSize` is
+`$randomizeSampleSize` when given, otherwise defaults to `$minPoolSize`
+exactly as before this param existed; a given value below `$minPoolSize`
+is a `GameStateException` (the draft can't proceed on fewer cards than
+every player's own cutoff needs), but a value larger than what the pool
+source can actually provide is NOT an error -- `buildDraftPool()`
+already returns the pool as-is (still checked against `$minPoolSize`
+afterward) rather than padding it out, the same way an oversized
+`truncateToTarget` request always has. `$sampleSize` (not `$minPoolSize`)
+is what now drives the Structure-doubling/jceddy's-150-swap thresholds
+too, so a larger sample from a small named pool still reaches for the
+bigger underlying pool it actually needs to sample from -- e.g. a
+randomized `jceddys_75` pool with a sample size over 75 samples from the
+full 150-card `jceddys_150` pool, not the original 75-card one, the same
+way a floor over 75 already did before this param existed. The New Game
+dialog's own number input for this is pre-filled with the current floor
+(`currentRotisserieDraftMinPoolSize()`) as its default value, editable
+up -- see "Rotisserie Draft's own drafting phase" in
+`web-static/README.md`.
 
 **Pick order -- snaking with a rotating starter, alternating every two
 rounds** -- `rotisserieDraftPickUserId($userIds, $pickIndex)` computes,
@@ -12364,3 +12413,155 @@ migration's own name, and clean themselves out of the shared
 The test suite truncates `users`/`sessions`/`email_verifications`/
 `friendships` in that database before each test, so never point it at a
 database with real data.
+
+## Achievements
+
+A 108-entry catalog (design doc: "MoodSwings-Web Achievements -- Draft
+List"), covering every achievement whose condition is knowable at
+game-completion or tournament-completion time, the four meta rows, and
+every account/social trigger with a real call site. `achievements`
+(migration 0357) is static reference data --
+`slug`/`category`/`title`/`description`/`tier`/`target`/`hidden`, one row
+per catalog entry, seeded once at migration time and never touched again
+by application code. `user_achievements` is the per-user progress table
+(`progress`, `unlocked_at`), lazily created and bumped the same
+`INSERT ... ON DUPLICATE KEY UPDATE` way `user_lifetime_stats`/
+`card_stats` already work -- necessary for the same reason those are
+incremental: a completed game is deleted after 7 days
+(`deleteStaleCompletedGames()`), so nothing here can ever be recomputed
+retroactively. No backfill from existing `user_lifetime_stats`: every
+counter starts at zero from this deploy forward. Three small supporting
+tables exist purely because a single running `progress` integer can't
+express what they need: `user_played_mythic_cards` (Rarity Collector's
+distinct-set-of-15 tracking), `user_format_play_counts` (Format Purist's
+*per-format* count, so switching formats between games doesn't silently
+count toward the same total), and `user_daily_game_counts`/
+`user_opponent_game_counts` (Marathon Session's per-calendar-day count
+and Rematch!'s per-opponent count, both day/pair-scoped the same way).
+
+`AchievementService` (`src/Achievements/AchievementService.php`) is the
+whole system. Three generic primitives cover nearly every row: `unlock()`
+(a direct one-shot condition), `bumpProgress()` (a cumulative counter
+that auto-unlocks at `target`), and `setProgressLevel()` (a high-water
+mark for a value that can also go back down, e.g. friend count -- only
+ever raises `progress`). `onGameCompleted()` is called from
+`GameService::recordGameCompletionStats()` -- the same single call site
+every completion path already funnels through -- and covers Volume,
+Format, Deck Type, Color/Rarity (including the six synonym-cluster and
+six card-cycle rows), most In-Game Skill/Card Feat achievements, and the
+Marathon Session/Rematch! counters. `onBestOfThreeMatchCompleted()` is
+called from `advanceGameMatch()` for the handful of achievements about
+the *overall* best-of-three match rather than any one game in it (Match
+Point/Match Maker/Grand Champion/Comeback Kid/Flawless Victory) --
+Duel/Team Play/Traditional only (`games.game_match_id`). Sealed Deck/
+Sealed Pool of the Day/Weekly Sealed Pool/Quick Draft/Booster Draft/
+Rotisserie Draft track their own best-of-N progression through
+`games.draft_match_id` instead, via a separate `advanceDraftMatch()` --
+reported live ("Comeback Kid did not unlock" for a Sealed Deck match won
+2-1 after losing game 1) as never having called any achievement hook at
+all on match completion. `onDraftMatchCompleted()` is its counterpart,
+called from `advanceDraftMatch()`'s own match-completion branch,
+computing the same "lost game 1"/"lost any game" shape from
+`draft_match_id`-scoped `games` rows (no team handling needed here --
+`draft_match_players` has no `team_id`, a draft-family match is always
+an individual best-of-N); both funnel into a shared
+`unlockMatchLevelAchievements()` so the two paths can't drift again.
+`onTournamentCompleted()`/`onTournamentJoined()`/`onTournamentStarted()`
+are called from `TournamentService` for the Tournaments category. Every
+account/social achievement is wired from its own natural call site:
+`FriendshipService::respondToInvite()` (Making Friends/Social Butterfly),
+`UserDecklistService::create()`/`update()` (Deck Curator/Deck Doctor/
+Sharing is Caring, the last on `visibility === 'friends'`),
+`DiscordOAuthService::handleCallback()` (Discord Connected),
+`GameService::createGame()` (Bot Wrangler, 2+ bot seats) and
+`GET /games/spectate/state`/`POST /games/replay/import`/
+`GET /stats/cards` in `public/index.php` (Spectator Sport/Replay
+Enthusiast/Card Counter).
+
+Night Owl/Early Bird/Marathon Session ("...your local time"/"a single
+calendar day") need each player's own timezone, which the server has no
+other way to learn -- every timestamp it deals in
+(`games.completed_at`, `CURDATE()`) is plain UTC (`Connection::get()`'s
+own `SET time_zone = '+00:00'`). `app.js`'s `apiRequest()` sends the
+browser's IANA identifier (`Intl.DateTimeFormat().resolvedOptions().timeZone`)
+as an `X-Timezone` header on every request; `AuthService::currentUser()`
+validates it (a bare `new DateTimeZone($timezone)`, rejecting anything
+not real) and persists it to `users.timezone` (migration 0361) --
+opportunistic, the same "kept in sync on every authenticated request"
+treatment `sessions.last_seen_at` already gets, not a one-time Settings
+field. `AchievementService::timezoneFor($userId)` reads it back (falling
+back to UTC for a user it isn't known for yet) and both
+`checkVolumeAndFormatWins()`'s Night Owl/Early Bird hour check and
+`checkMarathonSession()`'s calendar-day computation convert through it
+per-user, rather than reading a single shared UTC value for everyone.
+
+Unlock notifications reuse `NotificationService`'s existing channel
+fan-out exactly like `notifyTimeoutWarning()` does:
+`notifyAchievementUnlocked()`, a `notify_achievement_unlocked` preference
+column (migration 0359, defaults on), and its own
+`NotificationScope::forAchievement($slug)` -- scoped per-achievement
+rather than sharing one bucket, so a burst of several unlocks at once
+(a meta row cascading right after the row that completed it, say) still
+notifies about each individually instead of the 5-minute cooldown
+coalescing them into one. `GET /user/achievements`
+(`AchievementService::catalogForUser()`) returns the full catalog
+left-joined against the viewer's own progress, grouped by category; a
+`hidden` row (Mood Ring/Completionist) has its title/description redacted
+to a generic `"???"` placeholder until actually unlocked. `achievements.tier`
+is `ENUM('Bronze', 'Silver', 'Gold', 'Platinum', 'Diamond')` (migration
+0364) -- Diamond is reserved for Completionist alone, so the one
+achievement that requires unlocking every other one stands out with its
+own tier rather than sharing Platinum's badge color with ordinary
+(non-meta) rows like Legend/Draft Completionist. The frontend
+(`web-static/achievements/`, linked from the lobby's own "Achievements"
+button) renders that response grouped by category with a tier badge,
+progress bar, and unlocked checkmark per row, plus a "hide locked
+achievements" toggle (a pure client-side filter, persisted to
+`localStorage`, over the already-fetched catalog -- no extra round trip).
+
+The lobby itself surfaces an unlock without the player needing to open the
+page at all: `checkAchievementNotification()` in `game.js` polls
+`GET /user/achievements` every 15 seconds (same cadence as the existing
+friend-request check) and compares each row's `unlocked_at` against two
+`localStorage` timestamps -- `achievementsSeenAt` (bumped only when the
+player actually opens the Achievements page; drives a small dot on
+`#achievements-button`, the same treatment as the friend-request/unread-chat
+dots) and `achievementsToastedThroughAt` (bumped on every toast shown, and
+also on page visit, so a still-unseen unlock doesn't re-toast on every
+poll). A newly-detected unlock also fires a `showToast()` (`app.js`'s
+generic bottom-corner toast helper, its own lazily-created
+`#toast-container`) naming the achievement, clickable through to the
+Achievements page. The first-ever poll on a given browser baselines both
+markers to whatever's already unlocked rather than toasting/flagging a
+player's entire existing history the moment this shipped.
+
+The in-game board's own Players list shows a trophy icon to the left of
+each seated player's name, colored by that specific player's highest
+currently-unlocked achievement tier (`AchievementService::highestUnlockedTiersFor()`,
+batched once per `GameService::buildGameState()` call the same way
+`$presenceStatuses`/`$handCounts` already are, rather than one query per
+seat). `players[].highest_achievement_tier` is `null` for a player with
+zero unlocked achievements, in which case the frontend
+(`buildAchievementTrophyFlag()` in `game.js`) omits the icon entirely
+rather than showing a neutral/empty trophy. The five tier colors
+(`.player-flag--tier-bronze/silver/gold/platinum/diamond` in `style.css`)
+are kept in sync by hand with `achievements.css`'s own
+`.achievement-tier-*` badge colors, since the game board doesn't load
+that stylesheet.
+
+Known simplifications, worth revisiting if they ever matter enough:
+color-majority/Rainbow Connection/Common Touch/David vs. Goliath read
+final-board cards' *printed* color/base_value/rarity straight off the
+`cards` catalog via `game_cards.card_id`, not a live `BoardState`'s
+*effective* values (so a Creativity copy, an Imagination color override,
+or a chosen dice/alt value isn't reflected). Betrayer/Sneak Attack unlock
+on simply having played Betrayal/Sneakiness and won, rather than
+confirming the reclaim/swap specifically happened (both are effectively
+unconditional parts of playing those cards, so this is a reasonable stand-in
+rather than a real gap). The Copycat only checks a DIRECT Creativity-copies-a-
+Creativity chain (via `game_cards.copied_card_id` once), not the full
+transitive chain `BoardState::effectiveCardId()` would walk. Chain Reaction
+and Deadline Dodger are not yet implemented: `game_events` has no
+turn-boundary marker for the former, and the timeout warning shown mid-game
+is purely computed-on-read (`buildActionTimeoutWarning()`), never
+persisted, so there's nothing left to check by completion time.

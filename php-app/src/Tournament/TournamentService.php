@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace MoodSwings\Tournament;
 
+use MoodSwings\Achievements\AchievementService;
 use MoodSwings\Game\CardCatalog;
 use MoodSwings\Game\Exceptions\GameStateException;
 use MoodSwings\Game\GameService;
@@ -67,6 +68,7 @@ final class TournamentService implements TournamentMatchObserver
         private readonly BoosterPackBuilder $boosterPackBuilder,
         private readonly BoosterDraftPodBuilder $podBuilder,
         private readonly GridDraftPodBuilder $gridDraftPodBuilder,
+        private readonly AchievementService $achievements = new AchievementService(),
     ) {
     }
 
@@ -216,6 +218,7 @@ final class TournamentService implements TournamentMatchObserver
         if ($creatorDeck !== null) {
             $this->participants->setDeck($creatorParticipantId, $creatorDeck['name'], $creatorDeck['cardIds'], $creatorDeck['sideboardCardIds']);
         }
+        $this->achievements->onTournamentJoined($createdByUserId);
 
         if ($registrationMode === 'invite_only') {
             foreach (array_unique($inviteUserIds) as $inviteeUserId) {
@@ -265,6 +268,7 @@ final class TournamentService implements TournamentMatchObserver
         if ($deck !== null) {
             $this->participants->setDeck((int) $participant['id'], $deck['name'], $deck['cardIds'], $deck['sideboardCardIds']);
         }
+        $this->achievements->onTournamentJoined($userId);
     }
 
     public function declineInvite(int $tournamentId, int $userId): void
@@ -316,6 +320,7 @@ final class TournamentService implements TournamentMatchObserver
         if ($deck !== null) {
             $this->participants->setDeck($participantId, $deck['name'], $deck['cardIds'], $deck['sideboardCardIds']);
         }
+        $this->achievements->onTournamentJoined($userId);
     }
 
     /**
@@ -428,6 +433,7 @@ final class TournamentService implements TournamentMatchObserver
         if ($count < (int) $tournament['min_participants']) {
             throw new TournamentStateException("This tournament needs at least {$tournament['min_participants']} joined participants to start (has {$count})");
         }
+        $this->achievements->onTournamentStarted((int) $tournament['created_by_user_id'], $count);
 
         // Random seeding: nothing about registration/invite-accept order
         // should predict bracket strength.
@@ -1360,7 +1366,14 @@ final class TournamentService implements TournamentMatchObserver
     private function finishTournament(int $tournamentId, int $winnerParticipantId): void
     {
         $winner = $this->participants->find($winnerParticipantId);
-        $this->tournaments->markCompleted($tournamentId, (int) $winner['user_id']);
+        $winnerUserId = (int) $winner['user_id'];
+        $this->tournaments->markCompleted($tournamentId, $winnerUserId);
+
+        $tournament = $this->tournaments->find($tournamentId);
+        if ($tournament !== null) {
+            $tournament['winner_user_id'] = $winnerUserId;
+            $this->achievements->onTournamentCompleted($tournament);
+        }
     }
 
     /** @return array<int, int> participant id => win count, every participant who has ever played a match in this tournament */

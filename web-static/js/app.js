@@ -10,6 +10,25 @@ const API_BASE = '/app';
 // that assignment doesn't stop script execution synchronously.
 let redirectingToMaintenance = false;
 
+// The server has no other way to learn a player's real local time -- every
+// timestamp it stores/computes (games.completed_at, CURDATE(), etc.) is
+// plain UTC (see php-app's Connection::get()). Sent on every request so
+// AuthService::currentUser() can opportunistically keep users.timezone in
+// sync (same "touched on every authenticated request" treatment as
+// sessions.last_seen_at), which is what AchievementService's Night Owl/
+// Early Bird/Marathon Session checks read to compute each player's own
+// local hour/calendar day instead of the server's. Intl.DateTimeFormat is
+// broadly supported, but this is a nice-to-have (those checks just fall
+// back to UTC for a browser that lacks it), so failures are swallowed
+// rather than surfaced.
+function getBrowserTimezone() {
+    try {
+        return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+    } catch (e) {
+        return '';
+    }
+}
+
 async function apiRequest(path, options = {}) {
     if (redirectingToMaintenance) {
         return new Promise(() => {}); // never resolves; a navigation is already in flight
@@ -18,7 +37,7 @@ async function apiRequest(path, options = {}) {
     try {
         const response = await fetch(API_BASE + path, {
             credentials: 'same-origin',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', 'X-Timezone': getBrowserTimezone() },
             ...options,
         });
 
@@ -139,7 +158,7 @@ function getCardStats() {
     return apiRequest('/stats/cards');
 }
 
-function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId, defaultSelectionsMode, botDecklistText, botSavedDecklistId, randomTeams, rotisserieDraftPoolSource, rotisserieDraftCustomPoolText, rotisserieDraftCutoffCount, tieredRotisserieDraftMode, tieredRotisserieDraftTiers, botGoesFirst, bestOfThree, allowSideboarding, diagnosticMode, botDecklists, timeoutMinutes, timeoutAction, totalTimeLimitMinutes, synchronousMode) {
+function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId, defaultSelectionsMode, botDecklistText, botSavedDecklistId, randomTeams, rotisserieDraftPoolSource, rotisserieDraftCustomPoolText, rotisserieDraftCutoffCount, rotisserieDraftRandomizePool, rotisserieDraftRandomizeSampleSize, tieredRotisserieDraftMode, tieredRotisserieDraftTiers, botGoesFirst, bestOfThree, allowSideboarding, diagnosticMode, botDecklists, timeoutMinutes, timeoutAction, totalTimeLimitMinutes, synchronousMode) {
     return apiRequest('/games', {
         method: 'POST',
         body: JSON.stringify({
@@ -200,6 +219,14 @@ function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText,
             rotisserie_draft_pool_source: rotisserieDraftPoolSource,
             rotisserie_draft_custom_pool_text: rotisserieDraftCustomPoolText,
             rotisserie_draft_cutoff_count: rotisserieDraftCutoffCount,
+            // Issue #454: randomly narrow rotisserieDraftPoolSource's own
+            // pool down to a sample, instead of laying it out in full --
+            // see "Rotisserie Draft" in web-static/README.md.
+            rotisserie_draft_randomize_pool: rotisserieDraftRandomizePool,
+            // Issue #462 follow-up: only meaningful alongside
+            // rotisserie_draft_randomize_pool -- how many cards to sample;
+            // undefined falls back to the minimum needed.
+            rotisserie_draft_randomize_sample_size: rotisserieDraftRandomizeSampleSize,
             // Only meaningful for deck_type 'tiered_rotisserie_draft' -- see
             // "Tiered Rotisserie Draft" in web-static/README.md.
             tiered_rotisserie_draft_mode: tieredRotisserieDraftMode,
@@ -319,6 +346,10 @@ function getCardCatalog() {
 // "User info" in web-static/README.md. Self only for now.
 function getUserStats() {
     return apiRequest('/user/stats');
+}
+
+function getAchievements() {
+    return apiRequest('/user/achievements');
 }
 
 // Online/presence indicator (issue #110) -- write-only; the current value
@@ -1247,6 +1278,40 @@ function closeDialogOnBackdropClick(dialog) {
 // (game.js) -- not login.js/register.js, which don't stay open long
 // enough for this to matter and redirect away as soon as a session exists
 // anyway.
+// A small transient message in the bottom corner of the screen, for
+// "something happened while you weren't looking" events (e.g. an
+// achievement unlocking -- see checkAchievementNotification() in game.js)
+// that don't warrant a dialog or a page navigation. Lazily creates its own
+// fixed-position container the first time it's called, so no page needs to
+// remember to include one in its markup; every caller just gets the same
+// look regardless of which page it's on. Optional onClick navigates/acts
+// when the toast itself is clicked, same as the service worker's own
+// notificationclick handling for OS-level push notifications.
+function showToast(message, { durationMs = 6000, onClick = null } = {}) {
+    let container = document.getElementById('toast-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'toast-container';
+        container.setAttribute('role', 'status');
+        container.setAttribute('aria-live', 'polite');
+        document.body.appendChild(container);
+    }
+
+    const toast = document.createElement('div');
+    toast.className = 'toast';
+    toast.textContent = message;
+    if (onClick) {
+        toast.classList.add('toast-clickable');
+        toast.addEventListener('click', onClick);
+    }
+    container.appendChild(toast);
+
+    setTimeout(() => {
+        toast.classList.add('toast-dismissing');
+        toast.addEventListener('transitionend', () => toast.remove(), { once: true });
+    }, durationMs);
+}
+
 function startVersionWatcher(intervalMs = 60000) {
     let versionAtLoad = null;
     fetchDeployedVersion().then((version) => { versionAtLoad = version; });

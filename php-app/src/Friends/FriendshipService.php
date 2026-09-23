@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace MoodSwings\Friends;
 
+use MoodSwings\Achievements\AchievementService;
 use MoodSwings\Presence\PresenceService;
 use MoodSwings\Repository\FriendshipRepository;
 use MoodSwings\Repository\SessionRepository;
@@ -15,6 +16,7 @@ final class FriendshipService
         private readonly UserRepository $users,
         private readonly FriendshipRepository $friendships,
         private readonly PresenceService $presence = new PresenceService(new SessionRepository()),
+        private readonly AchievementService $achievements = new AchievementService(),
     ) {
     }
 
@@ -72,6 +74,11 @@ final class FriendshipService
             'block' => $this->friendships->updateStatus((int) $friendship['id'], 'blocked', $userId),
             default => throw new \InvalidArgumentException('Action must be one of: accept, decline, block.'),
         };
+
+        if ($action === 'accept') {
+            $this->achievements->onFriendAdded($userId, count($this->listFriends($userId)));
+            $this->achievements->onFriendAdded($otherUserId, count($this->listFriends($otherUserId)));
+        }
     }
 
     public function removeFriend(int $userId, int $otherUserId): void

@@ -92,6 +92,7 @@
         <button id="user-info-button" type="button">User info</button>
         <button id="spectate-button" type="button">Spectate</button>
         <button id="stats-button" type="button">Stats</button>
+        <button id="achievements-button" type="button">Achievements</button>
         <button id="settings-button" type="button">Settings</button>
         <button id="logout-button">Log out</button>
 
@@ -895,6 +896,15 @@
                     </select>
                 </label>
                 <p id="new-game-rotisserie-draft-pool-source-description"></p>
+
+                <label id="new-game-rotisserie-draft-randomize-pool-label">
+                    <input type="checkbox" id="new-game-rotisserie-draft-randomize-pool">
+                    Randomly sample cards from this pool, instead of laying it out in full
+                </label>
+
+                <label class="new-game-field" id="new-game-rotisserie-draft-randomize-sample-size-label" hidden>Cards to sample
+                    <input type="number" id="new-game-rotisserie-draft-randomize-sample-size" min="1">
+                </label>
 
                 <div id="new-game-rotisserie-draft-custom-pool-fields" hidden>
                     <label>Upload a pool file

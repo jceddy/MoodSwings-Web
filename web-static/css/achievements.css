@@ -1,0 +1,112 @@
+#achievements-categories {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+}
+
+.achievement-category-title {
+    margin-bottom: 0.5rem;
+    border-bottom: 1px solid var(--color-border);
+    padding-bottom: 0.25rem;
+}
+
+.achievement-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.achievement-row {
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 6px;
+    padding: 0.6rem 0.8rem;
+    background: var(--color-surface);
+}
+
+.achievement-row.achievement-locked {
+    opacity: 0.6;
+}
+
+.achievement-row.achievement-unlocked {
+    opacity: 1;
+    border-color: var(--color-success);
+}
+
+.achievement-row-main {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.achievement-title {
+    font-weight: 600;
+}
+
+.achievement-description {
+    margin: 0.25rem 0 0;
+    color: var(--color-text-secondary);
+    font-size: 0.9rem;
+}
+
+.achievement-unlocked-check {
+    margin-left: auto;
+    color: var(--color-success);
+    font-weight: 700;
+}
+
+.achievement-tier-badge {
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    padding: 0.1rem 0.45rem;
+    border-radius: 999px;
+    color: #222;
+    flex-shrink: 0;
+}
+
+.achievement-tier-bronze { background: #cd7f32; }
+.achievement-tier-silver { background: #c0c0c0; }
+.achievement-tier-gold { background: #d4af37; }
+.achievement-tier-platinum { background: #a8d0e6; }
+.achievement-tier-diamond { background: #b9f2ff; }
+
+/* Not a plain .achievement-progress-wrap { display: flex } -- an author
+   stylesheet's display always wins over the UA stylesheet's [hidden]
+   { display: none }, even at equal specificity, so an unqualified rule
+   here would defeat achievements.js's own wrap.hidden = true and show
+   an empty/wrong progress bar for every unlocked (or targetless)
+   achievement. */
+.achievement-progress-wrap:not([hidden]) {
+    margin-top: 0.4rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.achievement-progress-bar {
+    flex: 1;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--color-border-subtle);
+    overflow: hidden;
+}
+
+.achievement-progress-fill {
+    height: 100%;
+    background: var(--color-info);
+}
+
+.achievement-progress-label {
+    font-size: 0.8rem;
+    color: var(--color-muted);
+    white-space: nowrap;
+}
+
+.achievement-row.achievement-hidden .achievement-title,
+.achievement-row.achievement-hidden .achievement-description {
+    font-style: italic;
+}

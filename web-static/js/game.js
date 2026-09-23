@@ -23,6 +23,8 @@
     startVersionWatcher();
     checkFriendRequestNotification();
     setInterval(checkFriendRequestNotification, 15000);
+    checkAchievementNotification();
+    setInterval(checkAchievementNotification, 15000);
     initSettings();
 
     document.getElementById('logout-button').addEventListener('click', async () => {
@@ -47,6 +49,12 @@
     // pattern as #user-info-button/#spectate-button above.
     document.getElementById('stats-button').addEventListener('click', () => {
         window.location.href = '../stats/';
+    });
+
+    // Achievements -- same real-page-navigation pattern as
+    // #user-info-button/#spectate-button/#stats-button above.
+    document.getElementById('achievements-button').addEventListener('click', () => {
+        window.location.href = '../achievements/';
     });
 
     const friendsDialog = document.getElementById('friends-dialog');
@@ -114,6 +122,91 @@
         if (ok) {
             setFriendRequestNotification(body.incoming.length > 0);
         }
+    }
+
+    // Achievement unlock indication (#achievements-button dot + a toast --
+    // see showToast() in app.js). Unlike the friend-request dot above,
+    // "has one" isn't the right test here -- almost every player has SOME
+    // unlocked achievement, so this tracks "unlocked more recently than
+    // the player last looked" via a pair of localStorage timestamps rather
+    // than a plain boolean:
+    //  - achievementsSeenAt: bumped only by achievements.js when the
+    //    player actually opens the Achievements page -- drives the dot.
+    //  - achievementsToastedThroughAt: bumped here (and by
+    //    achievements.js, on page visit) every time an unlock has been
+    //    toasted -- keeps a still-unseen unlock from re-toasting on every
+    //    15-second poll until the player finally opens the page.
+    // Both keys are shared with achievements.js (not game.js-local), same
+    // localStorage-key-as-contract approach as CHAT_LAST_SEEN_STORAGE_PREFIX.
+    const ACHIEVEMENTS_SEEN_STORAGE_KEY = 'achievementsSeenAt';
+    const ACHIEVEMENTS_TOASTED_THROUGH_STORAGE_KEY = 'achievementsToastedThroughAt';
+
+    function getStoredAchievementTimestamp(key) {
+        try {
+            return localStorage.getItem(key);
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function setStoredAchievementTimestamp(key, value) {
+        try {
+            localStorage.setItem(key, value);
+        } catch (e) {
+            // ignore -- this marker just won't persist across reloads
+        }
+    }
+
+    function setAchievementNotification(hasNew) {
+        document.getElementById('achievements-button').classList.toggle('has-new-achievement', hasNew);
+    }
+
+    async function checkAchievementNotification() {
+        const { ok, body } = await getAchievements();
+        if (!ok) {
+            return;
+        }
+
+        const unlocked = Object.values(body.achievements)
+            .flat()
+            .filter((achievement) => achievement.unlocked_at !== null);
+
+        let seenAt = getStoredAchievementTimestamp(ACHIEVEMENTS_SEEN_STORAGE_KEY);
+        let toastedThroughAt = getStoredAchievementTimestamp(ACHIEVEMENTS_TOASTED_THROUGH_STORAGE_KEY);
+
+        // First time either marker has ever been set on this browser --
+        // treat everything unlocked so far as a known baseline rather than
+        // "brand new," so a player who already has a dozen achievements
+        // doesn't get a dozen toasts (and a lit-up dot) the moment this
+        // feature ships.
+        if (seenAt === null || toastedThroughAt === null) {
+            const latestSoFar = unlocked.reduce(
+                (max, achievement) => (achievement.unlocked_at > max ? achievement.unlocked_at : max),
+                ''
+            );
+            seenAt = seenAt === null ? latestSoFar : seenAt;
+            toastedThroughAt = toastedThroughAt === null ? latestSoFar : toastedThroughAt;
+            setStoredAchievementTimestamp(ACHIEVEMENTS_SEEN_STORAGE_KEY, seenAt);
+            setStoredAchievementTimestamp(ACHIEVEMENTS_TOASTED_THROUGH_STORAGE_KEY, toastedThroughAt);
+        }
+
+        const newlyUnlocked = unlocked
+            .filter((achievement) => achievement.unlocked_at > toastedThroughAt)
+            .sort((a, b) => (a.unlocked_at < b.unlocked_at ? -1 : 1));
+
+        for (const achievement of newlyUnlocked) {
+            showToast(`Achievement unlocked: ${achievement.title}`, {
+                onClick: () => {
+                    window.location.href = '../achievements/';
+                },
+            });
+        }
+        if (newlyUnlocked.length > 0) {
+            toastedThroughAt = newlyUnlocked[newlyUnlocked.length - 1].unlocked_at;
+            setStoredAchievementTimestamp(ACHIEVEMENTS_TOASTED_THROUGH_STORAGE_KEY, toastedThroughAt);
+        }
+
+        setAchievementNotification(unlocked.some((achievement) => achievement.unlocked_at > seenAt));
     }
 
     // Browser push notifications (issue #108): Push API + Notifications API
@@ -2175,6 +2268,49 @@
             rotisserieStructureOptionLabel(rotisserieMinPoolSize);
         rotisserieSelect.querySelector('option[value="jceddys_75"]').textContent =
             rotisserieJceddys75OptionLabel(rotisserieMinPoolSize);
+        refreshRotisserieDraftRandomizeSampleSizeDefault();
+    }
+
+    // Issue #462 follow-up: whether the creator has typed their own value
+    // into #new-game-rotisserie-draft-randomize-sample-size -- once true,
+    // refreshRotisserieDraftRandomizeSampleSizeDefault() stops overwriting
+    // it on every cutoff-count/opponent-selection change, the same
+    // "don't clobber a deliberate edit" concern a live-recomputed default
+    // always has. Reset back to false whenever the randomize checkbox is
+    // unchecked, so checking it again later starts from a fresh default
+    // rather than remembering a stale manual value from earlier in the
+    // same dialog session.
+    let rotisserieDraftRandomizeSampleSizeUserEdited = false;
+
+    // Keeps #new-game-rotisserie-draft-randomize-sample-size pre-filled
+    // with the current minimum pool size (the same value
+    // currentRotisserieDraftMinPoolSize() feeds the pool-source option
+    // labels above) whenever the creator hasn't already typed their own
+    // number in -- called from updateDraftPoolSourceOptionLabels() (so it
+    // stays current on every cutoff-count/opponent-selection change) and
+    // from updateRotisserieDraftRandomizeSampleSizeVisibility() (so
+    // checking the box for the first time seeds a sensible starting
+    // point rather than an empty field).
+    function refreshRotisserieDraftRandomizeSampleSizeDefault() {
+        const input = document.getElementById('new-game-rotisserie-draft-randomize-sample-size');
+        const minPoolSize = currentRotisserieDraftMinPoolSize(currentDraftPlayerCount());
+        input.min = String(minPoolSize);
+        if (!rotisserieDraftRandomizeSampleSizeUserEdited) {
+            input.value = String(minPoolSize);
+        }
+    }
+
+    // Shows/hides the "cards to sample" field alongside the randomize
+    // checkbox -- mirrors every other conditional-field toggle on this
+    // form (updateQuickDraftPoolSourceVisibility() and friends).
+    function updateRotisserieDraftRandomizeSampleSizeVisibility() {
+        const randomizeChecked = document.getElementById('new-game-rotisserie-draft-randomize-pool').checked;
+        document.getElementById('new-game-rotisserie-draft-randomize-sample-size-label').hidden = !randomizeChecked;
+        if (!randomizeChecked) {
+            rotisserieDraftRandomizeSampleSizeUserEdited = false;
+        } else {
+            refreshRotisserieDraftRandomizeSampleSizeDefault();
+        }
     }
 
     const RARITIES = ['common', 'uncommon', 'rare', 'mythic'];
@@ -3626,6 +3762,14 @@
     // same option-label refresh a checked-opponent/format change already
     // triggers via updateOpponentSelectionLimit().
     document.getElementById('new-game-rotisserie-draft-cutoff-count').addEventListener('input', updateDraftPoolSourceOptionLabels);
+    // Issue #462 follow-up: shows/hides the "cards to sample" field
+    // alongside the checkbox, and marks it user-edited once the creator
+    // types their own value in -- see refreshRotisserieDraftRandomizeSampleSizeDefault()'s
+    // own docblock for why that stops future auto-refills.
+    document.getElementById('new-game-rotisserie-draft-randomize-pool').addEventListener('change', updateRotisserieDraftRandomizeSampleSizeVisibility);
+    document.getElementById('new-game-rotisserie-draft-randomize-sample-size').addEventListener('input', () => {
+        rotisserieDraftRandomizeSampleSizeUserEdited = true;
+    });
     document.getElementById('new-game-tiered-rotisserie-draft-mode').addEventListener('change', updateTieredRotisserieDraftModeVisibility);
     document.getElementById('new-game-tiered-rotisserie-draft-tier-count').addEventListener('change', updateTieredRotisserieDraftTierCountVisibility);
     [1, 2, 3, 4].forEach((n) => {
@@ -3782,6 +3926,14 @@
         // plain HTML default, so this runs after it.
         document.getElementById('new-game-default-selections').checked =
             prefill ? prefill.defaultSelectionsMode : user.default_selections_mode_preference;
+        // form.reset() above already unchecked the randomize-pool checkbox
+        // (so #new-game-rotisserie-draft-randomize-sample-size-label is
+        // moot this time regardless), but this flag itself lives outside
+        // the form and would otherwise survive into a LATER session where
+        // deck_type is picked back to 'rotisserie_draft' and the checkbox
+        // is checked again -- reset it here too, same reasoning as the
+        // default-selections checkbox just above.
+        rotisserieDraftRandomizeSampleSizeUserEdited = false;
         const submitButton = document.getElementById('new-game-submit-button');
         submitButton.disabled = false;
         // form.reset() above already put the mode radios back to "Invite
@@ -5323,6 +5475,20 @@
         const rotisserieDraftCutoffCount = deckType === 'rotisserie_draft'
             ? Number(document.getElementById('new-game-rotisserie-draft-cutoff-count').value) || undefined
             : undefined;
+        // Issue #454: only meaningful for deck_type 'rotisserie_draft' --
+        // undefined (not false) when unchecked/not applicable, same
+        // "don't send this at all" convention as every other optional
+        // field on this form.
+        const rotisserieDraftRandomizePool = deckType === 'rotisserie_draft'
+            && document.getElementById('new-game-rotisserie-draft-randomize-pool').checked
+            ? true
+            : undefined;
+        // Issue #462 follow-up: only meaningful alongside
+        // rotisserieDraftRandomizePool -- same "don't send this at all"
+        // convention when it isn't applicable.
+        const rotisserieDraftRandomizeSampleSize = rotisserieDraftRandomizePool
+            ? Number(document.getElementById('new-game-rotisserie-draft-randomize-sample-size').value) || undefined
+            : undefined;
         const tieredRotisserieDraftMode = deckType === 'tiered_rotisserie_draft'
             ? document.getElementById('new-game-tiered-rotisserie-draft-mode').value
             : undefined;
@@ -5449,6 +5615,8 @@
                 rotisserie_draft_pool_source: rotisserieDraftPoolSource,
                 rotisserie_draft_custom_pool_text: rotisserieDraftCustomPoolText,
                 rotisserie_draft_cutoff_count: rotisserieDraftCutoffCount,
+                rotisserie_draft_randomize_pool: rotisserieDraftRandomizePool,
+                rotisserie_draft_randomize_sample_size: rotisserieDraftRandomizeSampleSize,
                 tiered_rotisserie_draft_mode: tieredRotisserieDraftMode,
                 tiered_rotisserie_draft_tiers: tieredRotisserieDraftTiers,
                 // Issue #90 follow-up: was missing here entirely, so
@@ -5497,6 +5665,8 @@
             rotisserieDraftPoolSource,
             rotisserieDraftCustomPoolText,
             rotisserieDraftCutoffCount,
+            rotisserieDraftRandomizePool,
+            rotisserieDraftRandomizeSampleSize,
             tieredRotisserieDraftMode,
             tieredRotisserieDraftTiers,
             botGoesFirst,
@@ -7069,6 +7239,15 @@
         // Round wins: a trophy cup on a stem and base.
         wins: '<polygon points="6,4 18,4 15,13 9,13"/>'
             + '<rect x="11" y="13" width="2" height="4"/><rect x="8" y="18" width="8" height="2"/>',
+        // Highest unlocked achievement tier: the same trophy-cup silhouette
+        // as `wins` above -- reused deliberately, since this is also
+        // literally a trophy, just recolored per-tier (see
+        // .player-flag--tier-* in style.css) rather than always gold.
+        // Distinguished from `wins` at a glance by position (to the LEFT
+        // of the name, not among the other stats to its right) rather
+        // than shape.
+        achievementTier: '<polygon points="6,4 18,4 15,13 9,13"/>'
+            + '<rect x="11" y="13" width="2" height="4"/><rect x="8" y="18" width="8" height="2"/>',
         // Hand size: two overlapping cards, echoing the printed cards'
         // own portrait shape elsewhere on this page.
         hand: '<rect x="4" y="7" width="10" height="14" rx="1.5" transform="rotate(-8 9 14)"/>'
@@ -7204,6 +7383,20 @@
             isThinking ? 'player-flag--presenceThinking' : null,
         ].filter(Boolean).join(' ');
         return buildPlayerFlag('presence', label, extraClasses || null);
+    }
+
+    // Trophy icon shown to the LEFT of a player's name, colored by their
+    // highest currently-unlocked achievement tier (player.highest_achievement_tier
+    // -- see AchievementService::highestUnlockedTiersFor()). Returns null
+    // for a player with no unlocked achievements at all, in which case the
+    // caller omits the icon entirely rather than showing an empty/neutral
+    // placeholder trophy.
+    function buildAchievementTrophyFlag(username, tier) {
+        if (!tier) {
+            return null;
+        }
+        const label = username + "'s highest unlocked achievement tier: " + tier;
+        return buildPlayerFlag('achievementTier', label, 'player-flag--tier-' + tier.toLowerCase());
     }
 
     async function refreshBoard() {
@@ -7642,6 +7835,14 @@
                     deckNameEl.className = 'player-deck-name';
                     deckNameEl.textContent = deckName;
                     nameBlock.appendChild(deckNameEl);
+                }
+                // To the left of the name (li's own flex order), not
+                // folded into .player-icons -- that box lives to the
+                // RIGHT of the name and is about this round/game's own
+                // live stats, not the player's all-time achievements.
+                const trophyFlag = buildAchievementTrophyFlag(player.username, player.highest_achievement_tier);
+                if (trophyFlag) {
+                    li.appendChild(trophyFlag);
                 }
                 li.appendChild(nameBlock);
 
@@ -10451,23 +10652,28 @@
     let selectedCard = null;
 
     // Creativity's copy_card_id is the only field whose choice changes what
-    // OTHER fields the panel needs to show. Two different things happen
-    // once a copy target is picked, both mirroring exactly what
-    // MoodPlayService reads once the play actually reaches the server:
+    // OTHER fields the panel needs to show. Once a copy target is picked,
+    // its own field list comes entirely from copy_simulation (from
+    // GameService::creativityCopySimulation()), which bundles two things
+    // that both mirror exactly what MoodPlayService reads once the play
+    // actually reaches the server:
     //  1) the copied mood's OWN fields -- its "to play" cost (e.g. Guile's
     //     discard_card_ids) and its own after-playing choices (e.g.
-    //     Compulsion's target_player_id, Dignity's discard_card_id) -- read
-    //     from the exact same flat, top-level choices bag a normal play of
-    //     that card would use. These are already sitting on the candidate's
-    //     own serialized choice_fields (currentState.in_play), computed the
-    //     same way for every card -- no new data needed, just reused as-is.
+    //     Compulsion's target_player_id, Dignity's discard_card_id) --
+    //     resolved server-side through effectiveCardId(), NOT read from the
+    //     candidate's own serialized choice_fields (currentState.in_play):
+    //     for a candidate that's itself an in-play Creativity copy, THAT
+    //     always describes playing bare Creativity (just its own
+    //     copy_card_id picker) regardless of what it's actually copying, so
+    //     reusing it directly used to show a second, spurious copy-target
+    //     dropdown instead of the real card's fields (e.g. Intimidation's
+    //     target_player_id) when copying a copy.
     //  2) reactions to the play from the ACTING PLAYER's own OTHER cards --
     //     Duplicity's repeat-with-fresh-choices, Scorn's/Validation's
     //     reactions -- which depend on board state (do you have Duplicity/
     //     Scorn/Validation in play?) the client would otherwise have to
     //     duplicate the checks for, so these come precomputed per candidate
-    //     from the server instead (copy_simulation, from
-    //     GameService::creativityCopySimulation()).
+    //     from the server instead too.
     // creativityBaseFields is just the copy_card_id field itself -- rendered
     // once, as a static row, and never rebuilt. Everything else Creativity's
     // own serialized choice_fields carries (its own baseline Scorn/
@@ -10505,8 +10711,17 @@
 
         let extras;
         if (copiedCard) {
+            // simulation.extra_fields is already the copy target's full
+            // own field list (cost + after-playing), resolved server-side
+            // through the whole copy chain (GameService::
+            // creativityCopySimulation()) -- copiedCard.choice_fields
+            // itself must NOT be reused here too: for a candidate that's
+            // itself an in-play Creativity copy, that describes playing
+            // bare Creativity (just its own copy_card_id picker), not
+            // whatever it's actually copying, and would show a second,
+            // spurious copy-target dropdown alongside the real fields.
             const simulation = selectedCard.copy_simulation[copiedCardId];
-            extras = [...copiedCard.choice_fields, ...(simulation ? simulation.extra_fields : [])];
+            extras = simulation ? simulation.extra_fields : [];
             selectedCard.copy_cost_payable = simulation ? simulation.cost_payable : true;
         } else {
             extras = creativityNoCopyExtraFields;
@@ -11549,10 +11764,26 @@
             // reuses that same spot instead of board-error -- which is
             // easy to miss, sitting above the hand, while the player's
             // attention is still on the choices panel they were just
-            // filling in.
+            // filling in. The panel itself is deliberately left open (not
+            // cleared the way a genuinely stale pending-decision is in
+            // respondToDecision()'s own failure path) -- most rejections
+            // here are an ordinary fixable mistake in the choices
+            // themselves, not stale state, and closing it would force
+            // re-picking everything from scratch every time.
             const validationMessage = document.getElementById('choices-validation');
             validationMessage.textContent = body.message || 'Could not play that card.';
             validationMessage.hidden = false;
+            // Reported live: a play rejected as "it's not your turn"
+            // (e.g. a stale/duplicate submission racing one that had
+            // already gone through and ended the turn) left the REST of
+            // the board -- whose turn it is, the log, the opponent's
+            // hand count -- showing the stale pre-rejection state too,
+            // with nothing telling the player anything had actually
+            // changed underneath them; they had to manually reload the
+            // page to discover the card was already played. Refreshing
+            // here (without touching the choices panel above) means that
+            // staleness self-corrects immediately instead.
+            await refreshBoard();
             return;
         }
 

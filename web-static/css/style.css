@@ -721,6 +721,26 @@ dialog#resources-dialog #resources-close-button {
     border: 1px solid var(--color-bg);
 }
 
+/* A small notification dot on #achievements-button while an achievement
+   has unlocked since the player last opened the Achievements page -- see
+   checkAchievementNotification() in game.js. Same visual treatment as
+   #friends-button.has-friend-request above. */
+#achievements-button {
+    position: relative;
+}
+
+#achievements-button.has-new-achievement::after {
+    content: '';
+    position: absolute;
+    top: -0.3rem;
+    right: -0.3rem;
+    width: 0.6rem;
+    height: 0.6rem;
+    border-radius: 50%;
+    background-color: var(--color-error);
+    border: 1px solid var(--color-bg);
+}
+
 /* #new-game-button otherwise touches #games-list directly beneath it
    with no gap. */
 #new-game-button {
@@ -842,6 +862,44 @@ dialog#resources-dialog #resources-close-button {
    beneath it). z-index: 1 settles that regardless of which descendant
    happens to be creating a stacking context on a given load, without
    needing to track down and fix every individual cause. */
+/* Toast notifications (see showToast() in app.js) -- a stack of transient
+   "something happened" messages fixed to the bottom-right corner. Higher
+   z-index than #loading-overlay's own stacking-context fix below since a
+   toast (e.g. an achievement unlocking mid-poll) should stay visible even
+   if a fresh load happens to be in flight at the same moment; every
+   dialog#* in this app promotes itself to the browser's own top layer
+   regardless, so this never needs to out-rank those. */
+#toast-container {
+    position: fixed;
+    bottom: 1rem;
+    right: 1rem;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    max-width: calc(100vw - 2rem);
+}
+
+.toast {
+    background: var(--color-surface);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    padding: 0.6rem 1rem;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    max-width: 20rem;
+    opacity: 1;
+    transition: opacity 0.3s ease;
+}
+
+.toast-clickable {
+    cursor: pointer;
+}
+
+.toast-dismissing {
+    opacity: 0;
+}
+
 #loading-overlay {
     position: fixed;
     inset: 0;
@@ -2225,6 +2283,34 @@ body.game-page {
 
 .player-flag--teamOpponent {
     color: var(--color-error);
+}
+
+/* Achievement-tier trophy (left of the player's name -- see
+   buildAchievementTrophyFlag() in game.js): same five tier colors as
+   .achievement-tier-* in achievements.css, kept in sync by hand since the
+   game board doesn't load that stylesheet. Unlike .achievement-tier-badge
+   (a solid pill with dark #222 text baked in for contrast against every
+   one of these), this is just `color` on an SVG using `fill: currentColor`
+   sitting on the page's own background, so no separate text-contrast
+   color is needed here. */
+.player-flag--tier-bronze {
+    color: #cd7f32;
+}
+
+.player-flag--tier-silver {
+    color: #c0c0c0;
+}
+
+.player-flag--tier-gold {
+    color: #d4af37;
+}
+
+.player-flag--tier-platinum {
+    color: #a8d0e6;
+}
+
+.player-flag--tier-diamond {
+    color: #b9f2ff;
 }
 
 /* -- Hurt Feelings art thumbnail (players list) ---------------------- */

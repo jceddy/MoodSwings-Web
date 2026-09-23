@@ -3983,7 +3983,34 @@ button).
       source select's own option labels (e.g. "39 random cards") on every
       change to either the cutoff count or the opponent selection, the
       same dynamic-relabeling pattern Quick/Winston/Grid Draft's own pool
-      pickers already use.
+      pickers already use. Issue #454: a `#new-game-rotisserie-draft-
+      randomize-pool` checkbox sits just below the pool-source picker's own
+      description paragraph -- "Randomly sample cards from this pool,
+      instead of laying it out in full." Checking it sends
+      `rotisserie_draft_randomize_pool: true` alongside whichever pool
+      source is chosen, letting a creator combine a specific named pool
+      (a saved deck, jceddy's 75, etc.) with `random_48`-style random
+      sampling instead of only ever getting one or the other -- see
+      `buildRotisserieDraftPool()`'s own docblock in
+      `php-app/README.md`'s "Rotisserie Draft". Checking it also reveals a
+      `#new-game-rotisserie-draft-randomize-sample-size-label` number
+      input (issue #462 follow-up) pre-filled with
+      `currentRotisserieDraftMinPoolSize()`'s own current value -- editable
+      up to sample MORE than the floor instead of always exactly the
+      floor, sent as `rotisserie_draft_randomize_sample_size`.
+      `refreshRotisserieDraftRandomizeSampleSizeDefault()` keeps that
+      pre-fill current on every cutoff-count/opponent-selection change
+      (same trigger as the option-label refresh above) as long as the
+      creator hasn't typed their own number in yet
+      (`rotisserieDraftRandomizeSampleSizeUserEdited`) -- an edit permanently
+      opts that dialog session out of the auto-refill, the same
+      "don't clobber a deliberate edit" rule a live-recomputed default
+      always needs, until the checkbox is unchecked and rechecked (or the
+      dialog is reopened), which resets it. Neither field has visibility
+      logic of its own beyond that: both live inside
+      `#new-game-rotisserie-draft-fields`, which already shows/hides as a
+      whole with every other Rotisserie Draft field whenever the deck type
+      selection changes.
     - **Tiered Rotisserie Draft's own drafting phase** (`#tiered-rotisserie-
       draft-panel` > `#tiered-rotisserie-draft-drafting`,
       `renderTieredRotisserieDraftDrafting()`, shown while
@@ -4090,6 +4117,19 @@ button).
     clobber the server's actual rejection message that was just shown
     there) so the player can adjust their choice and try again; on success
     the whole panel closes anyway, so there's nothing left to re-enable.
+    A rejection also triggers the same `refreshBoard()` a successful play
+    does -- reported live: a play rejected as "it's not your turn" (a
+    stale/duplicate submission racing one that had already gone through
+    and ended the turn) left the REST of the board -- whose turn it is,
+    the log, the opponent's hand count -- showing the stale
+    pre-rejection state too, with nothing telling the player anything had
+    actually changed; they had to manually reload the page to discover
+    the card was already played. The panel itself is deliberately left
+    open rather than cleared the way `respondToDecision()`'s own
+    genuinely-stale pending decision is on failure (see its own
+    docblock) -- most rejections here are an ordinary fixable mistake in
+    the choices themselves, not stale state, and closing it would force
+    re-picking everything from scratch every time.
     Clicking Play on a card whose entire `choice_fields` is a single
     optional target left blank -- Anger, Hate, Denial, Shock, Creativity
     with no copy target, etc., `cardHasNoTargetSelected()` -- interrupts
@@ -5043,6 +5083,25 @@ button).
     other). The Team Scores panel's own per-team icon
     (`renderTeamScores()`) follows the identical solid-blue/hollow-red
     convention, using `'team'`/`'teamOpponent'` the same way.
+
+    **Achievement-tier trophy icon.** To the LEFT of the name (not folded
+    into the `.player-icons` wrapper above, which is about this round/
+    game's own live stats, not the player's all-time achievements) sits a
+    trophy icon colored by that player's own highest currently-unlocked
+    achievement tier (`player.highest_achievement_tier` — see
+    `AchievementService::highestUnlockedTiersFor()` in `php-app/README.md`'s
+    Achievements section). `buildAchievementTrophyFlag()` returns `null`
+    (rendering nothing) for a player with zero unlocked achievements,
+    rather than a neutral/empty trophy placeholder. It reuses the exact
+    same trophy-cup silhouette as the `wins` stat icon on the right side of
+    the row (`PLAYER_STAT_ICON_PATHS.achievementTier`) — deliberately, since
+    this is also literally a trophy — distinguished from `wins` by position
+    (left of the name vs. among the round stats) and color (one of five
+    tier colors, `.player-flag--tier-bronze/silver/gold/platinum/diamond`
+    in `style.css`, vs. `wins`'s fixed `--color-gold`) rather than shape.
+    Those five colors are the same ones `achievements.css`'s own
+    `.achievement-tier-*` badge classes use, kept in sync by hand since the
+    game board doesn't load that stylesheet.
 
     `'after_scoring_order'`'s own field (`type: 'card_order'`) is the one
     pending-decision field that isn't a `<select>`-backed widget at all —

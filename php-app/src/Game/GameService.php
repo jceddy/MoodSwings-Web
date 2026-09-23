@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace MoodSwings\Game;
 
+use MoodSwings\Achievements\AchievementService;
 use MoodSwings\Bot\BotChoiceResolver;
 use MoodSwings\Bot\BotPlayerService;
 use MoodSwings\Bot\SearchBotPlayerService;
@@ -1364,6 +1365,7 @@ final class GameService
         private readonly PresenceService $presence = new PresenceService(new SessionRepository()),
         private readonly GameNoteRepository $notes = new GameNoteRepository(),
         private readonly CardStatsService $cardStats = new CardStatsService(),
+        private readonly AchievementService $achievements = new AchievementService(),
         private readonly GameChatRepository $chat = new GameChatRepository(),
         private readonly BotPlayerService $bots = new BotPlayerService(new BotChoiceResolver()),
         private readonly ChaosEffectRegistry $chaosRegistry = new ChaosEffectRegistry(),
@@ -1484,6 +1486,41 @@ final class GameService
      *        ROTISSERIE_DRAFT_MAX_CUTOFF (13-20), defaulting to
      *        ROTISSERIE_DRAFT_DEFAULT_CUTOFF (14). Fixed for the whole
      *        match once chosen, the same shape as $winsNeeded.
+     * @param bool $rotisserieDraftRandomizePool issue #454: only
+     *        meaningful when $deckType is 'rotisserie_draft' -- when true,
+     *        $rotisserieDraftPoolSource's own pool (already built at its
+     *        own natural full size, including any Structure/jceddy's 75
+     *        doubling-up) is randomly narrowed down to
+     *        $rotisserieDraftRandomizeSampleSize cards before drafting
+     *        starts, the same "shuffle + take N" truncation Quick/Winston/
+     *        Grid Draft's own pool sources already get unconditionally
+     *        (see buildDraftPool()'s own $truncateToTarget param) -- rather
+     *        than the "lay the whole thing out face-up, leftovers simply
+     *        never drafted" default buildRotisserieDraftPool() otherwise
+     *        always uses. Lets a creator combine a specific named pool
+     *        (a saved deck, jceddy's 75, etc.) with 'random_48'-style
+     *        random sampling instead of only ever getting one or the
+     *        other. Defaults to false (the pre-existing "lay it all
+     *        out" behavior), so every existing caller is unaffected.
+     * @param ?int $rotisserieDraftRandomizeSampleSize issue #462 follow-up:
+     *        only meaningful when $rotisserieDraftRandomizePool is true --
+     *        how many cards to sample, instead of always sampling exactly
+     *        rotisserieDraftMinPoolSize() (the floor). Null (the default)
+     *        falls back to that floor, matching the original behavior. A
+     *        non-null value below the floor is an error (the draft can't
+     *        proceed with fewer than every player's own cutoff needs); a
+     *        value larger than the pool source can actually provide is NOT
+     *        an error -- buildDraftPool() already returns the pool as-is
+     *        (still at least the floor) rather than padding it out, the
+     *        same way an oversized $truncateToTarget request always has.
+     *        Also raises the Structure-doubling/jceddy's-150-swap
+     *        thresholds (both keyed off the same effective target) when it
+     *        exceeds the floor, so a larger sample from a small named pool
+     *        still gets the bigger underlying pool to actually sample from.
+     *        Silently ignored (not an error) whenever
+     *        $rotisserieDraftRandomizePool is false, the same "harmless
+     *        no-op outside its own narrow scope" convention every other
+     *        creation-time opt-in here already follows.
      * @param ?string $tieredRotisserieDraftMode only meaningful (and
      *        required) when $deckType is 'tiered_rotisserie_draft' --
      *        'rarity' (the fixed reference scheme, no further fields
@@ -1601,6 +1638,8 @@ final class GameService
         ?string $rotisserieDraftPoolSource = null,
         ?string $rotisserieDraftCustomPoolText = null,
         int $rotisserieDraftCutoffCount = self::ROTISSERIE_DRAFT_DEFAULT_CUTOFF,
+        bool $rotisserieDraftRandomizePool = false,
+        ?int $rotisserieDraftRandomizeSampleSize = null,
         ?string $tieredRotisserieDraftMode = null,
         ?array $tieredRotisserieDraftTiers = null,
         bool $botGoesFirst = false,
@@ -2035,7 +2074,7 @@ final class GameService
             'quick_draft', 'chaos_draft' => $this->buildQuickDraftPool((string) $quickDraftPoolSource, $quickDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds)),
             'winston_draft' => $this->buildWinstonDraftPool((string) $winstonDraftPoolSource, $winstonDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds)),
             'grid_draft' => $this->buildGridDraftPool((string) $gridDraftPoolSource, $gridDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds)),
-            'rotisserie_draft' => $this->buildRotisserieDraftPool((string) $rotisserieDraftPoolSource, $rotisserieDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds), $rotisserieDraftCutoffCount),
+            'rotisserie_draft' => $this->buildRotisserieDraftPool((string) $rotisserieDraftPoolSource, $rotisserieDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds), $rotisserieDraftCutoffCount, $rotisserieDraftRandomizePool, $rotisserieDraftRandomizeSampleSize),
             'tiered_rotisserie_draft' => array_merge(...array_map(static fn (array $tier): array => $tier['pool_card_ids'], $tieredRotisserieDraftTierPools)),
             // The flattened union of every player's own individual pool --
             // draftMatchPoolView()'s own undraftedCardIds computation
@@ -2343,6 +2382,18 @@ final class GameService
                 $pdo->rollBack();
             }
             throw $e;
+        }
+
+        $botSeatCount = 0;
+        $userStmt = Connection::get()->prepare('SELECT is_bot FROM users WHERE id = :id');
+        foreach ($seatedUserIds as $seatedUserId) {
+            $userStmt->execute(['id' => $seatedUserId]);
+            if ((bool) $userStmt->fetchColumn()) {
+                $botSeatCount++;
+            }
+        }
+        if ($botSeatCount >= 2) {
+            $this->achievements->onBotGameCreated($createdByUserId);
         }
 
         return $gameId;
@@ -4422,14 +4473,15 @@ final class GameService
     /**
      * @return int[] Rotisserie Draft's own pool -- unlike Quick/Winston/
      *         Grid Draft, this is a FLOOR (rotisserieDraftMinPoolSize()),
-     *         not an exact target: $truncateToTarget is false, so anything
-     *         over the floor is laid out in full rather than randomly cut
-     *         down first (see buildDraftPool()'s own docblock). The
-     *         'random_48' source is the one exception in practice --
-     *         buildRandomDraftCardIds() already returns exactly
-     *         $minPoolSize cards, so there's never anything to truncate
-     *         either way -- matching "N random cards, where N is the
-     *         minimum pool size" (the maintainer's own words) exactly.
+     *         not an exact target: $truncateToTarget is false by default
+     *         (unless $randomizePool -- issue #454, see below), so
+     *         anything over the floor is laid out in full rather than
+     *         randomly cut down first (see buildDraftPool()'s own
+     *         docblock). The 'random_48' source is the one exception in
+     *         practice -- buildRandomDraftCardIds() already returns
+     *         exactly $minPoolSize cards, so there's never anything to
+     *         truncate either way -- matching "N random cards, where N is
+     *         the minimum pool size" (the maintainer's own words) exactly.
      *         'structure' is doubled whenever the floor itself exceeds a
      *         single 45-card copy -- a different condition than Quick/
      *         Winston Draft's own $playerCount > 2 (see
@@ -4447,20 +4499,50 @@ final class GameService
      *         18-card cutoff (72) still fits but a 19-card one (76) tips
      *         over into needing the 150-card pool -- see
      *         buildDraftPool()'s own docblock.
+     *
+     *         $randomizePool (issue #454) flips $truncateToTarget to true
+     *         instead, so the pool source's own full (already doubled/
+     *         swapped-up) card list is randomly narrowed down to
+     *         $sampleSize cards -- the same shuffle-and-slice every
+     *         other draft type's own pool already always gets.
+     *         $sampleSize itself (issue #462 follow-up) is
+     *         $randomizeSampleSize when given (validated below to be no
+     *         smaller than $minPoolSize -- the draft can't proceed on
+     *         fewer cards than every player's own cutoff needs), otherwise
+     *         defaults to $minPoolSize exactly as before. It's used as
+     *         $targetSize for the doubling/swap-up decision too (not just
+     *         the final truncation), so a randomize-with-a-larger-sample
+     *         request still reaches for the bigger underlying pool it
+     *         actually needs to sample from -- e.g. a randomized
+     *         'jceddys_75' pool with a sample size over 75 samples from
+     *         the full 150-card 'jceddys_150' pool, not the original
+     *         75-card one, the same way a floor over 75 already did before
+     *         this param existed. $randomizeSampleSize is silently ignored
+     *         whenever $randomizePool is false ($sampleSize just reduces
+     *         to $minPoolSize, same as $targetSize always was previously).
      */
-    private function buildRotisserieDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $playerCount, int $cutoffCount): array
+    private function buildRotisserieDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $playerCount, int $cutoffCount, bool $randomizePool = false, ?int $randomizeSampleSize = null): array
     {
         $minPoolSize = self::rotisserieDraftMinPoolSize($cutoffCount, $playerCount);
+
+        $sampleSize = $randomizePool ? ($randomizeSampleSize ?? $minPoolSize) : $minPoolSize;
+
+        if ($randomizePool && $randomizeSampleSize !== null && $randomizeSampleSize < $minPoolSize) {
+            throw new GameStateException(
+                "The randomize-pool sample size ({$randomizeSampleSize}) can't be smaller than the "
+                . "{$minPoolSize}-card minimum Rotisserie Draft with {$playerCount} players and a {$cutoffCount}-card cutoff requires"
+            );
+        }
 
         $cardIds = $this->buildDraftPool(
             $poolSource,
             $customPoolText,
             $savedDecklistId,
             $requestingUserId,
+            $sampleSize,
             $minPoolSize,
-            $minPoolSize,
-            doubleStructureForMultiplayer: $minPoolSize > 45,
-            truncateToTarget: false,
+            doubleStructureForMultiplayer: $sampleSize > 45,
+            truncateToTarget: $randomizePool,
         );
 
         if (count($cardIds) < $minPoolSize) {
@@ -11000,11 +11082,13 @@ final class GameService
         // submitQuickDraftPick()'s own recordQuickDraftPick() guard for
         // the draft pick-position half (Chaos Draft's own drafting phase
         // reuses Quick Draft's pick mechanic verbatim).
-        if (!$containsBot && $this->fetchGame($gameId)['deck_type'] !== 'chaos_draft') {
+        $game = $this->fetchGame($gameId);
+        if (!$containsBot && $game['deck_type'] !== 'chaos_draft') {
             $this->bumpLifetimeStats($winningUserIds, 'game_wins');
             $this->bumpLifetimeStats($losingUserIds, 'game_losses');
             $this->cardStats->recordGameCompletion($gameId, $winningUserIds, $losingUserIds);
         }
+        $this->achievements->onGameCompleted($gameId, $game, $winningUserIds, $losingUserIds, $containsBot);
 
         foreach ($winningUserIds as $userId) {
             if ($userId === $excludeUserId) {
@@ -11687,6 +11771,7 @@ final class GameService
                 "UPDATE draft_matches SET status = 'completed', winner_user_id = :winner, completed_at = NOW() WHERE id = :id"
             )->execute(['winner' => $winnerUserId, 'id' => $draftMatchId]);
             $this->recordMatchCompletionStats($draftMatchId, $winnerUserId);
+            $this->achievements->onDraftMatchCompleted($draftMatchId, $winnerUserId);
 
             return;
         }
@@ -11890,6 +11975,7 @@ final class GameService
             $pdo->prepare(
                 "UPDATE game_matches SET status = 'completed', winner_user_id = :winner, completed_at = NOW() WHERE id = :id"
             )->execute(['winner' => $winnerUserId, 'id' => $gameMatchId]);
+            $this->achievements->onBestOfThreeMatchCompleted($gameMatchId, self::isTeamFormat($game['format']));
 
             return;
         }
@@ -16579,6 +16665,11 @@ final class GameService
         }
         $presenceStatuses = $this->presence->statusesFor($sharePresenceByUserId);
 
+        // Trophy-icon indicator next to each player's name -- see
+        // AchievementService::highestUnlockedTiersFor()'s own docblock.
+        // Batched the same way as $presenceStatuses just above.
+        $highestAchievementTiers = $this->achievements->highestUnlockedTiersFor(array_keys($sharePresenceByUserId));
+
         $handCounts = [];
         if ($game['status'] === 'in_progress' || $game['status'] === 'completed') {
             $handCountStmt = $pdo->prepare(
@@ -16793,6 +16884,11 @@ final class GameService
                 // player considering whether to opt into a rematch with
                 // the same settings can see how close everyone got.
                 'active_seconds_used' => (int) $row['active_seconds_used'],
+                // Trophy icon shown next to this player's name on the
+                // board (see AchievementService::highestUnlockedTiersFor())
+                // -- null for a player with zero unlocked achievements, in
+                // which case the frontend omits the icon entirely.
+                'highest_achievement_tier' => $highestAchievementTiers[(int) $row['user_id']] ?? null,
             ];
         }
 
@@ -19779,7 +19875,20 @@ final class GameService
         foreach ($state->moodsInPlay() as $candidateCardId => $mood) {
             $candidateRow = $state->catalogRow($state->effectiveCardId($candidateCardId));
             $simulation[$candidateCardId] = [
-                'extra_fields' => $this->reactionFields($state, $viewerId, $candidateRow['color']),
+                // The candidate's own after-playing/cost fields, keyed by
+                // its EFFECTIVE effect_key -- not the candidate's own
+                // serialized choice_fields (game.js used to reuse those
+                // directly), which for a candidate that's itself an in-play
+                // Creativity copy describes playing bare Creativity (its
+                // raw printed identity's schema is just copy_card_id),
+                // never whatever it's actually copying. Resolving through
+                // effectiveCardId() here means copying a Creativity-that's-
+                // copying-Intimidation offers Intimidation's own
+                // target_player_id field, not another copy_card_id picker.
+                'extra_fields' => [
+                    ...CardChoiceSchema::forEffectKey($candidateRow['effectKey']),
+                    ...$this->reactionFields($state, $viewerId, $candidateRow['color']),
+                ],
                 'cost_payable' => $this->plays->canPayCopiedToPlayCost($state, $viewerId, $creativityCardId, $candidateCardId),
             ];
         }

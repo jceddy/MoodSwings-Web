@@ -1,0 +1,12 @@
+-- Issue #462 follow-up: Rotisserie Draft's "randomize this pool" checkbox
+-- now lets the creator specify how many cards to sample, instead of
+-- forcing it to always be exactly the minimum (rotisserieDraftMinPoolSize()).
+-- The New Game dialog's new number input defaults to the current minimum,
+-- editable up. GameService::buildRotisserieDraftPool()'s new
+-- $randomizeSampleSize param also now drives the Structure-doubling/
+-- jceddy's-150-swap thresholds, so a larger sample from a small named
+-- pool still reaches for the bigger underlying pool it needs.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.50.16' WHERE id = 1;

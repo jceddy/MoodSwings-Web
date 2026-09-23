@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace MoodSwings\Deck;
 
+use MoodSwings\Achievements\AchievementService;
 use MoodSwings\Friends\FriendshipService;
 use MoodSwings\Game\CardCatalog;
 use MoodSwings\Game\DecklistParser;
@@ -26,6 +27,7 @@ final class UserDecklistService
     public function __construct(
         private readonly UserDecklistRepository $decklists,
         private readonly FriendshipService $friendships,
+        private readonly AchievementService $achievements = new AchievementService(),
     ) {
     }
 
@@ -39,7 +41,13 @@ final class UserDecklistService
         $name = $this->sanitizeName($name);
         [$cardIds, $sideboardCardIds] = $this->resolveCardIds($decklistText, $cardIds, $sideboardCardIds);
 
-        return $this->decklists->create($userId, $name, $cardIds, $sideboardCardIds, $visibility);
+        $decklistId = $this->decklists->create($userId, $name, $cardIds, $sideboardCardIds, $visibility);
+        $this->achievements->onDecklistSaved($userId, count($this->decklists->listForUser($userId)));
+        if ($visibility === 'friends') {
+            $this->achievements->onDecklistShared($userId);
+        }
+
+        return $decklistId;
     }
 
     /**
@@ -54,6 +62,10 @@ final class UserDecklistService
         [$cardIds, $sideboardCardIds] = $this->resolveCardIds($decklistText, $cardIds, $sideboardCardIds);
 
         $this->decklists->update($decklistId, $name, $cardIds, $sideboardCardIds, $visibility);
+        $this->achievements->onDecklistEdited($userId);
+        if ($visibility === 'friends') {
+            $this->achievements->onDecklistShared($userId);
+        }
     }
 
     public function delete(int $userId, int $decklistId): void

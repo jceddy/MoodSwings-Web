@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <script>
+    // Sets the palette before first paint so an explicit preference (see
+    // "Palettes" in web-static/README.md) never flashes the wrong one first
+    // -- inlined and duplicated per-page rather than an external script,
+    // since an external file would itself add a delay this exists to avoid.
+    // The "system" default needs no JS at all: style.css's own
+    // prefers-color-scheme media query handles it; every OTHER value
+    // (light/dark, or a named palette like jade/red-marble/white-marble/
+    // high-contrast -- issue #363) is a fixed look applied unconditionally.
+    (function () {
+        try {
+            var theme = localStorage.getItem('themePreference');
+            if (theme && theme !== 'system') {
+                document.documentElement.dataset.theme = theme;
+            }
+        } catch (e) {
+            // localStorage unavailable (e.g. private browsing) -- falls back
+            // to the system default.
+        }
+    })();
+    </script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Achievements - MoodSwings-Web</title>
+    <link rel="stylesheet" href="../css/style.css">
+    <link rel="stylesheet" href="../css/achievements.css">
+</head>
+<body>
+    <main id="achievements-main" hidden>
+        <button id="achievements-back-to-lobby-button" type="button">&larr; Back to your games</button>
+        <h1>Achievements</h1>
+        <p id="achievements-summary"></p>
+        <label id="hide-locked-label"><input type="checkbox" id="hide-locked-toggle"> Hide locked achievements</label>
+
+        <div id="achievements-categories"></div>
+    </main>
+
+    <template id="achievement-category-template">
+        <section class="achievement-category">
+            <h2 class="achievement-category-title"></h2>
+            <ul class="achievement-list"></ul>
+        </section>
+    </template>
+
+    <template id="achievement-row-template">
+        <li class="achievement-row">
+            <div class="achievement-row-main">
+                <span class="achievement-tier-badge"></span>
+                <span class="achievement-title"></span>
+                <span class="achievement-unlocked-check" hidden>&#10003;</span>
+            </div>
+            <p class="achievement-description"></p>
+            <div class="achievement-progress-wrap" hidden>
+                <div class="achievement-progress-bar"><div class="achievement-progress-fill"></div></div>
+                <span class="achievement-progress-label"></span>
+            </div>
+        </li>
+    </template>
+
+    <dialog id="resources-dialog">
+        <button id="resources-close-button" type="button" aria-label="Close">&times;</button>
+        <h2>Resources</h2>
+        <ul id="resources-list">
+            <li><a href="https://magic.wizards.com/en/news/feature/mood-swings-extended-rules" target="_blank" rel="noopener noreferrer">Rules</a></li>
+            <li><a href="https://magic.wizards.com/en/news/feature/other-ways-to-play-mood-swings" target="_blank" rel="noopener noreferrer">Formats</a></li>
+            <li><a href="https://magic.wizards.com/en/news/feature/mood-swings-card-notes" target="_blank" rel="noopener noreferrer">Card Specific Rulings</a></li>
+            <li><a href="https://magic.wizards.com/en/news/card-image-gallery/mood-swings" target="_blank" rel="noopener noreferrer">Card Gallery</a></li>
+            <li><a href="https://moodiest.app/" target="_blank" rel="noopener noreferrer">Moodiest (Card Repository)</a></li>
+            <li><a href="https://moodswings.scryfall.com/" target="_blank" rel="noopener noreferrer">Moodfall (another Card Repository)</a></li>
+            <li><a href="https://discord.gg/GgHFEBAd6C" target="_blank" rel="noopener noreferrer">Discord</a></li>
+            <li><a href="https://www.reddit.com/r/moodswingstcg/" target="_blank" rel="noopener noreferrer">Reddit</a></li>
+            <li><a href="https://github.com/jceddy/MoodSwings-Web" target="_blank" rel="noopener noreferrer">GitHub repository</a></li>
+            <li>Looking for synchronous play? Check out <a href="https://moodygg.fly.dev/" target="_blank" rel="noopener noreferrer">moodygg</a>!</li>
+        </ul>
+        <script type="text/javascript" src="https://cdnjs.buymeacoffee.com/1.0.0/button.prod.min.js" data-name="bmc-button" data-slug="jceddy" data-color="#FFDD00" data-emoji="" data-font="Cookie" data-text="Buy me a coffee" data-outline-color="#000000" data-font-color="#000000" data-coffee-color="#ffffff"></script>
+    </dialog>
+
+    <footer><span id="app-version"></span><a id="resources-link" href="#">Resources</a><label id="theme-select-label">Theme
+        <select id="theme-select">
+            <optgroup label="Basic">
+                <option value="system">System</option>
+                <option value="light">Light</option>
+                <option value="dark">Dark</option>
+            </optgroup>
+            <optgroup label="Palettes">
+                <option value="jade">Jade</option>
+                <option value="red-marble">Red Marble</option>
+                <option value="white-marble">White Marble</option>
+                <option value="high-contrast">High Contrast</option>
+                <option value="high-contrast-dark">High Contrast Dark</option>
+            </optgroup>
+            <optgroup label="Skins">
+                <option value="noir">Noir</option>
+                <option value="steampunk">Steampunk</option>
+                <option value="futuristic">Futuristic</option>
+                <option value="neon">Neon</option>
+            </optgroup>
+        </select>
+    </label></footer>
+    <script src="../js/app.js"></script>
+    <script src="../js/achievements.js"></script>
+</body>
+</html>

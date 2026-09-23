@@ -1,0 +1,11 @@
+-- Requested: a trophy icon to the left of each player's name on the game
+-- board, colored by that player's own highest currently-unlocked
+-- achievement tier. GameService::buildGameState() now exposes
+-- players[].highest_achievement_tier (computed from existing
+-- achievements/user_achievements rows via
+-- AchievementService::highestUnlockedTiersFor(), batched once per
+-- request the same way presence/hand-count already are), and game.js
+-- renders it via buildAchievementTrophyFlag(). No schema change -- just
+-- the version bump MaintenanceGate needs to see this deploy as caught up
+-- with the code.
+UPDATE schema_version SET version = '1.51.8' WHERE id = 1;

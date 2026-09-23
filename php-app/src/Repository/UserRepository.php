@@ -153,6 +153,24 @@ final class UserRepository
     }
 
     /**
+     * The IANA identifier (e.g. 'America/Los_Angeles') the browser
+     * reported on its most recent authenticated request -- see
+     * AuthService::currentUser(), the only caller, which validates it
+     * with DateTimeZone before ever getting here. Not a user-facing
+     * preference (no Settings dialog field for it): it's opportunistically
+     * kept in sync with the browser on every request, the same way
+     * sessions.last_seen_at is, rather than set once and left stale.
+     * Consumed by AchievementService's own Night Owl/Early Bird/Marathon
+     * Session checks, which need each player's real local time/calendar
+     * day rather than the server's UTC.
+     */
+    public function updateTimezone(int $id, string $timezone): void
+    {
+        $stmt = Connection::get()->prepare('UPDATE users SET timezone = :timezone WHERE id = :id');
+        $stmt->execute(['timezone' => $timezone, 'id' => $id]);
+    }
+
+    /**
      * "Custom card/effect formats" (issue #405 follow-up) as a personal
      * preference (Settings dialog's "Game defaults" section) -- gates
      * whether Chaos Draft's own fan-made 133-effect pool (and any future
