@@ -884,6 +884,66 @@ final class AchievementService
             }
         }
 
+        $this->unlockMatchLevelAchievements($winnerUserId, $wonGame1, $lostAnyGame);
+    }
+
+    /**
+     * Draft-family analogue of onBestOfThreeMatchCompleted() above --
+     * called from GameService::advanceDraftMatch() the moment a
+     * draft_matches row itself completes. Sealed Deck/Sealed Pool of the
+     * Day/Weekly Sealed Pool/Quick Draft/Booster Draft/Rotisserie Draft
+     * all track their best-of-N progression through draft_match_id
+     * rather than game_match_id, so Match Point/Match Maker/Grand
+     * Champion/Comeback Kid/Flawless Victory were silently never checked
+     * for any of them -- reported live: "Comeback Kid did not unlock"
+     * for a Sealed Deck match won 2-1 after losing game 1. No team
+     * handling needed here unlike the game_match_id version:
+     * draft_match_players has no team_id at all -- a draft-family match
+     * is always an individual best-of-N.
+     */
+    public function onDraftMatchCompleted(int $draftMatchId, int $winnerUserId): void
+    {
+        $pdo = Connection::get();
+
+        $botStmt = $pdo->prepare(
+            'SELECT 1 FROM draft_match_players dmp JOIN users u ON u.id = dmp.user_id
+             WHERE dmp.draft_match_id = :m AND u.is_bot = 1 LIMIT 1'
+        );
+        $botStmt->execute(['m' => $draftMatchId]);
+        if ($botStmt->fetch() !== false) {
+            return;
+        }
+
+        $gamesStmt = $pdo->prepare(
+            "SELECT id, match_game_number, deck_type, winner_game_player_id FROM games
+             WHERE draft_match_id = :m AND status = 'completed' ORDER BY match_game_number"
+        );
+        $gamesStmt->execute(['m' => $draftMatchId]);
+        $games = $gamesStmt->fetchAll();
+        if ($games === [] || $games[0]['deck_type'] === 'chaos_draft') {
+            return;
+        }
+
+        $wonGame1 = null;
+        $lostAnyGame = false;
+        foreach ($games as $g) {
+            $winnerStmt = $pdo->prepare('SELECT user_id FROM game_players WHERE id = :id');
+            $winnerStmt->execute(['id' => $g['winner_game_player_id']]);
+            $wonThisGame = (int) $winnerStmt->fetchColumn() === $winnerUserId;
+
+            if ((int) $g['match_game_number'] === 1) {
+                $wonGame1 = $wonThisGame;
+            }
+            if (!$wonThisGame) {
+                $lostAnyGame = true;
+            }
+        }
+
+        $this->unlockMatchLevelAchievements($winnerUserId, $wonGame1, $lostAnyGame);
+    }
+
+    private function unlockMatchLevelAchievements(int $winnerUserId, ?bool $wonGame1, bool $lostAnyGame): void
+    {
         $this->unlock($winnerUserId, 'match-point');
         $this->bumpProgress($winnerUserId, 'match-maker');
         $this->bumpProgress($winnerUserId, 'grand-champion');

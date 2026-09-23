@@ -12452,7 +12452,20 @@ six card-cycle rows), most In-Game Skill/Card Feat achievements, and the
 Marathon Session/Rematch! counters. `onBestOfThreeMatchCompleted()` is
 called from `advanceGameMatch()` for the handful of achievements about
 the *overall* best-of-three match rather than any one game in it (Match
-Point/Match Maker/Grand Champion/Comeback Kid/Flawless Victory).
+Point/Match Maker/Grand Champion/Comeback Kid/Flawless Victory) --
+Duel/Team Play/Traditional only (`games.game_match_id`). Sealed Deck/
+Sealed Pool of the Day/Weekly Sealed Pool/Quick Draft/Booster Draft/
+Rotisserie Draft track their own best-of-N progression through
+`games.draft_match_id` instead, via a separate `advanceDraftMatch()` --
+reported live ("Comeback Kid did not unlock" for a Sealed Deck match won
+2-1 after losing game 1) as never having called any achievement hook at
+all on match completion. `onDraftMatchCompleted()` is its counterpart,
+called from `advanceDraftMatch()`'s own match-completion branch,
+computing the same "lost game 1"/"lost any game" shape from
+`draft_match_id`-scoped `games` rows (no team handling needed here --
+`draft_match_players` has no `team_id`, a draft-family match is always
+an individual best-of-N); both funnel into a shared
+`unlockMatchLevelAchievements()` so the two paths can't drift again.
 `onTournamentCompleted()`/`onTournamentJoined()`/`onTournamentStarted()`
 are called from `TournamentService` for the Tournaments category. Every
 account/social achievement is wired from its own natural call site:

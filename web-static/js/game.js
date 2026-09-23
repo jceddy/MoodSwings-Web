@@ -11733,10 +11733,26 @@
             // reuses that same spot instead of board-error -- which is
             // easy to miss, sitting above the hand, while the player's
             // attention is still on the choices panel they were just
-            // filling in.
+            // filling in. The panel itself is deliberately left open (not
+            // cleared the way a genuinely stale pending-decision is in
+            // respondToDecision()'s own failure path) -- most rejections
+            // here are an ordinary fixable mistake in the choices
+            // themselves, not stale state, and closing it would force
+            // re-picking everything from scratch every time.
             const validationMessage = document.getElementById('choices-validation');
             validationMessage.textContent = body.message || 'Could not play that card.';
             validationMessage.hidden = false;
+            // Reported live: a play rejected as "it's not your turn"
+            // (e.g. a stale/duplicate submission racing one that had
+            // already gone through and ended the turn) left the REST of
+            // the board -- whose turn it is, the log, the opponent's
+            // hand count -- showing the stale pre-rejection state too,
+            // with nothing telling the player anything had actually
+            // changed underneath them; they had to manually reload the
+            // page to discover the card was already played. Refreshing
+            // here (without touching the choices panel above) means that
+            // staleness self-corrects immediately instead.
+            await refreshBoard();
             return;
         }
 

@@ -4117,6 +4117,19 @@ button).
     clobber the server's actual rejection message that was just shown
     there) so the player can adjust their choice and try again; on success
     the whole panel closes anyway, so there's nothing left to re-enable.
+    A rejection also triggers the same `refreshBoard()` a successful play
+    does -- reported live: a play rejected as "it's not your turn" (a
+    stale/duplicate submission racing one that had already gone through
+    and ended the turn) left the REST of the board -- whose turn it is,
+    the log, the opponent's hand count -- showing the stale
+    pre-rejection state too, with nothing telling the player anything had
+    actually changed; they had to manually reload the page to discover
+    the card was already played. The panel itself is deliberately left
+    open rather than cleared the way `respondToDecision()`'s own
+    genuinely-stale pending decision is on failure (see its own
+    docblock) -- most rejections here are an ordinary fixable mistake in
+    the choices themselves, not stale state, and closing it would force
+    re-picking everything from scratch every time.
     Clicking Play on a card whose entire `choice_fields` is a single
     optional target left blank -- Anger, Hate, Denial, Shock, Creativity
     with no copy target, etc., `cardHasNoTargetSelected()` -- interrupts

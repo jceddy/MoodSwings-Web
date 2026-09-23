@@ -1,0 +1,13 @@
+-- Reported live: a rejected play (e.g. "it's not your turn" from a
+-- stale/duplicate submission racing one that had already gone through
+-- and ended the turn) left the whole board -- whose turn it is, the log,
+-- the opponent's hand count -- showing stale pre-rejection state, with
+-- nothing telling the player anything had changed underneath them; they
+-- had to manually reload the page to discover the card was already
+-- played. submitPlay()'s own failure path in game.js now refreshes board
+-- state the same way a successful play already does, without touching
+-- the still-open choices panel (most rejections are an ordinary fixable
+-- mistake in the choices themselves, not stale state). No schema change,
+-- just the version bump MaintenanceGate needs to see this deploy as
+-- caught up with the code.
+UPDATE schema_version SET version = '1.51.6' WHERE id = 1;
