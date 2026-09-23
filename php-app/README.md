@@ -12465,6 +12465,23 @@ Sharing is Caring, the last on `visibility === 'friends'`),
 `GET /stats/cards` in `public/index.php` (Spectator Sport/Replay
 Enthusiast/Card Counter).
 
+Night Owl/Early Bird/Marathon Session ("...your local time"/"a single
+calendar day") need each player's own timezone, which the server has no
+other way to learn -- every timestamp it deals in
+(`games.completed_at`, `CURDATE()`) is plain UTC (`Connection::get()`'s
+own `SET time_zone = '+00:00'`). `app.js`'s `apiRequest()` sends the
+browser's IANA identifier (`Intl.DateTimeFormat().resolvedOptions().timeZone`)
+as an `X-Timezone` header on every request; `AuthService::currentUser()`
+validates it (a bare `new DateTimeZone($timezone)`, rejecting anything
+not real) and persists it to `users.timezone` (migration 0361) --
+opportunistic, the same "kept in sync on every authenticated request"
+treatment `sessions.last_seen_at` already gets, not a one-time Settings
+field. `AchievementService::timezoneFor($userId)` reads it back (falling
+back to UTC for a user it isn't known for yet) and both
+`checkVolumeAndFormatWins()`'s Night Owl/Early Bird hour check and
+`checkMarathonSession()`'s calendar-day computation convert through it
+per-user, rather than reading a single shared UTC value for everyone.
+
 Unlock notifications reuse `NotificationService`'s existing channel
 fan-out exactly like `notifyTimeoutWarning()` does:
 `notifyAchievementUnlocked()`, a `notify_achievement_unlocked` preference

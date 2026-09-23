@@ -10,6 +10,25 @@ const API_BASE = '/app';
 // that assignment doesn't stop script execution synchronously.
 let redirectingToMaintenance = false;
 
+// The server has no other way to learn a player's real local time -- every
+// timestamp it stores/computes (games.completed_at, CURDATE(), etc.) is
+// plain UTC (see php-app's Connection::get()). Sent on every request so
+// AuthService::currentUser() can opportunistically keep users.timezone in
+// sync (same "touched on every authenticated request" treatment as
+// sessions.last_seen_at), which is what AchievementService's Night Owl/
+// Early Bird/Marathon Session checks read to compute each player's own
+// local hour/calendar day instead of the server's. Intl.DateTimeFormat is
+// broadly supported, but this is a nice-to-have (those checks just fall
+// back to UTC for a browser that lacks it), so failures are swallowed
+// rather than surfaced.
+function getBrowserTimezone() {
+    try {
+        return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+    } catch (e) {
+        return '';
+    }
+}
+
 async function apiRequest(path, options = {}) {
     if (redirectingToMaintenance) {
         return new Promise(() => {}); // never resolves; a navigation is already in flight
@@ -18,7 +37,7 @@ async function apiRequest(path, options = {}) {
     try {
         const response = await fetch(API_BASE + path, {
             credentials: 'same-origin',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', 'X-Timezone': getBrowserTimezone() },
             ...options,
         });
 

@@ -173,6 +173,51 @@ final class AchievementServiceIntegrationTest extends TestCase
         ];
     }
 
+    private function setTimezone(int $userId, string $timezone): void
+    {
+        $this->pdo->prepare('UPDATE users SET timezone = :tz WHERE id = :u')
+            ->execute(['tz' => $timezone, 'u' => $userId]);
+    }
+
+    /**
+     * A game row/pair of game_players good enough for onGameCompleted()
+     * to run against directly (no game_cards/game_rounds seeded, so
+     * checkColorAndCardFeats()/checkInGameSkillFeats() just no-op on
+     * their own empty-result guards) -- used instead of
+     * playAndWinAStandardGame()/resignGame() by the Night Owl/Early Bird
+     * tests below, which need a specific completed_at rather than
+     * whatever NOW() happens to be when the test runs.
+     *
+     * @return array{gameId:int}
+     */
+    private function insertMinimalCompletedGame(int $winnerUserId, int $loserUserId, string $completedAtUtc): array
+    {
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, deck_type, status, created_by_user_id, wins_needed, completed_at)
+             VALUES ('standard', 'structure', 'completed', :created_by, 1, :completed_at)"
+        );
+        $stmt->execute(['created_by' => $winnerUserId, 'completed_at' => $completedAtUtc]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $this->insertGamePlayer($gameId, $winnerUserId, 0);
+        $this->insertGamePlayer($gameId, $loserUserId, 1);
+
+        return ['gameId' => $gameId];
+    }
+
+    /** @return array<string, mixed> minimal onGameCompleted() $game shape -- see insertMinimalCompletedGame() */
+    private function minimalGameArray(string $completedAtUtc): array
+    {
+        return [
+            'format' => 'standard',
+            'deck_type' => 'structure',
+            'default_selections_mode' => 0,
+            'timeout_minutes' => null,
+            'total_time_limit_minutes' => null,
+            'completed_at' => $completedAtUtc,
+        ];
+    }
+
     private function isUnlocked(int $userId, string $slug): bool
     {
         $stmt = $this->pdo->prepare(
@@ -448,6 +493,111 @@ final class AchievementServiceIntegrationTest extends TestCase
         }
 
         self::assertTrue($this->isUnlocked($winnerUserId, 'marathon-session'));
+    }
+
+    /**
+     * Reported live: "the timed achievements aren't calculating local
+     * time correctly" -- Night Owl/Early Bird's own catalog descriptions
+     * both say "your local time" explicitly, so the SAME completed_at
+     * moment must unlock differently depending on which timezone the
+     * winner's own browser last reported (users.timezone), not read a
+     * single shared UTC hour off the game row for every winner.
+     */
+    public function testNightOwlAndEarlyBirdAreEvaluatedPerPlayerTimezoneNotServerUtc(): void
+    {
+        $completedAtUtc = '2026-01-01 09:00:00'; // 9am UTC
+
+        // 9am UTC is 1am in Los Angeles (UTC-8 in January) -- Night Owl's
+        // own midnight-4am window.
+        $laWinnerId = $this->insertUser('achtzla');
+        $laLoserId = $this->insertUser('achtzlal');
+        $this->setTimezone($laWinnerId, 'America/Los_Angeles');
+
+        // The exact same 9am UTC is 10am in Berlin (UTC+1 in January) --
+        // nowhere near either window.
+        $berlinWinnerId = $this->insertUser('achtzberlin');
+        $berlinLoserId = $this->insertUser('achtzberlinl');
+        $this->setTimezone($berlinWinnerId, 'Europe/Berlin');
+
+        $achievements = new AchievementService();
+        $game = $this->minimalGameArray($completedAtUtc);
+
+        ['gameId' => $laGameId] = $this->insertMinimalCompletedGame($laWinnerId, $laLoserId, $completedAtUtc);
+        $achievements->onGameCompleted($laGameId, $game, [$laWinnerId], [$laLoserId], false);
+
+        ['gameId' => $berlinGameId] = $this->insertMinimalCompletedGame($berlinWinnerId, $berlinLoserId, $completedAtUtc);
+        $achievements->onGameCompleted($berlinGameId, $game, [$berlinWinnerId], [$berlinLoserId], false);
+
+        self::assertTrue($this->isUnlocked($laWinnerId, 'night-owl'), 'the LA winner is at 1am local time');
+        self::assertFalse($this->isUnlocked($laWinnerId, 'early-bird'));
+        self::assertFalse($this->isUnlocked($berlinWinnerId, 'night-owl'), 'the Berlin winner is at 10am local time');
+        self::assertFalse($this->isUnlocked($berlinWinnerId, 'early-bird'));
+    }
+
+    /**
+     * A user whose browser has never sent an X-Timezone header yet (never
+     * logged in since this shipped) has users.timezone still NULL --
+     * AchievementService::timezoneFor() falls back to UTC for them,
+     * matching this feature's pre-fix behavior rather than throwing or
+     * silently skipping the check.
+     */
+    public function testNightOwlFallsBackToUtcWhenThePlayersTimezoneIsUnknown(): void
+    {
+        $winnerUserId = $this->insertUser('achtzunknown');
+        $loserUserId = $this->insertUser('achtzunknownl');
+
+        $completedAtUtc = '2026-01-01 02:00:00';
+        ['gameId' => $gameId] = $this->insertMinimalCompletedGame($winnerUserId, $loserUserId, $completedAtUtc);
+
+        (new AchievementService())->onGameCompleted(
+            $gameId,
+            $this->minimalGameArray($completedAtUtc),
+            [$winnerUserId],
+            [$loserUserId],
+            false
+        );
+
+        self::assertTrue($this->isUnlocked($winnerUserId, 'night-owl'));
+    }
+
+    /**
+     * Marathon Session's own catalog wording ("a single calendar day")
+     * means the PLAYER's day, the same "your local time" intent as Night
+     * Owl/Early Bird above -- checkMarathonSession() computes play_date
+     * from each user's own timezone rather than CURDATE(), which reflects
+     * the DB session's fixed UTC. Proven with UTC+14 and UTC-12 (a
+     * 26-hour gap): at ANY real instant this test happens to run, at
+     * least one of them has already crossed into a different calendar
+     * date than the other -- see the exact hour-by-hour reasoning this
+     * relies on in AchievementService::checkMarathonSession()'s own
+     * comment -- so two distinct play_date rows for the exact same real
+     * moment is only possible if each is genuinely computed from that
+     * specific player's own timezone, never a single shared server value.
+     */
+    public function testMarathonSessionUsesEachPlayersOwnCalendarDayNotServerUtc(): void
+    {
+        $farEastUserId = $this->insertUser('achtzfareast');
+        $farWestUserId = $this->insertUser('achtzfarwest');
+        $this->setTimezone($farEastUserId, 'Pacific/Kiritimati'); // UTC+14
+        $this->setTimezone($farWestUserId, 'Etc/GMT+12'); // UTC-12 (POSIX sign convention)
+
+        $achievements = new AchievementService();
+        foreach ([$farEastUserId, $farWestUserId] as $userId) {
+            $loserUserId = $this->insertUser("achtzopp{$userId}");
+            $completedAtUtc = gmdate('Y-m-d H:i:s');
+            ['gameId' => $gameId] = $this->insertMinimalCompletedGame($userId, $loserUserId, $completedAtUtc);
+            $achievements->onGameCompleted($gameId, $this->minimalGameArray($completedAtUtc), [$userId], [$loserUserId], false);
+        }
+
+        $stmt = $this->pdo->prepare('SELECT play_date FROM user_daily_game_counts WHERE user_id = :u');
+        $stmt->execute(['u' => $farEastUserId]);
+        $farEastDate = $stmt->fetchColumn();
+        $stmt->execute(['u' => $farWestUserId]);
+        $farWestDate = $stmt->fetchColumn();
+
+        self::assertNotFalse($farEastDate);
+        self::assertNotFalse($farWestDate);
+        self::assertNotSame($farWestDate, $farEastDate);
     }
 
     public function testBotWranglerUnlocksWhenCreatingAGameWithTwoOrMoreBots(): void
