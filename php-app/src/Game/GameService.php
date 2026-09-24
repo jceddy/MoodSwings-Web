@@ -16633,9 +16633,11 @@ final class GameService
      * hand (players[].hand) -- matching how a finished game is customarily
      * "shown" once it no longer matters. Spectating a still-'waiting' game
      * (nothing dealt yet) or an 'abandoned' one is rejected outright. See
-     * "Spectator mode" in php-app/README.md, including the deferred
-     * "tournament spectator" mode (full private info, LIVE) this
-     * deliberately does not cover.
+     * "Spectator mode" in php-app/README.md. Compare
+     * getTournamentCastState() below, which reveals that same
+     * private info while a tournament match is still 'in_progress' --
+     * behind a distinctly more trusted permission than this method's
+     * anyone-with-the-code visibility.
      *
      * @return array<string, mixed>
      */
@@ -16650,18 +16652,75 @@ final class GameService
     }
 
     /**
-     * Shared builder behind both getState() (a real seated player --
-     * $viewerUserId/$viewerGamePlayerId always non-null) and
-     * getSpectatorState() (a non-seated spectator -- both null,
-     * $revealAllHands only ever true for a completed game). Every branch
-     * below conditioned on $viewerGamePlayerId/$viewerUserId === null was
-     * deliberately made explicit rather than relying on a null id merely
-     * happening to compare unequal everywhere -- see "Spectator mode" in
+     * Tournament spectator mode (issue #238): a trusted caster/streamer's
+     * live view of a tournament match, hands and pending-decision
+     * internals revealed even while still 'in_progress' -- unlike
+     * getSpectatorState() above, which only reveals that once 'completed'.
+     * Authorization (is $viewerUserId this tournament's creator, or
+     * someone the creator explicitly granted cast access to via
+     * TournamentService::hasCastAccess()) is the caller's job, same as
+     * getSpectatorState()'s own spectate_code/friendship check is
+     * canSpectateGame()'s job in public/index.php -- this method only
+     * knows how to build the revealed board, not who's allowed to see it.
+     * $viewerUserId/$viewerGamePlayerId are passed through as null (same
+     * as a plain spectator) so a caster never picks up creator-only
+     * fields (e.g. isTournamentMatch's own Rematch prefill) just because
+     * they happen to also be the game's created_by_user_id.
+     *
+     * @return array<string, mixed>
+     */
+    public function getTournamentCastState(int $gameId): array
+    {
+        $game = $this->fetchGame($gameId);
+        if ($game['status'] === 'waiting' || $game['status'] === 'abandoned') {
+            throw new GameStateException("Game {$gameId} can't be cast right now.");
+        }
+
+        return $this->buildGameState($gameId, null, null, $game['status'] === 'completed', tournamentCastMode: true);
+    }
+
+    /**
+     * Tournament spectator mode (issue #238): resolves which tournament
+     * (if any) a game belongs to, via the same three-way tournament_matches
+     * lookup buildGameState()'s own $isTournamentMatch check performs (a
+     * bare single game's own game_id, a best-of-three match's
+     * game_match_id, or a draft match's draft_match_id) -- reused here so
+     * public/index.php's own cast-access authorization check doesn't have
+     * to re-derive it. Null for an ordinary non-tournament game.
+     */
+    public function tournamentIdForGame(int $gameId): ?int
+    {
+        $game = $this->fetchGame($gameId);
+        $stmt = Connection::get()->prepare(
+            'SELECT tm.tournament_id FROM tournament_matches tm
+             WHERE tm.game_id = :game_id OR tm.game_match_id = :game_match_id OR tm.draft_match_id = :draft_match_id
+             LIMIT 1'
+        );
+        $stmt->execute([
+            'game_id' => $gameId,
+            'game_match_id' => $game['game_match_id'],
+            'draft_match_id' => $game['draft_match_id'],
+        ]);
+        $tournamentId = $stmt->fetchColumn();
+
+        return $tournamentId === false ? null : (int) $tournamentId;
+    }
+
+    /**
+     * Shared builder behind getState() (a real seated player --
+     * $viewerUserId/$viewerGamePlayerId always non-null), getSpectatorState()
+     * (a non-seated spectator -- both null, $revealAllHands only ever true
+     * for a completed game), and getTournamentCastState() (a trusted
+     * tournament caster -- both null, $tournamentCastMode true regardless
+     * of completion). Every branch below conditioned on
+     * $viewerGamePlayerId/$viewerUserId === null was deliberately made
+     * explicit rather than relying on a null id merely happening to
+     * compare unequal everywhere -- see "Spectator mode" in
      * php-app/README.md.
      *
      * @return array<string, mixed>
      */
-    private function buildGameState(int $gameId, ?int $viewerUserId, ?int $viewerGamePlayerId, bool $revealAllHands = false): array
+    private function buildGameState(int $gameId, ?int $viewerUserId, ?int $viewerGamePlayerId, bool $revealAllHands = false, bool $tournamentCastMode = false): array
     {
         $game = $this->fetchGame($gameId);
         $pdo = Connection::get();
@@ -17316,12 +17375,14 @@ final class GameService
             $player['deck_count'] = $state->hasSeparateDecks()
                 ? count($state->deck($player['game_player_id']))
                 : count($state->deck());
-            if ($revealAllHands) {
-                // Every seated player's final hand -- only ever populated
-                // for a completed game (see getSpectatorState() above),
-                // once there's no more competitive reason to hide it.
-                // reactingViewerId: null since no live play is left for
-                // any choice_fields/is_playable simulation to matter.
+            if ($revealAllHands || $tournamentCastMode) {
+                // Every seated player's hand -- for a completed game (see
+                // getSpectatorState() above) once there's no more
+                // competitive reason to hide it, or unconditionally for a
+                // trusted tournament caster (see getTournamentCastState()
+                // above) even while still in_progress. reactingViewerId:
+                // null since neither viewer can act on this board, so no
+                // choice_fields/is_playable simulation applies.
                 $player['hand'] = array_map(
                     fn (int $cardId) => $this->serializeCard($state, $cardId, $names, null),
                     $state->hand($player['game_player_id'])
@@ -17391,7 +17452,7 @@ final class GameService
                 'hurt_feelings_game_player_id' => $roundRow['hurt_feelings_game_player_id'] !== null ? (int) $roundRow['hurt_feelings_game_player_id'] : null,
                 'banned_colors' => $state->bannedColorsThisRound(),
                 'discarded_this_round' => (bool) $roundRow['discarded_this_round'],
-                'pending_decision' => $this->serializePendingDecision((int) $roundRow['id'], $viewerGamePlayerId, $state, (bool) $game['default_selections_mode']),
+                'pending_decision' => $this->serializePendingDecision((int) $roundRow['id'], $viewerGamePlayerId, $state, (bool) $game['default_selections_mode'], $tournamentCastMode),
                 'scoring_preview' => $this->serializeScoringPreview($state, (int) $roundRow['id']),
                 'scoring_effects' => $this->scoringEffectEntries($state, $names, $playerNames),
                 'board_effects' => $this->boardEffectEntries($state, $names, $playerNames),
@@ -21195,8 +21256,12 @@ final class GameService
      * from $viewerGamePlayerId's own perspective -- every viewer sees who
      * initiated it, which card, and who it's waiting on, but the actual
      * prompt (`field`, e.g. Compulsion's target's own hand-card options)
-     * is only ever included for the targeted player themselves, the same
-     * way an opponent's hand is never exposed to anyone else.
+     * is only ever included for the targeted player themselves ($isYou),
+     * the same way an opponent's hand is never exposed to anyone else --
+     * with one deliberate exception: $revealToNonTarget (tournament
+     * spectator mode, issue #238) reveals `field` to a trusted caster too,
+     * even though they're never the target themselves ($isYou/`is_you`
+     * stay accurately false for them regardless).
      *
      * @return array<string, mixed>|null
      */
@@ -21208,11 +21273,12 @@ final class GameService
      * buildFieldRow()/buildFieldWidget() code either way, so the
      * withChoiceDefault() enrichment is the same policy applied to the
      * one field a pending decision carries, rather than an array of
-     * them. Only for $isYou, matching the gate 'field' itself was
-     * already behind (the decision's own private choice payload is
-     * still never populated for anyone else).
+     * them. Gated on $revealField ($isYou || $revealToNonTarget), matching
+     * the gate 'field' itself is behind -- a cast viewer's read-only
+     * preview shows the same default a real target would see, rather than
+     * an inconsistent raw field.
      */
-    private function serializePendingDecision(int $roundId, ?int $viewerGamePlayerId, ?BoardState $state = null, bool $defaultSelectionsMode = false): ?array
+    private function serializePendingDecision(int $roundId, ?int $viewerGamePlayerId, ?BoardState $state = null, bool $defaultSelectionsMode = false, bool $revealToNonTarget = false): ?array
     {
         $batchRow = $this->activePendingBatch($roundId);
         if ($batchRow === null) {
@@ -21230,8 +21296,12 @@ final class GameService
         // target_game_player_id, so 'field' (the decision's own private
         // choice payload) is never populated below, the same way it's
         // never populated for a real player who isn't the one being
-        // asked.
+        // asked. 'is_you' stays accurately false for a null viewer even
+        // when $revealToNonTarget reveals 'field' anyway (tournament
+        // spectator mode, issue #238) -- a trusted caster still isn't the
+        // player making this decision, they're just allowed to see it.
         $isYou = $targetGamePlayerId === $viewerGamePlayerId;
+        $revealField = $isYou || $revealToNonTarget;
         $playedCardId = (int) $batchRow['played_card_id'];
 
         $result = [
@@ -21243,7 +21313,7 @@ final class GameService
             'is_you' => $isYou,
         ];
 
-        if ($isYou) {
+        if ($revealField) {
             $field = json_decode((string) $decisionRow['field'], true);
             if ($defaultSelectionsMode && $state !== null) {
                 // Issue #405 follow-up: a pending decision opened by an

@@ -1382,6 +1382,21 @@
             <ol id="tournament-view-standings-list"></ol>
         </div>
         <div id="tournament-view-bracket"></div>
+        <!-- Tournament spectator mode (issue #238) -- the creator's own
+             roster of who besides themselves may cast (view with hands
+             revealed) this tournament's still-in_progress matches, shown
+             only to the creator (see renderTournamentCasters() in
+             game.js) -- a granted caster sees their own "Cast" buttons on
+             each in_progress match instead (renderBracketRounds()), not
+             this management section. -->
+        <div id="tournament-view-casters-section" hidden>
+            <h3>Casters</h3>
+            <p>Grant a trusted user live, hands-revealed viewing of this tournament's matches while they're still in progress -- for casting/streaming, not for players.</p>
+            <ul id="tournament-view-casters-list"></ul>
+            <input id="tournament-view-add-caster-username" type="text" placeholder="Username">
+            <button id="tournament-view-add-caster-button" type="button">Grant cast access</button>
+            <p id="tournament-view-caster-error" class="error" hidden></p>
+        </div>
         <p id="tournament-view-error" class="error" hidden></p>
         <button id="tournament-view-close-button" type="button">Close</button>
     </dialog>

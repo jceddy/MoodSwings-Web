@@ -1082,6 +1082,19 @@ function canSpectateGame(GameService $games, FriendshipService $friendships, int
     return false;
 }
 
+// Tournament spectator mode (issue #238): a game only has a "cast"
+// permission at all if it's actually a tournament match in the first
+// place (GameService::tournamentIdForGame()), and even then only for
+// whoever that tournament's creator has trusted with
+// TournamentService::hasCastAccess() -- deliberately unrelated to
+// canSpectateGame() above (friendship/spectate_code never grant this).
+function canCastTournamentGame(GameService $games, TournamentService $tournaments, int $gameId, int $userId): bool
+{
+    $tournamentId = $games->tournamentIdForGame($gameId);
+
+    return $tournamentId !== null && $tournaments->hasCastAccess($tournamentId, $userId);
+}
+
 // Practice bots (issue #140): the New Game dialog's own bot picker, a
 // small fixed roster (migration 0090) rather than anything scoped to the
 // caller specifically -- every authenticated user sees the same list, the
@@ -1616,6 +1629,66 @@ if ($path === '/tournaments/decline-invite' && $method === 'POST') {
     }
 }
 
+// Tournament spectator mode (issue #238): the creator grants a user
+// (a dedicated caster, not necessarily a participant) live, hands-revealed
+// viewing of this tournament's matches. See TournamentService::grantCastAccess().
+if ($path === '/tournaments/cast-grants/add' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $grantee = $tournaments->grantCastAccess(
+            (int) ($body['tournament_id'] ?? 0),
+            (int) $currentUser['id'],
+            trim((string) ($body['username'] ?? '')),
+        );
+        respond(201, ['status' => 'ok', 'user' => $grantee]);
+    } catch (TournamentNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAuthorizedForTournamentException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (TournamentStateException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+// Tournament spectator mode (issue #238): the creator revokes a previously granted caster's access.
+if ($path === '/tournaments/cast-grants/remove' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $tournaments->revokeCastAccess((int) ($body['tournament_id'] ?? 0), (int) $currentUser['id'], (int) ($body['user_id'] ?? 0));
+        respond(200, ['status' => 'ok']);
+    } catch (TournamentNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAuthorizedForTournamentException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+// Tournament spectator mode (issue #238): the creator's own roster of everyone they've granted cast access to.
+if ($path === '/tournaments/cast-grants' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $tournamentId = (int) ($_GET['tournament_id'] ?? 0);
+
+    try {
+        $grants = $tournaments->listCastGrants($tournamentId, (int) $currentUser['id']);
+        respond(200, [
+            'status' => 'ok',
+            'grants' => array_map(static fn (array $grant): array => [
+                'user_id' => (int) $grant['user_id'],
+                'username' => $grant['username'],
+                'granted_at' => $grant['created_at'],
+            ], $grants),
+        ]);
+    } catch (TournamentNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAuthorizedForTournamentException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
 if ($path === '/tournaments/join' && $method === 'POST') {
     $currentUser = requireAuth($auth);
     $body = requestBody();
@@ -1984,6 +2057,26 @@ if ($path === '/games/spectate/state' && $method === 'GET') {
         $state = $games->getSpectatorState($gameId);
         $achievements->onGameSpectated((int) $currentUser['id']);
         respond(200, ['status' => 'ok', ...$state]);
+    } catch (GameStateException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+// Tournament spectator mode (issue #238): the trusted-caster equivalent
+// of GET /games/spectate/state -- reveals hands/pending-decision
+// internals even while the match is still in_progress, gated behind
+// canCastTournamentGame() rather than canSpectateGame()'s much looser
+// friendship/code check. See GameService::getTournamentCastState().
+if ($path === '/games/tournament-cast/state' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $gameId = (int) ($_GET['game_id'] ?? 0);
+
+    if (!canCastTournamentGame($games, $tournaments, $gameId, (int) $currentUser['id'])) {
+        respond(403, ['status' => 'error', 'message' => 'You are not authorized to cast this tournament match.']);
+    }
+
+    try {
+        respond(200, ['status' => 'ok', ...$games->getTournamentCastState($gameId)]);
     } catch (GameStateException $e) {
         respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
     }
