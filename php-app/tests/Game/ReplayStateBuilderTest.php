@@ -431,6 +431,49 @@ final class ReplayStateBuilderTest extends TestCase
         self::assertStringContainsString('Anger', $afterAngerImport['steps'][0]['description']);
     }
 
+    /**
+     * The exported-JSON sibling of GameServiceIntegrationTest::
+     * testReplayStateAsOfIncludesTimeoutAndSynchronousModeFieldsGameJsNeeds()
+     * -- same reported bug ("Watch Replay" broken for every game), same
+     * fields, just via replayFromExport() instead of a live $gameId.
+     */
+    public function testReplayFromExportIncludesTimeoutAndSynchronousModeFieldsGameJsNeeds(): void
+    {
+        $u1 = $this->insertUser('replayexporttimeout1');
+        $u2 = $this->insertUser('replayexporttimeout2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed, timeout_minutes, timeout_action, total_time_limit_minutes, synchronous_mode, default_selections_mode)
+             VALUES ('standard', 'in_progress', :created_by, 3, 30, 'resign', 60, 1, 1)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameCard($gameId, 3, 'hand', $p1);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+        $this->markCompleted($gameId);
+
+        $export = $this->games->exportGameData($gameId, $p1);
+        $import = $this->games->replayFromExport($export, 0);
+        $snapshot = $import['snapshot'];
+
+        self::assertSame(30, $snapshot['game']['timeout_minutes']);
+        self::assertSame('resign', $snapshot['game']['timeout_action']);
+        self::assertNull($snapshot['game']['action_timeout_warning']);
+        self::assertSame(60, $snapshot['game']['total_time_limit_minutes']);
+        self::assertTrue($snapshot['game']['synchronous_mode']);
+        self::assertTrue($snapshot['game']['default_selections_mode']);
+        self::assertNull($snapshot['bot_thinking']);
+
+        $p1Snapshot = array_values(array_filter($snapshot['players'], static fn (array $p): bool => $p['game_player_id'] === $p1))[0];
+        self::assertArrayHasKey('active_seconds_used', $p1Snapshot);
+        self::assertArrayHasKey('ready', $p1Snapshot);
+        self::assertArrayHasKey('timeout_extensions_banked', $p1Snapshot);
+        self::assertArrayHasKey('highest_achievement_tier', $p1Snapshot);
+    }
+
     public function testStateAsOfRejectsANonCompletedGame(): void
     {
         $u1 = $this->insertUser('replayreject1');

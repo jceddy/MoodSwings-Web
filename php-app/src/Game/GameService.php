@@ -18052,7 +18052,7 @@ final class GameService
         $pdo = Connection::get();
 
         $playersStmt = $pdo->prepare(
-            'SELECT gp.id, gp.user_id, gp.seat_order, gp.team_id, gp.custom_deck_name, gp.custom_deck_card_ids, gp.resigned_at, u.username, u.is_bot FROM game_players gp
+            'SELECT gp.id, gp.user_id, gp.seat_order, gp.team_id, gp.custom_deck_name, gp.custom_deck_card_ids, gp.resigned_at, gp.active_seconds_used, gp.ready_at, gp.timeout_extensions_banked, u.username, u.is_bot FROM game_players gp
              JOIN users u ON u.id = gp.user_id
              WHERE gp.game_id = :game_id ORDER BY gp.seat_order ASC'
         );
@@ -18060,6 +18060,14 @@ final class GameService
         $playerRows = $playersStmt->fetchAll();
 
         $names = $this->cardNamesFor($gameId);
+
+        // Trophy icon parity with the live board (see GameService::
+        // buildGameState()'s own identical batching) -- a completed
+        // game's replay still benefits from showing each player's real,
+        // current highest tier, same as spectating it live would.
+        $highestAchievementTiers = $this->achievements->highestUnlockedTiersFor(
+            array_map(static fn (array $row): int => (int) $row['user_id'], $playerRows)
+        );
 
         $winnerUsernames = [];
         $players = [];
@@ -18080,6 +18088,15 @@ final class GameService
                 'custom_deck_name' => $row['custom_deck_name'],
                 'deck_submitted' => $row['custom_deck_card_ids'] !== null,
                 'resigned' => $row['resigned_at'] !== null,
+                // These four mirror buildGameState()'s own identical
+                // fields (see its own docblocks) -- a completed game's
+                // final active_seconds_used/timeout_extensions_banked are
+                // still meaningful historical facts, and ready/'s own
+                // "always present" treatment there applies here too.
+                'active_seconds_used' => (int) $row['active_seconds_used'],
+                'ready' => $row['ready_at'] !== null,
+                'timeout_extensions_banked' => (int) $row['timeout_extensions_banked'],
+                'highest_achievement_tier' => $highestAchievementTiers[(int) $row['user_id']] ?? null,
                 'hand' => array_map(
                     fn (int $cardId) => $this->serializeCard($state, $cardId, $names, null),
                     $state->hand((int) $row['id']),
@@ -18134,6 +18151,34 @@ final class GameService
                 'winner_usernames' => $winnerUsernames,
                 'winner_team_id' => $game['winner_team_id'] !== null ? (int) $game['winner_team_id'] : null,
                 'match_game_number' => $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null,
+                // Reported live: "Watch Replay" crashed with an empty
+                // Players list and stale round-status/in-play sections
+                // for every game -- these fields were simply never added
+                // here as buildGameState() grew them for later features
+                // (issue #85's own timeouts/time-limit, then synchronous
+                // mode), so game.js read them as undefined. Most just
+                // printed "undefined" in the board title, but
+                // action_timeout_warning is read unconditionally
+                // (state.game.action_timeout_warning.game_player_id, no
+                // null-safety) -- undefined.game_player_id threw, and
+                // that uncaught exception aborted renderBoard() before it
+                // ever reached the Players list or in-play rendering.
+                // Copied straight off the same $game row buildGameState()
+                // itself reads (see its own docblocks for each field);
+                // action_timeout_warning/the synchronous-mode deadlines
+                // are always null here rather than actually computed --
+                // a completed game's replay has no "current" idle player
+                // or live action clock to warn about.
+                'timeout_minutes' => $game['timeout_minutes'] !== null ? (int) $game['timeout_minutes'] : null,
+                'timeout_action' => $game['timeout_action'],
+                'action_timeout_warning' => null,
+                'total_time_limit_minutes' => $game['total_time_limit_minutes'] !== null ? (int) $game['total_time_limit_minutes'] : null,
+                'synchronous_mode' => (bool) $game['synchronous_mode'],
+                'default_selections_mode' => (bool) $game['default_selections_mode'],
+                'action_deadline_at' => null,
+                'action_deadline_game_player_id' => null,
+                'draft_pick_deadline_at' => null,
+                'draft_pick_deadline_usernames' => [],
             ],
             'players' => $players,
             'you' => ['game_player_id' => null],
@@ -18200,6 +18245,12 @@ final class GameService
             'grid_draft' => null,
             'rotisserie_draft' => null,
             'tiered_rotisserie_draft' => null,
+            // Rounds out live parity with buildGameState()'s own
+            // 'bot_thinking' key (see botThinkingStateFor()) -- always
+            // null here, never actually computed: a completed game's
+            // replay has no live Tactical Bot search in flight to report
+            // on.
+            'bot_thinking' => null,
         ];
     }
 
@@ -18366,6 +18417,15 @@ final class GameService
         $names = $this->exportCardNames($export['game_cards']);
         [$displayNames, $isBot] = $this->exportPlayerNames($playerRows);
 
+        // Best-effort, same "genuine hit only when the export happens to
+        // reference a user id this server also has" convention as
+        // exportPlayerNames()'s own username lookup just above -- a
+        // coincidental match shows that local user's real tier, same as
+        // it already would for their real username.
+        $highestAchievementTiers = $this->achievements->highestUnlockedTiersFor(
+            array_map(static fn (array $row): int => (int) $row['user_id'], $playerRows)
+        );
+
         $winnerUsernames = [];
         $players = [];
         foreach ($playerRows as $row) {
@@ -18385,6 +18445,10 @@ final class GameService
                 'custom_deck_name' => $row['custom_deck_name'],
                 'deck_submitted' => $row['custom_deck_card_ids'] !== null,
                 'resigned' => $row['resigned_at'] !== null,
+                'active_seconds_used' => (int) $row['active_seconds_used'],
+                'ready' => $row['ready_at'] !== null,
+                'timeout_extensions_banked' => (int) $row['timeout_extensions_banked'],
+                'highest_achievement_tier' => $highestAchievementTiers[(int) $row['user_id']] ?? null,
                 'hand' => array_map(
                     fn (int $cardId) => $this->serializeCard($state, $cardId, $names, null),
                     $state->hand($gamePlayerId),
@@ -18445,6 +18509,21 @@ final class GameService
                 'winner_usernames' => $winnerUsernames,
                 'winner_team_id' => $game['winner_team_id'] !== null ? (int) $game['winner_team_id'] : null,
                 'match_game_number' => $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null,
+                // See serializeReplaySnapshot()'s own identical fields
+                // and their docblock -- same fix, same reason, for the
+                // exported-JSON replay sibling. $game here is a full raw
+                // `games` row dump (buildGameExport()'s own 'game' =>
+                // $game), so every column read here is genuinely present.
+                'timeout_minutes' => $game['timeout_minutes'] !== null ? (int) $game['timeout_minutes'] : null,
+                'timeout_action' => $game['timeout_action'],
+                'action_timeout_warning' => null,
+                'total_time_limit_minutes' => $game['total_time_limit_minutes'] !== null ? (int) $game['total_time_limit_minutes'] : null,
+                'synchronous_mode' => (bool) $game['synchronous_mode'],
+                'default_selections_mode' => (bool) $game['default_selections_mode'],
+                'action_deadline_at' => null,
+                'action_deadline_game_player_id' => null,
+                'draft_pick_deadline_at' => null,
+                'draft_pick_deadline_usernames' => [],
             ],
             'players' => $players,
             'you' => ['game_player_id' => null],
@@ -18511,6 +18590,10 @@ final class GameService
             'grid_draft' => null,
             'rotisserie_draft' => null,
             'tiered_rotisserie_draft' => null,
+            // See serializeReplaySnapshot()'s own identical 'bot_thinking'
+            // field just above -- same reason, for the exported-JSON
+            // replay sibling.
+            'bot_thinking' => null,
         ];
     }
 
