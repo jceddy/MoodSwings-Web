@@ -423,6 +423,26 @@ final class CardChoiceSchemaTest extends TestCase
     }
 
     /**
+     * Reported live: "Shock should be able to target itself." Shock's own
+     * printed text ("choose up to two players, for each chosen player put
+     * one of their moods with a value of 3 or less into the discard pile")
+     * has no "other than this one" exclusion, and Shock's own printed
+     * value (2) always qualifies -- the exact same shape as Hostility's
+     * own second stage just above, just reached straight from hand
+     * instead of behind an optional first-stage cost. ShockEffect itself
+     * already accepted the card's own id as a target (nothing in
+     * ShockEffect::afterPlaying() checks $targetCardId against $cardId),
+     * but this schema entry was missing includes_self, so neither the
+     * game.js UI nor the bot ever actually offered it as a candidate.
+     */
+    public function testShockIncludesSelfAsATarget(): void
+    {
+        $fields = CardChoiceSchema::forEffectKey('shock');
+
+        self::assertTrue($fields[0]['includes_self']);
+    }
+
+    /**
      * Reported live: a player chose Contempt's own target_mood_id but
      * never touched its separate, optional 'mode' field -- the play
      * submitted as legal, but ContemptEffect::afterPlaying() returns

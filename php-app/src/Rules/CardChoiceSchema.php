@@ -75,7 +75,12 @@ namespace MoodSwings\Rules;
  *                           // and Hostility's own second stage ("put up to two moods, each with a value of 3
  *                           // or less, into the discard pile" has no "other than this one" clause the way
  *                           // Worry's near-identical wording does, and Hostility's own flat value of 3
- *                           // happens to qualify) are the first such cards. Set true to have fieldOptions()
+ *                           // happens to qualify), and Shock (reported live: "Shock should be able to target
+ *                           // itself" -- "choose up to two players, for each chosen player put one of their
+ *                           // moods with a value of 3 or less into the discard pile," the exact same shape and
+ *                           // filter as Hostility's own second stage above, just reached straight from hand
+ *                           // instead of behind an optional first-stage cost, and Shock's own printed value of
+ *                           // 2 always qualifies) are the first such cards. Set true to have fieldOptions()
  *                           // synthesize a self entry directly from the card being played (labeled " [self]"
  *                           // so it isn't mistaken for some other in-play copy of the same card -- a duel
  *                           // deck, or two of the same custom card, can each be played independently in the
@@ -266,7 +271,7 @@ final class CardChoiceSchema
             ['key' => 'value', 'type' => 'value', 'required' => true, 'min' => 0, 'max' => 3, 'label' => 'Value to put into the discard pile (every mood showing it)'],
         ],
         'shock' => [
-            ['key' => 'target_mood_ids', 'type' => 'mood', 'scope' => 'any', 'multi' => true, 'required' => false, 'label' => 'Moods to put into the discard pile (value 3 or less, up to 2, one per player)', 'filter' => ['max_value' => 3], 'count' => ['max' => 2], 'constraint' => ['type' => 'distinct_owners']],
+            ['key' => 'target_mood_ids', 'type' => 'mood', 'scope' => 'any', 'multi' => true, 'required' => false, 'label' => 'Moods to put into the discard pile (value 3 or less, up to 2, one per player)', 'filter' => ['max_value' => 3], 'count' => ['max' => 2], 'constraint' => ['type' => 'distinct_owners'], 'includes_self' => true],
         ],
         'bravado' => [
             ['key' => 'discard_mood_id', 'type' => 'mood', 'scope' => 'own', 'required' => false, 'label' => 'Another of your moods to put into the discard pile (unlocks an extra play)'],

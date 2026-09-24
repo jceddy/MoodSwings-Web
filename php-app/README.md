@@ -7259,6 +7259,21 @@ stale "it's your turn" for a turn already taken.
 `friend_request`), so clearing one game's queued reminder can never touch
 a different game's, or a friend request's.
 
+The above only ever clears the *acting* player's own row -- a game
+ending doesn't always mean the player it would have reminded ever acted
+themselves (an opponent's resignation, or the game simply going stale
+and getting force-completed). `NotificationService::clearQueuedForFinishedGame()`
+(`QueuedNotificationRepository::clearForGame()`) is the game-wide
+counterpart: it deletes *every* seated player's queued row for that
+game's scope at once, called from `GameService::recordGameCompletionStats()`
+(every ordinary win/loss/resignation completion) and separately from
+`expireStaleActiveGames()` (which never calls `recordGameCompletionStats()`
+at all -- see that method's own docblock -- but is exactly the case most
+likely to still have a stale reminder queued, since that's presumably why
+the game went stale in the first place). Without this, a "waiting on you"
+reminder queued for a player who never got to act could otherwise sit
+around and eventually fire for a game that's already over.
+
 **Opting out of the cooldown entirely**: a `disable_cooldown` preference
 (migration `0051`, defaulting `false` -- the cooldown stays on for every
 existing user until they explicitly turn it off) lets a player receive
@@ -12295,6 +12310,26 @@ choices before that card has entered play, so it's never present in
 `moodsInPlay()` for this loop to encounter regardless. Left as-is, with an
 updated docblock explaining why -- there was no reachable bot-side gap to
 fix here, only the schema entry.
+
+### Shock can target itself
+
+Reported live: "Shock should be able to target itself." The same
+schema-metadata gap as Conviction's own fix above, just for a card whose
+own choice field also carries a value filter: Shock's printed text
+("choose up to two players, for each chosen player put one of their
+moods with a value of 3 or less into the discard pile") has no "other
+than this one" exclusion the way Worry's near-identical wording does,
+and Shock's own printed value (2) always qualifies -- the exact same
+shape as Hostility's own second stage, just reached straight from hand
+instead of behind an optional first-stage cost. `ShockEffect::afterPlaying()`
+never checked a target against the card's own id either, so the only
+real gap was `CardChoiceSchema`'s `'shock'` entry missing `'includes_self'
+=> true`. `game.js`'s `fieldOptions()` already concatenates the
+synthesized self-option ahead of whatever candidate list it builds --
+including the server-computed `candidate_card_ids` a value-filtered
+field like Shock's gets (see `GameService::withSimulatedMoodCandidates()`'s
+own docblock) -- so adding the flag was the entire fix, no game.js or
+GameService change needed.
 
 ### Lobby row highlight didn't account for a pending decision on someone else
 

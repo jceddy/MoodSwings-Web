@@ -2565,6 +2565,38 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame('This game was automatically ended due to inactivity', $lastEntry['description']);
     }
 
+    // NotificationService::clearQueuedForFinishedGame() -- a stale game is
+    // exactly the case most likely to still have a "waiting on you"
+    // reminder sitting in the queue (that's presumably why nobody ever
+    // acted on it), so expireStaleActiveGames() needs to clear it too,
+    // even though this path never calls recordGameCompletionStats() at
+    // all (no winner, no stats, no "game finished" notification -- see
+    // that method's own docblock).
+    public function testExpireStaleActiveGamesClearsAnyQueuedNotificationForThatGame(): void
+    {
+        $creator = $this->insertUser('expirequeue-alice');
+        $bob = $this->insertUser('expirequeue-bob');
+
+        $games = $this->gamesWithNotificationsWired();
+        $staleGameId = $games->createGame($creator, [$creator, $bob]);
+        $games->startGame($staleGameId);
+        $this->markGameStale($staleGameId, 8);
+
+        $queuedNotifications = new QueuedNotificationRepository();
+        $queuedNotifications->enqueue($creator, NotificationScope::forGame($staleGameId), 'notify_your_turn', [
+            'title' => "It's your turn", 'body' => 'stale', 'url' => "/game/?id={$staleGameId}", 'tag' => "game-{$staleGameId}-turn",
+        ]);
+
+        $games->expireStaleActiveGames();
+
+        $scope = NotificationScope::forGame($staleGameId);
+        $remaining = array_filter(
+            $queuedNotifications->all(),
+            static fn (array $row) => $row['user_id'] === $creator && $row['scope'] === $scope
+        );
+        self::assertSame([], $remaining);
+    }
+
     /**
      * The full picture for issue #84: a game force-completed by
      * expireStaleActiveGames() immediately moves to Past games (not the
@@ -5571,6 +5603,53 @@ final class GameServiceIntegrationTest extends TestCase
         $games->playMood($gameId, $p1, $apathyId, []);
 
         self::assertSame([], array_filter($queuedNotifications->all(), static fn (array $row) => $row['user_id'] === $u1));
+    }
+
+    // NotificationService::clearQueuedForFinishedGame() -- unlike the
+    // acting-player-only clear above, a game finishing clears EVERY
+    // seated player's queued reminder for it, including a player who
+    // never acted at all (here, the opponent of whoever resigned) -- a
+    // resignation is exactly the case where the other player has no
+    // action of their own to clear their own row, so without this the
+    // stale reminder would sit in the queue until the next cron flush
+    // fires it for a game that's already over.
+    public function testResignGameClearsQueuedNotificationsForBothPlayersNotJustTheResigningOne(): void
+    {
+        $u1 = $this->insertUser('resign-clear-queue-p1');
+        $u2 = $this->insertUser('resign-clear-queue-p2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('duel', 'in_progress', :created_by, 2)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $queuedNotifications = new QueuedNotificationRepository();
+        $queuedNotifications->enqueue($u1, NotificationScope::forGame($gameId), 'notify_your_turn', [
+            'title' => "It's your turn", 'body' => 'stale', 'url' => "/game/?id={$gameId}", 'tag' => "game-{$gameId}-turn",
+        ]);
+        $queuedNotifications->enqueue($u2, NotificationScope::forGame($gameId), 'notify_your_turn', [
+            'title' => "It's your turn", 'body' => 'stale', 'url' => "/game/?id={$gameId}", 'tag' => "game-{$gameId}-turn",
+        ]);
+
+        $games = $this->gamesWithNotificationsWired();
+        $games->resignGame($gameId, $p1);
+
+        // Filtered on scope as well as user_id, not just user_id alone --
+        // this table isn't truncated between tests in this file (unlike
+        // NotificationsIntegrationTest), so a leftover row from an
+        // unrelated earlier test could otherwise coincidentally share one
+        // of these two freshly-created users' ids.
+        $scope = NotificationScope::forGame($gameId);
+        $remaining = array_filter(
+            $queuedNotifications->all(),
+            static fn (array $row) => in_array($row['user_id'], [$u1, $u2], true) && $row['scope'] === $scope
+        );
+        self::assertSame([], $remaining);
     }
 
     public function testFullRoundCycleAssignsHurtFeelingsDrawsForLosersAndCompletesGame(): void

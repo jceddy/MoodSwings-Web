@@ -613,6 +613,31 @@ final class NotificationsIntegrationTest extends TestCase
         self::assertSame([], array_filter($this->queuedNotifications->all(), static fn (array $row) => $row['user_id'] === $userId));
     }
 
+    // GameService::recordGameCompletionStats()/expireStaleActiveGames()'s
+    // own passthrough -- unlike clearQueuedForGame() above, this clears
+    // EVERY seated player's queued row for the game at once, not just one
+    // user's, since the game itself is now over for all of them.
+    public function testClearQueuedForFinishedGameClearsEveryPlayersRowForThatGameOnly(): void
+    {
+        $alice = $this->insertUser('finished-game-alice');
+        $bob = $this->insertUser('finished-game-bob');
+        $this->queuedNotifications->enqueue($alice, NotificationScope::forGame(7), 'notify_your_turn', [
+            'title' => "It's your turn", 'body' => 'game 7', 'url' => '/game/?id=7', 'tag' => 'game-7-turn',
+        ]);
+        $this->queuedNotifications->enqueue($bob, NotificationScope::forGame(7), 'notify_your_turn', [
+            'title' => "It's your turn", 'body' => 'game 7', 'url' => '/game/?id=7', 'tag' => 'game-7-turn',
+        ]);
+        $this->queuedNotifications->enqueue($alice, NotificationScope::forGame(8), 'notify_your_turn', [
+            'title' => "It's your turn", 'body' => 'game 8', 'url' => '/game/?id=8', 'tag' => 'game-8-turn',
+        ]);
+
+        $this->service()->clearQueuedForFinishedGame(7);
+
+        $remaining = $this->queuedNotifications->all();
+        self::assertCount(1, $remaining);
+        self::assertSame('game 8', $remaining[0]['body']);
+    }
+
     public function testClearQueuedFriendRequestOnlyClearsTheFriendRequestScope(): void
     {
         $userId = $this->insertUser('clear-friend-request');
