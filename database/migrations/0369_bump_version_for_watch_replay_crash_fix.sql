@@ -1,0 +1,15 @@
+-- Reported live: "Watch Replay" seems to be broken for any game -- the
+-- board title showed literal "undefined" text, and the Players list
+-- crashed empty with stale round-status/in-play content behind it.
+-- serializeReplaySnapshot()/serializeExportReplaySnapshot() (GameService.php)
+-- had never been updated to include several game/players[] fields
+-- buildGameState() grew for later features (issue #85's own timeouts/
+-- time-limit, then synchronous mode, then the achievement-tier trophy
+-- icon) -- most just printed as "undefined" text, but game.js's own
+-- unconditional `state.game.action_timeout_warning.game_player_id` read
+-- threw on the missing field, aborting the rest of renderBoard() before
+-- it ever reached the Players list. See php-app/README.md's own "Watch
+-- replay" section for the full write-up. No schema change -- just the
+-- version bump MaintenanceGate needs to see this deploy as caught up
+-- with the code.
+UPDATE schema_version SET version = '1.51.12' WHERE id = 1;
