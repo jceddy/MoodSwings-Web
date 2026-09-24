@@ -12,7 +12,12 @@ use MoodSwings\Rules\PlayerChoices;
 /**
  * Shock: "After playing this mood, choose up to two players. For each
  * chosen player, put one of their moods with a value of 3 or less into
- * the discard pile."
+ * the discard pile." Reported live: "Shock should be able to target
+ * itself" -- the card text has no exclusion of its own controller, and
+ * Shock's own printed value (2) always qualifies, so nothing here needs
+ * to check $targetCardId against $cardId; the frontend's own
+ * CardChoiceSchema entry (`includes_self` => true) was the only thing
+ * missing.
  */
 final class ShockEffect extends AbstractMoodEffect
 {

@@ -1397,6 +1397,26 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->playMood($state, 1, 101, new PlayerChoices(['target_mood_ids' => [9]]));
     }
 
+    /**
+     * Reported live: "Shock should be able to target itself." Shock's own
+     * printed text has no "other than this one" exclusion, and its own
+     * printed value (2) always qualifies for its own "value 3 or less"
+     * filter -- MoodPlayService::playMood() moves a card into play before
+     * resolving its own effect, so ShockEffect::afterPlaying() sees no
+     * reason to reject the card's own id as one of its (up to two)
+     * targets.
+     */
+    public function testShockCanTargetItself(): void
+    {
+        $state = $this->boardState(hands: [1 => [101]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 101, new PlayerChoices(['target_mood_ids' => [101]]));
+
+        self::assertFalse($state->isInPlay(101));
+        self::assertSame([101], $state->discardPile());
+    }
+
     public function testFuryPausesForEachPlayersOwnChoiceThenDiscardsTheChosenHighestValueMood(): void
     {
         $state = $this->boardState(hands: [1 => [91, 3], 2 => [9], 3 => [7]]);
