@@ -12311,6 +12311,26 @@ choices before that card has entered play, so it's never present in
 updated docblock explaining why -- there was no reachable bot-side gap to
 fix here, only the schema entry.
 
+### Shock can target itself
+
+Reported live: "Shock should be able to target itself." The same
+schema-metadata gap as Conviction's own fix above, just for a card whose
+own choice field also carries a value filter: Shock's printed text
+("choose up to two players, for each chosen player put one of their
+moods with a value of 3 or less into the discard pile") has no "other
+than this one" exclusion the way Worry's near-identical wording does,
+and Shock's own printed value (2) always qualifies -- the exact same
+shape as Hostility's own second stage, just reached straight from hand
+instead of behind an optional first-stage cost. `ShockEffect::afterPlaying()`
+never checked a target against the card's own id either, so the only
+real gap was `CardChoiceSchema`'s `'shock'` entry missing `'includes_self'
+=> true`. `game.js`'s `fieldOptions()` already concatenates the
+synthesized self-option ahead of whatever candidate list it builds --
+including the server-computed `candidate_card_ids` a value-filtered
+field like Shock's gets (see `GameService::withSimulatedMoodCandidates()`'s
+own docblock) -- so adding the flag was the entire fix, no game.js or
+GameService change needed.
+
 ### Lobby row highlight didn't account for a pending decision on someone else
 
 Reported live: a game showed the your-turn (`lobby-row--your-turn`) green
