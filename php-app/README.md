@@ -12584,6 +12584,42 @@ are kept in sync by hand with `achievements.css`'s own
 `.achievement-tier-*` badge colors, since the game board doesn't load
 that stylesheet.
 
+**Backfill for pre-existing players** (`bin/backfill_win_count_achievements.php`):
+reported live, a returning player asked whether the win/loss/game-count
+achievements could reflect their real history instead of starting from
+zero the moment achievements shipped (0357). `AchievementService::
+backfillWinCountProgressFromLifetimeStats()` covers the handful that can
+actually be recovered -- Getting the Hang of It/Seasoned Player/Veteran/
+Legend (`user_lifetime_stats.game_wins`), Regular/No Days Off
+(`game_wins + game_losses`), Good Sport (`game_losses`), Social Butterfly
+(a live `FriendshipService::listFriends()` count), and Deck Curator (a
+live `UserDecklistRepository::listForUser()` count) -- since
+`user_lifetime_stats` (migration 0042) and the friendships/decklists
+tables all predate achievements and were never pruned. Every other
+count-based achievement (per-format wins, per-deck-type wins,
+color-majority wins, Mythic Hunter, Practice Makes Perfect, Grand Slam,
+Rematch, Marathon Session, Default Setting) is **not** backfillable: each
+depends on facts that only ever lived on individual `games` rows, and
+`GameService::deleteStaleCompletedGames()` permanently deletes a
+completed game 7 days after it finishes -- by the time achievements
+shipped and stayed live across many later deploys, every game still in
+the table had already been counted by the live per-completion hooks, so
+there's no surviving pre-achievement history left to recover for those.
+`setProgressLevel()`'s own `GREATEST()`-based merge makes the backfill
+safe to run more than once, and safe to run against every registered
+user unconditionally rather than needing to identify which accounts
+predate achievements: it can only ever raise a covered achievement's
+progress toward its target, never lower whatever's already been
+live-tracked, so it's a harmless no-op for anyone who started playing
+after achievements shipped. It's also deliberately silent -- the script
+constructs `AchievementService` with no `NotificationService`, so a
+returning player retroactively qualifying for several achievements at
+once doesn't get a wall of "Achievement unlocked!" toasts/pushes for
+something that may have happened years ago; their Achievements page
+just shows the correct state next time they open it. A one-off
+maintenance script, not a cron job -- meant to be run once by hand after
+deploying.
+
 Known simplifications, worth revisiting if they ever matter enough:
 color-majority/Rainbow Connection/Common Touch/David vs. Goliath read
 final-board cards' *printed* color/base_value/rarity straight off the
