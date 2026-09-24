@@ -1099,6 +1099,48 @@ final class AchievementService
     }
 
     // ---------------------------------------------------------------
+    // One-time backfill (bin/backfill_win_count_achievements.php)
+    // ---------------------------------------------------------------
+
+    /**
+     * Reported live: a returning player wanted the win/loss/game-count
+     * achievements that predate the achievements system itself (migration
+     * 0357) to reflect their real history instead of starting from zero
+     * the moment achievements shipped. Every value passed in here is a
+     * CURRENT, ALL-TIME total already computed elsewhere
+     * (GameService::lifetimeStatsFor(), FriendshipService::listFriends(),
+     * UserDecklistRepository::listForUser()) -- see
+     * bin/backfill_win_count_achievements.php's own docblock for why only
+     * these specific achievements (and not the many other count-based
+     * ones) are backfillable at all, and why this is safe to run
+     * unconditionally against every user, more than once.
+     *
+     * setProgressLevel()'s own GREATEST()-based merge is exactly what
+     * makes this safe: it can only ever raise an achievement's progress
+     * toward its target, never lower whatever's already been live-tracked
+     * since launch, and it's a harmless no-op for anyone whose
+     * achievements-era progress already equals their all-time total (i.e.
+     * everyone who started playing after achievements shipped).
+     */
+    public function backfillWinCountProgressFromLifetimeStats(
+        int $userId,
+        int $gameWins,
+        int $gameLosses,
+        int $acceptedFriendCount,
+        int $savedDecklistCount,
+    ): void {
+        foreach (['getting-the-hang-of-it', 'seasoned-player', 'veteran', 'legend'] as $slug) {
+            $this->setProgressLevel($userId, $slug, $gameWins);
+        }
+        foreach (['regular', 'no-days-off'] as $slug) {
+            $this->setProgressLevel($userId, $slug, $gameWins + $gameLosses);
+        }
+        $this->setProgressLevel($userId, 'good-sport', $gameLosses);
+        $this->setProgressLevel($userId, 'social-butterfly', $acceptedFriendCount);
+        $this->setProgressLevel($userId, 'deck-curator', $savedDecklistCount);
+    }
+
+    // ---------------------------------------------------------------
     // Lookup
     // ---------------------------------------------------------------
 

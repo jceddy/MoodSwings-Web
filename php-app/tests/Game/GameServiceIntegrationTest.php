@@ -5240,6 +5240,61 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * Reported live: "Watch Replay" was broken for every game -- the board
+     * title showed literal "undefined" text, and the Players list crashed
+     * empty with stale round-status/in-play sections behind it.
+     * serializeReplaySnapshot() had never been updated to include several
+     * fields buildGameState() grew for later features (issue #85's own
+     * timeouts/time-limit, then synchronous mode), so game.js read them
+     * as undefined -- and game.js's own unconditional
+     * `state.game.action_timeout_warning.game_player_id` read (no
+     * null-safety) threw on the missing field, aborting the rest of
+     * renderBoard(). This only needs to confirm the snapshot's own shape
+     * now matches what game.js needs -- the actual crash was purely
+     * client-side JavaScript, invisible to any PHP-level test.
+     */
+    public function testReplayStateAsOfIncludesTimeoutAndSynchronousModeFieldsGameJsNeeds(): void
+    {
+        $u1 = $this->insertUser('replaytimeoutfields1');
+        $u2 = $this->insertUser('replaytimeoutfields2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed, timeout_minutes, timeout_action, total_time_limit_minutes, synchronous_mode, default_selections_mode)
+             VALUES ('standard', 'in_progress', :created_by, 3, 30, 'resign', 60, 1, 1)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameCard($gameId, 3, 'hand', $p1);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->pdo->prepare("UPDATE games SET status = 'completed', completed_at = NOW() WHERE id = :id")
+            ->execute(['id' => $gameId]);
+
+        $snapshot = $this->games->replayStateAsOf($gameId, 0);
+
+        self::assertSame(30, $snapshot['game']['timeout_minutes']);
+        self::assertSame('resign', $snapshot['game']['timeout_action']);
+        self::assertNull($snapshot['game']['action_timeout_warning'], 'never computed for a completed game\'s replay, but must be present (not missing) -- game.js reads it unconditionally');
+        self::assertSame(60, $snapshot['game']['total_time_limit_minutes']);
+        self::assertTrue($snapshot['game']['synchronous_mode']);
+        self::assertTrue($snapshot['game']['default_selections_mode']);
+        self::assertNull($snapshot['game']['action_deadline_at']);
+        self::assertNull($snapshot['game']['action_deadline_game_player_id']);
+        self::assertNull($snapshot['game']['draft_pick_deadline_at']);
+        self::assertSame([], $snapshot['game']['draft_pick_deadline_usernames']);
+        self::assertNull($snapshot['bot_thinking']);
+
+        $p1Snapshot = array_values(array_filter($snapshot['players'], fn (array $p) => $p['game_player_id'] === $p1))[0];
+        self::assertArrayHasKey('active_seconds_used', $p1Snapshot);
+        self::assertArrayHasKey('ready', $p1Snapshot);
+        self::assertArrayHasKey('timeout_extensions_banked', $p1Snapshot);
+        self::assertArrayHasKey('highest_achievement_tier', $p1Snapshot);
+    }
+
+    /**
      * Every seated player sees the exact same full log, the same way
      * recentEvents() itself already applies no per-viewer filtering --
      * confirmed here against a Malice cascade specifically (see

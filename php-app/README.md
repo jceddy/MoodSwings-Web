@@ -6962,6 +6962,49 @@ only the final confirmed choice is logged).
 The frontend reuses the board renderer entirely -- see "Watch replay" in
 `web-static/README.md` for the step-control UI.
 
+**Reported live: "Watch Replay" seems to be broken for any game"** -- the
+board title showed literal `undefined` text (`"undefined-minute total
+time limit, undefined-minute timeout (undefined)"`), and the Players
+list rendered completely empty with stale round-status/in-play content
+left behind it. Root cause: `serializeReplaySnapshot()` was written for
+issue #240, long before several later features -- issue #85's own
+turn/decision timeouts and full-game time limit, then synchronous mode,
+then the achievement-tier trophy icon -- each of which grew new
+top-level `game`/`players[]` fields on `buildGameState()`'s own return
+shape that nobody ever mirrored into the replay snapshot. Most of the
+missing fields (`timeout_minutes`, `timeout_action`,
+`total_time_limit_minutes`) just printed as literal `"undefined"` text
+in the board title (annoying, but harmless) -- reading a genuinely
+absent JS property doesn't throw, it just prints "undefined" wherever
+it's concatenated into a string. But `action_timeout_warning` is read
+unconditionally in `renderBoard()`
+(`state.game.action_timeout_warning.game_player_id`, no null-safety,
+since the live path always guarantees it's at least `null`) -- reading
+`.game_player_id` off a genuinely `undefined` value throws, and that
+uncaught exception aborted the rest of `renderBoard()` immediately,
+before it ever reached the Players list (left empty by
+`renderList()`'s own `innerHTML = ''` running before the throw) or
+`renderInPlay()` (left showing whatever the board displayed the last
+time it rendered successfully). Nothing showed up in the PHP error log
+because there was nothing to log server-side: `GET /games/replay/state`
+returned a perfectly valid `200` with an incomplete payload, and the
+crash was 100% client-side JavaScript. Fixed by copying
+`timeout_minutes`/`timeout_action`/`total_time_limit_minutes`/
+`synchronous_mode`/`default_selections_mode` straight off the same
+`$game` row already fetched, adding `action_timeout_warning`/
+`action_deadline_at`/`action_deadline_game_player_id`/
+`draft_pick_deadline_at`/top-level `bot_thinking` as `null` (a completed
+game's replay has no "current" idle player or live action clock to
+warn about, and no live Tactical Bot search in flight), and adding
+`active_seconds_used`/`ready`/`timeout_extensions_banked`/
+`highest_achievement_tier` to each `players[]` entry for full parity.
+The exported-JSON sibling, `serializeExportReplaySnapshot()`, had the
+identical gap and got the identical fix -- `$export['game']`/
+`$export['game_players']` are full raw table dumps
+(`GameService::exportGameData()`'s own `'game' => $game`), so every
+column this needs is already present in any export regardless of when
+it was captured.
+
 ### Replay from an exported game
 
 Reported live, debugging the Anger duplicate-in-hand-and-discard bug
@@ -12583,6 +12626,42 @@ rather than showing a neutral/empty trophy. The five tier colors
 are kept in sync by hand with `achievements.css`'s own
 `.achievement-tier-*` badge colors, since the game board doesn't load
 that stylesheet.
+
+**Backfill for pre-existing players** (`bin/backfill_win_count_achievements.php`):
+reported live, a returning player asked whether the win/loss/game-count
+achievements could reflect their real history instead of starting from
+zero the moment achievements shipped (0357). `AchievementService::
+backfillWinCountProgressFromLifetimeStats()` covers the handful that can
+actually be recovered -- Getting the Hang of It/Seasoned Player/Veteran/
+Legend (`user_lifetime_stats.game_wins`), Regular/No Days Off
+(`game_wins + game_losses`), Good Sport (`game_losses`), Social Butterfly
+(a live `FriendshipService::listFriends()` count), and Deck Curator (a
+live `UserDecklistRepository::listForUser()` count) -- since
+`user_lifetime_stats` (migration 0042) and the friendships/decklists
+tables all predate achievements and were never pruned. Every other
+count-based achievement (per-format wins, per-deck-type wins,
+color-majority wins, Mythic Hunter, Practice Makes Perfect, Grand Slam,
+Rematch, Marathon Session, Default Setting) is **not** backfillable: each
+depends on facts that only ever lived on individual `games` rows, and
+`GameService::deleteStaleCompletedGames()` permanently deletes a
+completed game 7 days after it finishes -- by the time achievements
+shipped and stayed live across many later deploys, every game still in
+the table had already been counted by the live per-completion hooks, so
+there's no surviving pre-achievement history left to recover for those.
+`setProgressLevel()`'s own `GREATEST()`-based merge makes the backfill
+safe to run more than once, and safe to run against every registered
+user unconditionally rather than needing to identify which accounts
+predate achievements: it can only ever raise a covered achievement's
+progress toward its target, never lower whatever's already been
+live-tracked, so it's a harmless no-op for anyone who started playing
+after achievements shipped. It's also deliberately silent -- the script
+constructs `AchievementService` with no `NotificationService`, so a
+returning player retroactively qualifying for several achievements at
+once doesn't get a wall of "Achievement unlocked!" toasts/pushes for
+something that may have happened years ago; their Achievements page
+just shows the correct state next time they open it. A one-off
+maintenance script, not a cron job -- meant to be run once by hand after
+deploying.
 
 Known simplifications, worth revisiting if they ever matter enough:
 color-majority/Rainbow Connection/Common Touch/David vs. Goliath read

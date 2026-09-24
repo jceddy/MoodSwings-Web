@@ -1,0 +1,16 @@
+-- Reported live: "for some of the achievements that track win counts,
+-- would it be possible to base them off your statistics page (for people
+-- who have been playing before the addition)". Adds
+-- AchievementService::backfillWinCountProgressFromLifetimeStats() and its
+-- one-off bin/backfill_win_count_achievements.php runner, which sets
+-- correct progress (and unlocks where earned) for Getting the Hang of
+-- It/Seasoned Player/Veteran/Legend/Regular/No Days Off/Good Sport/Social
+-- Butterfly/Deck Curator from user_lifetime_stats and the live
+-- friendships/decklists tables -- see php-app/README.md's own
+-- "Backfill for pre-existing players" section for exactly which
+-- achievements this covers and why the rest of the count-based catalog
+-- isn't recoverable. No schema change, and the script itself is meant to
+-- be run once by hand after this deploys, not automatically -- this
+-- migration just bumps the version MaintenanceGate needs to see this
+-- deploy as caught up with the code.
+UPDATE schema_version SET version = '1.51.11' WHERE id = 1;

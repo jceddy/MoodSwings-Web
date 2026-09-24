@@ -747,6 +747,68 @@ final class AchievementServiceIntegrationTest extends TestCase
         self::assertSame('Bronze', $tiers[$bronzeUserId]);
     }
 
+    /**
+     * bin/backfill_win_count_achievements.php's own per-user work (reported
+     * live: "would it be possible to base [win-count achievements] off your
+     * statistics page for people who have been playing before the
+     * addition"). 15 all-time wins crosses getting-the-hang-of-it's target
+     * (10) but not seasoned-player's (50); 4 losses crosses neither
+     * good-sport's target (50) nor -- combined with the 15 wins, 19 total
+     * games -- regular's (100).
+     */
+    public function testBackfillWinCountProgressSetsProgressAndUnlocksWhatQualifies(): void
+    {
+        $userId = $this->insertUser('backfill-wins');
+        $achievements = new AchievementService();
+
+        $achievements->backfillWinCountProgressFromLifetimeStats(
+            $userId,
+            gameWins: 15,
+            gameLosses: 4,
+            acceptedFriendCount: 12,
+            savedDecklistCount: 2,
+        );
+
+        self::assertTrue($this->isUnlocked($userId, 'getting-the-hang-of-it'));
+        self::assertSame(15, $this->progress($userId, 'seasoned-player'));
+        self::assertFalse($this->isUnlocked($userId, 'seasoned-player'));
+        self::assertSame(19, $this->progress($userId, 'regular'));
+        self::assertSame(4, $this->progress($userId, 'good-sport'));
+        self::assertTrue($this->isUnlocked($userId, 'social-butterfly')); // target 10, given 12
+        self::assertSame(2, $this->progress($userId, 'deck-curator')); // target 5, given 2
+        self::assertFalse($this->isUnlocked($userId, 'deck-curator'));
+    }
+
+    /**
+     * setProgressLevel()'s own GREATEST()-based merge is what makes the
+     * backfill safe to run against every user unconditionally: a player
+     * who already won games live SINCE achievements shipped (progress
+     * already ahead of what the backfill would set) must never have that
+     * progress lowered, and an already-unlocked achievement must never be
+     * re-locked.
+     */
+    public function testBackfillWinCountProgressNeverLowersExistingProgressOrRelocksAnAchievement(): void
+    {
+        $userId = $this->insertUser('backfill-no-regress');
+        $achievements = new AchievementService();
+
+        // Simulates live play since achievements shipped: already ahead of
+        // (and, for one slug, already past) what the backfill would set.
+        $achievements->bumpProgress($userId, 'seasoned-player', 40);
+        $achievements->unlock($userId, 'getting-the-hang-of-it');
+
+        $achievements->backfillWinCountProgressFromLifetimeStats(
+            $userId,
+            gameWins: 3,
+            gameLosses: 0,
+            acceptedFriendCount: 0,
+            savedDecklistCount: 0,
+        );
+
+        self::assertSame(40, $this->progress($userId, 'seasoned-player'));
+        self::assertTrue($this->isUnlocked($userId, 'getting-the-hang-of-it'));
+    }
+
     /** @param array<int, array<string, mixed>> $rows */
     private static function findBySlug(array $rows, string $slug): array
     {
