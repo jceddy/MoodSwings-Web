@@ -3871,6 +3871,65 @@ final class MoodPlayServiceTest extends TestCase
     }
 
     /**
+     * Reported scenario: opponent has 3 moods, you have 1; you play Pride
+     * as your 2nd mood (still behind, 2 vs 3) and choose the opponent;
+     * you then play Betrayal using Pride's own grant, giving PRIDE ITSELF
+     * away to that same opponent. This isn't just "Pride survives leaving
+     * play" (already covered by the Infatuation-sacrifice test above,
+     * where Pride leaves play into the discard pile) -- Pride never
+     * leaves play at all here, it simply changes OWNER while staying in
+     * play, which moodsOwnedBy()-based counting handles exactly the same
+     * way with no special-casing needed: player 1 drops to 1 mood (losing
+     * Pride) before Betrayal itself is counted, and the opponent rises to
+     * 4 (gaining Pride) -- BoardState::grantIsActive()'s own
+     * 'requiresBehindPlayer' check never references Pride's own card id
+     * or its current owner at all, only the chosen opponent's and current
+     * player's own live mood counts, so it can't tell the difference
+     * between "Pride is still mine, sitting in play" and "Pride now
+     * belongs to the opponent, sitting in play" -- both just move the
+     * count. Gap ends up at 2 (4 vs 2), so exactly two more plays should
+     * be possible before tying, matching what was reported.
+     */
+    public function testPrideGrantSurvivesGivingPrideItselfAwayViaBetrayal(): void
+    {
+        $state = $this->boardState(hands: [1 => [74, 22, 56, 4, 9], 2 => [5, 32, 55]]);
+        $state->moveHandToInPlay(1, 74); // player 1's own pre-existing mood
+        $state->moveHandToInPlay(2, 5);
+        $state->moveHandToInPlay(2, 32);
+        $state->moveHandToInPlay(2, 55); // player 2's own 3 pre-existing moods
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 22, new PlayerChoices([])); // Pride -- player 1 now has 2 moods (74, 22) vs player 2's 3
+        $this->plays->resolvePendingDecisions(
+            $state, 22, 1, new PlayerChoices([]), new PlayerChoices([]), 0,
+            ['target_player_id' => new PlayerChoices(['target_player_id' => 2])],
+            0,
+        );
+        self::assertSame(1, $state->playsRemaining());
+
+        $betrayalChoices = new PlayerChoices(['recipient_player_id' => 2]);
+        $this->plays->playMood($state, 1, 56, $betrayalChoices); // Betrayal, using Pride's own grant
+        $this->plays->resolvePendingDecisions(
+            $state, 56, 1, $betrayalChoices, $betrayalChoices, 0,
+            ['target_mood_id' => new PlayerChoices(['target_mood_id' => 22])], // give Pride itself away
+            0,
+        );
+
+        self::assertSame(2, $state->ownerOf(22), 'Pride now belongs to player 2, still in play');
+        self::assertCount(2, $state->moodsOwnedBy(1)); // 74, 56
+        self::assertCount(4, $state->moodsOwnedBy(2)); // 5, 32, 55, 22 (Pride)
+        self::assertSame(1, $state->playsRemaining(), "Pride's grant must still be active -- player 2 (4 moods) is still ahead of player 1 (2), regardless of who Pride itself currently belongs to");
+
+        // First of the two additional plays the gap (2) should allow.
+        $this->plays->playMood($state, 1, 4, new PlayerChoices([]));
+        self::assertSame(1, $state->playsRemaining(), 'still behind (3 vs 4) -- one more play should remain');
+
+        // Second of the two additional plays -- this one closes the gap.
+        $this->plays->playMood($state, 1, 9, new PlayerChoices([]));
+        self::assertSame(0, $state->playsRemaining(), 'tied at 4 vs 4 -- the grant stops re-qualifying, exactly two extra plays as expected');
+    }
+
+    /**
      * Even though the candidate list offered by pendingDecisionsFor() is
      * already correctly filtered (see the test above), resolveDecisions()
      * still validates its own answer defensively -- a malicious/buggy
