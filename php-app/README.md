@@ -11616,6 +11616,24 @@ renders it as "{name}'s turn ended automatically -- the same board state
 kept repeating", a distinct phrasing from the existing "no legal play"
 auto-pass message just above.
 
+**A missing key, not a wrong value, broke deck submission entirely**
+(reported live: two brand new custom-duel bot games stuck with no
+deck-submission prompt at all). `buildGameState()`'s own `game.loop_warning`
+was first written AFTER its "still `'waiting'`" status guard returns --
+so a game that hadn't started yet (nothing to warn about, but also
+nothing to submit a decklist for otherwise) got a response with the key
+missing entirely, not `null`. `web-static/js/game.js`'s own `!== null`
+check treats `undefined` the same as "not null" too, so it went on to
+read `.game_player_id` off `undefined` and threw, aborting the *entire*
+board render -- Players list, deck submission prompt, all of it -- before
+any of it ran. This is the exact same class of bug `action_timeout_warning`
+itself was caught live doing once before (see its own docblock), and the
+fix is identical: `loop_warning` now defaults to `null` alongside
+`action_timeout_warning` in every response shape that field already
+covers (the main `buildGameState()` literal, the replay-snapshot
+serializer, and the JSON export), so the key always exists regardless of
+game status.
+
 **Bot-facing: avoid wasting the turn, not just recover from it.**
 `BotPlayerService::chooseAction()`'s own real-world targeting policies
 (`thrillHandMoodIds()` only ever bounces an in-play Nostalgia, never
