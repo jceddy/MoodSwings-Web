@@ -206,6 +206,23 @@ final class BoardState
     private array $playGrants = [];
 
     /**
+     * Issue #192: how many times each distinct board-state signature (see
+     * turnStateSignature()) has occurred so far THIS TURN -- keyed by the
+     * signature string, reset whenever the turn changes hands (same
+     * lifecycle as $playGrants, which is why GameService::updateRoundTurnState()
+     * resets both together on a genuine handoff). Persisted alongside
+     * pending_play_grants (game_rounds.loop_state_signature_counts) so it
+     * survives the load/save round-trip between one request and the next --
+     * a human player's own repeated clicks are separate HTTP requests, not
+     * one long-lived loop in memory, so without this the counter would
+     * silently reset to zero on every single request and never detect
+     * anything.
+     *
+     * @var array<string, int>
+     */
+    private array $turnStateSignatureCounts = [];
+
+    /**
      * @var int[] card ids revealed by a purely random ($cardId chosen via
      * array_rand(), not any submitted choice) effect this play -- Paranoia/
      * Curiosity. Transient, never persisted by BoardStateRepository: it
@@ -1225,7 +1242,10 @@ final class BoardState
         );
     }
 
-    /** @param array<int, ?array{type?: string, values?: int[], source?: string, onUseEffectState?: array<string, mixed>, sourceCardId?: int, requiresSourceInPlay?: bool}> $playGrants */
+    /**
+     * @param array<int, ?array{type?: string, values?: int[], source?: string, onUseEffectState?: array<string, mixed>, sourceCardId?: int, requiresSourceInPlay?: bool}> $playGrants
+     * @param array<string, int> $turnStateSignatureCounts
+     */
     public function restoreTurnState(
         ?int $currentPlayerId,
         array $playGrants,
@@ -1239,6 +1259,7 @@ final class BoardState
         bool $awardsExtraWinThisRound = false,
         ?int $awardsExtraWinSourceCardId = null,
         ?int $awardsExtraWinOwnerId = null,
+        array $turnStateSignatureCounts = [],
     ): void {
         $this->currentPlayerId = $currentPlayerId;
         $this->playGrants = $playGrants;
@@ -1252,6 +1273,7 @@ final class BoardState
         $this->awardsExtraWinThisRound = $awardsExtraWinThisRound;
         $this->awardsExtraWinSourceCardId = $awardsExtraWinSourceCardId;
         $this->awardsExtraWinOwnerId = $awardsExtraWinOwnerId;
+        $this->turnStateSignatureCounts = $turnStateSignatureCounts;
     }
 
     /** Vulnerability: whether any card has been put into the discard pile so far this round -- see moveHandToDiscard()/moveInPlayToDiscard(). */
@@ -1946,6 +1968,86 @@ final class BoardState
         // can attribute it to Hurt Feelings by name instead of it reading
         // as an indistinguishable second "your normal turn".
         $this->playGrants = $hasHurtFeelings ? [null, ['sourceLabel' => 'Hurt Feelings']] : [null];
+        $this->turnStateSignatureCounts = [];
+    }
+
+    /**
+     * Issue #192: a cheap, exact signature of everything that can recur
+     * during a single turn's back-and-forth resolution -- every player's
+     * hand, every mood in play (with its owner, its Creativity copy target
+     * if any, and its effectState/suppressions, since those are what a
+     * one-time value override like Cynicism/Dignity or a stored choice
+     * like Imagination's color lives in), and the discard pile. No card
+     * ever enters or leaves the game mid-turn, so this partition is a
+     * closed system: if the exact same signature recurs while a play grant
+     * is still available, the player is PROVABLY able to reproduce that
+     * same recurrence forever from here (nothing about the rest of the
+     * game has changed, so nothing about what's legal or what it does has
+     * either) -- not just "this looks similar", a mathematical guarantee.
+     * Order-independent (sorted before hashing) since nothing in this game
+     * cares what order cards sit within a zone.
+     */
+    public function turnStateSignature(): string
+    {
+        $hands = [];
+        foreach ($this->playerOrder as $playerId) {
+            $hand = $this->hands[$playerId] ?? [];
+            sort($hand);
+            $hands[$playerId] = $hand;
+        }
+        ksort($hands);
+
+        $inPlay = [];
+        foreach ($this->moodsInPlay as $mood) {
+            $effectState = $mood->effectState;
+            ksort($effectState);
+            $inPlay[] = [$mood->cardId, $mood->ownerId, $mood->copiedCardId, $effectState, $mood->suppressions];
+        }
+        usort($inPlay, static fn (array $a, array $b): int => $a[0] <=> $b[0]);
+
+        $discard = $this->discard;
+        sort($discard);
+
+        return md5((string) json_encode(['hands' => $hands, 'inPlay' => $inPlay, 'discard' => $discard]));
+    }
+
+    /**
+     * Registers one more occurrence of the CURRENT board signature and
+     * returns its new count -- called once per fully-resolved action (see
+     * GameService::updateRoundTurnState()), never speculatively, so the
+     * count reflects genuine occurrences, not attempts.
+     */
+    public function registerTurnStateOccurrence(): int
+    {
+        $signature = $this->turnStateSignature();
+        $count = ($this->turnStateSignatureCounts[$signature] ?? 0) + 1;
+        $this->turnStateSignatureCounts[$signature] = $count;
+
+        return $count;
+    }
+
+    /** Non-mutating peek at the current board signature's own occurrence count so far, for display (GameService::buildGameState()'s own loop_warning) without registering a new one. */
+    public function currentTurnStateOccurrenceCount(): int
+    {
+        return $this->turnStateSignatureCounts[$this->turnStateSignature()] ?? 0;
+    }
+
+    /** @return array<string, int> */
+    public function turnStateSignatureCounts(): array
+    {
+        return $this->turnStateSignatureCounts;
+    }
+
+    /** GameService::updateRoundTurnState() calls this the moment the turn changes hands -- a fresh player's turn never inherits the previous player's own repeat counts. */
+    public function resetTurnStateSignatureCounts(): void
+    {
+        $this->turnStateSignatureCounts = [];
+    }
+
+    /** GameService::updateRoundTurnState() calls this instead of resetTurnStateSignatureCounts() when the SAME player is still mid-turn, restoring whatever this round's own row had persisted from the previous action in this same chain. @param array<string, int> $counts */
+    public function restoreTurnStateSignatureCounts(array $counts): void
+    {
+        $this->turnStateSignatureCounts = $counts;
     }
 
     /**

@@ -11555,6 +11555,99 @@ own `{"resigned": true}` already rides alongside it.
 opted-in human's, since both mean the exact same thing to a reader of
 this log ("nobody actually clicked Pass here").
 
+### Same-turn infinite-combo detection (issue #192)
+
+Some cards can, in combination, return themselves (or each other) to a
+replayable zone at zero net cost forever within a single turn -- reported
+live with two concrete examples: **Thrill (red) <-> Fear (blue)**, each
+bouncing the other back to hand and granting one unconditional extra play
+in return, oscillating forever; and **Thrill -> Angst -> Nostalgia ->
+Thrill**, where Thrill bounces both Angst and Nostalgia to hand, Angst
+discards Thrill (red qualifies) for a discard-sourced extra play, and
+Nostalgia recovers Thrill from discard back to hand for one more
+unconditional play, closing the cycle. Investigating turned up a third,
+even more minimal one not originally reported: **Fear + Angst alone**
+loops forever with no Thrill or Nostalgia at all -- Angst discards Fear
+(blue also qualifies) for a discard-sourced play, and that grant can play
+Fear straight back out of the discard pile (`BoardState::grantAllows()`
+already allows a discard-sourced grant to target a card sitting in
+discard), which bounces Angst back to hand to repeat. Neither loop was
+ever a scoring exploit -- `RoundScorer` scores final board state only, no
+counter anywhere tracks cumulative plays this turn -- so this is purely a
+tedium/engine-stress/stalling vector, not a way to win bigger.
+
+**Detection: `BoardState::turnStateSignature()`.** Since no card ever
+enters or leaves the game mid-turn, the exact partition of every card
+into (each player's hand, every mood in play with its owner/copy-target/
+effectState/suppressions, the discard pile) is a closed system: if that
+exact signature recurs while a play grant is still available, the player
+is *provably* able to reproduce it forever from there, not merely
+"looks similar." `registerTurnStateOccurrence()` hashes this once per
+fully-resolved action and increments a per-signature counter
+(`GameService::LOOP_STATE_WARNING_OCCURRENCE_COUNT` = 3,
+`LOOP_STATE_AUTO_PASS_OCCURRENCE_COUNT` = 4); `currentTurnStateOccurrenceCount()`
+is the non-mutating peek `getState()` uses for display. Persisted
+alongside `pending_play_grants` in a new `game_rounds.loop_state_signature_counts`
+JSON column (migration `0373`) -- a human's own repeated clicks are
+separate HTTP requests, not one long-lived in-memory loop, so without
+persisting this the counter would silently reset to zero every time.
+Reset to fresh the moment the turn changes hands (the exact same
+`$previousPlayerId !== $playerId` check `GameService::updateRoundTurnState()`
+already uses to decide whether to fire an "it's your turn" push
+notification also decides whether to reset this), carried forward
+untouched for a same-player continuation (an extra play, a Duplicity
+repeat).
+
+**Human-facing: warn, then auto-pass.** `GameService::finishPlay()`'s own
+"plays remaining, same player continues" branch reads the occurrence
+count `updateRoundTurnState()` returns: at 3 (two full repeats), nothing
+blocks the play, but `getState()`'s own `game.loop_warning` (`{game_player_id,
+occurrence_count}`, live-computed via `buildLoopStateWarning()`, same
+null-unless-relevant shape `action_timeout_warning` already uses) turns
+non-null and the frontend shows an amber "repeating" badge next to that
+player's name (`web-static/js/game.js`'s `buildLoopWarningStat()`) -- the
+same "no separate is-it-this-player's-turn check needed, the
+`game_player_id` match already is one" pattern the action-timeout warning
+established. At 4 (a repeat made anyway, after already being warned),
+`finishPlay()` logs a `turn_passed` event (`{"automated": true, "reason":
+"loop_detected"}`) and ends the turn immediately via `advanceTurn()`
+rather than trusting the player to notice and stop -- `describeEvent()`
+renders it as "{name}'s turn ended automatically -- the same board state
+kept repeating", a distinct phrasing from the existing "no legal play"
+auto-pass message just above.
+
+**Bot-facing: avoid wasting the turn, not just recover from it.**
+`BotPlayerService::chooseAction()`'s own real-world targeting policies
+(`thrillHandMoodIds()` only ever bounces an in-play Nostalgia, never
+Fear; Fear's/Angst's own optional bounce/discard fields are left
+unfilled by the generic resolver's "never volunteer for an unproven
+bonus" bias) already mean the plain heuristic bot doesn't spontaneously
+walk into either reported loop today -- but as defense-in-depth against a
+future bespoke policy, a different card combo, or the Tactical Bot's own
+real per-turn choices, `GameService::chooseBotActionAvoidingLoop()` wraps
+every `chooseAction()` call site: it simulates the bot's chosen candidate
+on a throwaway `clone $state` (the exact documented use case
+`BoardState::__clone()`'s own docblock calls out -- explore a
+hypothetical play without ever touching the real game), and if that
+candidate would push an already-seen signature to the auto-pass count,
+removes it from the candidate list and asks again, falling back to a
+plain pass only once nothing safe remains. A candidate still pending
+after one simulated play (a Duplicity repeat offer) is never
+second-guessed this way -- resolving that whole chain speculatively
+would be its own project, and a pending decision can't contribute to a
+same-turn loop on its own anyway (every repeat there is an explicit
+yes/no asked fresh, never auto-repeated).
+
+Bots were already structurally protected from a genuine infinite loop
+regardless (`SearchBotPlayerService::MAX_PLAYS_PER_ROLLOUT`/
+`MAX_PENDING_DECISION_ROUNDS` bound simulated search rollouts;
+`GameService::MAX_AUTOMATED_ACTIONS_PER_REQUEST`/
+`MAX_AUTOMATED_TURN_RECHECK_CHAIN_DEPTH` bound real automated-turn
+resolution) -- those exist "against a hypothetical future bug where
+advanceAutomatedTurns() keeps reporting genuine progress forever", the
+same category of concern this feature addresses for a human, who had no
+equivalent safety net at all before now.
+
 ### Auto-apply scoring bonuses (issue #397)
 
 A personal preference (`users.auto_apply_scoring_bonuses`, migration

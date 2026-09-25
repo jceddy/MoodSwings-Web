@@ -166,7 +166,7 @@ final class BoardStateRepository
         }
 
         $roundStmt = $pdo->prepare(
-            "SELECT current_turn_game_player_id, first_game_player_id, team_turn_1_game_player_id, plays_remaining, pending_play_grants, round_number, discarded_this_round, skip_scoring, skip_scoring_first_player_game_player_id, skip_scoring_source_card_id, skip_scoring_owner_game_player_id, awards_extra_win, awards_extra_win_source_card_id, awards_extra_win_owner_game_player_id FROM game_rounds
+            "SELECT current_turn_game_player_id, first_game_player_id, team_turn_1_game_player_id, plays_remaining, pending_play_grants, loop_state_signature_counts, round_number, discarded_this_round, skip_scoring, skip_scoring_first_player_game_player_id, skip_scoring_source_card_id, skip_scoring_owner_game_player_id, awards_extra_win, awards_extra_win_source_card_id, awards_extra_win_owner_game_player_id FROM game_rounds
              WHERE game_id = :game_id AND status = 'in_progress'
              ORDER BY round_number DESC LIMIT 1"
         );
@@ -179,6 +179,13 @@ final class BoardStateRepository
             $playGrants = $roundRow['pending_play_grants'] !== null
                 ? json_decode((string) $roundRow['pending_play_grants'], true)
                 : array_fill(0, (int) $roundRow['plays_remaining'], null);
+            // Issue #192: same "absent on older rows" fallback as
+            // pending_play_grants above -- an older row from before this
+            // column existed, or a fresh turn nothing's recurred in yet,
+            // both mean "nothing seen so far".
+            $turnStateSignatureCounts = $roundRow['loop_state_signature_counts'] !== null
+                ? json_decode((string) $roundRow['loop_state_signature_counts'], true)
+                : [];
 
             // Chivalry/Triumph care about whoever PERSONALLY took turn 1
             // this round -- for Open Team Play, that's
@@ -207,6 +214,7 @@ final class BoardStateRepository
                 (bool) $roundRow['awards_extra_win'],
                 $roundRow['awards_extra_win_source_card_id'] !== null ? (int) $roundRow['awards_extra_win_source_card_id'] : null,
                 $roundRow['awards_extra_win_owner_game_player_id'] !== null ? (int) $roundRow['awards_extra_win_owner_game_player_id'] : null,
+                $turnStateSignatureCounts,
             );
         }
 

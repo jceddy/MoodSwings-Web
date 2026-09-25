@@ -7471,6 +7471,16 @@
         // recolored three ways.
         actionTimeoutWarning: '<path d="M12 2a1 1 0 0 1 1 1v.6c3.4.9 5.8 4 5.8 7.6v3.4l1.7 2.6a1 1 0 0 1-.84 1.55H4.34a1 1 0 0 1-.84-1.55l1.7-2.6V11.2c0-3.6 2.4-6.7 5.8-7.6V3a1 1 0 0 1 1-1Z"/>'
             + '<path d="M9.2 20.2a2.8 2.8 0 0 0 5.6 0Z"/>',
+        // Issue #192's own same-turn infinite-combo warning: two curved
+        // arrows chasing each other into a closed loop -- a distinct
+        // silhouette from every icon above (no straight edges at all), so
+        // it reads as "going in circles" at a glance rather than being
+        // mistaken for onTurn's plain triangle or pendingDecision's
+        // hourglass.
+        loopWarning: '<path d="M6 12a6 6 0 0 1 10.5-3.9" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>'
+            + '<polygon points="16.5,4.5 17.6,9.4 12.7,8.4"/>'
+            + '<path d="M18 12a6 6 0 0 1-10.5 3.9" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>'
+            + '<polygon points="7.5,19.5 6.4,14.6 11.3,15.6"/>',
         // Team affiliation (Open/Closed Team Play only, player.team_id !==
         // null): a heraldic shield, reported live as hard to distinguish
         // for colorblind users when the two teams were told apart by color
@@ -7818,6 +7828,25 @@
         return buildPlayerStat('actionTimeoutWarning', badge, label, severityClass);
     }
 
+    // Issue #192 ("if a play results in the exact same board state, say,
+    // three times in one turn, give the active player a warning and if it
+    // comes up again, auto-pass their turn"): state.game.loop_warning is
+    // null except on whoever's currently mid-turn with their own board
+    // having already recurred (see BoardState::turnStateSignature()'s own
+    // docblock for what "recurred" means here) at least 3 times this turn
+    // -- same "never needs its own is-it-this-player's-turn check, the
+    // game_player_id match already is one" shape as
+    // buildActionTimeoutWarningStat() above. The auto-pass itself needs no
+    // separate UI here at all -- it lands in the event log via
+    // describeEvent()'s own 'loop_detected' phrasing, same as every other
+    // automated pass.
+    function buildLoopWarningStat(occurrenceCount) {
+        const label = 'This exact board state has repeated ' + occurrenceCount + ' times this turn. '
+            + 'Repeating it again will end this turn automatically.';
+
+        return buildPlayerStat('loopWarning', occurrenceCount, label);
+    }
+
     function renderBoard(state) {
         // A custom decklist's own name (or "Uploaded Deck" if none was
         // specified) replaces "<deck type> deck" entirely here, rather than
@@ -8138,6 +8167,9 @@
                 // here -- the game_player_id match already is one.
                 if (state.game.action_timeout_warning !== null && state.game.action_timeout_warning.game_player_id === player.game_player_id) {
                     iconsEl.appendChild(buildActionTimeoutWarningStat(state.game.action_timeout_warning.seconds_remaining));
+                }
+                if (state.game.loop_warning !== null && state.game.loop_warning.game_player_id === player.game_player_id) {
+                    iconsEl.appendChild(buildLoopWarningStat(state.game.loop_warning.occurrence_count));
                 }
                 if (wentFirst) {
                     iconsEl.appendChild(buildPlayerFlag('wentFirst', 'Went first this round'));
