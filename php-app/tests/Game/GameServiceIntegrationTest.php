@@ -2755,6 +2755,21 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertNull($state['round']);
         self::assertArrayNotHasKey('hand', $state['you']);
         self::assertCount(2, $state['players']);
+        // Issue #192 follow-up (reported live: two brand new custom-duel
+        // bot games stuck with no deck-submission prompt at all): every
+        // response shape this array feeds must always carry this KEY, not
+        // just a correct value once a round exists -- buildGameState()'s
+        // own status guard returns long before loop_warning is actually
+        // computed, so a still-'waiting' game (nothing has started, no
+        // round yet) would otherwise omit the key entirely.
+        // web-static/js/game.js's own `!== null` check treats `undefined`
+        // as "not null" and throws trying to read `.game_player_id` off
+        // it, aborting the whole board render -- the exact same class of
+        // bug action_timeout_warning already hit once before (see its own
+        // "action_timeout_warning is null except on..." comment in
+        // buildGameState()).
+        self::assertArrayHasKey('loop_warning', $state['game']);
+        self::assertNull($state['game']['loop_warning']);
     }
 
     public function testGetStateForInProgressGameExposesYourHandAndHidesOpponentsHand(): void

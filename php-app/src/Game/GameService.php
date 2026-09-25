@@ -17215,6 +17215,22 @@ final class GameService
                 // why it's this narrow rather than always exposing a raw
                 // countdown.
                 'action_timeout_warning' => $this->buildActionTimeoutWarning($gameId, $game),
+                // Issue #192's own same-turn infinite-combo warning --
+                // defaults to null here (a game still 'waiting', with no
+                // round to peek at yet) and is overwritten below, once
+                // $state/$roundRow actually exist, for any 'in_progress'/
+                // 'completed' game. Declared here (like
+                // action_timeout_warning just above) so the KEY always
+                // exists in every response shape this array feeds --
+                // web-static/js/game.js's own `!== null` check would
+                // otherwise see `undefined` (not null) for a still-waiting
+                // game and throw trying to read `.game_player_id` off it,
+                // exactly the bug reported live: two brand new custom-duel
+                // bot games stuck with no deck-submission prompt at all,
+                // because a JS exception this early in rendering aborted
+                // the whole players/state render before anything else on
+                // the page could run.
+                'loop_warning' => null,
                 // Issue #85 follow-up's own full-game time-limit mode --
                 // same "visible to the players playing it" treatment,
                 // independent of timeout_minutes/timeout_action above.
@@ -18366,6 +18382,7 @@ final class GameService
                 'timeout_minutes' => $game['timeout_minutes'] !== null ? (int) $game['timeout_minutes'] : null,
                 'timeout_action' => $game['timeout_action'],
                 'action_timeout_warning' => null,
+                'loop_warning' => null,
                 'total_time_limit_minutes' => $game['total_time_limit_minutes'] !== null ? (int) $game['total_time_limit_minutes'] : null,
                 'synchronous_mode' => (bool) $game['synchronous_mode'],
                 'default_selections_mode' => (bool) $game['default_selections_mode'],
@@ -18711,6 +18728,7 @@ final class GameService
                 'timeout_minutes' => $game['timeout_minutes'] !== null ? (int) $game['timeout_minutes'] : null,
                 'timeout_action' => $game['timeout_action'],
                 'action_timeout_warning' => null,
+                'loop_warning' => null,
                 'total_time_limit_minutes' => $game['total_time_limit_minutes'] !== null ? (int) $game['total_time_limit_minutes'] : null,
                 'synchronous_mode' => (bool) $game['synchronous_mode'],
                 'default_selections_mode' => (bool) $game['default_selections_mode'],
