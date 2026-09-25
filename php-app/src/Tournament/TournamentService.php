@@ -269,8 +269,17 @@ final class TournamentService implements TournamentMatchObserver
             if ($granteeUserId === $createdByUserId || isset($grantedCastUserIds[$granteeUserId])) {
                 continue;
             }
+            $revealHands = (bool) ($castGrant['reveal_hands'] ?? true);
+            // Same hands-revealed-caster-can't-also-play rule as
+            // grantCastAccess() -- checked here after the invite loop
+            // above has already inserted its rows, so someone listed in
+            // both inviteUserIds and castGrants (reveal_hands: true) is
+            // caught the same way it would be for an existing tournament.
+            if ($revealHands && $this->hasActiveParticipation($tournamentId, $granteeUserId)) {
+                throw new TournamentStateException("\"{$granteeUsername}\" is a participant in this tournament and cannot also be granted hands-revealed cast access -- grant \"no hands\" access instead.");
+            }
             $grantedCastUserIds[$granteeUserId] = true;
-            $this->castGrants->add($tournamentId, $granteeUserId, $createdByUserId, (bool) ($castGrant['reveal_hands'] ?? true));
+            $this->castGrants->add($tournamentId, $granteeUserId, $createdByUserId, $revealHands);
         }
 
         return $tournamentId;
@@ -289,6 +298,14 @@ final class TournamentService implements TournamentMatchObserver
         }
         if ($this->users->findById($inviteeUserId) === null) {
             throw new TournamentStateException("No such user id {$inviteeUserId}");
+        }
+        // Reported live: a caster with hands revealed can see both
+        // players' cards in every match -- letting them also play would
+        // hand them a scouting advantage over every future opponent, not
+        // just whoever they're personally seated against. See
+        // hasFullHandsCastGrant()'s own docblock.
+        if ($this->hasFullHandsCastGrant($tournamentId, $inviteeUserId)) {
+            throw new TournamentStateException('That user has hands-revealed cast access to this tournament and cannot also be invited to play in it -- revoke their cast access first.');
         }
 
         $this->participants->add($tournamentId, $inviteeUserId, 'invited');
@@ -365,6 +382,13 @@ final class TournamentService implements TournamentMatchObserver
         }
         if ($this->castGrants->find($tournamentId, $granteeUserId) !== null) {
             throw new TournamentStateException('That user already has cast access to this tournament');
+        }
+        // Reported live: a hands-revealed caster can't also play -- see
+        // invite()'s own identical concern/docblock. "No hands" grants
+        // are exempt since that caster never sees more than any plain
+        // spectator would.
+        if ($revealHands && $this->hasActiveParticipation($tournamentId, $granteeUserId)) {
+            throw new TournamentStateException('That user is a participant in this tournament and cannot also be granted hands-revealed cast access -- remove them from the tournament first, or grant "no hands" access instead.');
         }
 
         $this->castGrants->add($tournamentId, $granteeUserId, $granterUserId, $revealHands);
@@ -506,6 +530,11 @@ final class TournamentService implements TournamentMatchObserver
         $friendship = $this->friendships->findByPair((int) $tournament['created_by_user_id'], $userId);
         if ($friendship !== null && $friendship['status'] === 'blocked') {
             throw new NotAuthorizedForTournamentException('You cannot join this tournament');
+        }
+        // Reported live: a hands-revealed caster can't also play -- see
+        // invite()'s own identical check/docblock.
+        if ($this->hasFullHandsCastGrant($tournamentId, $userId)) {
+            throw new TournamentStateException('You have hands-revealed cast access to this tournament and cannot also join it as a player -- ask the organizer to revoke your cast access first.');
         }
         $this->assertRoomAvailable($tournament);
         $deck = $this->resolveJoinTimeDeck($tournament['match_params'], $userId, $decklistText, $savedDecklistId);
@@ -1864,6 +1893,34 @@ final class TournamentService implements TournamentMatchObserver
         if ((int) $tournament['created_by_user_id'] !== $userId) {
             throw new NotAuthorizedForTournamentException('Only the tournament creator can do that');
         }
+    }
+
+    /**
+     * Reported live: a caster granted hands-revealed access sees both
+     * players' hands in every match of the tournament, not just their
+     * own -- so if they were also allowed to play, they'd carry a
+     * scouting advantage into every match they're seated in. A "no
+     * hands" grant doesn't trigger this since it never reveals more
+     * than a plain issue #128 spectator already sees.
+     */
+    private function hasFullHandsCastGrant(int $tournamentId, int $userId): bool
+    {
+        $grant = $this->castGrants->find($tournamentId, $userId);
+
+        return $grant !== null && (bool) $grant['reveal_hands'];
+    }
+
+    /**
+     * True while $userId still has a live claim on a tournament seat
+     * ('invited' or 'joined'). A 'declined' or 'withdrawn' participant
+     * is no longer in contention for a match, so they remain eligible
+     * for a hands-revealed cast grant same as anyone who never joined.
+     */
+    private function hasActiveParticipation(int $tournamentId, int $userId): bool
+    {
+        $participant = $this->participants->findForUser($tournamentId, $userId);
+
+        return $participant !== null && in_array($participant['status'], ['invited', 'joined'], true);
     }
 
     private function requireRegistrationOpen(array $tournament): void

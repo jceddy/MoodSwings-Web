@@ -6880,6 +6880,24 @@ $tournamentId, int $userId): bool` resolves which mode applies -- the
 creator is always `true` regardless of any grant; a granted caster gets
 whatever `$revealHands` their own grant stored.
 
+**Caster/player mutual exclusion** (reported live: "casters with access
+to private information (both user's hands) can't play in the
+tournament"): a hands-revealed (`reveal_hands = true`) grant sees both
+players' cards in *every* match of the tournament, not just whoever
+they're personally seated against, so also letting them play would hand
+them a scouting advantage over every future opponent. `TournamentService`
+enforces this bidirectionally via two private helpers,
+`hasFullHandsCastGrant()` and `hasActiveParticipation()` (true only for
+`'invited'`/`'joined'` -- a `'declined'`/`'withdrawn'` participant is no
+longer in contention for a match, so they remain eligible for a
+hands-revealed grant same as anyone who never joined):
+`grantCastAccess()` and `createTournament()`'s own `$castGrants` loop
+reject a `reveal_hands = true` grant to anyone with active participation,
+and `invite()`/`joinOpenTournament()` reject inviting/joining anyone who
+already holds a hands-revealed grant. A **"no hands"** (`reveal_hands =
+false`) grant is exempt from all of this in both directions, since it
+never reveals more than a plain issue #128 spectator already sees.
+
 `GET /games/tournament-cast/state`'s own handler in `index.php` resolves
 which tournament (if any) the game belongs to via
 `GameService::tournamentIdForGame(int $gameId): ?int` (the same
