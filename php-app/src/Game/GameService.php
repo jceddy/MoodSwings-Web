@@ -3980,7 +3980,7 @@ final class GameService
                 $freshGrants = $this->computeFreshGrants($loggedState, $chosenGamePlayerId, 1);
                 $this->logFreshGrants($gameId, (int) $round['id'], $chosenGamePlayerId, $freshGrants);
                 $this->boardStates->save($gameId, $loggedState);
-                $this->updateRoundTurnState((int) $round['id'], $chosenGamePlayerId, $freshGrants, $loggedState->discardedThisRound(), $loggedState->skipScoringThisRound(), $loggedState->skipScoringFirstPlayerId(), $loggedState->skipScoringSourceCardId(), $loggedState->skipScoringOwnerId(), $loggedState->awardsExtraWinThisRound(), $loggedState->awardsExtraWinSourceCardId(), $loggedState->awardsExtraWinOwnerId());
+                $this->updateRoundTurnState((int) $round['id'], $chosenGamePlayerId, $freshGrants, $loggedState->discardedThisRound(), $loggedState->skipScoringThisRound(), $loggedState->skipScoringFirstPlayerId(), $loggedState->skipScoringSourceCardId(), $loggedState->skipScoringOwnerId(), $loggedState->awardsExtraWinThisRound(), $loggedState->awardsExtraWinSourceCardId(), $loggedState->awardsExtraWinOwnerId(), $loggedState);
             }
 
             $this->logEvent($gameId, (int) $round['id'], $chosenGamePlayerId, 'match_first_player_decided', null, ['game_player_id' => $chosenGamePlayerId], $loggedState);
@@ -6412,7 +6412,7 @@ final class GameService
 
                 try {
                     $this->boardStates->save($gameId, $state);
-                    $this->updateRoundTurnState($roundId, $gamePlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId());
+                    $this->updateRoundTurnState($roundId, $gamePlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId(), $state);
                     $this->writePendingBatch($gameId, $roundId, $gamePlayerId, $playerChoices, $result->invocationChoices, $result);
                     $this->logEvent($gameId, $roundId, $gamePlayerId, 'pending_decision_created', $cardId, $this->withPlayedFrom($state, $cardId, $choices), $state);
 
@@ -6907,7 +6907,7 @@ final class GameService
                     $this->candidatePlayCardIds($state, $currentTurnGamePlayerId),
                     fn (int $cardId) => $this->plays->isPlayable($state, $currentTurnGamePlayerId, $cardId),
                 ));
-                $action = $this->bots->chooseAction($state, $playableCardIds, $currentTurnGamePlayerId, $this->roundWinsStillNeededToWinGame($gameId, $currentTurnGamePlayerId), $this->roundWinsNeededToWinGameForActivePlayers($gameId, $state));
+                $action = $this->chooseBotActionAvoidingLoop($state, $playableCardIds, $currentTurnGamePlayerId, $this->roundWinsStillNeededToWinGame($gameId, $currentTurnGamePlayerId), $this->roundWinsNeededToWinGameForActivePlayers($gameId, $state));
                 if ((bool) $this->fetchGame($gameId)['diagnostic_mode']) {
                     $this->logHeuristicBotReasoning($gameId, $state, $currentTurnGamePlayerId, $action);
                 }
@@ -8042,6 +8042,66 @@ final class GameService
         return null;
     }
 
+    /**
+     * Issue #192: same-turn infinite-combo detection (see BoardState::
+     * turnStateSignature()'s own docblock) -- wraps BotPlayerService::
+     * chooseAction() so a bot never willingly walks into finishPlay()'s
+     * own auto-pass safety net (LOOP_STATE_AUTO_PASS_OCCURRENCE_COUNT),
+     * which would waste whatever plays_remaining it still had left rather
+     * than spend them on something that actually helps. Simulates each
+     * candidate on a throwaway clone (BoardState::__clone()'s own
+     * documented use case -- explore a hypothetical play without ever
+     * touching the real game) before committing to it, then tries the
+     * next-best card instead of one that would push an already-seen
+     * signature to the auto-pass count, bounded by $playableCardIds'
+     * own shrinking size so this can never loop forever itself.
+     *
+     * A card whose own effect is still pending after one simulated play
+     * (a Duplicity repeat offer, a reaction) is never vetoed here --
+     * predicting its EVENTUAL resulting state would mean resolving that
+     * whole chain speculatively too, and a pending decision can't
+     * contribute to a same-turn loop on its own anyway (every repeat
+     * there is an explicit yes/no asked fresh each time, never
+     * auto-repeated -- see MoodPlayService's own repeat-offer). A
+     * candidate that throws mid-simulation is left alone too -- that's
+     * chooseAction()'s own bug to surface via its real playMood() call
+     * right after this returns, not this method's to pre-empt.
+     *
+     * @param int[] $playableCardIds
+     * @param array<int, int> $roundWinsNeededToWinGameByPlayerId
+     * @return ?array{card_id: int, choices: array<string, mixed>}
+     */
+    private function chooseBotActionAvoidingLoop(BoardState $state, array $playableCardIds, int $gamePlayerId, ?int $roundWinsNeededToWinGame, array $roundWinsNeededToWinGameByPlayerId): ?array
+    {
+        while (true) {
+            $action = $this->bots->chooseAction($state, $playableCardIds, $gamePlayerId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
+            if ($action === null) {
+                return $action;
+            }
+
+            $wouldWasteTurn = false;
+            try {
+                $simulated = clone $state;
+                $result = $this->plays->playMood($simulated, $gamePlayerId, $action['card_id'], new PlayerChoices($action['choices']));
+                if (!$result->isPending) {
+                    $existingCount = $state->turnStateSignatureCounts()[$simulated->turnStateSignature()] ?? 0;
+                    $wouldWasteTurn = $existingCount + 1 >= self::LOOP_STATE_AUTO_PASS_OCCURRENCE_COUNT;
+                }
+            } catch (Throwable) {
+                // See this method's own docblock -- not ours to pre-empt.
+            }
+
+            if (!$wouldWasteTurn) {
+                return $action;
+            }
+
+            $playableCardIds = array_values(array_filter($playableCardIds, static fn (int $cardId): bool => $cardId !== $action['card_id']));
+            if ($playableCardIds === []) {
+                return null;
+            }
+        }
+    }
+
     /** The ordinary heuristic bot's own play/pass, applied immediately -- see advanceTacticalBotSearch()'s own stale-job fallback and runTacticalBotSearchJob()'s own on-error fallback. */
     private function playViaHeuristicBotFallback(int $gameId, int $gamePlayerId): array
     {
@@ -8050,7 +8110,7 @@ final class GameService
             $this->candidatePlayCardIds($state, $gamePlayerId),
             fn (int $cardId) => $this->plays->isPlayable($state, $gamePlayerId, $cardId),
         ));
-        $action = $this->bots->chooseAction($state, $playableCardIds, $gamePlayerId, $this->roundWinsStillNeededToWinGame($gameId, $gamePlayerId), $this->roundWinsNeededToWinGameForActivePlayers($gameId, $state));
+        $action = $this->chooseBotActionAvoidingLoop($state, $playableCardIds, $gamePlayerId, $this->roundWinsStillNeededToWinGame($gameId, $gamePlayerId), $this->roundWinsNeededToWinGameForActivePlayers($gameId, $state));
         // A Tactical Bot's own turn landing here means its own search had
         // nothing recoverable at all (see advanceTacticalBotSearch()'s
         // own docblock) -- logging the heuristic fallback's OWN reasoning
@@ -9563,7 +9623,7 @@ final class GameService
                 // Already inside this method's own transaction, so this
                 // just writes rows -- no nested beginTransaction().
                 $this->boardStates->save($gameId, $state);
-                $this->updateRoundTurnState($roundId, $initiatingPlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId());
+                $this->updateRoundTurnState($roundId, $initiatingPlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId(), $state);
                 $this->writePendingBatch($gameId, $roundId, $initiatingPlayerId, $topLevelChoices, $result->invocationChoices, $result);
                 $this->logEvent($gameId, $roundId, $initiatingPlayerId, 'pending_decision_created', $playedCardId, $this->withPlayedFrom($state, $playedCardId, []), $state);
 
@@ -9683,7 +9743,7 @@ final class GameService
                 $freshGrants = $this->computeFreshGrants($freshState, $firstPlayerId, 1);
                 $this->logFreshGrants($gameId, (int) $round['id'], $firstPlayerId, $freshGrants);
                 $this->boardStates->save($gameId, $freshState);
-                $this->updateRoundTurnState((int) $round['id'], $firstPlayerId, $freshGrants, $freshState->discardedThisRound(), $freshState->skipScoringThisRound(), $freshState->skipScoringFirstPlayerId(), $freshState->skipScoringSourceCardId(), $freshState->skipScoringOwnerId(), $freshState->awardsExtraWinThisRound(), $freshState->awardsExtraWinSourceCardId(), $freshState->awardsExtraWinOwnerId());
+                $this->updateRoundTurnState((int) $round['id'], $firstPlayerId, $freshGrants, $freshState->discardedThisRound(), $freshState->skipScoringThisRound(), $freshState->skipScoringFirstPlayerId(), $freshState->skipScoringSourceCardId(), $freshState->skipScoringOwnerId(), $freshState->awardsExtraWinThisRound(), $freshState->awardsExtraWinSourceCardId(), $freshState->awardsExtraWinOwnerId(), $freshState);
             }
 
             return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => !$allSubmitted];
@@ -9896,7 +9956,7 @@ final class GameService
             $freshGrants = $this->computeFreshGrants($state, $chosenGamePlayerId, 1);
             $this->logFreshGrants($gameId, $roundId, $chosenGamePlayerId, $freshGrants);
             $this->boardStates->save($gameId, $state);
-            $this->updateRoundTurnState($roundId, $chosenGamePlayerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId());
+            $this->updateRoundTurnState($roundId, $chosenGamePlayerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId(), $state);
         }
 
         $pdo->prepare("UPDATE game_rounds SET {$column} = :chosen WHERE id = :round_id")
@@ -9941,7 +10001,7 @@ final class GameService
         $freshGrants = $this->computeFreshGrants($state, $chosenGamePlayerId, 1);
         $this->logFreshGrants($gameId, $roundId, $chosenGamePlayerId, $freshGrants);
         $this->boardStates->save($gameId, $state);
-        $this->updateRoundTurnState($roundId, $chosenGamePlayerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId());
+        $this->updateRoundTurnState($roundId, $chosenGamePlayerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId(), $state);
 
         Connection::get()->prepare('UPDATE game_rounds SET first_game_player_id = :chosen WHERE id = :round_id')
             ->execute(['chosen' => $chosenGamePlayerId, 'round_id' => $roundId]);
@@ -9989,7 +10049,7 @@ final class GameService
         $freshGrants = $this->computeFreshGrants($state, $overridePlayerId, 1);
         $this->logFreshGrants($gameId, $roundId, $overridePlayerId, $freshGrants);
         $this->boardStates->save($gameId, $state);
-        $this->updateRoundTurnState($roundId, $overridePlayerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId());
+        $this->updateRoundTurnState($roundId, $overridePlayerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId(), $state);
 
         $pdo = Connection::get();
 
@@ -10760,6 +10820,21 @@ final class GameService
     }
 
     /**
+     * Issue #192: same-turn infinite-combo detection thresholds (e.g.
+     * Thrill<->Fear, Fear+Angst, Thrill+Angst+Nostalgia -- see
+     * BoardState::turnStateSignature()'s own docblock). A genuinely
+     * infinite loop is provably reproducible forever the moment its board
+     * signature FIRST recurs (see that docblock), so counting from 1 for
+     * the original occurrence: a 3rd occurrence (two full repeats) is
+     * warned about via getState()'s own loop_warning, and a 4th occurrence
+     * (a repeat the player made anyway, after already being warned) ends
+     * their turn for them rather than trusting them to stop manually.
+     */
+    private const LOOP_STATE_WARNING_OCCURRENCE_COUNT = 3;
+
+    private const LOOP_STATE_AUTO_PASS_OCCURRENCE_COUNT = 4;
+
+    /**
      * The shared tail of a fully-resolved play (whether that play just
      * completed in one request, or completed across a pending-decision
      * pause and response) -- saves $state's mutations, then either the
@@ -10785,7 +10860,20 @@ final class GameService
         $this->boardStates->save($gameId, $state);
 
         if ($state->playsRemaining() > 0) {
-            $this->updateRoundTurnState((int) $round['id'], $actingGamePlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId());
+            $occurrenceCount = $this->updateRoundTurnState((int) $round['id'], $actingGamePlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId(), $state);
+
+            // Issue #192: the player repeated an already-warned-about board
+            // state anyway -- end their turn for them rather than trusting
+            // a human to notice/stop, and steering a bot away from ever
+            // reaching this in the first place is BotPlayerService's own
+            // job (see its own docblock), so a bot landing here regardless
+            // (an unanticipated combo, a future card) gets the exact same
+            // safety net a human does.
+            if ($occurrenceCount >= self::LOOP_STATE_AUTO_PASS_OCCURRENCE_COUNT) {
+                $this->logEvent($gameId, (int) $round['id'], $actingGamePlayerId, 'turn_passed', null, ['automated' => true, 'reason' => 'loop_detected']);
+
+                return $this->advanceTurn($gameId, $round, $state, $requestingGamePlayerId);
+            }
 
             return ['round_scored' => false, 'game_completed' => false];
         }
@@ -10838,7 +10926,7 @@ final class GameService
         // which has to be persisted even though this turn's own play
         // didn't otherwise touch the board.
         $this->boardStates->save($gameId, $state);
-        $this->updateRoundTurnState((int) $round['id'], $nextPlayerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId());
+        $this->updateRoundTurnState((int) $round['id'], $nextPlayerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId(), $state);
 
         return ['round_scored' => false, 'game_completed' => false];
     }
@@ -10913,7 +11001,7 @@ final class GameService
         $freshGrants = $this->computeFreshGrants($state, $playerId, 1);
         $this->logFreshGrants($gameId, $roundId, $playerId, $freshGrants);
         $this->boardStates->save($gameId, $state);
-        $this->updateRoundTurnState($roundId, $playerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId());
+        $this->updateRoundTurnState($roundId, $playerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId(), $state);
     }
 
     /**
@@ -14381,6 +14469,36 @@ final class GameService
     }
 
     /**
+     * Issue #192's own getState() half: a live peek (never registers a new
+     * occurrence -- see BoardState::currentTurnStateOccurrenceCount()'s own
+     * docblock) at whether the CURRENT player's own board has already
+     * recurred LOOP_STATE_WARNING_OCCURRENCE_COUNT times this turn, so a
+     * poll or page refresh shows the same warning finishPlay() already
+     * computed for that exact play, without needing a separate one-shot
+     * flag threaded through the response. Null once plays_remaining hits 0
+     * (their turn already moved on, whether by scoring, an ordinary pass,
+     * or finishPlay()'s own auto-pass -- either way the counter is already
+     * reset for whoever's turn it is now, so there's nothing left to warn
+     * about even before this method re-derives that itself).
+     */
+    private function buildLoopStateWarning(BoardState $state, array $roundRow): ?array
+    {
+        if ($roundRow['current_turn_game_player_id'] === null || $state->playsRemaining() === 0) {
+            return null;
+        }
+
+        $occurrenceCount = $state->currentTurnStateOccurrenceCount();
+        if ($occurrenceCount < self::LOOP_STATE_WARNING_OCCURRENCE_COUNT) {
+            return null;
+        }
+
+        return [
+            'game_player_id' => (int) $roundRow['current_turn_game_player_id'],
+            'occurrence_count' => $occurrenceCount,
+        ];
+    }
+
+    /**
      * applyTimeoutsForAllActiveGames()'s own other half: "send a
      * notification if either the action timeout or the full game chess
      * clock timeout becomes less than 15 minutes left." Only ever called
@@ -17364,6 +17482,13 @@ final class GameService
         $state = $isViewerAwaitingTurnAcknowledgment
             ? $this->replay->stateAsOf($gameId, (int) $roundRow['pre_after_scoring_event_id'], requireCompleted: false)
             : $this->boardStates->load($gameId);
+        // Issue #192: a frozen/replayed $state above (the paused-viewer
+        // branch) never carries real turnStateSignatureCounts -- nothing
+        // populates them outside the normal load()/restoreTurnState() path
+        // -- so this naturally reads as "nothing repeated yet" there,
+        // which is the right conservative answer for a snapshot that isn't
+        // even the live board.
+        $response['game']['loop_warning'] = $this->buildLoopStateWarning($state, $roundRow);
         $names = $this->cardNamesFor($gameId);
         $playerNames = array_column($players, 'username', 'game_player_id');
 
@@ -18954,6 +19079,12 @@ final class GameService
             // to a reader of this log ("nobody actually clicked Pass
             // here"), so they share one phrasing rather than needing to
             // explain which of the two mechanisms fired.
+            // Issue #192: a same-turn infinite-combo warning the player
+            // ignored (or a bot steering couldn't avoid) -- see
+            // GameService::finishPlay()'s own LOOP_STATE_AUTO_PASS_OCCURRENCE_COUNT
+            // docblock. Checked before the plain 'automated' phrasing below
+            // since this is also logged with automated=true.
+            $row['event_type'] === 'turn_passed' && ($details['reason'] ?? null) === 'loop_detected' => "{$actor}'s turn ended automatically -- the same board state kept repeating",
             $row['event_type'] === 'turn_passed' => ($details['automated'] ?? false)
                 ? "{$actor} passed automatically (no legal play)"
                 : "{$actor} passed",
@@ -21076,23 +21207,52 @@ final class GameService
      * after-scoring hook actually moved something, so this is the one
      * notifyItsYourTurn() call site that never even offers a
      * $worthPausingFor argument, relying on its default of false.
+     *
+     * Also the one place issue #192's own loop-state-signature counter
+     * (BoardState::turnStateSignatureCounts()) gets registered and
+     * persisted, for the same reason "it's your turn" belongs here: the
+     * $previousPlayerId !== $playerId check that already tells this method
+     * a genuine handoff just happened is exactly the signal that also has
+     * to reset the counter -- a fresh turn never inherits the PREVIOUS
+     * player's own repeat counts, the same "reset every turn" lifecycle
+     * $playGrants itself already has. $state is whichever BoardState the
+     * caller already has in hand reflecting the board as of THIS save --
+     * see registerTurnStateOccurrence()'s own docblock for why counting
+     * here (once, from the state that's actually being persisted) rather
+     * than at each individual call site is what keeps this exact and not
+     * approximate.
+     *
+     * @return int the current board signature's own occurrence count this
+     *             turn, AFTER registering this one (1 for a fresh turn) --
+     *             callers that care whether to warn/auto-pass a human or
+     *             steer a bot away read this; every other caller ignores it.
      */
-    private function updateRoundTurnState(int $roundId, int $playerId, array $playGrants, bool $discardedThisRound, bool $skipScoringThisRound, ?int $skipScoringFirstPlayerId, ?int $skipScoringSourceCardId, ?int $skipScoringOwnerId, bool $awardsExtraWinThisRound = false, ?int $awardsExtraWinSourceCardId = null, ?int $awardsExtraWinOwnerId = null): void
+    private function updateRoundTurnState(int $roundId, int $playerId, array $playGrants, bool $discardedThisRound, bool $skipScoringThisRound, ?int $skipScoringFirstPlayerId, ?int $skipScoringSourceCardId, ?int $skipScoringOwnerId, bool $awardsExtraWinThisRound, ?int $awardsExtraWinSourceCardId, ?int $awardsExtraWinOwnerId, BoardState $state): int
     {
         $pdo = Connection::get();
 
-        $previousStmt = $pdo->prepare('SELECT current_turn_game_player_id FROM game_rounds WHERE id = :round_id');
+        $previousStmt = $pdo->prepare('SELECT current_turn_game_player_id, loop_state_signature_counts FROM game_rounds WHERE id = :round_id');
         $previousStmt->execute(['round_id' => $roundId]);
-        $previousPlayerId = $previousStmt->fetchColumn();
-        $previousPlayerId = $previousPlayerId !== false ? (int) $previousPlayerId : null;
+        $previousRow = $previousStmt->fetch();
+        $previousPlayerId = $previousRow !== false && $previousRow['current_turn_game_player_id'] !== null ? (int) $previousRow['current_turn_game_player_id'] : null;
+
+        if ($previousPlayerId !== $playerId) {
+            $state->resetTurnStateSignatureCounts();
+        } elseif ($previousRow !== false) {
+            $state->restoreTurnStateSignatureCounts(
+                $previousRow['loop_state_signature_counts'] !== null ? json_decode((string) $previousRow['loop_state_signature_counts'], true) : [],
+            );
+        }
+        $occurrenceCount = $state->registerTurnStateOccurrence();
 
         $stmt = $pdo->prepare(
-            'UPDATE game_rounds SET current_turn_game_player_id = :player_id, plays_remaining = :plays_remaining, pending_play_grants = :pending_play_grants, discarded_this_round = :discarded_this_round, skip_scoring = :skip_scoring, skip_scoring_first_player_game_player_id = :skip_scoring_first_player_id, skip_scoring_source_card_id = :skip_scoring_source_card_id, skip_scoring_owner_game_player_id = :skip_scoring_owner_id, awards_extra_win = :awards_extra_win, awards_extra_win_source_card_id = :awards_extra_win_source_card_id, awards_extra_win_owner_game_player_id = :awards_extra_win_owner_id WHERE id = :round_id'
+            'UPDATE game_rounds SET current_turn_game_player_id = :player_id, plays_remaining = :plays_remaining, pending_play_grants = :pending_play_grants, loop_state_signature_counts = :loop_state_signature_counts, discarded_this_round = :discarded_this_round, skip_scoring = :skip_scoring, skip_scoring_first_player_game_player_id = :skip_scoring_first_player_id, skip_scoring_source_card_id = :skip_scoring_source_card_id, skip_scoring_owner_game_player_id = :skip_scoring_owner_id, awards_extra_win = :awards_extra_win, awards_extra_win_source_card_id = :awards_extra_win_source_card_id, awards_extra_win_owner_game_player_id = :awards_extra_win_owner_id WHERE id = :round_id'
         );
         $stmt->execute([
             'player_id' => $playerId,
             'plays_remaining' => count($playGrants),
             'pending_play_grants' => json_encode($playGrants),
+            'loop_state_signature_counts' => json_encode($state->turnStateSignatureCounts()),
             'discarded_this_round' => $discardedThisRound ? 1 : 0,
             'skip_scoring' => $skipScoringThisRound ? 1 : 0,
             'skip_scoring_first_player_id' => $skipScoringFirstPlayerId,
@@ -21107,6 +21267,8 @@ final class GameService
         if ($previousPlayerId !== $playerId) {
             $this->notifyItsYourTurn($roundId, $playerId);
         }
+
+        return $occurrenceCount;
     }
 
     /**

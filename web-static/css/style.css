@@ -2201,6 +2201,14 @@ body.game-page {
     color: var(--color-error);
 }
 
+/* Issue #192's own same-turn infinite-combo warning -- only ever rendered
+   once the board has already recurred, so like actionTimeoutWarning above
+   there's no "comfortable" default state; --color-pending (amber) matches
+   the same "you should probably do something differently" register. */
+.player-stat--loopWarning {
+    color: var(--color-pending);
+}
+
 /* Synchronous mode's own live 30-second action timer (reported live) --
    plain text color by default, escalating to --color-error under 10
    seconds remaining (tickSynchronousActionTimer() in game.js), the same
