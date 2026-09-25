@@ -3121,6 +3121,98 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * Tournament spectator mode (issue #238): a trusted caster's own
+     * getTournamentCastState() reveals a pending decision's 'field' even
+     * though the caster is nobody's own target (is_you stays false,
+     * unlike the real target's own getState() above) -- unlike a plain
+     * getSpectatorState() spectator, who never gets 'field' at all. Same
+     * Duplicity/Dignity setup as
+     * testGetStateExposesDuplicitysRepeatOfferAsAPendingDecisionForTheActingPlayer()
+     * above.
+     */
+    public function testGetTournamentCastStateRevealsPendingDecisionFieldUnlikePlainSpectating(): void
+    {
+        $u1 = $this->insertUser('castdecision1');
+        $u2 = $this->insertUser('castdecision2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 37, 'in_play', $p1); // Duplicity
+        $dignityId = $this->insertGameCard($gameId, 8, 'hand', $p1); // Dignity -- has its own afterPlaying choice
+        $charityId = $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity, value 1 -- discard fodder
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $playResult = $this->games->playMood($gameId, $p1, $dignityId, ['discard_card_id' => $charityId]);
+        self::assertTrue($playResult['pending_decision'] ?? false);
+
+        $spectatorPending = $this->games->getSpectatorState($gameId)['round']['pending_decision'];
+        self::assertFalse($spectatorPending['is_you']);
+        self::assertArrayNotHasKey('field', $spectatorPending);
+
+        $castPending = $this->games->getTournamentCastState($gameId, revealHands: true)['round']['pending_decision'];
+        self::assertFalse($castPending['is_you'], 'a caster is still nobody\'s own target, even though the field is revealed to them');
+        self::assertSame('duplicity_repeat', $castPending['field']['key']);
+        self::assertSame($p1, $castPending['target_game_player_id']);
+
+        // Hands are revealed too, even though the game is still in_progress.
+        $castState = $this->games->getTournamentCastState($gameId, revealHands: true);
+        $p1Cast = array_values(array_filter($castState['players'], fn (array $p): bool => $p['game_player_id'] === $p1))[0];
+        self::assertArrayHasKey('hand', $p1Cast);
+
+        // A plain spectator never gets hands revealed while still in_progress.
+        $spectatorState = $this->games->getSpectatorState($gameId);
+        $p1Spectator = array_values(array_filter($spectatorState['players'], fn (array $p): bool => $p['game_player_id'] === $p1))[0];
+        self::assertArrayNotHasKey('hand', $p1Spectator);
+    }
+
+    /**
+     * Reported live: a "no hands" cast option -- getTournamentCastState()
+     * with $revealHands=false is behaviorally IDENTICAL to
+     * getSpectatorState() (hands never revealed while in_progress,
+     * pending_decision.field never revealed to a non-target); the only
+     * thing a "no hands" caster actually gets over a plain spectator is
+     * authorization to watch without a spectate_code/friendship at all,
+     * which is enforced entirely outside this method (canCastTournamentGame()
+     * in public/index.php) and so isn't itself testable here.
+     */
+    public function testGetTournamentCastStateWithRevealHandsFalseMatchesPlainSpectating(): void
+    {
+        $u1 = $this->insertUser('castnohands1');
+        $u2 = $this->insertUser('castnohands2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 37, 'in_play', $p1); // Duplicity
+        $dignityId = $this->insertGameCard($gameId, 8, 'hand', $p1);
+        $charityId = $this->insertGameCard($gameId, 3, 'hand', $p1);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $dignityId, ['discard_card_id' => $charityId]);
+
+        $noHandsCastState = $this->games->getTournamentCastState($gameId, revealHands: false);
+        $p1NoHandsCast = array_values(array_filter($noHandsCastState['players'], fn (array $p): bool => $p['game_player_id'] === $p1))[0];
+        self::assertArrayNotHasKey('hand', $p1NoHandsCast, 'a no-hands caster gets no hands while the match is still in_progress, same as a plain spectator');
+
+        $noHandsPending = $noHandsCastState['round']['pending_decision'];
+        self::assertFalse($noHandsPending['is_you']);
+        self::assertArrayNotHasKey('field', $noHandsPending, 'a no-hands caster never gets a pending decision\'s own private field either');
+    }
+
+    /**
      * Guile's own "to play" cost field never belongs in a repeat's own
      * choices -- a repeat only re-invokes afterPlaying(), never re-pays a
      * cost already paid once when Guile was originally played -- mirrors

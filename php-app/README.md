@@ -6790,13 +6790,13 @@ username from `state.players`, and every `state.you.*`-driven control
 (Play/Pass buttons, the first-player choice panel, etc.) degrades to
 hidden/disabled rather than crashing.
 
-Only *public* information is exposed for a live game in this first
-implementation. A follow-up "tournament spectator mode" issue tracks a
-separate, trusted-viewer-only mode that would additionally reveal hands
-and pending-decision internals for a still-`in_progress` game (for
-casting/streaming) -- deliberately not built on top of the plain
-`spectate_code` mechanism above, since that mechanism's entire premise
-is that holding a code never reveals hands before the game ends.
+Only *public* information is exposed for a live game via this mechanism.
+See "Tournament spectator mode" below for the separate,
+trusted-viewer-only mode that additionally reveals hands and
+pending-decision internals for a still-`in_progress` tournament match --
+deliberately not built on top of the plain `spectate_code` mechanism
+above, since that mechanism's entire premise is that holding a code
+never reveals hands before the game ends.
 
 Once a spectated game reaches `completed`, the frontend hands off from
 this live single-snapshot view into "Watch replay"'s own step controls
@@ -6804,6 +6804,178 @@ this live single-snapshot view into "Watch replay"'s own step controls
 `GET /games/replay/state` already authorize a spectator the same way
 `GET /games/spectate/state` does. See "Spectator mode" in
 `web-static/README.md` for the client-side switch.
+
+### Tournament spectator mode (issue #238)
+
+A follow-up to plain spectator mode above, for casting/streaming a live
+tournament match: a trusted caster sees hands and pending-decision
+internals even while the match is still `in_progress`, not just once it
+`completed`. Deliberately **not** built on the `spectate_code` mechanism
+-- that mechanism's entire premise is "holding a code never reveals
+hands before the game ends," and a caster needs a distinctly more
+trusted permission than that.
+
+**Who's trusted**: `TournamentService::hasCastAccess(int $tournamentId,
+int $userId): bool` -- true for a tournament's own creator
+(`tournaments.created_by_user_id`, always implicitly trusted) or anyone
+the creator has explicitly granted cast access via
+`grantCastAccess(int $tournamentId, int $granterUserId, string
+$granteeUsername, bool $revealHands = true): array` (`requireCreator()`-gated,
+same as `invite()`; resolves the grantee by username rather than a
+friend-list/search-result id, since there's no existing picker to source
+one from -- mirrors `FriendshipService::sendInvite()`'s own
+`username_or_email` resolution). Stored in the `tournament_cast_grants`
+table (migration `0370`, `reveal_hands` added by migration `0371`:
+`tournament_id`, `user_id`, `granted_by_user_id`, `reveal_hands`) rather
+than reusing `tournament_participants` -- a caster isn't a participant
+at all, and often isn't one (a dedicated streamer with no seat in the
+bracket). `revokeCastAccess()` removes a grant (creator-only);
+`listCastGrants()` returns the current roster -- **not** creator-only
+(see below). A grant is idempotent-ish but not silently so: re-granting
+someone who already has it, or granting the creator themselves (who's
+always already trusted), is a `TournamentStateException`, the same
+"already invited or joined" shape `invite()` uses, so a caller can't
+mistake a duplicate click for confirmation nothing changed.
+
+Reported live: **"user(s) with spectator mode access need to be
+selected when the tournament is created so that all users in the
+tournament can see who is allowed to cast"** -- two separate asks,
+addressed as follows:
+
+- **Selected at creation time**: `createTournament()` gained an
+  `array $castGrants = []` param (each entry `['username' => string,
+  'reveal_hands' => bool]`), resolved and inserted right after the
+  invite loop, once `$tournamentId` actually exists -- same validation
+  as `grantCastAccess()` (an unknown username throws), plus the
+  creator's own username is silently skipped (they're always already
+  trusted) and duplicate grantees -- by resolved user id, not raw
+  string -- collapse to one grant rather than colliding against
+  `tournament_cast_grants`' own unique `(tournament_id, user_id)`
+  constraint. Casters can still be added/revoked after creation too via
+  the same `grantCastAccess()`/`revokeCastAccess()` the tournament view
+  dialog's own "Casters" section uses -- creation-time selection is an
+  additional entry point, not a replacement for it.
+- **Visible to everyone in the tournament**: `listCastGrants()`'s own
+  access check changed from creator-only to the same broadened audience
+  `getState()` already allows (a new private `canViewTournament()`
+  helper both now share) -- the creator, any invited/joined participant,
+  a granted caster themselves, or anyone at all once registration is
+  `open`. `getState()` additionally embeds this same list as
+  `cast_grants` in its own response (`{id, tournament_id, user_id,
+  username, granted_by_user_id, reveal_hands, created_at}[]`) so the
+  tournament view loads it for free, no second round-trip.
+
+**"No hands" option** (reported live): `reveal_hands` on a grant decides
+whether a caster's `GameService::getTournamentCastState(int $gameId,
+bool $revealHands): array` call reveals hands/pending-decision internals
+at all. `$revealHands = true` is the original issue #238 behavior
+(hands + pending-decision internals revealed even while `in_progress`);
+`$revealHands = false` makes the response **identical** to
+`getSpectatorState()` (hands only ever revealed once `completed`,
+`pending_decision.field` never revealed to a non-target) -- the only
+thing a "no hands" caster actually gets over a plain issue #128
+spectator is not needing a `spectate_code`/friendship to watch a
+still-`in_progress` match at all. `TournamentService::castRevealsHands(int
+$tournamentId, int $userId): bool` resolves which mode applies -- the
+creator is always `true` regardless of any grant; a granted caster gets
+whatever `$revealHands` their own grant stored.
+
+`GET /games/tournament-cast/state`'s own handler in `index.php` resolves
+which tournament (if any) the game belongs to via
+`GameService::tournamentIdForGame(int $gameId): ?int` (the same
+three-way `tournament_matches` lookup `buildGameState()`'s own
+`$isTournamentMatch` flag already performs -- a bare single game's own
+`game_id`, a best-of-three match's `game_match_id`, or a draft match's
+`draft_match_id`), checks `hasCastAccess()` against it, then resolves
+`castRevealsHands()` to decide which mode to actually request. A
+non-tournament game has no cast permission at all, regardless of who's
+asking.
+
+Internally, `buildGameState()` has a second reveal flag,
+`bool $tournamentCastMode = false`, alongside the existing
+`$revealAllHands` (only ever true for a *completed* game -- see plain
+spectator mode above): `$revealAllHands || $tournamentCastMode` gates
+`players[].hand`, so a hands-revealing cast viewer's hands show
+regardless of the match's own status; `getTournamentCastState()` simply
+never sets `$tournamentCastMode` true for a "no hands" caster. The
+trickier half is `pending_decision.field` (`serializePendingDecision()`'s
+own private choice payload, normally gated on `$isYou =
+$targetGamePlayerId === $viewerGamePlayerId`, which a null-viewer caster
+never satisfies) -- a `$revealToNonTarget` parameter (fed the same
+`$tournamentCastMode` value) reveals `field` independently of `is_you`,
+which **stays accurately `false`** for a caster (they're still not the
+one making the decision, just allowed to see it, when they're allowed to
+see it at all). `getSpectatorState()`/`getState()` both pass
+`$revealToNonTarget = false` (unchanged behavior).
+
+`GET /tournaments/state` (`TournamentService::getState()`) has
+`viewer_has_cast_access: bool` and a relaxed access check -- a granted
+caster who isn't otherwise a participant (and this is an invite-only
+tournament) can still load the bracket to find the match they're
+casting, the same bypass a tournament's own creator or an
+open-registration tournament already gets -- plus `viewer_cast_reveals_hands:
+?bool` (`null` when `viewer_has_cast_access` is false) so the frontend
+can label its own "Cast" button correctly without searching
+`cast_grants` for its own row (which wouldn't even find the creator --
+never listed there). `TournamentRepository::listForUser()` (behind
+`GET /tournaments?mine=1`, the frontend's own "Tournaments" dialog) got
+the equivalent fix -- a granted caster with no participant row of their
+own now finds the tournament there too, rather than having no way to
+even discover it in the UI despite being able to load it by id.
+
+**Frontend** (`web-static/js/game.js`): the New Tournament dialog gained
+its own "Casters" fields (`#new-tournament-casters-fields`) -- a
+free-text username (not the friends checkboxes the invite list uses,
+since a caster is often not a friend or participant at all) plus a
+"Reveal hands" checkbox per row, collected client-side into
+`newTournamentCastGrants` and sent as `createTournament()`'s own
+`cast_grants` param on submit. A new `isCasting` flag parallels
+`isSpectating`/`isReplaying` (folded into `isReadOnlyView()`), with its
+own `showCastBoard(gameId)` (opened from the tournament view dialog's
+"Cast (reveal hands)"/"Cast (public info only)" button on an
+`in_progress` match -- `renderBracketRounds()`, shown only when
+`viewer_has_cast_access` is true, labeled from
+`viewer_cast_reveals_hands`) and `getTournamentCastState()` API call.
+`refreshBoard()` reuses the exact same `state.you` stub pattern
+`isSpectating` already established, and `renderSpectatorFinalHands()`
+needed no changes at all -- it already just checks for `players[].hand`
+presence, regardless of why it's there (or isn't, for a "no hands"
+caster). A revealed pending decision renders as a disabled, read-only
+preview inside the same `#pending-decision-panel` a real responder gets
+(`renderCastPendingDecisionPreview()` -- every control disabled via
+`disableFieldRowControls()`, no Respond button), rather than a second
+bespoke renderer; a "no hands" caster never gets `pending_decision.field`
+at all, so this simply never fires for them, same as a plain spectator.
+The tournament view dialog's own "Casters" section
+(`renderTournamentCasters()`) now lists the current roster (with each
+one's mode -- "(public info only, no hands)" where it applies) for
+**every** viewer, reading straight off `getState()`'s own embedded
+`cast_grants`; only the add-caster form and each row's "Revoke" button
+stay creator-only.
+
+Building this surfaced a pre-existing, app-wide history/navigation bug:
+`tournamentViewDialog.close(); tournamentsDialog.close(); showBoard(...)`
+(the "Go to game"/"Continue drafting" pattern this feature's own "Cast"
+button also follows) closes *two* dialogs in the same tick, each queuing
+its own orphan-cleanup `history.back()` via the shared
+`dialogHistoryObserver` -- but the flag that swallows the resulting
+self-triggered `popstate` event, `suppressNextPopState`, was a plain
+boolean that could only ever swallow the *first* of the two. The second
+popstate fell through to the handler's normal logic and, with no dialog
+left open, was treated as a genuine Back press -- silently bouncing the
+player back to the lobby instead of opening the board (a real, if easy
+to miss, interactivity glitch pre-dating this feature). For a spectator/
+tournament-caster view specifically, that stray `showLobby()` also
+resets `isSpectating`/`isCasting` back to false and clears `currentGameId`
+*while the initial `refreshBoard()` fetch for the board being opened is
+still in flight* -- so when that fetch resolves moments later, it finds
+`isCasting` already false, skips the `state.you` stub, and crashes
+`renderBoard()` outright on `state.you.game_player_id` (the same shape of
+bug the Watch Replay crash, issue #240, was). Fixed by turning
+`suppressNextPopState` into a counter, `pendingSuppressedPopStates`,
+incremented once per orphaned dialog and decremented (not reset to zero)
+per swallowed `popstate` -- correctly swallowing however many
+self-triggered `popstate`s were actually queued, not just the first.
 
 ### Watch replay (issue #240)
 

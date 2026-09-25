@@ -66,6 +66,15 @@ final class TournamentRepository
      * decide who actually gets shown it (see tournamentListItemLabel()
      * in web-static/js/game.js).
      */
+    /**
+     * Tournament spectator mode (issue #238): a tournament the viewer has
+     * been granted cast access to (tournament_cast_grants) also counts as
+     * "mine" here, alongside creating it or having a participant row --
+     * otherwise a dedicated caster with no seat of their own would have
+     * no way to even find the tournament they're supposed to cast in
+     * this list, despite TournamentService::getState() already letting
+     * them load it directly by id.
+     */
     public function listForUser(int $userId): array
     {
         $stmt = Connection::get()->prepare(
@@ -74,10 +83,11 @@ final class TournamentRepository
              FROM tournaments t
              LEFT JOIN tournament_participants tp ON tp.tournament_id = t.id AND tp.user_id = :user_id
              LEFT JOIN users w ON w.id = t.winner_user_id
-             WHERE t.created_by_user_id = :user_id_created OR tp.id IS NOT NULL
+             LEFT JOIN tournament_cast_grants tcg ON tcg.tournament_id = t.id AND tcg.user_id = :user_id_cast_grant
+             WHERE t.created_by_user_id = :user_id_created OR tp.id IS NOT NULL OR tcg.id IS NOT NULL
              ORDER BY t.created_at DESC"
         );
-        $stmt->execute(['user_id' => $userId, 'user_id_created' => $userId]);
+        $stmt->execute(['user_id' => $userId, 'user_id_created' => $userId, 'user_id_cast_grant' => $userId]);
 
         return array_map($this->decode(...), $stmt->fetchAll());
     }

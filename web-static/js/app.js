@@ -563,6 +563,23 @@ function declineTournamentInvite(tournamentId) {
     });
 }
 
+// Tournament spectator mode (issue #238): the creator grants a caster
+// (identified by username, not user_id -- there's no friend-list picker
+// here) live, hands-revealed viewing of this tournament's matches.
+function grantTournamentCastAccess(tournamentId, username, revealHands = true) {
+    return apiRequest('/tournaments/cast-grants/add', {
+        method: 'POST',
+        body: JSON.stringify({ tournament_id: tournamentId, username, reveal_hands: revealHands }),
+    });
+}
+
+function revokeTournamentCastAccess(tournamentId, userId) {
+    return apiRequest('/tournaments/cast-grants/remove', {
+        method: 'POST',
+        body: JSON.stringify({ tournament_id: tournamentId, user_id: userId }),
+    });
+}
+
 // deckParams -- see acceptTournamentInvite()'s own docblock just above.
 function joinTournament(tournamentId, deckParams = {}) {
     return apiRequest('/tournaments/join', {
@@ -882,6 +899,14 @@ function getSpectatorGameState(gameId, code) {
         path += '&code=' + encodeURIComponent(code);
     }
     return apiRequest(path);
+}
+
+// Tournament spectator mode (issue #238) -- the trusted-caster equivalent
+// of getSpectatorGameState() above, revealing hands even while the match
+// is still in_progress. No code param -- authorization is the server's
+// own tournament cast-grant check, not a shareable code.
+function getTournamentCastState(gameId) {
+    return apiRequest('/games/tournament-cast/state?game_id=' + encodeURIComponent(gameId));
 }
 
 function startGame(gameId) {

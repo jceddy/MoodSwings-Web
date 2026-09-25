@@ -9,6 +9,7 @@ use MoodSwings\Game\CardCatalog;
 use MoodSwings\Game\Exceptions\GameStateException;
 use MoodSwings\Game\GameService;
 use MoodSwings\Repository\FriendshipRepository;
+use MoodSwings\Repository\TournamentCastGrantRepository;
 use MoodSwings\Repository\TournamentMatchRepository;
 use MoodSwings\Repository\TournamentParticipantRepository;
 use MoodSwings\Repository\TournamentPodRepository;
@@ -69,6 +70,7 @@ final class TournamentService implements TournamentMatchObserver
         private readonly BoosterDraftPodBuilder $podBuilder,
         private readonly GridDraftPodBuilder $gridDraftPodBuilder,
         private readonly AchievementService $achievements = new AchievementService(),
+        private readonly TournamentCastGrantRepository $castGrants = new TournamentCastGrantRepository(),
     ) {
     }
 
@@ -103,6 +105,16 @@ final class TournamentService implements TournamentMatchObserver
         array $inviteUserIds = [],
         ?string $creatorDecklistText = null,
         ?int $creatorSavedDecklistId = null,
+        // Reported live: "user(s) with spectator mode access need to be
+        // selected when the tournament is created so that all users in
+        // the tournament can see who is allowed to cast" -- each entry
+        // is ['username' => string, 'reveal_hands' => bool], resolved
+        // and inserted the same way grantCastAccess() would, once
+        // $tournamentId actually exists. Free-text usernames (not a
+        // friend-list picker like $inviteUserIds) since a caster is
+        // often not a friend or participant at all -- see
+        // grantCastAccess()'s own docblock for why.
+        array $castGrants = [],
     ): int {
         if (!in_array($bracketType, self::BRACKET_TYPES, true)) {
             throw new TournamentStateException("Unknown tournament bracket type \"{$bracketType}\"");
@@ -232,6 +244,35 @@ final class TournamentService implements TournamentMatchObserver
             }
         }
 
+        // Tournament spectator mode follow-up (reported live: casters
+        // selected at creation time) -- same grantCastAccess() rules
+        // (resolve by username, reveal_hands defaults true), just applied
+        // to a tournament that only now exists rather than an existing
+        // one. Deduplicated by resolved user id (not raw username) so
+        // two different-cased spellings of the same account, or the same
+        // one listed twice, can't collide against castGrants' own unique
+        // (tournament_id, user_id) constraint. The tournament's own
+        // creator is silently skipped if listed here (they're always
+        // already trusted -- see hasCastAccess()), the same "silently
+        // skip yourself" convention the invite loop above uses.
+        $grantedCastUserIds = [];
+        foreach ($castGrants as $castGrant) {
+            $granteeUsername = trim((string) ($castGrant['username'] ?? ''));
+            if ($granteeUsername === '') {
+                continue;
+            }
+            $grantee = $this->users->findByUsername($granteeUsername);
+            if ($grantee === null) {
+                throw new TournamentStateException("No such user \"{$granteeUsername}\"");
+            }
+            $granteeUserId = (int) $grantee['id'];
+            if ($granteeUserId === $createdByUserId || isset($grantedCastUserIds[$granteeUserId])) {
+                continue;
+            }
+            $grantedCastUserIds[$granteeUserId] = true;
+            $this->castGrants->add($tournamentId, $granteeUserId, $createdByUserId, (bool) ($castGrant['reveal_hands'] ?? true));
+        }
+
         return $tournamentId;
     }
 
@@ -279,6 +320,164 @@ final class TournamentService implements TournamentMatchObserver
         }
 
         $this->participants->updateStatus((int) $participant['id'], 'declined');
+    }
+
+    /**
+     * Tournament spectator mode (issue #238): the creator grants a user
+     * -- a dedicated caster, not necessarily a participant at all --
+     * live, hands-revealed viewing of this tournament's matches while
+     * still in_progress. Deliberately its own grant, never the ordinary
+     * spectate_code from issue #128 -- see
+     * database/migrations/0370's own docblock for why. Idempotent-ish in
+     * spirit but not silently so: re-granting someone who already has it
+     * is a state error, the same "already invited or joined" shape
+     * invite() above uses, rather than a no-op UPSERT, so a caller can't
+     * mistake a duplicate click for confirmation nothing changed.
+     *
+     * $granteeUsername (rather than a user_id, unlike invite()'s own
+     * $inviteeUserId) since granting cast access has no friend-list/
+     * search-result picker to source an id from -- the organizer simply
+     * types the caster's username, the same way FriendshipService::
+     * sendInvite()'s own username_or_email is resolved server-side.
+     *
+     * $revealHands (reported live: a "no hands" option) -- true grants
+     * the original issue #238 behavior (hands + pending-decision
+     * internals revealed even while in_progress); false grants a caster
+     * only the same public information a plain issue #128 spectator sees
+     * for an in_progress game, just without needing a spectate_code or
+     * friendship to get it. See GameService::getTournamentCastState()'s
+     * own docblock for exactly what each mode does and doesn't reveal.
+     *
+     * @return array{id: int, username: string, reveal_hands: bool} the grantee, so a caller doesn't have to look them back up
+     */
+    public function grantCastAccess(int $tournamentId, int $granterUserId, string $granteeUsername, bool $revealHands = true): array
+    {
+        $tournament = $this->requireTournament($tournamentId);
+        $this->requireCreator($tournament, $granterUserId);
+
+        $grantee = $this->users->findByUsername($granteeUsername);
+        if ($grantee === null) {
+            throw new TournamentStateException("No such user \"{$granteeUsername}\"");
+        }
+        $granteeUserId = (int) $grantee['id'];
+        if ((int) $tournament['created_by_user_id'] === $granteeUserId) {
+            throw new TournamentStateException('The tournament creator already has cast access');
+        }
+        if ($this->castGrants->find($tournamentId, $granteeUserId) !== null) {
+            throw new TournamentStateException('That user already has cast access to this tournament');
+        }
+
+        $this->castGrants->add($tournamentId, $granteeUserId, $granterUserId, $revealHands);
+
+        return ['id' => $granteeUserId, 'username' => $grantee['username'], 'reveal_hands' => $revealHands];
+    }
+
+    /** Tournament spectator mode (issue #238): the creator revokes a previously granted caster's access. Revoking a grant that doesn't exist is a harmless no-op, same as DELETE always is. */
+    public function revokeCastAccess(int $tournamentId, int $granterUserId, int $granteeUserId): void
+    {
+        $tournament = $this->requireTournament($tournamentId);
+        $this->requireCreator($tournament, $granterUserId);
+
+        $this->castGrants->remove($tournamentId, $granteeUserId);
+    }
+
+    /**
+     * Tournament spectator mode (issue #238): the tournament's own roster
+     * of everyone explicitly granted cast access (never includes the
+     * creator themselves -- hasCastAccess() below always treats them as
+     * trusted implicitly, so they'd never need to be listed here).
+     * Reported live: "all users in the tournament can see who is allowed
+     * to cast" -- viewable by the same audience getState() itself allows
+     * (creator, participant, a granted caster, or anyone for an
+     * open-registration tournament), not creator-only -- getState()
+     * already embeds this same list as 'cast_grants' for its own
+     * viewers, so this standalone method mainly exists for the creator's
+     * own "Casters" management dialog to re-fetch just this after an
+     * add/revoke.
+     *
+     * @return array[] {id, tournament_id, user_id, username, granted_by_user_id, reveal_hands, created_at}, oldest grant first
+     */
+    public function listCastGrants(int $tournamentId, int $requesterUserId): array
+    {
+        $tournament = $this->requireTournament($tournamentId);
+        if (!$this->canViewTournament($tournament, $requesterUserId)) {
+            throw new NotAuthorizedForTournamentException("You're not part of this tournament");
+        }
+
+        return $this->castGrants->listForTournament($tournamentId);
+    }
+
+    /**
+     * Tournament spectator mode (issue #238): whether $userId may view
+     * this tournament's still-in_progress matches at all as a trusted
+     * caster (with or without hands revealed -- see castRevealsHands()
+     * for which) -- either they created the tournament (always
+     * implicitly trusted, the same way a game's own created_by_user_id
+     * already gets creator-only fields elsewhere) or the creator
+     * explicitly granted them access. Never throws -- a nonexistent
+     * tournament simply has no one with cast access, the same "false,
+     * not an error" shape GameService::tournamentIdForGame()'s own
+     * caller relies on.
+     */
+    public function hasCastAccess(int $tournamentId, int $userId): bool
+    {
+        $tournament = $this->tournaments->find($tournamentId);
+        if ($tournament === null) {
+            return false;
+        }
+        if ((int) $tournament['created_by_user_id'] === $userId) {
+            return true;
+        }
+
+        return $this->castGrants->find($tournamentId, $userId) !== null;
+    }
+
+    /**
+     * Tournament spectator mode follow-up (reported live: a "no hands"
+     * cast option): whether $userId's own cast access (hasCastAccess()
+     * must already be true, or this is meaningless) reveals hands -- the
+     * tournament's own creator is always fully trusted (true); a granted
+     * caster gets whatever $revealHands grantCastAccess() stored for
+     * them. False (not an error) for someone with no cast access at all,
+     * matching hasCastAccess()'s own "false, not an error" shape --
+     * callers are expected to check hasCastAccess() first regardless.
+     */
+    public function castRevealsHands(int $tournamentId, int $userId): bool
+    {
+        $tournament = $this->tournaments->find($tournamentId);
+        if ($tournament === null) {
+            return false;
+        }
+        if ((int) $tournament['created_by_user_id'] === $userId) {
+            return true;
+        }
+
+        $grant = $this->castGrants->find($tournamentId, $userId);
+
+        return $grant !== null && $grant['reveal_hands'];
+    }
+
+    /**
+     * Tournament spectator mode (issue #238): the shared "who's allowed
+     * to even load this tournament" rule getState() and listCastGrants()
+     * both enforce -- the creator, an invited/joined participant, a
+     * granted caster (hasCastAccess() already covers the creator too,
+     * checked last since it's the only branch requiring an extra query),
+     * or anyone at all once registration is 'open'.
+     */
+    private function canViewTournament(array $tournament, int $viewerUserId): bool
+    {
+        if ((int) $tournament['created_by_user_id'] === $viewerUserId) {
+            return true;
+        }
+        if ($tournament['registration_mode'] === 'open') {
+            return true;
+        }
+        if ($this->participants->findForUser((int) $tournament['id'], $viewerUserId) !== null) {
+            return true;
+        }
+
+        return $this->hasCastAccess((int) $tournament['id'], $viewerUserId);
     }
 
     public function joinOpenTournament(int $tournamentId, int $userId, ?string $decklistText = null, ?int $savedDecklistId = null): void
@@ -1504,10 +1703,22 @@ final class TournamentService implements TournamentMatchObserver
     public function getState(int $tournamentId, int $viewerUserId): array
     {
         $tournament = $this->requireTournament($tournamentId);
-        $participant = $this->participants->findForUser($tournamentId, $viewerUserId);
-        if ($tournament['created_by_user_id'] !== $viewerUserId && $participant === null && $tournament['registration_mode'] !== 'open') {
+        // Tournament spectator mode (issue #238): a granted caster who
+        // isn't otherwise a participant (e.g. a dedicated streamer) still
+        // needs to be able to load this invite-only tournament's own
+        // bracket to find the match they're casting -- canViewTournament()
+        // already covers the creator too, so this is purely additive.
+        if (!$this->canViewTournament($tournament, $viewerUserId)) {
             throw new NotAuthorizedForTournamentException("You're not part of this tournament");
         }
+        $viewerHasCastAccess = $this->hasCastAccess($tournamentId, $viewerUserId);
+        // Reported live: "all users in the tournament can see who is
+        // allowed to cast" -- everyone who reaches this point (a
+        // participant, the creator, a granted caster, or anyone for an
+        // open-registration tournament) sees the same roster
+        // listCastGrants() itself would return them, without a second
+        // round-trip.
+        $castGrants = $this->castGrants->listForTournament($tournamentId);
 
         $rounds = $this->matches->listRounds($tournamentId);
         $matchesByRound = [];
@@ -1534,6 +1745,24 @@ final class TournamentService implements TournamentMatchObserver
                 ? $this->swissStandings($tournamentId)
                 : null,
             'pods' => ($this->isBoosterDraft($tournament) || $this->isGridDraftPod($tournament) || $this->isGridDraftPodPlayoff($tournament)) ? $this->podsSummary($tournamentId) : null,
+            // Tournament spectator mode (issue #238): lets the frontend
+            // show "Cast" links on this tournament's in_progress matches
+            // for a non-creator caster too, not just the creator (who can
+            // already infer it from being the creator).
+            'viewer_has_cast_access' => $viewerHasCastAccess,
+            // Reported live: a "no hands" cast option -- null when the
+            // viewer has no cast access at all (viewer_has_cast_access is
+            // false); lets the frontend label its own "Cast" button
+            // correctly ("Cast (reveal hands)" vs "Cast (public info
+            // only)") without having to search $castGrants for the
+            // viewer's own row itself, which wouldn't even find the
+            // creator (never listed there -- see hasCastAccess()).
+            'viewer_cast_reveals_hands' => $viewerHasCastAccess ? $this->castRevealsHands($tournamentId, $viewerUserId) : null,
+            // {id, tournament_id, user_id, username, granted_by_user_id,
+            // reveal_hands, created_at}[] -- see listCastGrants()'s own
+            // docblock. Reported live: everyone in the tournament should
+            // be able to see who's allowed to cast, not just the creator.
+            'cast_grants' => $castGrants,
         ];
     }
 
