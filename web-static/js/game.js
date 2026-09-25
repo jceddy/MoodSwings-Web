@@ -1583,6 +1583,20 @@
     let currentGameId = null;
     let currentState = null;
     let pollTimer = null;
+    // Issue #192 loop warning (reported live: "I didn't see the warning,
+    // though it did successfully force-pass my turn" -- the player-row
+    // badge buildLoopWarningStat() adds is easy to miss entirely, since
+    // nothing draws the eye to it). Tracks the game_player_id:
+    // occurrence_count of whichever warning showAlertDialog() has already
+    // popped up for, so the same still-unresolved warning doesn't re-pop
+    // on every ~4s poll while it remains non-null -- see renderBoard()'s
+    // own use of this just below buildLoopWarningStat(). Reset in
+    // showBoard() (a fresh game load has nothing to have already shown),
+    // and back to null the moment a poll comes back with loop_warning
+    // itself null again (the turn ended, one way or another), so a later,
+    // unrelated recurrence within a still-later turn pops its own dialog
+    // rather than being silently treated as "already seen."
+    let loopWarningDialogAcknowledgedKey = null;
     // Synchronous mode's own live action timer (reported live: "which
     // should be visible in the game display") -- a separate 1-second
     // interval from pollTimer above, since a 30-second countdown needs
@@ -1768,6 +1782,7 @@
         // dead ever since the deck-building step was generalized past
         // Quick Draft -- rather than this one).
         draftDeckSelectionInitialized = false;
+        loopWarningDialogAcknowledgedKey = null;
         showLoadingOverlay();
         refreshBoard().finally(hideLoadingOverlay);
         if (pollTimer) {
@@ -7847,6 +7862,47 @@
         return buildPlayerStat('loopWarning', occurrenceCount, label);
     }
 
+    // Reported live: the badge buildLoopWarningStat() adds above sits
+    // quietly next to the player's name -- easy enough to miss that the
+    // auto-pass fired without the player ever having noticed the warning
+    // that preceded it. This is the same warning, just also pushed through
+    // showAlertDialog() (see its own docblock -- the shared #confirm-dialog
+    // window.alert() replacement, since a real <dialog> can't be
+    // suppressed the way iOS suppresses window.alert() itself) so it's
+    // impossible to keep playing past without acknowledging it. Only pops
+    // for the player it's actually about (loop_warning.game_player_id,
+    // never an opponent's), and only once per distinct occurrence_count --
+    // loopWarningDialogAcknowledgedKey (declared up top alongside
+    // currentGameId) remembers the last one already shown so this doesn't
+    // reopen on every ~4s poll for as long as the same warning stays
+    // un-resolved. Skips the dialog outright if #confirm-dialog already
+    // has something else open (e.g. a resign confirmation mid-flight) --
+    // showModal() on an already-open <dialog> throws, and there's nothing
+    // useful to preempt a player's in-progress confirmation for.
+    function maybeShowLoopWarningDialog(state) {
+        const warning = state.game.loop_warning;
+
+        if (warning === null) {
+            loopWarningDialogAcknowledgedKey = null;
+            return;
+        }
+
+        if (warning.game_player_id !== state.you.game_player_id) {
+            return;
+        }
+
+        const warningKey = warning.game_player_id + ':' + warning.occurrence_count;
+        if (warningKey === loopWarningDialogAcknowledgedKey || confirmDialog.open) {
+            return;
+        }
+
+        loopWarningDialogAcknowledgedKey = warningKey;
+        showAlertDialog(
+            'This exact board state has repeated ' + warning.occurrence_count + ' times this turn. '
+            + 'Repeating it again will end your turn automatically.',
+        );
+    }
+
     function renderBoard(state) {
         // A custom decklist's own name (or "Uploaded Deck" if none was
         // specified) replaces "<deck type> deck" entirely here, rather than
@@ -7859,6 +7915,7 @@
         // deckTypeLabel()'s generic "Custom Decklists (Duel) deck", which
         // never actually named anything the viewer had chosen.
         const you = state.players.find((p) => p.game_player_id === state.you.game_player_id);
+        maybeShowLoopWarningDialog(state);
         const deckDescription = state.game.deck_type === 'custom'
             ? (state.game.custom_deck_name || 'Uploaded Deck')
             : state.game.deck_type === 'custom_duel'
