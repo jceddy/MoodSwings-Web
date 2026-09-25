@@ -2559,6 +2559,42 @@ final class BoardState
         return array_values(array_filter($this->playGrants, fn (?array $g) => $this->grantIsActive($g)));
     }
 
+    /**
+     * Bug caught live (reported: "I should have more plays here" -- Pride
+     * targeting an opponent, then Betrayal giving Pride itself to that
+     * SAME opponent): GameService's own "same player continues" call
+     * sites (a mid-play pause for a pending decision, that decision's own
+     * later resolution, and finishPlay()'s "plays_remaining > 0" branch --
+     * see updateRoundTurnState()'s own callers) used to persist
+     * pendingPlayGrants() -- the FILTERED, currently-active-only list --
+     * into game_rounds.pending_play_grants. That's the right thing to
+     * show a player right now (see this method's own other callers, both
+     * display-only), but wrong to persist: a self-renewing grant like
+     * Pride's own 'requiresBehindPlayer' (see grantIsActive()'s own
+     * docblock) is designed to reactivate later in the turn if the
+     * condition holds again, which requires it to still EXIST in
+     * $playGrants next time this is checked -- but filtering it out here
+     * at a moment it happens to be transiently inactive (e.g. tied 3-3
+     * the instant Betrayal itself enters play, before its own "give a
+     * mood away" decision even resolves) meant it was simply never
+     * written to the database at all. The next request reloads BoardState
+     * fresh from that same column (BoardStateRepository::load()), so a
+     * grant dropped here is gone for the rest of the turn, not merely
+     * inactive -- even though the SAME request's own in-memory $playGrants
+     * (see useGrantFor()'s own docblock on why this grant type is never
+     * removed from it) never actually lost it. This is what those three
+     * call sites should persist instead -- the complete, unfiltered list,
+     * exactly mirroring pendingPlayGrants()'s own filter for the current
+     * signature/JSON shape, but keeping every entry regardless of whether
+     * grantIsActive() currently agrees with it.
+     *
+     * @return array<int, ?array{type?: string, values?: int[], source?: string, onUseEffectState?: array<string, mixed>}>
+     */
+    public function allPlayGrantsForPersistence(): array
+    {
+        return array_values($this->playGrants);
+    }
+
     /** Whether any outstanding grant this turn -- restricted or not -- would allow playing $cardId. */
     public function hasUsablePlayGrant(int $cardId, int $playerId): bool
     {

@@ -1700,6 +1700,29 @@ its own effect either way, matching the ruling that you may play such a
 card as long as the opponent was still ahead at the moment you committed
 to it, even though it doesn't stay ahead once that same card resolves.
 
+Because this grant is designed to survive a moment of transient
+inactivity (the mood gap can close and reopen within the same turn), it
+must never be dropped from what gets persisted just because
+`grantIsActive()` happens to disagree with it right now. That distinction
+was missed at first: `GameService`'s three "same player continues
+mid-turn" call sites for `updateRoundTurnState()` (a play pausing on its
+own pending decision, that decision's later resolution, and
+`finishPlay()`'s "plays remaining" branch) persisted
+`BoardState::pendingPlayGrants()` -- the filtered, currently-active-only
+view meant for `playsRemaining()`'s count and the API's display fields --
+into `game_rounds.pending_play_grants`. That's fine for those two uses,
+but wrong for persistence: playing Pride against an opponent and then
+Betrayal (spending Pride's own grant to give Pride itself to that same
+opponent) momentarily ties the mood count the instant Betrayal itself
+enters play, before its own "give a mood away" decision even resolves --
+so the filtered view dropped the grant from what got saved, even though
+`$playGrants` in memory never lost it. The next request reloaded
+`BoardState` fresh from that same column, so the grant was gone for the
+rest of the turn rather than merely inactive. Fixed by adding
+`BoardState::allPlayGrantsForPersistence()`, an unfiltered view used only
+for what those three call sites write to `pending_play_grants`; the
+filtered `pendingPlayGrants()` still drives everything else unchanged.
+
 Losing a grant this way is silent from `playsRemaining()`'s own
 perspective -- it just reads one lower, with nothing to say why -- so
 `BoardState::cascadeMoodLeavingPlay()` (already the one place every

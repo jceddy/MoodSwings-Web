@@ -6413,7 +6413,7 @@ final class GameService
 
                 try {
                     $this->boardStates->save($gameId, $state);
-                    $this->updateRoundTurnState($roundId, $gamePlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId(), $state);
+                    $this->updateRoundTurnState($roundId, $gamePlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId(), $state, persistedPlayGrants: $state->allPlayGrantsForPersistence());
                     $this->writePendingBatch($gameId, $roundId, $gamePlayerId, $playerChoices, $result->invocationChoices, $result);
                     $this->logEvent($gameId, $roundId, $gamePlayerId, 'pending_decision_created', $cardId, $this->withPlayedFrom($state, $cardId, $choices), $state);
 
@@ -9756,7 +9756,7 @@ final class GameService
                 // Already inside this method's own transaction, so this
                 // just writes rows -- no nested beginTransaction().
                 $this->boardStates->save($gameId, $state);
-                $this->updateRoundTurnState($roundId, $initiatingPlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId(), $state);
+                $this->updateRoundTurnState($roundId, $initiatingPlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId(), $state, persistedPlayGrants: $state->allPlayGrantsForPersistence());
                 $this->writePendingBatch($gameId, $roundId, $initiatingPlayerId, $topLevelChoices, $result->invocationChoices, $result);
                 $this->logEvent($gameId, $roundId, $initiatingPlayerId, 'pending_decision_created', $playedCardId, $this->withPlayedFrom($state, $playedCardId, []), $state);
 
@@ -10993,7 +10993,7 @@ final class GameService
         $this->boardStates->save($gameId, $state);
 
         if ($state->playsRemaining() > 0) {
-            $turnState = $this->updateRoundTurnState((int) $round['id'], $actingGamePlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId(), $state);
+            $turnState = $this->updateRoundTurnState((int) $round['id'], $actingGamePlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId(), $state, persistedPlayGrants: $state->allPlayGrantsForPersistence());
 
             // Issue #192: the player repeated an already-warned-about board
             // state anyway -- end their turn for them rather than trusting
@@ -21445,8 +21445,34 @@ final class GameService
      *             callers that care whether to warn/auto-pass a human or
      *             steer a bot away read this; every other caller ignores it.
      */
-    /** @return array{exactCount: int, chaosLoopAutoPass: bool} */
-    private function updateRoundTurnState(int $roundId, int $playerId, array $playGrants, bool $discardedThisRound, bool $skipScoringThisRound, ?int $skipScoringFirstPlayerId, ?int $skipScoringSourceCardId, ?int $skipScoringOwnerId, bool $awardsExtraWinThisRound, ?int $awardsExtraWinSourceCardId, ?int $awardsExtraWinOwnerId, BoardState $state): array
+    /**
+     * $persistedPlayGrants, when given, is what actually gets written to
+     * game_rounds.pending_play_grants -- $playGrants itself still drives
+     * plays_remaining (count($playGrants), unchanged) and every other
+     * read here. Bug caught live (reported: "I should have more plays
+     * here" -- Pride targeting an opponent, then Betrayal giving Pride
+     * itself to that SAME opponent): every "same player continues" call
+     * site used to persist $state->pendingPlayGrants() -- the FILTERED,
+     * currently-active-only list -- as pending_play_grants too, which
+     * permanently drops a self-renewing grant (Pride's own
+     * 'requiresBehindPlayer' -- see BoardState::grantIsActive()'s own
+     * docblock) from the database the instant it's transiently inactive
+     * (e.g. tied 3-3 the moment Betrayal itself enters play, before its
+     * own "give a mood away" decision even resolves), even though it's
+     * designed to reactivate later if the gap reopens and is never
+     * removed from the in-memory $playGrants that produced it (see
+     * BoardState::useGrantFor()'s own docblock). Those three call sites
+     * now separately pass $state->allPlayGrantsForPersistence() (the
+     * complete, unfiltered list) here, so a grant that's merely inactive
+     * survives to be re-evaluated on the next request instead of being
+     * lost outright -- see that method's own docblock for the full
+     * writeup. Defaults to $playGrants for every other, unaffected call
+     * site (a fresh turn/round's own newly COMPUTED grants, which have
+     * no "already existed, might reactivate" history to preserve).
+     *
+     * @return array{exactCount: int, chaosLoopAutoPass: bool}
+     */
+    private function updateRoundTurnState(int $roundId, int $playerId, array $playGrants, bool $discardedThisRound, bool $skipScoringThisRound, ?int $skipScoringFirstPlayerId, ?int $skipScoringSourceCardId, ?int $skipScoringOwnerId, bool $awardsExtraWinThisRound, ?int $awardsExtraWinSourceCardId, ?int $awardsExtraWinOwnerId, BoardState $state, ?array $persistedPlayGrants = null): array
     {
         $pdo = Connection::get();
 
@@ -21496,7 +21522,7 @@ final class GameService
         $stmt->execute([
             'player_id' => $playerId,
             'plays_remaining' => count($playGrants),
-            'pending_play_grants' => json_encode($playGrants),
+            'pending_play_grants' => json_encode($persistedPlayGrants ?? $playGrants),
             'loop_state_signature_counts' => json_encode($state->turnStateSignatureCounts()),
             'chaos_loop_state' => json_encode([
                 'coarseCounts' => $state->coarseTurnStateSignatureCounts(),
