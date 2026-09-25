@@ -2093,4 +2093,140 @@ final class TournamentServiceIntegrationTest extends TestCase
         $this->expectException(NotAuthorizedForTournamentException::class);
         $this->tournaments->listCastGrants($tournamentId, $stranger);
     }
+
+    /**
+     * Reported live: "casters with access to private information (both
+     * user's hands) can't play in the tournament" -- a hands-revealed
+     * grant sees every match's hands, not just whoever they're
+     * personally seated against, so letting them also be an active
+     * participant would hand them a scouting advantage. A "no hands"
+     * grant is exempt since it never reveals more than a plain
+     * spectator would.
+     */
+    public function testGrantCastAccessRejectsFullHandsGrantToAnExistingParticipant(): void
+    {
+        $creator = $this->insertUser('excl_grant_creator');
+        $p2 = $this->insertUser('excl_grant_p2');
+        $tournamentId = $this->createStandardTournament($creator, [$p2], 'single_elimination');
+        $this->tournaments->acceptInvite($tournamentId, $p2);
+
+        try {
+            $this->tournaments->grantCastAccess($tournamentId, $creator, 'excl_grant_p2', true);
+            self::fail('Expected TournamentStateException');
+        } catch (TournamentStateException) {
+        }
+
+        // A "no hands" grant to the same participant is fine.
+        $grant = $this->tournaments->grantCastAccess($tournamentId, $creator, 'excl_grant_p2', false);
+        self::assertFalse($grant['reveal_hands']);
+    }
+
+    /** Same rule, the other direction: invite() rejects someone who already holds a hands-revealed cast grant. */
+    public function testInviteRejectsAnExistingFullHandsCaster(): void
+    {
+        $creator = $this->insertUser('excl_invite_creator');
+        $fullCaster = $this->insertUser('excl_invite_full');
+        $noHandsCaster = $this->insertUser('excl_invite_nohands');
+        $tournamentId = $this->createStandardTournament($creator, [], 'single_elimination');
+        $this->tournaments->grantCastAccess($tournamentId, $creator, 'excl_invite_full', true);
+        $this->tournaments->grantCastAccess($tournamentId, $creator, 'excl_invite_nohands', false);
+
+        try {
+            $this->tournaments->invite($tournamentId, $creator, $fullCaster);
+            self::fail('Expected TournamentStateException');
+        } catch (TournamentStateException) {
+        }
+
+        // A "no hands" caster can still be invited to play.
+        $this->tournaments->invite($tournamentId, $creator, $noHandsCaster);
+        $state = $this->tournaments->getState($tournamentId, $creator);
+        self::assertNotNull($state['tournament']);
+    }
+
+    /** Same rule for open-registration tournaments' own join path. */
+    public function testJoinOpenTournamentRejectsAnExistingFullHandsCaster(): void
+    {
+        $creator = $this->insertUser('excl_open_creator');
+        (new UserRepository())->setMatchmakingDiscoverable($creator, true);
+        $fullCaster = $this->insertUser('excl_open_full');
+        $noHandsCaster = $this->insertUser('excl_open_nohands');
+        $tournamentId = $this->tournaments->createTournament(
+            $creator,
+            'Excl Open Cup',
+            'single_elimination',
+            'open',
+            ['format' => 'standard'],
+            null,
+            minParticipants: 4,
+            maxParticipants: 4,
+        );
+        $this->tournaments->grantCastAccess($tournamentId, $creator, 'excl_open_full', true);
+        $this->tournaments->grantCastAccess($tournamentId, $creator, 'excl_open_nohands', false);
+
+        try {
+            $this->tournaments->joinOpenTournament($tournamentId, $fullCaster);
+            self::fail('Expected TournamentStateException');
+        } catch (TournamentStateException) {
+        }
+
+        $this->tournaments->joinOpenTournament($tournamentId, $noHandsCaster);
+        self::assertTrue($this->tournaments->hasCastAccess($tournamentId, $noHandsCaster));
+    }
+
+    /** A participant who's no longer in contention for a match (declined or withdrawn) is still eligible for a full-hands cast grant. */
+    public function testDeclinedOrWithdrawnParticipantCanStillBeGrantedFullHandsCastAccess(): void
+    {
+        $creator = $this->insertUser('excl_declined_creator');
+        $declinedUser = $this->insertUser('excl_declined_user');
+        $withdrawnUser = $this->insertUser('excl_withdrawn_user');
+        $tournamentId = $this->createStandardTournament($creator, [$declinedUser, $withdrawnUser], 'single_elimination');
+        $this->tournaments->declineInvite($tournamentId, $declinedUser);
+        $this->tournaments->acceptInvite($tournamentId, $withdrawnUser);
+        $this->tournaments->withdraw($tournamentId, $withdrawnUser);
+
+        $declinedGrant = $this->tournaments->grantCastAccess($tournamentId, $creator, 'excl_declined_user', true);
+        self::assertTrue($declinedGrant['reveal_hands']);
+        $withdrawnGrant = $this->tournaments->grantCastAccess($tournamentId, $creator, 'excl_withdrawn_user', true);
+        self::assertTrue($withdrawnGrant['reveal_hands']);
+    }
+
+    /** createTournament()'s own $castGrants param enforces the same rule against its own $inviteUserIds in the same call. */
+    public function testCreateTournamentRejectsOverlappingInviteAndFullHandsCastGrant(): void
+    {
+        $creator = $this->insertUser('excl_create_creator');
+        $overlapUser = $this->insertUser('excl_create_overlap');
+
+        try {
+            $this->tournaments->createTournament(
+                $creator,
+                'Excl Overlap Cup',
+                'single_elimination',
+                'invite_only',
+                ['format' => 'standard'],
+                null,
+                minParticipants: 4,
+                maxParticipants: 16,
+                inviteUserIds: [$overlapUser],
+                castGrants: [['username' => 'excl_create_overlap', 'reveal_hands' => true]],
+            );
+            self::fail('Expected TournamentStateException');
+        } catch (TournamentStateException) {
+        }
+
+        // The same overlap with a "no hands" grant is fine.
+        $tournamentId = $this->tournaments->createTournament(
+            $creator,
+            'Excl Overlap Cup 2',
+            'single_elimination',
+            'invite_only',
+            ['format' => 'standard'],
+            null,
+            minParticipants: 4,
+            maxParticipants: 16,
+            inviteUserIds: [$overlapUser],
+            castGrants: [['username' => 'excl_create_overlap', 'reveal_hands' => false]],
+        );
+        self::assertTrue($this->tournaments->hasCastAccess($tournamentId, $overlapUser));
+        self::assertFalse($this->tournaments->castRevealsHands($tournamentId, $overlapUser));
+    }
 }
