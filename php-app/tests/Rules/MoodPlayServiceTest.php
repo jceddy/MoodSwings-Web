@@ -3812,6 +3812,65 @@ final class MoodPlayServiceTest extends TestCase
     }
 
     /**
+     * Published rulings, restated explicitly for this specific scenario:
+     * Pride's grant is a live comparison re-run before every play, not a
+     * one-way "count the gap once, then disable permanently the first
+     * time parity is reached" switch -- so if the chosen player pulls
+     * ahead again LATER in the same turn (here, simulated the same way
+     * an in-play trigger like a token spawn or a bounce-back would --
+     * moveHandToInPlay() directly, with no card of its own played),
+     * player 1's already-tied grant (from the test above) must reactivate
+     * and permit another play, still sourced from the very same Pride
+     * card, still governed by grantIsActive()'s own live
+     * 'requiresBehindPlayer' check -- see that method's own docblock.
+     */
+    public function testPrideGrantReactivatesIfTheChosenPlayerPullsAheadAgainLaterTheSameTurn(): void
+    {
+        $state = $this->boardState(hands: [1 => [22, 4, 9, 74], 2 => [5, 32, 55, 6]]);
+        $state->moveHandToInPlay(2, 5);
+        $state->moveHandToInPlay(2, 32);
+        $state->moveHandToInPlay(2, 55);
+        $state->startTurn(1);
+
+        $choices = new PlayerChoices([]);
+        $this->plays->playMood($state, 1, 22, $choices); // Pride
+        $this->plays->resolvePendingDecisions(
+            $state, 22, 1, $choices, $choices, 0,
+            ['target_player_id' => new PlayerChoices(['target_player_id' => 2])],
+            0,
+        );
+        $this->plays->playMood($state, 1, 4, new PlayerChoices([]));
+        $this->plays->playMood($state, 1, 9, new PlayerChoices([]));
+
+        // Tied at 3 moods each, exactly as the test above -- the grant is
+        // currently inactive, but still sitting in $playGrants (see
+        // useGrantFor()'s own docblock on why it's never removed).
+        self::assertSame(0, $state->playsRemaining());
+
+        // Player 2 pulls ahead again (4 moods vs player 1's 3) via some
+        // other mechanism entirely -- no card played, no choice made,
+        // just the live mood count changing underneath the standing
+        // grant.
+        $state->moveHandToInPlay(2, 6);
+
+        self::assertSame(1, $state->playsRemaining(), 'the same Pride grant must reactivate now that player 2 is ahead again, not stay disabled for the rest of the turn');
+        self::assertTrue($state->hasUsablePlayGrant(74, 1));
+
+        // Sadness (74): hasWhileInPlay=true (a pure computeValue() scoring
+        // formula) but hasAfterPlaying=false -- deliberately inert for
+        // this test's own purposes, unlike Charity (3), whose own
+        // afterPlaying() grants a fresh unconditional extra play that
+        // would otherwise mask whether Pride's own reactivated grant is
+        // what's actually being tested here.
+        $this->plays->playMood($state, 1, 74, new PlayerChoices([]));
+        self::assertTrue($state->isInPlay(74));
+        // Tied again (4 vs 4) -- inactive once more, but still not
+        // consumed/removed; it would reactivate a third time if player 2
+        // pulled ahead yet again.
+        self::assertSame(0, $state->playsRemaining());
+    }
+
+    /**
      * Even though the candidate list offered by pendingDecisionsFor() is
      * already correctly filtered (see the test above), resolveDecisions()
      * still validates its own answer defensively -- a malicious/buggy
