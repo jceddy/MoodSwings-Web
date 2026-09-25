@@ -951,6 +951,16 @@ function advanceTurn(gameId) {
     });
 }
 
+// Issue #192 follow-up: applies a currently outstanding chaos-loop-
+// shortcut offer (state.game.chaos_loop_shortcut) $count times in one
+// step -- see GameService::applyChaosLoopShortcut()'s own docblock.
+function applyChaosLoopShortcut(gameId, count) {
+    return apiRequest('/games/apply-chaos-loop-shortcut', {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId, count: count }),
+    });
+}
+
 function resignGame(gameId) {
     return apiRequest('/games/resign', {
         method: 'POST',

@@ -1527,6 +1527,13 @@
     const confirmDialogMessage = document.getElementById('confirm-dialog-message');
     const confirmDialogCancelButton = document.getElementById('confirm-dialog-cancel-button');
 
+    // Issue #192 follow-up -- see #chaos-loop-shortcut-dialog's own
+    // comment in game/index.html and maybeShowChaosLoopShortcutDialog()
+    // below.
+    const chaosLoopShortcutDialog = document.getElementById('chaos-loop-shortcut-dialog');
+    const chaosLoopShortcutDialogMessage = document.getElementById('chaos-loop-shortcut-dialog-message');
+    const chaosLoopShortcutDialogCountInput = document.getElementById('chaos-loop-shortcut-dialog-count-input');
+
     // method="dialog" on the <form> already sets confirmDialog.returnValue
     // to the clicked button's own value ('ok'/'cancel') and closes the
     // dialog with no JS needed for that part -- Escape closes it too,
@@ -1597,6 +1604,13 @@
     // unrelated recurrence within a still-later turn pops its own dialog
     // rather than being silently treated as "already seen."
     let loopWarningDialogAcknowledgedKey = null;
+    // Issue #192 follow-up: same "don't re-pop on every ~4s poll while
+    // it's still outstanding" role as loopWarningDialogAcknowledgedKey
+    // just above, for #chaos-loop-shortcut-dialog -- see
+    // maybeShowChaosLoopShortcutDialog()'s own docblock. Reset in
+    // showBoard() and back to null once state.game.chaos_loop_shortcut
+    // itself goes null again (applied, or the turn ended).
+    let chaosLoopShortcutDialogShownKey = null;
     // Synchronous mode's own live action timer (reported live: "which
     // should be visible in the game display") -- a separate 1-second
     // interval from pollTimer above, since a 30-second countdown needs
@@ -1783,6 +1797,7 @@
         // Quick Draft -- rather than this one).
         draftDeckSelectionInitialized = false;
         loopWarningDialogAcknowledgedKey = null;
+        chaosLoopShortcutDialogShownKey = null;
         showLoadingOverlay();
         refreshBoard().finally(hideLoadingOverlay);
         if (pollTimer) {
@@ -7903,6 +7918,45 @@
         );
     }
 
+    // Issue #192 follow-up: state.game.chaos_loop_shortcut is the
+    // counterpart to loop_warning above for a loop a registered Chaos
+    // Draft effect keeps reactively spawning tokens/drawing cards/
+    // boosting a mood's value on every cycle -- see
+    // GameService::buildChaosLoopShortcut()'s own docblock for why the
+    // ordinary exact-board-state warning never catches this (the board
+    // is never actually identical twice). Same "only the player it's
+    // actually about, only once per distinct offer" shape as
+    // maybeShowLoopWarningDialog() above, but a real custom dialog
+    // (#chaos-loop-shortcut-dialog) instead of the shared alert/confirm
+    // one -- this needs a number input, not just a message. Dedup key is
+    // game_player_id:kind:cap rather than an occurrence_count, since the
+    // offer itself (not a repeat counter) is what stays stable for as
+    // long as it's outstanding -- see BoardState::$pendingChaosLoopShortcutOffer's
+    // own docblock.
+    function maybeShowChaosLoopShortcutDialog(state) {
+        const shortcut = state.game.chaos_loop_shortcut;
+
+        if (shortcut === null) {
+            chaosLoopShortcutDialogShownKey = null;
+            return;
+        }
+
+        if (shortcut.game_player_id !== state.you.game_player_id) {
+            return;
+        }
+
+        const shortcutKey = shortcut.game_player_id + ':' + shortcut.kind + ':' + shortcut.cap;
+        if (shortcutKey === chaosLoopShortcutDialogShownKey || chaosLoopShortcutDialog.open) {
+            return;
+        }
+
+        chaosLoopShortcutDialogShownKey = shortcutKey;
+        chaosLoopShortcutDialogMessage.textContent = shortcut.label;
+        chaosLoopShortcutDialogCountInput.max = String(shortcut.cap);
+        chaosLoopShortcutDialogCountInput.value = String(shortcut.cap);
+        chaosLoopShortcutDialog.showModal();
+    }
+
     function renderBoard(state) {
         // A custom decklist's own name (or "Uploaded Deck" if none was
         // specified) replaces "<deck type> deck" entirely here, rather than
@@ -7916,6 +7970,7 @@
         // never actually named anything the viewer had chosen.
         const you = state.players.find((p) => p.game_player_id === state.you.game_player_id);
         maybeShowLoopWarningDialog(state);
+        maybeShowChaosLoopShortcutDialog(state);
         const deckDescription = state.game.deck_type === 'custom'
             ? (state.game.custom_deck_name || 'Uploaded Deck')
             : state.game.deck_type === 'custom_duel'
@@ -10856,6 +10911,39 @@
         // until the player happens to notice and clicks Cancel.
         selectedCard = null;
         choicesPanel.hidden = true;
+        announceOutcome(body);
+        await refreshBoard();
+    });
+
+    // Issue #192 follow-up -- see #chaos-loop-shortcut-dialog's own
+    // comment in game/index.html. "Not now" just closes the dialog
+    // without calling the server at all -- the standing offer (see
+    // BoardState::$pendingChaosLoopShortcutOffer) is untouched, so it
+    // simply reappears (chaosLoopShortcutDialogShownKey unchanged, still
+    // matching) if the player reopens/reloads the board, or gets
+    // resolved automatically by the ordinary auto-pass path if the same
+    // loop keeps recurring instead.
+    document.getElementById('chaos-loop-shortcut-dialog-not-now-button').addEventListener('click', () => {
+        chaosLoopShortcutDialog.close();
+    });
+
+    document.getElementById('chaos-loop-shortcut-dialog-apply-button').addEventListener('click', async () => {
+        boardError.hidden = true;
+        boardMessage.hidden = true;
+        const applyButton = document.getElementById('chaos-loop-shortcut-dialog-apply-button');
+        applyButton.disabled = true;
+        const count = Math.max(0, Math.min(
+            parseInt(chaosLoopShortcutDialogCountInput.value, 10) || 0,
+            parseInt(chaosLoopShortcutDialogCountInput.max, 10),
+        ));
+        const { ok, body } = await applyChaosLoopShortcut(currentGameId, count);
+        applyButton.disabled = false;
+        if (!ok) {
+            boardError.textContent = body.message || 'Could not apply the shortcut.';
+            boardError.hidden = false;
+            return;
+        }
+        chaosLoopShortcutDialog.close();
         announceOutcome(body);
         await refreshBoard();
     });

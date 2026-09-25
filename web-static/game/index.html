@@ -1504,6 +1504,30 @@
         </form>
     </dialog>
 
+    <!-- Issue #192 follow-up -- offered once a same-turn loop keeps
+         triggering a Chaos Draft effect that spawns tokens/draws cards/
+         boosts a mood's value every cycle (see
+         GameService::buildChaosLoopShortcut()'s own docblock --
+         state.game.chaos_loop_shortcut) but never trips the ordinary
+         exact-board-state warning, since the board is never actually
+         identical twice. Lets the player apply many cycles' worth of
+         that one effect in a single step instead of manually repeating
+         the loop. Not a plain method="dialog" form like #confirm-dialog
+         above -- "Apply" needs to actually submit the chosen count to
+         the server (see maybeShowChaosLoopShortcutDialog() in game.js),
+         not just close the dialog. -->
+    <dialog id="chaos-loop-shortcut-dialog">
+        <p id="chaos-loop-shortcut-dialog-message"></p>
+        <label id="chaos-loop-shortcut-dialog-count-label">
+            Count:
+            <input id="chaos-loop-shortcut-dialog-count-input" type="number" min="0" step="1">
+        </label>
+        <div>
+            <button id="chaos-loop-shortcut-dialog-apply-button" type="button">Apply</button>
+            <button id="chaos-loop-shortcut-dialog-not-now-button" type="button">Not now</button>
+        </div>
+    </dialog>
+
     <!-- The entire game log (issue #98) -- see openGameLog() in game.js
          and "Game log" in web-static/README.md. -->
     <dialog id="game-log-dialog">

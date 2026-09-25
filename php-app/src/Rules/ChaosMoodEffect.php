@@ -120,4 +120,22 @@ interface ChaosMoodEffect
      * @param int[] $winningGamePlayerIds
      */
     public function afterScoring(BoardState $state, int $cardId, int $ownerId, array $scores, array $winningGamePlayerIds, int $lowestScorePlayerId): void;
+
+    /**
+     * Issue #192 follow-up: non-null only for the handful of effects on
+     * ChaosLoopShortcut::REGISTERED_EFFECT_KEYS, whose onMoodPlayed()/
+     * onMoodDiscarded()/onMoodSuppressed() above can call
+     * spawnMoodInPlay()/drawCard()/adjustChaosValueDelta() every cycle of
+     * a same-turn loop -- see BoardState::turnStateSignatureCoarse()'s own
+     * docblock for why that defeats the ordinary exact-signature loop
+     * detector, and ChaosLoopShortcut's own docblock for what this
+     * describes. Called only once GameService has already decided a
+     * shortcut should be offered (the coarse signature AND this effect's
+     * own fire count both look like a loop -- see
+     * GameService::buildChaosLoopShortcut()), so it's safe for an
+     * implementation to resolve a random/reactive target here exactly
+     * the way its own single-firing hook already would; the Abstract
+     * default (null) means "not one of the registered effects."
+     */
+    public function loopShortcut(BoardState $state, int $cardId, int $ownerId): ?ChaosLoopShortcut;
 }

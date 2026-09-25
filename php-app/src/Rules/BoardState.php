@@ -223,6 +223,95 @@ final class BoardState
     private array $turnStateSignatureCounts = [];
 
     /**
+     * Issue #192 follow-up: same per-turn/reset-on-handoff lifecycle as
+     * $turnStateSignatureCounts above (see GameService::updateRoundTurnState()),
+     * but keyed off turnStateSignatureCoarse() instead of turnStateSignature()
+     * itself. A Chaos Draft effect that reactively spawns a token
+     * (spawnMoodInPlay()) or draws a card (drawCard()) on every cycle of an
+     * otherwise-perpetual loop (chaos_026/037/040/089/011/024/016/120 --
+     * see each one's own docblock) makes the EXACT signature different
+     * every single cycle -- new tokens keep entering play, new cards keep
+     * entering hand -- so $turnStateSignatureCounts above never sees a
+     * repeat and the warn/auto-pass safety net never engages, no matter
+     * how many times the loop actually runs. turnStateSignatureCoarse()
+     * normalizes both of those away (drops spawned-token moods from the
+     * in-play side, drops cards drawn this turn from the hand side) so the
+     * loop's own underlying repeating SHAPE still surfaces here even while
+     * tokens/hand size keep growing around it.
+     *
+     * @var array<string, int>
+     */
+    private array $coarseTurnStateSignatureCounts = [];
+
+    /**
+     * Issue #192 follow-up: every card id drawn via drawCard() so far this
+     * turn (any player, since a reactive draw effect can trigger for
+     * either side -- chaos_040's own owner draws off the OPPONENT's play).
+     * Same reset-on-handoff/carry-forward-on-continuation lifecycle as
+     * $turnStateSignatureCounts. Exists purely so
+     * turnStateSignatureCoarse() can exclude these specific card ids from
+     * each hand before hashing -- see that method's own docblock.
+     *
+     * @var int[]
+     */
+    private array $drawnThisTurnCardIds = [];
+
+    /**
+     * Issue #192 follow-up: how many times each Chaos Draft effect on
+     * ChaosLoopShortcut::REGISTERED_EFFECT_KEYS has actually performed its
+     * risky side effect (not merely been dispatched -- see each
+     * implementation's own registerChaosEffectFired() call, made only
+     * once its own internal condition/no-op check already passed) so far
+     * THIS TURN -- keyed by effect_key. Same reset-on-handoff/carry-
+     * forward-on-continuation lifecycle as $turnStateSignatureCounts.
+     * GameService combines this with $coarseTurnStateSignatureCounts to
+     * decide whether to offer a loop shortcut (see buildChaosLoopShortcut()'s
+     * own docblock): the coarse signature alone can't tell "a real,
+     * intentional repeat of this exact card" apart from "coincidentally
+     * matches an earlier turn's shape for unrelated reasons," so requiring
+     * BOTH a coarse repeat AND a registered effect actually firing
+     * repeatedly keeps a false positive from ending a legitimate turn
+     * early.
+     *
+     * @var array<string, int>
+     */
+    private array $chaosEffectFireCounts = [];
+
+    /**
+     * Issue #192 follow-up: the currently outstanding chaos-loop-shortcut
+     * offer (see GameService::buildChaosLoopShortcut()), resolved and
+     * frozen the moment the coarse-repeat+fire-count condition first
+     * crosses its threshold this turn, so a random/reactive target a
+     * registered effect's own loopShortcut() might resolve (chaos_120's
+     * own array_rand() pick, for instance) stays STABLE for as long as the
+     * offer is outstanding rather than re-rolling on every subsequent
+     * getState() poll. Null once nothing is currently offered -- either
+     * nothing has crossed the threshold yet this turn, or the last offer
+     * was already applied (GameService::applyChaosLoopShortcut() clears
+     * it) or superseded by an auto-pass. Reset on handoff/carried forward
+     * on continuation, same as the rest of this turn-scoped state.
+     *
+     * @var array{effectKey: string, gamePlayerId: int, kind: string, cap: int, label: string, tokenCatalogCardId: ?int, forPlayerId: ?int, valueBoostTargetCardId: ?int}|null
+     */
+    private ?array $pendingChaosLoopShortcutOffer = null;
+
+    /**
+     * Issue #192 follow-up: true once ANY chaos-loop-shortcut offer has
+     * been made this turn (see $pendingChaosLoopShortcutOffer above),
+     * whether or not it was ever actually applied -- once true, the next
+     * time the coarse-repeat+fire-count condition crosses its threshold
+     * again this turn (the player either ignored the standing offer and
+     * kept looping, or already applied a draw-kind one -- which
+     * deliberately doesn't end the turn -- and resumed the same loop
+     * afterward), GameService auto-passes instead of making a second
+     * offer, the same "warn once, then don't trust them to stop" posture
+     * the ordinary exact-signature warn/auto-pass already has. Reset on
+     * handoff/carried forward on continuation, same as the rest of this
+     * turn-scoped state.
+     */
+    private bool $chaosLoopShortcutOfferedThisTurn = false;
+
+    /**
      * @var int[] card ids revealed by a purely random ($cardId chosen via
      * array_rand(), not any submitted choice) effect this play -- Paranoia/
      * Curiosity. Transient, never persisted by BoardStateRepository: it
@@ -1173,6 +1262,7 @@ final class BoardState
         }
         $this->hands[$playerId][] = $cardId;
         $this->pendingDraws[] = ['player_id' => $playerId, 'card_id' => $cardId];
+        $this->drawnThisTurnCardIds[] = $cardId;
 
         return $cardId;
     }
@@ -1260,6 +1350,11 @@ final class BoardState
         ?int $awardsExtraWinSourceCardId = null,
         ?int $awardsExtraWinOwnerId = null,
         array $turnStateSignatureCounts = [],
+        array $coarseTurnStateSignatureCounts = [],
+        array $drawnThisTurnCardIds = [],
+        array $chaosEffectFireCounts = [],
+        bool $chaosLoopShortcutOfferedThisTurn = false,
+        ?array $pendingChaosLoopShortcutOffer = null,
     ): void {
         $this->currentPlayerId = $currentPlayerId;
         $this->playGrants = $playGrants;
@@ -1274,6 +1369,17 @@ final class BoardState
         $this->awardsExtraWinSourceCardId = $awardsExtraWinSourceCardId;
         $this->awardsExtraWinOwnerId = $awardsExtraWinOwnerId;
         $this->turnStateSignatureCounts = $turnStateSignatureCounts;
+        // Issue #192 follow-up: same "restore whatever the DB already had"
+        // role as $turnStateSignatureCounts just above, for the four
+        // pieces of bookkeeping game_rounds.chaos_loop_state persists --
+        // see each one's own property docblock (just above
+        // turnStateSignatureCoarse()/registerChaosEffectFired()/etc.) for
+        // what it's for.
+        $this->coarseTurnStateSignatureCounts = $coarseTurnStateSignatureCounts;
+        $this->drawnThisTurnCardIds = $drawnThisTurnCardIds;
+        $this->chaosEffectFireCounts = $chaosEffectFireCounts;
+        $this->chaosLoopShortcutOfferedThisTurn = $chaosLoopShortcutOfferedThisTurn;
+        $this->pendingChaosLoopShortcutOffer = $pendingChaosLoopShortcutOffer;
     }
 
     /** Vulnerability: whether any card has been put into the discard pile so far this round -- see moveHandToDiscard()/moveInPlayToDiscard(). */
@@ -2048,6 +2154,187 @@ final class BoardState
     public function restoreTurnStateSignatureCounts(array $counts): void
     {
         $this->turnStateSignatureCounts = $counts;
+    }
+
+    /**
+     * Issue #192 follow-up: the same closed-system hash turnStateSignature()
+     * computes, except with every spawned-token mood dropped from the
+     * in-play side (catalogRow()'s own 'isToken', migration 0183's
+     * cards.is_token column -- true for every one of the handful of
+     * catalog rows a Chaos Draft "put a token into play" effect ever
+     * spawns via spawnMoodInPlay(), never for an ordinary drafted card)
+     * and every card drawn this turn ($drawnThisTurnCardIds) dropped from
+     * each hand. See turnStateSignature()'s own docblock for why the
+     * EXACT hash exists in the first place, and $coarseTurnStateSignatureCounts'
+     * own docblock for why this coarser one has to exist alongside it --
+     * a reactively-triggered token spawn or card draw makes the exact hash
+     * different every cycle, but the loop's own underlying shape (which
+     * cards are in play, owned by whom, with what effectState) still
+     * repeats underneath that noise, and this is what actually surfaces
+     * it.
+     */
+    public function turnStateSignatureCoarse(): string
+    {
+        $hands = [];
+        foreach ($this->playerOrder as $playerId) {
+            $hand = array_values(array_diff($this->hands[$playerId] ?? [], $this->drawnThisTurnCardIds));
+            sort($hand);
+            $hands[$playerId] = $hand;
+        }
+        ksort($hands);
+
+        $inPlay = [];
+        foreach ($this->moodsInPlay as $mood) {
+            if ($this->catalogRow($mood->cardId)['isToken'] ?? false) {
+                continue;
+            }
+            $effectState = $mood->effectState;
+            ksort($effectState);
+            $inPlay[] = [$mood->cardId, $mood->ownerId, $mood->copiedCardId, $effectState, $mood->suppressions];
+        }
+        usort($inPlay, static fn (array $a, array $b): int => $a[0] <=> $b[0]);
+
+        $discard = $this->discard;
+        sort($discard);
+
+        return md5((string) json_encode(['hands' => $hands, 'inPlay' => $inPlay, 'discard' => $discard]));
+    }
+
+    /** turnStateSignatureCoarse()'s own counterpart to registerTurnStateOccurrence() -- see that method's own docblock. */
+    public function registerCoarseTurnStateOccurrence(): int
+    {
+        $signature = $this->turnStateSignatureCoarse();
+        $count = ($this->coarseTurnStateSignatureCounts[$signature] ?? 0) + 1;
+        $this->coarseTurnStateSignatureCounts[$signature] = $count;
+
+        return $count;
+    }
+
+    /** Non-mutating peek at the current coarse signature's own occurrence count so far -- turnStateSignatureCoarse()'s own counterpart to currentTurnStateOccurrenceCount(). */
+    public function currentCoarseTurnStateOccurrenceCount(): int
+    {
+        return $this->coarseTurnStateSignatureCounts[$this->turnStateSignatureCoarse()] ?? 0;
+    }
+
+    /** @return array<string, int> */
+    public function coarseTurnStateSignatureCounts(): array
+    {
+        return $this->coarseTurnStateSignatureCounts;
+    }
+
+    /** GameService::updateRoundTurnState() calls this the moment the turn changes hands -- same lifecycle as resetTurnStateSignatureCounts(). */
+    public function resetCoarseTurnStateSignatureCounts(): void
+    {
+        $this->coarseTurnStateSignatureCounts = [];
+    }
+
+    /** @param array<string, int> $counts */
+    public function restoreCoarseTurnStateSignatureCounts(array $counts): void
+    {
+        $this->coarseTurnStateSignatureCounts = $counts;
+    }
+
+    /** @return int[] */
+    public function drawnThisTurnCardIds(): array
+    {
+        return $this->drawnThisTurnCardIds;
+    }
+
+    /** GameService::updateRoundTurnState() calls this the moment the turn changes hands -- a fresh turn starts with nothing drawn yet. */
+    public function resetDrawnThisTurnCardIds(): void
+    {
+        $this->drawnThisTurnCardIds = [];
+    }
+
+    /** @param int[] $cardIds */
+    public function restoreDrawnThisTurnCardIds(array $cardIds): void
+    {
+        $this->drawnThisTurnCardIds = $cardIds;
+    }
+
+    /**
+     * Registers one more firing of $effectKey's own risky reactive side
+     * effect (ChaosLoopShortcut::REGISTERED_EFFECT_KEYS) and returns its
+     * new count -- called by that effect's own onMoodPlayed()/
+     * onMoodDiscarded()/onMoodSuppressed() implementation, only once its
+     * own internal condition has already determined this firing actually
+     * did something (so a dispatched-but-no-op call, e.g. chaos_037's own
+     * onMoodPlayed() seeing an opponent's play instead of the owner's,
+     * never inflates this). See $chaosEffectFireCounts' own docblock.
+     */
+    public function registerChaosEffectFired(string $effectKey): int
+    {
+        $count = ($this->chaosEffectFireCounts[$effectKey] ?? 0) + 1;
+        $this->chaosEffectFireCounts[$effectKey] = $count;
+
+        return $count;
+    }
+
+    /** Non-mutating peek at $effectKey's own fire count so far this turn. */
+    public function chaosEffectFireCount(string $effectKey): int
+    {
+        return $this->chaosEffectFireCounts[$effectKey] ?? 0;
+    }
+
+    /** @return array<string, int> */
+    public function chaosEffectFireCounts(): array
+    {
+        return $this->chaosEffectFireCounts;
+    }
+
+    /** GameService::updateRoundTurnState() calls this the moment the turn changes hands -- same lifecycle as resetTurnStateSignatureCounts(). */
+    public function resetChaosEffectFireCounts(): void
+    {
+        $this->chaosEffectFireCounts = [];
+    }
+
+    /** @param array<string, int> $counts */
+    public function restoreChaosEffectFireCounts(array $counts): void
+    {
+        $this->chaosEffectFireCounts = $counts;
+    }
+
+    /** See $pendingChaosLoopShortcutOffer's own docblock. @return array{effectKey: string, gamePlayerId: int, kind: string, cap: int, label: string, tokenCatalogCardId: ?int, forPlayerId: ?int, valueBoostTargetCardId: ?int}|null */
+    public function pendingChaosLoopShortcutOffer(): ?array
+    {
+        return $this->pendingChaosLoopShortcutOffer;
+    }
+
+    /** @param array{effectKey: string, gamePlayerId: int, kind: string, cap: int, label: string, tokenCatalogCardId: ?int, forPlayerId: ?int, valueBoostTargetCardId: ?int} $offer */
+    public function setPendingChaosLoopShortcutOffer(array $offer): void
+    {
+        $this->pendingChaosLoopShortcutOffer = $offer;
+        $this->chaosLoopShortcutOfferedThisTurn = true;
+    }
+
+    /** GameService::applyChaosLoopShortcut() calls this once the standing offer has been applied (or superseded by an auto-pass) -- see $pendingChaosLoopShortcutOffer's own docblock on why this clears while $chaosLoopShortcutOfferedThisTurn deliberately does not. */
+    public function clearPendingChaosLoopShortcutOffer(): void
+    {
+        $this->pendingChaosLoopShortcutOffer = null;
+    }
+
+    /** @param array{effectKey: string, gamePlayerId: int, kind: string, cap: int, label: string, tokenCatalogCardId: ?int, forPlayerId: ?int, valueBoostTargetCardId: ?int}|null $offer */
+    public function restorePendingChaosLoopShortcutOffer(?array $offer): void
+    {
+        $this->pendingChaosLoopShortcutOffer = $offer;
+    }
+
+    /** See $chaosLoopShortcutOfferedThisTurn's own docblock. */
+    public function hasOfferedChaosLoopShortcutThisTurn(): bool
+    {
+        return $this->chaosLoopShortcutOfferedThisTurn;
+    }
+
+    /** GameService::updateRoundTurnState() calls this the moment the turn changes hands -- a fresh turn hasn't offered anything yet. Also clears the standing offer itself, same as every other per-turn field reset here. */
+    public function resetChaosLoopShortcutOfferedThisTurn(): void
+    {
+        $this->chaosLoopShortcutOfferedThisTurn = false;
+        $this->pendingChaosLoopShortcutOffer = null;
+    }
+
+    public function restoreChaosLoopShortcutOfferedThisTurn(bool $offered): void
+    {
+        $this->chaosLoopShortcutOfferedThisTurn = $offered;
     }
 
     /**

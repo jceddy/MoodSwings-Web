@@ -55,4 +55,9 @@ abstract class AbstractChaosMoodEffect implements ChaosMoodEffect
     public function afterScoring(BoardState $state, int $cardId, int $ownerId, array $scores, array $winningGamePlayerIds, int $lowestScorePlayerId): void
     {
     }
+
+    public function loopShortcut(BoardState $state, int $cardId, int $ownerId): ?ChaosLoopShortcut
+    {
+        return null;
+    }
 }

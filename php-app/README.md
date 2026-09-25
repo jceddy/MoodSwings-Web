@@ -11683,6 +11683,105 @@ advanceAutomatedTurns() keeps reporting genuine progress forever", the
 same category of concern this feature addresses for a human, who had no
 equivalent safety net at all before now.
 
+**Follow-up: some Chaos Draft effects defeat exact-signature detection
+entirely.** `turnStateSignature()`'s "closed system" guarantee (no card
+ever enters or leaves the game mid-turn) is only true of the base rules
+-- `BoardState::spawnMoodInPlay()` (an uncapped, freshly-minted token,
+never drawn from any deck) and `drawCard()` (deck -> hand) both violate
+it. A handful of Chaos Draft effects call one of those two REACTIVELY,
+on a hook (`ChaosMoodEffect::onMoodPlayed()`/`onMoodDiscarded()`/
+`onMoodSuppressed()`) that fires on every cycle of an otherwise-
+perpetual loop: `chaos_026` ("each time you play another mood with a 0
+or 1 in its corner, put a Smugness token into play" -- Thrill/Fear/
+Nostalgia all qualify, so this fires on every cycle of all three known
+loops with no discard needed at all), `chaos_037`/`chaos_040` ("each
+time you/an opponent plays another mood, draw a card" -- no value
+condition, fires on literally every cycle, and can hand a bystander
+opponent free draws off someone ELSE's loop), and `chaos_089`/`chaos_011`/
+`chaos_024`/`chaos_016` (rarer token-spawning triggers on discard/
+suppression/entering play). Combined with a perpetual loop, each of
+these turns "harmless stalling" into unbounded, silent value generation:
+every cycle's board is provably different from the last (a new token or
+drawn card), so `registerTurnStateOccurrence()` never sees a repeat and
+the warn-at-3/auto-pass-at-4 safety net above never engages, no matter
+how many times the loop actually runs.
+
+`BoardState::turnStateSignatureCoarse()` is the fix: the same hash,
+except with every spawned-token mood (`catalogRow()`'s own `isToken`,
+migration 0183's `cards.is_token`) dropped from the in-play side, and
+every card drawn this turn (`$drawnThisTurnCardIds`) dropped from each
+hand -- so the loop's underlying repeating SHAPE still surfaces despite
+the noise piling up around it. A second, parallel occurrence counter
+(`$coarseTurnStateSignatureCounts`, persisted in a new
+`game_rounds.chaos_loop_state` JSON column alongside three more pieces
+of per-turn bookkeeping -- see that column's own migration comment)
+tracks this the same way the exact one already does. On its own,
+though, a coarse repeat is too blunt a signal to act on: a coincidental
+match between two genuinely different turns is a real (if rare)
+possibility, and the consequence of a false positive here is ending a
+legitimate turn early -- worse than the exact-signature case, where a
+false positive is structurally impossible (see that method's own
+docblock). So `GameService::resolveChaosLoopShortcutOffer()` requires a
+SECOND, independent signal before acting: `BoardState::registerChaosEffectFired()`
+(called only from inside a registered effect's own implementation, once
+its own internal condition already passed, so it never counts a
+dispatched-but-no-op call) tracks how many times each of
+`ChaosLoopShortcut::REGISTERED_EFFECT_KEYS` has actually fired this
+turn. Only when a registered effect's own fire count AND the coarse
+signature's own repeat count both cross the same threshold (3) does
+anything happen -- and what happens is not the ordinary warning/auto-
+pass, but a **shortcut**: `ChaosLoopShortcut` describes what one firing
+of the effect actually does (spawn a token, draw a card, or -- see
+below -- permanently boost a mood's value), each registered effect's own
+`loopShortcut()` resolves any needed random/reactive target exactly the
+way its single-firing hook already would (frozen once offered, in
+`BoardState::$pendingChaosLoopShortcutOffer`, so it can't re-roll on a
+later poll), and `GameService::applyChaosLoopShortcut()` (`POST
+/games/apply-chaos-loop-shortcut`, surfaced in `getState()` as
+`game.chaos_loop_shortcut`, same null-unless-relevant shape
+`loop_warning` already uses) lets the player apply as many cycles' worth
+of it as they choose in one step -- up to 16 for a token effect, up to
+the player's own current deck size for a draw effect, up to 65,536 for a
+value-boost effect -- instead of manually repeating the loop that many
+times.
+
+Applying a token/value-boost shortcut ends the turn immediately, same
+posture as the ordinary auto-pass. A draw shortcut deliberately does
+NOT -- the whole point is letting the player go on to actually play what
+they just drew -- so `BoardState::$chaosLoopShortcutOfferedThisTurn`
+(sticky for the rest of the turn once any offer is made, regardless of
+whether it's ever applied) is what makes a LATER repeat of the same loop
+this turn auto-pass (`turn_passed`, `reason: 'chaos_loop_detected'`)
+instead of re-offering a second shortcut -- the same "warn once, then
+don't trust them to stop" posture the exact-signature case already has,
+just generalized to not care whether the player took the first offer.
+
+**Is a permanent +1 effect the same risk?** Audited every
+`adjustChaosValueDelta()` caller in the pool: `chaos_064`/`chaos_056`
+permanently reduce an OPPONENT's mood and self-terminate (once a
+target's value would go negative it's discarded instead, removing it
+from the pool of future targets); `chaos_133` is a one-shot
+`after_playing` snapshot; `chaos_120` ("the next time an opponent plays
+a mood, boost one of your own moods by 1") only fires ONCE per arming
+(`afterPlaying()` arms it, the very next qualifying play disarms it),
+and re-arming needs `chaos_120` itself to be replayed -- since it isn't
+one of the four cards any known loop actually cycles, it never reaches
+the fire-count threshold. No live exploit exists today, but it's the
+exact same failure class (a value delta lives in `effectState`, which
+IS part of both signatures, so a hypothetical future effect shaped like
+"each cycle, permanently +1, no self-termination" would defeat even the
+coarse signature the same way tokens/draws defeat the exact one) --
+`chaos_120` is registered anyway (`ChaosLoopShortcut::valueBoost()`)
+as insurance against a future card shaped that way, not because this
+one is exploitable now.
+
+**Bot-facing.** `GameService::advanceBotChaosLoopShortcut()` -- checked
+early in `advanceAutomatedTurns()`'s own loop, since a shortcut's own
+beneficiary (`chaos_040`'s owner, for instance) isn't necessarily
+whoever's turn it currently is -- always takes the maximum offered
+count: unlike a human, a bot has no reason to ever pick less (nothing
+in this bounded, one-shot action has a downside).
+
 ### Auto-apply scoring bonuses (issue #397)
 
 A personal preference (`users.auto_apply_scoring_bonuses`, migration
