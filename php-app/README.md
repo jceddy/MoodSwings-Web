@@ -1700,6 +1700,29 @@ its own effect either way, matching the ruling that you may play such a
 card as long as the opponent was still ahead at the moment you committed
 to it, even though it doesn't stay ahead once that same card resolves.
 
+Because this grant is designed to survive a moment of transient
+inactivity (the mood gap can close and reopen within the same turn), it
+must never be dropped from what gets persisted just because
+`grantIsActive()` happens to disagree with it right now. That distinction
+was missed at first: `GameService`'s three "same player continues
+mid-turn" call sites for `updateRoundTurnState()` (a play pausing on its
+own pending decision, that decision's later resolution, and
+`finishPlay()`'s "plays remaining" branch) persisted
+`BoardState::pendingPlayGrants()` -- the filtered, currently-active-only
+view meant for `playsRemaining()`'s count and the API's display fields --
+into `game_rounds.pending_play_grants`. That's fine for those two uses,
+but wrong for persistence: playing Pride against an opponent and then
+Betrayal (spending Pride's own grant to give Pride itself to that same
+opponent) momentarily ties the mood count the instant Betrayal itself
+enters play, before its own "give a mood away" decision even resolves --
+so the filtered view dropped the grant from what got saved, even though
+`$playGrants` in memory never lost it. The next request reloaded
+`BoardState` fresh from that same column, so the grant was gone for the
+rest of the turn rather than merely inactive. Fixed by adding
+`BoardState::allPlayGrantsForPersistence()`, an unfiltered view used only
+for what those three call sites write to `pending_play_grants`; the
+filtered `pendingPlayGrants()` still drives everything else unchanged.
+
 Losing a grant this way is silent from `playsRemaining()`'s own
 perspective -- it just reads one lower, with nothing to say why -- so
 `BoardState::cascadeMoodLeavingPlay()` (already the one place every
@@ -6790,13 +6813,13 @@ username from `state.players`, and every `state.you.*`-driven control
 (Play/Pass buttons, the first-player choice panel, etc.) degrades to
 hidden/disabled rather than crashing.
 
-Only *public* information is exposed for a live game in this first
-implementation. A follow-up "tournament spectator mode" issue tracks a
-separate, trusted-viewer-only mode that would additionally reveal hands
-and pending-decision internals for a still-`in_progress` game (for
-casting/streaming) -- deliberately not built on top of the plain
-`spectate_code` mechanism above, since that mechanism's entire premise
-is that holding a code never reveals hands before the game ends.
+Only *public* information is exposed for a live game via this mechanism.
+See "Tournament spectator mode" below for the separate,
+trusted-viewer-only mode that additionally reveals hands and
+pending-decision internals for a still-`in_progress` tournament match --
+deliberately not built on top of the plain `spectate_code` mechanism
+above, since that mechanism's entire premise is that holding a code
+never reveals hands before the game ends.
 
 Once a spectated game reaches `completed`, the frontend hands off from
 this live single-snapshot view into "Watch replay"'s own step controls
@@ -6804,6 +6827,196 @@ this live single-snapshot view into "Watch replay"'s own step controls
 `GET /games/replay/state` already authorize a spectator the same way
 `GET /games/spectate/state` does. See "Spectator mode" in
 `web-static/README.md` for the client-side switch.
+
+### Tournament spectator mode (issue #238)
+
+A follow-up to plain spectator mode above, for casting/streaming a live
+tournament match: a trusted caster sees hands and pending-decision
+internals even while the match is still `in_progress`, not just once it
+`completed`. Deliberately **not** built on the `spectate_code` mechanism
+-- that mechanism's entire premise is "holding a code never reveals
+hands before the game ends," and a caster needs a distinctly more
+trusted permission than that.
+
+**Who's trusted**: `TournamentService::hasCastAccess(int $tournamentId,
+int $userId): bool` -- true for a tournament's own creator
+(`tournaments.created_by_user_id`, always implicitly trusted) or anyone
+the creator has explicitly granted cast access via
+`grantCastAccess(int $tournamentId, int $granterUserId, string
+$granteeUsername, bool $revealHands = true): array` (`requireCreator()`-gated,
+same as `invite()`; resolves the grantee by username rather than a
+friend-list/search-result id, since there's no existing picker to source
+one from -- mirrors `FriendshipService::sendInvite()`'s own
+`username_or_email` resolution). Stored in the `tournament_cast_grants`
+table (migration `0370`, `reveal_hands` added by migration `0371`:
+`tournament_id`, `user_id`, `granted_by_user_id`, `reveal_hands`) rather
+than reusing `tournament_participants` -- a caster isn't a participant
+at all, and often isn't one (a dedicated streamer with no seat in the
+bracket). `revokeCastAccess()` removes a grant (creator-only);
+`listCastGrants()` returns the current roster -- **not** creator-only
+(see below). A grant is idempotent-ish but not silently so: re-granting
+someone who already has it, or granting the creator themselves (who's
+always already trusted), is a `TournamentStateException`, the same
+"already invited or joined" shape `invite()` uses, so a caller can't
+mistake a duplicate click for confirmation nothing changed.
+
+Reported live: **"user(s) with spectator mode access need to be
+selected when the tournament is created so that all users in the
+tournament can see who is allowed to cast"** -- two separate asks,
+addressed as follows:
+
+- **Selected at creation time**: `createTournament()` gained an
+  `array $castGrants = []` param (each entry `['username' => string,
+  'reveal_hands' => bool]`), resolved and inserted right after the
+  invite loop, once `$tournamentId` actually exists -- same validation
+  as `grantCastAccess()` (an unknown username throws), plus the
+  creator's own username is silently skipped (they're always already
+  trusted) and duplicate grantees -- by resolved user id, not raw
+  string -- collapse to one grant rather than colliding against
+  `tournament_cast_grants`' own unique `(tournament_id, user_id)`
+  constraint. Casters can still be added/revoked after creation too via
+  the same `grantCastAccess()`/`revokeCastAccess()` the tournament view
+  dialog's own "Casters" section uses -- creation-time selection is an
+  additional entry point, not a replacement for it.
+- **Visible to everyone in the tournament**: `listCastGrants()`'s own
+  access check changed from creator-only to the same broadened audience
+  `getState()` already allows (a new private `canViewTournament()`
+  helper both now share) -- the creator, any invited/joined participant,
+  a granted caster themselves, or anyone at all once registration is
+  `open`. `getState()` additionally embeds this same list as
+  `cast_grants` in its own response (`{id, tournament_id, user_id,
+  username, granted_by_user_id, reveal_hands, created_at}[]`) so the
+  tournament view loads it for free, no second round-trip.
+
+**"No hands" option** (reported live): `reveal_hands` on a grant decides
+whether a caster's `GameService::getTournamentCastState(int $gameId,
+bool $revealHands): array` call reveals hands/pending-decision internals
+at all. `$revealHands = true` is the original issue #238 behavior
+(hands + pending-decision internals revealed even while `in_progress`);
+`$revealHands = false` makes the response **identical** to
+`getSpectatorState()` (hands only ever revealed once `completed`,
+`pending_decision.field` never revealed to a non-target) -- the only
+thing a "no hands" caster actually gets over a plain issue #128
+spectator is not needing a `spectate_code`/friendship to watch a
+still-`in_progress` match at all. `TournamentService::castRevealsHands(int
+$tournamentId, int $userId): bool` resolves which mode applies -- the
+creator is always `true` regardless of any grant; a granted caster gets
+whatever `$revealHands` their own grant stored.
+
+**Caster/player mutual exclusion** (reported live: "casters with access
+to private information (both user's hands) can't play in the
+tournament"): a hands-revealed (`reveal_hands = true`) grant sees both
+players' cards in *every* match of the tournament, not just whoever
+they're personally seated against, so also letting them play would hand
+them a scouting advantage over every future opponent. `TournamentService`
+enforces this bidirectionally via two private helpers,
+`hasFullHandsCastGrant()` and `hasActiveParticipation()` (true only for
+`'invited'`/`'joined'` -- a `'declined'`/`'withdrawn'` participant is no
+longer in contention for a match, so they remain eligible for a
+hands-revealed grant same as anyone who never joined):
+`grantCastAccess()` and `createTournament()`'s own `$castGrants` loop
+reject a `reveal_hands = true` grant to anyone with active participation,
+and `invite()`/`joinOpenTournament()` reject inviting/joining anyone who
+already holds a hands-revealed grant. A **"no hands"** (`reveal_hands =
+false`) grant is exempt from all of this in both directions, since it
+never reveals more than a plain issue #128 spectator already sees.
+
+`GET /games/tournament-cast/state`'s own handler in `index.php` resolves
+which tournament (if any) the game belongs to via
+`GameService::tournamentIdForGame(int $gameId): ?int` (the same
+three-way `tournament_matches` lookup `buildGameState()`'s own
+`$isTournamentMatch` flag already performs -- a bare single game's own
+`game_id`, a best-of-three match's `game_match_id`, or a draft match's
+`draft_match_id`), checks `hasCastAccess()` against it, then resolves
+`castRevealsHands()` to decide which mode to actually request. A
+non-tournament game has no cast permission at all, regardless of who's
+asking.
+
+Internally, `buildGameState()` has a second reveal flag,
+`bool $tournamentCastMode = false`, alongside the existing
+`$revealAllHands` (only ever true for a *completed* game -- see plain
+spectator mode above): `$revealAllHands || $tournamentCastMode` gates
+`players[].hand`, so a hands-revealing cast viewer's hands show
+regardless of the match's own status; `getTournamentCastState()` simply
+never sets `$tournamentCastMode` true for a "no hands" caster. The
+trickier half is `pending_decision.field` (`serializePendingDecision()`'s
+own private choice payload, normally gated on `$isYou =
+$targetGamePlayerId === $viewerGamePlayerId`, which a null-viewer caster
+never satisfies) -- a `$revealToNonTarget` parameter (fed the same
+`$tournamentCastMode` value) reveals `field` independently of `is_you`,
+which **stays accurately `false`** for a caster (they're still not the
+one making the decision, just allowed to see it, when they're allowed to
+see it at all). `getSpectatorState()`/`getState()` both pass
+`$revealToNonTarget = false` (unchanged behavior).
+
+`GET /tournaments/state` (`TournamentService::getState()`) has
+`viewer_has_cast_access: bool` and a relaxed access check -- a granted
+caster who isn't otherwise a participant (and this is an invite-only
+tournament) can still load the bracket to find the match they're
+casting, the same bypass a tournament's own creator or an
+open-registration tournament already gets -- plus `viewer_cast_reveals_hands:
+?bool` (`null` when `viewer_has_cast_access` is false) so the frontend
+can label its own "Cast" button correctly without searching
+`cast_grants` for its own row (which wouldn't even find the creator --
+never listed there). `TournamentRepository::listForUser()` (behind
+`GET /tournaments?mine=1`, the frontend's own "Tournaments" dialog) got
+the equivalent fix -- a granted caster with no participant row of their
+own now finds the tournament there too, rather than having no way to
+even discover it in the UI despite being able to load it by id.
+
+**Frontend** (`web-static/js/game.js`): the New Tournament dialog gained
+its own "Casters" fields (`#new-tournament-casters-fields`) -- a
+free-text username (not the friends checkboxes the invite list uses,
+since a caster is often not a friend or participant at all) plus a
+"Reveal hands" checkbox per row, collected client-side into
+`newTournamentCastGrants` and sent as `createTournament()`'s own
+`cast_grants` param on submit. A new `isCasting` flag parallels
+`isSpectating`/`isReplaying` (folded into `isReadOnlyView()`), with its
+own `showCastBoard(gameId)` (opened from the tournament view dialog's
+"Cast (reveal hands)"/"Cast (public info only)" button on an
+`in_progress` match -- `renderBracketRounds()`, shown only when
+`viewer_has_cast_access` is true, labeled from
+`viewer_cast_reveals_hands`) and `getTournamentCastState()` API call.
+`refreshBoard()` reuses the exact same `state.you` stub pattern
+`isSpectating` already established, and `renderSpectatorFinalHands()`
+needed no changes at all -- it already just checks for `players[].hand`
+presence, regardless of why it's there (or isn't, for a "no hands"
+caster). A revealed pending decision renders as a disabled, read-only
+preview inside the same `#pending-decision-panel` a real responder gets
+(`renderCastPendingDecisionPreview()` -- every control disabled via
+`disableFieldRowControls()`, no Respond button), rather than a second
+bespoke renderer; a "no hands" caster never gets `pending_decision.field`
+at all, so this simply never fires for them, same as a plain spectator.
+The tournament view dialog's own "Casters" section
+(`renderTournamentCasters()`) now lists the current roster (with each
+one's mode -- "(public info only, no hands)" where it applies) for
+**every** viewer, reading straight off `getState()`'s own embedded
+`cast_grants`; only the add-caster form and each row's "Revoke" button
+stay creator-only.
+
+Building this surfaced a pre-existing, app-wide history/navigation bug:
+`tournamentViewDialog.close(); tournamentsDialog.close(); showBoard(...)`
+(the "Go to game"/"Continue drafting" pattern this feature's own "Cast"
+button also follows) closes *two* dialogs in the same tick, each queuing
+its own orphan-cleanup `history.back()` via the shared
+`dialogHistoryObserver` -- but the flag that swallows the resulting
+self-triggered `popstate` event, `suppressNextPopState`, was a plain
+boolean that could only ever swallow the *first* of the two. The second
+popstate fell through to the handler's normal logic and, with no dialog
+left open, was treated as a genuine Back press -- silently bouncing the
+player back to the lobby instead of opening the board (a real, if easy
+to miss, interactivity glitch pre-dating this feature). For a spectator/
+tournament-caster view specifically, that stray `showLobby()` also
+resets `isSpectating`/`isCasting` back to false and clears `currentGameId`
+*while the initial `refreshBoard()` fetch for the board being opened is
+still in flight* -- so when that fetch resolves moments later, it finds
+`isCasting` already false, skips the `state.you` stub, and crashes
+`renderBoard()` outright on `state.you.game_player_id` (the same shape of
+bug the Watch Replay crash, issue #240, was). Fixed by turning
+`suppressNextPopState` into a counter, `pendingSuppressedPopStates`,
+incremented once per orphaned dialog and decremented (not reset to zero)
+per swallowed `popstate` -- correctly swallowing however many
+self-triggered `popstate`s were actually queued, not just the first.
 
 ### Watch replay (issue #240)
 
@@ -11364,6 +11577,233 @@ own `{"resigned": true}` already rides alongside it.
 "{name} passed" -- one shared phrasing for both a bot's own pass and an
 opted-in human's, since both mean the exact same thing to a reader of
 this log ("nobody actually clicked Pass here").
+
+### Same-turn infinite-combo detection (issue #192)
+
+Some cards can, in combination, return themselves (or each other) to a
+replayable zone at zero net cost forever within a single turn -- reported
+live with two concrete examples: **Thrill (red) <-> Fear (blue)**, each
+bouncing the other back to hand and granting one unconditional extra play
+in return, oscillating forever; and **Thrill -> Angst -> Nostalgia ->
+Thrill**, where Thrill bounces both Angst and Nostalgia to hand, Angst
+discards Thrill (red qualifies) for a discard-sourced extra play, and
+Nostalgia recovers Thrill from discard back to hand for one more
+unconditional play, closing the cycle. Investigating turned up a third,
+even more minimal one not originally reported: **Fear + Angst alone**
+loops forever with no Thrill or Nostalgia at all -- Angst discards Fear
+(blue also qualifies) for a discard-sourced play, and that grant can play
+Fear straight back out of the discard pile (`BoardState::grantAllows()`
+already allows a discard-sourced grant to target a card sitting in
+discard), which bounces Angst back to hand to repeat. Neither loop was
+ever a scoring exploit -- `RoundScorer` scores final board state only, no
+counter anywhere tracks cumulative plays this turn -- so this is purely a
+tedium/engine-stress/stalling vector, not a way to win bigger.
+
+**Detection: `BoardState::turnStateSignature()`.** Since no card ever
+enters or leaves the game mid-turn, the exact partition of every card
+into (each player's hand, every mood in play with its owner/copy-target/
+effectState/suppressions, the discard pile) is a closed system: if that
+exact signature recurs while a play grant is still available, the player
+is *provably* able to reproduce it forever from there, not merely
+"looks similar." `registerTurnStateOccurrence()` hashes this once per
+fully-resolved action and increments a per-signature counter
+(`GameService::LOOP_STATE_WARNING_OCCURRENCE_COUNT` = 3,
+`LOOP_STATE_AUTO_PASS_OCCURRENCE_COUNT` = 4); `currentTurnStateOccurrenceCount()`
+is the non-mutating peek `getState()` uses for display. Persisted
+alongside `pending_play_grants` in a new `game_rounds.loop_state_signature_counts`
+JSON column (migration `0373`) -- a human's own repeated clicks are
+separate HTTP requests, not one long-lived in-memory loop, so without
+persisting this the counter would silently reset to zero every time.
+Reset to fresh the moment the turn changes hands (the exact same
+`$previousPlayerId !== $playerId` check `GameService::updateRoundTurnState()`
+already uses to decide whether to fire an "it's your turn" push
+notification also decides whether to reset this), carried forward
+untouched for a same-player continuation (an extra play, a Duplicity
+repeat).
+
+**Human-facing: warn, then auto-pass.** `GameService::finishPlay()`'s own
+"plays remaining, same player continues" branch reads the occurrence
+count `updateRoundTurnState()` returns: at 3 (two full repeats), nothing
+blocks the play, but `getState()`'s own `game.loop_warning` (`{game_player_id,
+occurrence_count}`, live-computed via `buildLoopStateWarning()`, same
+null-unless-relevant shape `action_timeout_warning` already uses) turns
+non-null and the frontend shows an amber "repeating" badge next to that
+player's name (`web-static/js/game.js`'s `buildLoopWarningStat()`) -- the
+same "no separate is-it-this-player's-turn check needed, the
+`game_player_id` match already is one" pattern the action-timeout warning
+established. At 4 (a repeat made anyway, after already being warned),
+`finishPlay()` logs a `turn_passed` event (`{"automated": true, "reason":
+"loop_detected"}`) and ends the turn immediately via `advanceTurn()`
+rather than trusting the player to notice and stop -- `describeEvent()`
+renders it as "{name}'s turn ended automatically -- the same board state
+kept repeating", a distinct phrasing from the existing "no legal play"
+auto-pass message just above.
+
+**A missing key, not a wrong value, broke deck submission entirely**
+(reported live: two brand new custom-duel bot games stuck with no
+deck-submission prompt at all). `buildGameState()`'s own `game.loop_warning`
+was first written AFTER its "still `'waiting'`" status guard returns --
+so a game that hadn't started yet (nothing to warn about, but also
+nothing to submit a decklist for otherwise) got a response with the key
+missing entirely, not `null`. `web-static/js/game.js`'s own `!== null`
+check treats `undefined` the same as "not null" too, so it went on to
+read `.game_player_id` off `undefined` and threw, aborting the *entire*
+board render -- Players list, deck submission prompt, all of it -- before
+any of it ran. This is the exact same class of bug `action_timeout_warning`
+itself was caught live doing once before (see its own docblock), and the
+fix is identical: `loop_warning` now defaults to `null` alongside
+`action_timeout_warning` in every response shape that field already
+covers (the main `buildGameState()` literal, the replay-snapshot
+serializer, and the JSON export), so the key always exists regardless of
+game status.
+
+**A badge alone wasn't enough** (reported live: "I didn't see the
+warning, though it did successfully force-pass my turn"). The amber
+player-row badge above is easy to miss entirely if nothing draws the eye
+to it, so `web-static/js/game.js`'s `maybeShowLoopWarningDialog()` now
+also pushes the same warning through `showAlertDialog()` -- the shared
+`#confirm-dialog` `window.confirm()`/`window.alert()` replacement
+already used everywhere else in this file (see its own docblock; a real
+`<dialog>` can't be silently suppressed the way iOS suppresses
+`window.alert()` for a page ever launched in standalone mode). Scoped to
+the player it's actually about (`loop_warning.game_player_id`, never an
+opponent's) and shown only once per distinct `occurrence_count` --
+`loopWarningDialogAcknowledgedKey` remembers the last one already shown
+so the still-unresolved warning doesn't re-pop on every ~4s poll, reset
+back to null the moment a poll reports `loop_warning` itself null again
+(the turn ended, warned or not). The badge itself stays, as a persistent
+reminder alongside the one-time popup.
+
+**Bot-facing: avoid wasting the turn, not just recover from it.**
+`BotPlayerService::chooseAction()`'s own real-world targeting policies
+(`thrillHandMoodIds()` only ever bounces an in-play Nostalgia, never
+Fear; Fear's/Angst's own optional bounce/discard fields are left
+unfilled by the generic resolver's "never volunteer for an unproven
+bonus" bias) already mean the plain heuristic bot doesn't spontaneously
+walk into either reported loop today -- but as defense-in-depth against a
+future bespoke policy, a different card combo, or the Tactical Bot's own
+real per-turn choices, `GameService::chooseBotActionAvoidingLoop()` wraps
+every `chooseAction()` call site: it simulates the bot's chosen candidate
+on a throwaway `clone $state` (the exact documented use case
+`BoardState::__clone()`'s own docblock calls out -- explore a
+hypothetical play without ever touching the real game), and if that
+candidate would push an already-seen signature to the auto-pass count,
+removes it from the candidate list and asks again, falling back to a
+plain pass only once nothing safe remains. A candidate still pending
+after one simulated play (a Duplicity repeat offer) is never
+second-guessed this way -- resolving that whole chain speculatively
+would be its own project, and a pending decision can't contribute to a
+same-turn loop on its own anyway (every repeat there is an explicit
+yes/no asked fresh, never auto-repeated).
+
+Bots were already structurally protected from a genuine infinite loop
+regardless (`SearchBotPlayerService::MAX_PLAYS_PER_ROLLOUT`/
+`MAX_PENDING_DECISION_ROUNDS` bound simulated search rollouts;
+`GameService::MAX_AUTOMATED_ACTIONS_PER_REQUEST`/
+`MAX_AUTOMATED_TURN_RECHECK_CHAIN_DEPTH` bound real automated-turn
+resolution) -- those exist "against a hypothetical future bug where
+advanceAutomatedTurns() keeps reporting genuine progress forever", the
+same category of concern this feature addresses for a human, who had no
+equivalent safety net at all before now.
+
+**Follow-up: some Chaos Draft effects defeat exact-signature detection
+entirely.** `turnStateSignature()`'s "closed system" guarantee (no card
+ever enters or leaves the game mid-turn) is only true of the base rules
+-- `BoardState::spawnMoodInPlay()` (an uncapped, freshly-minted token,
+never drawn from any deck) and `drawCard()` (deck -> hand) both violate
+it. A handful of Chaos Draft effects call one of those two REACTIVELY,
+on a hook (`ChaosMoodEffect::onMoodPlayed()`/`onMoodDiscarded()`/
+`onMoodSuppressed()`) that fires on every cycle of an otherwise-
+perpetual loop: `chaos_026` ("each time you play another mood with a 0
+or 1 in its corner, put a Smugness token into play" -- Thrill/Fear/
+Nostalgia all qualify, so this fires on every cycle of all three known
+loops with no discard needed at all), `chaos_037`/`chaos_040` ("each
+time you/an opponent plays another mood, draw a card" -- no value
+condition, fires on literally every cycle, and can hand a bystander
+opponent free draws off someone ELSE's loop), and `chaos_089`/`chaos_011`/
+`chaos_024`/`chaos_016` (rarer token-spawning triggers on discard/
+suppression/entering play). Combined with a perpetual loop, each of
+these turns "harmless stalling" into unbounded, silent value generation:
+every cycle's board is provably different from the last (a new token or
+drawn card), so `registerTurnStateOccurrence()` never sees a repeat and
+the warn-at-3/auto-pass-at-4 safety net above never engages, no matter
+how many times the loop actually runs.
+
+`BoardState::turnStateSignatureCoarse()` is the fix: the same hash,
+except with every spawned-token mood (`catalogRow()`'s own `isToken`,
+migration 0183's `cards.is_token`) dropped from the in-play side, and
+every card drawn this turn (`$drawnThisTurnCardIds`) dropped from each
+hand -- so the loop's underlying repeating SHAPE still surfaces despite
+the noise piling up around it. A second, parallel occurrence counter
+(`$coarseTurnStateSignatureCounts`, persisted in a new
+`game_rounds.chaos_loop_state` JSON column alongside three more pieces
+of per-turn bookkeeping -- see that column's own migration comment)
+tracks this the same way the exact one already does. On its own,
+though, a coarse repeat is too blunt a signal to act on: a coincidental
+match between two genuinely different turns is a real (if rare)
+possibility, and the consequence of a false positive here is ending a
+legitimate turn early -- worse than the exact-signature case, where a
+false positive is structurally impossible (see that method's own
+docblock). So `GameService::resolveChaosLoopShortcutOffer()` requires a
+SECOND, independent signal before acting: `BoardState::registerChaosEffectFired()`
+(called only from inside a registered effect's own implementation, once
+its own internal condition already passed, so it never counts a
+dispatched-but-no-op call) tracks how many times each of
+`ChaosLoopShortcut::REGISTERED_EFFECT_KEYS` has actually fired this
+turn. Only when a registered effect's own fire count AND the coarse
+signature's own repeat count both cross the same threshold (3) does
+anything happen -- and what happens is not the ordinary warning/auto-
+pass, but a **shortcut**: `ChaosLoopShortcut` describes what one firing
+of the effect actually does (spawn a token, draw a card, or -- see
+below -- permanently boost a mood's value), each registered effect's own
+`loopShortcut()` resolves any needed random/reactive target exactly the
+way its single-firing hook already would (frozen once offered, in
+`BoardState::$pendingChaosLoopShortcutOffer`, so it can't re-roll on a
+later poll), and `GameService::applyChaosLoopShortcut()` (`POST
+/games/apply-chaos-loop-shortcut`, surfaced in `getState()` as
+`game.chaos_loop_shortcut`, same null-unless-relevant shape
+`loop_warning` already uses) lets the player apply as many cycles' worth
+of it as they choose in one step -- up to 16 for a token effect, up to
+the player's own current deck size for a draw effect, up to 65,536 for a
+value-boost effect -- instead of manually repeating the loop that many
+times.
+
+Applying a token/value-boost shortcut ends the turn immediately, same
+posture as the ordinary auto-pass. A draw shortcut deliberately does
+NOT -- the whole point is letting the player go on to actually play what
+they just drew -- so `BoardState::$chaosLoopShortcutOfferedThisTurn`
+(sticky for the rest of the turn once any offer is made, regardless of
+whether it's ever applied) is what makes a LATER repeat of the same loop
+this turn auto-pass (`turn_passed`, `reason: 'chaos_loop_detected'`)
+instead of re-offering a second shortcut -- the same "warn once, then
+don't trust them to stop" posture the exact-signature case already has,
+just generalized to not care whether the player took the first offer.
+
+**Is a permanent +1 effect the same risk?** Audited every
+`adjustChaosValueDelta()` caller in the pool: `chaos_064`/`chaos_056`
+permanently reduce an OPPONENT's mood and self-terminate (once a
+target's value would go negative it's discarded instead, removing it
+from the pool of future targets); `chaos_133` is a one-shot
+`after_playing` snapshot; `chaos_120` ("the next time an opponent plays
+a mood, boost one of your own moods by 1") only fires ONCE per arming
+(`afterPlaying()` arms it, the very next qualifying play disarms it),
+and re-arming needs `chaos_120` itself to be replayed -- since it isn't
+one of the four cards any known loop actually cycles, it never reaches
+the fire-count threshold. No live exploit exists today, but it's the
+exact same failure class (a value delta lives in `effectState`, which
+IS part of both signatures, so a hypothetical future effect shaped like
+"each cycle, permanently +1, no self-termination" would defeat even the
+coarse signature the same way tokens/draws defeat the exact one) --
+`chaos_120` is registered anyway (`ChaosLoopShortcut::valueBoost()`)
+as insurance against a future card shaped that way, not because this
+one is exploitable now.
+
+**Bot-facing.** `GameService::advanceBotChaosLoopShortcut()` -- checked
+early in `advanceAutomatedTurns()`'s own loop, since a shortcut's own
+beneficiary (`chaos_040`'s owner, for instance) isn't necessarily
+whoever's turn it currently is -- always takes the maximum offered
+count: unlike a human, a bot has no reason to ever pick less (nothing
+in this bounded, one-shot action has a downside).
 
 ### Auto-apply scoring bonuses (issue #397)
 

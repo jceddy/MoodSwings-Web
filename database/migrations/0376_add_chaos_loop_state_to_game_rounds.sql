@@ -1,0 +1,32 @@
+-- Issue #192 follow-up: a handful of Chaos Draft effects (chaos_026/037/
+-- 040/089/011/024/016/120) can reactively call BoardState::spawnMoodInPlay()/
+-- drawCard()/adjustChaosValueDelta() on every cycle of an otherwise-
+-- perpetual same-turn loop (Thrill<->Fear, Thrill->Angst->Nostalgia->
+-- Thrill, Fear+Angst -- see turnStateSignature()'s own docblock). Each
+-- firing makes the EXACT board signature loop_state_signature_counts
+-- already tracks different every single cycle (a new token keeps
+-- entering play, or a new card keeps entering hand), so that counter
+-- never sees a repeat and the existing warn/auto-pass safety net never
+-- engages no matter how many times the loop actually runs.
+--
+-- This column persists three more pieces of per-turn, reset-on-handoff/
+-- carried-forward-on-continuation bookkeeping (same lifecycle as
+-- loop_state_signature_counts, kept in a separate column rather than
+-- restructuring that one's own flat shape) needed to detect this and
+-- offer a shortcut instead:
+--   * coarseCounts: BoardState::turnStateSignatureCoarse()'s own
+--     per-signature occurrence counts -- the same idea as
+--     loop_state_signature_counts, but hashed with spawned tokens and
+--     cards drawn this turn normalized out, so the loop's underlying
+--     repeating shape still surfaces despite that noise.
+--   * drawnCardIds: every card id drawn this turn, so
+--     turnStateSignatureCoarse() knows which hand entries to exclude.
+--   * chaosEffectFireCounts: how many times each registered risky
+--     effect has actually fired this turn.
+--   * usedDrawLoopShortcut: whether a card-draw shortcut has already
+--     been applied this turn (a draw shortcut deliberately doesn't end
+--     the turn, so this is what makes a second detection auto-pass
+--     instead of re-offering it indefinitely).
+ALTER TABLE game_rounds ADD COLUMN chaos_loop_state JSON DEFAULT NULL AFTER loop_state_signature_counts;
+
+UPDATE schema_version SET version = '1.54.0' WHERE id = 1;

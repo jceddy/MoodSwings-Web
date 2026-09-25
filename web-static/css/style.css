@@ -2201,6 +2201,14 @@ body.game-page {
     color: var(--color-error);
 }
 
+/* Issue #192's own same-turn infinite-combo warning -- only ever rendered
+   once the board has already recurred, so like actionTimeoutWarning above
+   there's no "comfortable" default state; --color-pending (amber) matches
+   the same "you should probably do something differently" register. */
+.player-stat--loopWarning {
+    color: var(--color-pending);
+}
+
 /* Synchronous mode's own live 30-second action timer (reported live) --
    plain text color by default, escalating to --color-error under 10
    seconds remaining (tickSynchronousActionTimer() in game.js), the same
@@ -2367,6 +2375,44 @@ dialog#confirm-dialog {
 }
 
 #confirm-dialog form {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+}
+
+/* Issue #192 follow-up -- see #chaos-loop-shortcut-dialog's own comment
+   in game/index.html. Same shape/sizing as #confirm-dialog above, plus a
+   count input row. */
+dialog#chaos-loop-shortcut-dialog {
+    box-sizing: border-box;
+    max-width: 22rem;
+    width: 85%;
+    padding: 1.5rem;
+    background-color: var(--color-surface);
+    backdrop-filter: var(--surface-blur, none);
+    -webkit-backdrop-filter: var(--surface-blur, none);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    border-radius: 0.5rem;
+}
+
+#chaos-loop-shortcut-dialog-message {
+    margin-top: 0;
+    white-space: pre-line;
+}
+
+#chaos-loop-shortcut-dialog-count-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+}
+
+#chaos-loop-shortcut-dialog-count-input {
+    width: 6rem;
+}
+
+#chaos-loop-shortcut-dialog div {
     display: flex;
     justify-content: flex-end;
     gap: 0.5rem;

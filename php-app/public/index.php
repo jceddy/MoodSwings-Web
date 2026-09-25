@@ -1082,6 +1082,16 @@ function canSpectateGame(GameService $games, FriendshipService $friendships, int
     return false;
 }
 
+// Tournament spectator mode (issue #238): a game only has a "cast"
+// permission at all if it's actually a tournament match in the first
+// place (GameService::tournamentIdForGame()), and even then only for
+// whoever that tournament's creator has trusted with
+// TournamentService::hasCastAccess() -- deliberately unrelated to
+// canSpectateGame() above (friendship/spectate_code never grant this).
+// Inlined at its one call site (GET /games/tournament-cast/state) rather
+// than kept as its own helper, since that route also needs the resolved
+// $tournamentId itself right after (TournamentService::castRevealsHands()).
+
 // Practice bots (issue #140): the New Game dialog's own bot picker, a
 // small fixed roster (migration 0090) rather than anything scoped to the
 // caller specifically -- every authenticated user sees the same list, the
@@ -1502,6 +1512,21 @@ if ($path === '/tournaments' && $method === 'POST') {
             array_map(intval(...), (array) ($body['invite_user_ids'] ?? [])),
             isset($body['decklist_text']) ? (string) $body['decklist_text'] : null,
             isset($body['saved_decklist_id']) ? (int) $body['saved_decklist_id'] : null,
+            // Tournament spectator mode follow-up (reported live: casters
+            // selected at creation time) -- each entry {username,
+            // reveal_hands}, sanitized the same "coerce, don't trust the
+            // client's own shape" way every other body field here is.
+            array_map(
+                static function ($castGrant): array {
+                    $castGrant = (array) $castGrant;
+
+                    return [
+                        'username' => (string) ($castGrant['username'] ?? ''),
+                        'reveal_hands' => (bool) ($castGrant['reveal_hands'] ?? true),
+                    ];
+                },
+                (array) ($body['cast_grants'] ?? []),
+            ),
         );
         respond(201, ['status' => 'ok', 'tournament_id' => $tournamentId]);
     } catch (TournamentStateException $e) {
@@ -1613,6 +1638,67 @@ if ($path === '/tournaments/decline-invite' && $method === 'POST') {
         respond(200, ['status' => 'ok']);
     } catch (TournamentStateException $e) {
         respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+// Tournament spectator mode (issue #238): the creator grants a user
+// (a dedicated caster, not necessarily a participant) live, hands-revealed
+// viewing of this tournament's matches. See TournamentService::grantCastAccess().
+if ($path === '/tournaments/cast-grants/add' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $grantee = $tournaments->grantCastAccess(
+            (int) ($body['tournament_id'] ?? 0),
+            (int) $currentUser['id'],
+            trim((string) ($body['username'] ?? '')),
+            (bool) ($body['reveal_hands'] ?? true),
+        );
+        respond(201, ['status' => 'ok', 'user' => $grantee]);
+    } catch (TournamentNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAuthorizedForTournamentException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (TournamentStateException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+// Tournament spectator mode (issue #238): the creator revokes a previously granted caster's access.
+if ($path === '/tournaments/cast-grants/remove' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $tournaments->revokeCastAccess((int) ($body['tournament_id'] ?? 0), (int) $currentUser['id'], (int) ($body['user_id'] ?? 0));
+        respond(200, ['status' => 'ok']);
+    } catch (TournamentNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAuthorizedForTournamentException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+// Tournament spectator mode (issue #238): the creator's own roster of everyone they've granted cast access to.
+if ($path === '/tournaments/cast-grants' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $tournamentId = (int) ($_GET['tournament_id'] ?? 0);
+
+    try {
+        $grants = $tournaments->listCastGrants($tournamentId, (int) $currentUser['id']);
+        respond(200, [
+            'status' => 'ok',
+            'grants' => array_map(static fn (array $grant): array => [
+                'user_id' => (int) $grant['user_id'],
+                'username' => $grant['username'],
+                'granted_at' => $grant['created_at'],
+            ], $grants),
+        ]);
+    } catch (TournamentNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAuthorizedForTournamentException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
     }
 }
 
@@ -1989,6 +2075,30 @@ if ($path === '/games/spectate/state' && $method === 'GET') {
     }
 }
 
+// Tournament spectator mode (issue #238): the trusted-caster equivalent
+// of GET /games/spectate/state -- allows watching a still-in_progress
+// match with no spectate_code/friendship needed at all, gated behind
+// TournamentService::hasCastAccess() rather than canSpectateGame()'s
+// much looser check. Whether hands are ALSO revealed (reported live: a
+// "no hands" option) depends entirely on the caller's own grant -- see
+// TournamentService::castRevealsHands()/GameService::getTournamentCastState().
+if ($path === '/games/tournament-cast/state' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $gameId = (int) ($_GET['game_id'] ?? 0);
+    $tournamentId = $games->tournamentIdForGame($gameId);
+
+    if ($tournamentId === null || !$tournaments->hasCastAccess($tournamentId, (int) $currentUser['id'])) {
+        respond(403, ['status' => 'error', 'message' => 'You are not authorized to cast this tournament match.']);
+    }
+
+    try {
+        $revealHands = $tournaments->castRevealsHands($tournamentId, (int) $currentUser['id']);
+        respond(200, ['status' => 'ok', ...$games->getTournamentCastState($gameId, $revealHands)]);
+    } catch (GameStateException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
 // The entire game log (issue #98) -- unlike GET /games/state, no
 // per-viewer customization at all (see GameService::fullEventLog()'s own
 // docblock), so a spectator (issue #128) can read it just as well as a
@@ -2215,6 +2325,39 @@ if ($path === '/games/pass' && $method === 'POST') {
         }
         respond(200, ['status' => 'ok', ...$result]);
     } catch (GameStateException | IllegalPlayException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+// Issue #192 follow-up: applies a currently outstanding chaos-loop-
+// shortcut offer (see GameService::buildChaosLoopShortcut()'s own
+// docblock -- the game.chaos_loop_shortcut field GET /games/state
+// exposes) $count times in one step. Authorized against whichever
+// game_player_id this request's own user actually seats -- that's
+// naturally the offer's own beneficiary too, since only THAT player's
+// own client would ever see the offer to act on in the first place (see
+// GameService::applyChaosLoopShortcut()'s own docblock on why the
+// beneficiary isn't necessarily whoever's turn it currently is).
+if ($path === '/games/apply-chaos-loop-shortcut' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $gameId = (int) ($body['game_id'] ?? 0);
+    $count = (int) ($body['count'] ?? 0);
+
+    $gamePlayerId = requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    try {
+        $result = $games->applyChaosLoopShortcut($gameId, $gamePlayerId, $count);
+        // Practice bots (issue #140)/auto-pass on empty hand -- see the
+        // identical comment on POST /games/play above.
+        $autoResult = $games->advanceAutomatedTurns($gameId);
+        if ($autoResult !== null) {
+            $result = $autoResult;
+        }
+        respond(200, ['status' => 'ok', ...$result]);
+    } catch (InvalidChoiceException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (GameStateException $e) {
         respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
     }
 }

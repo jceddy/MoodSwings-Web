@@ -1,0 +1,16 @@
+-- Bug fix (reported live: two brand new custom-duel bot games stuck with
+-- no deck-submission prompt at all): GameService::buildGameState() only
+-- ever set $response['game']['loop_warning'] AFTER its own "still
+-- 'waiting'" status guard returns early, so a game that hadn't started
+-- yet (nothing to submit a decklist for otherwise) got a response with
+-- the key missing entirely rather than null. web-static/js/game.js's own
+-- `state.game.loop_warning !== null` check treats `undefined` as "not
+-- null" too, so it went on to read `.game_player_id` off `undefined` and
+-- threw -- aborting the whole board render (Players list, deck
+-- submission prompt, everything) before any of it ever ran. Now
+-- defaulted to null alongside action_timeout_warning in every response
+-- shape that field already covers, so the key always exists.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.53.1' WHERE id = 1;

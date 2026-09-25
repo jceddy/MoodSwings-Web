@@ -1527,6 +1527,13 @@
     const confirmDialogMessage = document.getElementById('confirm-dialog-message');
     const confirmDialogCancelButton = document.getElementById('confirm-dialog-cancel-button');
 
+    // Issue #192 follow-up -- see #chaos-loop-shortcut-dialog's own
+    // comment in game/index.html and maybeShowChaosLoopShortcutDialog()
+    // below.
+    const chaosLoopShortcutDialog = document.getElementById('chaos-loop-shortcut-dialog');
+    const chaosLoopShortcutDialogMessage = document.getElementById('chaos-loop-shortcut-dialog-message');
+    const chaosLoopShortcutDialogCountInput = document.getElementById('chaos-loop-shortcut-dialog-count-input');
+
     // method="dialog" on the <form> already sets confirmDialog.returnValue
     // to the clicked button's own value ('ok'/'cancel') and closes the
     // dialog with no JS needed for that part -- Escape closes it too,
@@ -1583,6 +1590,27 @@
     let currentGameId = null;
     let currentState = null;
     let pollTimer = null;
+    // Issue #192 loop warning (reported live: "I didn't see the warning,
+    // though it did successfully force-pass my turn" -- the player-row
+    // badge buildLoopWarningStat() adds is easy to miss entirely, since
+    // nothing draws the eye to it). Tracks the game_player_id:
+    // occurrence_count of whichever warning showAlertDialog() has already
+    // popped up for, so the same still-unresolved warning doesn't re-pop
+    // on every ~4s poll while it remains non-null -- see renderBoard()'s
+    // own use of this just below buildLoopWarningStat(). Reset in
+    // showBoard() (a fresh game load has nothing to have already shown),
+    // and back to null the moment a poll comes back with loop_warning
+    // itself null again (the turn ended, one way or another), so a later,
+    // unrelated recurrence within a still-later turn pops its own dialog
+    // rather than being silently treated as "already seen."
+    let loopWarningDialogAcknowledgedKey = null;
+    // Issue #192 follow-up: same "don't re-pop on every ~4s poll while
+    // it's still outstanding" role as loopWarningDialogAcknowledgedKey
+    // just above, for #chaos-loop-shortcut-dialog -- see
+    // maybeShowChaosLoopShortcutDialog()'s own docblock. Reset in
+    // showBoard() and back to null once state.game.chaos_loop_shortcut
+    // itself goes null again (applied, or the turn ended).
+    let chaosLoopShortcutDialogShownKey = null;
     // Synchronous mode's own live action timer (reported live: "which
     // should be visible in the game display") -- a separate 1-second
     // interval from pollTimer above, since a 30-second countdown needs
@@ -1605,6 +1633,13 @@
     // every single request.
     let isSpectating = false;
     let spectateCode = null;
+    // Tournament spectator mode (issue #238) -- a trusted caster's live,
+    // hands-revealed view of a tournament match, opened in-page from the
+    // tournament view dialog (see showCastBoard()) rather than a separate
+    // URL entry point the way isSpectating is, so this DOES reset back to
+    // false in showLobby() -- the same "opened and closed within this
+    // same page session" reasoning isReplaying's own docblock gives.
+    let isCasting = false;
     // Watch game replay (issue #240) -- the read-only, step-through-history
     // counterpart to isSpectating above, for a completed game. Unlike
     // isSpectating, this DOES reset back to false (see showLobby()) since a
@@ -1664,13 +1699,14 @@
 
     // Whether the current view is read-only for the same underlying reason
     // spectating is (no seat of the viewer's own to act from) -- covers
-    // both isSpectating and isReplaying (issue #240). Used to sweep the
-    // interactivity-gating checks that both share (canAct, resign/share
-    // buttons, "your hand" section); spectator-specific chrome (code
-    // re-sending on poll, the "Back to spectate list" label) stays keyed
-    // on isSpectating alone -- see showReplayBoard()'s own docblock.
+    // isSpectating, isReplaying (issue #240), and isCasting (issue #238).
+    // Used to sweep the interactivity-gating checks all three share
+    // (canAct, resign/share buttons, "your hand" section); mode-specific
+    // chrome (code re-sending on poll, the "Back to spectate list" label)
+    // stays keyed on isSpectating alone -- see showReplayBoard()'s own
+    // docblock.
     function isReadOnlyView() {
-        return isSpectating || isReplaying;
+        return isSpectating || isReplaying || isCasting;
     }
 
     // The share code (if any) authorizing the current read-only view --
@@ -1706,6 +1742,9 @@
         replayEvents = [];
         replayEventIndex = 0;
         importedReplayExport = null;
+        // Tournament spectator mode (issue #238) -- see isCasting's own
+        // docblock for why this resets here the same way isReplaying does.
+        isCasting = false;
         document.getElementById('back-to-lobby-button').textContent = '← Back to your games';
         document.getElementById('replay-controls').hidden = true;
         boardView.hidden = true;
@@ -1757,6 +1796,8 @@
         // dead ever since the deck-building step was generalized past
         // Quick Draft -- rather than this one).
         draftDeckSelectionInitialized = false;
+        loopWarningDialogAcknowledgedKey = null;
+        chaosLoopShortcutDialogShownKey = null;
         showLoadingOverlay();
         refreshBoard().finally(hideLoadingOverlay);
         if (pollTimer) {
@@ -1782,6 +1823,35 @@
         isSpectating = true;
         spectateCode = code || null;
         document.getElementById('back-to-lobby-button').textContent = '← Back to spectate list';
+        lobbyView.hidden = true;
+        boardView.hidden = false;
+        boardMessage.hidden = true;
+        showLoadingOverlay();
+        refreshBoard().finally(hideLoadingOverlay);
+        if (pollTimer) {
+            clearInterval(pollTimer);
+        }
+        pollTimer = setInterval(() => {
+            if (choicesPanel.hidden && pendingDecisionPanel.hidden) {
+                refreshBoard();
+            }
+        }, 4000);
+    }
+
+    // Tournament spectator mode (issue #238) -- the trusted-caster
+    // counterpart to showSpectatorBoard() above: same read-only
+    // #board-view/4-second poll, but hands (and a pending decision's own
+    // internals) are revealed even while the match is still in_progress,
+    // via getTournamentCastState() rather than getSpectatorGameState().
+    // Opened from the tournament view dialog's own "Cast" button
+    // (renderBracketRounds()), not a separate URL entry point, so
+    // "Back"/"Exit cast view" returns to the ordinary lobby the same way
+    // exiting a replay does.
+    function showCastBoard(gameId) {
+        pushDisplayHistoryEntry();
+        currentGameId = gameId;
+        isCasting = true;
+        document.getElementById('back-to-lobby-button').textContent = '← Exit cast view';
         lobbyView.hidden = true;
         boardView.hidden = false;
         boardMessage.hidden = true;
@@ -4253,6 +4323,12 @@
     const tournamentViewError = document.getElementById('tournament-view-error');
     let currentTournamentViewId = null;
 
+    // Tournament spectator mode (issue #238) -- reported live: casters
+    // selected at creation time. {username, reveal_hands}[], reset in
+    // openNewTournamentDialog() below and sent as createTournament()'s
+    // own cast_grants param on submit -- see renderNewTournamentCasters().
+    let newTournamentCastGrants = [];
+
     const TOURNAMENT_BRACKET_TYPE_LABELS = { single_elimination: 'Single elimination', double_elimination: 'Double elimination', swiss: 'Swiss rounds' };
     const TOURNAMENT_STATUS_LABELS = { registration: 'Registration open', in_progress: 'In progress', completed: 'Completed', cancelled: 'Cancelled' };
     // 'Round'/'winners round'/etc. prefix a plain round_number in the
@@ -4814,9 +4890,56 @@
     document.getElementById('new-tournament-timeout-enabled').addEventListener('change', enforceNewTournamentSynchronousExclusivityFromAsyncCheckboxes);
     document.getElementById('new-tournament-total-time-limit-enabled').addEventListener('change', enforceNewTournamentSynchronousExclusivityFromAsyncCheckboxes);
 
+    // Tournament spectator mode (issue #238) -- reported live: casters
+    // selected at creation time. Renders newTournamentCastGrants as a
+    // plain list with a Remove button per row -- no server round-trip
+    // (unlike the tournament view dialog's own post-creation "Casters"
+    // section), since nothing has actually been created yet to grant
+    // against; the whole list is sent as createTournament()'s own
+    // cast_grants param on submit.
+    function renderNewTournamentCasters() {
+        const list = document.getElementById('new-tournament-casters-list');
+        list.innerHTML = '';
+        newTournamentCastGrants.forEach((castGrant, index) => {
+            const item = document.createElement('li');
+            item.append(castGrant.username + (castGrant.reveal_hands ? '' : ' (no hands)') + ' ');
+            const removeButton = document.createElement('button');
+            removeButton.type = 'button';
+            removeButton.textContent = 'Remove';
+            removeButton.addEventListener('click', () => {
+                newTournamentCastGrants.splice(index, 1);
+                renderNewTournamentCasters();
+            });
+            item.appendChild(removeButton);
+            list.appendChild(item);
+        });
+    }
+
+    document.getElementById('new-tournament-add-caster-button').addEventListener('click', () => {
+        const usernameInput = document.getElementById('new-tournament-add-caster-username');
+        const username = usernameInput.value.trim();
+        if (!username) {
+            return;
+        }
+        if (newTournamentCastGrants.some((castGrant) => castGrant.username.toLowerCase() === username.toLowerCase())) {
+            newTournamentError.textContent = `${username} is already in the caster list.`;
+            newTournamentError.hidden = false;
+            return;
+        }
+        newTournamentError.hidden = true;
+        newTournamentCastGrants.push({
+            username,
+            reveal_hands: document.getElementById('new-tournament-add-caster-reveal-hands').checked,
+        });
+        usernameInput.value = '';
+        renderNewTournamentCasters();
+    });
+
     async function openNewTournamentDialog() {
         newTournamentError.hidden = true;
         newTournamentForm.reset();
+        newTournamentCastGrants = [];
+        renderNewTournamentCasters();
         populateNewTournamentParticipantRangeSelects();
         updateNewTournamentAllowSideboardingVisibility();
         updateNewTournamentDecklistFieldVisibility();
@@ -4895,6 +5018,9 @@
             min_participants: parseInt(document.getElementById('new-tournament-min-participants').value, 10),
             max_participants: maxParticipants,
             invite_user_ids: inviteUserIds,
+            // Tournament spectator mode (issue #238) -- reported live:
+            // casters selected at creation time.
+            cast_grants: newTournamentCastGrants,
             format,
             deck_type: deckType,
             // "Power Duel" always implies the "power" duel_deck_rules
@@ -5045,7 +5171,7 @@
      * pod has its own winner) is labeled "Finals" instead of "Pod N"
      * since by then there's only ever the one.
      */
-    function renderTournamentPods(tournament, pods, participantsById) {
+    function renderTournamentPods(tournament, pods, participantsById, viewerHasCastAccess = false, viewerCastRevealsHands = true) {
         const section = document.getElementById('tournament-view-pods-section');
         section.hidden = !pods;
         if (!pods) {
@@ -5068,7 +5194,7 @@
 
             if (pod.bracket_rounds.length > 0) {
                 const podBracketContainer = document.createElement('div');
-                renderBracketRounds(podBracketContainer, pod.bracket_rounds, (round) => round.matches, participantsById);
+                renderBracketRounds(podBracketContainer, pod.bracket_rounds, (round) => round.matches, participantsById, viewerHasCastAccess, viewerCastRevealsHands);
                 item.appendChild(podBracketContainer);
             }
 
@@ -5113,7 +5239,11 @@
             return;
         }
 
-        const { tournament, participants, rounds, matches_by_round: matchesByRound, standings, pods } = body;
+        // viewer_has_cast_access (issue #238) is a top-level sibling of
+        // `tournament`, not a property of it (see TournamentService::
+        // getState()'s own return shape) -- destructured here rather than
+        // read off `tournament` itself.
+        const { tournament, participants, rounds, matches_by_round: matchesByRound, standings, pods, viewer_has_cast_access: viewerHasCastAccess, viewer_cast_reveals_hands: viewerCastRevealsHands, cast_grants: castGrants } = body;
         document.getElementById('tournament-view-title').textContent = tournament.name;
         document.getElementById('tournament-view-status').textContent =
             `${TOURNAMENT_BRACKET_TYPE_LABELS[tournament.bracket_type] || tournament.bracket_type} — ${TOURNAMENT_STATUS_LABELS[tournament.status] || tournament.status}`;
@@ -5130,7 +5260,7 @@
         document.getElementById('tournament-view-cancel-button').hidden =
             !(isCreator && (tournament.status === 'registration' || tournament.status === 'in_progress'));
 
-        renderTournamentPods(tournament, pods, participantsById);
+        renderTournamentPods(tournament, pods, participantsById, viewerHasCastAccess, viewerCastRevealsHands);
         renderMyBoosterDraftDeck(participants);
 
         const standingsSection = document.getElementById('tournament-view-standings-section');
@@ -5146,7 +5276,9 @@
         }
 
         const bracketContainer = document.getElementById('tournament-view-bracket');
-        renderBracketRounds(bracketContainer, rounds, (round) => matchesByRound[round.id], participantsById);
+        renderBracketRounds(bracketContainer, rounds, (round) => matchesByRound[round.id], participantsById, viewerHasCastAccess, viewerCastRevealsHands);
+
+        renderTournamentCasters(tournament, isCreator, castGrants);
     }
 
     /**
@@ -5160,7 +5292,7 @@
      * their matches inline -- see TournamentService::podsSummary()'s own
      * docblock).
      */
-    function renderBracketRounds(container, rounds, getMatchesForRound, participantsById) {
+    function renderBracketRounds(container, rounds, getMatchesForRound, participantsById, canCast = false, castRevealsHands = true) {
         container.innerHTML = '';
         for (const round of rounds) {
             const heading = document.createElement('h4');
@@ -5181,12 +5313,104 @@
                         showBoard(match.game_id);
                     });
                     item.appendChild(goToGameButton);
+
+                    // Tournament spectator mode (issue #238): only for
+                    // whoever this tournament's creator has trusted with
+                    // cast access (see TournamentService::hasCastAccess())
+                    // -- everyone else already has "Go to game"/"View
+                    // game" above, which is the ordinary (hands-hidden
+                    // until completed) board. Only offered while
+                    // in_progress -- a completed match's hands are
+                    // already revealed via the ordinary "View game" ->
+                    // Watch Replay path, so a separate cast view adds
+                    // nothing there. The label reflects the viewer's own
+                    // grant (reported live: a "no hands" option) -- see
+                    // TournamentService::getState()'s own
+                    // viewer_cast_reveals_hands.
+                    if (canCast && match.status === 'in_progress') {
+                        const castButton = document.createElement('button');
+                        castButton.type = 'button';
+                        castButton.textContent = castRevealsHands ? 'Cast (reveal hands)' : 'Cast (public info only)';
+                        castButton.addEventListener('click', () => {
+                            tournamentViewDialog.close();
+                            tournamentsDialog.close();
+                            showCastBoard(match.game_id);
+                        });
+                        item.appendChild(castButton);
+                    }
                 }
                 list.appendChild(item);
             }
             container.appendChild(list);
         }
     }
+
+    // Tournament spectator mode (issue #238): the creator's own "Casters"
+    // management section -- who besides themselves may cast this
+    // tournament's matches. Creator-only (TournamentService::
+    // grantCastAccess()/revokeCastAccess()/listCastGrants() all
+    // requireCreator()); everyone else never sees this section at all,
+    // including a caster the creator already granted access to -- they
+    // find their own "Cast" buttons via renderBracketRounds() instead.
+    // Tournament spectator mode (issue #238): the roster of everyone
+    // granted cast access, shown to EVERY tournament viewer (reported
+    // live: "all users in the tournament can see who is allowed to
+    // cast"), not just the creator -- getState() itself already scopes
+    // who's allowed to see this list at all (canViewTournament()), so by
+    // the time this renders, the viewer is always allowed to see it.
+    // Only the creator gets the add/revoke controls below the list --
+    // everyone else sees the same list read-only, plus their own
+    // "Cast"/"Cast (public info only)" button on each in_progress match
+    // instead (renderBracketRounds()). $castGrants comes straight off
+    // getState()'s own response (no separate fetch needed).
+    function renderTournamentCasters(tournament, isCreator, castGrants) {
+        document.getElementById('tournament-view-caster-error').hidden = true;
+        document.getElementById('tournament-view-add-caster-fields').hidden = !isCreator;
+
+        const list = document.getElementById('tournament-view-casters-list');
+        list.innerHTML = '';
+        document.getElementById('tournament-view-casters-empty').hidden = castGrants.length > 0;
+        for (const grant of castGrants) {
+            const item = document.createElement('li');
+            item.append(grant.username + (grant.reveal_hands ? '' : ' (public info only, no hands)') + ' ');
+            if (isCreator) {
+                const removeButton = document.createElement('button');
+                removeButton.type = 'button';
+                removeButton.textContent = 'Revoke';
+                removeButton.addEventListener('click', async () => {
+                    const result = await revokeTournamentCastAccess(tournament.id, grant.user_id);
+                    if (!result.ok) {
+                        document.getElementById('tournament-view-caster-error').textContent = result.body.message || 'Could not revoke cast access.';
+                        document.getElementById('tournament-view-caster-error').hidden = false;
+                        return;
+                    }
+                    await refreshTournamentView();
+                });
+                item.appendChild(removeButton);
+            }
+            list.appendChild(item);
+        }
+    }
+
+    document.getElementById('tournament-view-add-caster-button').addEventListener('click', async () => {
+        const usernameInput = document.getElementById('tournament-view-add-caster-username');
+        const username = usernameInput.value.trim();
+        const errorEl = document.getElementById('tournament-view-caster-error');
+        errorEl.hidden = true;
+        if (!username) {
+            return;
+        }
+
+        const revealHands = document.getElementById('tournament-view-add-caster-reveal-hands').checked;
+        const { ok, body } = await grantTournamentCastAccess(currentTournamentViewId, username, revealHands);
+        if (!ok) {
+            errorEl.textContent = body.message || 'Could not grant cast access.';
+            errorEl.hidden = false;
+            return;
+        }
+        usernameInput.value = '';
+        await refreshTournamentView();
+    });
 
     document.getElementById('tournament-view-refresh-button').addEventListener('click', refreshTournamentView);
 
@@ -7277,6 +7501,16 @@
         // recolored three ways.
         actionTimeoutWarning: '<path d="M12 2a1 1 0 0 1 1 1v.6c3.4.9 5.8 4 5.8 7.6v3.4l1.7 2.6a1 1 0 0 1-.84 1.55H4.34a1 1 0 0 1-.84-1.55l1.7-2.6V11.2c0-3.6 2.4-6.7 5.8-7.6V3a1 1 0 0 1 1-1Z"/>'
             + '<path d="M9.2 20.2a2.8 2.8 0 0 0 5.6 0Z"/>',
+        // Issue #192's own same-turn infinite-combo warning: two curved
+        // arrows chasing each other into a closed loop -- a distinct
+        // silhouette from every icon above (no straight edges at all), so
+        // it reads as "going in circles" at a glance rather than being
+        // mistaken for onTurn's plain triangle or pendingDecision's
+        // hourglass.
+        loopWarning: '<path d="M6 12a6 6 0 0 1 10.5-3.9" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>'
+            + '<polygon points="16.5,4.5 17.6,9.4 12.7,8.4"/>'
+            + '<path d="M18 12a6 6 0 0 1-10.5 3.9" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>'
+            + '<polygon points="7.5,19.5 6.4,14.6 11.3,15.6"/>',
         // Team affiliation (Open/Closed Team Play only, player.team_id !==
         // null): a heraldic shield, reported live as hard to distinguish
         // for colorblind users when the two teams were told apart by color
@@ -7401,9 +7635,11 @@
 
     async function refreshBoard() {
         const seq = ++boardRequestSeq;
-        const { ok, body } = isSpectating
-            ? await getSpectatorGameState(currentGameId, spectateCode)
-            : await getGameState(currentGameId);
+        const { ok, body } = isCasting
+            ? await getTournamentCastState(currentGameId)
+            : isSpectating
+                ? await getSpectatorGameState(currentGameId, spectateCode)
+                : await getGameState(currentGameId);
         if (seq !== boardRequestSeq) {
             return; // a newer refreshBoard() call has since been issued -- this response is stale, ignore it
         }
@@ -7431,25 +7667,29 @@
             return;
         }
 
-        if (isSpectating) {
-            // The spectator state route never includes a 'you' key at all
-            // (see GameService::buildGameState()) -- this stub makes every
+        if (isSpectating || isCasting) {
+            // Neither the spectator nor the tournament-cast state route
+            // includes a 'you' key at all (see GameService::
+            // buildGameState()) -- this stub makes every
             // "===/!== state.you.game_player_id" comparison in
             // renderBoard() and its sub-functions resolve as "nobody,"
-            // exactly the behavior a spectator needs, without touching
-            // those comparisons individually. hand: [] covers the (rare)
-            // sub-functions that read state.you.hand directly rather than
-            // through a `|| []` fallback.
+            // exactly the behavior a non-seated viewer needs, without
+            // touching those comparisons individually. hand: [] covers
+            // the (rare) sub-functions that read state.you.hand directly
+            // rather than through a `|| []` fallback -- harmless for a
+            // caster too, whose own revealed hands live on players[].hand
+            // instead (see renderSpectatorFinalHands()).
             body.you = { game_player_id: null, hand: [], is_your_turn: false };
             // GameService::buildGameState() deliberately zeroes the
-            // viewer-scoped top-level deck_count for a spectator (there's
-            // no "your deck" to report) and documents players[].deck_count
-            // as the replacement -- for a shared (non-duel/draft) deck,
-            // every player's own count is the same single pool, so any one
-            // of them stands in for the "Deck: N cards left" line below.
-            // No single number is meaningful for a duel/draft game's
-            // separate per-player decks, so this is left at 0 there, same
-            // as a real player currently only ever sees their own anyway.
+            // viewer-scoped top-level deck_count for a non-seated viewer
+            // (there's no "your deck" to report) and documents
+            // players[].deck_count as the replacement -- for a shared
+            // (non-duel/draft) deck, every player's own count is the same
+            // single pool, so any one of them stands in for the
+            // "Deck: N cards left" line below. No single number is
+            // meaningful for a duel/draft game's separate per-player
+            // decks, so this is left at 0 there, same as a real player
+            // currently only ever sees their own anyway.
             if (isSharedDeckType(body.game.deck_type) && body.players.length > 0) {
                 body.deck_count = body.players[0].deck_count;
             }
@@ -7618,6 +7858,105 @@
         return buildPlayerStat('actionTimeoutWarning', badge, label, severityClass);
     }
 
+    // Issue #192 ("if a play results in the exact same board state, say,
+    // three times in one turn, give the active player a warning and if it
+    // comes up again, auto-pass their turn"): state.game.loop_warning is
+    // null except on whoever's currently mid-turn with their own board
+    // having already recurred (see BoardState::turnStateSignature()'s own
+    // docblock for what "recurred" means here) at least 3 times this turn
+    // -- same "never needs its own is-it-this-player's-turn check, the
+    // game_player_id match already is one" shape as
+    // buildActionTimeoutWarningStat() above. The auto-pass itself needs no
+    // separate UI here at all -- it lands in the event log via
+    // describeEvent()'s own 'loop_detected' phrasing, same as every other
+    // automated pass.
+    function buildLoopWarningStat(occurrenceCount) {
+        const label = 'This exact board state has repeated ' + occurrenceCount + ' times this turn. '
+            + 'Repeating it again will end this turn automatically.';
+
+        return buildPlayerStat('loopWarning', occurrenceCount, label);
+    }
+
+    // Reported live: the badge buildLoopWarningStat() adds above sits
+    // quietly next to the player's name -- easy enough to miss that the
+    // auto-pass fired without the player ever having noticed the warning
+    // that preceded it. This is the same warning, just also pushed through
+    // showAlertDialog() (see its own docblock -- the shared #confirm-dialog
+    // window.alert() replacement, since a real <dialog> can't be
+    // suppressed the way iOS suppresses window.alert() itself) so it's
+    // impossible to keep playing past without acknowledging it. Only pops
+    // for the player it's actually about (loop_warning.game_player_id,
+    // never an opponent's), and only once per distinct occurrence_count --
+    // loopWarningDialogAcknowledgedKey (declared up top alongside
+    // currentGameId) remembers the last one already shown so this doesn't
+    // reopen on every ~4s poll for as long as the same warning stays
+    // un-resolved. Skips the dialog outright if #confirm-dialog already
+    // has something else open (e.g. a resign confirmation mid-flight) --
+    // showModal() on an already-open <dialog> throws, and there's nothing
+    // useful to preempt a player's in-progress confirmation for.
+    function maybeShowLoopWarningDialog(state) {
+        const warning = state.game.loop_warning;
+
+        if (warning === null) {
+            loopWarningDialogAcknowledgedKey = null;
+            return;
+        }
+
+        if (warning.game_player_id !== state.you.game_player_id) {
+            return;
+        }
+
+        const warningKey = warning.game_player_id + ':' + warning.occurrence_count;
+        if (warningKey === loopWarningDialogAcknowledgedKey || confirmDialog.open) {
+            return;
+        }
+
+        loopWarningDialogAcknowledgedKey = warningKey;
+        showAlertDialog(
+            'This exact board state has repeated ' + warning.occurrence_count + ' times this turn. '
+            + 'Repeating it again will end your turn automatically.',
+        );
+    }
+
+    // Issue #192 follow-up: state.game.chaos_loop_shortcut is the
+    // counterpart to loop_warning above for a loop a registered Chaos
+    // Draft effect keeps reactively spawning tokens/drawing cards/
+    // boosting a mood's value on every cycle -- see
+    // GameService::buildChaosLoopShortcut()'s own docblock for why the
+    // ordinary exact-board-state warning never catches this (the board
+    // is never actually identical twice). Same "only the player it's
+    // actually about, only once per distinct offer" shape as
+    // maybeShowLoopWarningDialog() above, but a real custom dialog
+    // (#chaos-loop-shortcut-dialog) instead of the shared alert/confirm
+    // one -- this needs a number input, not just a message. Dedup key is
+    // game_player_id:kind:cap rather than an occurrence_count, since the
+    // offer itself (not a repeat counter) is what stays stable for as
+    // long as it's outstanding -- see BoardState::$pendingChaosLoopShortcutOffer's
+    // own docblock.
+    function maybeShowChaosLoopShortcutDialog(state) {
+        const shortcut = state.game.chaos_loop_shortcut;
+
+        if (shortcut === null) {
+            chaosLoopShortcutDialogShownKey = null;
+            return;
+        }
+
+        if (shortcut.game_player_id !== state.you.game_player_id) {
+            return;
+        }
+
+        const shortcutKey = shortcut.game_player_id + ':' + shortcut.kind + ':' + shortcut.cap;
+        if (shortcutKey === chaosLoopShortcutDialogShownKey || chaosLoopShortcutDialog.open) {
+            return;
+        }
+
+        chaosLoopShortcutDialogShownKey = shortcutKey;
+        chaosLoopShortcutDialogMessage.textContent = shortcut.label;
+        chaosLoopShortcutDialogCountInput.max = String(shortcut.cap);
+        chaosLoopShortcutDialogCountInput.value = String(shortcut.cap);
+        chaosLoopShortcutDialog.showModal();
+    }
+
     function renderBoard(state) {
         // A custom decklist's own name (or "Uploaded Deck" if none was
         // specified) replaces "<deck type> deck" entirely here, rather than
@@ -7630,6 +7969,8 @@
         // deckTypeLabel()'s generic "Custom Decklists (Duel) deck", which
         // never actually named anything the viewer had chosen.
         const you = state.players.find((p) => p.game_player_id === state.you.game_player_id);
+        maybeShowLoopWarningDialog(state);
+        maybeShowChaosLoopShortcutDialog(state);
         const deckDescription = state.game.deck_type === 'custom'
             ? (state.game.custom_deck_name || 'Uploaded Deck')
             : state.game.deck_type === 'custom_duel'
@@ -7939,6 +8280,9 @@
                 if (state.game.action_timeout_warning !== null && state.game.action_timeout_warning.game_player_id === player.game_player_id) {
                     iconsEl.appendChild(buildActionTimeoutWarningStat(state.game.action_timeout_warning.seconds_remaining));
                 }
+                if (state.game.loop_warning !== null && state.game.loop_warning.game_player_id === player.game_player_id) {
+                    iconsEl.appendChild(buildLoopWarningStat(state.game.loop_warning.occurrence_count));
+                }
                 if (wentFirst) {
                     iconsEl.appendChild(buildPlayerFlag('wentFirst', 'Went first this round'));
                 }
@@ -8134,12 +8478,13 @@
             document.getElementById('board-round-status').textContent =
                 'Game over — ' + winnerNames + ' won.';
         } else {
-            // Spectator mode (issue #128): there's no "you" to say "your
-            // turn" relative to, so this names whoever's turn it actually
-            // is instead -- current_turn_game_player_id is already public,
+            // Spectator mode (issue #128)/Tournament spectator mode
+            // (issue #238): there's no "you" to say "your turn" relative
+            // to, so this names whoever's turn it actually is instead --
+            // current_turn_game_player_id is already public,
             // always-present information (see GameService::buildGameState()).
             let turnSuffix = ' — waiting on another player';
-            if (isSpectating) {
+            if (isSpectating || isCasting) {
                 const currentTurnPlayer = state.players.find(
                     (p) => p.game_player_id === state.round.current_turn_game_player_id
                 );
@@ -8292,16 +8637,19 @@
             return li;
         });
 
-        // Spectator mode (issue #128)/Watch game replay (issue #240): a
-        // spectator or replay viewer has no hand of their own to show in
+        // Spectator mode (issue #128)/Watch game replay (issue #240)/
+        // Tournament spectator mode (issue #238): none of these three
+        // read-only viewers has a hand of their own to show in
         // #your-hand-section (state.you.hand is always []) -- swap it for
-        // #spectator-final-hands-section instead, only once the game is
-        // 'completed' and every seated player's final hand has actually
-        // been revealed (players[].hand is only ever present then -- see
-        // GameService::buildGameState()'s own $revealAllHands, and
+        // #spectator-final-hands-section instead, once every seated
+        // player's hand has actually been revealed (players[].hand is
+        // only ever present then -- see GameService::buildGameState()'s
+        // own $revealAllHands/$tournamentCastMode, and
         // serializeReplaySnapshot()'s identical always-revealed shape).
-        // Still in_progress -- nothing to show either way, so both stay
-        // hidden.
+        // For a plain spectator/replay viewer that's only once the game is
+        // 'completed'; a trusted tournament caster gets it even while
+        // still in_progress. Neither revealed yet -- nothing to show
+        // either way, so both stay hidden.
         document.getElementById('your-hand-section').hidden = isReadOnlyView();
         renderSpectatorFinalHands(isReadOnlyView() ? state : null);
 
@@ -10567,6 +10915,39 @@
         await refreshBoard();
     });
 
+    // Issue #192 follow-up -- see #chaos-loop-shortcut-dialog's own
+    // comment in game/index.html. "Not now" just closes the dialog
+    // without calling the server at all -- the standing offer (see
+    // BoardState::$pendingChaosLoopShortcutOffer) is untouched, so it
+    // simply reappears (chaosLoopShortcutDialogShownKey unchanged, still
+    // matching) if the player reopens/reloads the board, or gets
+    // resolved automatically by the ordinary auto-pass path if the same
+    // loop keeps recurring instead.
+    document.getElementById('chaos-loop-shortcut-dialog-not-now-button').addEventListener('click', () => {
+        chaosLoopShortcutDialog.close();
+    });
+
+    document.getElementById('chaos-loop-shortcut-dialog-apply-button').addEventListener('click', async () => {
+        boardError.hidden = true;
+        boardMessage.hidden = true;
+        const applyButton = document.getElementById('chaos-loop-shortcut-dialog-apply-button');
+        applyButton.disabled = true;
+        const count = Math.max(0, Math.min(
+            parseInt(chaosLoopShortcutDialogCountInput.value, 10) || 0,
+            parseInt(chaosLoopShortcutDialogCountInput.max, 10),
+        ));
+        const { ok, body } = await applyChaosLoopShortcut(currentGameId, count);
+        applyButton.disabled = false;
+        if (!ok) {
+            boardError.textContent = body.message || 'Could not apply the shortcut.';
+            boardError.hidden = false;
+            return;
+        }
+        chaosLoopShortcutDialog.close();
+        announceOutcome(body);
+        await refreshBoard();
+    });
+
     // "Pause at the start of your turn" (reported live) -- clears
     // turn_pending_acknowledgment for the viewer, the only thing this
     // button ever does; #turn-pending-acknowledgment-banner itself hides
@@ -11486,8 +11867,24 @@
             pendingDecisionBanner.textContent = 'Waiting on ' + playerLabelFor(pendingDecision.target_game_player_id) +
                 ' to respond to ' + (pendingDecision.played_card_name || 'a mood') + '.';
             pendingDecisionBanner.hidden = false;
-            pendingDecisionPanel.hidden = true;
             activePendingDecision = null;
+
+            // Tournament spectator mode (issue #238): a trusted caster's
+            // own pending_decision carries 'field' even though is_you is
+            // deliberately kept false (see GameService::
+            // serializePendingDecision()) -- every other viewer (a real
+            // player who isn't the one being asked, or a plain spectator)
+            // never gets 'field' at all, so this only ever fires for a
+            // caster. Reuses the same #pending-decision-panel/
+            // #pending-decision-field a real responder gets, just
+            // read-only (every control disabled, no Respond button) --
+            // this viewer isn't the one making the decision, only allowed
+            // to see it.
+            if (pendingDecision.field) {
+                renderCastPendingDecisionPreview(pendingDecision);
+            } else {
+                pendingDecisionPanel.hidden = true;
+            }
             return;
         }
 
@@ -11542,7 +11939,56 @@
             updateRespondButtonEnabled
         ));
 
+        // Restores visibility after a previous poll's read-only cast
+        // preview (renderCastPendingDecisionPreview() below) hid this --
+        // never actually reachable for a real responder in practice (a
+        // real player's own pending_decision.field is only ever present
+        // for the target themselves, is_you true, so this branch is the
+        // only one they ever see), but kept correct regardless.
+        document.getElementById('respond-decision-button').hidden = false;
         updateRespondButtonEnabled();
+        pendingDecisionPanel.hidden = false;
+    }
+
+    // Tournament spectator mode (issue #238): disables every interactive
+    // control buildFieldRow() can produce (checkboxes/selects/text inputs,
+    // plus the after_scoring_order field's own reorder buttons) so a
+    // caster's read-only preview looks/behaves like a preview rather than
+    // a functioning (but silently broken, since nothing submits it) form.
+    function disableFieldRowControls(node) {
+        node.querySelectorAll('input, select, textarea, button').forEach((el) => {
+            el.disabled = true;
+        });
+        return node;
+    }
+
+    // Tournament spectator mode (issue #238): renderPendingDecision()'s
+    // own read-only counterpart to its "is_you" branch just above -- same
+    // #pending-decision-panel/#pending-decision-field, same
+    // buildFieldRow(), but disabled (disableFieldRowControls()) and with
+    // no Respond button, since a caster is never the one actually
+    // deciding. Always rebuilt (no "only once per decision" guard the
+    // interactive branch needs) -- there's no in-progress user edit here
+    // to protect from being clobbered by the next poll.
+    function renderCastPendingDecisionPreview(pendingDecision) {
+        document.getElementById('pending-decision-title').textContent =
+            'Live preview — ' + playerLabelFor(pendingDecision.target_game_player_id) + ' is deciding';
+
+        const playedCardInPlay = currentState.in_play.find((c) => c.card_id === pendingDecision.played_card_id);
+        const fieldCard = pendingDecision.decision_type === 'duplicity_repeat_offer'
+            ? (playedCardInPlay || { card_id: pendingDecision.played_card_id })
+            : PENDING_DECISION_PLACEHOLDER_CARD;
+
+        const fieldContainer = document.getElementById('pending-decision-field');
+        fieldContainer.innerHTML = '';
+        fieldContainer.appendChild(disableFieldRowControls(buildFieldRow(
+            pendingDecision.field,
+            fieldCard,
+            pendingDecision.field.key,
+            () => {},
+        )));
+
+        document.getElementById('respond-decision-button').hidden = true;
         pendingDecisionPanel.hidden = false;
     }
 
@@ -12137,18 +12583,32 @@
     // DOM order or that only one is ever open at a time.
     let openDialogStack = [];
     let suppressHistoryPopFor = null;
-    // Set immediately before the orphan-cleanup history.back() call below,
-    // and consumed at the very top of the popstate handler -- history.back()
-    // fires its own popstate event once the browser actually processes the
-    // navigation, exactly like a real Back press does, and the handler has
-    // no other way to tell "the user pressed Back" apart from "our own
-    // cleanup code just called history.back() on their behalf". Without
-    // this flag, that self-triggered popstate fell through to the handler's
-    // normal logic and, with no dialog left open, was treated as a genuine
-    // Back press on the board itself -- silently bouncing the player to the
-    // lobby every time they closed a lone dialog via a button (Close,
-    // Select/De-select, a form submit, ...) instead of pressing Back.
-    let suppressNextPopState = false;
+    // Incremented immediately before each orphan-cleanup history.back() call
+    // below, and decremented (while > 0) at the very top of the popstate
+    // handler -- history.back() fires its own popstate event once the
+    // browser actually processes the navigation, exactly like a real Back
+    // press does, and the handler has no other way to tell "the user
+    // pressed Back" apart from "our own cleanup code just called
+    // history.back() on their behalf". Without this, that self-triggered
+    // popstate fell through to the handler's normal logic and, with no
+    // dialog left open, was treated as a genuine Back press on the board
+    // itself -- silently bouncing the player to the lobby every time they
+    // closed a lone dialog via a button (Close, Select/De-select, a form
+    // submit, ...) instead of pressing Back. A plain boolean undercounted
+    // -- a bug caught live: closing TWO dialogs in the same tick (e.g.
+    // "Cast (reveal hands)"/"Go to game"/"Continue drafting" in the
+    // tournament view, which each close both #tournament-view-dialog and
+    // #tournaments-dialog before opening a board) queues two orphan
+    // history.back() calls, but a boolean can only ever swallow the
+    // FIRST of the two resulting popstate events -- the second was
+    // treated as a genuine Back press, bouncing back to the lobby (or,
+    // for a spectator/tournament-caster view with no `you` of its own,
+    // crashing renderBoard() outright once the in-flight, now-orphaned
+    // refreshBoard() call resolved with isSpectating/isCasting already
+    // reset false by that stray showLobby()). A counter swallows exactly
+    // as many self-triggered popstates as were actually queued, however
+    // many dialogs closed together.
+    let pendingSuppressedPopStates = 0;
 
     const dialogHistoryObserver = new MutationObserver((mutations) => {
         for (const { target: dialog } of mutations) {
@@ -12171,10 +12631,13 @@
                 // clicking outside, a form submit) -- the history entry
                 // pushed when it opened is now orphaned; discard it so
                 // Back doesn't need an extra do-nothing press before it
-                // reaches anything real. See suppressNextPopState's own
-                // docblock above for why the resulting popstate must be
-                // swallowed rather than acted on.
-                suppressNextPopState = true;
+                // reaches anything real. See pendingSuppressedPopStates'
+                // own docblock above for why the resulting popstate must
+                // be swallowed rather than acted on -- incremented, not
+                // just set true, since this loop can queue more than one
+                // of these in the same tick (closing several dialogs at
+                // once).
+                pendingSuppressedPopStates += 1;
                 history.back();
             }
         }
@@ -12204,13 +12667,16 @@
     history.pushState({ base: true }, '');
 
     window.addEventListener('popstate', () => {
-        if (suppressNextPopState) {
+        if (pendingSuppressedPopStates > 0) {
             // Our own orphan-cleanup history.back() call above, not a real
             // Back press -- the history entry it targeted is already fully
             // accounted for (the dialog it belonged to is already closed
             // and already removed from openDialogStack), so there's
-            // nothing left to do.
-            suppressNextPopState = false;
+            // nothing left to do. Decremented, not reset to zero -- several
+            // of these can be queued at once (see the counter's own
+            // docblock above), and each is its own separate popstate to
+            // swallow, not just the first.
+            pendingSuppressedPopStates -= 1;
             return;
         }
 

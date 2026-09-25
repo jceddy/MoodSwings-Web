@@ -1301,6 +1301,24 @@
             <label class="dialog-field" id="new-tournament-synchronous-enabled-label"><input type="checkbox" id="new-tournament-synchronous-enabled"> Synchronous mode (play live, right now)</label>
             <p id="new-tournament-synchronous-description" hidden>Both players must be ready before each match's game (or draft) deals. Each action/pick has a short timer, and each player has a 30-minute chess clock for the whole match (deck-building/sideboarding time counts against it) -- automatic loss if it runs out. Mutually exclusive with the idle time-out/total-time-limit options above.</p>
 
+            <!-- Tournament spectator mode (issue #238) -- reported live:
+                 "user(s) with spectator mode access need to be selected
+                 when the tournament is created so that all users in the
+                 tournament can see who is allowed to cast." Free-text
+                 username (not the friends checkboxes #tournament-invite-
+                 checkboxes above use) since a caster is often not a
+                 friend or participant at all -- see
+                 TournamentService::grantCastAccess()'s own docblock.
+                 Casters can still be added/removed after creation too
+                 (the tournament view dialog's own "Casters" section). -->
+            <div id="new-tournament-casters-fields">
+                <p>Casters (optional): trusted users who can watch this tournament's matches live, without needing to join it.</p>
+                <ul id="new-tournament-casters-list"></ul>
+                <input type="text" id="new-tournament-add-caster-username" placeholder="Username">
+                <label><input type="checkbox" id="new-tournament-add-caster-reveal-hands" checked> Reveal hands</label>
+                <button type="button" id="new-tournament-add-caster-button">Add caster</button>
+            </div>
+
             <button type="submit" id="new-tournament-submit-button">Create tournament</button>
             <button type="button" id="new-tournament-cancel-button">Cancel</button>
             <p id="new-tournament-error" class="error" hidden></p>
@@ -1382,6 +1400,30 @@
             <ol id="tournament-view-standings-list"></ol>
         </div>
         <div id="tournament-view-bracket"></div>
+        <!-- Tournament spectator mode (issue #238) -- the creator's own
+             roster of who besides themselves may cast (view with hands
+             revealed) this tournament's still-in_progress matches, shown
+             only to the creator (see renderTournamentCasters() in
+             game.js) -- a granted caster sees their own "Cast" buttons on
+             each in_progress match instead (renderBracketRounds()), not
+             this management section. -->
+        <!-- Reported live: "all users in the tournament can see who is
+             allowed to cast" -- this whole section is now shown to every
+             viewer this dialog opens for at all, not creator-only; only
+             #tournament-view-add-caster-fields below stays creator-only
+             (see renderTournamentCasters() in game.js). -->
+        <div id="tournament-view-casters-section">
+            <h3>Casters</h3>
+            <p>Trusted users who can watch this tournament's matches live, without needing to join it.</p>
+            <ul id="tournament-view-casters-list"></ul>
+            <p id="tournament-view-casters-empty" hidden>No casters yet.</p>
+            <div id="tournament-view-add-caster-fields" hidden>
+                <input id="tournament-view-add-caster-username" type="text" placeholder="Username">
+                <label><input id="tournament-view-add-caster-reveal-hands" type="checkbox" checked> Reveal hands</label>
+                <button id="tournament-view-add-caster-button" type="button">Grant cast access</button>
+            </div>
+            <p id="tournament-view-caster-error" class="error" hidden></p>
+        </div>
         <p id="tournament-view-error" class="error" hidden></p>
         <button id="tournament-view-close-button" type="button">Close</button>
     </dialog>
@@ -1460,6 +1502,30 @@
             <button id="confirm-dialog-ok-button" type="submit" value="ok">OK</button>
             <button id="confirm-dialog-cancel-button" type="submit" value="cancel">Cancel</button>
         </form>
+    </dialog>
+
+    <!-- Issue #192 follow-up -- offered once a same-turn loop keeps
+         triggering a Chaos Draft effect that spawns tokens/draws cards/
+         boosts a mood's value every cycle (see
+         GameService::buildChaosLoopShortcut()'s own docblock --
+         state.game.chaos_loop_shortcut) but never trips the ordinary
+         exact-board-state warning, since the board is never actually
+         identical twice. Lets the player apply many cycles' worth of
+         that one effect in a single step instead of manually repeating
+         the loop. Not a plain method="dialog" form like #confirm-dialog
+         above -- "Apply" needs to actually submit the chosen count to
+         the server (see maybeShowChaosLoopShortcutDialog() in game.js),
+         not just close the dialog. -->
+    <dialog id="chaos-loop-shortcut-dialog">
+        <p id="chaos-loop-shortcut-dialog-message"></p>
+        <label id="chaos-loop-shortcut-dialog-count-label">
+            Count:
+            <input id="chaos-loop-shortcut-dialog-count-input" type="number" min="0" step="1">
+        </label>
+        <div>
+            <button id="chaos-loop-shortcut-dialog-apply-button" type="button">Apply</button>
+            <button id="chaos-loop-shortcut-dialog-not-now-button" type="button">Not now</button>
+        </div>
     </dialog>
 
     <!-- The entire game log (issue #98) -- see openGameLog() in game.js

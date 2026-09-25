@@ -1,0 +1,29 @@
+-- Reported live: "I should have more plays here" -- after playing Pride
+-- (targeting an opponent) and then Betrayal (using Pride's own granted extra
+-- play, to give Pride itself to that same opponent), the extra play was
+-- silently lost instead of persisting for the rest of the turn.
+--
+-- Pride's grant is a self-renewing "requiresBehindPlayer" permission: it's
+-- meant to exist for the whole turn and simply go active/inactive as the
+-- mood gap changes (BoardState::grantIsActive()), never actually removed
+-- from BoardState::$playGrants while in use (see useGrantFor()). But the
+-- three GameService::updateRoundTurnState() call sites for "same player
+-- continues mid-turn" (a play creating a pending decision, that decision's
+-- own resolution, and finishPlay()'s plays-remaining branch) were
+-- persisting BoardState::pendingPlayGrants() -- the FILTERED,
+-- currently-active-only view -- into game_rounds.pending_play_grants.
+-- That's correct for display, but wrong for persistence: the instant
+-- Betrayal itself entered play (before its own "give a mood away" decision
+-- even resolved), the mood count momentarily tied, grantIsActive() returned
+-- false, and the grant was filtered out of what got saved -- even though
+-- $playGrants itself, in memory, never actually lost it. The next request
+-- reloaded BoardState fresh from that same column, so the grant was gone
+-- for good, not merely inactive.
+--
+-- Fixed with a new BoardState::allPlayGrantsForPersistence() (unfiltered)
+-- accessor, used only for what those three call sites persist; the
+-- filtered pendingPlayGrants() view continues to drive plays_remaining and
+-- the existing display use sites unchanged. No schema change -- just the
+-- version bump MaintenanceGate needs to see this deploy as caught up with
+-- the code.
+UPDATE schema_version SET version = '1.54.1' WHERE id = 1;

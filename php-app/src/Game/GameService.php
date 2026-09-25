@@ -22,6 +22,7 @@ use MoodSwings\Rules\BoardState;
 use MoodSwings\Rules\CardChoiceSchema;
 use MoodSwings\Rules\ChaosCardChoiceSchema;
 use MoodSwings\Rules\ChaosEffectRegistry;
+use MoodSwings\Rules\ChaosLoopShortcut;
 use MoodSwings\Rules\Exceptions\InvalidChoiceException;
 use MoodSwings\Rules\MoodInPlay;
 use MoodSwings\Rules\MoodPlayService;
@@ -3980,7 +3981,7 @@ final class GameService
                 $freshGrants = $this->computeFreshGrants($loggedState, $chosenGamePlayerId, 1);
                 $this->logFreshGrants($gameId, (int) $round['id'], $chosenGamePlayerId, $freshGrants);
                 $this->boardStates->save($gameId, $loggedState);
-                $this->updateRoundTurnState((int) $round['id'], $chosenGamePlayerId, $freshGrants, $loggedState->discardedThisRound(), $loggedState->skipScoringThisRound(), $loggedState->skipScoringFirstPlayerId(), $loggedState->skipScoringSourceCardId(), $loggedState->skipScoringOwnerId(), $loggedState->awardsExtraWinThisRound(), $loggedState->awardsExtraWinSourceCardId(), $loggedState->awardsExtraWinOwnerId());
+                $this->updateRoundTurnState((int) $round['id'], $chosenGamePlayerId, $freshGrants, $loggedState->discardedThisRound(), $loggedState->skipScoringThisRound(), $loggedState->skipScoringFirstPlayerId(), $loggedState->skipScoringSourceCardId(), $loggedState->skipScoringOwnerId(), $loggedState->awardsExtraWinThisRound(), $loggedState->awardsExtraWinSourceCardId(), $loggedState->awardsExtraWinOwnerId(), $loggedState);
             }
 
             $this->logEvent($gameId, (int) $round['id'], $chosenGamePlayerId, 'match_first_player_decided', null, ['game_player_id' => $chosenGamePlayerId], $loggedState);
@@ -6412,7 +6413,7 @@ final class GameService
 
                 try {
                     $this->boardStates->save($gameId, $state);
-                    $this->updateRoundTurnState($roundId, $gamePlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId());
+                    $this->updateRoundTurnState($roundId, $gamePlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId(), $state, persistedPlayGrants: $state->allPlayGrantsForPersistence());
                     $this->writePendingBatch($gameId, $roundId, $gamePlayerId, $playerChoices, $result->invocationChoices, $result);
                     $this->logEvent($gameId, $roundId, $gamePlayerId, 'pending_decision_created', $cardId, $this->withPlayedFrom($state, $cardId, $choices), $state);
 
@@ -6472,6 +6473,96 @@ final class GameService
         $this->clearQueuedNotificationForGamePlayer($gameId, $gamePlayerId);
 
         return $result;
+    }
+
+    /**
+     * Issue #192 follow-up: applies a currently outstanding chaos-loop-
+     * shortcut offer (see buildChaosLoopShortcut()/resolveChaosLoopShortcutOffer())
+     * $count times in one step, instead of trusting the player to keep
+     * re-triggering the underlying loop manually that many times.
+     * Authorized by matching $gamePlayerId against the offer's OWN
+     * game_player_id, NOT against whoever's turn it currently is --
+     * chaos_040's own owner can benefit from a shortcut while their
+     * OPPONENT is the one mid-turn (every one of chaos_040/026/037/089/
+     * 011/024/016/120's own reactive hooks fires off whoever is actually
+     * looping, not necessarily this effect's own owner -- see each
+     * one's own docblock), the same "whoever the offer actually targets,
+     * not necessarily the current turn holder" precedent
+     * respondToDecision() already establishes for pending decisions
+     * targeting a non-active player.
+     *
+     * Token/value-boost kinds end the turn immediately once applied --
+     * nothing further to "use" from a passive token or a permanent stat
+     * bump, the same posture the ordinary exact-signature auto-pass
+     * already has. A draw kind deliberately does NOT end the turn (the
+     * whole point is letting the player go on to actually play what they
+     * just drew), so this only clears the standing offer and persists
+     * the drawn cards -- $state->hasOfferedChaosLoopShortcutThisTurn()
+     * stays true regardless (set once, for the rest of the turn, by
+     * setPendingChaosLoopShortcutOffer() when the offer was first made),
+     * which is what makes a LATER repeat of the same loop this turn
+     * auto-pass instead of offering a second shortcut.
+     *
+     * @return array{round_scored: bool, game_completed: bool, winner_game_player_id?: int}
+     */
+    public function applyChaosLoopShortcut(int $gameId, int $gamePlayerId, int $count): array
+    {
+        return $this->withGameLock($gameId, function () use ($gameId, $gamePlayerId, $count): array {
+            $round = $this->currentRound($gameId);
+            $state = $this->boardStates->load($gameId);
+
+            $chaosLoopState = $round['chaos_loop_state'] !== null ? json_decode((string) $round['chaos_loop_state'], true) : [];
+            $offer = $chaosLoopState['pendingOffer'] ?? null;
+
+            if ($offer === null) {
+                throw new GameStateException('No chaos-loop shortcut is currently offered');
+            }
+            if ((int) $offer['gamePlayerId'] !== $gamePlayerId) {
+                throw new GameStateException("Player {$gamePlayerId} is not who this shortcut was offered to");
+            }
+            if ($count < 0 || $count > (int) $offer['cap']) {
+                throw new InvalidChoiceException("count must be between 0 and {$offer['cap']}");
+            }
+
+            switch ($offer['kind']) {
+                case ChaosLoopShortcut::KIND_TOKEN:
+                    for ($i = 0; $i < $count; $i++) {
+                        $state->spawnMoodInPlay((int) $offer['tokenCatalogCardId'], (int) $offer['forPlayerId']);
+                    }
+                    break;
+                case ChaosLoopShortcut::KIND_DRAW:
+                    for ($i = 0; $i < $count; $i++) {
+                        $state->drawCard((int) $offer['forPlayerId']);
+                    }
+                    break;
+                case ChaosLoopShortcut::KIND_VALUE_BOOST:
+                    $state->adjustChaosValueDelta((int) $offer['valueBoostTargetCardId'], $count);
+                    break;
+            }
+
+            $state->clearPendingChaosLoopShortcutOffer();
+            $this->logEvent($gameId, (int) $round['id'], $gamePlayerId, 'chaos_loop_shortcut_applied', null, ['effect_key' => $offer['effectKey'], 'kind' => $offer['kind'], 'count' => $count]);
+
+            if ($offer['kind'] !== ChaosLoopShortcut::KIND_DRAW) {
+                return $this->advanceTurn($gameId, $round, $state, $gamePlayerId);
+            }
+
+            $this->boardStates->save($gameId, $state);
+            Connection::get()
+                ->prepare('UPDATE game_rounds SET chaos_loop_state = :chaos_loop_state WHERE id = :round_id')
+                ->execute([
+                    'chaos_loop_state' => json_encode([
+                        'coarseCounts' => $state->coarseTurnStateSignatureCounts(),
+                        'drawnCardIds' => $state->drawnThisTurnCardIds(),
+                        'chaosEffectFireCounts' => $state->chaosEffectFireCounts(),
+                        'offeredThisTurn' => $state->hasOfferedChaosLoopShortcutThisTurn(),
+                        'pendingOffer' => $state->pendingChaosLoopShortcutOffer(),
+                    ]),
+                    'round_id' => (int) $round['id'],
+                ]);
+
+            return ['round_scored' => false, 'game_completed' => false];
+        });
     }
 
     /**
@@ -6731,6 +6822,21 @@ final class GameService
             }
             $roundId = (int) $round['id'];
 
+            // Issue #192 follow-up: a currently outstanding chaos-loop-
+            // shortcut offer (see buildChaosLoopShortcut()/
+            // resolveChaosLoopShortcutOffer()) belonging to a bot seat --
+            // checked before anything else below since the offer's own
+            // game_player_id is NOT necessarily whoever's turn it
+            // currently is (chaos_040's own owner can benefit from an
+            // OPPONENT's loop -- see that effect's own docblock), so this
+            // can't just be folded into the ordinary current-turn bot
+            // branch further down.
+            $chaosLoopShortcutResult = $this->advanceBotChaosLoopShortcut($gameId, $round, array_merge($botGamePlayerIds, $tacticalBotGamePlayerIds));
+            if ($chaosLoopShortcutResult !== null) {
+                $lastResult = $chaosLoopShortcutResult;
+                continue;
+            }
+
             // Chaos Draft's own round-start offer (issue #405 follow-up):
             // checked before the pending-batch/current-turn dispatch below,
             // since assertChaosDraftOfferResolved() would otherwise reject
@@ -6907,7 +7013,7 @@ final class GameService
                     $this->candidatePlayCardIds($state, $currentTurnGamePlayerId),
                     fn (int $cardId) => $this->plays->isPlayable($state, $currentTurnGamePlayerId, $cardId),
                 ));
-                $action = $this->bots->chooseAction($state, $playableCardIds, $currentTurnGamePlayerId, $this->roundWinsStillNeededToWinGame($gameId, $currentTurnGamePlayerId), $this->roundWinsNeededToWinGameForActivePlayers($gameId, $state));
+                $action = $this->chooseBotActionAvoidingLoop($state, $playableCardIds, $currentTurnGamePlayerId, $this->roundWinsStillNeededToWinGame($gameId, $currentTurnGamePlayerId), $this->roundWinsNeededToWinGameForActivePlayers($gameId, $state));
                 if ((bool) $this->fetchGame($gameId)['diagnostic_mode']) {
                     $this->logHeuristicBotReasoning($gameId, $state, $currentTurnGamePlayerId, $action);
                 }
@@ -8042,6 +8148,93 @@ final class GameService
         return null;
     }
 
+    /**
+     * Issue #192: same-turn infinite-combo detection (see BoardState::
+     * turnStateSignature()'s own docblock) -- wraps BotPlayerService::
+     * chooseAction() so a bot never willingly walks into finishPlay()'s
+     * own auto-pass safety net (LOOP_STATE_AUTO_PASS_OCCURRENCE_COUNT),
+     * which would waste whatever plays_remaining it still had left rather
+     * than spend them on something that actually helps. Simulates each
+     * candidate on a throwaway clone (BoardState::__clone()'s own
+     * documented use case -- explore a hypothetical play without ever
+     * touching the real game) before committing to it, then tries the
+     * next-best card instead of one that would push an already-seen
+     * signature to the auto-pass count, bounded by $playableCardIds'
+     * own shrinking size so this can never loop forever itself.
+     *
+     * A card whose own effect is still pending after one simulated play
+     * (a Duplicity repeat offer, a reaction) is never vetoed here --
+     * predicting its EVENTUAL resulting state would mean resolving that
+     * whole chain speculatively too, and a pending decision can't
+     * contribute to a same-turn loop on its own anyway (every repeat
+     * there is an explicit yes/no asked fresh each time, never
+     * auto-repeated -- see MoodPlayService's own repeat-offer). A
+     * candidate that throws mid-simulation is left alone too -- that's
+     * chooseAction()'s own bug to surface via its real playMood() call
+     * right after this returns, not this method's to pre-empt.
+     *
+     * @param int[] $playableCardIds
+     * @param array<int, int> $roundWinsNeededToWinGameByPlayerId
+     * @return ?array{card_id: int, choices: array<string, mixed>}
+     */
+    private function chooseBotActionAvoidingLoop(BoardState $state, array $playableCardIds, int $gamePlayerId, ?int $roundWinsNeededToWinGame, array $roundWinsNeededToWinGameByPlayerId): ?array
+    {
+        while (true) {
+            $action = $this->bots->chooseAction($state, $playableCardIds, $gamePlayerId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
+            if ($action === null) {
+                return $action;
+            }
+
+            $wouldWasteTurn = false;
+            try {
+                $simulated = clone $state;
+                $result = $this->plays->playMood($simulated, $gamePlayerId, $action['card_id'], new PlayerChoices($action['choices']));
+                if (!$result->isPending) {
+                    $existingCount = $state->turnStateSignatureCounts()[$simulated->turnStateSignature()] ?? 0;
+                    $wouldWasteTurn = $existingCount + 1 >= self::LOOP_STATE_AUTO_PASS_OCCURRENCE_COUNT;
+                }
+            } catch (Throwable) {
+                // See this method's own docblock -- not ours to pre-empt.
+            }
+
+            if (!$wouldWasteTurn) {
+                return $action;
+            }
+
+            $playableCardIds = array_values(array_filter($playableCardIds, static fn (int $cardId): bool => $cardId !== $action['card_id']));
+            if ($playableCardIds === []) {
+                return null;
+            }
+        }
+    }
+
+    /**
+     * Issue #192 follow-up: advanceAutomatedTurns()'s own handling for a
+     * chaos-loop-shortcut offer (see buildChaosLoopShortcut()/
+     * resolveChaosLoopShortcutOffer()) belonging to a bot seat. Unlike a
+     * human, a bot never has a meaningful reason to pick fewer than the
+     * maximum allowed count -- there's no downside within this shortcut's
+     * own bounded action (a token/value-boost shortcut ends the turn
+     * either way; a draw shortcut never costs anything, it just lets the
+     * turn continue) -- so it always takes the cap, the same "avoid
+     * wasting the bot's turn" philosophy chooseBotActionAvoidingLoop()
+     * above already has for the exact-signature case. Returns null (a
+     * no-op) whenever nothing is currently offered, or the offer belongs
+     * to a real player instead.
+     *
+     * @param int[] $botGamePlayerIds
+     */
+    private function advanceBotChaosLoopShortcut(int $gameId, array $round, array $botGamePlayerIds): ?array
+    {
+        $chaosLoopState = $round['chaos_loop_state'] !== null ? json_decode((string) $round['chaos_loop_state'], true) : [];
+        $offer = $chaosLoopState['pendingOffer'] ?? null;
+        if ($offer === null || !in_array((int) $offer['gamePlayerId'], $botGamePlayerIds, true)) {
+            return null;
+        }
+
+        return $this->applyChaosLoopShortcut($gameId, (int) $offer['gamePlayerId'], (int) $offer['cap']);
+    }
+
     /** The ordinary heuristic bot's own play/pass, applied immediately -- see advanceTacticalBotSearch()'s own stale-job fallback and runTacticalBotSearchJob()'s own on-error fallback. */
     private function playViaHeuristicBotFallback(int $gameId, int $gamePlayerId): array
     {
@@ -8050,7 +8243,7 @@ final class GameService
             $this->candidatePlayCardIds($state, $gamePlayerId),
             fn (int $cardId) => $this->plays->isPlayable($state, $gamePlayerId, $cardId),
         ));
-        $action = $this->bots->chooseAction($state, $playableCardIds, $gamePlayerId, $this->roundWinsStillNeededToWinGame($gameId, $gamePlayerId), $this->roundWinsNeededToWinGameForActivePlayers($gameId, $state));
+        $action = $this->chooseBotActionAvoidingLoop($state, $playableCardIds, $gamePlayerId, $this->roundWinsStillNeededToWinGame($gameId, $gamePlayerId), $this->roundWinsNeededToWinGameForActivePlayers($gameId, $state));
         // A Tactical Bot's own turn landing here means its own search had
         // nothing recoverable at all (see advanceTacticalBotSearch()'s
         // own docblock) -- logging the heuristic fallback's OWN reasoning
@@ -9563,7 +9756,7 @@ final class GameService
                 // Already inside this method's own transaction, so this
                 // just writes rows -- no nested beginTransaction().
                 $this->boardStates->save($gameId, $state);
-                $this->updateRoundTurnState($roundId, $initiatingPlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId());
+                $this->updateRoundTurnState($roundId, $initiatingPlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId(), $state, persistedPlayGrants: $state->allPlayGrantsForPersistence());
                 $this->writePendingBatch($gameId, $roundId, $initiatingPlayerId, $topLevelChoices, $result->invocationChoices, $result);
                 $this->logEvent($gameId, $roundId, $initiatingPlayerId, 'pending_decision_created', $playedCardId, $this->withPlayedFrom($state, $playedCardId, []), $state);
 
@@ -9683,7 +9876,7 @@ final class GameService
                 $freshGrants = $this->computeFreshGrants($freshState, $firstPlayerId, 1);
                 $this->logFreshGrants($gameId, (int) $round['id'], $firstPlayerId, $freshGrants);
                 $this->boardStates->save($gameId, $freshState);
-                $this->updateRoundTurnState((int) $round['id'], $firstPlayerId, $freshGrants, $freshState->discardedThisRound(), $freshState->skipScoringThisRound(), $freshState->skipScoringFirstPlayerId(), $freshState->skipScoringSourceCardId(), $freshState->skipScoringOwnerId(), $freshState->awardsExtraWinThisRound(), $freshState->awardsExtraWinSourceCardId(), $freshState->awardsExtraWinOwnerId());
+                $this->updateRoundTurnState((int) $round['id'], $firstPlayerId, $freshGrants, $freshState->discardedThisRound(), $freshState->skipScoringThisRound(), $freshState->skipScoringFirstPlayerId(), $freshState->skipScoringSourceCardId(), $freshState->skipScoringOwnerId(), $freshState->awardsExtraWinThisRound(), $freshState->awardsExtraWinSourceCardId(), $freshState->awardsExtraWinOwnerId(), $freshState);
             }
 
             return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => !$allSubmitted];
@@ -9896,7 +10089,7 @@ final class GameService
             $freshGrants = $this->computeFreshGrants($state, $chosenGamePlayerId, 1);
             $this->logFreshGrants($gameId, $roundId, $chosenGamePlayerId, $freshGrants);
             $this->boardStates->save($gameId, $state);
-            $this->updateRoundTurnState($roundId, $chosenGamePlayerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId());
+            $this->updateRoundTurnState($roundId, $chosenGamePlayerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId(), $state);
         }
 
         $pdo->prepare("UPDATE game_rounds SET {$column} = :chosen WHERE id = :round_id")
@@ -9941,7 +10134,7 @@ final class GameService
         $freshGrants = $this->computeFreshGrants($state, $chosenGamePlayerId, 1);
         $this->logFreshGrants($gameId, $roundId, $chosenGamePlayerId, $freshGrants);
         $this->boardStates->save($gameId, $state);
-        $this->updateRoundTurnState($roundId, $chosenGamePlayerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId());
+        $this->updateRoundTurnState($roundId, $chosenGamePlayerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId(), $state);
 
         Connection::get()->prepare('UPDATE game_rounds SET first_game_player_id = :chosen WHERE id = :round_id')
             ->execute(['chosen' => $chosenGamePlayerId, 'round_id' => $roundId]);
@@ -9989,7 +10182,7 @@ final class GameService
         $freshGrants = $this->computeFreshGrants($state, $overridePlayerId, 1);
         $this->logFreshGrants($gameId, $roundId, $overridePlayerId, $freshGrants);
         $this->boardStates->save($gameId, $state);
-        $this->updateRoundTurnState($roundId, $overridePlayerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId());
+        $this->updateRoundTurnState($roundId, $overridePlayerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId(), $state);
 
         $pdo = Connection::get();
 
@@ -10760,6 +10953,21 @@ final class GameService
     }
 
     /**
+     * Issue #192: same-turn infinite-combo detection thresholds (e.g.
+     * Thrill<->Fear, Fear+Angst, Thrill+Angst+Nostalgia -- see
+     * BoardState::turnStateSignature()'s own docblock). A genuinely
+     * infinite loop is provably reproducible forever the moment its board
+     * signature FIRST recurs (see that docblock), so counting from 1 for
+     * the original occurrence: a 3rd occurrence (two full repeats) is
+     * warned about via getState()'s own loop_warning, and a 4th occurrence
+     * (a repeat the player made anyway, after already being warned) ends
+     * their turn for them rather than trusting them to stop manually.
+     */
+    private const LOOP_STATE_WARNING_OCCURRENCE_COUNT = 3;
+
+    private const LOOP_STATE_AUTO_PASS_OCCURRENCE_COUNT = 4;
+
+    /**
      * The shared tail of a fully-resolved play (whether that play just
      * completed in one request, or completed across a pending-decision
      * pause and response) -- saves $state's mutations, then either the
@@ -10785,7 +10993,33 @@ final class GameService
         $this->boardStates->save($gameId, $state);
 
         if ($state->playsRemaining() > 0) {
-            $this->updateRoundTurnState((int) $round['id'], $actingGamePlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId());
+            $turnState = $this->updateRoundTurnState((int) $round['id'], $actingGamePlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId(), $state, persistedPlayGrants: $state->allPlayGrantsForPersistence());
+
+            // Issue #192: the player repeated an already-warned-about board
+            // state anyway -- end their turn for them rather than trusting
+            // a human to notice/stop, and steering a bot away from ever
+            // reaching this in the first place is BotPlayerService's own
+            // job (see its own docblock), so a bot landing here regardless
+            // (an unanticipated combo, a future card) gets the exact same
+            // safety net a human does.
+            if ($turnState['exactCount'] >= self::LOOP_STATE_AUTO_PASS_OCCURRENCE_COUNT) {
+                $this->logEvent($gameId, (int) $round['id'], $actingGamePlayerId, 'turn_passed', null, ['automated' => true, 'reason' => 'loop_detected']);
+
+                return $this->advanceTurn($gameId, $round, $state, $requestingGamePlayerId);
+            }
+
+            // Issue #192 follow-up: a registered Chaos Draft effect kept
+            // reactively spawning tokens/drawing cards every cycle of a
+            // loop that never repeats the EXACT signature above (see
+            // resolveChaosLoopShortcutOffer()'s own docblock), and this is
+            // at least the second time that's been detected this turn --
+            // the same "don't trust them to notice and stop" posture,
+            // just via the coarse signature instead.
+            if ($turnState['chaosLoopAutoPass']) {
+                $this->logEvent($gameId, (int) $round['id'], $actingGamePlayerId, 'turn_passed', null, ['automated' => true, 'reason' => 'chaos_loop_detected']);
+
+                return $this->advanceTurn($gameId, $round, $state, $requestingGamePlayerId);
+            }
 
             return ['round_scored' => false, 'game_completed' => false];
         }
@@ -10838,7 +11072,7 @@ final class GameService
         // which has to be persisted even though this turn's own play
         // didn't otherwise touch the board.
         $this->boardStates->save($gameId, $state);
-        $this->updateRoundTurnState((int) $round['id'], $nextPlayerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId());
+        $this->updateRoundTurnState((int) $round['id'], $nextPlayerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId(), $state);
 
         return ['round_scored' => false, 'game_completed' => false];
     }
@@ -10913,7 +11147,7 @@ final class GameService
         $freshGrants = $this->computeFreshGrants($state, $playerId, 1);
         $this->logFreshGrants($gameId, $roundId, $playerId, $freshGrants);
         $this->boardStates->save($gameId, $state);
-        $this->updateRoundTurnState($roundId, $playerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId());
+        $this->updateRoundTurnState($roundId, $playerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId(), $state);
     }
 
     /**
@@ -14381,6 +14615,68 @@ final class GameService
     }
 
     /**
+     * Issue #192's own getState() half: a live peek (never registers a new
+     * occurrence -- see BoardState::currentTurnStateOccurrenceCount()'s own
+     * docblock) at whether the CURRENT player's own board has already
+     * recurred LOOP_STATE_WARNING_OCCURRENCE_COUNT times this turn, so a
+     * poll or page refresh shows the same warning finishPlay() already
+     * computed for that exact play, without needing a separate one-shot
+     * flag threaded through the response. Null once plays_remaining hits 0
+     * (their turn already moved on, whether by scoring, an ordinary pass,
+     * or finishPlay()'s own auto-pass -- either way the counter is already
+     * reset for whoever's turn it is now, so there's nothing left to warn
+     * about even before this method re-derives that itself).
+     */
+    private function buildLoopStateWarning(BoardState $state, array $roundRow): ?array
+    {
+        if ($roundRow['current_turn_game_player_id'] === null || $state->playsRemaining() === 0) {
+            return null;
+        }
+
+        $occurrenceCount = $state->currentTurnStateOccurrenceCount();
+        if ($occurrenceCount < self::LOOP_STATE_WARNING_OCCURRENCE_COUNT) {
+            return null;
+        }
+
+        return [
+            'game_player_id' => (int) $roundRow['current_turn_game_player_id'],
+            'occurrence_count' => $occurrenceCount,
+        ];
+    }
+
+    /**
+     * Issue #192 follow-up's own getState() half: a live peek at whatever
+     * chaos-loop-shortcut offer resolveChaosLoopShortcutOffer() already
+     * resolved and froze on BoardState::$pendingChaosLoopShortcutOffer
+     * (never re-resolved here -- see that property's own docblock for why
+     * a random/reactive target has to stay stable once offered). Same
+     * null-once-plays_remaining-hits-0 shape buildLoopStateWarning() just
+     * above already has, for the same reason. Internal fields
+     * (tokenCatalogCardId/forPlayerId/valueBoostTargetCardId/effectKey)
+     * deliberately stay server-side only -- applyChaosLoopShortcut()
+     * reads them back off the same stored offer, so the client only ever
+     * needs to send a count.
+     */
+    private function buildChaosLoopShortcut(BoardState $state, array $roundRow): ?array
+    {
+        if ($roundRow['current_turn_game_player_id'] === null || $state->playsRemaining() === 0) {
+            return null;
+        }
+
+        $offer = $state->pendingChaosLoopShortcutOffer();
+        if ($offer === null) {
+            return null;
+        }
+
+        return [
+            'game_player_id' => $offer['gamePlayerId'],
+            'kind' => $offer['kind'],
+            'cap' => $offer['cap'],
+            'label' => $offer['label'],
+        ];
+    }
+
+    /**
      * applyTimeoutsForAllActiveGames()'s own other half: "send a
      * notification if either the action timeout or the full game chess
      * clock timeout becomes less than 15 minutes left." Only ever called
@@ -16633,9 +16929,11 @@ final class GameService
      * hand (players[].hand) -- matching how a finished game is customarily
      * "shown" once it no longer matters. Spectating a still-'waiting' game
      * (nothing dealt yet) or an 'abandoned' one is rejected outright. See
-     * "Spectator mode" in php-app/README.md, including the deferred
-     * "tournament spectator" mode (full private info, LIVE) this
-     * deliberately does not cover.
+     * "Spectator mode" in php-app/README.md. Compare
+     * getTournamentCastState() below, which reveals that same
+     * private info while a tournament match is still 'in_progress' --
+     * behind a distinctly more trusted permission than this method's
+     * anyone-with-the-code visibility.
      *
      * @return array<string, mixed>
      */
@@ -16650,18 +16948,83 @@ final class GameService
     }
 
     /**
-     * Shared builder behind both getState() (a real seated player --
-     * $viewerUserId/$viewerGamePlayerId always non-null) and
-     * getSpectatorState() (a non-seated spectator -- both null,
-     * $revealAllHands only ever true for a completed game). Every branch
-     * below conditioned on $viewerGamePlayerId/$viewerUserId === null was
-     * deliberately made explicit rather than relying on a null id merely
-     * happening to compare unequal everywhere -- see "Spectator mode" in
+     * Tournament spectator mode (issue #238): a trusted caster/streamer's
+     * live view of a tournament match. Authorization (is $viewerUserId
+     * this tournament's creator, or someone the creator explicitly
+     * granted cast access to via TournamentService::hasCastAccess()) is
+     * the caller's job, same as getSpectatorState()'s own spectate_code/
+     * friendship check is canSpectateGame()'s job in public/index.php --
+     * this method only knows how to build the board, not who's allowed
+     * to see it. $viewerUserId/$viewerGamePlayerId are passed through as
+     * null (same as a plain spectator) so a caster never picks up
+     * creator-only fields (e.g. isTournamentMatch's own Rematch prefill)
+     * just because they happen to also be the game's created_by_user_id.
+     *
+     * $revealHands (reported live: a "no hands" cast option --
+     * TournamentService::castRevealsHands()) is the ONLY thing that
+     * distinguishes a caster from a plain issue #128 spectator here: true
+     * reveals hands and pending-decision internals even while still
+     * 'in_progress' (the original issue #238 behavior); false is
+     * IDENTICAL to getSpectatorState() above (hands only ever revealed
+     * once 'completed', pending_decision.field never revealed to a
+     * non-target) -- the only difference a "no hands" caster actually
+     * gets over an ordinary spectator is not needing a spectate_code or
+     * friendship to watch a still-in_progress match at all.
+     *
+     * @return array<string, mixed>
+     */
+    public function getTournamentCastState(int $gameId, bool $revealHands): array
+    {
+        $game = $this->fetchGame($gameId);
+        if ($game['status'] === 'waiting' || $game['status'] === 'abandoned') {
+            throw new GameStateException("Game {$gameId} can't be cast right now.");
+        }
+
+        return $this->buildGameState($gameId, null, null, $game['status'] === 'completed', tournamentCastMode: $revealHands);
+    }
+
+    /**
+     * Tournament spectator mode (issue #238): resolves which tournament
+     * (if any) a game belongs to, via the same three-way tournament_matches
+     * lookup buildGameState()'s own $isTournamentMatch check performs (a
+     * bare single game's own game_id, a best-of-three match's
+     * game_match_id, or a draft match's draft_match_id) -- reused here so
+     * public/index.php's own cast-access authorization check doesn't have
+     * to re-derive it. Null for an ordinary non-tournament game.
+     */
+    public function tournamentIdForGame(int $gameId): ?int
+    {
+        $game = $this->fetchGame($gameId);
+        $stmt = Connection::get()->prepare(
+            'SELECT tm.tournament_id FROM tournament_matches tm
+             WHERE tm.game_id = :game_id OR tm.game_match_id = :game_match_id OR tm.draft_match_id = :draft_match_id
+             LIMIT 1'
+        );
+        $stmt->execute([
+            'game_id' => $gameId,
+            'game_match_id' => $game['game_match_id'],
+            'draft_match_id' => $game['draft_match_id'],
+        ]);
+        $tournamentId = $stmt->fetchColumn();
+
+        return $tournamentId === false ? null : (int) $tournamentId;
+    }
+
+    /**
+     * Shared builder behind getState() (a real seated player --
+     * $viewerUserId/$viewerGamePlayerId always non-null), getSpectatorState()
+     * (a non-seated spectator -- both null, $revealAllHands only ever true
+     * for a completed game), and getTournamentCastState() (a trusted
+     * tournament caster -- both null, $tournamentCastMode true regardless
+     * of completion). Every branch below conditioned on
+     * $viewerGamePlayerId/$viewerUserId === null was deliberately made
+     * explicit rather than relying on a null id merely happening to
+     * compare unequal everywhere -- see "Spectator mode" in
      * php-app/README.md.
      *
      * @return array<string, mixed>
      */
-    private function buildGameState(int $gameId, ?int $viewerUserId, ?int $viewerGamePlayerId, bool $revealAllHands = false): array
+    private function buildGameState(int $gameId, ?int $viewerUserId, ?int $viewerGamePlayerId, bool $revealAllHands = false, bool $tournamentCastMode = false): array
     {
         $game = $this->fetchGame($gameId);
         $pdo = Connection::get();
@@ -17030,6 +17393,28 @@ final class GameService
                 // why it's this narrow rather than always exposing a raw
                 // countdown.
                 'action_timeout_warning' => $this->buildActionTimeoutWarning($gameId, $game),
+                // Issue #192's own same-turn infinite-combo warning --
+                // defaults to null here (a game still 'waiting', with no
+                // round to peek at yet) and is overwritten below, once
+                // $state/$roundRow actually exist, for any 'in_progress'/
+                // 'completed' game. Declared here (like
+                // action_timeout_warning just above) so the KEY always
+                // exists in every response shape this array feeds --
+                // web-static/js/game.js's own `!== null` check would
+                // otherwise see `undefined` (not null) for a still-waiting
+                // game and throw trying to read `.game_player_id` off it,
+                // exactly the bug reported live: two brand new custom-duel
+                // bot games stuck with no deck-submission prompt at all,
+                // because a JS exception this early in rendering aborted
+                // the whole players/state render before anything else on
+                // the page could run.
+                'loop_warning' => null,
+                // Issue #192 follow-up's own chaos-loop-shortcut offer --
+                // same null-here/overwritten-below-for-in_progress/completed-
+                // games treatment as loop_warning just above, for the exact
+                // same "the key must always exist" reason (see that key's
+                // own comment).
+                'chaos_loop_shortcut' => null,
                 // Issue #85 follow-up's own full-game time-limit mode --
                 // same "visible to the players playing it" treatment,
                 // independent of timeout_minutes/timeout_action above.
@@ -17297,6 +17682,14 @@ final class GameService
         $state = $isViewerAwaitingTurnAcknowledgment
             ? $this->replay->stateAsOf($gameId, (int) $roundRow['pre_after_scoring_event_id'], requireCompleted: false)
             : $this->boardStates->load($gameId);
+        // Issue #192: a frozen/replayed $state above (the paused-viewer
+        // branch) never carries real turnStateSignatureCounts -- nothing
+        // populates them outside the normal load()/restoreTurnState() path
+        // -- so this naturally reads as "nothing repeated yet" there,
+        // which is the right conservative answer for a snapshot that isn't
+        // even the live board.
+        $response['game']['loop_warning'] = $this->buildLoopStateWarning($state, $roundRow);
+        $response['game']['chaos_loop_shortcut'] = $this->buildChaosLoopShortcut($state, $roundRow);
         $names = $this->cardNamesFor($gameId);
         $playerNames = array_column($players, 'username', 'game_player_id');
 
@@ -17316,12 +17709,14 @@ final class GameService
             $player['deck_count'] = $state->hasSeparateDecks()
                 ? count($state->deck($player['game_player_id']))
                 : count($state->deck());
-            if ($revealAllHands) {
-                // Every seated player's final hand -- only ever populated
-                // for a completed game (see getSpectatorState() above),
-                // once there's no more competitive reason to hide it.
-                // reactingViewerId: null since no live play is left for
-                // any choice_fields/is_playable simulation to matter.
+            if ($revealAllHands || $tournamentCastMode) {
+                // Every seated player's hand -- for a completed game (see
+                // getSpectatorState() above) once there's no more
+                // competitive reason to hide it, or unconditionally for a
+                // trusted tournament caster (see getTournamentCastState()
+                // above) even while still in_progress. reactingViewerId:
+                // null since neither viewer can act on this board, so no
+                // choice_fields/is_playable simulation applies.
                 $player['hand'] = array_map(
                     fn (int $cardId) => $this->serializeCard($state, $cardId, $names, null),
                     $state->hand($player['game_player_id'])
@@ -17391,7 +17786,7 @@ final class GameService
                 'hurt_feelings_game_player_id' => $roundRow['hurt_feelings_game_player_id'] !== null ? (int) $roundRow['hurt_feelings_game_player_id'] : null,
                 'banned_colors' => $state->bannedColorsThisRound(),
                 'discarded_this_round' => (bool) $roundRow['discarded_this_round'],
-                'pending_decision' => $this->serializePendingDecision((int) $roundRow['id'], $viewerGamePlayerId, $state, (bool) $game['default_selections_mode']),
+                'pending_decision' => $this->serializePendingDecision((int) $roundRow['id'], $viewerGamePlayerId, $state, (bool) $game['default_selections_mode'], $tournamentCastMode),
                 'scoring_preview' => $this->serializeScoringPreview($state, (int) $roundRow['id']),
                 'scoring_effects' => $this->scoringEffectEntries($state, $names, $playerNames),
                 'board_effects' => $this->boardEffectEntries($state, $names, $playerNames),
@@ -18172,6 +18567,8 @@ final class GameService
                 'timeout_minutes' => $game['timeout_minutes'] !== null ? (int) $game['timeout_minutes'] : null,
                 'timeout_action' => $game['timeout_action'],
                 'action_timeout_warning' => null,
+                'loop_warning' => null,
+                'chaos_loop_shortcut' => null,
                 'total_time_limit_minutes' => $game['total_time_limit_minutes'] !== null ? (int) $game['total_time_limit_minutes'] : null,
                 'synchronous_mode' => (bool) $game['synchronous_mode'],
                 'default_selections_mode' => (bool) $game['default_selections_mode'],
@@ -18517,6 +18914,8 @@ final class GameService
                 'timeout_minutes' => $game['timeout_minutes'] !== null ? (int) $game['timeout_minutes'] : null,
                 'timeout_action' => $game['timeout_action'],
                 'action_timeout_warning' => null,
+                'loop_warning' => null,
+                'chaos_loop_shortcut' => null,
                 'total_time_limit_minutes' => $game['total_time_limit_minutes'] !== null ? (int) $game['total_time_limit_minutes'] : null,
                 'synchronous_mode' => (bool) $game['synchronous_mode'],
                 'default_selections_mode' => (bool) $game['default_selections_mode'],
@@ -18885,6 +19284,25 @@ final class GameService
             // to a reader of this log ("nobody actually clicked Pass
             // here"), so they share one phrasing rather than needing to
             // explain which of the two mechanisms fired.
+            // Issue #192: a same-turn infinite-combo warning the player
+            // ignored (or a bot steering couldn't avoid) -- see
+            // GameService::finishPlay()'s own LOOP_STATE_AUTO_PASS_OCCURRENCE_COUNT
+            // docblock. Checked before the plain 'automated' phrasing below
+            // since this is also logged with automated=true.
+            $row['event_type'] === 'turn_passed' && ($details['reason'] ?? null) === 'loop_detected' => "{$actor}'s turn ended automatically -- the same board state kept repeating",
+            // Issue #192 follow-up: the coarse-signature counterpart above
+            // -- a registered Chaos Draft effect kept spawning tokens/
+            // drawing cards each cycle (see resolveChaosLoopShortcutOffer()'s
+            // own docblock), so the loop never tripped the exact-repeat
+            // check but tripped this one instead, at least a second time
+            // this turn after already being offered a shortcut.
+            $row['event_type'] === 'turn_passed' && ($details['reason'] ?? null) === 'chaos_loop_detected' => "{$actor}'s turn ended automatically -- the same repeating loop kept triggering a Chaos Draft effect",
+            // Issue #192 follow-up: logged by applyChaosLoopShortcut() --
+            // card_id is always null for this event (there's no single
+            // card the shortcut is "about"), so without its own arm this
+            // would otherwise fall through to the generic "{actor} played
+            // {a card}" default below, which reads as nonsense here.
+            $row['event_type'] === 'chaos_loop_shortcut_applied' => "{$actor} used a chaos-loop shortcut ({$details['count']}x {$details['kind']})",
             $row['event_type'] === 'turn_passed' => ($details['automated'] ?? false)
                 ? "{$actor} passed automatically (no legal play)"
                 : "{$actor} passed",
@@ -21007,23 +21425,112 @@ final class GameService
      * after-scoring hook actually moved something, so this is the one
      * notifyItsYourTurn() call site that never even offers a
      * $worthPausingFor argument, relying on its default of false.
+     *
+     * Also the one place issue #192's own loop-state-signature counter
+     * (BoardState::turnStateSignatureCounts()) gets registered and
+     * persisted, for the same reason "it's your turn" belongs here: the
+     * $previousPlayerId !== $playerId check that already tells this method
+     * a genuine handoff just happened is exactly the signal that also has
+     * to reset the counter -- a fresh turn never inherits the PREVIOUS
+     * player's own repeat counts, the same "reset every turn" lifecycle
+     * $playGrants itself already has. $state is whichever BoardState the
+     * caller already has in hand reflecting the board as of THIS save --
+     * see registerTurnStateOccurrence()'s own docblock for why counting
+     * here (once, from the state that's actually being persisted) rather
+     * than at each individual call site is what keeps this exact and not
+     * approximate.
+     *
+     * @return int the current board signature's own occurrence count this
+     *             turn, AFTER registering this one (1 for a fresh turn) --
+     *             callers that care whether to warn/auto-pass a human or
+     *             steer a bot away read this; every other caller ignores it.
      */
-    private function updateRoundTurnState(int $roundId, int $playerId, array $playGrants, bool $discardedThisRound, bool $skipScoringThisRound, ?int $skipScoringFirstPlayerId, ?int $skipScoringSourceCardId, ?int $skipScoringOwnerId, bool $awardsExtraWinThisRound = false, ?int $awardsExtraWinSourceCardId = null, ?int $awardsExtraWinOwnerId = null): void
+    /**
+     * $persistedPlayGrants, when given, is what actually gets written to
+     * game_rounds.pending_play_grants -- $playGrants itself still drives
+     * plays_remaining (count($playGrants), unchanged) and every other
+     * read here. Bug caught live (reported: "I should have more plays
+     * here" -- Pride targeting an opponent, then Betrayal giving Pride
+     * itself to that SAME opponent): every "same player continues" call
+     * site used to persist $state->pendingPlayGrants() -- the FILTERED,
+     * currently-active-only list -- as pending_play_grants too, which
+     * permanently drops a self-renewing grant (Pride's own
+     * 'requiresBehindPlayer' -- see BoardState::grantIsActive()'s own
+     * docblock) from the database the instant it's transiently inactive
+     * (e.g. tied 3-3 the moment Betrayal itself enters play, before its
+     * own "give a mood away" decision even resolves), even though it's
+     * designed to reactivate later if the gap reopens and is never
+     * removed from the in-memory $playGrants that produced it (see
+     * BoardState::useGrantFor()'s own docblock). Those three call sites
+     * now separately pass $state->allPlayGrantsForPersistence() (the
+     * complete, unfiltered list) here, so a grant that's merely inactive
+     * survives to be re-evaluated on the next request instead of being
+     * lost outright -- see that method's own docblock for the full
+     * writeup. Defaults to $playGrants for every other, unaffected call
+     * site (a fresh turn/round's own newly COMPUTED grants, which have
+     * no "already existed, might reactivate" history to preserve).
+     *
+     * @return array{exactCount: int, chaosLoopAutoPass: bool}
+     */
+    private function updateRoundTurnState(int $roundId, int $playerId, array $playGrants, bool $discardedThisRound, bool $skipScoringThisRound, ?int $skipScoringFirstPlayerId, ?int $skipScoringSourceCardId, ?int $skipScoringOwnerId, bool $awardsExtraWinThisRound, ?int $awardsExtraWinSourceCardId, ?int $awardsExtraWinOwnerId, BoardState $state, ?array $persistedPlayGrants = null): array
     {
         $pdo = Connection::get();
 
-        $previousStmt = $pdo->prepare('SELECT current_turn_game_player_id FROM game_rounds WHERE id = :round_id');
+        $previousStmt = $pdo->prepare('SELECT current_turn_game_player_id, loop_state_signature_counts, chaos_loop_state FROM game_rounds WHERE id = :round_id');
         $previousStmt->execute(['round_id' => $roundId]);
-        $previousPlayerId = $previousStmt->fetchColumn();
-        $previousPlayerId = $previousPlayerId !== false ? (int) $previousPlayerId : null;
+        $previousRow = $previousStmt->fetch();
+        $previousPlayerId = $previousRow !== false && $previousRow['current_turn_game_player_id'] !== null ? (int) $previousRow['current_turn_game_player_id'] : null;
+
+        if ($previousPlayerId !== $playerId) {
+            $state->resetTurnStateSignatureCounts();
+            $state->resetCoarseTurnStateSignatureCounts();
+            $state->resetDrawnThisTurnCardIds();
+            $state->resetChaosEffectFireCounts();
+            $state->resetChaosLoopShortcutOfferedThisTurn();
+        } elseif ($previousRow !== false) {
+            $state->restoreTurnStateSignatureCounts(
+                $previousRow['loop_state_signature_counts'] !== null ? json_decode((string) $previousRow['loop_state_signature_counts'], true) : [],
+            );
+            // Issue #192 follow-up: same "restore whatever this round's own
+            // row had persisted from the previous action in this same
+            // chain" role as restoreTurnStateSignatureCounts() just
+            // above, but ONLY for coarseCounts -- registerCoarseTurnStateOccurrence()
+            // just below is, like registerTurnStateOccurrence(), the ONLY
+            // place that ever increments it, so restore-then-register is
+            // correct here. drawnThisTurnCardIds/chaosEffectFireCounts are
+            // NOT restored here: unlike the two signature counters, they
+            // get incremented earlier in THIS SAME action -- during
+            // MoodPlayService::playMood()'s own dispatchChaosReactiveHooks()/
+            // drawCard() calls, which already ran before finishPlay() ever
+            // reaches this method -- so $state already holds the correct,
+            // up-to-date value (loaded once at BoardStateRepository::load()
+            // time, then live-incremented since); restoring them from a
+            // separate fresh SELECT here would silently overwrite THIS
+            // action's own increment with the stale pre-action snapshot,
+            // which is exactly the bug this comment is here to prevent
+            // reintroducing.
+            $chaosLoopState = $previousRow['chaos_loop_state'] !== null ? json_decode((string) $previousRow['chaos_loop_state'], true) : [];
+            $state->restoreCoarseTurnStateSignatureCounts($chaosLoopState['coarseCounts'] ?? []);
+        }
+        $occurrenceCount = $state->registerTurnStateOccurrence();
+        $coarseOccurrenceCount = $state->registerCoarseTurnStateOccurrence();
+        $chaosLoopAutoPass = $this->resolveChaosLoopShortcutOffer($state, $coarseOccurrenceCount);
 
         $stmt = $pdo->prepare(
-            'UPDATE game_rounds SET current_turn_game_player_id = :player_id, plays_remaining = :plays_remaining, pending_play_grants = :pending_play_grants, discarded_this_round = :discarded_this_round, skip_scoring = :skip_scoring, skip_scoring_first_player_game_player_id = :skip_scoring_first_player_id, skip_scoring_source_card_id = :skip_scoring_source_card_id, skip_scoring_owner_game_player_id = :skip_scoring_owner_id, awards_extra_win = :awards_extra_win, awards_extra_win_source_card_id = :awards_extra_win_source_card_id, awards_extra_win_owner_game_player_id = :awards_extra_win_owner_id WHERE id = :round_id'
+            'UPDATE game_rounds SET current_turn_game_player_id = :player_id, plays_remaining = :plays_remaining, pending_play_grants = :pending_play_grants, loop_state_signature_counts = :loop_state_signature_counts, chaos_loop_state = :chaos_loop_state, discarded_this_round = :discarded_this_round, skip_scoring = :skip_scoring, skip_scoring_first_player_game_player_id = :skip_scoring_first_player_id, skip_scoring_source_card_id = :skip_scoring_source_card_id, skip_scoring_owner_game_player_id = :skip_scoring_owner_id, awards_extra_win = :awards_extra_win, awards_extra_win_source_card_id = :awards_extra_win_source_card_id, awards_extra_win_owner_game_player_id = :awards_extra_win_owner_id WHERE id = :round_id'
         );
         $stmt->execute([
             'player_id' => $playerId,
             'plays_remaining' => count($playGrants),
-            'pending_play_grants' => json_encode($playGrants),
+            'pending_play_grants' => json_encode($persistedPlayGrants ?? $playGrants),
+            'loop_state_signature_counts' => json_encode($state->turnStateSignatureCounts()),
+            'chaos_loop_state' => json_encode([
+                'coarseCounts' => $state->coarseTurnStateSignatureCounts(),
+                'drawnCardIds' => $state->drawnThisTurnCardIds(),
+                'chaosEffectFireCounts' => $state->chaosEffectFireCounts(),
+                'offeredThisTurn' => $state->hasOfferedChaosLoopShortcutThisTurn(),
+                'pendingOffer' => $state->pendingChaosLoopShortcutOffer(),
+            ]),
             'discarded_this_round' => $discardedThisRound ? 1 : 0,
             'skip_scoring' => $skipScoringThisRound ? 1 : 0,
             'skip_scoring_first_player_id' => $skipScoringFirstPlayerId,
@@ -21038,6 +21545,78 @@ final class GameService
         if ($previousPlayerId !== $playerId) {
             $this->notifyItsYourTurn($roundId, $playerId);
         }
+
+        return ['exactCount' => $occurrenceCount, 'chaosLoopAutoPass' => $chaosLoopAutoPass];
+    }
+
+    /**
+     * Issue #192 follow-up: decides whether to offer a chaos-loop
+     * shortcut, or to auto-pass because one was already offered earlier
+     * this turn and the same loop shape has recurred again -- see
+     * BoardState::turnStateSignatureCoarse()'s own docblock for what
+     * problem this solves, and ChaosLoopShortcut's own docblock for what
+     * an "offer" actually contains. $coarseOccurrenceCount is this
+     * action's own freshly-registered coarse signature count (the
+     * SAME "the whole board shape has repeated" gate applies to every
+     * registered effect uniformly); each registered effect_key's own
+     * per-turn fire count is the second, effect-specific gate -- see
+     * ChaosLoopShortcut::REGISTERED_EFFECT_KEYS.
+     */
+    private function resolveChaosLoopShortcutOffer(BoardState $state, int $coarseOccurrenceCount): bool
+    {
+        if ($coarseOccurrenceCount < self::LOOP_STATE_WARNING_OCCURRENCE_COUNT) {
+            return false;
+        }
+
+        foreach (ChaosLoopShortcut::REGISTERED_EFFECT_KEYS as $effectKey) {
+            if ($state->chaosEffectFireCount($effectKey) < self::LOOP_STATE_WARNING_OCCURRENCE_COUNT) {
+                continue;
+            }
+
+            // Already offered a shortcut once this turn (whether or not it
+            // was ever applied) and the loop condition is back again --
+            // don't trust them to notice and stop, same posture the
+            // ordinary exact-signature warn/auto-pass already has.
+            if ($state->hasOfferedChaosLoopShortcutThisTurn()) {
+                return true;
+            }
+
+            $carrier = null;
+            foreach ($state->moodsInPlay() as $mood) {
+                $chaosRow = $state->chaosEffectRow($mood->cardId);
+                if ($chaosRow !== null && $chaosRow['effectKey'] === $effectKey) {
+                    $carrier = $mood;
+                    break;
+                }
+            }
+            if ($carrier === null) {
+                // Fired earlier this turn but its own carrier isn't in
+                // play anymore (e.g. it discarded itself) -- nothing left
+                // to attribute a fresh offer to; try the next registered
+                // effect instead of offering nothing at all.
+                continue;
+            }
+
+            $shortcut = $this->chaosRegistry->for($effectKey)->loopShortcut($state, $carrier->cardId, $carrier->ownerId);
+            if ($shortcut === null) {
+                continue;
+            }
+
+            $state->setPendingChaosLoopShortcutOffer([
+                'effectKey' => $effectKey,
+                'gamePlayerId' => $carrier->ownerId,
+                'kind' => $shortcut->kind,
+                'cap' => $shortcut->cap,
+                'label' => $shortcut->label,
+                'tokenCatalogCardId' => $shortcut->tokenCatalogCardId,
+                'forPlayerId' => $shortcut->forPlayerId,
+                'valueBoostTargetCardId' => $shortcut->valueBoostTargetCardId,
+            ]);
+
+            return false;
+        }
+
+        return false;
     }
 
     /**
@@ -21195,8 +21774,12 @@ final class GameService
      * from $viewerGamePlayerId's own perspective -- every viewer sees who
      * initiated it, which card, and who it's waiting on, but the actual
      * prompt (`field`, e.g. Compulsion's target's own hand-card options)
-     * is only ever included for the targeted player themselves, the same
-     * way an opponent's hand is never exposed to anyone else.
+     * is only ever included for the targeted player themselves ($isYou),
+     * the same way an opponent's hand is never exposed to anyone else --
+     * with one deliberate exception: $revealToNonTarget (tournament
+     * spectator mode, issue #238) reveals `field` to a trusted caster too,
+     * even though they're never the target themselves ($isYou/`is_you`
+     * stay accurately false for them regardless).
      *
      * @return array<string, mixed>|null
      */
@@ -21208,11 +21791,12 @@ final class GameService
      * buildFieldRow()/buildFieldWidget() code either way, so the
      * withChoiceDefault() enrichment is the same policy applied to the
      * one field a pending decision carries, rather than an array of
-     * them. Only for $isYou, matching the gate 'field' itself was
-     * already behind (the decision's own private choice payload is
-     * still never populated for anyone else).
+     * them. Gated on $revealField ($isYou || $revealToNonTarget), matching
+     * the gate 'field' itself is behind -- a cast viewer's read-only
+     * preview shows the same default a real target would see, rather than
+     * an inconsistent raw field.
      */
-    private function serializePendingDecision(int $roundId, ?int $viewerGamePlayerId, ?BoardState $state = null, bool $defaultSelectionsMode = false): ?array
+    private function serializePendingDecision(int $roundId, ?int $viewerGamePlayerId, ?BoardState $state = null, bool $defaultSelectionsMode = false, bool $revealToNonTarget = false): ?array
     {
         $batchRow = $this->activePendingBatch($roundId);
         if ($batchRow === null) {
@@ -21230,8 +21814,12 @@ final class GameService
         // target_game_player_id, so 'field' (the decision's own private
         // choice payload) is never populated below, the same way it's
         // never populated for a real player who isn't the one being
-        // asked.
+        // asked. 'is_you' stays accurately false for a null viewer even
+        // when $revealToNonTarget reveals 'field' anyway (tournament
+        // spectator mode, issue #238) -- a trusted caster still isn't the
+        // player making this decision, they're just allowed to see it.
         $isYou = $targetGamePlayerId === $viewerGamePlayerId;
+        $revealField = $isYou || $revealToNonTarget;
         $playedCardId = (int) $batchRow['played_card_id'];
 
         $result = [
@@ -21243,7 +21831,7 @@ final class GameService
             'is_you' => $isYou,
         ];
 
-        if ($isYou) {
+        if ($revealField) {
             $field = json_decode((string) $decisionRow['field'], true);
             if ($defaultSelectionsMode && $state !== null) {
                 // Issue #405 follow-up: a pending decision opened by an

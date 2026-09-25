@@ -57,6 +57,7 @@ final class TournamentServiceIntegrationTest extends TestCase
         }
 
         $pdo->exec('SET FOREIGN_KEY_CHECKS = 0');
+        $pdo->exec('TRUNCATE TABLE tournament_cast_grants');
         $pdo->exec('TRUNCATE TABLE tournament_matches');
         $pdo->exec('TRUNCATE TABLE tournament_rounds');
         $pdo->exec('TRUNCATE TABLE tournament_pod_picks');
@@ -428,6 +429,52 @@ final class TournamentServiceIntegrationTest extends TestCase
 
         $adHocGameState = $this->games->getState($adHocGameId, $creator);
         self::assertFalse($adHocGameState['game']['is_tournament_match']);
+    }
+
+    /**
+     * Tournament spectator mode (issue #238): GameService::
+     * tournamentIdForGame() is the authorization plumbing
+     * canCastTournamentGame() (public/index.php) relies on -- resolves a
+     * real tournament match's own game_id back to its tournament, null
+     * for an ad hoc game. Combined here with the full grant ->
+     * hasCastAccess -> getTournamentCastState() chain against a real
+     * still-in_progress tournament match (unlike
+     * GameServiceIntegrationTest's own equivalent, which drives
+     * buildGameState() directly against a hand-built game row).
+     */
+    public function testTournamentIdForGameResolvesARealMatchAndCastStateRevealsItsHands(): void
+    {
+        $creator = $this->insertUser('cast_tourney_p1');
+        $p2 = $this->insertUser('cast_tourney_p2');
+        $p3 = $this->insertUser('cast_tourney_p3');
+        $p4 = $this->insertUser('cast_tourney_p4');
+        $caster = $this->insertUser('cast_tourney_caster');
+
+        $tournamentId = $this->createStandardTournament($creator, [$p2, $p3, $p4], 'single_elimination');
+        foreach ([$p2, $p3, $p4] as $invitee) {
+            $this->tournaments->acceptInvite($tournamentId, $invitee);
+        }
+        $this->tournaments->startTournament($tournamentId, $creator);
+
+        $round1 = $this->matchRepo->listRounds($tournamentId)[0];
+        $match = $this->matchRepo->listForRound((int) $round1['id'])[0];
+        $tournamentGameId = (int) $match['game_id'];
+
+        self::assertSame($tournamentId, $this->games->tournamentIdForGame($tournamentGameId));
+
+        $adHocGameId = $this->games->createGame($creator, [$creator, $p2]);
+        self::assertNull($this->games->tournamentIdForGame($adHocGameId));
+
+        self::assertFalse($this->tournaments->hasCastAccess($tournamentId, $caster));
+        $this->tournaments->grantCastAccess($tournamentId, $creator, 'cast_tourney_caster');
+        self::assertTrue($this->tournaments->hasCastAccess($tournamentId, $caster));
+        self::assertTrue($this->tournaments->castRevealsHands($tournamentId, $caster), 'grantCastAccess() defaults to a full, hands-revealed grant');
+
+        $castState = $this->games->getTournamentCastState($tournamentGameId, revealHands: true);
+        self::assertSame('in_progress', $castState['game']['status']);
+        foreach ($castState['players'] as $player) {
+            self::assertArrayHasKey('hand', $player, "player {$player['game_player_id']}'s hand should be revealed in cast mode");
+        }
     }
 
     /**
@@ -1775,5 +1822,411 @@ final class TournamentServiceIntegrationTest extends TestCase
     private function powerDuelDecklistText(): string
     {
         return implode("\n", array_map(static fn (string $name): string => "1 {$name}", $this->fetchNonMythicCardNames(15)));
+    }
+
+    // -- Tournament spectator mode (issue #238) --------------------------
+
+    public function testCreatorCanGrantAndRevokeCastAccess(): void
+    {
+        $creator = $this->insertUser('cast_creator1');
+        $caster = $this->insertUser('cast_caster1');
+        $tournamentId = $this->createStandardTournament($creator, [], 'single_elimination');
+
+        self::assertFalse($this->tournaments->hasCastAccess($tournamentId, $caster));
+
+        $grantee = $this->tournaments->grantCastAccess($tournamentId, $creator, 'cast_caster1');
+        self::assertSame($caster, $grantee['id']);
+        self::assertSame('cast_caster1', $grantee['username']);
+        self::assertTrue($this->tournaments->hasCastAccess($tournamentId, $caster));
+
+        $grants = $this->tournaments->listCastGrants($tournamentId, $creator);
+        self::assertCount(1, $grants);
+        self::assertSame($caster, (int) $grants[0]['user_id']);
+        self::assertSame('cast_caster1', $grants[0]['username']);
+
+        $this->tournaments->revokeCastAccess($tournamentId, $creator, $caster);
+        self::assertFalse($this->tournaments->hasCastAccess($tournamentId, $caster));
+        self::assertCount(0, $this->tournaments->listCastGrants($tournamentId, $creator));
+    }
+
+    /** The creator is always implicitly trusted -- never needs (or can hold) a redundant grant of their own. */
+    public function testCreatorAlwaysHasCastAccessWithoutAGrant(): void
+    {
+        $creator = $this->insertUser('cast_creator2');
+        $tournamentId = $this->createStandardTournament($creator, [], 'single_elimination');
+
+        self::assertTrue($this->tournaments->hasCastAccess($tournamentId, $creator));
+
+        $this->expectException(TournamentStateException::class);
+        $this->tournaments->grantCastAccess($tournamentId, $creator, 'cast_creator2');
+    }
+
+    /**
+     * Granting/revoking cast access stays creator-only -- it's not a
+     * general tournament-management permission a mere participant gets.
+     * Listing, though, is deliberately NOT creator-only any more
+     * (reported live: "all users in the tournament can see who is
+     * allowed to cast") -- see testCastGrantsAreVisibleToEveryoneWhoCanViewTheTournamentNotJustTheCreator()
+     * for that broadened access itself.
+     */
+    public function testNonCreatorCannotGrantOrRevokeCastAccess(): void
+    {
+        $creator = $this->insertUser('cast_creator3');
+        $p2 = $this->insertUser('cast_p2');
+        $caster = $this->insertUser('cast_caster3');
+        $tournamentId = $this->createStandardTournament($creator, [$p2], 'single_elimination');
+        $this->tournaments->acceptInvite($tournamentId, $p2);
+
+        try {
+            $this->tournaments->grantCastAccess($tournamentId, $p2, 'cast_caster3');
+            self::fail('Expected NotAuthorizedForTournamentException');
+        } catch (NotAuthorizedForTournamentException) {
+        }
+
+        // The creator grants it properly, then a non-creator participant
+        // still can't revoke it.
+        $this->tournaments->grantCastAccess($tournamentId, $creator, 'cast_caster3');
+
+        $this->expectException(NotAuthorizedForTournamentException::class);
+        $this->tournaments->revokeCastAccess($tournamentId, $p2, $caster);
+    }
+
+    public function testGrantCastAccessRejectsAnUnknownUsernameOrADuplicateGrant(): void
+    {
+        $creator = $this->insertUser('cast_creator4');
+        $caster = $this->insertUser('cast_caster4');
+        $tournamentId = $this->createStandardTournament($creator, [], 'single_elimination');
+
+        try {
+            $this->tournaments->grantCastAccess($tournamentId, $creator, 'no_such_user_at_all');
+            self::fail('Expected TournamentStateException');
+        } catch (TournamentStateException) {
+        }
+
+        $this->tournaments->grantCastAccess($tournamentId, $creator, 'cast_caster4');
+        $this->expectException(TournamentStateException::class);
+        $this->tournaments->grantCastAccess($tournamentId, $creator, 'cast_caster4');
+    }
+
+    /**
+     * A granted caster (not otherwise a participant) can still load this
+     * invite-only tournament's own bracket -- getState()'s access check
+     * now bypasses the "creator, participant, or open registration"
+     * requirement for anyone hasCastAccess() trusts (see its own
+     * docblock). viewer_has_cast_access lets the frontend show the
+     * caster their own "Cast" buttons without them having to already be
+     * the creator.
+     */
+    public function testGrantedCasterCanLoadAnInviteOnlyTournamentsState(): void
+    {
+        $creator = $this->insertUser('cast_creator5');
+        $p2 = $this->insertUser('cast_p2b');
+        $caster = $this->insertUser('cast_caster5');
+        $tournamentId = $this->createStandardTournament($creator, [$p2], 'single_elimination');
+
+        try {
+            $this->tournaments->getState($tournamentId, $caster);
+            self::fail('Expected NotAuthorizedForTournamentException before being granted cast access');
+        } catch (NotAuthorizedForTournamentException) {
+        }
+
+        $this->tournaments->grantCastAccess($tournamentId, $creator, 'cast_caster5');
+
+        $state = $this->tournaments->getState($tournamentId, $caster);
+        self::assertTrue($state['viewer_has_cast_access']);
+
+        $creatorState = $this->tournaments->getState($tournamentId, $creator);
+        self::assertTrue($creatorState['viewer_has_cast_access']);
+
+        $participantState = $this->tournaments->getState($tournamentId, $p2);
+        self::assertFalse($participantState['viewer_has_cast_access']);
+
+        // Also findable via the ordinary "mine" tournament list -- a
+        // caster with no participant row of their own would otherwise
+        // have no way to discover this tournament in the frontend's
+        // "Tournaments" dialog at all (see TournamentRepository::
+        // listForUser()'s own docblock).
+        $mine = $this->tournaments->listMine($caster);
+        self::assertCount(1, array_filter($mine, static fn (array $t): bool => (int) $t['id'] === $tournamentId));
+    }
+
+    /**
+     * Reported live: a "no hands" cast option -- a caster granted with
+     * reveal_hands=false still passes hasCastAccess() (they're still
+     * allowed to watch the still-in_progress match), but castRevealsHands()
+     * reports false for them specifically, unlike a full grant or the
+     * creator (always true regardless of any grant).
+     */
+    public function testGrantCastAccessSupportsANoHandsGrant(): void
+    {
+        $creator = $this->insertUser('cast_nohands_creator');
+        $fullCaster = $this->insertUser('cast_nohands_full');
+        $noHandsCaster = $this->insertUser('cast_nohands_none');
+        $tournamentId = $this->createStandardTournament($creator, [], 'single_elimination');
+
+        $fullGrant = $this->tournaments->grantCastAccess($tournamentId, $creator, 'cast_nohands_full', true);
+        self::assertTrue($fullGrant['reveal_hands']);
+        $noHandsGrant = $this->tournaments->grantCastAccess($tournamentId, $creator, 'cast_nohands_none', false);
+        self::assertFalse($noHandsGrant['reveal_hands']);
+
+        self::assertTrue($this->tournaments->hasCastAccess($tournamentId, $fullCaster));
+        self::assertTrue($this->tournaments->hasCastAccess($tournamentId, $noHandsCaster));
+        self::assertTrue($this->tournaments->castRevealsHands($tournamentId, $fullCaster));
+        self::assertFalse($this->tournaments->castRevealsHands($tournamentId, $noHandsCaster));
+        self::assertTrue($this->tournaments->castRevealsHands($tournamentId, $creator), 'the creator is always fully trusted regardless of any grant');
+
+        // A user with no grant at all has no cast access, so
+        // castRevealsHands() defensively reports false for them too
+        // (callers are expected to check hasCastAccess() first).
+        $stranger = $this->insertUser('cast_nohands_stranger');
+        self::assertFalse($this->tournaments->hasCastAccess($tournamentId, $stranger));
+        self::assertFalse($this->tournaments->castRevealsHands($tournamentId, $stranger));
+    }
+
+    /**
+     * Reported live: "user(s) with spectator mode access need to be
+     * selected when the tournament is created" -- createTournament()'s
+     * own $castGrants param grants access the moment the tournament
+     * exists, same rules as grantCastAccess() (resolve by username, a
+     * per-entry reveal_hands flag, the creator's own username silently
+     * skipped since they're always already trusted, and duplicate
+     * grantees -- by resolved user id, not raw string -- collapsed to one
+     * grant rather than colliding against the unique (tournament_id,
+     * user_id) constraint).
+     */
+    public function testCreateTournamentAcceptsCastGrantsAtCreationTime(): void
+    {
+        $creator = $this->insertUser('cast_create_creator');
+        $fullCaster = $this->insertUser('cast_create_full');
+        $noHandsCaster = $this->insertUser('cast_create_none');
+
+        $tournamentId = $this->tournaments->createTournament(
+            $creator,
+            'Cast Grants At Creation',
+            'single_elimination',
+            'invite_only',
+            ['format' => 'standard'],
+            null,
+            minParticipants: 4,
+            maxParticipants: 16,
+            inviteUserIds: [],
+            castGrants: [
+                ['username' => 'cast_create_full', 'reveal_hands' => true],
+                ['username' => 'cast_create_none', 'reveal_hands' => false],
+                // Duplicate of the first entry -- must not throw a
+                // duplicate-key error, just collapse to the one grant.
+                ['username' => 'cast_create_full', 'reveal_hands' => true],
+                // The creator's own username -- silently skipped, same
+                // as $inviteUserIds already does for the creator.
+                ['username' => 'cast_create_creator', 'reveal_hands' => true],
+            ],
+        );
+
+        self::assertTrue($this->tournaments->hasCastAccess($tournamentId, $fullCaster));
+        self::assertTrue($this->tournaments->castRevealsHands($tournamentId, $fullCaster));
+        self::assertTrue($this->tournaments->hasCastAccess($tournamentId, $noHandsCaster));
+        self::assertFalse($this->tournaments->castRevealsHands($tournamentId, $noHandsCaster));
+
+        $grants = $this->tournaments->listCastGrants($tournamentId, $creator);
+        self::assertCount(2, $grants, 'the duplicate entry and the creator-username entry should not have produced extra rows');
+    }
+
+    public function testCreateTournamentRejectsAnUnknownCastGranteeUsername(): void
+    {
+        $creator = $this->insertUser('cast_create_bad_creator');
+
+        $this->expectException(TournamentStateException::class);
+        $this->tournaments->createTournament(
+            $creator,
+            'Cast Grants Bad Username',
+            'single_elimination',
+            'invite_only',
+            ['format' => 'standard'],
+            null,
+            minParticipants: 4,
+            maxParticipants: 16,
+            inviteUserIds: [],
+            castGrants: [['username' => 'no_such_user_at_all_here', 'reveal_hands' => true]],
+        );
+    }
+
+    /**
+     * Reported live: "all users in the tournament can see who is allowed
+     * to cast" -- getState() embeds the roster (cast_grants) and the
+     * viewer's own reveal_hands status (viewer_cast_reveals_hands) for
+     * everyone allowed to load the tournament at all (creator,
+     * participant, or a caster themselves), while listCastGrants() on
+     * its own is no longer creator-only. An uninvolved stranger (no
+     * participant row, not a caster, invite-only) still can't load
+     * either at all.
+     */
+    public function testCastGrantsAreVisibleToEveryoneWhoCanViewTheTournamentNotJustTheCreator(): void
+    {
+        $creator = $this->insertUser('cast_visible_creator');
+        $p2 = $this->insertUser('cast_visible_p2');
+        $caster = $this->insertUser('cast_visible_caster');
+        $stranger = $this->insertUser('cast_visible_stranger');
+        $tournamentId = $this->createStandardTournament($creator, [$p2], 'single_elimination');
+        $this->tournaments->acceptInvite($tournamentId, $p2);
+        $this->tournaments->grantCastAccess($tournamentId, $creator, 'cast_visible_caster', false);
+
+        foreach ([$creator, $p2, $caster] as $viewerUserId) {
+            $state = $this->tournaments->getState($tournamentId, $viewerUserId);
+            self::assertCount(1, $state['cast_grants']);
+            self::assertSame('cast_visible_caster', $state['cast_grants'][0]['username']);
+            self::assertFalse($state['cast_grants'][0]['reveal_hands']);
+
+            $grants = $this->tournaments->listCastGrants($tournamentId, $viewerUserId);
+            self::assertCount(1, $grants);
+        }
+
+        self::assertTrue($this->tournaments->getState($tournamentId, $creator)['viewer_cast_reveals_hands']);
+        self::assertFalse($this->tournaments->getState($tournamentId, $caster)['viewer_cast_reveals_hands']);
+        self::assertNull($this->tournaments->getState($tournamentId, $p2)['viewer_cast_reveals_hands'], 'a plain participant with no cast access of their own gets null, not false');
+
+        try {
+            $this->tournaments->getState($tournamentId, $stranger);
+            self::fail('Expected NotAuthorizedForTournamentException');
+        } catch (NotAuthorizedForTournamentException) {
+        }
+
+        $this->expectException(NotAuthorizedForTournamentException::class);
+        $this->tournaments->listCastGrants($tournamentId, $stranger);
+    }
+
+    /**
+     * Reported live: "casters with access to private information (both
+     * user's hands) can't play in the tournament" -- a hands-revealed
+     * grant sees every match's hands, not just whoever they're
+     * personally seated against, so letting them also be an active
+     * participant would hand them a scouting advantage. A "no hands"
+     * grant is exempt since it never reveals more than a plain
+     * spectator would.
+     */
+    public function testGrantCastAccessRejectsFullHandsGrantToAnExistingParticipant(): void
+    {
+        $creator = $this->insertUser('excl_grant_creator');
+        $p2 = $this->insertUser('excl_grant_p2');
+        $tournamentId = $this->createStandardTournament($creator, [$p2], 'single_elimination');
+        $this->tournaments->acceptInvite($tournamentId, $p2);
+
+        try {
+            $this->tournaments->grantCastAccess($tournamentId, $creator, 'excl_grant_p2', true);
+            self::fail('Expected TournamentStateException');
+        } catch (TournamentStateException) {
+        }
+
+        // A "no hands" grant to the same participant is fine.
+        $grant = $this->tournaments->grantCastAccess($tournamentId, $creator, 'excl_grant_p2', false);
+        self::assertFalse($grant['reveal_hands']);
+    }
+
+    /** Same rule, the other direction: invite() rejects someone who already holds a hands-revealed cast grant. */
+    public function testInviteRejectsAnExistingFullHandsCaster(): void
+    {
+        $creator = $this->insertUser('excl_invite_creator');
+        $fullCaster = $this->insertUser('excl_invite_full');
+        $noHandsCaster = $this->insertUser('excl_invite_nohands');
+        $tournamentId = $this->createStandardTournament($creator, [], 'single_elimination');
+        $this->tournaments->grantCastAccess($tournamentId, $creator, 'excl_invite_full', true);
+        $this->tournaments->grantCastAccess($tournamentId, $creator, 'excl_invite_nohands', false);
+
+        try {
+            $this->tournaments->invite($tournamentId, $creator, $fullCaster);
+            self::fail('Expected TournamentStateException');
+        } catch (TournamentStateException) {
+        }
+
+        // A "no hands" caster can still be invited to play.
+        $this->tournaments->invite($tournamentId, $creator, $noHandsCaster);
+        $state = $this->tournaments->getState($tournamentId, $creator);
+        self::assertNotNull($state['tournament']);
+    }
+
+    /** Same rule for open-registration tournaments' own join path. */
+    public function testJoinOpenTournamentRejectsAnExistingFullHandsCaster(): void
+    {
+        $creator = $this->insertUser('excl_open_creator');
+        (new UserRepository())->setMatchmakingDiscoverable($creator, true);
+        $fullCaster = $this->insertUser('excl_open_full');
+        $noHandsCaster = $this->insertUser('excl_open_nohands');
+        $tournamentId = $this->tournaments->createTournament(
+            $creator,
+            'Excl Open Cup',
+            'single_elimination',
+            'open',
+            ['format' => 'standard'],
+            null,
+            minParticipants: 4,
+            maxParticipants: 4,
+        );
+        $this->tournaments->grantCastAccess($tournamentId, $creator, 'excl_open_full', true);
+        $this->tournaments->grantCastAccess($tournamentId, $creator, 'excl_open_nohands', false);
+
+        try {
+            $this->tournaments->joinOpenTournament($tournamentId, $fullCaster);
+            self::fail('Expected TournamentStateException');
+        } catch (TournamentStateException) {
+        }
+
+        $this->tournaments->joinOpenTournament($tournamentId, $noHandsCaster);
+        self::assertTrue($this->tournaments->hasCastAccess($tournamentId, $noHandsCaster));
+    }
+
+    /** A participant who's no longer in contention for a match (declined or withdrawn) is still eligible for a full-hands cast grant. */
+    public function testDeclinedOrWithdrawnParticipantCanStillBeGrantedFullHandsCastAccess(): void
+    {
+        $creator = $this->insertUser('excl_declined_creator');
+        $declinedUser = $this->insertUser('excl_declined_user');
+        $withdrawnUser = $this->insertUser('excl_withdrawn_user');
+        $tournamentId = $this->createStandardTournament($creator, [$declinedUser, $withdrawnUser], 'single_elimination');
+        $this->tournaments->declineInvite($tournamentId, $declinedUser);
+        $this->tournaments->acceptInvite($tournamentId, $withdrawnUser);
+        $this->tournaments->withdraw($tournamentId, $withdrawnUser);
+
+        $declinedGrant = $this->tournaments->grantCastAccess($tournamentId, $creator, 'excl_declined_user', true);
+        self::assertTrue($declinedGrant['reveal_hands']);
+        $withdrawnGrant = $this->tournaments->grantCastAccess($tournamentId, $creator, 'excl_withdrawn_user', true);
+        self::assertTrue($withdrawnGrant['reveal_hands']);
+    }
+
+    /** createTournament()'s own $castGrants param enforces the same rule against its own $inviteUserIds in the same call. */
+    public function testCreateTournamentRejectsOverlappingInviteAndFullHandsCastGrant(): void
+    {
+        $creator = $this->insertUser('excl_create_creator');
+        $overlapUser = $this->insertUser('excl_create_overlap');
+
+        try {
+            $this->tournaments->createTournament(
+                $creator,
+                'Excl Overlap Cup',
+                'single_elimination',
+                'invite_only',
+                ['format' => 'standard'],
+                null,
+                minParticipants: 4,
+                maxParticipants: 16,
+                inviteUserIds: [$overlapUser],
+                castGrants: [['username' => 'excl_create_overlap', 'reveal_hands' => true]],
+            );
+            self::fail('Expected TournamentStateException');
+        } catch (TournamentStateException) {
+        }
+
+        // The same overlap with a "no hands" grant is fine.
+        $tournamentId = $this->tournaments->createTournament(
+            $creator,
+            'Excl Overlap Cup 2',
+            'single_elimination',
+            'invite_only',
+            ['format' => 'standard'],
+            null,
+            minParticipants: 4,
+            maxParticipants: 16,
+            inviteUserIds: [$overlapUser],
+            castGrants: [['username' => 'excl_create_overlap', 'reveal_hands' => false]],
+        );
+        self::assertTrue($this->tournaments->hasCastAccess($tournamentId, $overlapUser));
+        self::assertFalse($this->tournaments->castRevealsHands($tournamentId, $overlapUser));
     }
 }

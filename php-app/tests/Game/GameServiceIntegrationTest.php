@@ -26,6 +26,7 @@ use MoodSwings\Rules\DefaultEffectRegistry;
 use MoodSwings\Rules\Exceptions\IllegalPlayException;
 use MoodSwings\Rules\Exceptions\InvalidChoiceException;
 use MoodSwings\Rules\MoodPlayService;
+use MoodSwings\Rules\PlayerChoices;
 use MoodSwings\Rules\RoundScorer;
 use PDO;
 use PDOException;
@@ -2754,6 +2755,21 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertNull($state['round']);
         self::assertArrayNotHasKey('hand', $state['you']);
         self::assertCount(2, $state['players']);
+        // Issue #192 follow-up (reported live: two brand new custom-duel
+        // bot games stuck with no deck-submission prompt at all): every
+        // response shape this array feeds must always carry this KEY, not
+        // just a correct value once a round exists -- buildGameState()'s
+        // own status guard returns long before loop_warning is actually
+        // computed, so a still-'waiting' game (nothing has started, no
+        // round yet) would otherwise omit the key entirely.
+        // web-static/js/game.js's own `!== null` check treats `undefined`
+        // as "not null" and throws trying to read `.game_player_id` off
+        // it, aborting the whole board render -- the exact same class of
+        // bug action_timeout_warning already hit once before (see its own
+        // "action_timeout_warning is null except on..." comment in
+        // buildGameState()).
+        self::assertArrayHasKey('loop_warning', $state['game']);
+        self::assertNull($state['game']['loop_warning']);
     }
 
     public function testGetStateForInProgressGameExposesYourHandAndHidesOpponentsHand(): void
@@ -3118,6 +3134,98 @@ final class GameServiceIntegrationTest extends TestCase
         $bystanderPending = $this->games->getState($gameId, $u2)['round']['pending_decision'];
         self::assertFalse($bystanderPending['is_you']);
         self::assertArrayNotHasKey('field', $bystanderPending);
+    }
+
+    /**
+     * Tournament spectator mode (issue #238): a trusted caster's own
+     * getTournamentCastState() reveals a pending decision's 'field' even
+     * though the caster is nobody's own target (is_you stays false,
+     * unlike the real target's own getState() above) -- unlike a plain
+     * getSpectatorState() spectator, who never gets 'field' at all. Same
+     * Duplicity/Dignity setup as
+     * testGetStateExposesDuplicitysRepeatOfferAsAPendingDecisionForTheActingPlayer()
+     * above.
+     */
+    public function testGetTournamentCastStateRevealsPendingDecisionFieldUnlikePlainSpectating(): void
+    {
+        $u1 = $this->insertUser('castdecision1');
+        $u2 = $this->insertUser('castdecision2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 37, 'in_play', $p1); // Duplicity
+        $dignityId = $this->insertGameCard($gameId, 8, 'hand', $p1); // Dignity -- has its own afterPlaying choice
+        $charityId = $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity, value 1 -- discard fodder
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $playResult = $this->games->playMood($gameId, $p1, $dignityId, ['discard_card_id' => $charityId]);
+        self::assertTrue($playResult['pending_decision'] ?? false);
+
+        $spectatorPending = $this->games->getSpectatorState($gameId)['round']['pending_decision'];
+        self::assertFalse($spectatorPending['is_you']);
+        self::assertArrayNotHasKey('field', $spectatorPending);
+
+        $castPending = $this->games->getTournamentCastState($gameId, revealHands: true)['round']['pending_decision'];
+        self::assertFalse($castPending['is_you'], 'a caster is still nobody\'s own target, even though the field is revealed to them');
+        self::assertSame('duplicity_repeat', $castPending['field']['key']);
+        self::assertSame($p1, $castPending['target_game_player_id']);
+
+        // Hands are revealed too, even though the game is still in_progress.
+        $castState = $this->games->getTournamentCastState($gameId, revealHands: true);
+        $p1Cast = array_values(array_filter($castState['players'], fn (array $p): bool => $p['game_player_id'] === $p1))[0];
+        self::assertArrayHasKey('hand', $p1Cast);
+
+        // A plain spectator never gets hands revealed while still in_progress.
+        $spectatorState = $this->games->getSpectatorState($gameId);
+        $p1Spectator = array_values(array_filter($spectatorState['players'], fn (array $p): bool => $p['game_player_id'] === $p1))[0];
+        self::assertArrayNotHasKey('hand', $p1Spectator);
+    }
+
+    /**
+     * Reported live: a "no hands" cast option -- getTournamentCastState()
+     * with $revealHands=false is behaviorally IDENTICAL to
+     * getSpectatorState() (hands never revealed while in_progress,
+     * pending_decision.field never revealed to a non-target); the only
+     * thing a "no hands" caster actually gets over a plain spectator is
+     * authorization to watch without a spectate_code/friendship at all,
+     * which is enforced entirely outside this method (canCastTournamentGame()
+     * in public/index.php) and so isn't itself testable here.
+     */
+    public function testGetTournamentCastStateWithRevealHandsFalseMatchesPlainSpectating(): void
+    {
+        $u1 = $this->insertUser('castnohands1');
+        $u2 = $this->insertUser('castnohands2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 37, 'in_play', $p1); // Duplicity
+        $dignityId = $this->insertGameCard($gameId, 8, 'hand', $p1);
+        $charityId = $this->insertGameCard($gameId, 3, 'hand', $p1);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $dignityId, ['discard_card_id' => $charityId]);
+
+        $noHandsCastState = $this->games->getTournamentCastState($gameId, revealHands: false);
+        $p1NoHandsCast = array_values(array_filter($noHandsCastState['players'], fn (array $p): bool => $p['game_player_id'] === $p1))[0];
+        self::assertArrayNotHasKey('hand', $p1NoHandsCast, 'a no-hands caster gets no hands while the match is still in_progress, same as a plain spectator');
+
+        $noHandsPending = $noHandsCastState['round']['pending_decision'];
+        self::assertFalse($noHandsPending['is_you']);
+        self::assertArrayNotHasKey('field', $noHandsPending, 'a no-hands caster never gets a pending decision\'s own private field either');
     }
 
     /**
@@ -21848,5 +21956,269 @@ final class GameServiceIntegrationTest extends TestCase
         $carriedStmt = $this->pdo->prepare('SELECT active_seconds_used FROM game_players WHERE game_id = :game_id AND user_id = :user_id');
         $carriedStmt->execute(['game_id' => $nextGameId, 'user_id' => $u1]);
         self::assertSame(0, (int) $carriedStmt->fetchColumn(), 'total_time_limit_minutes stays a per-GAME budget, unlike synchronous mode');
+    }
+
+    /**
+     * Issue #192: Thrill (103, red) bouncing Fear (38, blue) back and forth
+     * is one of the two loops reported live as "truly infinite" -- Thrill's
+     * own "any number of your other moods" bounce + grant and Fear's own
+     * single-mood bounce + grant both being unconditional means neither
+     * side ever runs out of plays, and no card is ever lost (see
+     * BoardState::turnStateSignature()'s own docblock for exactly why that
+     * makes it provably a real loop, not merely "looks similar"). Fear
+     * starts already in play (rather than making the test spend a real
+     * play getting it there) purely to keep this fixture's own turn count
+     * to exactly what the loop itself needs.
+     */
+    private function buildThrillFearLoopFixture(): array
+    {
+        $u1 = $this->insertUser('loop-thrill-fear-p1');
+        $u2 = $this->insertUser('loop-thrill-fear-p2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $thrillId = $this->insertGameCard($gameId, 103, 'hand', $p1); // Thrill, red
+        $fearId = $this->insertGameCard($gameId, 38, 'in_play', $p1); // Fear, blue
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        return ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2, 'thrillId' => $thrillId, 'fearId' => $fearId];
+    }
+
+    public function testThrillFearLoopWarnsOnTheThirdOccurrenceOfARepeatingBoardState(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'thrillId' => $thrillId, 'fearId' => $fearId] = $this->buildThrillFearLoopFixture();
+
+        // Occurrence 1 of "Thrill in play, Fear in hand".
+        $this->games->playMood($gameId, $p1, $thrillId, ['hand_mood_ids' => [$fearId]]);
+        self::assertNull($this->games->getState($gameId, $p1)['game']['loop_warning']);
+
+        // Occurrence 1 of "Fear in play, Thrill in hand" -- a different
+        // signature, so this doesn't compound with the one above.
+        $this->games->playMood($gameId, $p1, $fearId, ['hand_mood_id' => $thrillId]);
+        self::assertNull($this->games->getState($gameId, $p1)['game']['loop_warning']);
+
+        // Occurrence 2 of the Thrill-in-play state.
+        $this->games->playMood($gameId, $p1, $thrillId, ['hand_mood_ids' => [$fearId]]);
+        self::assertNull($this->games->getState($gameId, $p1)['game']['loop_warning']);
+
+        // Occurrence 2 of the Fear-in-play state.
+        $this->games->playMood($gameId, $p1, $fearId, ['hand_mood_id' => $thrillId]);
+        self::assertNull($this->games->getState($gameId, $p1)['game']['loop_warning']);
+
+        // Occurrence 3 of the Thrill-in-play state -- now warned.
+        $this->games->playMood($gameId, $p1, $thrillId, ['hand_mood_ids' => [$fearId]]);
+        $warning = $this->games->getState($gameId, $p1)['game']['loop_warning'];
+        self::assertNotNull($warning);
+        self::assertSame($p1, $warning['game_player_id']);
+        self::assertSame(3, $warning['occurrence_count']);
+
+        // Still that player's own turn -- a warning alone never ends it.
+        self::assertSame($p1, (int) $this->fetchRound($gameId)['current_turn_game_player_id']);
+    }
+
+    public function testThrillFearLoopAutoPassesOnTheFourthOccurrenceAfterTheWarning(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2, 'thrillId' => $thrillId, 'fearId' => $fearId] = $this->buildThrillFearLoopFixture();
+
+        $this->games->playMood($gameId, $p1, $thrillId, ['hand_mood_ids' => [$fearId]]); // Thrill occurrence 1
+        $this->games->playMood($gameId, $p1, $fearId, ['hand_mood_id' => $thrillId]);    // Fear occurrence 1
+        $this->games->playMood($gameId, $p1, $thrillId, ['hand_mood_ids' => [$fearId]]); // Thrill occurrence 2
+        $this->games->playMood($gameId, $p1, $fearId, ['hand_mood_id' => $thrillId]);    // Fear occurrence 2
+        $this->games->playMood($gameId, $p1, $thrillId, ['hand_mood_ids' => [$fearId]]); // Thrill occurrence 3 -- warned
+        $this->games->playMood($gameId, $p1, $fearId, ['hand_mood_id' => $thrillId]);    // Fear occurrence 3 -- also warned, gets Thrill back to hand
+
+        // The 4th occurrence of the Thrill-in-play state -- the player
+        // repeated it anyway despite the warning above, so this play's own
+        // response still succeeds (the card genuinely plays), but it also
+        // ends their turn for them rather than leaving them free to keep
+        // going.
+        $this->games->playMood($gameId, $p1, $thrillId, ['hand_mood_ids' => [$fearId]]);
+
+        $round = $this->fetchRound($gameId);
+        self::assertSame($p2, (int) $round['current_turn_game_player_id'], 'the 4th repeat must end p1\'s turn, handing it to p2');
+        self::assertNull($this->games->getState($gameId, $p2)['game']['loop_warning'], 'p2 starts their own turn with a freshly reset counter');
+
+        $events = $this->fetchGameEvents($gameId);
+        $turnPassedEvents = array_values(array_filter($events, static fn (array $event): bool => $event['event_type'] === 'turn_passed'));
+        self::assertCount(1, $turnPassedEvents);
+        $details = json_decode((string) $turnPassedEvents[0]['details'], true);
+        self::assertTrue($details['automated']);
+        self::assertSame('loop_detected', $details['reason']);
+    }
+
+    /**
+     * Issue #192 ("allowing the bot to not waste its turn would be
+     * preferable"): BotPlayerService::thrillHandMoodIds() only ever
+     * targets an in-play Nostalgia (the one case its own docblock calls
+     * "PROVABLY risk-free"), never Fear -- so left entirely to its own
+     * heuristic, a bot holding Thrill with Fear in play actually plays
+     * Thrill with NO bounce at all, never spontaneously recreating the
+     * human-driven loop above. Rather than fight that (deliberately
+     * conservative) real policy to force a repeat that wouldn't otherwise
+     * happen, this seeds game_rounds.loop_state_signature_counts directly
+     * with 3 prior occurrences of EXACTLY the signature the bot's own
+     * real choice would produce (computed the same way
+     * GameService::chooseBotActionAvoidingLoop() itself would, via a
+     * throwaway clone), then confirms the bot's 4th attempt at that exact
+     * choice is vetoed in favor of Sadness (74, black, base value 0 --
+     * deliberately lower priority than Thrill's value 1, and has no
+     * afterPlaying() at all -- purely a "while in play" scoring effect,
+     * so playing it needs no choices and touches nothing else on the
+     * board -- unlike a "while in play, extra play" card that would just
+     * let a fresh cycle restart and muddy this test's own single-decision
+     * focus) instead of wasting the turn finishPlay()'s own auto-pass
+     * would otherwise trigger.
+     */
+    public function testABotAvoidsWastingItsTurnOnAFourthThrillFearOccurrenceItCouldStillUse(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'thrillId' => $thrillId, 'fearId' => $fearId] = $this->buildThrillFearLoopFixture();
+        $sadnessId = $this->insertGameCard($gameId, 74, 'hand', $p1); // Sadness, black, base value 0
+        $this->pdo->prepare('UPDATE users SET is_bot = 1 WHERE id = (SELECT user_id FROM game_players WHERE id = :p1)')->execute(['p1' => $p1]);
+
+        $registry = DefaultEffectRegistry::build();
+        $state = (new BoardStateRepository($registry))->load($gameId);
+        $simulated = clone $state;
+        (new MoodPlayService($registry))->playMood($simulated, $p1, $thrillId, new PlayerChoices([]));
+        $signature = $simulated->turnStateSignature();
+
+        $this->pdo->prepare('UPDATE game_rounds SET loop_state_signature_counts = :counts WHERE game_id = :game_id')
+            ->execute(['counts' => json_encode([$signature => 3]), 'game_id' => $gameId]);
+        $round1Id = (int) $this->fetchRound($gameId)['id'];
+
+        // Left to its own heuristic, the bot's highest-priority candidate
+        // is Thrill (value 1) over Sadness (value 0) -- this is the one
+        // call that proves chooseBotActionAvoidingLoop() actually
+        // intervened rather than the bot simply preferring Sadness on its
+        // own. This toy fixture's round completes (0-0, tie broken by
+        // earliest play) the instant p1 runs out of anything else to
+        // play, so advanceAutomatedTurns() goes on to deal and resolve
+        // further rounds too (where Thrill legitimately gets played --
+        // a brand new round has its own fresh, empty
+        // loop_state_signature_counts, so that's not a repeat of
+        // anything) -- irrelevant to what this test checks, which is
+        // scoped to round 1's own single decision alone.
+        $this->games->advanceAutomatedTurns($gameId);
+
+        $round1PlayEvents = array_values(array_filter(
+            $this->fetchGameEvents($gameId),
+            static fn (array $event): bool => (int) $event['game_round_id'] === $round1Id && $event['event_type'] === 'mood_played',
+        ));
+        self::assertCount(1, $round1PlayEvents, 'round 1 should resolve in exactly one play');
+        self::assertSame($sadnessId, (int) $round1PlayEvents[0]['card_id'], 'the bot should have played Sadness instead of repeating its own real Thrill choice a 4th time');
+
+        $loopDetectedEvents = array_filter($this->fetchGameEvents($gameId), static function (array $event): bool {
+            if ($event['event_type'] !== 'turn_passed') {
+                return false;
+            }
+            $details = json_decode((string) $event['details'], true);
+
+            return ($details['reason'] ?? null) === 'loop_detected';
+        });
+        self::assertSame([], $loopDetectedEvents, 'the bot avoiding the repeat means finishPlay() never needed its own auto-pass safety net at all');
+    }
+
+    public function testANoHandsFearBounceDoesNotFalselyRegisterAsTheSameRepeatingState(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'thrillId' => $thrillId, 'fearId' => $fearId] = $this->buildThrillFearLoopFixture();
+
+        $this->games->playMood($gameId, $p1, $thrillId, ['hand_mood_ids' => [$fearId]]); // Thrill occurrence 1
+        $this->games->playMood($gameId, $p1, $fearId, []);                               // Fear, declining to bounce anything
+
+        // Fear left Thrill sitting in play (never bounced back to hand),
+        // so this is a genuinely different, non-repeating board state --
+        // no warning, and p1 keeps whatever plays_remaining Fear's own
+        // unconditional grant gave them.
+        self::assertNull($this->games->getState($gameId, $p1)['game']['loop_warning']);
+        self::assertSame(1, (int) $this->fetchRound($gameId)['plays_remaining']);
+    }
+
+    /**
+     * Reported live (exported game data, then reproduced directly):
+     * playing Pride, targeting an opponent, then playing Betrayal using
+     * Pride's own grant to give PRIDE ITSELF to that same opponent left
+     * the acting player with no further plays, even though the opponent
+     * was still (in fact, more) ahead afterward -- "I should have more
+     * plays here." Root cause: BoardState::pendingPlayGrants() (the
+     * FILTERED, currently-active-only list) was what GameService
+     * persisted to game_rounds.pending_play_grants at the "still mid-play,
+     * a pending decision was just created" checkpoint -- and at the
+     * exact moment Betrayal itself enters play (before its OWN "give a
+     * mood away" decision has resolved), the acting player is
+     * momentarily TIED with the target (both at 3 moods here), which
+     * made grantIsActive() false for Pride's own grant AT THAT INSTANT,
+     * so it was silently dropped from what got written to the database
+     * -- even though it's specifically designed to be a self-renewing
+     * grant that should still exist to re-qualify once Betrayal's own
+     * decision resolves and reopens the gap. This test reproduces the
+     * exact sequence across SEPARATE playMood()/respondToDecision() calls
+     * (each its own request/transaction, unlike MoodPlayServiceTest's own
+     * single-BoardState-instance Pride tests, which never cross this
+     * persistence boundary and so never caught this) and reloads
+     * BoardState fresh from the database afterward, the same way a brand
+     * new HTTP request would, to prove the grant survives for real.
+     */
+    public function testPrideGrantSurvivesBetrayalGivingPrideAwayAcrossSeparateRequests(): void
+    {
+        $u1 = $this->insertUser('pride-persist-p1');
+        $u2 = $this->insertUser('pride-persist-p2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        // Player 1: 1 mood already in play. Player 2: 3 already in play.
+        $this->insertGameCard($gameId, 74, 'in_play', $p1); // Sadness, inert filler
+        $this->insertGameCard($gameId, 5, 'in_play', $p2);  // Complacency
+        $this->insertGameCard($gameId, 32, 'in_play', $p2); // Creativity
+        $this->insertGameCard($gameId, 55, 'in_play', $p2); // Apathy
+
+        $prideId = $this->insertGameCard($gameId, 22, 'hand', $p1);
+        $betrayalId = $this->insertGameCard($gameId, 56, 'hand', $p1);
+        $convictionId = $this->insertGameCard($gameId, 6, 'hand', $p1); // to actually spend the reactivated grant on
+
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $result = $this->games->playMood($gameId, $p1, $prideId, []);
+        self::assertTrue($result['pending_decision'] ?? false);
+        $this->games->respondToDecision($gameId, $p1, ['target_player_id' => $p2]);
+
+        // Betrayal itself entering play (before its own decision resolves)
+        // momentarily TIES player 1 (74, 22, 56 = 3) with player 2 (5, 32,
+        // 55 = 3) -- this is the exact instant the bug used to drop
+        // Pride's own grant from what gets persisted.
+        $result = $this->games->playMood($gameId, $p1, $betrayalId, ['recipient_player_id' => $p2]);
+        self::assertTrue($result['pending_decision'] ?? false);
+
+        $this->games->respondToDecision($gameId, $p1, ['target_mood_id' => $prideId]);
+
+        // A genuinely fresh BoardState, loaded from the database exactly
+        // the way a brand new HTTP request would -- not the same
+        // in-memory object either playMood() call above used.
+        $state = (new BoardStateRepository(DefaultEffectRegistry::build()))->load($gameId);
+
+        self::assertSame($p2, $state->ownerOf($prideId), 'Pride now belongs to player 2');
+        self::assertCount(2, $state->moodsOwnedBy($p1));
+        self::assertCount(4, $state->moodsOwnedBy($p2));
+        self::assertSame(1, $state->playsRemaining(), "Pride's grant must survive the persistence boundary between separate requests, not just an in-memory BoardState");
+        self::assertTrue($state->hasUsablePlayGrant($convictionId, $p1));
+
+        // Confirmed usable end-to-end too, not just via the raw BoardState
+        // check above. Conviction's own "choose a mood, bottom it and
+        // draw" targets itself -- a legal target per its own printed
+        // text -- purely so this play needs no further setup.
+        $this->games->playMood($gameId, $p1, $convictionId, ['target_mood_id' => $convictionId]);
+        self::assertSame($p1, (int) $this->fetchRound($gameId)['current_turn_game_player_id'], "still player 1's own turn -- the reactivated grant let them keep playing");
     }
 }
