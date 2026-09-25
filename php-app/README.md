@@ -11634,6 +11634,23 @@ covers (the main `buildGameState()` literal, the replay-snapshot
 serializer, and the JSON export), so the key always exists regardless of
 game status.
 
+**A badge alone wasn't enough** (reported live: "I didn't see the
+warning, though it did successfully force-pass my turn"). The amber
+player-row badge above is easy to miss entirely if nothing draws the eye
+to it, so `web-static/js/game.js`'s `maybeShowLoopWarningDialog()` now
+also pushes the same warning through `showAlertDialog()` -- the shared
+`#confirm-dialog` `window.confirm()`/`window.alert()` replacement
+already used everywhere else in this file (see its own docblock; a real
+`<dialog>` can't be silently suppressed the way iOS suppresses
+`window.alert()` for a page ever launched in standalone mode). Scoped to
+the player it's actually about (`loop_warning.game_player_id`, never an
+opponent's) and shown only once per distinct `occurrence_count` --
+`loopWarningDialogAcknowledgedKey` remembers the last one already shown
+so the still-unresolved warning doesn't re-pop on every ~4s poll, reset
+back to null the moment a poll reports `loop_warning` itself null again
+(the turn ended, warned or not). The badge itself stays, as a persistent
+reminder alongside the one-time popup.
+
 **Bot-facing: avoid wasting the turn, not just recover from it.**
 `BotPlayerService::chooseAction()`'s own real-world targeting policies
 (`thrillHandMoodIds()` only ever bounces an in-play Nostalgia, never

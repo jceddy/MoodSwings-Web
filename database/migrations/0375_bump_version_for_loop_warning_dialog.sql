@@ -1,0 +1,11 @@
+-- Loop-warning follow-up (reported live: "I didn't see the warning,
+-- though it did successfully force-pass my turn. Can we make the
+-- warning a dialog popup so the user is sure to see it?"). The amber
+-- player-row badge (buildLoopWarningStat()) stays, but
+-- web-static/js/game.js now also pushes the same warning through
+-- showAlertDialog() (the shared #confirm-dialog window.alert()
+-- replacement), scoped to the affected player and shown only once per
+-- distinct occurrence_count so it doesn't re-pop on every ~4s poll. Pure
+-- frontend change -- no schema change -- so this migration only bumps
+-- schema_version.
+UPDATE schema_version SET version = '1.53.2' WHERE id = 1;
