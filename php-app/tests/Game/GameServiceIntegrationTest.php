@@ -22138,4 +22138,87 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertNull($this->games->getState($gameId, $p1)['game']['loop_warning']);
         self::assertSame(1, (int) $this->fetchRound($gameId)['plays_remaining']);
     }
+
+    /**
+     * Reported live (exported game data, then reproduced directly):
+     * playing Pride, targeting an opponent, then playing Betrayal using
+     * Pride's own grant to give PRIDE ITSELF to that same opponent left
+     * the acting player with no further plays, even though the opponent
+     * was still (in fact, more) ahead afterward -- "I should have more
+     * plays here." Root cause: BoardState::pendingPlayGrants() (the
+     * FILTERED, currently-active-only list) was what GameService
+     * persisted to game_rounds.pending_play_grants at the "still mid-play,
+     * a pending decision was just created" checkpoint -- and at the
+     * exact moment Betrayal itself enters play (before its OWN "give a
+     * mood away" decision has resolved), the acting player is
+     * momentarily TIED with the target (both at 3 moods here), which
+     * made grantIsActive() false for Pride's own grant AT THAT INSTANT,
+     * so it was silently dropped from what got written to the database
+     * -- even though it's specifically designed to be a self-renewing
+     * grant that should still exist to re-qualify once Betrayal's own
+     * decision resolves and reopens the gap. This test reproduces the
+     * exact sequence across SEPARATE playMood()/respondToDecision() calls
+     * (each its own request/transaction, unlike MoodPlayServiceTest's own
+     * single-BoardState-instance Pride tests, which never cross this
+     * persistence boundary and so never caught this) and reloads
+     * BoardState fresh from the database afterward, the same way a brand
+     * new HTTP request would, to prove the grant survives for real.
+     */
+    public function testPrideGrantSurvivesBetrayalGivingPrideAwayAcrossSeparateRequests(): void
+    {
+        $u1 = $this->insertUser('pride-persist-p1');
+        $u2 = $this->insertUser('pride-persist-p2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        // Player 1: 1 mood already in play. Player 2: 3 already in play.
+        $this->insertGameCard($gameId, 74, 'in_play', $p1); // Sadness, inert filler
+        $this->insertGameCard($gameId, 5, 'in_play', $p2);  // Complacency
+        $this->insertGameCard($gameId, 32, 'in_play', $p2); // Creativity
+        $this->insertGameCard($gameId, 55, 'in_play', $p2); // Apathy
+
+        $prideId = $this->insertGameCard($gameId, 22, 'hand', $p1);
+        $betrayalId = $this->insertGameCard($gameId, 56, 'hand', $p1);
+        $convictionId = $this->insertGameCard($gameId, 6, 'hand', $p1); // to actually spend the reactivated grant on
+
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $result = $this->games->playMood($gameId, $p1, $prideId, []);
+        self::assertTrue($result['pending_decision'] ?? false);
+        $this->games->respondToDecision($gameId, $p1, ['target_player_id' => $p2]);
+
+        // Betrayal itself entering play (before its own decision resolves)
+        // momentarily TIES player 1 (74, 22, 56 = 3) with player 2 (5, 32,
+        // 55 = 3) -- this is the exact instant the bug used to drop
+        // Pride's own grant from what gets persisted.
+        $result = $this->games->playMood($gameId, $p1, $betrayalId, ['recipient_player_id' => $p2]);
+        self::assertTrue($result['pending_decision'] ?? false);
+
+        $this->games->respondToDecision($gameId, $p1, ['target_mood_id' => $prideId]);
+
+        // A genuinely fresh BoardState, loaded from the database exactly
+        // the way a brand new HTTP request would -- not the same
+        // in-memory object either playMood() call above used.
+        $state = (new BoardStateRepository(DefaultEffectRegistry::build()))->load($gameId);
+
+        self::assertSame($p2, $state->ownerOf($prideId), 'Pride now belongs to player 2');
+        self::assertCount(2, $state->moodsOwnedBy($p1));
+        self::assertCount(4, $state->moodsOwnedBy($p2));
+        self::assertSame(1, $state->playsRemaining(), "Pride's grant must survive the persistence boundary between separate requests, not just an in-memory BoardState");
+        self::assertTrue($state->hasUsablePlayGrant($convictionId, $p1));
+
+        // Confirmed usable end-to-end too, not just via the raw BoardState
+        // check above. Conviction's own "choose a mood, bottom it and
+        // draw" targets itself -- a legal target per its own printed
+        // text -- purely so this play needs no further setup.
+        $this->games->playMood($gameId, $p1, $convictionId, ['target_mood_id' => $convictionId]);
+        self::assertSame($p1, (int) $this->fetchRound($gameId)['current_turn_game_player_id'], "still player 1's own turn -- the reactivated grant let them keep playing");
+    }
 }

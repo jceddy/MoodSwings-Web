@@ -2329,6 +2329,39 @@ if ($path === '/games/pass' && $method === 'POST') {
     }
 }
 
+// Issue #192 follow-up: applies a currently outstanding chaos-loop-
+// shortcut offer (see GameService::buildChaosLoopShortcut()'s own
+// docblock -- the game.chaos_loop_shortcut field GET /games/state
+// exposes) $count times in one step. Authorized against whichever
+// game_player_id this request's own user actually seats -- that's
+// naturally the offer's own beneficiary too, since only THAT player's
+// own client would ever see the offer to act on in the first place (see
+// GameService::applyChaosLoopShortcut()'s own docblock on why the
+// beneficiary isn't necessarily whoever's turn it currently is).
+if ($path === '/games/apply-chaos-loop-shortcut' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $gameId = (int) ($body['game_id'] ?? 0);
+    $count = (int) ($body['count'] ?? 0);
+
+    $gamePlayerId = requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    try {
+        $result = $games->applyChaosLoopShortcut($gameId, $gamePlayerId, $count);
+        // Practice bots (issue #140)/auto-pass on empty hand -- see the
+        // identical comment on POST /games/play above.
+        $autoResult = $games->advanceAutomatedTurns($gameId);
+        if ($autoResult !== null) {
+            $result = $autoResult;
+        }
+        respond(200, ['status' => 'ok', ...$result]);
+    } catch (InvalidChoiceException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (GameStateException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
 // "Pause at the start of your turn" (reported live): the opted-in
 // player's own way of clearing GameService::notifyItsYourTurn()'s own
 // game_rounds.turn_pending_acknowledgment flag, unlocking the play/pass
