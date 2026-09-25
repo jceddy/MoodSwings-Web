@@ -1088,12 +1088,9 @@ function canSpectateGame(GameService $games, FriendshipService $friendships, int
 // whoever that tournament's creator has trusted with
 // TournamentService::hasCastAccess() -- deliberately unrelated to
 // canSpectateGame() above (friendship/spectate_code never grant this).
-function canCastTournamentGame(GameService $games, TournamentService $tournaments, int $gameId, int $userId): bool
-{
-    $tournamentId = $games->tournamentIdForGame($gameId);
-
-    return $tournamentId !== null && $tournaments->hasCastAccess($tournamentId, $userId);
-}
+// Inlined at its one call site (GET /games/tournament-cast/state) rather
+// than kept as its own helper, since that route also needs the resolved
+// $tournamentId itself right after (TournamentService::castRevealsHands()).
 
 // Practice bots (issue #140): the New Game dialog's own bot picker, a
 // small fixed roster (migration 0090) rather than anything scoped to the
@@ -1515,6 +1512,21 @@ if ($path === '/tournaments' && $method === 'POST') {
             array_map(intval(...), (array) ($body['invite_user_ids'] ?? [])),
             isset($body['decklist_text']) ? (string) $body['decklist_text'] : null,
             isset($body['saved_decklist_id']) ? (int) $body['saved_decklist_id'] : null,
+            // Tournament spectator mode follow-up (reported live: casters
+            // selected at creation time) -- each entry {username,
+            // reveal_hands}, sanitized the same "coerce, don't trust the
+            // client's own shape" way every other body field here is.
+            array_map(
+                static function ($castGrant): array {
+                    $castGrant = (array) $castGrant;
+
+                    return [
+                        'username' => (string) ($castGrant['username'] ?? ''),
+                        'reveal_hands' => (bool) ($castGrant['reveal_hands'] ?? true),
+                    ];
+                },
+                (array) ($body['cast_grants'] ?? []),
+            ),
         );
         respond(201, ['status' => 'ok', 'tournament_id' => $tournamentId]);
     } catch (TournamentStateException $e) {
@@ -1641,6 +1653,7 @@ if ($path === '/tournaments/cast-grants/add' && $method === 'POST') {
             (int) ($body['tournament_id'] ?? 0),
             (int) $currentUser['id'],
             trim((string) ($body['username'] ?? '')),
+            (bool) ($body['reveal_hands'] ?? true),
         );
         respond(201, ['status' => 'ok', 'user' => $grantee]);
     } catch (TournamentNotFoundException $e) {
@@ -2063,20 +2076,24 @@ if ($path === '/games/spectate/state' && $method === 'GET') {
 }
 
 // Tournament spectator mode (issue #238): the trusted-caster equivalent
-// of GET /games/spectate/state -- reveals hands/pending-decision
-// internals even while the match is still in_progress, gated behind
-// canCastTournamentGame() rather than canSpectateGame()'s much looser
-// friendship/code check. See GameService::getTournamentCastState().
+// of GET /games/spectate/state -- allows watching a still-in_progress
+// match with no spectate_code/friendship needed at all, gated behind
+// TournamentService::hasCastAccess() rather than canSpectateGame()'s
+// much looser check. Whether hands are ALSO revealed (reported live: a
+// "no hands" option) depends entirely on the caller's own grant -- see
+// TournamentService::castRevealsHands()/GameService::getTournamentCastState().
 if ($path === '/games/tournament-cast/state' && $method === 'GET') {
     $currentUser = requireAuth($auth);
     $gameId = (int) ($_GET['game_id'] ?? 0);
+    $tournamentId = $games->tournamentIdForGame($gameId);
 
-    if (!canCastTournamentGame($games, $tournaments, $gameId, (int) $currentUser['id'])) {
+    if ($tournamentId === null || !$tournaments->hasCastAccess($tournamentId, (int) $currentUser['id'])) {
         respond(403, ['status' => 'error', 'message' => 'You are not authorized to cast this tournament match.']);
     }
 
     try {
-        respond(200, ['status' => 'ok', ...$games->getTournamentCastState($gameId)]);
+        $revealHands = $tournaments->castRevealsHands($tournamentId, (int) $currentUser['id']);
+        respond(200, ['status' => 'ok', ...$games->getTournamentCastState($gameId, $revealHands)]);
     } catch (GameStateException $e) {
         respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
     }

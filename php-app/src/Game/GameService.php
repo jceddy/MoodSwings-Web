@@ -16653,30 +16653,38 @@ final class GameService
 
     /**
      * Tournament spectator mode (issue #238): a trusted caster/streamer's
-     * live view of a tournament match, hands and pending-decision
-     * internals revealed even while still 'in_progress' -- unlike
-     * getSpectatorState() above, which only reveals that once 'completed'.
-     * Authorization (is $viewerUserId this tournament's creator, or
-     * someone the creator explicitly granted cast access to via
-     * TournamentService::hasCastAccess()) is the caller's job, same as
-     * getSpectatorState()'s own spectate_code/friendship check is
-     * canSpectateGame()'s job in public/index.php -- this method only
-     * knows how to build the revealed board, not who's allowed to see it.
-     * $viewerUserId/$viewerGamePlayerId are passed through as null (same
-     * as a plain spectator) so a caster never picks up creator-only
-     * fields (e.g. isTournamentMatch's own Rematch prefill) just because
-     * they happen to also be the game's created_by_user_id.
+     * live view of a tournament match. Authorization (is $viewerUserId
+     * this tournament's creator, or someone the creator explicitly
+     * granted cast access to via TournamentService::hasCastAccess()) is
+     * the caller's job, same as getSpectatorState()'s own spectate_code/
+     * friendship check is canSpectateGame()'s job in public/index.php --
+     * this method only knows how to build the board, not who's allowed
+     * to see it. $viewerUserId/$viewerGamePlayerId are passed through as
+     * null (same as a plain spectator) so a caster never picks up
+     * creator-only fields (e.g. isTournamentMatch's own Rematch prefill)
+     * just because they happen to also be the game's created_by_user_id.
+     *
+     * $revealHands (reported live: a "no hands" cast option --
+     * TournamentService::castRevealsHands()) is the ONLY thing that
+     * distinguishes a caster from a plain issue #128 spectator here: true
+     * reveals hands and pending-decision internals even while still
+     * 'in_progress' (the original issue #238 behavior); false is
+     * IDENTICAL to getSpectatorState() above (hands only ever revealed
+     * once 'completed', pending_decision.field never revealed to a
+     * non-target) -- the only difference a "no hands" caster actually
+     * gets over an ordinary spectator is not needing a spectate_code or
+     * friendship to watch a still-in_progress match at all.
      *
      * @return array<string, mixed>
      */
-    public function getTournamentCastState(int $gameId): array
+    public function getTournamentCastState(int $gameId, bool $revealHands): array
     {
         $game = $this->fetchGame($gameId);
         if ($game['status'] === 'waiting' || $game['status'] === 'abandoned') {
             throw new GameStateException("Game {$gameId} can't be cast right now.");
         }
 
-        return $this->buildGameState($gameId, null, null, $game['status'] === 'completed', tournamentCastMode: true);
+        return $this->buildGameState($gameId, null, null, $game['status'] === 'completed', tournamentCastMode: $revealHands);
     }
 
     /**

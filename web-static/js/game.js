@@ -4293,6 +4293,12 @@
     const tournamentViewError = document.getElementById('tournament-view-error');
     let currentTournamentViewId = null;
 
+    // Tournament spectator mode (issue #238) -- reported live: casters
+    // selected at creation time. {username, reveal_hands}[], reset in
+    // openNewTournamentDialog() below and sent as createTournament()'s
+    // own cast_grants param on submit -- see renderNewTournamentCasters().
+    let newTournamentCastGrants = [];
+
     const TOURNAMENT_BRACKET_TYPE_LABELS = { single_elimination: 'Single elimination', double_elimination: 'Double elimination', swiss: 'Swiss rounds' };
     const TOURNAMENT_STATUS_LABELS = { registration: 'Registration open', in_progress: 'In progress', completed: 'Completed', cancelled: 'Cancelled' };
     // 'Round'/'winners round'/etc. prefix a plain round_number in the
@@ -4854,9 +4860,56 @@
     document.getElementById('new-tournament-timeout-enabled').addEventListener('change', enforceNewTournamentSynchronousExclusivityFromAsyncCheckboxes);
     document.getElementById('new-tournament-total-time-limit-enabled').addEventListener('change', enforceNewTournamentSynchronousExclusivityFromAsyncCheckboxes);
 
+    // Tournament spectator mode (issue #238) -- reported live: casters
+    // selected at creation time. Renders newTournamentCastGrants as a
+    // plain list with a Remove button per row -- no server round-trip
+    // (unlike the tournament view dialog's own post-creation "Casters"
+    // section), since nothing has actually been created yet to grant
+    // against; the whole list is sent as createTournament()'s own
+    // cast_grants param on submit.
+    function renderNewTournamentCasters() {
+        const list = document.getElementById('new-tournament-casters-list');
+        list.innerHTML = '';
+        newTournamentCastGrants.forEach((castGrant, index) => {
+            const item = document.createElement('li');
+            item.append(castGrant.username + (castGrant.reveal_hands ? '' : ' (no hands)') + ' ');
+            const removeButton = document.createElement('button');
+            removeButton.type = 'button';
+            removeButton.textContent = 'Remove';
+            removeButton.addEventListener('click', () => {
+                newTournamentCastGrants.splice(index, 1);
+                renderNewTournamentCasters();
+            });
+            item.appendChild(removeButton);
+            list.appendChild(item);
+        });
+    }
+
+    document.getElementById('new-tournament-add-caster-button').addEventListener('click', () => {
+        const usernameInput = document.getElementById('new-tournament-add-caster-username');
+        const username = usernameInput.value.trim();
+        if (!username) {
+            return;
+        }
+        if (newTournamentCastGrants.some((castGrant) => castGrant.username.toLowerCase() === username.toLowerCase())) {
+            newTournamentError.textContent = `${username} is already in the caster list.`;
+            newTournamentError.hidden = false;
+            return;
+        }
+        newTournamentError.hidden = true;
+        newTournamentCastGrants.push({
+            username,
+            reveal_hands: document.getElementById('new-tournament-add-caster-reveal-hands').checked,
+        });
+        usernameInput.value = '';
+        renderNewTournamentCasters();
+    });
+
     async function openNewTournamentDialog() {
         newTournamentError.hidden = true;
         newTournamentForm.reset();
+        newTournamentCastGrants = [];
+        renderNewTournamentCasters();
         populateNewTournamentParticipantRangeSelects();
         updateNewTournamentAllowSideboardingVisibility();
         updateNewTournamentDecklistFieldVisibility();
@@ -4935,6 +4988,9 @@
             min_participants: parseInt(document.getElementById('new-tournament-min-participants').value, 10),
             max_participants: maxParticipants,
             invite_user_ids: inviteUserIds,
+            // Tournament spectator mode (issue #238) -- reported live:
+            // casters selected at creation time.
+            cast_grants: newTournamentCastGrants,
             format,
             deck_type: deckType,
             // "Power Duel" always implies the "power" duel_deck_rules
@@ -5085,7 +5141,7 @@
      * pod has its own winner) is labeled "Finals" instead of "Pod N"
      * since by then there's only ever the one.
      */
-    function renderTournamentPods(tournament, pods, participantsById, viewerHasCastAccess = false) {
+    function renderTournamentPods(tournament, pods, participantsById, viewerHasCastAccess = false, viewerCastRevealsHands = true) {
         const section = document.getElementById('tournament-view-pods-section');
         section.hidden = !pods;
         if (!pods) {
@@ -5108,7 +5164,7 @@
 
             if (pod.bracket_rounds.length > 0) {
                 const podBracketContainer = document.createElement('div');
-                renderBracketRounds(podBracketContainer, pod.bracket_rounds, (round) => round.matches, participantsById, viewerHasCastAccess);
+                renderBracketRounds(podBracketContainer, pod.bracket_rounds, (round) => round.matches, participantsById, viewerHasCastAccess, viewerCastRevealsHands);
                 item.appendChild(podBracketContainer);
             }
 
@@ -5157,7 +5213,7 @@
         // `tournament`, not a property of it (see TournamentService::
         // getState()'s own return shape) -- destructured here rather than
         // read off `tournament` itself.
-        const { tournament, participants, rounds, matches_by_round: matchesByRound, standings, pods, viewer_has_cast_access: viewerHasCastAccess } = body;
+        const { tournament, participants, rounds, matches_by_round: matchesByRound, standings, pods, viewer_has_cast_access: viewerHasCastAccess, viewer_cast_reveals_hands: viewerCastRevealsHands, cast_grants: castGrants } = body;
         document.getElementById('tournament-view-title').textContent = tournament.name;
         document.getElementById('tournament-view-status').textContent =
             `${TOURNAMENT_BRACKET_TYPE_LABELS[tournament.bracket_type] || tournament.bracket_type} — ${TOURNAMENT_STATUS_LABELS[tournament.status] || tournament.status}`;
@@ -5174,7 +5230,7 @@
         document.getElementById('tournament-view-cancel-button').hidden =
             !(isCreator && (tournament.status === 'registration' || tournament.status === 'in_progress'));
 
-        renderTournamentPods(tournament, pods, participantsById, viewerHasCastAccess);
+        renderTournamentPods(tournament, pods, participantsById, viewerHasCastAccess, viewerCastRevealsHands);
         renderMyBoosterDraftDeck(participants);
 
         const standingsSection = document.getElementById('tournament-view-standings-section');
@@ -5190,9 +5246,9 @@
         }
 
         const bracketContainer = document.getElementById('tournament-view-bracket');
-        renderBracketRounds(bracketContainer, rounds, (round) => matchesByRound[round.id], participantsById, viewerHasCastAccess);
+        renderBracketRounds(bracketContainer, rounds, (round) => matchesByRound[round.id], participantsById, viewerHasCastAccess, viewerCastRevealsHands);
 
-        await renderTournamentCasters(tournament, isCreator);
+        renderTournamentCasters(tournament, isCreator, castGrants);
     }
 
     /**
@@ -5206,7 +5262,7 @@
      * their matches inline -- see TournamentService::podsSummary()'s own
      * docblock).
      */
-    function renderBracketRounds(container, rounds, getMatchesForRound, participantsById, canCast = false) {
+    function renderBracketRounds(container, rounds, getMatchesForRound, participantsById, canCast = false, castRevealsHands = true) {
         container.innerHTML = '';
         for (const round of rounds) {
             const heading = document.createElement('h4');
@@ -5237,11 +5293,14 @@
                     // in_progress -- a completed match's hands are
                     // already revealed via the ordinary "View game" ->
                     // Watch Replay path, so a separate cast view adds
-                    // nothing there.
+                    // nothing there. The label reflects the viewer's own
+                    // grant (reported live: a "no hands" option) -- see
+                    // TournamentService::getState()'s own
+                    // viewer_cast_reveals_hands.
                     if (canCast && match.status === 'in_progress') {
                         const castButton = document.createElement('button');
                         castButton.type = 'button';
-                        castButton.textContent = 'Cast (reveal hands)';
+                        castButton.textContent = castRevealsHands ? 'Cast (reveal hands)' : 'Cast (public info only)';
                         castButton.addEventListener('click', () => {
                             tournamentViewDialog.close();
                             tournamentsDialog.close();
@@ -5263,39 +5322,42 @@
     // requireCreator()); everyone else never sees this section at all,
     // including a caster the creator already granted access to -- they
     // find their own "Cast" buttons via renderBracketRounds() instead.
-    async function renderTournamentCasters(tournament, isCreator) {
-        const section = document.getElementById('tournament-view-casters-section');
-        section.hidden = !isCreator;
-        if (!isCreator) {
-            return;
-        }
-
+    // Tournament spectator mode (issue #238): the roster of everyone
+    // granted cast access, shown to EVERY tournament viewer (reported
+    // live: "all users in the tournament can see who is allowed to
+    // cast"), not just the creator -- getState() itself already scopes
+    // who's allowed to see this list at all (canViewTournament()), so by
+    // the time this renders, the viewer is always allowed to see it.
+    // Only the creator gets the add/revoke controls below the list --
+    // everyone else sees the same list read-only, plus their own
+    // "Cast"/"Cast (public info only)" button on each in_progress match
+    // instead (renderBracketRounds()). $castGrants comes straight off
+    // getState()'s own response (no separate fetch needed).
+    function renderTournamentCasters(tournament, isCreator, castGrants) {
         document.getElementById('tournament-view-caster-error').hidden = true;
-        const { ok, body } = await listTournamentCastGrants(tournament.id);
+        document.getElementById('tournament-view-add-caster-fields').hidden = !isCreator;
+
         const list = document.getElementById('tournament-view-casters-list');
         list.innerHTML = '';
-        if (!ok) {
-            document.getElementById('tournament-view-caster-error').textContent = body.message || 'Could not load casters.';
-            document.getElementById('tournament-view-caster-error').hidden = false;
-            return;
-        }
-
-        for (const grant of body.grants) {
+        document.getElementById('tournament-view-casters-empty').hidden = castGrants.length > 0;
+        for (const grant of castGrants) {
             const item = document.createElement('li');
-            item.append(grant.username + ' ');
-            const removeButton = document.createElement('button');
-            removeButton.type = 'button';
-            removeButton.textContent = 'Revoke';
-            removeButton.addEventListener('click', async () => {
-                const result = await revokeTournamentCastAccess(tournament.id, grant.user_id);
-                if (!result.ok) {
-                    document.getElementById('tournament-view-caster-error').textContent = result.body.message || 'Could not revoke cast access.';
-                    document.getElementById('tournament-view-caster-error').hidden = false;
-                    return;
-                }
-                renderTournamentCasters(tournament, isCreator);
-            });
-            item.appendChild(removeButton);
+            item.append(grant.username + (grant.reveal_hands ? '' : ' (public info only, no hands)') + ' ');
+            if (isCreator) {
+                const removeButton = document.createElement('button');
+                removeButton.type = 'button';
+                removeButton.textContent = 'Revoke';
+                removeButton.addEventListener('click', async () => {
+                    const result = await revokeTournamentCastAccess(tournament.id, grant.user_id);
+                    if (!result.ok) {
+                        document.getElementById('tournament-view-caster-error').textContent = result.body.message || 'Could not revoke cast access.';
+                        document.getElementById('tournament-view-caster-error').hidden = false;
+                        return;
+                    }
+                    await refreshTournamentView();
+                });
+                item.appendChild(removeButton);
+            }
             list.appendChild(item);
         }
     }
@@ -5309,7 +5371,8 @@
             return;
         }
 
-        const { ok, body } = await grantTournamentCastAccess(currentTournamentViewId, username);
+        const revealHands = document.getElementById('tournament-view-add-caster-reveal-hands').checked;
+        const { ok, body } = await grantTournamentCastAccess(currentTournamentViewId, username, revealHands);
         if (!ok) {
             errorEl.textContent = body.message || 'Could not grant cast access.';
             errorEl.hidden = false;

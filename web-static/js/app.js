@@ -566,10 +566,10 @@ function declineTournamentInvite(tournamentId) {
 // Tournament spectator mode (issue #238): the creator grants a caster
 // (identified by username, not user_id -- there's no friend-list picker
 // here) live, hands-revealed viewing of this tournament's matches.
-function grantTournamentCastAccess(tournamentId, username) {
+function grantTournamentCastAccess(tournamentId, username, revealHands = true) {
     return apiRequest('/tournaments/cast-grants/add', {
         method: 'POST',
-        body: JSON.stringify({ tournament_id: tournamentId, username }),
+        body: JSON.stringify({ tournament_id: tournamentId, username, reveal_hands: revealHands }),
     });
 }
 
@@ -578,10 +578,6 @@ function revokeTournamentCastAccess(tournamentId, userId) {
         method: 'POST',
         body: JSON.stringify({ tournament_id: tournamentId, user_id: userId }),
     });
-}
-
-function listTournamentCastGrants(tournamentId) {
-    return apiRequest(`/tournaments/cast-grants?tournament_id=${tournamentId}`);
 }
 
 // deckParams -- see acceptTournamentInvite()'s own docblock just above.
