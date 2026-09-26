@@ -22304,6 +22304,11 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame(4, $response['type']);
         self::assertStringContainsString("Game #{$gameId}", $response['data']['content']);
         self::assertStringContainsString("It's your turn", $response['data']['content']);
+        // Reported live: "we need to be able to see what cards are in
+        // play" -- public board info, shown to every viewer regardless
+        // of whose turn it is.
+        self::assertStringContainsString('discord-player-2\'s moods in play: (none)', $response['data']['content']);
+        self::assertStringContainsString('discord-player-3\'s moods in play: Complacency (4)', $response['data']['content']);
 
         $playSelect = $response['data']['components'][0]['components'][0];
         self::assertSame("ms:play:{$gameId}", $playSelect['custom_id']);
@@ -22522,6 +22527,82 @@ final class GameServiceIntegrationTest extends TestCase
         $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-15'));
 
         self::assertSame('ms:newgame:0', $response['data']['components'][0]['components'][0]['custom_id']);
+    }
+
+    /**
+     * Reported live alongside "we need to be able to see what cards are
+     * in play": Hate's own 'mood' field ("put any mood on the bottom of
+     * the deck," no owner restriction) offers candidates across BOTH
+     * players -- without an owner label, two moods with the same name/
+     * value would be indistinguishable, and even a single opponent's
+     * mood is a guess without knowing whose it is.
+     */
+    public function testDiscordComponentPlayfieldOptionsLabelEachMoodsOwner(): void
+    {
+        $u1 = $this->insertUser('discord-player-16');
+        $u2 = $this->insertUser('discord-player-17');
+        $this->linkDiscordAccount($u1, 'discord-16');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $hateId = $this->insertGameCard($gameId, 66, 'hand', $p1);
+        $ownMoodId = $this->insertGameCard($gameId, 74, 'in_play', $p1); // Sadness
+        $opponentMoodId = $this->insertGameCard($gameId, 5, 'in_play', $p2); // Complacency
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $response = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-16', "ms:play:{$gameId}", [(string) $hateId])
+        );
+
+        self::assertSame(7, $response['type']);
+        $fieldSelect = $response['data']['components'][0]['components'][0];
+        self::assertSame("ms:playfield:{$gameId}:{$hateId}", $fieldSelect['custom_id']);
+        $labelsByValue = array_column($fieldSelect['options'], 'label', 'value');
+        self::assertSame('Sadness (0) -- discord-player-16', $labelsByValue[(string) $ownMoodId]);
+        self::assertSame('Complacency (4) -- discord-player-17', $labelsByValue[(string) $opponentMoodId]);
+    }
+
+    /**
+     * The bug this whole batch of fixes was chasing: Hate's own field is
+     * OPTIONAL ("you MAY put any mood on the bottom of the deck"), and
+     * before withSkipOptionIfOptional()/SKIP_FIELD_VALUE existed, this
+     * class never rendered a choice for it at all -- it always played
+     * blank, indistinguishable from a player deliberately declining. Now
+     * that the field select offers an explicit Skip option, submitting
+     * it must actually leave the target blank: Hate itself gets played,
+     * but the opponent's other mood already in play stays untouched.
+     */
+    public function testDiscordComponentPlayfieldSkipLeavesTargetBlank(): void
+    {
+        $u1 = $this->insertUser('discord-player-18');
+        $u2 = $this->insertUser('discord-player-19');
+        $this->linkDiscordAccount($u1, 'discord-18');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $hateId = $this->insertGameCard($gameId, 66, 'hand', $p1);
+        $opponentMoodId = $this->insertGameCard($gameId, 5, 'in_play', $p2); // Complacency
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $response = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-18', "ms:playfield:{$gameId}:{$hateId}", ['__skip__'])
+        );
+
+        self::assertSame(7, $response['type']);
+        self::assertSame('in_play', $this->cardZone($hateId));
+        self::assertSame('in_play', $this->cardZone($opponentMoodId));
     }
 
     /** @return int[] */

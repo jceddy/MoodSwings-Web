@@ -29,17 +29,23 @@ use MoodSwings\SiteUrl;
  *   any other format gets a plain "open the web app for this" message,
  *   same as an unsupported choice shape below.
  * - A card is only offered to PLAY here (in the "Play a card" select) if
- *   every one of its own REQUIRED choice_fields (or the pending
- *   decision's own single field) is one of SUPPORTED_FIELD_TYPES below
- *   and not itself a `multi` field -- covers most single-target cards
- *   (Pride's own target_player_id, Compulsion's discard_card_id, ...) but
- *   deliberately excludes anything needing more than one field filled in,
- *   a `multi`/checkbox-style selection, or a `nested` sub-form
- *   (Duplicity's own repeat offer, any chaos_draft attachment). An
- *   OPTIONAL field is never rendered at all here -- a card with one is
- *   simply played without it, the same "start simple" scope cut. Both
- *   gaps are real, known v1 limitations (see php-app/README.md), not
- *   bugs -- a player who hits either is pointed at the web app instead.
+ *   it has exactly ONE choice_field total (or the pending decision's own
+ *   single field), of one of SUPPORTED_FIELD_TYPES below and not itself
+ *   a `multi` field -- covers most single-target cards regardless of
+ *   whether that one field happens to be required (Pride's own
+ *   target_player_id, Compulsion's discard_card_id, ...) or optional
+ *   (Hate's own "you may put any mood on the bottom of the deck" --
+ *   reported live: this class's first ship silently played it blank
+ *   every time, since it only ever looked at REQUIRED fields; an
+ *   optional field is now rendered the same way, just with an extra
+ *   Skip option prepended by withSkipOptionIfOptional() so declining is
+ *   an explicit choice, never a default nobody actually picked).
+ *   Deliberately excludes anything needing more than one field filled
+ *   in (required, optional, or a mix), a `multi`/checkbox-style
+ *   selection, or a `nested` sub-form (Duplicity's own repeat offer, any
+ *   chaos_draft attachment) -- a real, known v1 limitation (see
+ *   php-app/README.md), not a bug; a player who hits it is pointed at
+ *   the web app instead.
  * - Every actual rules decision (which candidates are legal for a given
  *   field) reuses BotChoiceResolver's own already-tested
  *   moodFieldCandidates()/playerFieldCandidates()/handCardFieldCandidates()/
@@ -86,6 +92,19 @@ final class DiscordGameCommandService
     private const SUPPORTED_FIELD_TYPES = ['mode', 'value', 'bool', 'mood', 'player', 'hand_card', 'discard_card'];
 
     private const MAX_SELECT_OPTIONS = 25;
+
+    /**
+     * The select-menu value for "leave this OPTIONAL field blank" --
+     * reported live: Hate's own 'target_mood_id' ("you may put any mood
+     * on the bottom of the deck") is `required => false`, and this
+     * class's first ship simply never rendered an optional field at all,
+     * always playing blank -- indistinguishable, from a player's own
+     * seat, from "there was never a choice to make." Distinct from every
+     * real candidate value this class ever emits (a game_cards id, a
+     * game_player id, a 'mode' option string, or bool's own '0'/'1'), so
+     * it's always unambiguous once cast back in castFieldValue().
+     */
+    private const SKIP_FIELD_VALUE = '__skip__';
 
     public function __construct(
         private readonly GameService $games,
@@ -217,12 +236,12 @@ final class DiscordGameCommandService
             throw new GameStateException('That card is no longer in your hand.');
         }
 
-        $field = $this->singleRequiredSupportedField($card['choice_fields'] ?? []);
+        $field = $this->singleSupportedField($card['choice_fields'] ?? []);
         if ($field === null) {
             throw new GameStateException("That card's own choice can't be answered from Discord anymore -- open the web app.");
         }
 
-        $this->games->playMood($gameId, $gamePlayerId, $cardId, [$field['key'] => $this->castFieldValue($field, $values)]);
+        $this->games->playMood($gameId, $gamePlayerId, $cardId, $this->choicesFor($field, $values));
     }
 
     /**
@@ -236,7 +255,15 @@ final class DiscordGameCommandService
             throw new GameStateException('That decision is no longer waiting on you.');
         }
 
-        $this->games->respondToDecision($gameId, $gamePlayerId, [$decision['field']['key'] => $this->castFieldValue($decision['field'], $values)]);
+        $this->games->respondToDecision($gameId, $gamePlayerId, $this->choicesFor($decision['field'], $values));
+    }
+
+    /** @param mixed[] $values @return array<string, mixed> */
+    private function choicesFor(array $field, array $values): array
+    {
+        $value = $this->castFieldValue($field, $values);
+
+        return $value !== null ? [$field['key'] => $value] : [];
     }
 
     /**
@@ -256,7 +283,7 @@ final class DiscordGameCommandService
             throw new GameStateException('That card is no longer in your hand.');
         }
 
-        $field = $this->singleRequiredSupportedField($card['choice_fields'] ?? []);
+        $field = $this->singleSupportedField($card['choice_fields'] ?? []);
         if ($field === null) {
             $this->games->playMood($gameId, $gamePlayerId, $cardId, []);
 
@@ -268,13 +295,15 @@ final class DiscordGameCommandService
         if ($options === []) {
             // No legal candidate exists right now (optional_if_no_targets'
             // own "if literally nothing qualifies, the field just doesn't
-            // apply" carve-out, mirrored here for a field this class
-            // otherwise treats as required) -- play with the field left
-            // unfilled rather than dead-ending on an empty select menu.
+            // apply" carve-out for a required field, or simply nothing to
+            // pick for an optional one either way) -- play with the field
+            // left unfilled rather than dead-ending on an empty select menu.
             $this->games->playMood($gameId, $gamePlayerId, $cardId, []);
 
             return null;
         }
+
+        $options = $this->withSkipOptionIfOptional($field, $options);
 
         $components = [['type' => 1, 'components' => [[
             'type' => 3,
@@ -284,6 +313,28 @@ final class DiscordGameCommandService
         ]]]];
 
         return ["Playing **{$card['name']}** -- {$field['label']}:", $components];
+    }
+
+    /**
+     * @param array<int, array{label: string, value: string}> $options
+     * @return array<int, array{label: string, value: string}>
+     */
+    private function withSkipOptionIfOptional(array $field, array $options): array
+    {
+        if (($field['required'] ?? false) === true) {
+            return $options;
+        }
+
+        array_unshift($options, ['label' => 'Skip -- play without this effect', 'value' => self::SKIP_FIELD_VALUE]);
+
+        // fieldOptions() itself already capped the real candidates at
+        // MAX_SELECT_OPTIONS -- re-capping AFTER prepending Skip (rather
+        // than reserving a slot up front, before knowing whether this
+        // specific field even needs one) keeps that cap the single
+        // source of truth for "how many real candidates," at the cost of
+        // this array_slice, never actually exceeding Discord's own
+        // 25-option limit on a select menu.
+        return array_slice($options, 0, self::MAX_SELECT_OPTIONS);
     }
 
     /**
@@ -324,6 +375,7 @@ final class DiscordGameCommandService
         $round = $state['round'];
         $you = $state['you'];
         $lines = ["**Game #{$gameId}** -- " . implode(', ', $scoreLines)];
+        $lines[] = $this->inPlaySummary($state);
 
         $decision = $round['pending_decision'] ?? null;
         $components = [];
@@ -340,7 +392,7 @@ final class DiscordGameCommandService
                             'type' => 3,
                             'custom_id' => "ms:decision:{$gameId}",
                             'placeholder' => $field['label'] ?? 'Choose one',
-                            'options' => $options,
+                            'options' => $this->withSkipOptionIfOptional($field, $options),
                         ]]];
                     } else {
                         $lines[] = "This needs more than Discord supports yet -- open the web app: {$webUrl}";
@@ -455,6 +507,34 @@ final class DiscordGameCommandService
     }
 
     /**
+     * Reported live right after the "New Practice Game" button shipped:
+     * "we need to be able to see what cards are in play" -- every prior
+     * boardMessage() only ever showed the viewer's OWN hand, never the
+     * board itself, making a mood-targeting choice (Hate's "put any mood
+     * on the bottom of the deck," Conviction's own self-targetable
+     * equivalent, ...) close to a guess. In-play cards are public
+     * information (unlike a hand), so this is shown to every viewer the
+     * same way regardless of whose turn it is.
+     *
+     * @param array<string, mixed> $state
+     */
+    private function inPlaySummary(array $state): string
+    {
+        $byOwner = [];
+        foreach ($state['in_play'] as $card) {
+            $byOwner[$card['owner_game_player_id']][] = "{$card['name']} ({$card['value']})";
+        }
+
+        $lines = [];
+        foreach ($state['players'] as $player) {
+            $cards = $byOwner[$player['game_player_id']] ?? [];
+            $lines[] = "{$player['username']}'s moods in play: " . ($cards === [] ? '(none)' : implode(', ', $cards));
+        }
+
+        return implode("\n", $lines);
+    }
+
+    /**
      * Splits the viewer's own hand into cards this class can offer to
      * play directly (a select option) vs. ones that need the web app --
      * anything with more than one required field, or a required field
@@ -475,8 +555,14 @@ final class DiscordGameCommandService
                 continue;
             }
 
-            $requiredFields = array_values(array_filter($card['choice_fields'] ?? [], fn (array $f) => ($f['required'] ?? false) === true));
-            if (count($requiredFields) > 1 || (count($requiredFields) === 1 && !$this->isSupportedField($requiredFields[0]))) {
+            // Every field, not just required ones -- an OPTIONAL field
+            // (Hate's own "you may put any mood on the bottom of the
+            // deck") is just as much a real in-game choice as a required
+            // one, see this class's own SKIP_FIELD_VALUE docblock for
+            // the bug report that caught the earlier required-only check
+            // silently always leaving it blank.
+            $fields = $card['choice_fields'] ?? [];
+            if (count($fields) > 1 || (count($fields) === 1 && !$this->isSupportedField($fields[0]))) {
                 $unsupported[] = $card['name'];
                 continue;
             }
@@ -496,15 +582,23 @@ final class DiscordGameCommandService
         return in_array($field['type'] ?? null, self::SUPPORTED_FIELD_TYPES, true) && ($field['multi'] ?? false) !== true;
     }
 
-    /** @param array<int, array<string, mixed>> $choiceFields */
-    private function singleRequiredSupportedField(array $choiceFields): ?array
+    /**
+     * The one field this class will render for a card/decision -- exactly
+     * one total (required OR optional; an optional one gets its own Skip
+     * option prepended by withSkipOptionIfOptional(), never silently
+     * dropped -- see SKIP_FIELD_VALUE's own docblock), of a supported
+     * type. Two-plus fields, or a lone unsupported one, both still fall
+     * outside v1 -- "needs the web app" either way.
+     *
+     * @param array<int, array<string, mixed>> $choiceFields
+     */
+    private function singleSupportedField(array $choiceFields): ?array
     {
-        $required = array_values(array_filter($choiceFields, fn (array $f) => ($f['required'] ?? false) === true));
-        if (count($required) !== 1 || !$this->isSupportedField($required[0])) {
+        if (count($choiceFields) !== 1 || !$this->isSupportedField($choiceFields[0])) {
             return null;
         }
 
-        return $required[0];
+        return $choiceFields[0];
     }
 
     /**
@@ -538,13 +632,31 @@ final class DiscordGameCommandService
         foreach ($state['players'] as $player) {
             $usernames[$player['game_player_id']] = $player['username'];
         }
+        // Reported live alongside inPlaySummary() above: a 'mood' field's
+        // own candidates (Hate's "any mood in play," Conviction's own
+        // self-targetable equivalent, ...) are just as ambiguous picked
+        // blind as the board itself was -- this labels each one with
+        // whose mood it is, not just its name/value, the same public
+        // information inPlaySummary() now always shows above the board.
+        // Absent for a candidate not actually in $state['in_play'] yet
+        // (a card still in hand, offered via that field's own
+        // includes_self) -- there's nothing to attribute an owner to
+        // there, and the plain name is unambiguous anyway (it's always
+        // "yourself").
+        $moodOwners = [];
+        foreach ($state['in_play'] ?? [] as $card) {
+            $moodOwners[$card['card_id']] = $usernames[$card['owner_game_player_id']] ?? null;
+        }
 
         $options = [];
         foreach (array_slice($candidates, 0, self::MAX_SELECT_OPTIONS) as $candidate) {
             $label = match ($field['type']) {
                 'mode' => (string) $candidate,
                 'bool' => $candidate === 1 ? 'Yes' : 'No',
-                'mood', 'hand_card', 'discard_card' => $cardNames[$candidate] ?? "Card #{$candidate}",
+                'mood' => isset($moodOwners[$candidate])
+                    ? ($cardNames[$candidate] ?? "Card #{$candidate}") . " -- {$moodOwners[$candidate]}"
+                    : ($cardNames[$candidate] ?? "Card #{$candidate}"),
+                'hand_card', 'discard_card' => $cardNames[$candidate] ?? "Card #{$candidate}",
                 'player' => $usernames[$candidate] ?? "Player #{$candidate}",
                 default => (string) $candidate,
             };
@@ -555,9 +667,13 @@ final class DiscordGameCommandService
     }
 
     /** @param mixed[] $values */
+    /** Null means "leave this field out of the submitted choices entirely" -- see SKIP_FIELD_VALUE's own docblock. */
     private function castFieldValue(array $field, array $values): mixed
     {
         $raw = $values[0] ?? null;
+        if ($raw === self::SKIP_FIELD_VALUE) {
+            return null;
+        }
 
         return match ($field['type']) {
             'mode' => (string) $raw,
