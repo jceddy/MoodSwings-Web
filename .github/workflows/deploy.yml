@@ -99,6 +99,11 @@ jobs:
           DISCORD_CLIENT_SECRET: ${{ secrets.DISCORD_CLIENT_SECRET }}
           DISCORD_PUBLIC_KEY: ${{ secrets.DISCORD_PUBLIC_KEY }}
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          # See deploy-dev.yml's own DEV_DISCORD_COMMAND_NAME for why this
+          # exists -- left unset here (Config::get()'s own coded default,
+          # 'moodswings', is exactly what production wants) unless a
+          # maintainer ever needs to rename production's own command too.
+          DISCORD_COMMAND_NAME: ${{ vars.DISCORD_COMMAND_NAME }}
           # MIGRATION_DEPLOY_KEY itself comes from the job-level env above
           # (already in scope here without redeclaring it).
         run: |
@@ -195,6 +200,7 @@ jobs:
           write_env_var DISCORD_CLIENT_SECRET "$DISCORD_CLIENT_SECRET"
           write_env_var DISCORD_PUBLIC_KEY "$DISCORD_PUBLIC_KEY"
           write_env_var DISCORD_BOT_TOKEN "$DISCORD_BOT_TOKEN"
+          write_env_var DISCORD_COMMAND_NAME "$DISCORD_COMMAND_NAME"
           write_env_var MIGRATION_DEPLOY_KEY "$MIGRATION_DEPLOY_KEY"
 
           # dist/, vendor/, src/, and database/ all end up under the shared

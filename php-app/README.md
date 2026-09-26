@@ -7740,6 +7740,21 @@ unprefixed `DISCORD_*` `.env` keys `deploy.yml` writes from the
 unprefixed secrets -- the application code itself has no notion of
 "which environment," same as every other `Config::get()` value.
 
+**`DISCORD_COMMAND_NAME`** (optional, defaults to `moodswings`) is the
+one exception to "the application code has no notion of which
+environment" above, and deliberately so: issue #233's own `/moodswings`
+command is a USER-installed app command (see "Playing the game via
+Discord" below), so outside a DM it's visible in the picker in ANY
+server/channel a linked player happens to be in -- including, for
+whoever tests dev while also using prod day to day, both environments'
+commands at once, identically named, distinguishable only by a small
+app-name label most people would never notice before tapping the wrong
+one. `DEV_DISCORD_COMMAND_NAME` (a `vars.*` GitHub Actions variable, not
+a secret -- a command's own name isn't sensitive) lets dev register
+under a visibly different name (e.g. `moodswingsdev`) instead; unset
+(the default), dev registers as plain `/moodswings` too, same as before
+this existed.
+
 ### Playing the game via Discord (issue #233)
 
 `Discord\DiscordGameCommandService`, dispatched to by
