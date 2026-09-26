@@ -54,12 +54,29 @@ use MoodSwings\SiteUrl;
  * `ms:play:{gameId}` (the "play a card" select; its own value is the
  * chosen card id), `ms:playfield:{gameId}:{cardId}` (that card's own
  * single required field's value select), `ms:decision:{gameId}` (the
- * current pending decision's own single field's value select). A
- * field's own key is never encoded in a custom_id -- it's always
- * re-derived server-side from the current board state (the card/decision
- * can only ever have exactly the one supported field this class already
- * chose to render), so there's nothing to carry across the round trip
- * besides which game and (for a card) which card.
+ * current pending decision's own single field's value select),
+ * `ms:newgame:0`/`ms:newgamebot:0` (starting a practice game -- see
+ * below; the trailing `0` is a dummy, never a real game id, kept only so
+ * every custom_id parses the same `ms:{verb}:{arg}` shape). A field's
+ * own key is never encoded in a custom_id -- it's always re-derived
+ * server-side from the current board state (the card/decision can only
+ * ever have exactly the one supported field this class already chose to
+ * render), so there's nothing to carry across the round trip besides
+ * which game and (for a card) which card.
+ *
+ * Starting a practice game (reported live, right after this class's own
+ * first ship: "Can we add a command to start a game from inside
+ * discord?") is the one action here that ISN'T "act on an existing
+ * game" -- a `structure` deck_type game needs no deck-building step at
+ * all (GameService::createGame()'s own defaults -- format 'standard',
+ * deck_type 'structure' -- already produce an immediately-`in_progress`
+ * game), and seating a practice bot is just naming its own user id
+ * alongside the caller's in createGame()'s `$userIds`, so this is fully
+ * completable inside Discord unlike almost everything else this class
+ * still points at the web app for. Never offers a HUMAN opponent here --
+ * that would need Discord's own way to pick/invite another linked
+ * player, real design work this class's docblock already flags as out
+ * of scope for a first pass.
  */
 final class DiscordGameCommandService
 {
@@ -96,17 +113,23 @@ final class DiscordGameCommandService
 
         $gameIds = $this->activeStandardGameIdsFor($userId);
         if ($gameIds === []) {
-            return $this->ephemeralMessage("You don't have an active Traditional game right now. Start or join one at " . SiteUrl::root() . '/game/');
+            return $this->ephemeralMessage(
+                "You don't have an active Traditional game right now. Start or join one at " . SiteUrl::root() . '/game/, or start a practice game below.',
+                [['type' => 1, 'components' => [$this->newGameButton()]]],
+            );
         }
 
         if (count($gameIds) === 1) {
             return $this->ephemeralMessage(...$this->boardMessage($gameIds[0], $userId));
         }
 
-        $components = [['type' => 1, 'components' => array_map(
-            fn (int $gameId) => ['type' => 2, 'style' => 2, 'label' => "Game #{$gameId}", 'custom_id' => "ms:view:{$gameId}"],
-            array_slice($gameIds, 0, 5),
-        )]];
+        $components = [['type' => 1, 'components' => [
+            ...array_map(
+                fn (int $gameId) => ['type' => 2, 'style' => 2, 'label' => "Game #{$gameId}", 'custom_id' => "ms:view:{$gameId}"],
+                array_slice($gameIds, 0, 4),
+            ),
+            $this->newGameButton(),
+        ]]];
 
         return $this->ephemeralMessage('You have more than one active Traditional game -- pick one:', components: $components);
     }
@@ -163,6 +186,10 @@ final class DiscordGameCommandService
                     $gamePlayerId = $this->requireSeatedIn($gameId, $userId);
                     $this->submitDecisionField($gameId, $userId, $gamePlayerId, $values);
                     break;
+                case 'newgame':
+                    return $this->updateMessage(...$this->newPracticeGameMessage($userId));
+                case 'newgamebot':
+                    return $this->updateMessage(...$this->createPracticeGameMessage($userId, (int) ($values[0] ?? 0)));
                 default:
                     return $this->updateMessage('Something about that action was not recognized -- try running /moodswings again.');
             }
@@ -353,6 +380,7 @@ final class DiscordGameCommandService
         $components[] = ['type' => 1, 'components' => [
             ['type' => 2, 'style' => 2, 'label' => 'Refresh', 'custom_id' => "ms:view:{$gameId}"],
             ['type' => 2, 'style' => 5, 'label' => 'Open in browser', 'url' => $webUrl],
+            $this->newGameButton(),
         ]];
 
         if ($notice !== null) {
@@ -360,6 +388,70 @@ final class DiscordGameCommandService
         }
 
         return [implode("\n", $lines), $components];
+    }
+
+    /**
+     * @return array{0: string, 1: array<int, array<string, mixed>>}
+     */
+    private function newPracticeGameMessage(int $userId): array
+    {
+        $bots = $this->games->listPracticeBots();
+        if ($bots === []) {
+            return ['No practice bots are configured on this deployment.', []];
+        }
+
+        if (count($bots) === 1) {
+            return $this->createPracticeGameMessage($userId, $bots[0]['user_id']);
+        }
+
+        $options = array_map(
+            fn (array $bot) => ['label' => $bot['username'], 'value' => (string) $bot['user_id']],
+            array_slice($bots, 0, self::MAX_SELECT_OPTIONS),
+        );
+
+        $components = [['type' => 1, 'components' => [[
+            'type' => 3,
+            'custom_id' => 'ms:newgamebot:0',
+            'placeholder' => 'Choose a practice bot...',
+            'options' => $options,
+        ]]]];
+
+        return ['Choose a practice bot to play against:', $components];
+    }
+
+    /**
+     * Creates the practice game and hands straight back to boardMessage()
+     * for the very same game. createGame() alone only ever leaves a game
+     * 'waiting' (see its own docblock) -- startGame() is what actually
+     * deals every seat's deck_type 'structure' cards and flips it to
+     * 'in_progress', and advanceAutomatedTurns() covers the case where
+     * the very first turn already belongs to the bot itself (or an
+     * auto-passed empty hand) -- the same two-call sequence
+     * `POST /games/start` already runs for a web-created game, just
+     * without the extra HTTP round trip. Errors here (e.g. $botUserId no
+     * longer a valid practice bot) get their own plain message rather
+     * than falling through to boardMessage() for a game id that may not
+     * even exist.
+     *
+     * @return array{0: string, 1: array<int, array<string, mixed>>}
+     */
+    private function createPracticeGameMessage(int $userId, int $botUserId): array
+    {
+        try {
+            $gameId = $this->games->createGame($userId, [$userId, $botUserId]);
+            $this->games->startGame($gameId);
+            $this->games->advanceAutomatedTurns($gameId);
+        } catch (\Throwable $e) {
+            return ["Couldn't start a practice game: " . $e->getMessage(), []];
+        }
+
+        return $this->boardMessage($gameId, $userId);
+    }
+
+    /** @return array<string, mixed> */
+    private function newGameButton(): array
+    {
+        return ['type' => 2, 'style' => 2, 'label' => 'New Practice Game', 'custom_id' => 'ms:newgame:0'];
     }
 
     /**

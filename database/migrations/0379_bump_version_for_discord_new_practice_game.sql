@@ -1,0 +1,12 @@
+-- Issue #233 follow-up (reported live: "Can we add a command to start a
+-- game from inside discord?"): a "New Practice Game" button, offered
+-- alongside every message DiscordGameCommandService already shows,
+-- seats a practice bot (GameService::listPracticeBots()) and creates +
+-- starts a format 'standard'/deck_type 'structure' game -- the one
+-- action needing no deck-building step at all, so it's fully
+-- completable inside Discord. See php-app/README.md's "Playing the game
+-- via Discord" section for the full design.
+--
+-- No schema change -- just the version bump MaintenanceGate needs to
+-- see this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.55.1' WHERE id = 1;

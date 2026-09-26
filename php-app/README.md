@@ -7807,11 +7807,34 @@ full reasoning):
 its own value is the chosen card id), `ms:playfield:{gameId}:{cardId}`
 (that card's own single required field's value select),
 `ms:decision:{gameId}` (the current pending decision's own single
-field's value select). A field's own key is never encoded in a
-custom_id -- it's always the one field this class already chose to
-render for that specific card/decision, so it's re-derived server-side
-from the current board state on the round trip rather than carried
-across it.
+field's value select), `ms:newgame:0`/`ms:newgamebot:0` (starting a
+practice game -- below; the trailing `0` is always a dummy, never a real
+game id). A field's own key is never encoded in a custom_id -- it's
+always the one field this class already chose to render for that
+specific card/decision, so it's re-derived server-side from the current
+board state on the round trip rather than carried across it.
+
+**Starting a practice game** (reported live right after this feature's
+own first ship: "Can we add a command to start a game from inside
+discord?") is the one action here that doesn't act on an already-existing
+game -- a `New Practice Game` button, offered wherever this class already
+shows a message (no active game, the multi-game picker, and every board
+view, so there's always a way to start another one). `deck_type`
+`structure` (`GameService::createGame()`'s own default) needs no
+deck-building step at all, and seating a practice bot is just naming its
+own user id alongside the caller's own in `createGame()`'s `$userIds` --
+so this is fully completable inside Discord, unlike almost everything
+else this class still points at the web app for. Exactly one practice
+bot configured (`GameService::listPracticeBots()`) starts immediately;
+2+ shows a select menu (`ms:newgamebot:0`) first. `createGame()` alone
+only ever leaves a game `waiting` (see its own docblock) -- `startGame()`
+(deals every seat's cards, flips it to `in_progress`) and
+`advanceAutomatedTurns()` (covers the bot's own very first turn, or an
+auto-passed empty hand) both have to run too, the same two-call sequence
+`POST /games/start` already runs for a web-created game. Never offers a
+HUMAN opponent here -- picking/inviting another linked player is real
+design work this class's own docblock already flags as out of scope for
+a first pass.
 
 **No new persistence** -- every interaction re-fetches `GameService::getState()`
 (for display) and, when rendering a field select, a fresh `BoardState`

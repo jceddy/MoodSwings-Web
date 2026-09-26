@@ -22436,6 +22436,107 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame(1, (int) $this->fetchRound($gameId)['plays_remaining'], "Pride's grant should now be active -- player 2 has more moods");
     }
 
+    /**
+     * Reported live right after this feature's own first ship: "Can we
+     * add a command to start a game from inside discord?" -- exactly one
+     * practice bot configured skips the picker and starts immediately,
+     * fully `in_progress` (createGame() alone only ever leaves a game
+     * 'waiting' -- see createPracticeGameMessage()'s own docblock for why
+     * startGame()/advanceAutomatedTurns() both have to run too).
+     */
+    public function testDiscordComponentNewGameStartsImmediatelyWithExactlyOnePracticeBot(): void
+    {
+        $u1 = $this->insertUser('discord-player-12');
+        $this->linkDiscordAccount($u1, 'discord-12');
+        $bot = $this->insertBotUser('discord-practice-bot-1');
+
+        $response = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-12', 'ms:newgame:0')
+        );
+
+        self::assertSame(7, $response['type']);
+        self::assertStringContainsString('Game #', $response['data']['content']);
+
+        $gameIds = $this->activeStandardGameIdsForTest($u1);
+        self::assertCount(1, $gameIds);
+        $game = $this->fetchGame($gameIds[0]);
+        self::assertSame('in_progress', $game['status']);
+        self::assertSame('standard', $game['format']);
+
+        $playerUserIds = array_column($this->pdo->query(
+            "SELECT user_id FROM game_players WHERE game_id = {$gameIds[0]}"
+        )->fetchAll(), 'user_id');
+        self::assertEqualsCanonicalizing([$u1, $bot], array_map(intval(...), $playerUserIds));
+    }
+
+    /**
+     * 2+ practice bots configured -- rather than guessing which one the
+     * player wants, this offers a select menu (ms:newgamebot:0) instead
+     * of creating anything yet.
+     */
+    public function testDiscordComponentNewGameOffersAPickerWithMultiplePracticeBots(): void
+    {
+        $u1 = $this->insertUser('discord-player-13');
+        $this->linkDiscordAccount($u1, 'discord-13');
+        $bot1 = $this->insertBotUser('discord-practice-bot-2');
+        $bot2 = $this->insertBotUser('discord-practice-bot-3');
+
+        $response = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-13', 'ms:newgame:0')
+        );
+
+        self::assertSame(7, $response['type']);
+        $select = $response['data']['components'][0]['components'][0];
+        self::assertSame('ms:newgamebot:0', $select['custom_id']);
+        self::assertEqualsCanonicalizing([(string) $bot1, (string) $bot2], array_column($select['options'], 'value'));
+
+        self::assertSame([], $this->activeStandardGameIdsForTest($u1), 'nothing created yet -- still waiting on a pick');
+    }
+
+    /** Completes the picker flow above: picking a specific bot creates and starts a game against exactly that one. */
+    public function testDiscordComponentNewGameBotCreatesAGameAgainstTheChosenBot(): void
+    {
+        $u1 = $this->insertUser('discord-player-14');
+        $this->linkDiscordAccount($u1, 'discord-14');
+        $this->insertBotUser('discord-practice-bot-4');
+        $bot2 = $this->insertBotUser('discord-practice-bot-5');
+
+        $response = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-14', 'ms:newgamebot:0', [(string) $bot2])
+        );
+
+        self::assertSame(7, $response['type']);
+        $gameIds = $this->activeStandardGameIdsForTest($u1);
+        self::assertCount(1, $gameIds);
+        $playerUserIds = array_map(intval(...), array_column($this->pdo->query(
+            "SELECT user_id FROM game_players WHERE game_id = {$gameIds[0]}"
+        )->fetchAll(), 'user_id'));
+        self::assertContains($bot2, $playerUserIds);
+    }
+
+    public function testDiscordCommandNoActiveGameOffersTheNewGameButton(): void
+    {
+        $userId = $this->insertUser('discord-player-15');
+        $this->linkDiscordAccount($userId, 'discord-15');
+
+        $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-15'));
+
+        self::assertSame('ms:newgame:0', $response['data']['components'][0]['components'][0]['custom_id']);
+    }
+
+    /** @return int[] */
+    private function activeStandardGameIdsForTest(int $userId): array
+    {
+        $gameIds = [];
+        foreach ($this->games->listGamesForUser($userId) as $game) {
+            if ($game['format'] === 'standard' && $game['status'] === 'in_progress') {
+                $gameIds[] = $game['id'];
+            }
+        }
+
+        return $gameIds;
+    }
+
     private function cardZone(int $gameCardId): string
     {
         $stmt = $this->pdo->prepare('SELECT zone FROM game_cards WHERE id = :id');
