@@ -202,6 +202,37 @@ final class BotChoiceResolver
         return $this->playerCandidates($state, $field, $actingPlayerId, $excludeSelf);
     }
 
+    /**
+     * The full, unranked legal candidate list for a required 'hand_card'
+     * field -- see moodFieldCandidates()'s own docblock for why this is
+     * exposed (Discord\DiscordGameCommandService's own single-field
+     * choice rendering, issue #233). Applies the same
+     * ambitionSafeHandCardIds() carve-out resolve() itself would for
+     * effect_key 'ambition' -- a Discord player choosing Ambition's own
+     * discard cost should never be offered Hope as a legal candidate
+     * either, the same reason a bot never is.
+     *
+     * @return int[]
+     */
+    public function handCardFieldCandidates(BoardState $state, array $field, int $actingPlayerId, int $ownCardId, string $effectKey): array
+    {
+        return $this->ownResourceCandidates($state, $field, $this->ambitionSafeHandCardIds($state, $effectKey, $state->hand($actingPlayerId)), $ownCardId);
+    }
+
+    /**
+     * The full, unranked legal candidate list for a required
+     * 'discard_card' field -- see handCardFieldCandidates()'s own
+     * docblock for why this is exposed. No $actingPlayerId param, unlike
+     * its hand_card sibling -- the discard pile (state->discardPile())
+     * is shared/public, not scoped to one player.
+     *
+     * @return int[]
+     */
+    public function discardCardFieldCandidates(BoardState $state, array $field, int $ownCardId): array
+    {
+        return $this->ownResourceCandidates($state, $field, $state->discardPile(), $ownCardId);
+    }
+
     private function resolveMode(array $field, string $effectKey): ?string
     {
         $options = $field['options'] ?? [];
@@ -364,12 +395,18 @@ final class BotChoiceResolver
      */
     private function resolveOwnResourceField(BoardState $state, array $field, array $candidateCardIds, int $ownCardId): int|array|null
     {
-        $candidates = array_values(array_filter(
+        $candidates = $this->ownResourceCandidates($state, $field, $candidateCardIds, $ownCardId);
+
+        return $this->pickCandidates($state, $field, $candidates, true, $ownCardId);
+    }
+
+    /** @param int[] $candidateCardIds @return int[] */
+    private function ownResourceCandidates(BoardState $state, array $field, array $candidateCardIds, int $ownCardId): array
+    {
+        return array_values(array_filter(
             $candidateCardIds,
             fn (int $cardId) => $cardId !== $ownCardId && $this->matchesCardFilter($state, $cardId, $field['filter'] ?? null),
         ));
-
-        return $this->pickCandidates($state, $field, $candidates, true, $ownCardId);
     }
 
     /** @param int[] $candidates @return int|int[]|null */

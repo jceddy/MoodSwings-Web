@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace MoodSwings\Tests\Game;
 
+use MoodSwings\Bot\BotChoiceResolver;
 use MoodSwings\Database\Connection;
 use MoodSwings\Deck\NotAuthorizedToAccessDecklistException;
 use MoodSwings\Deck\UserDecklistService;
+use MoodSwings\Discord\DiscordGameCommandService;
 use MoodSwings\Friends\FriendshipService;
 use MoodSwings\Game\BoardStateRepository;
 use MoodSwings\Game\Exceptions\GameStateException;
@@ -15,6 +17,7 @@ use MoodSwings\Game\ReplayStateBuilder;
 use MoodSwings\Notifications\NotificationScope;
 use MoodSwings\Notifications\NotificationService;
 use MoodSwings\Notifications\PushNotificationChannel;
+use MoodSwings\Repository\DiscordAccountRepository;
 use MoodSwings\Repository\FriendshipRepository;
 use MoodSwings\Repository\NotificationCooldownRepository;
 use MoodSwings\Repository\NotificationPreferenceRepository;
@@ -100,6 +103,14 @@ final class GameServiceIntegrationTest extends TestCase
         $pdo->exec('TRUNCATE TABLE user_daily_game_counts');
         $pdo->exec('TRUNCATE TABLE user_opponent_game_counts');
         $pdo->exec('TRUNCATE TABLE friendships');
+        // Issue #233's own DiscordGameCommandServiceTest coverage below is
+        // the only thing in this file that ever links a Discord account --
+        // without this, a stale (user_id, discord_user_id) row from an
+        // earlier test would still exist once TRUNCATE TABLE users resets
+        // auto-increment back to 1, silently resolving THIS test's own
+        // freshly-created user id 1 to whatever discord_user_id a
+        // completely unrelated earlier test happened to link it to.
+        $pdo->exec('TRUNCATE TABLE discord_accounts');
         $pdo->exec('TRUNCATE TABLE users');
         $pdo->exec('SET FOREIGN_KEY_CHECKS = 1');
 
@@ -22220,5 +22231,216 @@ final class GameServiceIntegrationTest extends TestCase
         // text -- purely so this play needs no further setup.
         $this->games->playMood($gameId, $p1, $convictionId, ['target_mood_id' => $convictionId]);
         self::assertSame($p1, (int) $this->fetchRound($gameId)['current_turn_game_player_id'], "still player 1's own turn -- the reactivated grant let them keep playing");
+    }
+
+    // --- Issue #233: playing the game via Discord (DiscordGameCommandService) ---
+
+    private function discordCommandService(): DiscordGameCommandService
+    {
+        return new DiscordGameCommandService(
+            $this->games,
+            new BoardStateRepository(DefaultEffectRegistry::build()),
+            new DiscordAccountRepository(),
+            new BotChoiceResolver(),
+        );
+    }
+
+    private function linkDiscordAccount(int $userId, string $discordUserId): void
+    {
+        (new DiscordAccountRepository())->link($userId, $discordUserId, "discord-{$discordUserId}");
+    }
+
+    /** @return array<string, mixed> */
+    private function discordCommandPayload(string $discordUserId): array
+    {
+        return ['type' => 2, 'data' => ['name' => 'moodswings'], 'user' => ['id' => $discordUserId]];
+    }
+
+    /** @param mixed[] $values @return array<string, mixed> */
+    private function discordComponentPayload(string $discordUserId, string $customId, array $values = []): array
+    {
+        return ['type' => 3, 'data' => ['custom_id' => $customId, 'values' => $values], 'user' => ['id' => $discordUserId]];
+    }
+
+    public function testDiscordCommandWithoutLinkedAccountAsksToLink(): void
+    {
+        $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('unlinked-discord-id'));
+
+        self::assertSame(4, $response['type']);
+        self::assertStringContainsString("isn't linked", $response['data']['content']);
+    }
+
+    public function testDiscordCommandWithNoActiveGameSaysSo(): void
+    {
+        $userId = $this->insertUser('discord-player-1');
+        $this->linkDiscordAccount($userId, 'discord-1');
+
+        $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-1'));
+
+        self::assertSame(4, $response['type']);
+        self::assertStringContainsString("don't have an active Traditional game", $response['data']['content']);
+    }
+
+    public function testDiscordCommandRendersBoardWithPlayAndPassForOneActiveGame(): void
+    {
+        $u1 = $this->insertUser('discord-player-2');
+        $u2 = $this->insertUser('discord-player-3');
+        $this->linkDiscordAccount($u1, 'discord-2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $sadnessId = $this->insertGameCard($gameId, 74, 'hand', $p1); // Sadness -- no required choice_fields
+        $this->insertGameCard($gameId, 5, 'in_play', $p2);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-2'));
+
+        self::assertSame(4, $response['type']);
+        self::assertStringContainsString("Game #{$gameId}", $response['data']['content']);
+        self::assertStringContainsString("It's your turn", $response['data']['content']);
+
+        $playSelect = $response['data']['components'][0]['components'][0];
+        self::assertSame("ms:play:{$gameId}", $playSelect['custom_id']);
+        self::assertSame(['label' => 'Sadness (0)', 'value' => (string) $sadnessId], $playSelect['options'][0]);
+
+        $passButton = $response['data']['components'][1]['components'][0];
+        self::assertSame("ms:pass:{$gameId}", $passButton['custom_id']);
+    }
+
+    public function testDiscordComponentPassAdvancesTheTurn(): void
+    {
+        $u1 = $this->insertUser('discord-player-4');
+        $u2 = $this->insertUser('discord-player-5');
+        $this->linkDiscordAccount($u1, 'discord-4');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $response = $this->discordCommandService()->handleComponent($this->discordComponentPayload('discord-4', "ms:pass:{$gameId}"));
+
+        self::assertSame(7, $response['type']);
+        self::assertSame($p2, (int) $this->fetchRound($gameId)['current_turn_game_player_id']);
+    }
+
+    public function testDiscordComponentPlaysAZeroFieldCardDirectly(): void
+    {
+        $u1 = $this->insertUser('discord-player-6');
+        $u2 = $this->insertUser('discord-player-7');
+        $this->linkDiscordAccount($u1, 'discord-6');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+        $sadnessId = $this->insertGameCard($gameId, 74, 'hand', $p1);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $response = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-6', "ms:play:{$gameId}", [(string) $sadnessId])
+        );
+
+        self::assertSame(7, $response['type']);
+        self::assertSame('in_play', $this->cardZone($sadnessId));
+    }
+
+    public function testDiscordComponentPlayThenPlayfieldForASingleRequiredFieldCard(): void
+    {
+        $u1 = $this->insertUser('discord-player-8');
+        $u2 = $this->insertUser('discord-player-9');
+        $this->linkDiscordAccount($u1, 'discord-8');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+        $convictionId = $this->insertGameCard($gameId, 6, 'hand', $p1);
+        // A real deck card to draw, not just Conviction's own eventual
+        // discard -- otherwise, self-targeting Conviction moves itself to
+        // the bottom of an otherwise-empty deck and then immediately
+        // redraws that exact same (only) card, landing right back in
+        // hand and making "did this actually play" impossible to tell
+        // apart from "never played at all". Owner left null -- 'standard'
+        // format shares one deck across every player (BoardState::deckKeyFor()),
+        // so an explicit owner here would load into the wrong ($p1-keyed,
+        // never actually consulted for this format) bucket instead.
+        $this->insertGameCard($gameId, 5, 'deck', null, 1);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $playResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-8', "ms:play:{$gameId}", [(string) $convictionId])
+        );
+
+        self::assertSame(7, $playResponse['type']);
+        self::assertSame('hand', $this->cardZone($convictionId), 'not played yet -- still waiting on its own required field');
+        $fieldSelect = $playResponse['data']['components'][0]['components'][0];
+        self::assertSame("ms:playfield:{$gameId}:{$convictionId}", $fieldSelect['custom_id']);
+        self::assertContains((string) $convictionId, array_column($fieldSelect['options'], 'value'), 'Conviction can legally target itself');
+
+        $fieldResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-8', "ms:playfield:{$gameId}:{$convictionId}", [(string) $convictionId])
+        );
+
+        self::assertSame(7, $fieldResponse['type']);
+        self::assertNotSame('hand', $this->cardZone($convictionId));
+    }
+
+    public function testDiscordComponentDecisionRespondsToASingleFieldPendingDecision(): void
+    {
+        $u1 = $this->insertUser('discord-player-10');
+        $u2 = $this->insertUser('discord-player-11');
+        $this->linkDiscordAccount($u1, 'discord-10');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameCard($gameId, 5, 'in_play', $p2);
+        $this->insertGameCard($gameId, 32, 'in_play', $p2);
+        $prideId = $this->insertGameCard($gameId, 22, 'hand', $p1);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $prideId, []);
+        self::assertNotNull($this->games->getState($gameId, $u1)['round']['pending_decision']);
+
+        $response = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-10', "ms:decision:{$gameId}", [(string) $p2])
+        );
+
+        self::assertSame(7, $response['type']);
+        self::assertNull($this->games->getState($gameId, $u1)['round']['pending_decision']);
+        self::assertSame(1, (int) $this->fetchRound($gameId)['plays_remaining'], "Pride's grant should now be active -- player 2 has more moods");
+    }
+
+    private function cardZone(int $gameCardId): string
+    {
+        $stmt = $this->pdo->prepare('SELECT zone FROM game_cards WHERE id = :id');
+        $stmt->execute(['id' => $gameCardId]);
+
+        return (string) $stmt->fetchColumn();
     }
 }

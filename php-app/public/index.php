@@ -19,6 +19,7 @@ use MoodSwings\Deck\DecklistNotFoundException;
 use MoodSwings\Deck\DecklistValidationException;
 use MoodSwings\Deck\NotAuthorizedToAccessDecklistException;
 use MoodSwings\Deck\UserDecklistService;
+use MoodSwings\Discord\DiscordGameCommandService;
 use MoodSwings\Discord\DiscordInteractionsService;
 use MoodSwings\Discord\DiscordLinkException;
 use MoodSwings\Discord\DiscordNotificationChannel;
@@ -709,7 +710,6 @@ if ($path === '/notifications/preferences' && $method === 'POST') {
 // $discordAccounts itself was already constructed above, alongside
 // $notifications.
 $discordOAuth = new DiscordOAuthService($discordAccounts, new DiscordOAuthStateRepository(), achievements: $achievements);
-$discordInteractions = new DiscordInteractionsService();
 
 if ($path === '/discord/status' && $method === 'GET') {
     $currentUser = requireAuth($auth);
@@ -745,25 +745,6 @@ if ($path === '/discord/unlink' && $method === 'POST') {
     $currentUser = requireAuth($auth);
     $discordAccounts->unlink((int) $currentUser['id']);
     respond(200, ['status' => 'ok', 'message' => 'Discord account unlinked.']);
-}
-
-// Discord's own Interactions Endpoint -- called by Discord itself, never
-// by this site's own JS, so it's authenticated by Ed25519 signature
-// (DiscordInteractionsService::verify()) instead of the session cookie
-// every other route here uses. The raw, exact request body is what gets
-// signed, so it has to be read (and handed to verify()) before anything
-// touches requestBody()'s own json_decode()'d copy.
-if ($path === '/discord/interactions' && $method === 'POST') {
-    $rawBody = (string) file_get_contents('php://input');
-    $signature = $_SERVER['HTTP_X_SIGNATURE_ED25519'] ?? null;
-    $timestamp = $_SERVER['HTTP_X_SIGNATURE_TIMESTAMP'] ?? null;
-
-    if (!is_string($signature) || !is_string($timestamp) || !$discordInteractions->verify($rawBody, $signature, $timestamp)) {
-        respond(401, ['status' => 'error', 'message' => 'Invalid request signature']);
-    }
-
-    $payload = json_decode($rawBody, true);
-    respond(200, $discordInteractions->handle(is_array($payload) ? $payload : []));
 }
 
 $userDecklists = new UserDecklistService(new UserDecklistRepository(), $friendships, $achievements);
@@ -859,6 +840,33 @@ $gameRegistry = DefaultEffectRegistry::build();
 $chaosRegistry = ChaosDefaultEffectRegistry::build();
 $cardStats = new CardStatsService();
 $games = new GameService(new BoardStateRepository($gameRegistry, $chaosRegistry), new MoodPlayService($gameRegistry, $chaosRegistry), new RoundScorer(), $userDecklists, new ReplayStateBuilder($gameRegistry), notifications: $notifications, cardStats: $cardStats, achievements: $achievements, chaosRegistry: $chaosRegistry);
+
+// Issue #233: "play the game via Discord" -- constructed here (rather
+// than alongside $discordOAuth/$discordAccounts above) since it needs
+// $games itself, plus its own BoardState loader for BotChoiceResolver's
+// candidate enumeration (see DiscordGameCommandService's own docblock).
+$discordInteractions = new DiscordInteractionsService(
+    new DiscordGameCommandService($games, new BoardStateRepository($gameRegistry, $chaosRegistry), $discordAccounts)
+);
+
+// Discord's own Interactions Endpoint -- called by Discord itself, never
+// by this site's own JS, so it's authenticated by Ed25519 signature
+// (DiscordInteractionsService::verify()) instead of the session cookie
+// every other route here uses. The raw, exact request body is what gets
+// signed, so it has to be read (and handed to verify()) before anything
+// touches requestBody()'s own json_decode()'d copy.
+if ($path === '/discord/interactions' && $method === 'POST') {
+    $rawBody = (string) file_get_contents('php://input');
+    $signature = $_SERVER['HTTP_X_SIGNATURE_ED25519'] ?? null;
+    $timestamp = $_SERVER['HTTP_X_SIGNATURE_TIMESTAMP'] ?? null;
+
+    if (!is_string($signature) || !is_string($timestamp) || !$discordInteractions->verify($rawBody, $signature, $timestamp)) {
+        respond(401, ['status' => 'error', 'message' => 'Invalid request signature']);
+    }
+
+    $payload = json_decode($rawBody, true);
+    respond(200, $discordInteractions->handle(is_array($payload) ? $payload : []));
+}
 $matchmaking = new MatchmakingService(new OpenGameListingRepository(), new UserRepository(), new FriendshipRepository(), $games);
 $weeklySealedPoolQueue = new WeeklySealedPoolQueueService($games);
 // Issue #91 -- see TournamentMatchObserver's own docblock for why this
