@@ -22605,6 +22605,149 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame('in_play', $this->cardZone($opponentMoodId));
     }
 
+    /**
+     * Reported live: "show ... number of rounds each player has won so
+     * far, number of cards each player had in hand" -- both already
+     * public information the web board shows (players[].total_wins/
+     * hand_count), just never surfaced in the Discord score line before.
+     */
+    public function testDiscordCommandBoardShowsRoundsWonAndHandCount(): void
+    {
+        $u1 = $this->insertUser('discord-player-20');
+        $u2 = $this->insertUser('discord-player-21');
+        $this->linkDiscordAccount($u1, 'discord-20');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameCard($gameId, 74, 'hand', $p1); // Sadness
+        $this->insertGameCard($gameId, 5, 'hand', $p2); // Complacency
+        $this->insertGameCard($gameId, 66, 'hand', $p2); // Hate -- p2 has 2 cards, p1 has 1
+
+        $wonRoundStmt = $this->pdo->prepare(
+            "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, status, winner_game_player_id, wins_awarded, scored_at)
+             VALUES (:game_id, 1, :first_player, NULL, 0, 'scored', :winner, 1, NOW())"
+        );
+        $wonRoundStmt->execute(['game_id' => $gameId, 'first_player' => $p2, 'winner' => $p2]);
+        $this->insertGameRound($gameId, 2, $p2, $p1, 1);
+
+        $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-20'));
+
+        self::assertStringContainsString('discord-player-20: 0 pts, 0 round(s) won, 1 card(s) in hand', $response['data']['content']);
+        self::assertStringContainsString('discord-player-21: 0 pts, 1 round(s) won, 2 card(s) in hand', $response['data']['content']);
+    }
+
+    /**
+     * Reported live alongside the above: "some way to view the card
+     * details for the cards in hand/play/discard" -- the board only ever
+     * shows a bare name/value; this checks the "View Cards" button leads
+     * to a hand-card select whose own choice reveals the full rules text.
+     */
+    public function testDiscordComponentViewCardsShowsHandCardRulesText(): void
+    {
+        $u1 = $this->insertUser('discord-player-22');
+        $u2 = $this->insertUser('discord-player-23');
+        $this->linkDiscordAccount($u1, 'discord-22');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+        $hateId = $this->insertGameCard($gameId, 66, 'hand', $p1); // Hate
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $cardsResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-22', "ms:cards:{$gameId}")
+        );
+
+        self::assertSame(7, $cardsResponse['type']);
+        $handSelect = $cardsResponse['data']['components'][0]['components'][0];
+        self::assertSame("ms:cardhand:{$gameId}", $handSelect['custom_id']);
+        self::assertSame((string) $hateId, $handSelect['options'][0]['value']);
+
+        $detailResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-22', "ms:cardhand:{$gameId}", [(string) $hateId])
+        );
+
+        self::assertSame(7, $detailResponse['type']);
+        self::assertStringContainsString('Hate (0)', $detailResponse['data']['content']);
+        self::assertStringContainsString('bottom of the deck', $detailResponse['data']['content']);
+        self::assertSame("ms:cards:{$gameId}", $detailResponse['data']['components'][0]['components'][0]['custom_id']);
+    }
+
+    /** The same card-detail flow, but for a card already in play, owned by another player. */
+    public function testDiscordComponentViewCardsShowsInPlayCardOwnerAndRulesText(): void
+    {
+        $u1 = $this->insertUser('discord-player-24');
+        $u2 = $this->insertUser('discord-player-25');
+        $this->linkDiscordAccount($u1, 'discord-24');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $complacencyId = $this->insertGameCard($gameId, 5, 'in_play', $p2); // Complacency
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $cardsResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-24', "ms:cards:{$gameId}")
+        );
+
+        $inPlaySelect = $cardsResponse['data']['components'][0]['components'][0];
+        self::assertSame("ms:cardplay:{$gameId}", $inPlaySelect['custom_id']);
+        self::assertSame('Complacency (4) -- discord-player-25', $inPlaySelect['options'][0]['label']);
+
+        $detailResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-24', "ms:cardplay:{$gameId}", [(string) $complacencyId])
+        );
+
+        self::assertStringContainsString('Complacency (4)', $detailResponse['data']['content']);
+    }
+
+    /**
+     * Reported live alongside the above: "some way to view the text game
+     * log" -- reuses getState()'s own already-bounded recent_events.
+     */
+    public function testDiscordComponentGameLogShowsRecentPlays(): void
+    {
+        $u1 = $this->insertUser('discord-player-26');
+        $u2 = $this->insertUser('discord-player-27');
+        $this->linkDiscordAccount($u1, 'discord-26');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->discordCommandService()->handleComponent($this->discordComponentPayload('discord-26', "ms:pass:{$gameId}"));
+
+        $logResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-26', "ms:log:{$gameId}")
+        );
+
+        self::assertSame(7, $logResponse['type']);
+        self::assertStringContainsString('discord-player-26 passed', $logResponse['data']['content']);
+        self::assertSame("ms:view:{$gameId}", $logResponse['data']['components'][0]['components'][0]['custom_id']);
+    }
+
     /** @return int[] */
     private function activeStandardGameIdsForTest(int $userId): array
     {

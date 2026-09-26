@@ -7827,7 +7827,11 @@ its own value is the chosen card id), `ms:playfield:{gameId}:{cardId}`
 `ms:decision:{gameId}` (the current pending decision's own single
 field's value select), `ms:newgame:0`/`ms:newgamebot:0` (starting a
 practice game -- below; the trailing `0` is always a dummy, never a real
-game id). A field's own key is never encoded in a custom_id -- it's
+game id), `ms:cards:{gameId}` (the "View Cards" button -- switches to a
+browse screen offering `ms:cardhand:{gameId}`/`ms:cardplay:{gameId}`/
+`ms:carddiscard:{gameId}` select menus, one per zone, each value the
+chosen card's own game_cards id), `ms:log:{gameId}` (the "Game Log"
+button). A field's own key is never encoded in a custom_id -- it's
 always the one field this class already chose to render for that
 specific card/decision, so it's re-derived server-side from the current
 board state on the round trip rather than carried across it.
@@ -7853,6 +7857,41 @@ auto-passed empty hand) both have to run too, the same two-call sequence
 HUMAN opponent here -- picking/inviting another linked player is real
 design work this class's own docblock already flags as out of scope for
 a first pass.
+
+**Score line, card details, and the game log** (reported live: "show ...
+number of rounds each player has won so far, number of cards each player
+had in hand," "some way to view the card details for the cards in
+hand/play/discard," and "some way to view the text game log") -- three
+small additions on top of what the board already showed, all reusing
+data `GameService::getState()` already returns rather than adding any
+new query of their own:
+
+- Each player's score line now reads `{username}: {points} pts,
+  {rounds} round(s) won, {n} card(s) in hand`, the same
+  `players[].total_wins`/`hand_count` the web board's own player list
+  already shows (see `buildGameState()`), just never surfaced here
+  before.
+- A "View Cards" button switches the message to a browse screen
+  (`cardsMessage()`) offering up to three select menus -- one per zone
+  with anything in it (your own hand, everyone's in-play moods, the
+  discard pile) -- each option's value the card's own unique
+  `game_cards` id. Picking one (`ms:cardhand:`/`ms:cardplay:`/
+  `ms:carddiscard:{gameId}`) shows that single card's full catalog
+  detail (name, value, color, `rules_text`) via `cardDetailMessage()`,
+  with a "Back" button returning to the browse screen. The discard
+  pile's own select keeps the MOST RECENT `MAX_SELECT_OPTIONS` (25)
+  discards (a negative-length `array_slice()`) rather than the earliest
+  ones, once a long game's discard pile exceeds that cap, since those
+  are the ones a player is actually likely to want to check.
+- A "Game Log" button (`gameLogMessage()`) shows `recent_events` --
+  `GameService::recentEvents()`'s own already-bounded 15-row, newest-
+  first feed (the same one the web board's own "Recent plays" panel
+  reads) -- as plain text, with a defensive second cap (`substr()`
+  around 1900 chars) in case even 15 rows of unusually verbose
+  descriptions would still overflow Discord's own 2000-char message
+  content limit. Deliberately reuses this bounded feed rather than the
+  unbounded `fullEventLog()` (the web app's own "download log" export),
+  which has no such cap at all.
 
 **No new persistence** -- every interaction re-fetches `GameService::getState()`
 (for display) and, when rendering a field select, a fresh `BoardState`

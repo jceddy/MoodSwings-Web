@@ -209,6 +209,15 @@ final class DiscordGameCommandService
                     return $this->updateMessage(...$this->newPracticeGameMessage($userId));
                 case 'newgamebot':
                     return $this->updateMessage(...$this->createPracticeGameMessage($userId, (int) ($values[0] ?? 0)));
+                case 'cards':
+                    return $this->updateMessage(...$this->cardsMessage($gameId, $userId));
+                case 'cardhand':
+                case 'cardplay':
+                case 'carddiscard':
+                    $cardId = (int) ($values[0] ?? 0);
+                    return $this->updateMessage(...$this->cardDetailMessage($gameId, $userId, $verb, $cardId));
+                case 'log':
+                    return $this->updateMessage(...$this->gameLogMessage($gameId, $userId));
                 default:
                     return $this->updateMessage('Something about that action was not recognized -- try running /moodswings again.');
             }
@@ -369,7 +378,12 @@ final class DiscordGameCommandService
         $scoreLines = [];
         foreach ($state['players'] as $player) {
             $usernames[$player['game_player_id']] = $player['username'];
-            $scoreLines[] = "{$player['username']}: {$player['total_score']}";
+            // Reported live: "we need to show ... number of rounds each
+            // player has won so far, number of cards each player had in
+            // hand" -- both already public information the web board
+            // shows (players[].total_wins/hand_count, see buildGameState()),
+            // just never surfaced here alongside the score.
+            $scoreLines[] = "{$player['username']}: {$player['total_score']} pts, {$player['total_wins']} round(s) won, {$player['hand_count']} card(s) in hand";
         }
 
         $round = $state['round'];
@@ -431,6 +445,8 @@ final class DiscordGameCommandService
 
         $components[] = ['type' => 1, 'components' => [
             ['type' => 2, 'style' => 2, 'label' => 'Refresh', 'custom_id' => "ms:view:{$gameId}"],
+            ['type' => 2, 'style' => 2, 'label' => 'View Cards', 'custom_id' => "ms:cards:{$gameId}"],
+            ['type' => 2, 'style' => 2, 'label' => 'Game Log', 'custom_id' => "ms:log:{$gameId}"],
             ['type' => 2, 'style' => 5, 'label' => 'Open in browser', 'url' => $webUrl],
             $this->newGameButton(),
         ]];
@@ -532,6 +548,159 @@ final class DiscordGameCommandService
         }
 
         return implode("\n", $lines);
+    }
+
+    /**
+     * Reported live: "some way to view the card details for the cards in
+     * hand/play/discard" -- boardMessage() only ever shows a bare
+     * "Name (value)" for each card, never CardCatalog's own rules_text.
+     * One select menu per zone (hand/in_play/discard), each capped at
+     * MAX_SELECT_OPTIONS the same way every other select in this class
+     * is -- a long game's discard pile can exceed that, so it keeps the
+     * MOST RECENT discards (array_slice's negative length) rather than
+     * the earliest ones, since those are the ones a player is actually
+     * likely to want to check on.
+     *
+     * @return array{0: string, 1: array<int, array<string, mixed>>}
+     */
+    private function cardsMessage(int $gameId, int $userId): array
+    {
+        try {
+            $state = $this->games->getState($gameId, $userId);
+        } catch (GameStateException $e) {
+            return [$e->getMessage(), []];
+        }
+
+        $usernames = [];
+        foreach ($state['players'] as $player) {
+            $usernames[$player['game_player_id']] = $player['username'];
+        }
+
+        $components = [];
+
+        $handOptions = array_map(
+            fn (array $card) => ['label' => "{$card['name']} ({$card['value']})", 'value' => (string) $card['card_id']],
+            array_slice($state['you']['hand'] ?? [], 0, self::MAX_SELECT_OPTIONS),
+        );
+        if ($handOptions !== []) {
+            $components[] = ['type' => 1, 'components' => [[
+                'type' => 3, 'custom_id' => "ms:cardhand:{$gameId}", 'placeholder' => 'View a card in your hand...', 'options' => $handOptions,
+            ]]];
+        }
+
+        $inPlayOptions = array_map(
+            fn (array $card) => ['label' => "{$card['name']} ({$card['value']}) -- " . ($usernames[$card['owner_game_player_id']] ?? '?'), 'value' => (string) $card['card_id']],
+            array_slice($state['in_play'] ?? [], 0, self::MAX_SELECT_OPTIONS),
+        );
+        if ($inPlayOptions !== []) {
+            $components[] = ['type' => 1, 'components' => [[
+                'type' => 3, 'custom_id' => "ms:cardplay:{$gameId}", 'placeholder' => 'View a card in play...', 'options' => $inPlayOptions,
+            ]]];
+        }
+
+        $discardOptions = array_map(
+            fn (array $card) => ['label' => "{$card['name']} ({$card['value']}) -- " . ($card['last_owner_name'] ?? '?'), 'value' => (string) $card['card_id']],
+            array_slice($state['discard_pile'] ?? [], -self::MAX_SELECT_OPTIONS),
+        );
+        if ($discardOptions !== []) {
+            $components[] = ['type' => 1, 'components' => [[
+                'type' => 3, 'custom_id' => "ms:carddiscard:{$gameId}", 'placeholder' => 'View a card in the discard pile...', 'options' => $discardOptions,
+            ]]];
+        }
+
+        $components[] = ['type' => 1, 'components' => [['type' => 2, 'style' => 2, 'label' => 'Back to board', 'custom_id' => "ms:view:{$gameId}"]]];
+
+        $lines = ["**Game #{$gameId}** -- pick a card to view its details:"];
+        if ($handOptions === [] && $inPlayOptions === [] && $discardOptions === []) {
+            $lines[] = '(no cards to show right now)';
+        }
+
+        return [implode("\n", $lines), $components];
+    }
+
+    /**
+     * The single card $cardId's own catalog detail (name/value/color/
+     * rules_text) -- $zone picks which of the three arrays fieldOptions()'s
+     * own three custom_id verbs (cardhand/cardplay/carddiscard) searches,
+     * since the same card id could otherwise collide across zones (a
+     * discarded card and an unrelated card still in hand are different
+     * game_cards rows, but this keeps the lookup scoped to exactly the
+     * list the player actually picked from either way).
+     *
+     * @return array{0: string, 1: array<int, array<string, mixed>>}
+     */
+    private function cardDetailMessage(int $gameId, int $userId, string $zone, int $cardId): array
+    {
+        try {
+            $state = $this->games->getState($gameId, $userId);
+        } catch (GameStateException $e) {
+            return [$e->getMessage(), []];
+        }
+
+        $cards = match ($zone) {
+            'cardhand' => $state['you']['hand'] ?? [],
+            'cardplay' => $state['in_play'] ?? [],
+            'carddiscard' => $state['discard_pile'] ?? [],
+            default => [],
+        };
+
+        $card = $this->findCard($cards, $cardId);
+        if ($card === null) {
+            // The card moved zones (played, drawn back, etc.) between
+            // opening this select and picking from it -- rather than a
+            // dead-end error, just show the browse screen again with
+            // whatever's actually there now.
+            return $this->cardsMessage($gameId, $userId);
+        }
+
+        $lines = ["**{$card['name']} ({$card['value']})** -- {$card['color']}"];
+        if (($card['rules_text'] ?? '') !== '') {
+            $lines[] = $card['rules_text'];
+        }
+
+        $components = [['type' => 1, 'components' => [['type' => 2, 'style' => 2, 'label' => 'Back', 'custom_id' => "ms:cards:{$gameId}"]]]];
+
+        return [implode("\n", $lines), $components];
+    }
+
+    /**
+     * Reported live alongside cardsMessage() above: "some way to view the
+     * text game log" -- reuses getState()'s own already-bounded
+     * recent_events (GameService::recentEvents(), capped at 15 rows,
+     * newest first) rather than the unbounded fullEventLog(), since a
+     * long game's full log could badly overflow Discord's own 2000-char
+     * message content cap; the trailing substr() below is a second,
+     * defensive cap for the rare case even 15 rows of unusually verbose
+     * descriptions still would.
+     *
+     * @return array{0: string, 1: array<int, array<string, mixed>>}
+     */
+    private function gameLogMessage(int $gameId, int $userId): array
+    {
+        try {
+            $state = $this->games->getState($gameId, $userId);
+        } catch (GameStateException $e) {
+            return [$e->getMessage(), []];
+        }
+
+        $lines = ["**Game #{$gameId}** -- recent plays (newest first):"];
+        $events = $state['recent_events'] ?? [];
+        if ($events === []) {
+            $lines[] = '(nothing has happened yet)';
+        } else {
+            foreach ($events as $event) {
+                $lines[] = "- {$event['description']}";
+            }
+        }
+
+        $content = implode("\n", $lines);
+        if (strlen($content) > 1900) {
+            $content = substr($content, 0, 1897) . '...';
+        }
+
+        $components = [['type' => 1, 'components' => [['type' => 2, 'style' => 2, 'label' => 'Back to board', 'custom_id' => "ms:view:{$gameId}"]]]];
+
+        return [$content, $components];
     }
 
     /**
