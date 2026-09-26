@@ -7622,10 +7622,9 @@ actually sending a notification as a Discord DM
 (`Discord\DiscordNotificationChannel`, one of the `NotificationChannel`s
 `NotificationService` fans a notification out to -- see "Browser push
 notifications" above for the shared trigger/preference/cooldown/queue
-orchestration both channels sit behind). A slash-command/button-driven
-"play the game via Discord" is still out of scope here -- that's issue
-#233's own territory, and the only interaction type
-`DiscordInteractionsService` handles today is still just `PING`.
+orchestration both channels sit behind). The slash-command/button-driven
+"play the game via Discord" surface built on top of this is issue #233's
+own territory -- see "Playing the game via Discord" below.
 
 **Account linking** is Discord's standard OAuth2 authorization-code flow,
 `identify` scope only (`DiscordOAuthService`) -- `GET /discord/oauth/start`
@@ -7675,13 +7674,13 @@ Ed25519-signature-verified (`sodium_crypto_sign_verify_detached()` over
 the exact raw body, no new Composer dependency needed --
 `ext-sodium` ships with PHP) against `DISCORD_PUBLIC_KEY` before its JSON
 is even parsed -- a request that fails verification gets a bare `401`,
-never a rendered response. The only interaction type handled so far is
-`PING` (Discord's own one-time "is this endpoint alive and correctly
-verified" check, sent the moment the Interactions Endpoint URL is saved
-in the Developer Portal), answered with a bare `PONG` -- no slash command
-is registered yet (that's issue #233's own "play the game via Discord"
-territory), so nothing else is ever actually sent here today. Every
-rejected request (missing/malformed signature headers, no
+never a rendered response. `PING` (Discord's own one-time "is this
+endpoint alive and correctly verified" check, sent the moment the
+Interactions Endpoint URL is saved in the Developer Portal) is answered
+with a bare `PONG`; `APPLICATION_COMMAND`/`MESSAGE_COMPONENT` (the
+`/moodswings` slash command and its own buttons/select menus) delegate to
+`DiscordGameCommandService` -- see "Playing the game via Discord" below.
+Every rejected request (missing/malformed signature headers, no
 `DISCORD_PUBLIC_KEY` configured, a signature that doesn't verify, or --
 defensively -- `ext-sodium` itself unavailable) logs why to its own
 `discord-errors.log` (same convention as `notification-errors.log`), so a
@@ -7740,6 +7739,86 @@ Endpoint URL) -- the same reasoning `DB_*`/`FTP_*` already get a
 unprefixed `DISCORD_*` `.env` keys `deploy.yml` writes from the
 unprefixed secrets -- the application code itself has no notion of
 "which environment," same as every other `Config::get()` value.
+
+**`DISCORD_COMMAND_NAME`** (optional, defaults to `moodswings`) is the
+one exception to "the application code has no notion of which
+environment" above, and deliberately so: issue #233's own `/moodswings`
+command is a USER-installed app command (see "Playing the game via
+Discord" below), so outside a DM it's visible in the picker in ANY
+server/channel a linked player happens to be in -- including, for
+whoever tests dev while also using prod day to day, both environments'
+commands at once, identically named, distinguishable only by a small
+app-name label most people would never notice before tapping the wrong
+one. `DEV_DISCORD_COMMAND_NAME` (a `vars.*` GitHub Actions variable, not
+a secret -- a command's own name isn't sensitive) lets dev register
+under a visibly different name (e.g. `moodswingsdev`) instead; unset
+(the default), dev registers as plain `/moodswings` too, same as before
+this existed.
+
+### Playing the game via Discord (issue #233)
+
+`Discord\DiscordGameCommandService`, dispatched to by
+`DiscordInteractionsService` for `APPLICATION_COMMAND`/`MESSAGE_COMPONENT`
+interactions (see "Discord" above) -- a single `/moodswings` slash
+command, registered once per environment via
+`bin/register_discord_commands.php` (a bulk-overwrite `PUT` to
+`/applications/{id}/commands`, safe to rerun any time the command's own
+definition changes). Every response is **ephemeral** (`flags: 64`) --
+a hand's contents are exactly as private here as on the web board.
+
+**V1 scope, deliberately narrow** (this class's own docblock has the
+full reasoning):
+
+- Format `standard` (Traditional Duel) only. Team/Closed Team/Duel/
+  draft/chaos_draft all have their own extra state (teammate hand
+  visibility, per-seat decks, propose/confirm decisions, attached chaos
+  effects) this class has no rendering for yet -- any other format (or
+  any status other than `in_progress`) gets a plain "open the web app
+  for this" message with a link, never a crash.
+- A hand card is only offered to play here if every one of its own
+  REQUIRED `choice_fields` (or a pending decision's own single field) is
+  a `mode`/`value`/`bool`/`mood`/`player`/`hand_card`/`discard_card`
+  field and not itself a `multi` selection -- covers most single-target
+  cards (Pride's own `target_player_id`, Compulsion's
+  `discard_card_id`, Conviction's self-targetable `target_mood_id`, ...)
+  but excludes anything needing more than one field, a checkbox-style
+  `multi` selection, or a `nested` sub-form (Duplicity's own repeat
+  offer, any chaos_draft attachment) -- those cards are listed as
+  "needs the web app" instead. An OPTIONAL field is never rendered at
+  all -- a card offered here always plays with every optional field left
+  blank, a real (documented, not accidental) v1 limitation.
+- Legal candidates for a rendered field reuse `BotChoiceResolver`'s own
+  already-tested `moodFieldCandidates()`/`playerFieldCandidates()`/
+  `handCardFieldCandidates()`/`discardCardFieldCandidates()` against a
+  freshly loaded `BoardState`, rather than re-deriving
+  `CardChoiceSchema`'s own filter/scope logic a third time
+  (`web-static/js/game.js`'s `fieldOptions()` is the second) -- this
+  class only supplies the Discord embed/component layer on top of an
+  already-correct legal-candidate list. `BotChoiceResolver` gained two
+  new public methods for this (`handCardFieldCandidates()`/
+  `discardCardFieldCandidates()`, mirroring its own pre-existing
+  `moodFieldCandidates()`/`playerFieldCandidates()`), since it previously
+  only ever needed to return ONE non-strategic pick, never every legal
+  option.
+
+**Custom_id scheme** (colon-delimited, always well under Discord's own
+100-char cap): `ms:view:{gameId}` (refresh/select-a-game buttons),
+`ms:pass:{gameId}`, `ms:play:{gameId}` (the "play a card" select menu --
+its own value is the chosen card id), `ms:playfield:{gameId}:{cardId}`
+(that card's own single required field's value select),
+`ms:decision:{gameId}` (the current pending decision's own single
+field's value select). A field's own key is never encoded in a
+custom_id -- it's always the one field this class already chose to
+render for that specific card/decision, so it's re-derived server-side
+from the current board state on the round trip rather than carried
+across it.
+
+**No new persistence** -- every interaction re-fetches `GameService::getState()`
+(for display) and, when rendering a field select, a fresh `BoardState`
+(for `BotChoiceResolver`'s candidate enumeration) fresh from the
+database; nothing about "which card is mid-play" or "which field is
+being answered" needs its own table, since it all fits in the custom_id
+above and gets re-validated against the live board on every round trip.
 
 ### Lifetime stats
 

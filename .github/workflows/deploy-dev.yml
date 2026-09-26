@@ -92,6 +92,13 @@ jobs:
           DISCORD_CLIENT_SECRET: ${{ secrets.DEV_DISCORD_CLIENT_SECRET }}
           DISCORD_PUBLIC_KEY: ${{ secrets.DEV_DISCORD_PUBLIC_KEY }}
           DISCORD_BOT_TOKEN: ${{ secrets.DEV_DISCORD_BOT_TOKEN }}
+          # Not a secret (it's a slash command's own public name), but
+          # still DEV_-prefixed -- see bin/register_discord_commands.php's
+          # own docblock: this is what lets dev's /moodswings equivalent
+          # register under a visibly different name than production's,
+          # so the two don't sit side by side, identically named, in the
+          # picker for anyone who's linked their account to both.
+          DISCORD_COMMAND_NAME: ${{ vars.DEV_DISCORD_COMMAND_NAME }}
           # MIGRATION_DEPLOY_KEY itself comes from the job-level env above
           # (already in scope here without redeclaring it).
         run: |
@@ -188,6 +195,7 @@ jobs:
           write_env_var DISCORD_CLIENT_SECRET "$DISCORD_CLIENT_SECRET"
           write_env_var DISCORD_PUBLIC_KEY "$DISCORD_PUBLIC_KEY"
           write_env_var DISCORD_BOT_TOKEN "$DISCORD_BOT_TOKEN"
+          write_env_var DISCORD_COMMAND_NAME "$DISCORD_COMMAND_NAME"
           write_env_var MIGRATION_DEPLOY_KEY "$MIGRATION_DEPLOY_KEY"
 
           # dist/, vendor/, src/, and database/ all end up under the shared
