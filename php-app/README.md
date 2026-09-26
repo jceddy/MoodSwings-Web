@@ -7775,18 +7775,36 @@ full reasoning):
   effects) this class has no rendering for yet -- any other format (or
   any status other than `in_progress`) gets a plain "open the web app
   for this" message with a link, never a crash.
-- A hand card is only offered to play here if every one of its own
-  REQUIRED `choice_fields` (or a pending decision's own single field) is
-  a `mode`/`value`/`bool`/`mood`/`player`/`hand_card`/`discard_card`
-  field and not itself a `multi` selection -- covers most single-target
-  cards (Pride's own `target_player_id`, Compulsion's
-  `discard_card_id`, Conviction's self-targetable `target_mood_id`, ...)
-  but excludes anything needing more than one field, a checkbox-style
-  `multi` selection, or a `nested` sub-form (Duplicity's own repeat
-  offer, any chaos_draft attachment) -- those cards are listed as
-  "needs the web app" instead. An OPTIONAL field is never rendered at
-  all -- a card offered here always plays with every optional field left
-  blank, a real (documented, not accidental) v1 limitation.
+- A hand card is only offered to play here if it has exactly one
+  `choice_field` total -- required OR optional -- (or a pending
+  decision's own single field) of a `mode`/`value`/`bool`/`mood`/
+  `player`/`hand_card`/`discard_card` type and not itself a `multi`
+  selection -- covers most single-target cards (Pride's own
+  `target_player_id`, Compulsion's `discard_card_id`, Conviction's
+  self-targetable `target_mood_id`, Hate's optional "any mood in play,"
+  ...) but excludes anything needing more than one field, a
+  checkbox-style `multi` selection, or a `nested` sub-form (Duplicity's
+  own repeat offer, any chaos_draft attachment) -- those cards are
+  listed as "needs the web app" instead. An OPTIONAL field's select
+  menu (`withSkipOptionIfOptional()`) always gets a leading "Skip --
+  play without this effect" option (`SKIP_FIELD_VALUE`) so declining it
+  is a deliberate choice sent back to `castFieldValue()`/`choicesFor()`
+  as "leave this key out of the submitted choices entirely," never a
+  silent default -- this class's first ship never rendered an optional
+  field's choice at all (Hate's own `target_mood_id` is `required =>
+  false`, so it always played with no target and no way to pick one;
+  reported live as "select options for cards we choose to play (such as
+  a target for Hate)").
+- Every board view now opens with an in-play summary (`inPlaySummary()`)
+  listing each player's own moods currently in play, alongside their own
+  hand -- public information (unlike a hand), and the only way to make
+  an informed choice for a `mood`-type field like Hate's, whose
+  candidates can span both players. A `mood` field's own select options
+  (`fieldOptions()`) are labelled with their owning player's username
+  (e.g. `Complacency (4) -- discord-player-17`) for exactly that reason
+  -- a candidate not actually in play yet (a card still in the player's
+  own hand, offered only via that field's own `includes_self`) gets no
+  suffix, since it's always unambiguously "yourself."
 - Legal candidates for a rendered field reuse `BotChoiceResolver`'s own
   already-tested `moodFieldCandidates()`/`playerFieldCandidates()`/
   `handCardFieldCandidates()`/`discardCardFieldCandidates()` against a
@@ -7805,7 +7823,7 @@ full reasoning):
 100-char cap): `ms:view:{gameId}` (refresh/select-a-game buttons),
 `ms:pass:{gameId}`, `ms:play:{gameId}` (the "play a card" select menu --
 its own value is the chosen card id), `ms:playfield:{gameId}:{cardId}`
-(that card's own single required field's value select),
+(that card's own single field's value select, required or optional),
 `ms:decision:{gameId}` (the current pending decision's own single
 field's value select), `ms:newgame:0`/`ms:newgamebot:0` (starting a
 practice game -- below; the trailing `0` is always a dummy, never a real
