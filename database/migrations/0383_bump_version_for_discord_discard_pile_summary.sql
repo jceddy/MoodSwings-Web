@@ -1,0 +1,13 @@
+-- Issue #233 follow-up (reported live: "the user needs to be able to see
+-- the discard pile in the discord client"): every DiscordGameCommandService
+-- board view now shows a "Discard pile ({n}): Name (value), ..." line
+-- (discardPileSummary()) right alongside the existing "moods in play"
+-- lines -- public information, previously only reachable one card at a
+-- time via the "View Cards" button's own discard-pile select.
+--
+-- See php-app/README.md's "Playing the game via Discord" section for the
+-- full design.
+--
+-- No schema change -- just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.55.5' WHERE id = 1;

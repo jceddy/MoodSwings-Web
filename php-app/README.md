@@ -7935,6 +7935,19 @@ new query of their own:
   unbounded `fullEventLog()` (the web app's own "download log" export),
   which has no such cap at all.
 
+**Discard pile summary** (reported live: "the user needs to be able to
+see the discard pile in the discord client") -- `discardPileSummary()`
+adds a `Discard pile ({n}): {name} ({value}), ...` line to every board
+view, right alongside `inPlaySummary()`'s own "moods in play" lines,
+the same public-information treatment. The "View Cards" button above
+already let a player look up ONE discard-pile card's own full detail,
+but there was still no way to see the pile at a glance the way in-play
+moods already could be. Capped at 900 chars (`substr()`) -- unlike
+in-play moods, a long game's discard pile can run to 100+ cards, which
+could otherwise push this one line, on top of everything else
+`boardMessage()` already shows, past Discord's own 2000-char message
+content limit.
+
 **No new persistence** -- every interaction re-fetches `GameService::getState()`
 (for display) and, when rendering a field select, a fresh `BoardState`
 (for `BotChoiceResolver`'s candidate enumeration) fresh from the
