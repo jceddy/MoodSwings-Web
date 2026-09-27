@@ -22308,11 +22308,11 @@ final class GameServiceIntegrationTest extends TestCase
         // play" -- public board info, shown to every viewer regardless
         // of whose turn it is.
         self::assertStringContainsString('discord-player-2\'s moods in play: (none)', $response['data']['content']);
-        self::assertStringContainsString('discord-player-3\'s moods in play: Complacency (4)', $response['data']['content']);
+        self::assertStringContainsString('discord-player-3\'s moods in play: Complacency (4, White)', $response['data']['content']);
 
         $playSelect = $response['data']['components'][0]['components'][0];
         self::assertSame("ms:play:{$gameId}", $playSelect['custom_id']);
-        self::assertSame(['label' => 'Sadness (0)', 'value' => (string) $sadnessId], $playSelect['options'][0]);
+        self::assertSame(['label' => 'Sadness (0, Black)', 'value' => (string) $sadnessId], $playSelect['options'][0]);
 
         $passButton = $response['data']['components'][1]['components'][0];
         self::assertSame("ms:pass:{$gameId}", $passButton['custom_id']);
@@ -22567,8 +22567,8 @@ final class GameServiceIntegrationTest extends TestCase
         $fieldSelect = $response['data']['components'][0]['components'][0];
         self::assertStringStartsWith("ms:playfield:{$gameId}:{$hateId}:0:", $fieldSelect['custom_id']);
         $labelsByValue = array_column($fieldSelect['options'], 'label', 'value');
-        self::assertSame('Sadness (0) -- discord-player-16', $labelsByValue[(string) $ownMoodId]);
-        self::assertSame('Complacency (4) -- discord-player-17', $labelsByValue[(string) $opponentMoodId]);
+        self::assertSame('Sadness (0, Black) -- discord-player-16', $labelsByValue[(string) $ownMoodId]);
+        self::assertSame('Complacency (4, White) -- discord-player-17', $labelsByValue[(string) $opponentMoodId]);
     }
 
     /**
@@ -22682,7 +22682,7 @@ final class GameServiceIntegrationTest extends TestCase
         );
 
         self::assertSame(7, $detailResponse['type']);
-        self::assertStringContainsString('Hate (0)', $detailResponse['data']['content']);
+        self::assertStringContainsString('Hate (0, Black)', $detailResponse['data']['content']);
         self::assertStringContainsString('bottom of the deck', $detailResponse['data']['content']);
         self::assertSame("ms:cards:{$gameId}", $detailResponse['data']['components'][0]['components'][0]['custom_id']);
     }
@@ -22711,13 +22711,13 @@ final class GameServiceIntegrationTest extends TestCase
 
         $inPlaySelect = $cardsResponse['data']['components'][0]['components'][0];
         self::assertSame("ms:cardplay:{$gameId}", $inPlaySelect['custom_id']);
-        self::assertSame('Complacency (4) -- discord-player-25', $inPlaySelect['options'][0]['label']);
+        self::assertSame('Complacency (4, White) -- discord-player-25', $inPlaySelect['options'][0]['label']);
 
         $detailResponse = $this->discordCommandService()->handleComponent(
             $this->discordComponentPayload('discord-24', "ms:cardplay:{$gameId}", [(string) $complacencyId])
         );
 
-        self::assertStringContainsString('Complacency (4)', $detailResponse['data']['content']);
+        self::assertStringContainsString('Complacency (4, White)', $detailResponse['data']['content']);
     }
 
     /**
@@ -22879,7 +22879,7 @@ final class GameServiceIntegrationTest extends TestCase
 
         $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-32'));
 
-        self::assertStringContainsString('Discard pile (2): Sadness (0), Complacency (4)', $response['data']['content']);
+        self::assertStringContainsString('Discard pile (2): Sadness (0, Black), Complacency (4, White)', $response['data']['content']);
     }
 
     /**
@@ -22943,6 +22943,39 @@ final class GameServiceIntegrationTest extends TestCase
 
         self::assertSame(7, $response['type']);
         self::assertStringContainsString('discord-player-36 won', $response['data']['content']);
+    }
+
+    /**
+     * Reported live: "Let's show the colors of the cards in the discord
+     * client as well as the name/value" -- every card listing in this
+     * class (a hand, in-play summary, discard pile, a select-menu
+     * option, the single-card detail view, ...) shares cardLabel(), so
+     * this checks the color shows up in each of those places at once.
+     */
+    public function testDiscordCommandShowsCardColorsEverywhere(): void
+    {
+        $u1 = $this->insertUser('discord-player-38');
+        $u2 = $this->insertUser('discord-player-39');
+        $this->linkDiscordAccount($u1, 'discord-38');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameCard($gameId, 74, 'hand', $p1); // Sadness -- black
+        $this->insertGameCard($gameId, 5, 'in_play', $p2); // Complacency -- white
+        $this->insertGameCard($gameId, 6, 'discard'); // Conviction -- white
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-38'));
+
+        self::assertStringContainsString('Your hand: Sadness (0, Black)', $response['data']['content']);
+        self::assertStringContainsString('Complacency (4, White)', $response['data']['content']);
+        self::assertStringContainsString('Discard pile (1): Conviction (2, White)', $response['data']['content']);
     }
 
     /** @return int[] */

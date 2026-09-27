@@ -7974,6 +7974,26 @@ teammates' names for a format `team` win -- moot for the
 board's own "Game over" banner already reads) alongside each player's
 final `total_wins` tally.
 
+**Card colors** (reported live: "let's show the colors of the cards in
+the discord client as well as the name/value") -- every card listing
+this class builds (a hand, `inPlaySummary()`, `discardPileSummary()`, a
+select-menu option, `cardDetailMessage()`'s own single-card view, a
+`mood`/`hand_card`/`discard_card` field's own candidate labels, ...)
+used to build its own "{name} ({value})" string inline; `cardLabel()`
+is now the one place that format lives, reading `serializeCard()`'s own
+`color` field to produce "{name} ({value}, {Color})" everywhere
+instead. Considered showing card art thumbnails too (issue #233's own
+follow-up: "is there any way we can show card thumbnails instead of
+text?") -- `web-static/img/cards/MSW/{catalog_card_id}-{slug}.webp` is
+already public (served as a plain static file, fetchable directly by
+Discord's own servers for an embed's `thumbnail.url`), so a SINGLE
+card's own detail view could embed one directly. A multi-card list
+(a hand, the whole board) can't, though: Discord caps a message at 10
+embeds total, each holding at most one image, so a full hand or
+in-play board would either break down past ~10 cards or need a far
+bulkier one-embed-per-card layout in place of today's compact text
+lines -- deferred pending a decision on scope.
+
 **No new persistence** -- every interaction re-fetches `GameService::getState()`
 (for display) and, when rendering a field select, a fresh `BoardState`
 (for `BotChoiceResolver`'s candidate enumeration) fresh from the

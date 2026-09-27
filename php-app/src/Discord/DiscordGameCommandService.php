@@ -631,7 +631,7 @@ final class DiscordGameCommandService
         }
 
         $lines[] = 'Your hand: ' . ($you['hand'] === [] ? '(empty)' : implode(', ', array_map(
-            fn (array $card) => "{$card['name']} ({$card['value']})",
+            fn (array $card) => $this->cardLabel($card),
             $you['hand'],
         )));
 
@@ -730,7 +730,7 @@ final class DiscordGameCommandService
     {
         $byOwner = [];
         foreach ($state['in_play'] as $card) {
-            $byOwner[$card['owner_game_player_id']][] = "{$card['name']} ({$card['value']})";
+            $byOwner[$card['owner_game_player_id']][] = $this->cardLabel($card);
         }
 
         $lines = [];
@@ -769,7 +769,7 @@ final class DiscordGameCommandService
             return 'Discard pile: (empty)';
         }
 
-        $names = array_map(fn (array $card) => "{$card['name']} ({$card['value']})", $pile);
+        $names = array_map(fn (array $card) => $this->cardLabel($card), $pile);
         $line = 'Discard pile (' . count($pile) . '): ' . implode(', ', $names);
 
         if (strlen($line) > 900) {
@@ -808,7 +808,7 @@ final class DiscordGameCommandService
         $components = [];
 
         $handOptions = array_map(
-            fn (array $card) => ['label' => "{$card['name']} ({$card['value']})", 'value' => (string) $card['card_id']],
+            fn (array $card) => ['label' => $this->cardLabel($card), 'value' => (string) $card['card_id']],
             array_slice($state['you']['hand'] ?? [], 0, self::MAX_SELECT_OPTIONS),
         );
         if ($handOptions !== []) {
@@ -818,7 +818,7 @@ final class DiscordGameCommandService
         }
 
         $inPlayOptions = array_map(
-            fn (array $card) => ['label' => "{$card['name']} ({$card['value']}) -- " . ($usernames[$card['owner_game_player_id']] ?? '?'), 'value' => (string) $card['card_id']],
+            fn (array $card) => ['label' => $this->cardLabel($card) . ' -- ' . ($usernames[$card['owner_game_player_id']] ?? '?'), 'value' => (string) $card['card_id']],
             array_slice($state['in_play'] ?? [], 0, self::MAX_SELECT_OPTIONS),
         );
         if ($inPlayOptions !== []) {
@@ -828,7 +828,7 @@ final class DiscordGameCommandService
         }
 
         $discardOptions = array_map(
-            fn (array $card) => ['label' => "{$card['name']} ({$card['value']}) -- " . ($card['last_owner_name'] ?? '?'), 'value' => (string) $card['card_id']],
+            fn (array $card) => ['label' => $this->cardLabel($card) . ' -- ' . ($card['last_owner_name'] ?? '?'), 'value' => (string) $card['card_id']],
             array_slice($state['discard_pile'] ?? [], -self::MAX_SELECT_OPTIONS),
         );
         if ($discardOptions !== []) {
@@ -882,7 +882,7 @@ final class DiscordGameCommandService
             return $this->cardsMessage($gameId, $userId);
         }
 
-        $lines = ["**{$card['name']} ({$card['value']})** -- {$card['color']}"];
+        $lines = ['**' . $this->cardLabel($card) . '**'];
         if (($card['rules_text'] ?? '') !== '') {
             $lines[] = $card['rules_text'];
         }
@@ -966,7 +966,7 @@ final class DiscordGameCommandService
                 continue;
             }
 
-            $options[] = ['label' => "{$card['name']} ({$card['value']})", 'value' => (string) $card['card_id']];
+            $options[] = ['label' => $this->cardLabel($card), 'value' => (string) $card['card_id']];
         }
 
         return [$options, $unsupported];
@@ -1041,7 +1041,7 @@ final class DiscordGameCommandService
 
         $cardNames = [];
         foreach (array_merge($state['you']['hand'] ?? [], $state['in_play'] ?? [], $state['discard_pile'] ?? []) as $card) {
-            $cardNames[$card['card_id']] = "{$card['name']} ({$card['value']})";
+            $cardNames[$card['card_id']] = $this->cardLabel($card);
         }
         $usernames = [];
         foreach ($state['players'] as $player) {
@@ -1095,6 +1095,20 @@ final class DiscordGameCommandService
             'bool' => $raw === '1',
             default => (int) $raw,
         };
+    }
+
+    /**
+     * "Name (value, Color)" -- reported live: "Let's show the colors of
+     * the cards in the discord client as well as the name/value." Every
+     * card listing in this class (a hand, in-play summary, discard pile,
+     * a select-menu option, ...) built its own "{name} ({value})" string
+     * inline before this, so this is the one place that format lives now.
+     *
+     * @param array<string, mixed> $card
+     */
+    private function cardLabel(array $card): string
+    {
+        return "{$card['name']} ({$card['value']}, " . ucfirst((string) $card['color']) . ')';
     }
 
     /** @param array<int, array<string, mixed>> $hand */
