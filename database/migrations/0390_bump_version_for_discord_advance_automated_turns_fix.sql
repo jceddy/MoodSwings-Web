@@ -1,0 +1,23 @@
+-- Reported live: "every bot decision ... is not running until the 15
+-- minute CRON recovery job runs" -- root cause: unlike every equivalent
+-- web write route (POST /games/pass, /games/play, ...), which all call
+-- GameService::advanceAutomatedTurns() right after their own mutation,
+-- and unlike the web client's own ~4s GET /games/state poll (which
+-- calls it on every single poll as a backstop), DiscordGameCommandService's
+-- handleComponent() never called it at all after a human's own
+-- pass/play/decision, and handleCommand() (the /moodswings slash command
+-- itself) never called it either -- so a bot's own following turn, or
+-- even a human's own default-on empty-hand auto-pass, just sat there
+-- with nothing to drive it forward via Discord until the periodic cron
+-- fallback eventually caught it.
+--
+-- Both now call advanceAutomatedTurns() the same way their web
+-- equivalents already do -- handleComponent() right after a mutating
+-- verb's own switch case falls through, handleCommand() defensively
+-- before rendering the board (best-effort, matching GET /games/state's
+-- own try/catch(GameStateException) so a transient failure there never
+-- blocks the board from rendering at all).
+--
+-- No schema change -- just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.55.12' WHERE id = 1;
