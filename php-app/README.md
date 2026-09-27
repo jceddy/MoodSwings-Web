@@ -8087,6 +8087,29 @@ bare domain, missing the `/app` prefix entirely, a 404 Discord just
 renders as no image at all. Fixed to match `redirectUri()`'s own
 convention.
 
+**The image wasn't updating as moods got played** (reported live: "the
+discord in play image is not being updated as moods are played in the
+game") -- `boardImageUrl()`'s own URL used to be a bare function of the
+game id alone, identical on every single render for the same game.
+Discord's own CDN caches an embed image by URL the same way any HTTP
+client would, so once it fetched the image for a game once, it just
+kept serving that same cached copy back forever, no matter how many
+moods got played afterward -- `boardMessage()` itself was already
+correctly re-rendering fresh state on every call, just at an
+UNCHANGED url Discord had no reason to ever re-fetch. `boardImageUrl()`
+now takes a `$cacheKey` -- `boardImageCacheKey()` fingerprints exactly
+what `BoardImageRenderer` actually draws from `in_play` (each card's
+own `card_id`/`catalog_card_id`/`owner_game_player_id`/`value`,
+truncated to 12 hex chars of an `md5()`), appended as a plain, UNSIGNED
+`v=` query param. Deliberately not fed into `verifyBoardImageSignature()`'s
+own HMAC (still only ever a function of the game id) -- it's purely a
+cache-busting hint for Discord's own fetch, never anything the
+`/discord/board-image` route itself trusts for authorization, which
+still always re-renders fresh from the current database state
+regardless of what `v` says. An unchanged board (a plain "Refresh"
+click with nothing new having happened) keeps the exact same URL, so
+Discord still gets to reuse its own cache exactly when it should.
+
 **Bot turns/auto-passes weren't happening at all via Discord** (reported
 live: "every bot decision ... is not running until the 15 minute CRON
 recovery job runs") -- every equivalent web write route (`POST /games/pass`,

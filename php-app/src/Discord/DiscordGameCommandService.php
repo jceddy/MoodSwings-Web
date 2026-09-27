@@ -702,9 +702,55 @@ final class DiscordGameCommandService
             array_unshift($lines, $notice);
         }
 
-        $embeds = $state['in_play'] === [] ? [] : [['image' => ['url' => $this->boardImageUrl($gameId)]]];
+        // Reported live: "the discord in play image is not being
+        // updated as moods are played in the game" -- boardImageUrl()'s
+        // own URL used to be a bare function of $gameId alone, identical
+        // on every single render for the same game; Discord's own CDN
+        // (like any HTTP client) caches an embed image by URL, so once
+        // it fetched the composite image for THIS game once, every later
+        // updateMessage() with that same unchanged URL just kept
+        // reusing the stale cached copy, no matter how many moods got
+        // played afterward. boardImageCacheKey() below appends a query
+        // param that changes exactly when the rendered picture actually
+        // would (see its own docblock) -- NOT part of the HMAC signature
+        // itself (verifyBoardImageSignature() below still only ever
+        // covers $gameId), so it's purely a cache-busting hint for
+        // Discord's own fetch, never anything the server itself trusts
+        // for authorization.
+        $embeds = $state['in_play'] === [] ? [] : [['image' => ['url' => $this->boardImageUrl($gameId, $this->boardImageCacheKey($state['in_play']))]]];
 
         return [implode("\n", $lines), $components, $embeds];
+    }
+
+    /**
+     * A short fingerprint of exactly what BoardImageRenderer actually
+     * draws from $inPlay -- which card art file each cell shows
+     * (catalog_card_id), whose row it's in (owner_game_player_id), and
+     * its own current-value badge (value) -- appended to boardImageUrl()'s
+     * own URL purely so Discord's own CDN treats a genuinely different
+     * board as a genuinely different resource to (re)fetch, while an
+     * unchanged board (a plain "Refresh" click, re-running /moodswings
+     * with nothing new having happened) keeps the exact same URL and
+     * lets Discord keep serving its own already-cached copy instead of
+     * needlessly re-fetching. `card_id` alone would already change
+     * whenever a DIFFERENT card enters/leaves play, but a Creativity
+     * copy's own catalog_card_id/value can change on the SAME card_id
+     * (its copy target changing) without ever leaving play, so both
+     * still need including. Truncated to 12 hex chars -- this only ever
+     * needs to be "different when the board is," not cryptographically
+     * unique; the real access control is verifyBoardImageSignature()'s
+     * own HMAC, computed over $gameId alone, never this value.
+     *
+     * @param array<int, array<string, mixed>> $inPlay
+     */
+    private function boardImageCacheKey(array $inPlay): string
+    {
+        $signature = array_map(
+            static fn (array $card) => [$card['card_id'], $card['catalog_card_id'], $card['owner_game_player_id'], $card['value']],
+            $inPlay,
+        );
+
+        return substr(md5(json_encode($signature)), 0, 12);
     }
 
     /**
@@ -1058,10 +1104,18 @@ final class DiscordGameCommandService
      * this reason -- SiteUrl::root() pointed Discord's own fetch at the
      * bare domain, missing the '/app' prefix entirely, a 404 Discord
      * just renders as no image at all.
+     *
+     * $cacheKey (see boardImageCacheKey()'s own docblock for what it's
+     * made of and why) is deliberately NOT fed into signBoardImage()
+     * below -- it's a plain, unsigned query param purely for Discord's
+     * own HTTP caching, never anything the `/discord/board-image` route
+     * itself trusts for authorization (that route always re-renders
+     * fresh from the CURRENT database state regardless of what this
+     * says, the same as it always has).
      */
-    public function boardImageUrl(int $gameId): string
+    public function boardImageUrl(int $gameId, string $cacheKey): string
     {
-        return rtrim((string) Config::get('APP_URL', ''), '/') . "/discord/board-image?game_id={$gameId}&sig=" . $this->signBoardImage($gameId);
+        return rtrim((string) Config::get('APP_URL', ''), '/') . "/discord/board-image?game_id={$gameId}&sig=" . $this->signBoardImage($gameId) . '&v=' . rawurlencode($cacheKey);
     }
 
     /** @see boardImageUrl()'s own docblock for why this exists at all. */
