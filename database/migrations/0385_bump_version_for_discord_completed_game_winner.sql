@@ -1,0 +1,17 @@
+-- Issue #233 follow-up (reported live: "the ephemeral message announcing
+-- the game ending should mention who the winner was"): a 'completed' game
+-- used to fall into the same generic "Game #X is 'completed'" message
+-- every other non-in_progress status still gets, even though every
+-- action's own handleComponent() catch-all re-renders the board right
+-- after it runs -- so the last thing a player who just won saw was that
+-- plain status line, with no mention of who actually won.
+-- DiscordGameCommandService::boardMessage() now special-cases 'completed'
+-- first, announcing game.winner_usernames alongside each player's final
+-- total_wins tally.
+--
+-- See php-app/README.md's "Playing the game via Discord" section for the
+-- full design.
+--
+-- No schema change -- just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.55.7' WHERE id = 1;

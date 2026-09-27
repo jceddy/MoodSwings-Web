@@ -22882,6 +22882,69 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertStringContainsString('Discard pile (2): Sadness (0), Complacency (4)', $response['data']['content']);
     }
 
+    /**
+     * Reported live: "the discord client game display needs to show
+     * which player went first this round" -- uses the round's own
+     * went_first_game_player_id (BoardState::roundFirstPlayerId()), not
+     * the bare first_game_player_id column, since the former is the one
+     * that stays correct for format 'team' (a representative-member-only
+     * column there) even though Discord only supports 'standard' today.
+     */
+    public function testDiscordCommandBoardShowsWhoWentFirst(): void
+    {
+        $u1 = $this->insertUser('discord-player-34');
+        $u2 = $this->insertUser('discord-player-35');
+        $this->linkDiscordAccount($u1, 'discord-34');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameRound($gameId, 3, $p2, $p1, 1);
+
+        $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-34'));
+
+        self::assertStringContainsString('Round 3 -- discord-player-35 went first.', $response['data']['content']);
+    }
+
+    /**
+     * Reported live: "the ephemeral message announcing the game ending
+     * should mention who the winner was" -- previously fell into the
+     * generic "Game #X is 'completed'" message every action's own
+     * post-play boardMessage() re-render already produces, with no
+     * mention of who actually won.
+     */
+    public function testDiscordComponentCompletedGameAnnouncesTheWinner(): void
+    {
+        $u1 = $this->insertUser('discord-player-36');
+        $u2 = $this->insertUser('discord-player-37');
+        $this->linkDiscordAccount($u1, 'discord-36');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameRound($gameId, 3, $p1, $p1, 1);
+        $this->pdo->prepare(
+            "UPDATE games SET status = 'completed', completed_at = NOW(), winner_game_player_id = :winner WHERE id = :id"
+        )->execute(['winner' => $p1, 'id' => $gameId]);
+
+        $response = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-36', "ms:view:{$gameId}")
+        );
+
+        self::assertSame(7, $response['type']);
+        self::assertStringContainsString('discord-player-36 won', $response['data']['content']);
+    }
+
     /** @return int[] */
     private function activeStandardGameIdsForTest(int $userId): array
     {
