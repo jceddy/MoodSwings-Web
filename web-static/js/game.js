@@ -9412,6 +9412,15 @@
         if (state.game.is_tournament_match) {
             return false;
         }
+        // Issue #524: a solved puzzle already has its own "Try Again"
+        // (the Puzzles dialog's own button, which starts a correctly-
+        // seeded fresh attempt) -- Rematch's own New Game dialog has
+        // no way to recreate a single-seat puzzle attempt at all, and
+        // would just offer a confusing "new game" with format 'puzzle'
+        // and no real opponents.
+        if (state.game.format === 'puzzle') {
+            return false;
+        }
         if (state.game.status !== 'completed') {
             return false;
         }

@@ -987,6 +987,28 @@ dialog#friends-dialog li button + button {
     margin-left: 0.25rem;
 }
 
+/* Issue #524: unlike #friends-dialog/#decks-dialog's single-line rows
+   above, each #puzzles-list item stacks a title, description, optional
+   solved note, and an Attempt/Try Again button -- reported live, the
+   button sat flush against the next puzzle's own title with no
+   separation at all. Padding top/bottom (roughly a blank line's worth)
+   plus the same border-bottom divider convention gives each puzzle its
+   own visually distinct block. */
+#puzzles-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+#puzzles-list li {
+    padding: 1rem 0;
+    border-bottom: 1px solid var(--color-border-subtle);
+}
+
+#puzzles-list li:last-child {
+    border-bottom: none;
+}
+
 dialog#settings-dialog #notifications-preferences,
 dialog#settings-dialog #settings-game-defaults-section {
     display: flex;
