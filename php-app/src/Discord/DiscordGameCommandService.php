@@ -20,8 +20,8 @@ use MoodSwings\SiteUrl;
  * class renders is ever visible to anyone but the player who ran the
  * command/clicked the component.
  *
- * V1 SCOPE (deliberately narrow -- see issue #233's own "needs a decision
- * on scope for a first pass" note):
+ * SCOPE (deliberately narrower than the web app -- see issue #233's own
+ * "needs a decision on scope for a first pass" note):
  * - Format 'standard' (Traditional Duel) ONLY. Team/Closed Team/Duel/
  *   draft/chaos_draft formats all have their own extra state (teammate
  *   hand visibility, per-seat decks, propose/confirm decisions, attached
@@ -29,23 +29,24 @@ use MoodSwings\SiteUrl;
  *   any other format gets a plain "open the web app for this" message,
  *   same as an unsupported choice shape below.
  * - A card is only offered to PLAY here (in the "Play a card" select) if
- *   it has exactly ONE choice_field total (or the pending decision's own
- *   single field), of one of SUPPORTED_FIELD_TYPES below and not itself
- *   a `multi` field -- covers most single-target cards regardless of
- *   whether that one field happens to be required (Pride's own
- *   target_player_id, Compulsion's discard_card_id, ...) or optional
- *   (Hate's own "you may put any mood on the bottom of the deck" --
- *   reported live: this class's first ship silently played it blank
- *   every time, since it only ever looked at REQUIRED fields; an
- *   optional field is now rendered the same way, just with an extra
- *   Skip option prepended by withSkipOptionIfOptional() so declining is
- *   an explicit choice, never a default nobody actually picked).
- *   Deliberately excludes anything needing more than one field filled
- *   in (required, optional, or a mix), a `multi`/checkbox-style
- *   selection, or a `nested` sub-form (Duplicity's own repeat offer, any
- *   chaos_draft attachment) -- a real, known v1 limitation (see
- *   php-app/README.md), not a bug; a player who hits it is pointed at
- *   the web app instead.
+ *   every one of its own choice_fields, up to MAX_CHOICE_FIELDS total
+ *   (see supportedChoiceFields()), is one of SUPPORTED_FIELD_TYPES below
+ *   -- covers not just single-target cards (Pride's own
+ *   target_player_id, Compulsion's discard_card_id, Hate's optional "you
+ *   may put any mood on the bottom of the deck," ...) but also a `multi`
+ *   field (Suspicion's "any number of players," Guile's "exactly 2 cards
+ *   to discard" -- Discord's own native multi-select, min_values/
+ *   max_values, covers this directly, see fieldSelectComponent()) and a
+ *   card with a SECOND field (Faith, Guile, Condescension, Guilt,
+ *   Regret, Worry, Contempt, Cynicism, Hostility, Hesitation,
+ *   Rationalization, Corruption, Fascination -- promptOrPlay() asks them
+ *   one at a time, skipping one that doesn't need answering right now,
+ *   the same way an optional field with zero legal candidates already
+ *   got skipped before this class supported a second field at all).
+ *   Still excludes 3+ fields, or a `nested` sub-form (Duplicity's own
+ *   repeat offer, any chaos_draft attachment) -- a real, known scope
+ *   limit (see php-app/README.md), not a bug; a player who hits it is
+ *   pointed at the web app instead.
  * - Every actual rules decision (which candidates are legal for a given
  *   field) reuses BotChoiceResolver's own already-tested
  *   moodFieldCandidates()/playerFieldCandidates()/handCardFieldCandidates()/
@@ -53,22 +54,29 @@ use MoodSwings\SiteUrl;
  *   rather than re-deriving CardChoiceSchema's own filter/scope logic a
  *   third time (web-static/js/game.js's fieldOptions() is the second) --
  *   this class only ever supplies the DISPLAY (embed/component) layer on
- *   top of an already-correct legal-candidate list.
+ *   top of an already-correct legal-candidate list. A `multi` field's own
+ *   cross-selection constraints (CardChoiceSchema's `constraint` key --
+ *   distinct_owners, same_color_or_value, ...) are deliberately NOT
+ *   re-validated here either -- an illegal combination the select
+ *   menu's own candidate list didn't rule out still gets rejected
+ *   server-side, surfaced the same way any other failed play already is.
  *
  * Custom_id scheme (colon-delimited, always short enough for Discord's
  * own 100-char cap): `ms:view:{gameId}`, `ms:pass:{gameId}`,
  * `ms:play:{gameId}` (the "play a card" select; its own value is the
- * chosen card id), `ms:playfield:{gameId}:{cardId}` (that card's own
- * single required field's value select), `ms:decision:{gameId}` (the
- * current pending decision's own single field's value select),
- * `ms:newgame:0`/`ms:newgamebot:0` (starting a practice game -- see
- * below; the trailing `0` is a dummy, never a real game id, kept only so
- * every custom_id parses the same `ms:{verb}:{arg}` shape). A field's
- * own key is never encoded in a custom_id -- it's always re-derived
- * server-side from the current board state (the card/decision can only
- * ever have exactly the one supported field this class already chose to
- * render), so there's nothing to carry across the round trip besides
- * which game and (for a card) which card.
+ * chosen card id), `ms:playfield:{gameId}:{cardId}:{stepIndex}:{answers}`
+ * (that card's own $stepIndex'th field's value select -- $answers is
+ * every earlier field's own already-submitted choice, round-tripped
+ * through encodeAnswers()/decodeAnswers() since a 2-field card's second
+ * select needs to remember the first one's answer across the trip),
+ * `ms:decision:{gameId}` (the current pending decision's own single
+ * field's value select), `ms:newgame:0`/`ms:newgamebot:0` (starting a
+ * practice game -- see below; the trailing `0` is a dummy, never a real
+ * game id, kept only so every custom_id parses the same
+ * `ms:{verb}:{arg}` shape). A field's own KEY is never encoded in a
+ * custom_id (only its already-submitted VALUE, for a 2-field card's
+ * first field) -- it's always re-derived server-side from the current
+ * board state and $stepIndex.
  *
  * Starting a practice game (reported live, right after this class's own
  * first ship: "Can we add a command to start a game from inside
@@ -88,10 +96,24 @@ final class DiscordGameCommandService
 {
     private const SUPPORTED_FORMAT = 'standard';
 
-    /** @see this class's own docblock -- 'nested'/'card_order'/'grant_choice' and every `multi` field fall outside v1. */
+    /** @see this class's own docblock -- 'nested'/'card_order'/'grant_choice' fall outside scope; every one of these supports `multi` too. */
     private const SUPPORTED_FIELD_TYPES = ['mode', 'value', 'bool', 'mood', 'player', 'hand_card', 'discard_card'];
 
     private const MAX_SELECT_OPTIONS = 25;
+
+    /**
+     * The most choice_fields any hand-playable card actually has --
+     * confirmed by walking every effect_key in CardChoiceSchema and
+     * counting (Faith, Guile, Fascination, Guilt, Regret, Worry,
+     * Contempt, Condescension, Cynicism, Hostility, Hesitation,
+     * Rationalization, and Corruption all top out at exactly 2; nothing
+     * has 3+). promptOrPlay() walks fields one at a time regardless, so
+     * this is purely the "is this card even in scope" gate in
+     * supportedChoiceFields() -- a future card with a 3rd field would
+     * still just need the web app, the same as `nested`/an unsupported
+     * field type already does.
+     */
+    private const MAX_CHOICE_FIELDS = 2;
 
     /**
      * The select-menu value for "leave this OPTIONAL field blank" --
@@ -199,7 +221,12 @@ final class DiscordGameCommandService
                 case 'playfield':
                     $gamePlayerId = $this->requireSeatedIn($gameId, $userId);
                     $cardId = (int) ($parts[3] ?? 0);
-                    $this->submitPlayField($gameId, $userId, $gamePlayerId, $cardId, $values);
+                    $stepIndex = (int) ($parts[4] ?? 0);
+                    $priorAnswers = isset($parts[5]) ? $this->decodeAnswers($parts[5]) : [];
+                    $result = $this->submitPlayField($gameId, $userId, $gamePlayerId, $cardId, $stepIndex, $priorAnswers, $values);
+                    if ($result !== null) {
+                        return $this->updateMessage(...$result);
+                    }
                     break;
                 case 'decision':
                     $gamePlayerId = $this->requireSeatedIn($gameId, $userId);
@@ -235,9 +262,21 @@ final class DiscordGameCommandService
     }
 
     /**
+     * The second-and-later step of a multi-field card (Faith, Guile,
+     * Condescension, ...) -- $stepIndex is the field just answered by
+     * $values, $priorAnswers everything gathered from every step before
+     * it (round-tripped through the previous select's own custom_id via
+     * encodeAnswers()). Delegates straight to promptOrPlay() for
+     * $stepIndex + 1 onward, exactly the same walk applyPlaySelection()
+     * itself starts at index 0 -- there's only ever one "ask the next
+     * field, or play" operation in this class, just entered at a
+     * different index depending on how much has already been answered.
+     *
      * @param mixed[] $values
+     * @param array<string, mixed> $priorAnswers
+     * @return array{0: string, 1: array<int, array<string, mixed>>}|null
      */
-    private function submitPlayField(int $gameId, int $userId, int $gamePlayerId, int $cardId, array $values): void
+    private function submitPlayField(int $gameId, int $userId, int $gamePlayerId, int $cardId, int $stepIndex, array $priorAnswers, array $values): ?array
     {
         $state = $this->games->getState($gameId, $userId);
         $card = $this->findCard($state['you']['hand'] ?? [], $cardId);
@@ -245,12 +284,15 @@ final class DiscordGameCommandService
             throw new GameStateException('That card is no longer in your hand.');
         }
 
-        $field = $this->singleSupportedField($card['choice_fields'] ?? []);
-        if ($field === null) {
+        $fields = $this->supportedChoiceFields($card['choice_fields'] ?? []);
+        if ($fields === null || !isset($fields[$stepIndex])) {
             throw new GameStateException("That card's own choice can't be answered from Discord anymore -- open the web app.");
         }
 
-        $this->games->playMood($gameId, $gamePlayerId, $cardId, $this->choicesFor($field, $values));
+        $answers = [...$priorAnswers, ...$this->choicesFor($fields[$stepIndex], $values)];
+        $boardState = $this->boardStates->load($gameId);
+
+        return $this->promptOrPlay($gameId, $gamePlayerId, $cardId, $card, $fields, $stepIndex + 1, $answers, $boardState, $state);
     }
 
     /**
@@ -267,20 +309,34 @@ final class DiscordGameCommandService
         $this->games->respondToDecision($gameId, $gamePlayerId, $this->choicesFor($decision['field'], $values));
     }
 
-    /** @param mixed[] $values @return array<string, mixed> */
+    /**
+     * A `multi` field's own selected values are ALL of $values (Discord's
+     * own multi-select already enforces min/max_values -- see
+     * fieldSelectComponent()), cast to ints and included even when empty
+     * (an empty array is itself a legal answer -- "choose any number,"
+     * PlayerChoices::ints() already treats a missing key the same way).
+     * A single-value field keeps castFieldValue()'s own SKIP_FIELD_VALUE
+     * handling -- see that constant's docblock.
+     *
+     * @param mixed[] $values @return array<string, mixed>
+     */
     private function choicesFor(array $field, array $values): array
     {
+        if (($field['multi'] ?? false) === true) {
+            return [$field['key'] => array_map(intval(...), $values)];
+        }
+
         $value = $this->castFieldValue($field, $values);
 
         return $value !== null ? [$field['key'] => $value] : [];
     }
 
     /**
-     * Plays $cardId outright when it needs no supported field filled in,
-     * or returns a boardMessage()-shaped tuple asking for that one field
-     * instead. Never returns null AND leaves the card unplayed -- either
-     * it played, or the caller already has a field-select response to
-     * send back.
+     * Plays $cardId outright when it has no supported fields at all, or
+     * starts promptOrPlay()'s own field-by-field walk at index 0
+     * otherwise. Never returns null AND leaves the card unplayed --
+     * either it played, or the caller already has a field-select
+     * response to send back.
      *
      * @return array{0: string, 1: array<int, array<string, mixed>>}|null
      */
@@ -292,36 +348,140 @@ final class DiscordGameCommandService
             throw new GameStateException('That card is no longer in your hand.');
         }
 
-        $field = $this->singleSupportedField($card['choice_fields'] ?? []);
-        if ($field === null) {
-            $this->games->playMood($gameId, $gamePlayerId, $cardId, []);
-
-            return null;
+        $fields = $this->supportedChoiceFields($card['choice_fields'] ?? []);
+        if ($fields === null) {
+            // playableHandOptions() already keeps a card shaped like this
+            // out of the "Play a card" select entirely -- reaching here
+            // means a stale/forged interaction outran that check, so this
+            // is a real error, not a silent blank play.
+            throw new GameStateException("That card's own choice can't be answered from Discord anymore -- open the web app.");
         }
 
         $boardState = $this->boardStates->load($gameId);
-        $options = $this->fieldOptions($boardState, $field, $gamePlayerId, $cardId, $card['effect_key'], $state);
-        if ($options === []) {
-            // No legal candidate exists right now (optional_if_no_targets'
-            // own "if literally nothing qualifies, the field just doesn't
-            // apply" carve-out for a required field, or simply nothing to
-            // pick for an optional one either way) -- play with the field
-            // left unfilled rather than dead-ending on an empty select menu.
-            $this->games->playMood($gameId, $gamePlayerId, $cardId, []);
 
-            return null;
+        return $this->promptOrPlay($gameId, $gamePlayerId, $cardId, $card, $fields, 0, [], $boardState, $state);
+    }
+
+    /**
+     * The one place this class decides "ask another field, or actually
+     * play the card" -- walks $fields from $fromIndex, silently leaving
+     * blank any field that doesn't need asking right now (a
+     * `requires_mode` gate CardChoiceSchema's own docblock documents --
+     * Guilt/Contempt/Hesitation's own target_mood_id only matters once
+     * their 'mode' field is 'single' -- that $answers doesn't satisfy, or
+     * simply zero legal candidates, the same optional_if_no_targets
+     * carve-out a single-field card already got before this class ever
+     * supported a second one), then stops at the first field that DOES
+     * need asking and returns a select for it. Reaching the end of
+     * $fields with nothing left to ask actually plays the card with
+     * whatever was gathered along the way. $answers accumulates every
+     * field's own choicesFor() output, keyed by field key, exactly the
+     * shape GameService::playMood() itself expects.
+     *
+     * @param array<int, array<string, mixed>> $fields
+     * @param array<string, mixed> $answers
+     * @return array{0: string, 1: array<int, array<string, mixed>>}|null
+     */
+    private function promptOrPlay(int $gameId, int $gamePlayerId, int $cardId, array $card, array $fields, int $fromIndex, array $answers, BoardState $boardState, array $state): ?array
+    {
+        for ($stepIndex = $fromIndex; $stepIndex < count($fields); $stepIndex++) {
+            $field = $fields[$stepIndex];
+
+            if (isset($field['requires_mode']) && ($answers['mode'] ?? null) !== $field['requires_mode']) {
+                continue;
+            }
+
+            $options = $this->fieldOptions($boardState, $field, $gamePlayerId, $cardId, $card['effect_key'], $state);
+            if ($options === []) {
+                continue;
+            }
+
+            $customId = "ms:playfield:{$gameId}:{$cardId}:{$stepIndex}:" . $this->encodeAnswers($answers);
+            $components = [['type' => 1, 'components' => [$this->fieldSelectComponent($customId, $field, $options)]]];
+
+            return ["Playing **{$card['name']}** -- {$field['label']}:", $components];
         }
 
-        $options = $this->withSkipOptionIfOptional($field, $options);
+        $this->games->playMood($gameId, $gamePlayerId, $cardId, $answers);
 
-        $components = [['type' => 1, 'components' => [[
+        return null;
+    }
+
+    /**
+     * The select component for one field, either kind -- a `multi` field
+     * (Suspicion's "any number of players," Guile's "exactly 2 cards")
+     * gets Discord's own native multi-select (min_values/max_values)
+     * instead of the single-value Skip sentinel: not selecting anything,
+     * when min_values is 0, IS the "leave this optional field blank"
+     * signal, so there's no need for a fake option occupying a real slot
+     * the way withSkipOptionIfOptional() adds for a single-select field.
+     * min_values honors a `count.min` (Guile's "exactly 2," Malice's
+     * decision-side "choose two") over the plain required/optional flag
+     * where CardChoiceSchema sets one, except when `count.zero_ok` is
+     * set (Rejection/Denial's own "0 or exactly 2") -- there, 0 is
+     * always legal regardless of count.min, so min_values stays 0. This
+     * doesn't attempt every other constraint CardChoiceSchema can carry
+     * (same_color_or_value, distinct_owners, ...) -- same as this
+     * class's own docblock already says about not re-deriving that
+     * logic a third time, an illegal combination the UI didn't rule out
+     * still gets rejected server-side, surfaced the same way any other
+     * failed play already is.
+     *
+     * @param array<int, array{label: string, value: string}> $options
+     * @return array<string, mixed>
+     */
+    private function fieldSelectComponent(string $customId, array $field, array $options): array
+    {
+        if (($field['multi'] ?? false) !== true) {
+            return [
+                'type' => 3,
+                'custom_id' => $customId,
+                'placeholder' => $field['label'] ?? 'Choose one',
+                'options' => $this->withSkipOptionIfOptional($field, $options),
+            ];
+        }
+
+        $options = array_slice($options, 0, self::MAX_SELECT_OPTIONS);
+        $count = $field['count'] ?? [];
+        $max = min(count($options), (int) ($count['max'] ?? count($options)));
+        $min = ($count['zero_ok'] ?? false) === true
+            ? 0
+            : (int) ($count['min'] ?? (($field['required'] ?? false) === true ? 1 : 0));
+
+        return [
             'type' => 3,
-            'custom_id' => "ms:playfield:{$gameId}:{$cardId}",
-            'placeholder' => $field['label'] ?? 'Choose one',
+            'custom_id' => $customId,
+            'placeholder' => $field['label'] ?? 'Choose one or more',
             'options' => $options,
-        ]]]];
+            'min_values' => min($min, $max),
+            'max_values' => $max,
+        ];
+    }
 
-        return ["Playing **{$card['name']}** -- {$field['label']}:", $components];
+    /**
+     * Round-trips a multi-field card's own earlier answer(s) through the
+     * next field's select custom_id -- bounded to at most
+     * MAX_CHOICE_FIELDS - 1 accumulated keys (never more than 1 today),
+     * each a small int/string/int[]/bool value, so this comfortably
+     * fits well under Discord's own 100-char custom_id cap alongside the
+     * `ms:playfield:{gameId}:{cardId}:{stepIndex}:` prefix. URL-safe
+     * (no `+`/`/`/`=`) so it never collides with the colon-delimited
+     * parsing handleComponent() already does on the rest of the id.
+     *
+     * @param array<string, mixed> $answers
+     */
+    private function encodeAnswers(array $answers): string
+    {
+        return rtrim(strtr(base64_encode(json_encode($answers)), '+/', '-_'), '=');
+    }
+
+    /** @return array<string, mixed> */
+    private function decodeAnswers(string $encoded): array
+    {
+        $padded = str_pad(strtr($encoded, '-_', '+/'), (int) (4 * ceil(strlen($encoded) / 4)), '=');
+        $decoded = json_decode(base64_decode($padded), true);
+
+        return is_array($decoded) ? $decoded : [];
     }
 
     /**
@@ -402,12 +562,9 @@ final class DiscordGameCommandService
                     $boardState = $this->boardStates->load($gameId);
                     $options = $this->fieldOptions($boardState, $field, $you['game_player_id'], 0, '', $state);
                     if ($options !== []) {
-                        $components[] = ['type' => 1, 'components' => [[
-                            'type' => 3,
-                            'custom_id' => "ms:decision:{$gameId}",
-                            'placeholder' => $field['label'] ?? 'Choose one',
-                            'options' => $this->withSkipOptionIfOptional($field, $options),
-                        ]]];
+                        $components[] = ['type' => 1, 'components' => [
+                            $this->fieldSelectComponent("ms:decision:{$gameId}", $field, $options),
+                        ]];
                     } else {
                         $lines[] = "This needs more than Discord supports yet -- open the web app: {$webUrl}";
                     }
@@ -706,10 +863,14 @@ final class DiscordGameCommandService
     /**
      * Splits the viewer's own hand into cards this class can offer to
      * play directly (a select option) vs. ones that need the web app --
-     * anything with more than one required field, or a required field
-     * whose type this class doesn't support. Optional fields are never
-     * consulted here (see this class's own docblock) -- a card offered
-     * here always plays with every optional field left blank.
+     * more than MAX_CHOICE_FIELDS choice_fields, or any unsupported one
+     * among them (see supportedChoiceFields()). Every field is consulted
+     * here regardless of required/optional/multi -- an OPTIONAL field
+     * (Hate's own "you may put any mood on the bottom of the deck") is
+     * just as much a real in-game choice as a required one, see this
+     * class's own SKIP_FIELD_VALUE docblock for the bug report that
+     * caught an earlier required-only check silently always leaving it
+     * blank.
      *
      * @param array<string, mixed> $state
      * @return array{0: array<int, array{label: string, value: string}>, 1: string[]}
@@ -724,14 +885,7 @@ final class DiscordGameCommandService
                 continue;
             }
 
-            // Every field, not just required ones -- an OPTIONAL field
-            // (Hate's own "you may put any mood on the bottom of the
-            // deck") is just as much a real in-game choice as a required
-            // one, see this class's own SKIP_FIELD_VALUE docblock for
-            // the bug report that caught the earlier required-only check
-            // silently always leaving it blank.
-            $fields = $card['choice_fields'] ?? [];
-            if (count($fields) > 1 || (count($fields) === 1 && !$this->isSupportedField($fields[0]))) {
+            if ($this->supportedChoiceFields($card['choice_fields'] ?? []) === null) {
                 $unsupported[] = $card['name'];
                 continue;
             }
@@ -746,28 +900,48 @@ final class DiscordGameCommandService
         return [$options, $unsupported];
     }
 
+    /**
+     * A `multi` field (Suspicion's "any number of players," Guile's
+     * "exactly 2 cards to discard," ...) is just as supported as a
+     * single-value one now -- see fieldSelectComponent()'s own docblock
+     * for how Discord's native multi-select (min_values/max_values)
+     * covers it without needing a Skip sentinel the way an optional
+     * single-value field does.
+     */
     private function isSupportedField(array $field): bool
     {
-        return in_array($field['type'] ?? null, self::SUPPORTED_FIELD_TYPES, true) && ($field['multi'] ?? false) !== true;
+        return in_array($field['type'] ?? null, self::SUPPORTED_FIELD_TYPES, true);
     }
 
     /**
-     * The one field this class will render for a card/decision -- exactly
-     * one total (required OR optional; an optional one gets its own Skip
-     * option prepended by withSkipOptionIfOptional(), never silently
-     * dropped -- see SKIP_FIELD_VALUE's own docblock), of a supported
-     * type. Two-plus fields, or a lone unsupported one, both still fall
-     * outside v1 -- "needs the web app" either way.
+     * The fields this class will render for a card/decision, one at a
+     * time (promptOrPlay()) -- up to MAX_CHOICE_FIELDS total (every
+     * hand-playable card tops out at 2 -- Faith/Guile/Condescension/
+     * Guilt/Regret/Worry/Contempt/Cynicism/Hostility/Hesitation/
+     * Rationalization/Corruption/Fascination, confirmed by walking
+     * CardChoiceSchema's own full field list), each of a supported type.
+     * A card's own 0-field case (nothing to ask at all) returns `[]`, not
+     * null -- still "supported," just with nothing to prompt for. Only
+     * 3+ fields, a `nested` sub-form, or a lone unsupported field type
+     * still fall outside this class's scope -- "needs the web app"
+     * either way.
      *
      * @param array<int, array<string, mixed>> $choiceFields
+     * @return array<int, array<string, mixed>>|null
      */
-    private function singleSupportedField(array $choiceFields): ?array
+    private function supportedChoiceFields(array $choiceFields): ?array
     {
-        if (count($choiceFields) !== 1 || !$this->isSupportedField($choiceFields[0])) {
+        if (count($choiceFields) > self::MAX_CHOICE_FIELDS) {
             return null;
         }
 
-        return $choiceFields[0];
+        foreach ($choiceFields as $field) {
+            if (!$this->isSupportedField($field)) {
+                return null;
+            }
+        }
+
+        return $choiceFields;
     }
 
     /**
