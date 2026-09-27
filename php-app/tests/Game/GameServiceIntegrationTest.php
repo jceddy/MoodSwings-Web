@@ -23122,6 +23122,60 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertStringContainsString("/discord/board-image?game_id={$gameId}&sig=", $imageUrl);
     }
 
+    /**
+     * Reported live: "the discord in play image is not being updated as
+     * moods are played in the game." Root cause -- boardImageUrl()'s own
+     * URL used to be a bare function of $gameId alone, identical on
+     * every single render for the same game; Discord's own CDN caches
+     * an embed image by URL the same way any HTTP client would, so once
+     * it fetched the image for this game once, it just kept reusing
+     * that cached copy forever, no matter how many moods got played
+     * afterward -- boardMessage() itself was already correctly embedding
+     * a fresh render's own worth of state, but at an UNCHANGED url
+     * Discord had no reason to ever re-fetch. This checks the actual
+     * observable fix: the embedded image URL for the exact same game
+     * differs before vs. after a card enters play (boardImageCacheKey()'s
+     * own `v=` query param -- see that method's docblock for what
+     * changes it and why), so Discord's cache can no longer mask a real
+     * change to the board.
+     */
+    public function testDiscordCommandBoardImageUrlChangesWhenInPlayCardsChange(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-51');
+        $u2 = $this->insertDiscordUser('discord-player-52');
+        $this->linkDiscordAccount($u1, 'discord-51');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameCard($gameId, 5, 'in_play', $p2); // Complacency
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $beforeResponse = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-51'));
+        $beforeUrl = $beforeResponse['data']['embeds'][0]['image']['url'];
+
+        $this->insertGameCard($gameId, 66, 'in_play', $p1); // Hate joins the board
+
+        $afterResponse = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-51'));
+        $afterUrl = $afterResponse['data']['embeds'][0]['image']['url'];
+
+        self::assertNotSame($beforeUrl, $afterUrl);
+
+        // The signature itself never changes (still only ever a function
+        // of $gameId -- see boardImageUrl()'s own docblock for why the
+        // cache-busting param stays deliberately unsigned); only the
+        // trailing `v=` cache-busting param should differ.
+        parse_str((string) parse_url($beforeUrl, PHP_URL_QUERY), $beforeQuery);
+        parse_str((string) parse_url($afterUrl, PHP_URL_QUERY), $afterQuery);
+        self::assertSame($beforeQuery['sig'], $afterQuery['sig']);
+        self::assertNotSame($beforeQuery['v'], $afterQuery['v']);
+    }
+
     public function testDiscordCommandBoardHasNoEmbedWhenNothingIsInPlay(): void
     {
         $u1 = $this->insertDiscordUser('discord-player-42');
@@ -23152,7 +23206,7 @@ final class GameServiceIntegrationTest extends TestCase
     public function testBoardImageSignatureRejectsTamperedGameIdOrSignature(): void
     {
         $service = $this->discordCommandService();
-        $url = $service->boardImageUrl(123);
+        $url = $service->boardImageUrl(123, 'v1');
         parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
         $signature = $query['sig'];
 
@@ -23187,7 +23241,7 @@ final class GameServiceIntegrationTest extends TestCase
                 'SITE_URL' => 'https://moodswings.example.com',
             ]);
 
-            $url = $this->discordCommandService()->boardImageUrl(123);
+            $url = $this->discordCommandService()->boardImageUrl(123, 'v1');
 
             self::assertStringStartsWith('https://moodswings.example.com/app/discord/board-image?game_id=123&sig=', $url);
         } finally {
