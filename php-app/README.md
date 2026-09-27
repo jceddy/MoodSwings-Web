@@ -8004,11 +8004,46 @@ MULTI-card list (a hand, `inPlaySummary()`, `discardPileSummary()`) --
 Discord caps a message at 10 embeds total, each holding at most one
 image, so a full hand or in-play board would either break down past
 ~10 cards or need a far bulkier one-embed-per-card layout in place of
-today's compact lines. Composing several cards' own art into a SINGLE
-image server-side (another follow-up question) remains unexplored --
-it would need an image-processing library and a new public endpoint to
-serve the composite from, both real additions, not just reusing what
-already exists here.
+today's compact lines. See "Composite in-play board image" below for
+the SINGLE-image alternative that follow-up question led to.
+
+**Composite in-play board image** (issue #233's own follow-up: "would
+it be possible to use some kind of image library to render, say, the
+cards in play as a single image to embed in the game display
+message?", scoped by explicit decisions: directly in the main board
+message, in-play only for now) -- `boardMessage()` now attaches one
+embed, whenever at least one mood is currently in play, pointing at
+`boardImageUrl()`'s own signed URL. `BoardImageRenderer` tiles every
+in-play card's own MSW print into a single grid (GD -- confirmed
+bundled with PHP on the target Bluehost hosting, including `.webp`
+DECODE support, unlike the Imagick PECL extension shared hosting can't
+install), output as PNG regardless of the source format (GD's own
+WEBP *encode* support is less universally guaranteed than decode).
+`DiscordGameCommandService::cardArtFilePath()` locates each card's art
+file ON DISK (unlike `cardArtUrl()`'s public URL) by probing two
+candidate paths, since local dev and production disagree on where
+`web-static/img/` sits relative to that file -- production's
+`deploy.yml` flattens `web-static/`'s own contents straight into the
+doc root alongside `src/` (the same relative depth `dirname(__DIR__, 2)`
+already reaches `bin/` at), but locally `web-static/` is a sibling of
+`php-app/` ITSELF, one level shallower.
+
+Unlike every other route this class's responses point at, the new
+`GET /discord/board-image` route in `public/index.php` is deliberately
+UNAUTHENTICATED -- Discord's own servers fetch an embed's `image.url`
+directly, with no session cookie of the viewer's to send. Reported
+live in response to "how should the board-image URL be protected from
+guessing/enumeration?": rather than a new dedicated secret, or
+shipping unsigned, `boardImageUrl()`/`verifyBoardImageSignature()`
+reuse the existing `DISCORD_CLIENT_SECRET` as an HMAC-SHA256 key over
+the game id, so only a URL this class itself generated can pass. The
+route renders via `renderBoardImage()`, which uses `getSpectatorState()`
+(public information -- moods in play, never a hand) rather than
+`getState()`, since there's no per-viewer session for the signed
+request to carry the way every other method in this class has
+`$userId` for; a missing/invalid signature or nothing renderable
+(game gone/still `waiting`/`abandoned`, or simply no cards in play)
+gets a plain 404.
 
 **No new persistence** -- every interaction re-fetches `GameService::getState()`
 (for display) and, when rendering a field select, a fresh `BoardState`

@@ -1,0 +1,18 @@
+-- Issue #233 follow-up (reported live: "would it be possible to use some
+-- kind of image library to render, say, the cards in play as a single
+-- image to embed in the game display message?", scoped by explicit
+-- decisions: directly in the main board message, in-play only for now).
+-- DiscordGameCommandService::boardMessage() now attaches one embed,
+-- whenever at least one mood is currently in play, pointing at
+-- boardImageUrl()'s own HMAC-signed (reusing DISCORD_CLIENT_SECRET), UNAUTHENTICATED
+-- `GET /discord/board-image` route in public/index.php. That route
+-- renders via the new BoardImageRenderer (GD, tiling every in-play
+-- card's own MSW print into a single PNG) using
+-- DiscordGameCommandService::renderBoardImage()/cardArtFilePath() --
+-- see php-app/README.md's "Composite in-play board image" section for
+-- the full design, including why this needed a signed URL at all and
+-- the local-vs-production filesystem path resolution it works around.
+--
+-- No schema change -- just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.55.10' WHERE id = 1;

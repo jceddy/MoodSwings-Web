@@ -845,9 +845,12 @@ $games = new GameService(new BoardStateRepository($gameRegistry, $chaosRegistry)
 // than alongside $discordOAuth/$discordAccounts above) since it needs
 // $games itself, plus its own BoardState loader for BotChoiceResolver's
 // candidate enumeration (see DiscordGameCommandService's own docblock).
-$discordInteractions = new DiscordInteractionsService(
-    new DiscordGameCommandService($games, new BoardStateRepository($gameRegistry, $chaosRegistry), $discordAccounts)
-);
+// Kept as its own variable (not just inlined into $discordInteractions
+// below) since the composite board-image route further down also needs
+// to call boardImageUrl()'s own signature-verifying counterpart on this
+// exact same instance.
+$discordGames = new DiscordGameCommandService($games, new BoardStateRepository($gameRegistry, $chaosRegistry), $discordAccounts);
+$discordInteractions = new DiscordInteractionsService($discordGames);
 
 // Discord's own Interactions Endpoint -- called by Discord itself, never
 // by this site's own JS, so it's authenticated by Ed25519 signature
@@ -866,6 +869,37 @@ if ($path === '/discord/interactions' && $method === 'POST') {
 
     $payload = json_decode($rawBody, true);
     respond(200, $discordInteractions->handle(is_array($payload) ? $payload : []));
+}
+
+// The composite in-play board image DiscordGameCommandService::boardMessage()
+// embeds (issue #233 follow-up: "would it be possible to ... render, say,
+// the cards in play as a single image?"). Unlike every other route here,
+// this one is deliberately UNAUTHENTICATED -- Discord's own servers fetch
+// an embed's image.url directly, with no session cookie of the viewer's
+// to send -- so it's gated by boardImageUrl()'s own HMAC signature
+// instead (see that method's docblock for why). A missing/invalid sig,
+// or a game with nothing renderable (gone, still 'waiting'/'abandoned',
+// or simply no cards in play right now), gets a plain 404, same as any
+// other not-found resource.
+if ($path === '/discord/board-image' && $method === 'GET') {
+    $gameId = (int) ($_GET['game_id'] ?? 0);
+    $signature = (string) ($_GET['sig'] ?? '');
+
+    if ($gameId <= 0 || $signature === '' || !$discordGames->verifyBoardImageSignature($gameId, $signature)) {
+        http_response_code(404);
+        exit;
+    }
+
+    $image = $discordGames->renderBoardImage($gameId);
+    if ($image === null) {
+        http_response_code(404);
+        exit;
+    }
+
+    header('Content-Type: image/png');
+    header('Content-Length: ' . strlen($image));
+    echo $image;
+    exit;
 }
 $matchmaking = new MatchmakingService(new OpenGameListingRepository(), new UserRepository(), new FriendshipRepository(), $games);
 $weeklySealedPoolQueue = new WeeklySealedPoolQueueService($games);
