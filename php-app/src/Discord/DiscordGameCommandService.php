@@ -1087,6 +1087,23 @@ final class DiscordGameCommandService
      * that's gone/still 'waiting'/'abandoned' (getSpectatorState() itself
      * rejects those), or one with nothing currently in play -- either
      * way the caller responds 404 rather than serving a broken image.
+     *
+     * Reported live: "would it be possible to arrange the cards similarly
+     * to how we do in the web client, including the player's names,
+     * badges on the cards to indicate current value, etc." -- groups
+     * $state['in_play'] by owner_game_player_id the exact same way
+     * boardMessage()'s own inPlaySummary() already does for its text
+     * listing (same $state['players'] seat order, same "a player with
+     * nothing in play gets no row at all"), so BoardImageRenderer's own
+     * layout matches that listing's structure instead of an
+     * undifferentiated grid. `value`/`base_value` ride along per card
+     * for BoardImageRenderer's own current-value badge -- see its
+     * docblock for why that mirrors buildCardThumb()'s identical check
+     * rather than every other badge that function can also show (chaos
+     * delta/override, Copy, recolor, suppressed, ...): those only ever
+     * apply to a chaos_draft-format game, entirely out of scope for this
+     * class's own 'standard'-only SUPPORTED_FORMAT (see this class's own
+     * docblock).
      */
     public function renderBoardImage(int $gameId): ?string
     {
@@ -1096,15 +1113,27 @@ final class DiscordGameCommandService
             return null;
         }
 
-        $paths = [];
+        $cardsByOwner = [];
         foreach ($state['in_play'] ?? [] as $card) {
-            $path = $this->cardArtFilePath($card);
-            if ($path !== null) {
-                $paths[] = $path;
+            $cardsByOwner[$card['owner_game_player_id']][] = $card;
+        }
+
+        $players = [];
+        foreach ($state['players'] as $player) {
+            $cards = [];
+            foreach ($cardsByOwner[$player['game_player_id']] ?? [] as $card) {
+                $path = $this->cardArtFilePath($card);
+                if ($path !== null) {
+                    $cards[] = ['path' => $path, 'value' => (int) $card['value'], 'base_value' => (int) $card['base_value']];
+                }
+            }
+
+            if ($cards !== []) {
+                $players[] = ['username' => $player['username'], 'cards' => $cards];
             }
         }
 
-        return $this->boardImageRenderer->render($paths);
+        return $this->boardImageRenderer->render($players);
     }
 
     /**
