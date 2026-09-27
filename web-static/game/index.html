@@ -103,6 +103,7 @@
                 <button id="open-games-button" type="button">Open games</button>
                 <button id="weekly-sealed-pool-button" type="button">Weekly Sealed Pool</button>
                 <button id="tournaments-button" type="button">Tournaments</button>
+                <button id="puzzles-button" type="button">Puzzles</button>
                 <div id="lobby-secondary-actions">
                     <button id="past-games-button" type="button">Past games</button>
                     <!-- "Is there a way I can replay these in the dev site using
@@ -1149,6 +1150,21 @@
         </section>
         <p id="tournaments-error" class="error" hidden></p>
         <button id="tournaments-close-button" type="button">Close</button>
+    </dialog>
+
+    <!-- Issue #524: the puzzle collection -- a curated, freely-replayable
+         library of standalone solitaire puzzles (fixed starting hand/
+         board, a specific goal, no live opponent). Each row's own
+         "Attempt"/"Try Again" button starts a fresh single-seat game
+         (POST /puzzles/attempt) and points the board at it -- the SAME
+         #board-view/refreshBoard() pipeline every other game already
+         uses, see showPuzzleBoard() in game.js. -->
+    <dialog id="puzzles-dialog">
+        <h2>Puzzles</h2>
+        <ul id="puzzles-list"></ul>
+        <p id="puzzles-empty" hidden>No puzzles available yet.</p>
+        <p id="puzzles-error" class="error" hidden></p>
+        <button id="puzzles-close-button" type="button">Close</button>
     </dialog>
 
     <!-- match_params fields here are deliberately a curated subset of

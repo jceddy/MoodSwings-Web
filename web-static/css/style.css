@@ -1547,6 +1547,12 @@ body.game-page {
     display: none;
 }
 
+/* Issue #524: a puzzle attempt is always exactly one seat -- just the
+   viewer's own "south" zone, no one else's in-play board to show. */
+#in-play-board.in-play-board--1 {
+    grid-template-areas: "south";
+}
+
 #in-play-board.in-play-board--2 {
     grid-template-areas:
         "north north"
