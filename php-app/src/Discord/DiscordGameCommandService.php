@@ -6,6 +6,7 @@ namespace MoodSwings\Discord;
 
 use MoodSwings\Bot\BotChoiceResolver;
 use MoodSwings\Config;
+use MoodSwings\Friends\FriendshipService;
 use MoodSwings\Game\BoardStateRepository;
 use MoodSwings\Game\Exceptions\GameStateException;
 use MoodSwings\Game\GameService;
@@ -88,10 +89,14 @@ use MoodSwings\SiteUrl;
  * game), and seating a practice bot is just naming its own user id
  * alongside the caller's in createGame()'s `$userIds`, so this is fully
  * completable inside Discord unlike almost everything else this class
- * still points at the web app for. Never offers a HUMAN opponent here --
- * that would need Discord's own way to pick/invite another linked
- * player, real design work this class's docblock already flags as out
- * of scope for a first pass.
+ * still points at the web app for. A HUMAN opponent (reported live:
+ * "let's add the ability to create a game for another human on the
+ * friend list") works the same way -- FriendshipService::listFriends()
+ * supplies the picker instead of listPracticeBots(), and createGame()
+ * seats that friend's own user id exactly the same as it would a bot's,
+ * no invite/accept step (see newFriendGameMessage()'s own docblock for
+ * why this earlier note calling it "real design work" turned out not to
+ * be true).
  */
 final class DiscordGameCommandService
 {
@@ -133,6 +138,7 @@ final class DiscordGameCommandService
         private readonly GameService $games,
         private readonly BoardStateRepository $boardStates,
         private readonly DiscordAccountRepository $accounts,
+        private readonly FriendshipService $friendships,
         private readonly BotChoiceResolver $choiceResolver = new BotChoiceResolver(),
         private readonly BoardImageRenderer $boardImageRenderer = new BoardImageRenderer(),
     ) {
@@ -157,8 +163,8 @@ final class DiscordGameCommandService
         $gameIds = $this->activeStandardGameIdsFor($userId);
         if ($gameIds === []) {
             return $this->ephemeralMessage(
-                "You don't have an active Traditional game right now. Start or join one at " . SiteUrl::root() . '/game/, or start a practice game below.',
-                [['type' => 1, 'components' => [$this->newGameButton()]]],
+                "You don't have an active Traditional game right now. Start or join one at " . SiteUrl::root() . '/game/, or start one below.',
+                [['type' => 1, 'components' => [$this->newGameButton(), $this->inviteFriendButton()]]],
             );
         }
 
@@ -188,13 +194,16 @@ final class DiscordGameCommandService
             return $this->ephemeralMessage(...$this->boardMessage($gameIds[0], $userId));
         }
 
-        $components = [['type' => 1, 'components' => [
-            ...array_map(
+        $components = [
+            ['type' => 1, 'components' => array_map(
                 fn (int $gameId) => ['type' => 2, 'style' => 2, 'label' => "Game #{$gameId}", 'custom_id' => "ms:view:{$gameId}"],
                 array_slice($gameIds, 0, 4),
-            ),
-            $this->newGameButton(),
-        ]]];
+            )],
+            // A separate row -- Discord caps a single action row at 5
+            // components total, and the game-picker row above can
+            // already hold 4 on its own.
+            ['type' => 1, 'components' => [$this->newGameButton(), $this->inviteFriendButton()]],
+        ];
 
         return $this->ephemeralMessage('You have more than one active Traditional game -- pick one:', components: $components);
     }
@@ -260,6 +269,10 @@ final class DiscordGameCommandService
                     return $this->updateMessage(...$this->newPracticeGameMessage($userId));
                 case 'newgamebot':
                     return $this->updateMessage(...$this->createPracticeGameMessage($userId, (int) ($values[0] ?? 0)));
+                case 'friendgame':
+                    return $this->updateMessage(...$this->newFriendGameMessage($userId));
+                case 'friendgamewith':
+                    return $this->updateMessage(...$this->createFriendGameMessage($userId, (int) ($values[0] ?? 0)));
                 case 'cards':
                     return $this->updateMessage(...$this->cardsMessage($gameId, $userId));
                 case 'cardhand':
@@ -695,8 +708,10 @@ final class DiscordGameCommandService
             ['type' => 2, 'style' => 2, 'label' => 'View Cards', 'custom_id' => "ms:cards:{$gameId}"],
             ['type' => 2, 'style' => 2, 'label' => 'Game Log', 'custom_id' => "ms:log:{$gameId}"],
             ['type' => 2, 'style' => 5, 'label' => 'Open in browser', 'url' => $webUrl],
-            $this->newGameButton(),
         ]];
+        // Its own row -- the row above is already at Discord's own
+        // 5-components-per-row cap.
+        $components[] = ['type' => 1, 'components' => [$this->newGameButton(), $this->inviteFriendButton()]];
 
         if ($notice !== null) {
             array_unshift($lines, $notice);
@@ -811,10 +826,100 @@ final class DiscordGameCommandService
         return $this->boardMessage($gameId, $userId);
     }
 
+    /**
+     * Reported live: "let's add the ability to create a game for another
+     * human on the friend list" -- this class's own docblock originally
+     * flagged a human opponent as needing "Discord's own way to
+     * pick/invite another linked player, real design work... out of
+     * scope for a first pass." That design turns out simpler than it
+     * sounds: `createGame()` seats ANY user id immediately (same as
+     * `createPracticeGameMessage()` already does for a bot's own user
+     * id) -- the friend doesn't need to already be Discord-linked, or
+     * present in this interaction at all, the same way the web app's own
+     * New Game dialog friend-picker seats a friend who isn't online
+     * right now. `FriendshipService::listFriends()` -- accepted
+     * friendships only, same "on the friend list" the web app's own
+     * picker uses -- supplies the candidates; picking one goes straight
+     * to createFriendGameMessage() below, no separate invite/accept step
+     * (matching the web app's own createGame() flow, which has none
+     * either -- see that method's own docblock).
+     *
+     * @return array{0: string, 1: array<int, array<string, mixed>>}
+     */
+    private function newFriendGameMessage(int $userId): array
+    {
+        $friends = $this->friendships->listFriends($userId);
+        if ($friends === []) {
+            return [
+                'You don\'t have any friends added yet. Add one at ' . SiteUrl::root() . '/game/?open_friends=1, then try again.',
+                [],
+            ];
+        }
+
+        $options = array_map(
+            fn (array $friend) => ['label' => $friend['friend_username'], 'value' => (string) $friend['friend_id']],
+            array_slice($friends, 0, self::MAX_SELECT_OPTIONS),
+        );
+
+        $components = [['type' => 1, 'components' => [[
+            'type' => 3,
+            'custom_id' => 'ms:friendgamewith:0',
+            'placeholder' => 'Choose a friend...',
+            'options' => $options,
+        ]]]];
+
+        return ['Choose a friend to play against:', $components];
+    }
+
+    /**
+     * Completes newFriendGameMessage()'s own picker -- same
+     * createGame()/startGame()/advanceAutomatedTurns() sequence
+     * createPracticeGameMessage() already runs (see that method's own
+     * docblock for why all three), just seating $opponentUserId instead
+     * of a bot's own user id. advanceAutomatedTurns() is still worth
+     * calling even though a human opponent is never a bot -- see its own
+     * docblock's other trigger, a default-on empty-hand auto-pass,
+     * which applies to ANY seated player, not just bots. Unlike a
+     * practice bot, the opponent here isn't present to take a first
+     * turn of their own -- boardMessage() already renders that as an
+     * ordinary "waiting on {username}'s turn" (or, on the roughly half
+     * of coin flips where $userId goes first instead, their own hand and
+     * playable options), the exact same board a fresh web-created game
+     * against this same friend would show.
+     *
+     * $opponentUserId is trusted here the same way `POST /games`
+     * trusts its own `opponent_user_ids` body param (see that route's
+     * own docblock) -- ANY user id createGame() is given gets seated
+     * immediately, friend or not, matching that route's own "the
+     * friends-only picker is a UI convenience, not an authorization
+     * boundary" design throughout the app. A stale/tampered value here
+     * fails no differently than it would there.
+     *
+     * @return array{0: string, 1: array<int, array<string, mixed>>}
+     */
+    private function createFriendGameMessage(int $userId, int $opponentUserId): array
+    {
+        try {
+            $gameId = $this->games->createGame($userId, [$userId, $opponentUserId]);
+            $this->games->startGame($gameId);
+            $this->games->advanceAutomatedTurns($gameId);
+        } catch (\Throwable $e) {
+            return ["Couldn't start a game: " . $e->getMessage(), []];
+        }
+
+        return $this->boardMessage($gameId, $userId);
+    }
+
     /** @return array<string, mixed> */
     private function newGameButton(): array
     {
         return ['type' => 2, 'style' => 2, 'label' => 'New Practice Game', 'custom_id' => 'ms:newgame:0'];
+    }
+
+    /** @return array<string, mixed> */
+    private function inviteFriendButton(): array
+    {
+        return ['type' => 2, 'style' => 2, 'label' => 'Invite a Friend', 'custom_id' => 'ms:friendgame:0'];
     }
 
     /**

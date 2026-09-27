@@ -7895,10 +7895,33 @@ only ever leaves a game `waiting` (see its own docblock) -- `startGame()`
 (deals every seat's cards, flips it to `in_progress`) and
 `advanceAutomatedTurns()` (covers the bot's own very first turn, or an
 auto-passed empty hand) both have to run too, the same two-call sequence
-`POST /games/start` already runs for a web-created game. Never offers a
-HUMAN opponent here -- picking/inviting another linked player is real
-design work this class's own docblock already flags as out of scope for
-a first pass.
+`POST /games/start` already runs for a web-created game.
+
+**Starting a game against a friend** (reported live: "let's add the
+ability to create a game for another human on the friend list") -- an
+`Invite a Friend` button alongside `New Practice Game` everywhere that
+already appears. Turned out not to need the "real design work" this
+class's own docblock originally flagged a human opponent as needing:
+`createGame()` seats ANY user id immediately, friend or not (the same
+way it already seats a practice bot's own user id), so the friend
+doesn't need to be present in this Discord interaction, already
+Discord-linked, or to explicitly accept anything -- exactly like the
+web app's own New Game dialog friend-picker, which has no invite/accept
+step either (see `createFriendGameMessage()`'s own docblock).
+`FriendshipService::listFriends()` (accepted friendships only) supplies
+the picker (`ms:friendgamewith:0`) in place of `listPracticeBots()`; an
+empty list gets its own message pointing at
+`/game/?open_friends=1` instead. Once created, `startGame()`/
+`advanceAutomatedTurns()` still both run (the latter now purely for its
+OTHER trigger, a default-on empty-hand auto-pass, since a human
+opponent is never a bot) -- but unlike a practice bot, nothing plays
+the friend's own first turn for them if the coin flip lands on them;
+the board just renders an ordinary "waiting on {username}'s turn," the
+same as any other game with an idle opponent. No notification is sent
+to the invited friend (on Discord or otherwise) -- matching the web
+app's own `POST /games` route, which doesn't notify either; the friend
+learns about it the same way they always have, by checking their own
+games list or a `notifyYourTurn()` push once play reaches them.
 
 **Score line, card details, and the game log** (reported live: "show ...
 number of rounds each player has won so far, number of cards each player
