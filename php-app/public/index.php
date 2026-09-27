@@ -1325,6 +1325,31 @@ if ($path === '/games' && $method === 'POST') {
     }
 }
 
+// Issue #524: the puzzle collection's own lobby list -- every active
+// puzzle, plus the caller's own solve status/best_plays for each one
+// (GameService::listActivePuzzles()' own LEFT JOIN).
+if ($path === '/puzzles' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    respond(200, ['status' => 'ok', 'puzzles' => $games->listActivePuzzles((int) $currentUser['id'])]);
+}
+
+// Starts (or restarts -- "Try Again" just calls this again, a fresh
+// games row each time, same as Rematch) one attempt at a puzzle.
+// createPuzzleAttempt() deals the puzzle's own stored starting
+// hand/in-play/deck arrays directly -- no shuffling, no MIN_PLAYERS gate.
+if ($path === '/puzzles/attempt' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $puzzleId = (int) ($body['puzzle_id'] ?? 0);
+
+    try {
+        $gameId = $games->createPuzzleAttempt((int) $currentUser['id'], $puzzleId);
+        respond(201, ['status' => 'ok', 'game_id' => $gameId]);
+    } catch (GameStateException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
 // Issue #116: an open lobby a player can post a game to instead of
 // naming specific friend opponents, and any other discoverable,
 // non-blocked player can browse and join. Mirrors POST /games' own body

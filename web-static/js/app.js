@@ -622,6 +622,19 @@ function cancelTournament(tournamentId) {
     });
 }
 
+// Issue #524: the puzzle collection -- see GameService::listActivePuzzles()/
+// createPuzzleAttempt() for what each of these actually returns.
+function listPuzzles() {
+    return apiRequest('/puzzles');
+}
+
+function attemptPuzzle(puzzleId) {
+    return apiRequest('/puzzles/attempt', {
+        method: 'POST',
+        body: JSON.stringify({ puzzle_id: puzzleId }),
+    });
+}
+
 // Booster Draft's own pod-drafting phase (issue #91 follow-up) -- see
 // TournamentService::getPodDraftState()'s own docblock.
 function getPodDraftState(tournamentId) {

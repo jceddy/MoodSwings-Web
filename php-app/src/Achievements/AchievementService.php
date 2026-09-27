@@ -1099,6 +1099,16 @@ final class AchievementService
     }
 
     // ---------------------------------------------------------------
+    // Puzzles (category J)
+    // ---------------------------------------------------------------
+
+    /** Called from GameService's puzzle goal-check hook the first time a solve is recorded for $userId (any puzzle). */
+    public function onPuzzleSolved(int $userId): void
+    {
+        $this->unlock($userId, 'puzzle-solver');
+    }
+
+    // ---------------------------------------------------------------
     // One-time backfill (bin/backfill_win_count_achievements.php)
     // ---------------------------------------------------------------
 

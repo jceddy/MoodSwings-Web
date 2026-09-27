@@ -12865,6 +12865,93 @@ further if that's ever worth the added surface; every prefilled field
 stays freely editable before submitting regardless, so this is a
 starting point, not a silent one-click recreate.
 
+### Puzzles (issue #524)
+
+A curated, freely-replayable library of standalone solitaire puzzles: a
+fixed starting hand/board and a specific goal, no live opponent, no
+daily/weekly cadence, no leaderboard. Debuted with 10 hand-authored,
+engine-verified puzzles spanning easy/medium/hard (see
+`php-app/tests/Rules/PuzzleContentTest.php`, which builds each one from
+its own stored definition and drives the intended solution -- and, where
+there's a tempting wrong line, asserts that line does NOT solve it --
+through the real engine) and a new achievement, "Puzzle Solver" (category
+J, unlocked on a player's first solve).
+
+A puzzle attempt is a real, minimal `games` row (`format = 'puzzle'`,
+exactly one seat), reusing the entire existing rules engine, persistence
+layer, API surface, and board-rendering frontend almost unchanged, rather
+than a parallel bespoke system:
+
+- `GameService::createPuzzleAttempt(int $userId, int $puzzleId): int`
+  deals a puzzle's own stored `starting_hand_card_ids`/
+  `starting_in_play_card_ids`/`deck_card_ids` (ordered catalog card id
+  arrays, no shuffling) directly into `game_cards`, and inserts one
+  `game_players`/one `game_rounds` row. Deliberately bypasses
+  `createGame()`/`startGame()` entirely -- both hard-enforce
+  `MIN_PLAYERS = 2`, which a solitaire puzzle can never satisfy -- and
+  starts the game `'in_progress'` immediately rather than `'waiting'`.
+  "Try Again" is just calling this again -- a fresh `games` row, the same
+  pattern Rematch already uses -- rather than resetting one in place, so
+  an old abandoned/solved attempt just sits there like any other finished
+  game.
+- `advanceTurn()`'s ordinary "no next player? score the round" fallback
+  would wrongly invoke the real scoring pipeline the instant a 1-seat
+  puzzle's `plays_remaining` hits 0 -- `advancePuzzleTurn()` is a new
+  early special case (mirroring the existing `'team'`-format one right
+  above it) that instead just grants the same seat a fresh mini-turn
+  (recomputed via `computeFreshGrants()`, so any Hope/Grace/Stubbornness
+  already in play on the puzzle's board still applies) and logs a
+  `puzzle_turn_refreshed` event, keeping the attempt open indefinitely
+  until the player solves it or runs out of legal plays.
+- The goal itself is never checked by scoring -- `playMood()`/
+  `respondToDecision()` (a play that itself pauses on a decision, e.g. a
+  Duplicity repeat offer, only ever finishes resolving in the latter) each
+  call `checkPuzzleGoal()` right after a play resolves, evaluating the
+  puzzle's own `goal_type`/`goal_params` against the live `BoardState`:
+  `hand_empty`, `card_in_hand`/`card_in_play` (a specific catalog card in
+  that zone), or `min_score` (the solver's own total in-play value at
+  least a target). Checked *before* `finishPlay()`'s own turn-advance
+  logic runs, not after -- otherwise a puzzle with a `max_plays` cap
+  couldn't tell a clean single-turn solve apart from one that only
+  finished after a `puzzle_turn_refreshed` reset, since that reset would
+  already be logged by the time a check running after `finishPlay()` saw
+  it, even for the correct solution.
+- `max_plays` (optional, per puzzle) means "solved within this many total
+  plays, in one unbroken turn" -- both the play count
+  (`COUNT(*) FROM game_events WHERE event_type = 'mood_played'`) and a
+  check that no `puzzle_turn_refreshed` event happened yet must hold. A
+  puzzle whose intended solution genuinely needs a mid-attempt turn
+  refresh (e.g. establishing a mood in play on one mini-turn before a
+  card that costs discarding one becomes legal on the next) simply leaves
+  `max_plays` unset.
+- Solving marks `games.status = 'completed'` (`winner_game_player_id` is
+  the solver's own seat, purely so the ordinary completed-game board
+  treatment applies -- there's no real "winner" concept otherwise),
+  upserts `puzzle_solves` (first solve or a new personal best), and fires
+  `AchievementService::onPuzzleSolved()`. Deliberately does NOT call
+  `recordGameCompletionStats()` -- that's the real win/loss lifetime-stats
+  pipeline, and a solitaire puzzle isn't a real game in that sense. If a
+  `max_plays` cap is exceeded (or a turn refresh already happened) before
+  the goal is reached, the puzzle simply stays `in_progress` and
+  replayable -- there's no separate "you failed" state; the player just
+  keeps playing or starts a fresh attempt.
+- `GET /puzzles` lists every active puzzle plus the caller's own solve
+  status (`GameService::listActivePuzzles()`); `POST /puzzles/attempt`
+  (`{puzzle_id}`) starts one, returning `{game_id}`.
+- Frontend: a "Puzzles" button in the lobby opens a dialog listing every
+  puzzle (title, difficulty, description, solved checkmark + best play
+  count) with an "Attempt"/"Try Again" button per row that calls
+  `POST /puzzles/attempt` and reuses the exact same `showBoard()`/
+  `refreshBoard()`/`renderBoard()` pipeline every other game already
+  uses. The one rendering gap a single-seat game exposed:
+  `IN_PLAY_ZONE_ORDER_BY_PLAYER_COUNT`/`.in-play-board--N` only handled
+  2-4 players; both now have a `1` entry. A completed puzzle's board shows
+  a "Puzzle solved in N plays!" banner in place of the ordinary "Game
+  over -- X won" one (`games.puzzle_plays_made`, exposed only for
+  `format = 'puzzle'`).
+- Deliberately out of scope for this debut: a "give up / show solution"
+  reveal, and multi-seat/opponent-board puzzles -- solitaire only for now.
+
 ### Duel: separate per-player decks
 
 `format: 'duel'` and `format: 'draft'` (see "Draft format" below) are the
@@ -13354,7 +13441,8 @@ database with real data.
 
 ## Achievements
 
-A 108-entry catalog (design doc: "MoodSwings-Web Achievements -- Draft
+A 109-entry catalog (108 from the original design doc, plus Puzzle Solver
+-- design doc: "MoodSwings-Web Achievements -- Draft
 List"), covering every achievement whose condition is knowable at
 game-completion or tournament-completion time, the four meta rows, and
 every account/social trigger with a real call site. `achievements`
@@ -13414,7 +13502,9 @@ Sharing is Caring, the last on `visibility === 'friends'`),
 `GameService::createGame()` (Bot Wrangler, 2+ bot seats) and
 `GET /games/spectate/state`/`POST /games/replay/import`/
 `GET /stats/cards` in `public/index.php` (Spectator Sport/Replay
-Enthusiast/Card Counter).
+Enthusiast/Card Counter). Puzzle Solver (category J, "Puzzles" above) is
+its own one-row category, unlocked via `onPuzzleSolved()` from
+`GameService`'s puzzle goal-check hook.
 
 Night Owl/Early Bird/Marathon Session ("...your local time"/"a single
 calendar day") need each player's own timezone, which the server has no
