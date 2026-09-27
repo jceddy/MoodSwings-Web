@@ -8014,11 +8014,40 @@ message?", scoped by explicit decisions: directly in the main board
 message, in-play only for now) -- `boardMessage()` now attaches one
 embed, whenever at least one mood is currently in play, pointing at
 `boardImageUrl()`'s own signed URL. `BoardImageRenderer` tiles every
-in-play card's own MSW print into a single grid (GD -- confirmed
-bundled with PHP on the target Bluehost hosting, including `.webp`
-DECODE support, unlike the Imagick PECL extension shared hosting can't
-install), output as PNG regardless of the source format (GD's own
-WEBP *encode* support is less universally guaranteed than decode).
+in-play card's own MSW print (GD -- confirmed bundled with PHP on the
+target Bluehost hosting, including `.webp` DECODE support, unlike the
+Imagick PECL extension shared hosting can't install), output as PNG
+regardless of the source format (GD's own WEBP *encode* support is
+less universally guaranteed than decode).
+
+Reported live, right after this first shipped: "would it be possible
+to arrange the cards similarly to how we do in the web client,
+including the player's names, badges on the cards to indicate current
+value, etc." -- `renderBoardImage()` now groups `in_play` by
+`owner_game_player_id`, the exact same way `inPlaySummary()`'s own text
+listing already does (same `$state['players']` seat order, a player
+with nothing in play gets no row at all), and `BoardImageRenderer` lays
+those groups out as one labeled row per player instead of an
+undifferentiated grid, with a current-value badge (dark pill, top-right
+corner) on any card whose `value` no longer matches its `base_value` --
+mirroring `web-static/js/game.js`'s own `buildCardThumb()` (`if
+(card.value !== card.base_value)`). Deliberately NOT the web board's
+own viewer-relative north/south/east/west seating
+(`inPlayZoneAssignments()`) -- this image is fetched once by Discord's
+own servers and cached at a single URL keyed only by game id, with no
+per-viewer variant, so "south is always the viewer's own seat" can't
+apply here; whichever player happened to invoke `/moodswings` first
+would otherwise freeze everyone else's own view into THEIR
+perspective. Text rendering deliberately stays on GD's own built-in
+bitmap fonts (`imagestring()`) rather than `imagettftext()`, which needs
+FreeType support in GD's own build AND a font file on disk that isn't
+confirmed either way for the target hosting -- the built-in fonts work
+in every GD build unconditionally. Every OTHER badge
+`buildCardThumb()` can show (chaos delta/override, Copy, recolor,
+suppressed, ...) is deliberately out of scope -- those only ever apply
+to a `chaos_draft`-format game, and this class only ever supports
+`'standard'` (see its own `SUPPORTED_FORMAT`).
+
 `DiscordGameCommandService::cardArtFilePath()` locates each card's art
 file ON DISK (unlike `cardArtUrl()`'s public URL) by probing two
 candidate paths, since local dev and production disagree on where
