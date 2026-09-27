@@ -7775,26 +7775,61 @@ full reasoning):
   effects) this class has no rendering for yet -- any other format (or
   any status other than `in_progress`) gets a plain "open the web app
   for this" message with a link, never a crash.
-- A hand card is only offered to play here if it has exactly one
-  `choice_field` total -- required OR optional -- (or a pending
-  decision's own single field) of a `mode`/`value`/`bool`/`mood`/
-  `player`/`hand_card`/`discard_card` type and not itself a `multi`
-  selection -- covers most single-target cards (Pride's own
-  `target_player_id`, Compulsion's `discard_card_id`, Conviction's
-  self-targetable `target_mood_id`, Hate's optional "any mood in play,"
-  ...) but excludes anything needing more than one field, a
-  checkbox-style `multi` selection, or a `nested` sub-form (Duplicity's
-  own repeat offer, any chaos_draft attachment) -- those cards are
-  listed as "needs the web app" instead. An OPTIONAL field's select
-  menu (`withSkipOptionIfOptional()`) always gets a leading "Skip --
-  play without this effect" option (`SKIP_FIELD_VALUE`) so declining it
-  is a deliberate choice sent back to `castFieldValue()`/`choicesFor()`
-  as "leave this key out of the submitted choices entirely," never a
+- A hand card is only offered to play here if EVERY one of its own
+  `choice_fields`, up to `MAX_CHOICE_FIELDS` (2 -- the most any
+  hand-playable card actually has) total, is one of a `mode`/`value`/
+  `bool`/`mood`/`player`/`hand_card`/`discard_card` type -- covers not
+  just single-target cards (Pride's own `target_player_id`,
+  Compulsion's `discard_card_id`, Conviction's self-targetable
+  `target_mood_id`, Hate's optional "any mood in play," ...) but also a
+  `multi` (checkbox-style) field and a card with a SECOND field. Cards
+  needing more than 2 fields, or a `nested` sub-form (Duplicity's own
+  repeat offer, any chaos_draft attachment), are still listed as "needs
+  the web app" instead. An OPTIONAL single-value field's select menu
+  (`withSkipOptionIfOptional()`) always gets a leading "Skip -- play
+  without this effect" option (`SKIP_FIELD_VALUE`) so declining it is a
+  deliberate choice sent back to `castFieldValue()`/`choicesFor()` as
+  "leave this key out of the submitted choices entirely," never a
   silent default -- this class's first ship never rendered an optional
   field's choice at all (Hate's own `target_mood_id` is `required =>
   false`, so it always played with no target and no way to pick one;
   reported live as "select options for cards we choose to play (such as
   a target for Hate)").
+- A `multi` field (Suspicion's own "choose any number of players,"
+  Guile's "exactly 2 cards to discard," Malice's decision-side "choose
+  two of your moods," ...) -- reported live as "we need some way to
+  play targeted cards like Insecurity/Suspicion" -- gets Discord's own
+  native multi-select (`min_values`/`max_values`) instead of the
+  single-value Skip sentinel (`fieldSelectComponent()`): selecting
+  nobody, when `min_values` is 0, IS the "leave this optional field
+  blank" signal, so there's no fake option occupying a real slot the
+  way Skip needs for a single-select field. `min_values` honors a
+  `count.min` (Guile's "exactly 2") over the plain required/optional
+  flag where `CardChoiceSchema` sets one, except when `count.zero_ok`
+  is set (Rejection/Denial's own "0 or exactly 2") -- there 0 is always
+  legal regardless of `count.min`. Deliberately doesn't re-validate a
+  `multi` field's own cross-selection `constraint` (`distinct_owners`,
+  `same_color_or_value`, ...) -- an illegal combination the select's
+  own candidate list didn't rule out still gets rejected server-side,
+  surfaced the same way any other failed play already is.
+- A card with a SECOND `choice_field` (Faith, Guile, Condescension,
+  Guilt, Regret, Worry, Contempt, Cynicism, Hostility, Hesitation,
+  Rationalization, Corruption, Fascination -- confirmed by walking
+  every effect_key in `CardChoiceSchema`, nothing has 3+) is asked one
+  field at a time (`promptOrPlay()`), the first field's own select
+  handing off to a second one via its custom_id (below) rather than a
+  new top-level slash command -- Discord slash-command options are
+  static/single-valued at the protocol level (no true multi-select, and
+  dynamic per-game candidates would need implementing autocomplete
+  interactions), so extending the existing ephemeral component flow
+  covers both this and the `multi` case above without that extra
+  plumbing. A field that doesn't need answering right now -- a
+  `requires_mode` gate (Guilt/Contempt/Hesitation's own `target_mood_id`
+  only matters once their `mode` field is `single`) that the first
+  field's answer doesn't satisfy, or simply zero legal candidates, the
+  same `optional_if_no_targets` carve-out a single-field card already
+  got -- is silently left blank and skipped, the same way reaching the
+  end of every field just plays the card with whatever was gathered.
 - Every board view now opens with an in-play summary (`inPlaySummary()`)
   listing each player's own moods currently in play, alongside their own
   hand -- public information (unlike a hand), and the only way to make
@@ -7822,19 +7857,26 @@ full reasoning):
 **Custom_id scheme** (colon-delimited, always well under Discord's own
 100-char cap): `ms:view:{gameId}` (refresh/select-a-game buttons),
 `ms:pass:{gameId}`, `ms:play:{gameId}` (the "play a card" select menu --
-its own value is the chosen card id), `ms:playfield:{gameId}:{cardId}`
-(that card's own single field's value select, required or optional),
-`ms:decision:{gameId}` (the current pending decision's own single
-field's value select), `ms:newgame:0`/`ms:newgamebot:0` (starting a
-practice game -- below; the trailing `0` is always a dummy, never a real
-game id), `ms:cards:{gameId}` (the "View Cards" button -- switches to a
-browse screen offering `ms:cardhand:{gameId}`/`ms:cardplay:{gameId}`/
-`ms:carddiscard:{gameId}` select menus, one per zone, each value the
-chosen card's own game_cards id), `ms:log:{gameId}` (the "Game Log"
-button). A field's own key is never encoded in a custom_id -- it's
-always the one field this class already chose to render for that
-specific card/decision, so it's re-derived server-side from the current
-board state on the round trip rather than carried across it.
+its own value is the chosen card id),
+`ms:playfield:{gameId}:{cardId}:{stepIndex}:{answers}` (that card's own
+`stepIndex`'th field's value select -- `answers` is every EARLIER
+field's own already-submitted choice for this same card, round-tripped
+via `encodeAnswers()`/`decodeAnswers()` (URL-safe base64 of the JSON
+choices array so far) since a 2-field card's second select needs to
+remember the first one's answer across the trip; `stepIndex` is always
+`0` for a single-field card, so its own custom_id looks the same as
+before this class supported a second field), `ms:decision:{gameId}`
+(the current pending decision's own single field's value select --
+decisions never have more than one field), `ms:newgame:0`/
+`ms:newgamebot:0` (starting a practice game -- below; the trailing `0`
+is always a dummy, never a real game id), `ms:cards:{gameId}` (the
+"View Cards" button -- switches to a browse screen offering
+`ms:cardhand:{gameId}`/`ms:cardplay:{gameId}`/`ms:carddiscard:{gameId}`
+select menus, one per zone, each value the chosen card's own game_cards
+id), `ms:log:{gameId}` (the "Game Log" button). A field's own KEY is
+never encoded in a custom_id (only an earlier field's already-submitted
+VALUE) -- it's always re-derived server-side from the current board
+state and `stepIndex`.
 
 **Starting a practice game** (reported live right after this feature's
 own first ship: "Can we add a command to start a game from inside

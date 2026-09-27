@@ -22399,11 +22399,14 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame(7, $playResponse['type']);
         self::assertSame('hand', $this->cardZone($convictionId), 'not played yet -- still waiting on its own required field');
         $fieldSelect = $playResponse['data']['components'][0]['components'][0];
-        self::assertSame("ms:playfield:{$gameId}:{$convictionId}", $fieldSelect['custom_id']);
+        // ms:playfield:{gameId}:{cardId}:{stepIndex}:{encoded prior answers}
+        // -- stepIndex 0 and no prior answers yet, since this is the
+        // first (and, for Conviction, only) field.
+        self::assertStringStartsWith("ms:playfield:{$gameId}:{$convictionId}:0:", $fieldSelect['custom_id']);
         self::assertContains((string) $convictionId, array_column($fieldSelect['options'], 'value'), 'Conviction can legally target itself');
 
         $fieldResponse = $this->discordCommandService()->handleComponent(
-            $this->discordComponentPayload('discord-8', "ms:playfield:{$gameId}:{$convictionId}", [(string) $convictionId])
+            $this->discordComponentPayload('discord-8', $fieldSelect['custom_id'], [(string) $convictionId])
         );
 
         self::assertSame(7, $fieldResponse['type']);
@@ -22562,7 +22565,7 @@ final class GameServiceIntegrationTest extends TestCase
 
         self::assertSame(7, $response['type']);
         $fieldSelect = $response['data']['components'][0]['components'][0];
-        self::assertSame("ms:playfield:{$gameId}:{$hateId}", $fieldSelect['custom_id']);
+        self::assertStringStartsWith("ms:playfield:{$gameId}:{$hateId}:0:", $fieldSelect['custom_id']);
         $labelsByValue = array_column($fieldSelect['options'], 'label', 'value');
         self::assertSame('Sadness (0) -- discord-player-16', $labelsByValue[(string) $ownMoodId]);
         self::assertSame('Complacency (4) -- discord-player-17', $labelsByValue[(string) $opponentMoodId]);
@@ -22746,6 +22749,107 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame(7, $logResponse['type']);
         self::assertStringContainsString('discord-player-26 passed', $logResponse['data']['content']);
         self::assertSame("ms:view:{$gameId}", $logResponse['data']['components'][0]['components'][0]['custom_id']);
+    }
+
+    /**
+     * Reported live: "we need some way to play targeted cards like
+     * Insecurity/Suspicion" -- Suspicion's own field ('player_ids') is
+     * `multi => true`, which this class's earlier v1 scope excluded
+     * outright. Now it gets Discord's own native multi-select
+     * (min_values/max_values) instead of the single-value Skip sentinel
+     * -- selecting zero players IS "skip," since min_values is 0 for
+     * this optional field.
+     */
+    public function testDiscordComponentPlayMultiFieldSelectsMultiplePlayers(): void
+    {
+        $u1 = $this->insertUser('discord-player-28');
+        $u2 = $this->insertUser('discord-player-29');
+        $this->linkDiscordAccount($u1, 'discord-28');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $suspicionId = $this->insertGameCard($gameId, 78, 'hand', $p1); // Suspicion
+        $this->insertGameCard($gameId, 5, 'hand', $p2); // gives p2 a hand card, satisfying Suspicion's own min_hand_count filter
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $playResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-28', "ms:play:{$gameId}", [(string) $suspicionId])
+        );
+
+        self::assertSame(7, $playResponse['type']);
+        $fieldSelect = $playResponse['data']['components'][0]['components'][0];
+        self::assertStringStartsWith("ms:playfield:{$gameId}:{$suspicionId}:0:", $fieldSelect['custom_id']);
+        self::assertSame(0, $fieldSelect['min_values'], 'optional multi field -- selecting nobody is itself a legal answer');
+        self::assertSame(count($fieldSelect['options']), $fieldSelect['max_values']);
+        self::assertContains((string) $p2, array_column($fieldSelect['options'], 'value'));
+
+        $fieldResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-28', $fieldSelect['custom_id'], [(string) $p2])
+        );
+
+        self::assertSame(7, $fieldResponse['type']);
+        self::assertSame('in_play', $this->cardZone($suspicionId));
+    }
+
+    /**
+     * The same report, but for a card with a SECOND choice_field --
+     * Faith's own target_mood_id ("required if discarding a card above")
+     * only needs asking once the first field (discard_card_id) is
+     * actually answered. promptOrPlay() walks both fields one at a time,
+     * carrying the first field's own answer forward through the second
+     * select's own custom_id (encodeAnswers()/decodeAnswers()).
+     */
+    public function testDiscordComponentPlayChainsASecondChoiceField(): void
+    {
+        $u1 = $this->insertUser('discord-player-30');
+        $u2 = $this->insertUser('discord-player-31');
+        $this->linkDiscordAccount($u1, 'discord-30');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $faithId = $this->insertGameCard($gameId, 12, 'hand', $p1); // Faith
+        $creativityId = $this->insertGameCard($gameId, 32, 'hand', $p1); // Creativity -- blue, a legal discard candidate
+        $complacencyId = $this->insertGameCard($gameId, 5, 'in_play', $p2); // Complacency, a legal suppression target
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $playResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-30', "ms:play:{$gameId}", [(string) $faithId])
+        );
+
+        self::assertSame(7, $playResponse['type']);
+        $firstSelect = $playResponse['data']['components'][0]['components'][0];
+        self::assertStringStartsWith("ms:playfield:{$gameId}:{$faithId}:0:", $firstSelect['custom_id']);
+        self::assertContains((string) $creativityId, array_column($firstSelect['options'], 'value'));
+
+        $secondResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-30', $firstSelect['custom_id'], [(string) $creativityId])
+        );
+
+        self::assertSame(7, $secondResponse['type']);
+        self::assertSame('hand', $this->cardZone($faithId), 'not played yet -- still waiting on its own second field');
+        $secondSelect = $secondResponse['data']['components'][0]['components'][0];
+        self::assertStringStartsWith("ms:playfield:{$gameId}:{$faithId}:1:", $secondSelect['custom_id']);
+        self::assertContains((string) $complacencyId, array_column($secondSelect['options'], 'value'));
+
+        $thirdResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-30', $secondSelect['custom_id'], [(string) $complacencyId])
+        );
+
+        self::assertSame(7, $thirdResponse['type']);
+        self::assertSame('in_play', $this->cardZone($faithId));
+        self::assertSame('discard', $this->cardZone($creativityId));
     }
 
     /** @return int[] */
