@@ -8045,6 +8045,40 @@ request to carry the way every other method in this class has
 (game gone/still `waiting`/`abandoned`, or simply no cards in play)
 gets a plain 404.
 
+Reported live: the embed shipped blank in production -- `boardImageUrl()`
+originally built off `SiteUrl::root()` (the bare domain, meant for
+STATIC frontend links like `cardArtUrl()`'s own `.webp` URLs) instead
+of `APP_URL` (which includes the PHP app's own `/app` path prefix on
+shared hosting -- see `SiteUrl`'s own docblock). `/discord/board-image`
+is a `public/index.php` ROUTE, the same category as
+`DiscordOAuthService::redirectUri()`'s own `/discord/oauth/callback`
+link, which already builds off `Config::get('APP_URL')` for exactly
+this reason -- `SiteUrl::root()` pointed Discord's own fetch at the
+bare domain, missing the `/app` prefix entirely, a 404 Discord just
+renders as no image at all. Fixed to match `redirectUri()`'s own
+convention.
+
+**Bot turns/auto-passes weren't happening at all via Discord** (reported
+live: "every bot decision ... is not running until the 15 minute CRON
+recovery job runs") -- every equivalent web write route (`POST /games/pass`,
+`/games/play`, ...) already calls `GameService::advanceAutomatedTurns()`
+right after its own mutation, and the web client's own ~4s
+`GET /games/state` poll ALSO calls it on every single poll as a
+backstop, so a bot's own turn (or even a human's own default-on
+empty-hand auto-pass) there gets driven forward even if nothing else
+does. `handleComponent()` never called it at all after a human's own
+pass/play/decision, and `handleCommand()` (the `/moodswings` command
+itself) never called it either -- so via Discord, a following bot turn
+just sat there with nothing to drive it forward until the periodic cron
+fallback eventually caught it. Both now call it: `handleComponent()`
+right after a mutating verb's own switch case falls through (skipped
+when a further field-select is still pending, i.e. nothing was actually
+played yet), and `handleCommand()` defensively before rendering the
+board, matching `GET /games/state`'s own best-effort
+`try`/`catch (GameStateException)` so a transient failure there (e.g.
+lock contention from a concurrent write) never blocks the board from
+rendering.
+
 **No new persistence** -- every interaction re-fetches `GameService::getState()`
 (for display) and, when rendering a field select, a fresh `BoardState`
 (for `BotChoiceResolver`'s candidate enumeration) fresh from the

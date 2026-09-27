@@ -1,0 +1,16 @@
+-- Reported live: the composite in-play board image embed shipped in
+-- 1.55.10 showed up blank in Discord. Root cause --
+-- DiscordGameCommandService::boardImageUrl() built off SiteUrl::root()
+-- (the bare domain, meant for STATIC frontend links like cardArtUrl()'s
+-- own .webp URLs) instead of APP_URL (which includes the PHP app's own
+-- '/app' path prefix on shared hosting -- see SiteUrl's own docblock).
+-- `/discord/board-image` is a public/index.php ROUTE, the same category
+-- as DiscordOAuthService::redirectUri()'s own `/discord/oauth/callback`
+-- link, which already builds off Config::get('APP_URL') for exactly this
+-- reason -- SiteUrl::root() pointed Discord's own fetch at the bare
+-- domain, missing the '/app' prefix entirely, a 404 Discord just renders
+-- as no image at all.
+--
+-- No schema change -- just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.55.11' WHERE id = 1;

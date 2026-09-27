@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace MoodSwings\Tests\Game;
 
 use MoodSwings\Bot\BotChoiceResolver;
+use MoodSwings\Config;
 use MoodSwings\Database\Connection;
 use MoodSwings\Deck\NotAuthorizedToAccessDecklistException;
 use MoodSwings\Deck\UserDecklistService;
@@ -22250,6 +22251,37 @@ final class GameServiceIntegrationTest extends TestCase
         (new DiscordAccountRepository())->link($userId, $discordUserId, "discord-{$discordUserId}");
     }
 
+    /**
+     * Every Discord test's own human player -- unlike plain insertUser(),
+     * this opts OUT of auto_pass_on_empty_hand/auto_apply_scoring_bonuses
+     * (both default ON for every real user -- see
+     * testAdvanceAutomatedTurnsNeverAutoPassesAPlayerMidComboWhoStillHasALegalPlay()'s
+     * own docblock: "true for virtually every human"). Needed only
+     * because handleCommand()/handleComponent() now call
+     * advanceAutomatedTurns() (see that fix's own docblock: "every bot
+     * decision ... is not running until the 15 minute CRON recovery job
+     * runs") -- these tests' own bare fixtures (a single game_rounds row,
+     * no real dealt deck) give a player a genuinely EMPTY hand purely as
+     * a display-testing shortcut, which a real default-on human would
+     * otherwise have auto-passed (and, once BOTH seats stay perpetually
+     * empty-handed across every synthetic follow-up round this test
+     * fixture never deals real cards into either, auto-scored straight
+     * through to game completion) the instant advanceAutomatedTurns()
+     * actually runs -- something a REAL game's own always-dealt deck
+     * could never do turn after turn. A seated bot (insertBotUser()) is
+     * deliberately NOT given this treatment -- its whole point in a test
+     * like testDiscordComponentPassImmediatelyDrivesTheFollowingBotTurn()
+     * is to actually act on its own.
+     */
+    private function insertDiscordUser(string $username): int
+    {
+        $userId = $this->insertUser($username);
+        $this->pdo->prepare('UPDATE users SET auto_pass_on_empty_hand = 0, auto_apply_scoring_bonuses = 0 WHERE id = :id')
+            ->execute(['id' => $userId]);
+
+        return $userId;
+    }
+
     /** @return array<string, mixed> */
     private function discordCommandPayload(string $discordUserId): array
     {
@@ -22272,7 +22304,7 @@ final class GameServiceIntegrationTest extends TestCase
 
     public function testDiscordCommandWithNoActiveGameSaysSo(): void
     {
-        $userId = $this->insertUser('discord-player-1');
+        $userId = $this->insertDiscordUser('discord-player-1');
         $this->linkDiscordAccount($userId, 'discord-1');
 
         $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-1'));
@@ -22283,8 +22315,8 @@ final class GameServiceIntegrationTest extends TestCase
 
     public function testDiscordCommandRendersBoardWithPlayAndPassForOneActiveGame(): void
     {
-        $u1 = $this->insertUser('discord-player-2');
-        $u2 = $this->insertUser('discord-player-3');
+        $u1 = $this->insertDiscordUser('discord-player-2');
+        $u2 = $this->insertDiscordUser('discord-player-3');
         $this->linkDiscordAccount($u1, 'discord-2');
 
         $stmt = $this->pdo->prepare(
@@ -22320,8 +22352,8 @@ final class GameServiceIntegrationTest extends TestCase
 
     public function testDiscordComponentPassAdvancesTheTurn(): void
     {
-        $u1 = $this->insertUser('discord-player-4');
-        $u2 = $this->insertUser('discord-player-5');
+        $u1 = $this->insertDiscordUser('discord-player-4');
+        $u2 = $this->insertDiscordUser('discord-player-5');
         $this->linkDiscordAccount($u1, 'discord-4');
 
         $stmt = $this->pdo->prepare(
@@ -22340,10 +22372,83 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame($p2, (int) $this->fetchRound($gameId)['current_turn_game_player_id']);
     }
 
+    /**
+     * Reported live: "every bot decision ... is not running until the 15
+     * minute CRON recovery job runs" -- root cause: unlike every
+     * equivalent web write route (POST /games/pass, /games/play, ...),
+     * which all call GameService::advanceAutomatedTurns() right after
+     * their own mutation, and unlike the web client's own ~4s
+     * GET /games/state poll (which calls it on every single poll as a
+     * backstop), handleComponent() never called it at all -- a human's
+     * own pass/play/decision via Discord left a following bot turn just
+     * sitting there with nothing to drive it forward until the periodic
+     * cron fallback eventually caught it. This seats a real bot (not a
+     * hand-rolled game_player row -- BotPlayerService needs users.is_bot
+     * to recognize the seat as its own) as p2, gives it one simple,
+     * unconditionally-playable card, and confirms that after the human's
+     * OWN pass via Discord -- one single handleComponent() call, nothing
+     * else -- the bot's own turn already resolved on its own: the round
+     * has moved past the bot's seat, not stuck waiting on it.
+     */
+    public function testDiscordComponentPassImmediatelyDrivesTheFollowingBotTurn(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-49');
+        $botUserId = $this->insertBotUser('discord-player-49-bot');
+        $this->linkDiscordAccount($u1, 'discord-49');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $botUserId, 1);
+        $this->insertGameCard($gameId, 5, 'hand', $p2); // Complacency -- no choice_fields, always playable
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->discordCommandService()->handleComponent($this->discordComponentPayload('discord-49', "ms:pass:{$gameId}"));
+
+        self::assertNotSame($p2, (int) $this->fetchRound($gameId)['current_turn_game_player_id']);
+    }
+
+    /**
+     * The other half of the same fix: opening `/moodswings` itself
+     * (handleCommand(), not a component click) is the other moment,
+     * alongside the equivalent web client's own ~4s GET /games/state
+     * poll, where a bot turn already stuck from BEFORE this fix (e.g.
+     * one left over from an old client, or simply never driven by
+     * anything else) gets a chance to catch up -- this simulates
+     * already-stuck state directly (current_turn_game_player_id pointed
+     * at the bot from the start, nothing having just passed to it) and
+     * confirms a single /moodswings invocation resolves it.
+     */
+    public function testDiscordCommandCatchesUpAnAlreadyStuckBotTurn(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-50');
+        $botUserId = $this->insertBotUser('discord-player-50-bot');
+        $this->linkDiscordAccount($u1, 'discord-50');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $botUserId, 1);
+        $this->insertGameCard($gameId, 5, 'hand', $p2); // Complacency -- no choice_fields, always playable
+        $this->insertGameRound($gameId, 1, $p2, $p2, 1);
+
+        $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-50'));
+
+        self::assertNotSame($p2, (int) $this->fetchRound($gameId)['current_turn_game_player_id']);
+    }
+
     public function testDiscordComponentPlaysAZeroFieldCardDirectly(): void
     {
-        $u1 = $this->insertUser('discord-player-6');
-        $u2 = $this->insertUser('discord-player-7');
+        $u1 = $this->insertDiscordUser('discord-player-6');
+        $u2 = $this->insertDiscordUser('discord-player-7');
         $this->linkDiscordAccount($u1, 'discord-6');
 
         $stmt = $this->pdo->prepare(
@@ -22367,8 +22472,8 @@ final class GameServiceIntegrationTest extends TestCase
 
     public function testDiscordComponentPlayThenPlayfieldForASingleRequiredFieldCard(): void
     {
-        $u1 = $this->insertUser('discord-player-8');
-        $u2 = $this->insertUser('discord-player-9');
+        $u1 = $this->insertDiscordUser('discord-player-8');
+        $u2 = $this->insertDiscordUser('discord-player-9');
         $this->linkDiscordAccount($u1, 'discord-8');
 
         $stmt = $this->pdo->prepare(
@@ -22415,8 +22520,8 @@ final class GameServiceIntegrationTest extends TestCase
 
     public function testDiscordComponentDecisionRespondsToASingleFieldPendingDecision(): void
     {
-        $u1 = $this->insertUser('discord-player-10');
-        $u2 = $this->insertUser('discord-player-11');
+        $u1 = $this->insertDiscordUser('discord-player-10');
+        $u2 = $this->insertDiscordUser('discord-player-11');
         $this->linkDiscordAccount($u1, 'discord-10');
 
         $stmt = $this->pdo->prepare(
@@ -22454,7 +22559,7 @@ final class GameServiceIntegrationTest extends TestCase
      */
     public function testDiscordComponentNewGameStartsImmediatelyWithExactlyOnePracticeBot(): void
     {
-        $u1 = $this->insertUser('discord-player-12');
+        $u1 = $this->insertDiscordUser('discord-player-12');
         $this->linkDiscordAccount($u1, 'discord-12');
         $bot = $this->insertBotUser('discord-practice-bot-1');
 
@@ -22484,7 +22589,7 @@ final class GameServiceIntegrationTest extends TestCase
      */
     public function testDiscordComponentNewGameOffersAPickerWithMultiplePracticeBots(): void
     {
-        $u1 = $this->insertUser('discord-player-13');
+        $u1 = $this->insertDiscordUser('discord-player-13');
         $this->linkDiscordAccount($u1, 'discord-13');
         $bot1 = $this->insertBotUser('discord-practice-bot-2');
         $bot2 = $this->insertBotUser('discord-practice-bot-3');
@@ -22504,7 +22609,7 @@ final class GameServiceIntegrationTest extends TestCase
     /** Completes the picker flow above: picking a specific bot creates and starts a game against exactly that one. */
     public function testDiscordComponentNewGameBotCreatesAGameAgainstTheChosenBot(): void
     {
-        $u1 = $this->insertUser('discord-player-14');
+        $u1 = $this->insertDiscordUser('discord-player-14');
         $this->linkDiscordAccount($u1, 'discord-14');
         $this->insertBotUser('discord-practice-bot-4');
         $bot2 = $this->insertBotUser('discord-practice-bot-5');
@@ -22524,7 +22629,7 @@ final class GameServiceIntegrationTest extends TestCase
 
     public function testDiscordCommandNoActiveGameOffersTheNewGameButton(): void
     {
-        $userId = $this->insertUser('discord-player-15');
+        $userId = $this->insertDiscordUser('discord-player-15');
         $this->linkDiscordAccount($userId, 'discord-15');
 
         $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-15'));
@@ -22542,8 +22647,8 @@ final class GameServiceIntegrationTest extends TestCase
      */
     public function testDiscordComponentPlayfieldOptionsLabelEachMoodsOwner(): void
     {
-        $u1 = $this->insertUser('discord-player-16');
-        $u2 = $this->insertUser('discord-player-17');
+        $u1 = $this->insertDiscordUser('discord-player-16');
+        $u2 = $this->insertDiscordUser('discord-player-17');
         $this->linkDiscordAccount($u1, 'discord-16');
 
         $stmt = $this->pdo->prepare(
@@ -22583,8 +22688,8 @@ final class GameServiceIntegrationTest extends TestCase
      */
     public function testDiscordComponentPlayfieldSkipLeavesTargetBlank(): void
     {
-        $u1 = $this->insertUser('discord-player-18');
-        $u2 = $this->insertUser('discord-player-19');
+        $u1 = $this->insertDiscordUser('discord-player-18');
+        $u2 = $this->insertDiscordUser('discord-player-19');
         $this->linkDiscordAccount($u1, 'discord-18');
 
         $stmt = $this->pdo->prepare(
@@ -22616,8 +22721,8 @@ final class GameServiceIntegrationTest extends TestCase
      */
     public function testDiscordCommandBoardShowsRoundsWonAndHandCount(): void
     {
-        $u1 = $this->insertUser('discord-player-20');
-        $u2 = $this->insertUser('discord-player-21');
+        $u1 = $this->insertDiscordUser('discord-player-20');
+        $u2 = $this->insertDiscordUser('discord-player-21');
         $this->linkDiscordAccount($u1, 'discord-20');
 
         $stmt = $this->pdo->prepare(
@@ -22653,8 +22758,8 @@ final class GameServiceIntegrationTest extends TestCase
      */
     public function testDiscordComponentViewCardsShowsHandCardRulesText(): void
     {
-        $u1 = $this->insertUser('discord-player-22');
-        $u2 = $this->insertUser('discord-player-23');
+        $u1 = $this->insertDiscordUser('discord-player-22');
+        $u2 = $this->insertDiscordUser('discord-player-23');
         $this->linkDiscordAccount($u1, 'discord-22');
 
         $stmt = $this->pdo->prepare(
@@ -22696,8 +22801,8 @@ final class GameServiceIntegrationTest extends TestCase
     /** The same card-detail flow, but for a card already in play, owned by another player. */
     public function testDiscordComponentViewCardsShowsInPlayCardOwnerAndRulesText(): void
     {
-        $u1 = $this->insertUser('discord-player-24');
-        $u2 = $this->insertUser('discord-player-25');
+        $u1 = $this->insertDiscordUser('discord-player-24');
+        $u2 = $this->insertDiscordUser('discord-player-25');
         $this->linkDiscordAccount($u1, 'discord-24');
 
         $stmt = $this->pdo->prepare(
@@ -22732,8 +22837,8 @@ final class GameServiceIntegrationTest extends TestCase
      */
     public function testDiscordComponentGameLogShowsRecentPlays(): void
     {
-        $u1 = $this->insertUser('discord-player-26');
-        $u2 = $this->insertUser('discord-player-27');
+        $u1 = $this->insertDiscordUser('discord-player-26');
+        $u2 = $this->insertDiscordUser('discord-player-27');
         $this->linkDiscordAccount($u1, 'discord-26');
 
         $stmt = $this->pdo->prepare(
@@ -22768,8 +22873,8 @@ final class GameServiceIntegrationTest extends TestCase
      */
     public function testDiscordComponentPlayMultiFieldSelectsMultiplePlayers(): void
     {
-        $u1 = $this->insertUser('discord-player-28');
-        $u2 = $this->insertUser('discord-player-29');
+        $u1 = $this->insertDiscordUser('discord-player-28');
+        $u2 = $this->insertDiscordUser('discord-player-29');
         $this->linkDiscordAccount($u1, 'discord-28');
 
         $stmt = $this->pdo->prepare(
@@ -22813,8 +22918,8 @@ final class GameServiceIntegrationTest extends TestCase
      */
     public function testDiscordComponentPlayChainsASecondChoiceField(): void
     {
-        $u1 = $this->insertUser('discord-player-30');
-        $u2 = $this->insertUser('discord-player-31');
+        $u1 = $this->insertDiscordUser('discord-player-30');
+        $u2 = $this->insertDiscordUser('discord-player-31');
         $this->linkDiscordAccount($u1, 'discord-30');
 
         $stmt = $this->pdo->prepare(
@@ -22867,8 +22972,8 @@ final class GameServiceIntegrationTest extends TestCase
      */
     public function testDiscordCommandBoardShowsDiscardPileSummary(): void
     {
-        $u1 = $this->insertUser('discord-player-32');
-        $u2 = $this->insertUser('discord-player-33');
+        $u1 = $this->insertDiscordUser('discord-player-32');
+        $u2 = $this->insertDiscordUser('discord-player-33');
         $this->linkDiscordAccount($u1, 'discord-32');
 
         $stmt = $this->pdo->prepare(
@@ -22898,8 +23003,8 @@ final class GameServiceIntegrationTest extends TestCase
      */
     public function testDiscordCommandBoardShowsWhoWentFirst(): void
     {
-        $u1 = $this->insertUser('discord-player-34');
-        $u2 = $this->insertUser('discord-player-35');
+        $u1 = $this->insertDiscordUser('discord-player-34');
+        $u2 = $this->insertDiscordUser('discord-player-35');
         $this->linkDiscordAccount($u1, 'discord-34');
 
         $stmt = $this->pdo->prepare(
@@ -22926,8 +23031,8 @@ final class GameServiceIntegrationTest extends TestCase
      */
     public function testDiscordComponentCompletedGameAnnouncesTheWinner(): void
     {
-        $u1 = $this->insertUser('discord-player-36');
-        $u2 = $this->insertUser('discord-player-37');
+        $u1 = $this->insertDiscordUser('discord-player-36');
+        $u2 = $this->insertDiscordUser('discord-player-37');
         $this->linkDiscordAccount($u1, 'discord-36');
 
         $stmt = $this->pdo->prepare(
@@ -22960,8 +23065,8 @@ final class GameServiceIntegrationTest extends TestCase
      */
     public function testDiscordCommandShowsCardColorsEverywhere(): void
     {
-        $u1 = $this->insertUser('discord-player-38');
-        $u2 = $this->insertUser('discord-player-39');
+        $u1 = $this->insertDiscordUser('discord-player-38');
+        $u2 = $this->insertDiscordUser('discord-player-39');
         $this->linkDiscordAccount($u1, 'discord-38');
 
         $stmt = $this->pdo->prepare(
@@ -22995,8 +23100,8 @@ final class GameServiceIntegrationTest extends TestCase
      */
     public function testDiscordCommandBoardEmbedsCompositeImageWhenCardsAreInPlay(): void
     {
-        $u1 = $this->insertUser('discord-player-40');
-        $u2 = $this->insertUser('discord-player-41');
+        $u1 = $this->insertDiscordUser('discord-player-40');
+        $u2 = $this->insertDiscordUser('discord-player-41');
         $this->linkDiscordAccount($u1, 'discord-40');
 
         $stmt = $this->pdo->prepare(
@@ -23019,7 +23124,7 @@ final class GameServiceIntegrationTest extends TestCase
 
     public function testDiscordCommandBoardHasNoEmbedWhenNothingIsInPlay(): void
     {
-        $u1 = $this->insertUser('discord-player-42');
+        $u1 = $this->insertDiscordUser('discord-player-42');
         $this->linkDiscordAccount($u1, 'discord-42');
 
         $stmt = $this->pdo->prepare(
@@ -23029,7 +23134,7 @@ final class GameServiceIntegrationTest extends TestCase
         $gameId = (int) $this->pdo->lastInsertId();
 
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
-        $this->insertGamePlayer($gameId, $this->insertUser('discord-player-43'), 1);
+        $this->insertGamePlayer($gameId, $this->insertDiscordUser('discord-player-43'), 1);
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
         $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-42'));
@@ -23057,6 +23162,40 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * Reported live: the embed showed up blank in Discord in production.
+     * Root cause -- boardImageUrl() built off SiteUrl::root() (the bare
+     * domain, meant for STATIC frontend links like cardArtUrl()'s own
+     * .webp URLs) instead of APP_URL (which includes the PHP app's own
+     * '/app' path prefix on shared hosting -- see SiteUrl's own
+     * docblock, and DiscordOAuthService::redirectUri()'s identical
+     * '/discord/oauth/callback' link, which already builds off APP_URL
+     * for exactly this reason). Locally APP_URL and SITE_URL happen to
+     * be identical (both `http://localhost:8000`, no `/app` suffix), so
+     * this only reproduces by overriding Config's own cached values for
+     * the duration of the test -- restored in finally so no later test
+     * in this process sees a stale APP_URL.
+     */
+    public function testBoardImageUrlUsesAppUrlNotSiteUrlSoItSurvivesAnAppPathPrefix(): void
+    {
+        $configValues = new \ReflectionProperty(Config::class, 'values');
+        $configValues->setAccessible(true);
+        $original = $configValues->getValue();
+
+        try {
+            $configValues->setValue(null, [
+                'APP_URL' => 'https://moodswings.example.com/app',
+                'SITE_URL' => 'https://moodswings.example.com',
+            ]);
+
+            $url = $this->discordCommandService()->boardImageUrl(123);
+
+            self::assertStringStartsWith('https://moodswings.example.com/app/discord/board-image?game_id=123&sig=', $url);
+        } finally {
+            $configValues->setValue(null, $original);
+        }
+    }
+
+    /**
      * renderBoardImage() is what the signed route actually serves --
      * this checks it produces a real, decodable PNG whenever there's at
      * least one mood in play, using its own already-tested public
@@ -23065,8 +23204,8 @@ final class GameServiceIntegrationTest extends TestCase
      */
     public function testRenderBoardImageProducesPngWhenCardsAreInPlay(): void
     {
-        $u1 = $this->insertUser('discord-player-44');
-        $u2 = $this->insertUser('discord-player-45');
+        $u1 = $this->insertDiscordUser('discord-player-44');
+        $u2 = $this->insertDiscordUser('discord-player-45');
 
         $stmt = $this->pdo->prepare(
             "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
@@ -23092,7 +23231,7 @@ final class GameServiceIntegrationTest extends TestCase
 
     public function testRenderBoardImageReturnsNullWhenNothingIsInPlay(): void
     {
-        $u1 = $this->insertUser('discord-player-46');
+        $u1 = $this->insertDiscordUser('discord-player-46');
 
         $stmt = $this->pdo->prepare(
             "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
@@ -23101,7 +23240,7 @@ final class GameServiceIntegrationTest extends TestCase
         $gameId = (int) $this->pdo->lastInsertId();
 
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
-        $this->insertGamePlayer($gameId, $this->insertUser('discord-player-47'), 1);
+        $this->insertGamePlayer($gameId, $this->insertDiscordUser('discord-player-47'), 1);
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
         self::assertNull($this->discordCommandService()->renderBoardImage($gameId));
@@ -23109,7 +23248,7 @@ final class GameServiceIntegrationTest extends TestCase
 
     public function testRenderBoardImageReturnsNullForAGameThatCannotBeSpectated(): void
     {
-        $u1 = $this->insertUser('discord-player-48');
+        $u1 = $this->insertDiscordUser('discord-player-48');
         $stmt = $this->pdo->prepare(
             "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'waiting', :created_by, 3)"
         );

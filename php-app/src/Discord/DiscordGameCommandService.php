@@ -163,6 +163,28 @@ final class DiscordGameCommandService
         }
 
         if (count($gameIds) === 1) {
+            // Reported live: bot turns weren't happening via Discord at
+            // all until the 15-minute cron fallback caught them -- see
+            // handleComponent()'s own identical call for the root cause
+            // (no equivalent here of the web client's ~4s
+            // GET /games/state poll, which calls this on every single
+            // poll as a backstop). Opening /moodswings is the other
+            // moment, alongside every mutating component click, where a
+            // stale bot turn can otherwise just sit there unnoticed --
+            // cheap to call even when nothing's actually stuck (see that
+            // method's own docblock), and its result is discarded in
+            // favor of boardMessage()'s own fresh getState() read either
+            // way, same as GET /games/state itself -- including that
+            // same route's own best-effort try/catch, since a transient
+            // failure here (e.g. lock contention from a concurrent write
+            // elsewhere in this same game) must never block the board
+            // from rendering at all.
+            try {
+                $this->games->advanceAutomatedTurns($gameIds[0]);
+            } catch (GameStateException) {
+                // Best-effort only -- see above.
+            }
+
             return $this->ephemeralMessage(...$this->boardMessage($gameIds[0], $userId));
         }
 
@@ -250,6 +272,27 @@ final class DiscordGameCommandService
                 default:
                     return $this->updateMessage('Something about that action was not recognized -- try running /moodswings again.');
             }
+
+            // Reported live: bot turns/auto-passes weren't happening at
+            // all via Discord until the 15-minute cron fallback caught
+            // them -- every equivalent web route (POST /games/pass,
+            // /games/play, ...) already calls this right after its own
+            // mutation (see GameService::advanceAutomatedTurns()'s own
+            // docblock), and the web client's ~4s poll
+            // (GET /games/state) ALSO calls it on every single poll as a
+            // backstop, so a bot's own turn there gets driven forward
+            // even if nothing else does. Discord has neither: no
+            // continuous poll, and (until now) no call here either, so a
+            // human's own pass/play/decision above just sat there. Only
+            // reached for a verb that actually mutated the game
+            // (view/pass/play/playfield/decision -- 'play'/'playfield'
+            // above already returned early instead of falling through
+            // here when there was nothing to advance yet, i.e. a further
+            // field select was needed rather than an actual play);
+            // 'newgamebot' already calls this itself inside
+            // createPracticeGameMessage(), and every other verb returns
+            // directly without reaching this line at all.
+            $this->games->advanceAutomatedTurns($gameId);
         } catch (\Throwable $e) {
             // Every exception this could realistically catch here
             // (GameStateException, IllegalPlayException,
@@ -1003,10 +1046,22 @@ final class DiscordGameCommandService
      * new dedicated secret, or shipping unsigned) as an HMAC key over the
      * game id -- see verifyBoardImageSignature(), the new
      * `/discord/board-image` route's own gate in public/index.php.
+     *
+     * Reported live: the embed showed up blank in Discord -- this used
+     * SiteUrl::root() (the bare domain, for linking to STATIC frontend
+     * assets like cardArtUrl()'s own .webp files) instead of APP_URL
+     * (which includes the PHP app's own '/app' path prefix on shared
+     * hosting -- see SiteUrl's own docblock). `/discord/board-image` is
+     * a public/index.php ROUTE, the same category as
+     * DiscordOAuthService::redirectUri()'s own `/discord/oauth/callback`
+     * link, which already builds off Config::get('APP_URL') for exactly
+     * this reason -- SiteUrl::root() pointed Discord's own fetch at the
+     * bare domain, missing the '/app' prefix entirely, a 404 Discord
+     * just renders as no image at all.
      */
     public function boardImageUrl(int $gameId): string
     {
-        return SiteUrl::root() . "/discord/board-image?game_id={$gameId}&sig=" . $this->signBoardImage($gameId);
+        return rtrim((string) Config::get('APP_URL', ''), '/') . "/discord/board-image?game_id={$gameId}&sig=" . $this->signBoardImage($gameId);
     }
 
     /** @see boardImageUrl()'s own docblock for why this exists at all. */
