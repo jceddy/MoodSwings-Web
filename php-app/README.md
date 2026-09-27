@@ -7948,6 +7948,18 @@ could otherwise push this one line, on top of everything else
 `boardMessage()` already shows, past Discord's own 2000-char message
 content limit.
 
+**Who went first this round** (reported live: "the discord client game
+display needs to show which player went first this round") --
+`boardMessage()` now opens with a `Round {n} -- {username} went first.`
+line, reading `round.went_first_game_player_id`
+(`BoardState::roundFirstPlayerId()`) rather than the round's own bare
+`first_game_player_id` column -- deliberately, even though Discord only
+supports format `standard` today: for format `team`, that column only
+ever names a representative member of whichever TEAM went first, not
+necessarily the player who actually did (see that method's own
+docblock), so using the field that's already correct for every format
+means nothing here needs revisiting if Discord ever supports `team`.
+
 **No new persistence** -- every interaction re-fetches `GameService::getState()`
 (for display) and, when rendering a field select, a fresh `BoardState`
 (for `BotChoiceResolver`'s candidate enumeration) fresh from the

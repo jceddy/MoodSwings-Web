@@ -549,6 +549,17 @@ final class DiscordGameCommandService
         $round = $state['round'];
         $you = $state['you'];
         $lines = ["**Game #{$gameId}** -- " . implode(', ', $scoreLines)];
+        // Reported live: "the discord client game display needs to show
+        // which player went first this round" -- went_first_game_player_id
+        // (not the round's own bare first_game_player_id) is deliberately
+        // used here: for format 'team' that column only ever names a
+        // representative member of whichever team went first, not
+        // necessarily the player who actually did (see
+        // BoardState::roundFirstPlayerId()'s own docblock) -- moot for the
+        // 'standard'-only format this class supports today, but this way
+        // nothing here needs revisiting if that ever changes.
+        $wentFirstUsername = $usernames[$round['went_first_game_player_id']] ?? 'nobody yet';
+        $lines[] = "Round {$round['round_number']} -- {$wentFirstUsername} went first.";
         $lines[] = $this->inPlaySummary($state);
         $lines[] = $this->discardPileSummary($state);
 
