@@ -8045,6 +8045,19 @@ request to carry the way every other method in this class has
 (game gone/still `waiting`/`abandoned`, or simply no cards in play)
 gets a plain 404.
 
+Reported live: the embed shipped blank in production -- `boardImageUrl()`
+originally built off `SiteUrl::root()` (the bare domain, meant for
+STATIC frontend links like `cardArtUrl()`'s own `.webp` URLs) instead
+of `APP_URL` (which includes the PHP app's own `/app` path prefix on
+shared hosting -- see `SiteUrl`'s own docblock). `/discord/board-image`
+is a `public/index.php` ROUTE, the same category as
+`DiscordOAuthService::redirectUri()`'s own `/discord/oauth/callback`
+link, which already builds off `Config::get('APP_URL')` for exactly
+this reason -- `SiteUrl::root()` pointed Discord's own fetch at the
+bare domain, missing the `/app` prefix entirely, a 404 Discord just
+renders as no image at all. Fixed to match `redirectUri()`'s own
+convention.
+
 **No new persistence** -- every interaction re-fetches `GameService::getState()`
 (for display) and, when rendering a field select, a fresh `BoardState`
 (for `BotChoiceResolver`'s candidate enumeration) fresh from the

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace MoodSwings\Tests\Game;
 
 use MoodSwings\Bot\BotChoiceResolver;
+use MoodSwings\Config;
 use MoodSwings\Database\Connection;
 use MoodSwings\Deck\NotAuthorizedToAccessDecklistException;
 use MoodSwings\Deck\UserDecklistService;
@@ -23054,6 +23055,40 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertTrue($service->verifyBoardImageSignature(123, $signature));
         self::assertFalse($service->verifyBoardImageSignature(456, $signature));
         self::assertFalse($service->verifyBoardImageSignature(123, $signature . 'a'));
+    }
+
+    /**
+     * Reported live: the embed showed up blank in Discord in production.
+     * Root cause -- boardImageUrl() built off SiteUrl::root() (the bare
+     * domain, meant for STATIC frontend links like cardArtUrl()'s own
+     * .webp URLs) instead of APP_URL (which includes the PHP app's own
+     * '/app' path prefix on shared hosting -- see SiteUrl's own
+     * docblock, and DiscordOAuthService::redirectUri()'s identical
+     * '/discord/oauth/callback' link, which already builds off APP_URL
+     * for exactly this reason). Locally APP_URL and SITE_URL happen to
+     * be identical (both `http://localhost:8000`, no `/app` suffix), so
+     * this only reproduces by overriding Config's own cached values for
+     * the duration of the test -- restored in finally so no later test
+     * in this process sees a stale APP_URL.
+     */
+    public function testBoardImageUrlUsesAppUrlNotSiteUrlSoItSurvivesAnAppPathPrefix(): void
+    {
+        $configValues = new \ReflectionProperty(Config::class, 'values');
+        $configValues->setAccessible(true);
+        $original = $configValues->getValue();
+
+        try {
+            $configValues->setValue(null, [
+                'APP_URL' => 'https://moodswings.example.com/app',
+                'SITE_URL' => 'https://moodswings.example.com',
+            ]);
+
+            $url = $this->discordCommandService()->boardImageUrl(123);
+
+            self::assertStringStartsWith('https://moodswings.example.com/app/discord/board-image?game_id=123&sig=', $url);
+        } finally {
+            $configValues->setValue(null, $original);
+        }
     }
 
     /**

@@ -1003,10 +1003,22 @@ final class DiscordGameCommandService
      * new dedicated secret, or shipping unsigned) as an HMAC key over the
      * game id -- see verifyBoardImageSignature(), the new
      * `/discord/board-image` route's own gate in public/index.php.
+     *
+     * Reported live: the embed showed up blank in Discord -- this used
+     * SiteUrl::root() (the bare domain, for linking to STATIC frontend
+     * assets like cardArtUrl()'s own .webp files) instead of APP_URL
+     * (which includes the PHP app's own '/app' path prefix on shared
+     * hosting -- see SiteUrl's own docblock). `/discord/board-image` is
+     * a public/index.php ROUTE, the same category as
+     * DiscordOAuthService::redirectUri()'s own `/discord/oauth/callback`
+     * link, which already builds off Config::get('APP_URL') for exactly
+     * this reason -- SiteUrl::root() pointed Discord's own fetch at the
+     * bare domain, missing the '/app' prefix entirely, a 404 Discord
+     * just renders as no image at all.
      */
     public function boardImageUrl(int $gameId): string
     {
-        return SiteUrl::root() . "/discord/board-image?game_id={$gameId}&sig=" . $this->signBoardImage($gameId);
+        return rtrim((string) Config::get('APP_URL', ''), '/') . "/discord/board-image?game_id={$gameId}&sig=" . $this->signBoardImage($gameId);
     }
 
     /** @see boardImageUrl()'s own docblock for why this exists at all. */
