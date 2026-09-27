@@ -530,6 +530,29 @@ final class DiscordGameCommandService
             return ["Game #{$gameId} is a '{$game['format']}' game -- Discord only supports Traditional games so far. Open it in the web app: {$webUrl}", []];
         }
 
+        if ($game['status'] === 'completed') {
+            // Reported live: "the ephemeral message announcing the game
+            // ending should mention who the winner was" -- this used to
+            // fall into the generic "is '{$status}'" message below (every
+            // action's own handleComponent() catch-all re-renders the
+            // board via boardMessage() right after it runs, so the very
+            // last thing a player who just won saw was a plain "Game #X
+            // is 'completed'," with the actual result nowhere on screen).
+            // winner_usernames (not the single winner_game_player_id) is
+            // format 'team's own "both teammates" list -- moot for the
+            // 'standard'-only format this class supports, but the same
+            // field the web board's own "Game over" banner already reads.
+            $winnerText = $game['winner_usernames'] !== []
+                ? implode(' & ', $game['winner_usernames']) . ' won'
+                : 'nobody won';
+            $scoreLine = implode(', ', array_map(
+                fn (array $player) => "{$player['username']}: {$player['total_wins']} round(s) won",
+                $state['players'],
+            ));
+
+            return ["Game #{$gameId} is complete -- {$winnerText}! ({$scoreLine}) Open it in the web app: {$webUrl}", []];
+        }
+
         if ($game['status'] !== 'in_progress') {
             return ["Game #{$gameId} is '{$game['status']}'. Open it in the web app: {$webUrl}", []];
         }

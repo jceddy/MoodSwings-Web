@@ -7960,6 +7960,20 @@ necessarily the player who actually did (see that method's own
 docblock), so using the field that's already correct for every format
 means nothing here needs revisiting if Discord ever supports `team`.
 
+**Announcing who won** (reported live: "the ephemeral message
+announcing the game ending should mention who the winner was") -- a
+`completed` game used to fall into the same generic "Game #X is
+'completed'" message every other non-`in_progress` status still gets,
+even though every action's own `handleComponent()` catch-all
+re-renders the board via `boardMessage()` right after it runs -- so the
+very last thing a player who just won a game saw was that plain status
+line, with the actual result nowhere on screen. `boardMessage()` now
+special-cases `completed` first, reading `game.winner_usernames` (both
+teammates' names for a format `team` win -- moot for the
+`standard`-only format Discord supports, but the same field the web
+board's own "Game over" banner already reads) alongside each player's
+final `total_wins` tally.
+
 **No new persistence** -- every interaction re-fetches `GameService::getState()`
 (for display) and, when rendering a field select, a fresh `BoardState`
 (for `BotChoiceResolver`'s candidate enumeration) fresh from the

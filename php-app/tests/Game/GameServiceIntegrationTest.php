@@ -22911,6 +22911,40 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertStringContainsString('Round 3 -- discord-player-35 went first.', $response['data']['content']);
     }
 
+    /**
+     * Reported live: "the ephemeral message announcing the game ending
+     * should mention who the winner was" -- previously fell into the
+     * generic "Game #X is 'completed'" message every action's own
+     * post-play boardMessage() re-render already produces, with no
+     * mention of who actually won.
+     */
+    public function testDiscordComponentCompletedGameAnnouncesTheWinner(): void
+    {
+        $u1 = $this->insertUser('discord-player-36');
+        $u2 = $this->insertUser('discord-player-37');
+        $this->linkDiscordAccount($u1, 'discord-36');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameRound($gameId, 3, $p1, $p1, 1);
+        $this->pdo->prepare(
+            "UPDATE games SET status = 'completed', completed_at = NOW(), winner_game_player_id = :winner WHERE id = :id"
+        )->execute(['winner' => $p1, 'id' => $gameId]);
+
+        $response = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-36', "ms:view:{$gameId}")
+        );
+
+        self::assertSame(7, $response['type']);
+        self::assertStringContainsString('discord-player-36 won', $response['data']['content']);
+    }
+
     /** @return int[] */
     private function activeStandardGameIdsForTest(int $userId): array
     {
