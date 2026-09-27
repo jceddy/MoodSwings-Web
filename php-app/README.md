@@ -7982,17 +7982,33 @@ select-menu option, `cardDetailMessage()`'s own single-card view, a
 used to build its own "{name} ({value})" string inline; `cardLabel()`
 is now the one place that format lives, reading `serializeCard()`'s own
 `color` field to produce "{name} ({value}, {Color})" everywhere
-instead. Considered showing card art thumbnails too (issue #233's own
+instead.
+
+**Card art in the single-card detail view** (issue #233's own
 follow-up: "is there any way we can show card thumbnails instead of
-text?") -- `web-static/img/cards/MSW/{catalog_card_id}-{slug}.webp` is
-already public (served as a plain static file, fetchable directly by
-Discord's own servers for an embed's `thumbnail.url`), so a SINGLE
-card's own detail view could embed one directly. A multi-card list
-(a hand, the whole board) can't, though: Discord caps a message at 10
-embeds total, each holding at most one image, so a full hand or
-in-play board would either break down past ~10 cards or need a far
-bulkier one-embed-per-card layout in place of today's compact text
-lines -- deferred pending a decision on scope.
+text?", then "either way, let's add the card image to the card detail
+display") -- `cardDetailMessage()` now attaches one Discord embed
+carrying that card's own MSW print, via `cardArtUrl()`, the same
+`web-static/img/cards/MSW/{catalog_card_id}-{slug}.webp` URL
+`web-static/js/game.js`'s own `defaultCardArtUrl()` builds (a Creativity
+copy's own `catalog_card_id` already switches to whatever it's
+currently copying, matching its name/rules_text, so the art shown
+always matches what's actually displayed -- see `serializeCard()`'s own
+comment). These `.webp` files are ordinary public static assets (no
+auth), so Discord's own servers can fetch one directly the same way a
+browser already does for the web board. `ephemeralMessage()`/
+`updateMessage()` both gained an optional third `$embeds` parameter for
+this -- every other call site still passes none, so this is the only
+message that carries one. Deliberately still text-only for every
+MULTI-card list (a hand, `inPlaySummary()`, `discardPileSummary()`) --
+Discord caps a message at 10 embeds total, each holding at most one
+image, so a full hand or in-play board would either break down past
+~10 cards or need a far bulkier one-embed-per-card layout in place of
+today's compact lines. Composing several cards' own art into a SINGLE
+image server-side (another follow-up question) remains unexplored --
+it would need an image-processing library and a new public endpoint to
+serve the composite from, both real additions, not just reusing what
+already exists here.
 
 **No new persistence** -- every interaction re-fetches `GameService::getState()`
 (for display) and, when rendering a field select, a fresh `BoardState`

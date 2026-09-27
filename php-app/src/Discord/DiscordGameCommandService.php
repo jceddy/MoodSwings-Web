@@ -856,7 +856,7 @@ final class DiscordGameCommandService
      * game_cards rows, but this keeps the lookup scoped to exactly the
      * list the player actually picked from either way).
      *
-     * @return array{0: string, 1: array<int, array<string, mixed>>}
+     * @return array{0: string, 1: array<int, array<string, mixed>>, 2?: array<int, array<string, mixed>>}
      */
     private function cardDetailMessage(int $gameId, int $userId, string $zone, int $cardId): array
     {
@@ -878,7 +878,10 @@ final class DiscordGameCommandService
             // The card moved zones (played, drawn back, etc.) between
             // opening this select and picking from it -- rather than a
             // dead-end error, just show the browse screen again with
-            // whatever's actually there now.
+            // whatever's actually there now. cardsMessage() only ever
+            // returns a 2-element tuple (no embeds of its own), which
+            // updateMessage()'s own optional third $embeds parameter
+            // already tolerates being omitted from.
             return $this->cardsMessage($gameId, $userId);
         }
 
@@ -889,7 +892,36 @@ final class DiscordGameCommandService
 
         $components = [['type' => 1, 'components' => [['type' => 2, 'style' => 2, 'label' => 'Back', 'custom_id' => "ms:cards:{$gameId}"]]]];
 
-        return [implode("\n", $lines), $components];
+        // Reported live: "let's add the card image to the card detail
+        // display" -- one embed, one image, for exactly the single-card
+        // view this fits (see cardArtUrl()'s own docblock for why a
+        // multi-card list doesn't get the same treatment).
+        $embeds = [['image' => ['url' => $this->cardArtUrl($card)]]];
+
+        return [implode("\n", $lines), $components, $embeds];
+    }
+
+    /**
+     * The same MSW-print card art URL web-static/js/game.js's own
+     * defaultCardArtUrl() builds (issue #233 follow-up: "is there any way
+     * we can show card thumbnails instead of text?") -- these .webp files
+     * are ordinary public static assets (no auth), so Discord's own
+     * servers can fetch one directly for an embed's image.url the same
+     * way a browser already does for the web board. Only used for
+     * cardDetailMessage()'s own SINGLE-card view -- Discord caps a
+     * message at 10 embeds total, each holding at most one image, so a
+     * multi-card list (a hand, the whole in-play board) can't get the
+     * same treatment without either breaking down past ~10 cards or a
+     * far bulkier one-embed-per-card layout; deferred pending a decision
+     * on scope (see php-app/README.md).
+     *
+     * @param array<string, mixed> $card
+     */
+    private function cardArtUrl(array $card): string
+    {
+        $slug = trim((string) preg_replace('/[^a-z0-9]+/', '-', strtolower((string) $card['name'])), '-');
+
+        return SiteUrl::root() . "/img/cards/MSW/{$card['catalog_card_id']}-{$slug}.webp";
     }
 
     /**
@@ -1166,19 +1198,21 @@ final class DiscordGameCommandService
 
     /**
      * @param array<int, array<string, mixed>> $components
+     * @param array<int, array<string, mixed>> $embeds
      * @return array<string, mixed>
      */
-    private function ephemeralMessage(string $content, array $components = []): array
+    private function ephemeralMessage(string $content, array $components = [], array $embeds = []): array
     {
-        return ['type' => 4, 'data' => ['content' => $content, 'components' => $components, 'flags' => 64]];
+        return ['type' => 4, 'data' => ['content' => $content, 'components' => $components, 'embeds' => $embeds, 'flags' => 64]];
     }
 
     /**
      * @param array<int, array<string, mixed>> $components
+     * @param array<int, array<string, mixed>> $embeds
      * @return array<string, mixed>
      */
-    private function updateMessage(string $content, array $components = []): array
+    private function updateMessage(string $content, array $components = [], array $embeds = []): array
     {
-        return ['type' => 7, 'data' => ['content' => $content, 'components' => $components, 'flags' => 64]];
+        return ['type' => 7, 'data' => ['content' => $content, 'components' => $components, 'embeds' => $embeds, 'flags' => 64]];
     }
 }

@@ -1,0 +1,20 @@
+-- Issue #233 follow-up (reported live: "either way, let's add the card
+-- image to the card detail display"): DiscordGameCommandService's
+-- cardDetailMessage() now attaches one Discord embed carrying that
+-- card's own MSW print (cardArtUrl(), the same public
+-- web-static/img/cards/MSW/{catalog_card_id}-{slug}.webp URL
+-- web-static/js/game.js's own defaultCardArtUrl() builds), fetched
+-- directly by Discord's own servers the same way a browser already does
+-- for the web board. ephemeralMessage()/updateMessage() both gained an
+-- optional third $embeds parameter for this -- every other message in
+-- this class still passes none.
+--
+-- See php-app/README.md's "Playing the game via Discord" section for
+-- why this stays limited to the single-card detail view (Discord's own
+-- 10-embed-per-message cap rules out the same treatment for a multi-card
+-- list), and for the still-unexplored "composite several cards into one
+-- server-rendered image" follow-up question.
+--
+-- No schema change -- just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.55.9' WHERE id = 1;

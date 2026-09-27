@@ -22685,6 +22685,12 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertStringContainsString('Hate (0, Black)', $detailResponse['data']['content']);
         self::assertStringContainsString('bottom of the deck', $detailResponse['data']['content']);
         self::assertSame("ms:cards:{$gameId}", $detailResponse['data']['components'][0]['components'][0]['custom_id']);
+        // Reported live: "let's add the card image to the card detail
+        // display" -- the same MSW-print .webp file web-static/js/game.js's
+        // own defaultCardArtUrl() builds, embedded as a real Discord
+        // embed image (Discord's own servers fetch it directly, so it
+        // has to be a real public URL, not a relative path).
+        self::assertStringEndsWith('/img/cards/MSW/66-hate.webp', $detailResponse['data']['embeds'][0]['image']['url']);
     }
 
     /** The same card-detail flow, but for a card already in play, owned by another player. */
