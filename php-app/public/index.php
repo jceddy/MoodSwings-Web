@@ -849,7 +849,7 @@ $games = new GameService(new BoardStateRepository($gameRegistry, $chaosRegistry)
 // below) since the composite board-image route further down also needs
 // to call boardImageUrl()'s own signature-verifying counterpart on this
 // exact same instance.
-$discordGames = new DiscordGameCommandService($games, new BoardStateRepository($gameRegistry, $chaosRegistry), $discordAccounts);
+$discordGames = new DiscordGameCommandService($games, new BoardStateRepository($gameRegistry, $chaosRegistry), $discordAccounts, $friendships);
 $discordInteractions = new DiscordInteractionsService($discordGames);
 
 // Discord's own Interactions Endpoint -- called by Discord itself, never

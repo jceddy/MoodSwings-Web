@@ -22242,6 +22242,7 @@ final class GameServiceIntegrationTest extends TestCase
             $this->games,
             new BoardStateRepository(DefaultEffectRegistry::build()),
             new DiscordAccountRepository(),
+            new FriendshipService(new UserRepository(), new FriendshipRepository()),
             new BotChoiceResolver(),
         );
     }
@@ -22635,6 +22636,82 @@ final class GameServiceIntegrationTest extends TestCase
         $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-15'));
 
         self::assertSame('ms:newgame:0', $response['data']['components'][0]['components'][0]['custom_id']);
+        // Reported live: "let's add the ability to create a game for
+        // another human on the friend list" -- offered right alongside
+        // the practice-game button, same "nothing to show yet" moment.
+        self::assertSame('ms:friendgame:0', $response['data']['components'][0]['components'][1]['custom_id']);
+    }
+
+    /**
+     * Reported live: "let's add the ability to create a game for another
+     * human on the friend list." FriendshipService::listFriends() --
+     * accepted friendships only -- supplies the picker; a pending
+     * invite (never accepted) and an unrelated third user must both be
+     * left out.
+     */
+    public function testDiscordComponentFriendGameOffersAPickerOfAcceptedFriendsOnly(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-53');
+        $acceptedFriend = $this->insertDiscordUser('discord-player-54');
+        $pendingFriend = $this->insertDiscordUser('discord-player-55');
+        $this->insertDiscordUser('discord-player-56'); // unrelated -- not a friend at all
+        $this->linkDiscordAccount($u1, 'discord-53');
+
+        $friendships = new FriendshipService(new UserRepository(), new FriendshipRepository());
+        $friendships->sendInvite($u1, 'discord-player-54');
+        $friendships->respondToInvite($acceptedFriend, $u1, 'accept');
+        $friendships->sendInvite($u1, 'discord-player-55'); // left pending -- never accepted
+
+        $response = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-53', 'ms:friendgame:0')
+        );
+
+        self::assertSame(7, $response['type']);
+        $select = $response['data']['components'][0]['components'][0];
+        self::assertSame('ms:friendgamewith:0', $select['custom_id']);
+        self::assertSame([['label' => 'discord-player-54', 'value' => (string) $acceptedFriend]], $select['options']);
+    }
+
+    public function testDiscordComponentFriendGameWithNoAcceptedFriendsShowsAMessageInstead(): void
+    {
+        $userId = $this->insertDiscordUser('discord-player-57');
+        $this->linkDiscordAccount($userId, 'discord-57');
+
+        $response = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-57', 'ms:friendgame:0')
+        );
+
+        self::assertSame(7, $response['type']);
+        self::assertStringContainsString("don't have any friends added yet", $response['data']['content']);
+        self::assertSame([], $response['data']['components']);
+    }
+
+    /** Completes the picker flow above: picking a specific friend creates and immediately starts a real game against them -- no invite/accept step, same as the web app's own New Game dialog. */
+    public function testDiscordComponentFriendGameWithCreatesAndStartsAGameAgainstThatFriend(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-58');
+        $friendUserId = $this->insertDiscordUser('discord-player-59');
+        $this->linkDiscordAccount($u1, 'discord-58');
+
+        $friendships = new FriendshipService(new UserRepository(), new FriendshipRepository());
+        $friendships->sendInvite($u1, 'discord-player-59');
+        $friendships->respondToInvite($friendUserId, $u1, 'accept');
+
+        $response = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-58', 'ms:friendgamewith:0', [(string) $friendUserId])
+        );
+
+        self::assertSame(7, $response['type']);
+        $gameIds = $this->activeStandardGameIdsForTest($u1);
+        self::assertCount(1, $gameIds);
+        $game = $this->fetchGame($gameIds[0]);
+        self::assertSame('in_progress', $game['status']);
+        self::assertSame('standard', $game['format']);
+
+        $playerUserIds = array_map(intval(...), array_column($this->pdo->query(
+            "SELECT user_id FROM game_players WHERE game_id = {$gameIds[0]}"
+        )->fetchAll(), 'user_id'));
+        self::assertEqualsCanonicalizing([$u1, $friendUserId], $playerUserIds);
     }
 
     /**

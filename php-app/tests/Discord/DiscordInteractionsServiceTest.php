@@ -150,7 +150,12 @@ final class DiscordInteractionsServiceTest extends TestCase
         );
 
         return new DiscordInteractionsService(
-            new DiscordGameCommandService($games, new BoardStateRepository($registry), new DiscordAccountRepository())
+            new DiscordGameCommandService(
+                $games,
+                new BoardStateRepository($registry),
+                new DiscordAccountRepository(),
+                new FriendshipService(new UserRepository(), new FriendshipRepository()),
+            )
         );
     }
 
