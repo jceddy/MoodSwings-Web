@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace MoodSwings\Discord;
 
 use MoodSwings\Bot\BotChoiceResolver;
+use MoodSwings\Config;
 use MoodSwings\Game\BoardStateRepository;
 use MoodSwings\Game\Exceptions\GameStateException;
 use MoodSwings\Game\GameService;
@@ -133,6 +134,7 @@ final class DiscordGameCommandService
         private readonly BoardStateRepository $boardStates,
         private readonly DiscordAccountRepository $accounts,
         private readonly BotChoiceResolver $choiceResolver = new BotChoiceResolver(),
+        private readonly BoardImageRenderer $boardImageRenderer = new BoardImageRenderer(),
     ) {
     }
 
@@ -513,7 +515,17 @@ final class DiscordGameCommandService
      * shown as an extra embed field above the board (an error message
      * from a just-failed action, most often).
      *
-     * @return array{0: string, 1: array<int, array<string, mixed>>}
+     * Reported live: "would it be possible to use some kind of image
+     * library to render, say, the cards in play as a single image to
+     * embed in the game display message?" -- followed by explicit
+     * scoping decisions ("directly in the main board message," "in-play
+     * only for now"), so the 3rd tuple element below carries exactly one
+     * embed, only for an 'in_progress' game with at least one mood
+     * actually in play, pointing at boardImageUrl()'s own signed,
+     * unauthenticated endpoint (see its docblock for why that's needed
+     * at all).
+     *
+     * @return array{0: string, 1: array<int, array<string, mixed>>, 2?: array<int, array<string, mixed>>}
      */
     private function boardMessage(int $gameId, int $userId, ?string $notice = null): array
     {
@@ -631,7 +643,7 @@ final class DiscordGameCommandService
         }
 
         $lines[] = 'Your hand: ' . ($you['hand'] === [] ? '(empty)' : implode(', ', array_map(
-            fn (array $card) => "{$card['name']} ({$card['value']})",
+            fn (array $card) => $this->cardLabel($card),
             $you['hand'],
         )));
 
@@ -647,7 +659,9 @@ final class DiscordGameCommandService
             array_unshift($lines, $notice);
         }
 
-        return [implode("\n", $lines), $components];
+        $embeds = $state['in_play'] === [] ? [] : [['image' => ['url' => $this->boardImageUrl($gameId)]]];
+
+        return [implode("\n", $lines), $components, $embeds];
     }
 
     /**
@@ -730,7 +744,7 @@ final class DiscordGameCommandService
     {
         $byOwner = [];
         foreach ($state['in_play'] as $card) {
-            $byOwner[$card['owner_game_player_id']][] = "{$card['name']} ({$card['value']})";
+            $byOwner[$card['owner_game_player_id']][] = $this->cardLabel($card);
         }
 
         $lines = [];
@@ -769,7 +783,7 @@ final class DiscordGameCommandService
             return 'Discard pile: (empty)';
         }
 
-        $names = array_map(fn (array $card) => "{$card['name']} ({$card['value']})", $pile);
+        $names = array_map(fn (array $card) => $this->cardLabel($card), $pile);
         $line = 'Discard pile (' . count($pile) . '): ' . implode(', ', $names);
 
         if (strlen($line) > 900) {
@@ -808,7 +822,7 @@ final class DiscordGameCommandService
         $components = [];
 
         $handOptions = array_map(
-            fn (array $card) => ['label' => "{$card['name']} ({$card['value']})", 'value' => (string) $card['card_id']],
+            fn (array $card) => ['label' => $this->cardLabel($card), 'value' => (string) $card['card_id']],
             array_slice($state['you']['hand'] ?? [], 0, self::MAX_SELECT_OPTIONS),
         );
         if ($handOptions !== []) {
@@ -818,7 +832,7 @@ final class DiscordGameCommandService
         }
 
         $inPlayOptions = array_map(
-            fn (array $card) => ['label' => "{$card['name']} ({$card['value']}) -- " . ($usernames[$card['owner_game_player_id']] ?? '?'), 'value' => (string) $card['card_id']],
+            fn (array $card) => ['label' => $this->cardLabel($card) . ' -- ' . ($usernames[$card['owner_game_player_id']] ?? '?'), 'value' => (string) $card['card_id']],
             array_slice($state['in_play'] ?? [], 0, self::MAX_SELECT_OPTIONS),
         );
         if ($inPlayOptions !== []) {
@@ -828,7 +842,7 @@ final class DiscordGameCommandService
         }
 
         $discardOptions = array_map(
-            fn (array $card) => ['label' => "{$card['name']} ({$card['value']}) -- " . ($card['last_owner_name'] ?? '?'), 'value' => (string) $card['card_id']],
+            fn (array $card) => ['label' => $this->cardLabel($card) . ' -- ' . ($card['last_owner_name'] ?? '?'), 'value' => (string) $card['card_id']],
             array_slice($state['discard_pile'] ?? [], -self::MAX_SELECT_OPTIONS),
         );
         if ($discardOptions !== []) {
@@ -856,7 +870,7 @@ final class DiscordGameCommandService
      * game_cards rows, but this keeps the lookup scoped to exactly the
      * list the player actually picked from either way).
      *
-     * @return array{0: string, 1: array<int, array<string, mixed>>}
+     * @return array{0: string, 1: array<int, array<string, mixed>>, 2?: array<int, array<string, mixed>>}
      */
     private function cardDetailMessage(int $gameId, int $userId, string $zone, int $cardId): array
     {
@@ -878,18 +892,164 @@ final class DiscordGameCommandService
             // The card moved zones (played, drawn back, etc.) between
             // opening this select and picking from it -- rather than a
             // dead-end error, just show the browse screen again with
-            // whatever's actually there now.
+            // whatever's actually there now. cardsMessage() only ever
+            // returns a 2-element tuple (no embeds of its own), which
+            // updateMessage()'s own optional third $embeds parameter
+            // already tolerates being omitted from.
             return $this->cardsMessage($gameId, $userId);
         }
 
-        $lines = ["**{$card['name']} ({$card['value']})** -- {$card['color']}"];
+        $lines = ['**' . $this->cardLabel($card) . '**'];
         if (($card['rules_text'] ?? '') !== '') {
             $lines[] = $card['rules_text'];
         }
 
         $components = [['type' => 1, 'components' => [['type' => 2, 'style' => 2, 'label' => 'Back', 'custom_id' => "ms:cards:{$gameId}"]]]];
 
-        return [implode("\n", $lines), $components];
+        // Reported live: "let's add the card image to the card detail
+        // display" -- one embed, one image, for exactly the single-card
+        // view this fits (see cardArtUrl()'s own docblock for why a
+        // multi-card list doesn't get the same treatment).
+        $embeds = [['image' => ['url' => $this->cardArtUrl($card)]]];
+
+        return [implode("\n", $lines), $components, $embeds];
+    }
+
+    /**
+     * The same MSW-print card art URL web-static/js/game.js's own
+     * defaultCardArtUrl() builds (issue #233 follow-up: "is there any way
+     * we can show card thumbnails instead of text?") -- these .webp files
+     * are ordinary public static assets (no auth), so Discord's own
+     * servers can fetch one directly for an embed's image.url the same
+     * way a browser already does for the web board. Only used for
+     * cardDetailMessage()'s own SINGLE-card view -- Discord caps a
+     * message at 10 embeds total, each holding at most one image, so a
+     * multi-card list (a hand, the whole in-play board) can't get the
+     * same treatment without either breaking down past ~10 cards or a
+     * far bulkier one-embed-per-card layout. See boardImageUrl() below
+     * for the composite-image alternative that scope decision led to.
+     *
+     * @param array<string, mixed> $card
+     */
+    private function cardArtUrl(array $card): string
+    {
+        return SiteUrl::root() . '/img' . $this->cardArtRelativePath($card);
+    }
+
+    /**
+     * Shared by cardArtUrl() (the public URL Discord's own servers fetch)
+     * and cardArtFilePath() (the local disk path this server itself reads
+     * for the composite board image) -- the same
+     * `/cards/MSW/{catalog_card_id}-{slug}.webp` suffix either way, just
+     * rooted differently.
+     *
+     * @param array<string, mixed> $card
+     */
+    private function cardArtRelativePath(array $card): string
+    {
+        $slug = trim((string) preg_replace('/[^a-z0-9]+/', '-', strtolower((string) $card['name'])), '-');
+
+        return "/cards/MSW/{$card['catalog_card_id']}-{$slug}.webp";
+    }
+
+    /**
+     * Locates $card's own MSW-print .webp file ON DISK (unlike
+     * cardArtUrl(), which only ever builds a public URL) so
+     * renderBoardImage() can decode it directly via GD instead of this
+     * server making an HTTP request back to its own public URL. Probes
+     * two candidate paths because local dev and production disagree on
+     * where web-static/img/ sits relative to THIS file: production's
+     * deploy.yml flattens web-static/'s own contents straight into the
+     * doc root alongside src/ (dist/img/... is dist/src/'s own sibling --
+     * the same relative depth dirname(__DIR__, 2) already reaches bin/ at,
+     * see GameService::launchTacticalBotSearchJob()'s own precedent), but
+     * locally web-static/ is a sibling of php-app/ ITSELF, one level
+     * shallower than that -- so a single hardcoded dirname(__DIR__, N)
+     * can't resolve both, and this just tries both instead. Returns null
+     * (never throws) for a card whose art is missing on THIS deployment --
+     * BoardImageRenderer already tolerates a shorter list than the
+     * in-play card count, same as a decode failure.
+     *
+     * @param array<string, mixed> $card
+     */
+    private function cardArtFilePath(array $card): ?string
+    {
+        $relative = $this->cardArtRelativePath($card);
+
+        foreach ([
+            dirname(__DIR__, 2) . '/img' . $relative,
+            dirname(__DIR__, 3) . '/web-static/img' . $relative,
+        ] as $candidate) {
+            if (is_file($candidate)) {
+                return $candidate;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * The signed, UNAUTHENTICATED URL boardMessage() embeds for the
+     * composite in-play board image -- unlike every other route this
+     * class's own responses point at (the web app itself, always behind
+     * the viewer's own session), Discord's servers fetch an embed's
+     * image.url directly, with no session cookie of the viewer's to send,
+     * so this can't be a normal `requireAuth()`-gated route. Reported
+     * live in response: "how should the board-image URL be protected
+     * from guessing/enumeration?" -- a bare game id alone would let
+     * anyone who can guess/enumerate one view that game's in-play board
+     * (never hands, but still not public the way a card's own art is),
+     * so this reuses the existing DISCORD_CLIENT_SECRET (rather than a
+     * new dedicated secret, or shipping unsigned) as an HMAC key over the
+     * game id -- see verifyBoardImageSignature(), the new
+     * `/discord/board-image` route's own gate in public/index.php.
+     */
+    public function boardImageUrl(int $gameId): string
+    {
+        return SiteUrl::root() . "/discord/board-image?game_id={$gameId}&sig=" . $this->signBoardImage($gameId);
+    }
+
+    /** @see boardImageUrl()'s own docblock for why this exists at all. */
+    public function verifyBoardImageSignature(int $gameId, string $signature): bool
+    {
+        return hash_equals($this->signBoardImage($gameId), $signature);
+    }
+
+    private function signBoardImage(int $gameId): string
+    {
+        return hash_hmac('sha256', (string) $gameId, (string) Config::get('DISCORD_CLIENT_SECRET', ''));
+    }
+
+    /**
+     * The actual PNG bytes for $gameId's composite in-play board image --
+     * called by the new `/discord/board-image` route in public/index.php
+     * only after verifyBoardImageSignature() already passed, so this
+     * itself does no authorization of its own. Uses getSpectatorState()
+     * (public information -- moods in play, never a hand) rather than
+     * getState(), since there's no per-viewer session here for the
+     * signed URL's request to carry the way every other method in this
+     * class has $userId for. Returns null (never throws) for a game
+     * that's gone/still 'waiting'/'abandoned' (getSpectatorState() itself
+     * rejects those), or one with nothing currently in play -- either
+     * way the caller responds 404 rather than serving a broken image.
+     */
+    public function renderBoardImage(int $gameId): ?string
+    {
+        try {
+            $state = $this->games->getSpectatorState($gameId);
+        } catch (GameStateException) {
+            return null;
+        }
+
+        $paths = [];
+        foreach ($state['in_play'] ?? [] as $card) {
+            $path = $this->cardArtFilePath($card);
+            if ($path !== null) {
+                $paths[] = $path;
+            }
+        }
+
+        return $this->boardImageRenderer->render($paths);
     }
 
     /**
@@ -966,7 +1126,7 @@ final class DiscordGameCommandService
                 continue;
             }
 
-            $options[] = ['label' => "{$card['name']} ({$card['value']})", 'value' => (string) $card['card_id']];
+            $options[] = ['label' => $this->cardLabel($card), 'value' => (string) $card['card_id']];
         }
 
         return [$options, $unsupported];
@@ -1041,7 +1201,7 @@ final class DiscordGameCommandService
 
         $cardNames = [];
         foreach (array_merge($state['you']['hand'] ?? [], $state['in_play'] ?? [], $state['discard_pile'] ?? []) as $card) {
-            $cardNames[$card['card_id']] = "{$card['name']} ({$card['value']})";
+            $cardNames[$card['card_id']] = $this->cardLabel($card);
         }
         $usernames = [];
         foreach ($state['players'] as $player) {
@@ -1095,6 +1255,20 @@ final class DiscordGameCommandService
             'bool' => $raw === '1',
             default => (int) $raw,
         };
+    }
+
+    /**
+     * "Name (value, Color)" -- reported live: "Let's show the colors of
+     * the cards in the discord client as well as the name/value." Every
+     * card listing in this class (a hand, in-play summary, discard pile,
+     * a select-menu option, ...) built its own "{name} ({value})" string
+     * inline before this, so this is the one place that format lives now.
+     *
+     * @param array<string, mixed> $card
+     */
+    private function cardLabel(array $card): string
+    {
+        return "{$card['name']} ({$card['value']}, " . ucfirst((string) $card['color']) . ')';
     }
 
     /** @param array<int, array<string, mixed>> $hand */
@@ -1152,19 +1326,21 @@ final class DiscordGameCommandService
 
     /**
      * @param array<int, array<string, mixed>> $components
+     * @param array<int, array<string, mixed>> $embeds
      * @return array<string, mixed>
      */
-    private function ephemeralMessage(string $content, array $components = []): array
+    private function ephemeralMessage(string $content, array $components = [], array $embeds = []): array
     {
-        return ['type' => 4, 'data' => ['content' => $content, 'components' => $components, 'flags' => 64]];
+        return ['type' => 4, 'data' => ['content' => $content, 'components' => $components, 'embeds' => $embeds, 'flags' => 64]];
     }
 
     /**
      * @param array<int, array<string, mixed>> $components
+     * @param array<int, array<string, mixed>> $embeds
      * @return array<string, mixed>
      */
-    private function updateMessage(string $content, array $components = []): array
+    private function updateMessage(string $content, array $components = [], array $embeds = []): array
     {
-        return ['type' => 7, 'data' => ['content' => $content, 'components' => $components, 'flags' => 64]];
+        return ['type' => 7, 'data' => ['content' => $content, 'components' => $components, 'embeds' => $embeds, 'flags' => 64]];
     }
 }

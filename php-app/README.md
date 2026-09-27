@@ -7974,6 +7974,77 @@ teammates' names for a format `team` win -- moot for the
 board's own "Game over" banner already reads) alongside each player's
 final `total_wins` tally.
 
+**Card colors** (reported live: "let's show the colors of the cards in
+the discord client as well as the name/value") -- every card listing
+this class builds (a hand, `inPlaySummary()`, `discardPileSummary()`, a
+select-menu option, `cardDetailMessage()`'s own single-card view, a
+`mood`/`hand_card`/`discard_card` field's own candidate labels, ...)
+used to build its own "{name} ({value})" string inline; `cardLabel()`
+is now the one place that format lives, reading `serializeCard()`'s own
+`color` field to produce "{name} ({value}, {Color})" everywhere
+instead.
+
+**Card art in the single-card detail view** (issue #233's own
+follow-up: "is there any way we can show card thumbnails instead of
+text?", then "either way, let's add the card image to the card detail
+display") -- `cardDetailMessage()` now attaches one Discord embed
+carrying that card's own MSW print, via `cardArtUrl()`, the same
+`web-static/img/cards/MSW/{catalog_card_id}-{slug}.webp` URL
+`web-static/js/game.js`'s own `defaultCardArtUrl()` builds (a Creativity
+copy's own `catalog_card_id` already switches to whatever it's
+currently copying, matching its name/rules_text, so the art shown
+always matches what's actually displayed -- see `serializeCard()`'s own
+comment). These `.webp` files are ordinary public static assets (no
+auth), so Discord's own servers can fetch one directly the same way a
+browser already does for the web board. `ephemeralMessage()`/
+`updateMessage()` both gained an optional third `$embeds` parameter for
+this -- every other call site still passes none, so this is the only
+message that carries one. Deliberately still text-only for every
+MULTI-card list (a hand, `inPlaySummary()`, `discardPileSummary()`) --
+Discord caps a message at 10 embeds total, each holding at most one
+image, so a full hand or in-play board would either break down past
+~10 cards or need a far bulkier one-embed-per-card layout in place of
+today's compact lines. See "Composite in-play board image" below for
+the SINGLE-image alternative that follow-up question led to.
+
+**Composite in-play board image** (issue #233's own follow-up: "would
+it be possible to use some kind of image library to render, say, the
+cards in play as a single image to embed in the game display
+message?", scoped by explicit decisions: directly in the main board
+message, in-play only for now) -- `boardMessage()` now attaches one
+embed, whenever at least one mood is currently in play, pointing at
+`boardImageUrl()`'s own signed URL. `BoardImageRenderer` tiles every
+in-play card's own MSW print into a single grid (GD -- confirmed
+bundled with PHP on the target Bluehost hosting, including `.webp`
+DECODE support, unlike the Imagick PECL extension shared hosting can't
+install), output as PNG regardless of the source format (GD's own
+WEBP *encode* support is less universally guaranteed than decode).
+`DiscordGameCommandService::cardArtFilePath()` locates each card's art
+file ON DISK (unlike `cardArtUrl()`'s public URL) by probing two
+candidate paths, since local dev and production disagree on where
+`web-static/img/` sits relative to that file -- production's
+`deploy.yml` flattens `web-static/`'s own contents straight into the
+doc root alongside `src/` (the same relative depth `dirname(__DIR__, 2)`
+already reaches `bin/` at), but locally `web-static/` is a sibling of
+`php-app/` ITSELF, one level shallower.
+
+Unlike every other route this class's responses point at, the new
+`GET /discord/board-image` route in `public/index.php` is deliberately
+UNAUTHENTICATED -- Discord's own servers fetch an embed's `image.url`
+directly, with no session cookie of the viewer's to send. Reported
+live in response to "how should the board-image URL be protected from
+guessing/enumeration?": rather than a new dedicated secret, or
+shipping unsigned, `boardImageUrl()`/`verifyBoardImageSignature()`
+reuse the existing `DISCORD_CLIENT_SECRET` as an HMAC-SHA256 key over
+the game id, so only a URL this class itself generated can pass. The
+route renders via `renderBoardImage()`, which uses `getSpectatorState()`
+(public information -- moods in play, never a hand) rather than
+`getState()`, since there's no per-viewer session for the signed
+request to carry the way every other method in this class has
+`$userId` for; a missing/invalid signature or nothing renderable
+(game gone/still `waiting`/`abandoned`, or simply no cards in play)
+gets a plain 404.
+
 **No new persistence** -- every interaction re-fetches `GameService::getState()`
 (for display) and, when rendering a field select, a fresh `BoardState`
 (for `BotChoiceResolver`'s candidate enumeration) fresh from the

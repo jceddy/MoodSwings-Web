@@ -1,0 +1,18 @@
+-- Issue #233 follow-up (reported live: "let's show the colors of the
+-- cards in the discord client as well as the name/value"): every card
+-- listing DiscordGameCommandService builds (a hand, in-play summary,
+-- discard pile, a select-menu option, the single-card detail view, a
+-- mood/hand_card/discard_card field's own candidate labels, ...) now
+-- reads "{name} ({value}, {Color})" via the new shared cardLabel()
+-- helper, instead of the bare "{name} ({value})" every one of those
+-- built inline before.
+--
+-- See php-app/README.md's "Playing the game via Discord" section for the
+-- full design, including the follow-up "card thumbnails instead of text"
+-- question -- feasible for a single card's own detail view (card art is
+-- already public), deferred for multi-card lists (Discord's own 10-embed
+-- cap per message) pending a decision on scope.
+--
+-- No schema change -- just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.55.8' WHERE id = 1;

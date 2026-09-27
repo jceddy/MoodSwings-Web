@@ -22308,11 +22308,11 @@ final class GameServiceIntegrationTest extends TestCase
         // play" -- public board info, shown to every viewer regardless
         // of whose turn it is.
         self::assertStringContainsString('discord-player-2\'s moods in play: (none)', $response['data']['content']);
-        self::assertStringContainsString('discord-player-3\'s moods in play: Complacency (4)', $response['data']['content']);
+        self::assertStringContainsString('discord-player-3\'s moods in play: Complacency (4, White)', $response['data']['content']);
 
         $playSelect = $response['data']['components'][0]['components'][0];
         self::assertSame("ms:play:{$gameId}", $playSelect['custom_id']);
-        self::assertSame(['label' => 'Sadness (0)', 'value' => (string) $sadnessId], $playSelect['options'][0]);
+        self::assertSame(['label' => 'Sadness (0, Black)', 'value' => (string) $sadnessId], $playSelect['options'][0]);
 
         $passButton = $response['data']['components'][1]['components'][0];
         self::assertSame("ms:pass:{$gameId}", $passButton['custom_id']);
@@ -22567,8 +22567,8 @@ final class GameServiceIntegrationTest extends TestCase
         $fieldSelect = $response['data']['components'][0]['components'][0];
         self::assertStringStartsWith("ms:playfield:{$gameId}:{$hateId}:0:", $fieldSelect['custom_id']);
         $labelsByValue = array_column($fieldSelect['options'], 'label', 'value');
-        self::assertSame('Sadness (0) -- discord-player-16', $labelsByValue[(string) $ownMoodId]);
-        self::assertSame('Complacency (4) -- discord-player-17', $labelsByValue[(string) $opponentMoodId]);
+        self::assertSame('Sadness (0, Black) -- discord-player-16', $labelsByValue[(string) $ownMoodId]);
+        self::assertSame('Complacency (4, White) -- discord-player-17', $labelsByValue[(string) $opponentMoodId]);
     }
 
     /**
@@ -22682,9 +22682,15 @@ final class GameServiceIntegrationTest extends TestCase
         );
 
         self::assertSame(7, $detailResponse['type']);
-        self::assertStringContainsString('Hate (0)', $detailResponse['data']['content']);
+        self::assertStringContainsString('Hate (0, Black)', $detailResponse['data']['content']);
         self::assertStringContainsString('bottom of the deck', $detailResponse['data']['content']);
         self::assertSame("ms:cards:{$gameId}", $detailResponse['data']['components'][0]['components'][0]['custom_id']);
+        // Reported live: "let's add the card image to the card detail
+        // display" -- the same MSW-print .webp file web-static/js/game.js's
+        // own defaultCardArtUrl() builds, embedded as a real Discord
+        // embed image (Discord's own servers fetch it directly, so it
+        // has to be a real public URL, not a relative path).
+        self::assertStringEndsWith('/img/cards/MSW/66-hate.webp', $detailResponse['data']['embeds'][0]['image']['url']);
     }
 
     /** The same card-detail flow, but for a card already in play, owned by another player. */
@@ -22711,13 +22717,13 @@ final class GameServiceIntegrationTest extends TestCase
 
         $inPlaySelect = $cardsResponse['data']['components'][0]['components'][0];
         self::assertSame("ms:cardplay:{$gameId}", $inPlaySelect['custom_id']);
-        self::assertSame('Complacency (4) -- discord-player-25', $inPlaySelect['options'][0]['label']);
+        self::assertSame('Complacency (4, White) -- discord-player-25', $inPlaySelect['options'][0]['label']);
 
         $detailResponse = $this->discordCommandService()->handleComponent(
             $this->discordComponentPayload('discord-24', "ms:cardplay:{$gameId}", [(string) $complacencyId])
         );
 
-        self::assertStringContainsString('Complacency (4)', $detailResponse['data']['content']);
+        self::assertStringContainsString('Complacency (4, White)', $detailResponse['data']['content']);
     }
 
     /**
@@ -22879,7 +22885,7 @@ final class GameServiceIntegrationTest extends TestCase
 
         $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-32'));
 
-        self::assertStringContainsString('Discard pile (2): Sadness (0), Complacency (4)', $response['data']['content']);
+        self::assertStringContainsString('Discard pile (2): Sadness (0, Black), Complacency (4, White)', $response['data']['content']);
     }
 
     /**
@@ -22943,6 +22949,174 @@ final class GameServiceIntegrationTest extends TestCase
 
         self::assertSame(7, $response['type']);
         self::assertStringContainsString('discord-player-36 won', $response['data']['content']);
+    }
+
+    /**
+     * Reported live: "Let's show the colors of the cards in the discord
+     * client as well as the name/value" -- every card listing in this
+     * class (a hand, in-play summary, discard pile, a select-menu
+     * option, the single-card detail view, ...) shares cardLabel(), so
+     * this checks the color shows up in each of those places at once.
+     */
+    public function testDiscordCommandShowsCardColorsEverywhere(): void
+    {
+        $u1 = $this->insertUser('discord-player-38');
+        $u2 = $this->insertUser('discord-player-39');
+        $this->linkDiscordAccount($u1, 'discord-38');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameCard($gameId, 74, 'hand', $p1); // Sadness -- black
+        $this->insertGameCard($gameId, 5, 'in_play', $p2); // Complacency -- white
+        $this->insertGameCard($gameId, 6, 'discard'); // Conviction -- white
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-38'));
+
+        self::assertStringContainsString('Your hand: Sadness (0, Black)', $response['data']['content']);
+        self::assertStringContainsString('Complacency (4, White)', $response['data']['content']);
+        self::assertStringContainsString('Discard pile (1): Conviction (2, White)', $response['data']['content']);
+    }
+
+    /**
+     * Reported live: "would it be possible to use some kind of image
+     * library to render, say, the cards in play as a single image to
+     * embed in the game display message?" -- followed by the explicit
+     * decision "directly in the main board message." boardMessage() only
+     * attaches this embed once there's actually at least one mood in
+     * play (a fresh 'in_progress' game has none yet) -- see the sibling
+     * test below for that empty case.
+     */
+    public function testDiscordCommandBoardEmbedsCompositeImageWhenCardsAreInPlay(): void
+    {
+        $u1 = $this->insertUser('discord-player-40');
+        $u2 = $this->insertUser('discord-player-41');
+        $this->linkDiscordAccount($u1, 'discord-40');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameCard($gameId, 5, 'in_play', $p2); // Complacency
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-40'));
+
+        self::assertCount(1, $response['data']['embeds']);
+        $imageUrl = $response['data']['embeds'][0]['image']['url'];
+        self::assertStringContainsString("/discord/board-image?game_id={$gameId}&sig=", $imageUrl);
+    }
+
+    public function testDiscordCommandBoardHasNoEmbedWhenNothingIsInPlay(): void
+    {
+        $u1 = $this->insertUser('discord-player-42');
+        $this->linkDiscordAccount($u1, 'discord-42');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $this->insertUser('discord-player-43'), 1);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-42'));
+
+        self::assertSame([], $response['data']['embeds']);
+    }
+
+    /**
+     * boardImageUrl()/verifyBoardImageSignature() are the whole access
+     * control for the new unauthenticated `/discord/board-image` route
+     * (see that route's own docblock in public/index.php) -- a tampered
+     * game id or signature must be rejected the same way a missing one
+     * would be.
+     */
+    public function testBoardImageSignatureRejectsTamperedGameIdOrSignature(): void
+    {
+        $service = $this->discordCommandService();
+        $url = $service->boardImageUrl(123);
+        parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
+        $signature = $query['sig'];
+
+        self::assertTrue($service->verifyBoardImageSignature(123, $signature));
+        self::assertFalse($service->verifyBoardImageSignature(456, $signature));
+        self::assertFalse($service->verifyBoardImageSignature(123, $signature . 'a'));
+    }
+
+    /**
+     * renderBoardImage() is what the signed route actually serves --
+     * this checks it produces a real, decodable PNG whenever there's at
+     * least one mood in play, using its own already-tested public
+     * getSpectatorState() rather than a per-viewer session (there's no
+     * viewer at all for Discord's own server-to-server embed fetch).
+     */
+    public function testRenderBoardImageProducesPngWhenCardsAreInPlay(): void
+    {
+        $u1 = $this->insertUser('discord-player-44');
+        $u2 = $this->insertUser('discord-player-45');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameCard($gameId, 66, 'in_play', $p1); // Hate
+        $this->insertGameCard($gameId, 5, 'in_play', $p2); // Complacency
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $image = $this->discordCommandService()->renderBoardImage($gameId);
+
+        self::assertNotNull($image);
+        self::assertStringStartsWith("\x89PNG\r\n\x1a\n", $image);
+        $decoded = imagecreatefromstring($image);
+        self::assertNotFalse($decoded);
+        self::assertGreaterThan(0, imagesx($decoded));
+        self::assertGreaterThan(0, imagesy($decoded));
+    }
+
+    public function testRenderBoardImageReturnsNullWhenNothingIsInPlay(): void
+    {
+        $u1 = $this->insertUser('discord-player-46');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $this->insertUser('discord-player-47'), 1);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        self::assertNull($this->discordCommandService()->renderBoardImage($gameId));
+    }
+
+    public function testRenderBoardImageReturnsNullForAGameThatCannotBeSpectated(): void
+    {
+        $u1 = $this->insertUser('discord-player-48');
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'waiting', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        self::assertNull($this->discordCommandService()->renderBoardImage($gameId));
     }
 
     /** @return int[] */
