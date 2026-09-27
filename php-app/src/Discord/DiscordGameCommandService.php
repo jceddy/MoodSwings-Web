@@ -550,6 +550,7 @@ final class DiscordGameCommandService
         $you = $state['you'];
         $lines = ["**Game #{$gameId}** -- " . implode(', ', $scoreLines)];
         $lines[] = $this->inPlaySummary($state);
+        $lines[] = $this->discardPileSummary($state);
 
         $decision = $round['pending_decision'] ?? null;
         $components = [];
@@ -705,6 +706,43 @@ final class DiscordGameCommandService
         }
 
         return implode("\n", $lines);
+    }
+
+    /**
+     * Reported live: "the user needs to be able to see the discard pile
+     * in the discord client" -- the "View Cards" button (cardsMessage())
+     * already lets a player look up ONE discard-pile card's own full
+     * detail, but there was still no way to see the discard pile AT A
+     * GLANCE the way inPlaySummary() already does for moods in play, so
+     * checking whether a given card is even still available (Corruption's
+     * own "cycle discard-pile cards," a `discard_card` field's own
+     * candidate list, ...) meant opening that browse screen and paging
+     * through one select menu. Public information (unlike a hand) the
+     * same way in-play cards are, so this is shown to every viewer
+     * regardless of whose turn it is. Capped defensively (unlike
+     * inPlaySummary(), which never gets long enough to need it) -- a
+     * long game's discard pile can run to 100+ cards, which would
+     * otherwise risk pushing this single line, on top of everything else
+     * boardMessage() already shows, past Discord's own 2000-char message
+     * content limit.
+     *
+     * @param array<string, mixed> $state
+     */
+    private function discardPileSummary(array $state): string
+    {
+        $pile = $state['discard_pile'] ?? [];
+        if ($pile === []) {
+            return 'Discard pile: (empty)';
+        }
+
+        $names = array_map(fn (array $card) => "{$card['name']} ({$card['value']})", $pile);
+        $line = 'Discard pile (' . count($pile) . '): ' . implode(', ', $names);
+
+        if (strlen($line) > 900) {
+            $line = substr($line, 0, 897) . '...';
+        }
+
+        return $line;
     }
 
     /**

@@ -22852,6 +22852,36 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame('discard', $this->cardZone($creativityId));
     }
 
+    /**
+     * Reported live: "the user needs to be able to see the discard pile
+     * in the discord client" -- the "View Cards" button already let a
+     * player look up one discard-pile card's own full detail, but there
+     * was no way to see the pile AT A GLANCE the way inPlaySummary()
+     * already does for moods in play.
+     */
+    public function testDiscordCommandBoardShowsDiscardPileSummary(): void
+    {
+        $u1 = $this->insertUser('discord-player-32');
+        $u2 = $this->insertUser('discord-player-33');
+        $this->linkDiscordAccount($u1, 'discord-32');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameCard($gameId, 74, 'discard'); // Sadness
+        $this->insertGameCard($gameId, 5, 'discard'); // Complacency
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-32'));
+
+        self::assertStringContainsString('Discard pile (2): Sadness (0), Complacency (4)', $response['data']['content']);
+    }
+
     /** @return int[] */
     private function activeStandardGameIdsForTest(int $userId): array
     {
