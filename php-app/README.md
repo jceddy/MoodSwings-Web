@@ -13016,6 +13016,26 @@ than a parallel bespoke system:
   mix (`GameService::STRUCTURE_DECK_RARITY_COUNTS`) so a player checking
   the deck list can see Chivalry is genuinely one of the 45 cards in the
   game, without knowing it's specifically the very next draw.
+- **"Chain Reaction" redesigned around a fourth trap card**: the original
+  solitaire version (`hand_empty` goal, Charity/Idealism/Indifference --
+  clear the whole hand by playing the vanilla card last, since it grants
+  no extra play of its own) now adds an opponent
+  (`outscore_opponent`) and a fourth hand card, Self-Loathing. Self-Loathing's
+  own flat value (6) beats Indifference's (4) outright, but its own
+  "to play this card, put one or more of your moods into the discard
+  pile" cost is genuinely illegal before at least one of Charity/Idealism
+  is already down (nothing to discard yet) -- so unlike an initially-tried
+  Animosity (whose own boosted value turned out to already be true from
+  turn 1 in a puzzle, since the opponent's hand size never changes,
+  letting it solve the puzzle alone in one play with no chain at all),
+  there's no one-move shortcut here. Paying that cost also shrinks the
+  solver back down to 2 moods -- fewer than the opponent's fixed 3
+  (Superiority + two otherwise-inert fillers) -- which spikes Superiority
+  ("value is 7 if its owner has more moods than every other player") from
+  3 to 7, a decisive loss despite Self-Loathing's own tempting value.
+  Deliberately a different trap mechanism (mood count, not the discard-
+  pile/Vulnerability reaction "One Fell Swoop" already uses) even though
+  Self-Loathing's own cost also happens to discard a card.
 
 ### Duel: separate per-player decks
 
