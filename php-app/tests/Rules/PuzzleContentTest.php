@@ -338,6 +338,25 @@ final class PuzzleContentTest extends TestCase
         $this->assertGameNotSolved($gameId);
     }
 
+    /**
+     * Reported live: "The opponent has Benevolence and Happiness in
+     * play... You have Charity, Idealism, Indifference, and Animosity in
+     * hand." Animosity's own boosted value turned out to already be true
+     * from turn 1 in a puzzle (the opponent seat never acts, so its hand
+     * size never changes), letting it solve the puzzle alone in one play
+     * -- landed instead (confirmed live, deliberately not reusing One
+     * Fell Swoop's own discard-pile/Vulnerability trap) on Self-Loathing,
+     * which is actually illegal to play before the chain even starts (see
+     * the test below), so there's no one-move shortcut here at all.
+     * Opponent: Superiority(3, spikes to 7 if its owner has more moods
+     * than every other player) + Malice(0) + Spite(1) -- exactly 3 moods,
+     * both fillers otherwise inert since a puzzle's opponent cards are
+     * dealt straight into play, never actually "played" through the
+     * engine. Charity(1) + Idealism(0) + Indifference(4) = 5 solver moods
+     * (3 of them) tied with the opponent's own 3 -- not fewer -- so
+     * Superiority stays at its base value (3) and the total (4) is
+     * cleared.
+     */
     public function testChainReactionSolvedByPlayingVanillaLast(): void
     {
         ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('chain-reaction');
@@ -350,6 +369,17 @@ final class PuzzleContentTest extends TestCase
         $this->assertGameSolved($gameId, $p);
     }
 
+    /**
+     * Playing the vanilla card first leaves the solver with just 1 mood
+     * against the opponent's 3 -- fewer, not tied -- spiking Superiority
+     * to 7 (opponent totals 8) against the solver's own 4, a decisive
+     * loss. And even once it refreshes into a fresh mini-turn and the
+     * other two get played too (bringing the solver back up to 3 moods,
+     * tied with the opponent again, and the score back to a winning 5-4),
+     * that refresh already happened, so max_plays' own "one unbroken
+     * turn" requirement blocks it from ever counting as solved regardless
+     * of the final score.
+     */
     public function testChainReactionVanillaFirstDoesNotSolveIt(): void
     {
         ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('chain-reaction');
@@ -357,6 +387,46 @@ final class PuzzleContentTest extends TestCase
         $this->play($gameId, $p, $this->instanceId($gameId, 44, 'hand'), []); // Indifference first -- stalls
         $this->play($gameId, $p, $this->instanceId($gameId, 3, 'hand'), []);
         $result = $this->play($gameId, $p, $this->instanceId($gameId, 16, 'hand'), []);
+
+        self::assertFalse($result['game_completed']);
+        $this->assertGameNotSolved($gameId);
+    }
+
+    /**
+     * Self-Loathing's own "to play this card, put one or more of your
+     * moods into the discard pile. If you can't do that, you can't play
+     * this card" makes it genuinely illegal as an opening move -- there's
+     * no mood in play yet to pay its cost with -- structurally forcing
+     * the Charity/Idealism chain to happen first, unlike Animosity's own
+     * unconditional boost in the originally-reported version of this
+     * puzzle.
+     */
+    public function testChainReactionSelfLoathingCannotBePlayedFirst(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('chain-reaction');
+
+        $this->expectException(IllegalPlayException::class);
+        $this->play($gameId, $p, $this->instanceId($gameId, 75, 'hand'), []); // Self-Loathing with an empty board -- no mood to discard
+    }
+
+    /**
+     * The tempting wrong line: Self-Loathing's own flat value (6) beats
+     * Indifference's (4) outright. But paying its own discard cost sends
+     * whichever of Charity/Idealism was chosen back out of play, shrinking
+     * the solver down to just 2 moods -- fewer than the opponent's 3 --
+     * which spikes Superiority from 3 to 7 (opponent totals 8), well past
+     * whatever the solver ends up with (6 or 7 depending on which mood
+     * was discarded), a decisive loss either way.
+     */
+    public function testChainReactionSelfLoathingLosesDespiteLookingTempting(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('chain-reaction');
+
+        $this->play($gameId, $p, $this->instanceId($gameId, 3, 'hand'), []); // Charity
+        $this->play($gameId, $p, $this->instanceId($gameId, 16, 'hand'), []); // Idealism
+
+        $idealismInPlayId = $this->instanceId($gameId, 16, 'in_play');
+        $result = $this->play($gameId, $p, $this->instanceId($gameId, 75, 'hand'), ['discard_mood_ids' => [$idealismInPlayId]]); // Self-Loathing, discarding Idealism
 
         self::assertFalse($result['game_completed']);
         $this->assertGameNotSolved($gameId);
