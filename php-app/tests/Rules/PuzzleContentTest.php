@@ -663,13 +663,21 @@ final class PuzzleContentTest extends TestCase
         );
     }
 
-    public function testKindredColorsSolvedByFollowingEagernessWithASharedColor(): void
+    /**
+     * Charity's own UNCONDITIONAL grant has to be spent first (on
+     * Eagerness itself, since Eagerness's printed color, green, doesn't
+     * match Charity's white), saving Eagerness's own CONDITIONAL grant
+     * ("...if it shares a color with one of your moods") for the very
+     * end: Laziness (green) is the only card left that can satisfy it
+     * once Eagerness is in play.
+     */
+    public function testKindredColorsSolvedBySpendingCharitysGrantBeforeEagernessOwnConditionalOne(): void
     {
         ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('kindred-colors');
 
+        $this->play($gameId, $p, $this->instanceId($gameId, 3, 'hand'), []); // Charity (white)
         $this->play($gameId, $p, $this->instanceId($gameId, 114, 'hand'), []); // Eagerness (green)
-        $this->play($gameId, $p, $this->instanceId($gameId, 128, 'hand'), []); // Nostalgia (green) -- satisfies the grant
-        $result = $this->play($gameId, $p, $this->instanceId($gameId, 37, 'hand'), []); // Duplicity (blue)
+        $result = $this->play($gameId, $p, $this->instanceId($gameId, 126, 'hand'), []); // Laziness (green) -- satisfies Eagerness's own grant
 
         self::assertTrue($result['game_completed']);
         $this->assertGameSolved($gameId, $p);
@@ -682,7 +690,36 @@ final class PuzzleContentTest extends TestCase
         $this->play($gameId, $p, $this->instanceId($gameId, 114, 'hand'), []); // Eagerness (green)
 
         $this->expectException(IllegalPlayException::class);
-        $this->play($gameId, $p, $this->instanceId($gameId, 37, 'hand'), []); // Duplicity (blue) -- doesn't share Eagerness's own color
+        $this->play($gameId, $p, $this->instanceId($gameId, 3, 'hand'), []); // Charity (white) -- doesn't share Eagerness's own color
+    }
+
+    /**
+     * Playing Eagerness first instead of last stalls one card short:
+     * its own conditional grant is immediately spent on the only
+     * qualifying card (Laziness, green), leaving Charity (white) with
+     * no further grant to use it -- only 2 of the 3 plays needed.
+     */
+    public function testKindredColorsPlayingEagernessFirstStallsOneCardShort(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('kindred-colors');
+
+        $this->play($gameId, $p, $this->instanceId($gameId, 114, 'hand'), []); // Eagerness (green)
+        $result = $this->play($gameId, $p, $this->instanceId($gameId, 126, 'hand'), []); // Laziness (green) -- satisfies the grant, but has no grant of its own
+
+        self::assertFalse($result['game_completed']);
+        $this->assertGameNotSolved($gameId);
+    }
+
+    public function testKindredColorsExposesItsHintViaGetState(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('kindred-colors');
+
+        $state = $this->games->getState($gameId, $this->userIdForGamePlayer($p));
+
+        self::assertSame(
+            'Eagerness only lets you follow it with a mood that DOES share a color with something you have in play.',
+            $state['game']['puzzle_hint']
+        );
     }
 
     public function testTheLesserSacrificeSolvedByTargetingConvictionItself(): void

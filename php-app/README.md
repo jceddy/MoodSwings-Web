@@ -13120,6 +13120,20 @@ than a parallel bespoke system:
   source of the two extra plays the solve needs. Its own inline
   explanation of that reactive trigger was moved behind a Hint, matching
   the pattern already established elsewhere in this arc.
+- **"Kindred Colors" swapped both of its non-Eagerness cards**: Duplicity
+  traded for Charity, and Nostalgia traded for Laziness (a vanilla green
+  common with no ability at all). This inverts which grant has to be
+  saved for last -- Charity's own UNCONDITIONAL grant must be spent
+  early (on Eagerness itself, since Eagerness's printed color, green,
+  doesn't match Charity's white), while Eagerness's own CONDITIONAL
+  grant ("...if it shares a color with one of your moods") has to be
+  saved for the very end, since Laziness (green) is the only card left
+  that can satisfy it once Eagerness is in play: Charity -> Eagerness ->
+  Laziness. Playing Eagerness first instead stalls one card short -- its
+  own conditional grant is immediately spent on the only qualifying card
+  (Laziness), leaving Charity with no further grant to use it. Its own
+  inline explanation of Eagerness's color restriction was moved behind a
+  Hint, matching the pattern already established elsewhere in this arc.
 
 ### Duel: separate per-player decks
 
