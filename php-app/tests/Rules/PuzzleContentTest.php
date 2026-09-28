@@ -172,31 +172,40 @@ final class PuzzleContentTest extends TestCase
         self::assertSame('in_progress', $stmt->fetchColumn());
     }
 
-    public function testOneFellSwoopSolvedByFriendlinessKindnessCharityComplacency(): void
+    public function testOneFellSwoopSolvedByDecliningAmbitionsDiscard(): void
     {
         ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('one-fell-swoop');
 
-        $result = null;
-        foreach ([13, 17, 3, 5] as $catalogCardId) { // Friendliness, Kindness, Charity, Complacency
-            $result = $this->play($gameId, $p, $this->instanceId($gameId, $catalogCardId, 'hand'), []);
-        }
+        // Friendliness -> Kindness -> Charity -> Ambition, and Ambition's
+        // own optional discard is DECLINED (no 'discard_card_id') -- no
+        // card ever reaches the discard pile this round, so Vulnerability
+        // stays at its base value 1. Final board: solver 1+2+2+2=7 vs
+        // PuzzleOpponent's static Vulnerability(1) + Neurosis(5) = 6.
+        $this->play($gameId, $p, $this->instanceId($gameId, 13, 'hand'), []); // Friendliness
+        $this->play($gameId, $p, $this->instanceId($gameId, 17, 'hand'), []); // Kindness
+        $this->play($gameId, $p, $this->instanceId($gameId, 3, 'hand'), []); // Charity
+        $result = $this->play($gameId, $p, $this->instanceId($gameId, 53, 'hand'), []); // Ambition, no discard
 
         self::assertTrue($result['game_completed']);
         $this->assertGameSolved($gameId, $p);
     }
 
-    public function testOneFellSwoopObviousOrderDoesNotSolveIt(): void
+    public function testOneFellSwoopTakingAmbitionsDiscardBoostsTheOpponentInstead(): void
     {
         ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('one-fell-swoop');
 
-        // Charity(1) -> Complacency(4): Complacency has no ability, so the
-        // turn refreshes with Friendliness/Kindness still in hand -- see
-        // advancePuzzleTurn(). Playing on afterward still empties the
-        // hand, but only after that refresh, which disqualifies it.
-        $this->play($gameId, $p, $this->instanceId($gameId, 3, 'hand'), []);
-        $this->play($gameId, $p, $this->instanceId($gameId, 5, 'hand'), []);
-        $this->play($gameId, $p, $this->instanceId($gameId, 13, 'hand'), []);
-        $result = $this->play($gameId, $p, $this->instanceId($gameId, 17, 'hand'), []);
+        // The tempting wrong line: play Ambition first and actually take
+        // its discard, expecting the extra play to help -- but ANY card
+        // reaching the discard pile this round (not just the acting
+        // player's own board) is what flips PuzzleOpponent's own
+        // Vulnerability from 1 to 7. Final board: solver
+        // Ambition(2)+Charity(1)+Friendliness(2)=5 (Kindness discarded
+        // instead of played) vs opponent's now-boosted
+        // Vulnerability(7)+Neurosis(5)=12 -- a decisive loss, not a win.
+        $kindnessId = $this->instanceId($gameId, 17, 'hand');
+        $this->play($gameId, $p, $this->instanceId($gameId, 53, 'hand'), ['discard_card_id' => $kindnessId]); // Ambition, discards Kindness
+        $this->play($gameId, $p, $this->instanceId($gameId, 3, 'hand'), []); // Charity
+        $result = $this->play($gameId, $p, $this->instanceId($gameId, 13, 'hand'), []); // Friendliness
 
         self::assertFalse($result['game_completed']);
         $this->assertGameNotSolved($gameId);

@@ -3576,21 +3576,72 @@ final class GameService
     }
 
     /**
+     * The fixed, real `users` row a two-seat "vs opponent" puzzle
+     * (`puzzles.opponent_hand_card_ids`/`opponent_in_play_card_ids`
+     * non-empty -- see createPuzzleAttempt()) seats as its own second
+     * game_player, the same "a real users row, is_bot = 1" convention
+     * 0090_add_practice_bots.sql's own fixed roster already established
+     * -- game_players.user_id is NOT NULL, so a puzzle's opponent needs a
+     * real row to reference regardless of the fact it never actually
+     * acts. Looked up first (production already has it seeded by
+     * migration 0395); created on the fly otherwise -- self-healing
+     * against a test suite that truncates `users` between runs, so
+     * neither environment ever depends on migration seed order.
+     */
+    private const PUZZLE_OPPONENT_USERNAME = 'PuzzleOpponent';
+
+    private function puzzleOpponentUserId(): int
+    {
+        $pdo = Connection::get();
+        $stmt = $pdo->prepare('SELECT id FROM users WHERE username = :username');
+        $stmt->execute(['username' => self::PUZZLE_OPPONENT_USERNAME]);
+        $id = $stmt->fetchColumn();
+        if ($id !== false) {
+            return (int) $id;
+        }
+
+        $insert = $pdo->prepare(
+            "INSERT INTO users (username, email, password_hash, share_presence, is_bot, email_verified_at)
+             VALUES (:username, 'puzzle-opponent@moodswings.invalid', :password_hash, 0, 1, NOW())"
+        );
+        $insert->execute([
+            'username' => self::PUZZLE_OPPONENT_USERNAME,
+            'password_hash' => password_hash(bin2hex(random_bytes(16)), PASSWORD_DEFAULT),
+        ]);
+
+        return (int) $pdo->lastInsertId();
+    }
+
+    /**
      * Issue #524: a puzzle attempt is a real, minimal `games` row
-     * (format = 'puzzle', exactly one seat) built directly from a
-     * curated `puzzles` row's own stored card-id arrays -- no shuffling,
-     * no deck-building step, and deliberately bypassing createGame()/
-     * startGame() entirely (both hard-enforce self::MIN_PLAYERS, which a
-     * solitaire puzzle can never satisfy; the game starts 'in_progress'
-     * immediately here instead of the usual 'waiting'). This reuses the
-     * SAME rules engine/persistence layer/board-rendering pipeline every
-     * other format does -- see advancePuzzleTurn() for the one other
-     * spot format = 'puzzle' needs special-casing (the turn-advance
-     * fallback that would otherwise trigger real round scoring), and
-     * playMood()'s own goal-check hook for how a puzzle is actually
-     * detected as solved. No notifyItsYourTurn() call -- there's no one
-     * else to notify, and the solver is already looking at the board
-     * they just requested.
+     * (format = 'puzzle') built directly from a curated `puzzles` row's
+     * own stored card-id arrays -- no shuffling, no deck-building step,
+     * and deliberately bypassing createGame()/startGame() entirely (both
+     * hard-enforce self::MIN_PLAYERS, which a solitaire puzzle can never
+     * satisfy; the game starts 'in_progress' immediately here instead of
+     * the usual 'waiting'). This reuses the SAME rules engine/persistence
+     * layer/board-rendering pipeline every other format does -- see
+     * advancePuzzleTurn() for the one other spot format = 'puzzle' needs
+     * special-casing (the turn-advance fallback that would otherwise
+     * trigger real round scoring/match-completion bookkeeping this isn't
+     * a real game for), and playMood()'s own goal-check hook for how a
+     * puzzle is actually detected as solved.
+     *
+     * Most puzzles are pure solitaire (a single seat), but one whose
+     * `puzzles.opponent_hand_card_ids`/`opponent_in_play_card_ids` are
+     * non-empty (issue #524 follow-up, reported live: "I want to up the
+     * ante on some of the puzzles, and it would require an opponent")
+     * seats a second game_player -- puzzleOpponentUserId()'s own fixed
+     * PuzzleOpponent row -- dealt from those same two arrays, with
+     * first_game_player_id pointed at THAT seat (so a card that cares who
+     * went first this round reads correctly, and so a goal_type
+     * 'outscore_opponent' tie -- see puzzleSolverOutscoresOpponent() --
+     * goes to the opponent, matching the Extended Rules' own "ties go to
+     * whoever played first" tiebreak). current_turn_game_player_id still
+     * always starts on the solver directly: PuzzleOpponent's own board is
+     * pre-set state to solve around, never a real turn to actually take
+     * -- advanceAutomatedTurns() never has a reason to touch it, since
+     * current_turn is never its own seat.
      *
      * "Try Again" is just calling this again -- a fresh games row, the
      * same pattern Rematch already uses -- rather than resetting one in
@@ -3613,6 +3664,9 @@ final class GameService
         $handCardIds = json_decode((string) $puzzle['starting_hand_card_ids'], true);
         $inPlayCardIds = json_decode((string) $puzzle['starting_in_play_card_ids'], true);
         $deckCardIds = json_decode((string) $puzzle['deck_card_ids'], true);
+        $opponentHandCardIds = json_decode((string) $puzzle['opponent_hand_card_ids'], true);
+        $opponentInPlayCardIds = json_decode((string) $puzzle['opponent_in_play_card_ids'], true);
+        $hasOpponent = $opponentHandCardIds !== [] || $opponentInPlayCardIds !== [];
 
         $pdo = Connection::get();
         $pdo->beginTransaction();
@@ -3626,10 +3680,16 @@ final class GameService
             $gameId = (int) $pdo->lastInsertId();
 
             $insertPlayer = $pdo->prepare(
-                'INSERT INTO game_players (game_id, user_id, seat_order) VALUES (:game_id, :user_id, 0)'
+                'INSERT INTO game_players (game_id, user_id, seat_order) VALUES (:game_id, :user_id, :seat_order)'
             );
-            $insertPlayer->execute(['game_id' => $gameId, 'user_id' => $userId]);
+            $insertPlayer->execute(['game_id' => $gameId, 'user_id' => $userId, 'seat_order' => 0]);
             $gamePlayerId = (int) $pdo->lastInsertId();
+
+            $opponentGamePlayerId = null;
+            if ($hasOpponent) {
+                $insertPlayer->execute(['game_id' => $gameId, 'user_id' => $this->puzzleOpponentUserId(), 'seat_order' => 1]);
+                $opponentGamePlayerId = (int) $pdo->lastInsertId();
+            }
 
             $insertCard = $pdo->prepare(
                 'INSERT INTO game_cards (game_id, card_id, zone, owner_game_player_id, deck_position)
@@ -3644,14 +3704,21 @@ final class GameService
             foreach (array_values($deckCardIds) as $position => $catalogCardId) {
                 $insertCard->execute(['game_id' => $gameId, 'card_id' => $catalogCardId, 'zone' => 'deck', 'owner' => null, 'deck_position' => $position]);
             }
+            foreach ($opponentHandCardIds as $catalogCardId) {
+                $insertCard->execute(['game_id' => $gameId, 'card_id' => $catalogCardId, 'zone' => 'hand', 'owner' => $opponentGamePlayerId, 'deck_position' => null]);
+            }
+            foreach ($opponentInPlayCardIds as $catalogCardId) {
+                $insertCard->execute(['game_id' => $gameId, 'card_id' => $catalogCardId, 'zone' => 'in_play', 'owner' => $opponentGamePlayerId, 'deck_position' => null]);
+            }
 
             $insertRound = $pdo->prepare(
                 "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, pending_play_grants, status)
-                 VALUES (:game_id, 1, :player_id, :player_id, 1, :pending_play_grants, 'in_progress')"
+                 VALUES (:game_id, 1, :first_player, :current_player, 1, :pending_play_grants, 'in_progress')"
             );
             $insertRound->execute([
                 'game_id' => $gameId,
-                'player_id' => $gamePlayerId,
+                'first_player' => $opponentGamePlayerId ?? $gamePlayerId,
+                'current_player' => $gamePlayerId,
                 'pending_play_grants' => json_encode([null]),
             ]);
 
@@ -11318,6 +11385,7 @@ final class GameService
             'card_in_hand' => $this->puzzleZoneHasCatalogCard($state, $state->hand($gamePlayerId), (int) $goalParams['catalog_card_id']),
             'card_in_play' => $this->puzzleZoneHasCatalogCard($state, array_keys($state->moodsOwnedBy($gamePlayerId)), (int) $goalParams['catalog_card_id']),
             'min_score' => $this->puzzleScoreFor($state, $gamePlayerId) >= (int) $goalParams['target'],
+            'outscore_opponent' => $this->puzzleSolverOutscoresOpponent($gameId, $gamePlayerId, $state),
             default => false,
         };
 
@@ -11399,6 +11467,34 @@ final class GameService
         }
 
         return $total;
+    }
+
+    /**
+     * goal_type 'outscore_opponent' (issue #524 follow-up): the real
+     * RoundScorer math, not a puzzle-specific approximation -- so a card
+     * like Vulnerability ("value is 7 if a card was put into the discard
+     * pile this round") reacts to whatever the solver's own plays
+     * actually did to the board, the same as it would in a real game.
+     * $this->scorer->winner() takes the opponent's seat first in its own
+     * turn-order argument, matching createPuzzleAttempt()'s own
+     * first_game_player_id -- a tied score goes to the opponent, per the
+     * Extended Rules' "ties go to whoever played first" rule, exactly
+     * like a real round would rule it.
+     */
+    private function puzzleSolverOutscoresOpponent(int $gameId, int $gamePlayerId, BoardState $state): bool
+    {
+        $opponentIdStmt = Connection::get()->prepare('SELECT id FROM game_players WHERE game_id = :game_id AND id != :solver_id');
+        $opponentIdStmt->execute(['game_id' => $gameId, 'solver_id' => $gamePlayerId]);
+        $opponentId = $opponentIdStmt->fetchColumn();
+
+        if ($opponentId === false) {
+            return false;
+        }
+
+        $opponentId = (int) $opponentId;
+        $scores = $this->scorer->score($state);
+
+        return $this->scorer->winner($scores, [$opponentId, $gamePlayerId]) === $gamePlayerId;
     }
 
     /**
