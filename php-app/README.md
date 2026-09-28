@@ -13087,6 +13087,21 @@ than a parallel bespoke system:
   with an empty board, it can't be played at all yet."), matching the
   pattern already established for One Fell Swoop, Vain Effort, and
   Wonder's Choice.
+- **"Validation Loop" swapped Idealism and Duplicity for two inert
+  filler cards**: both originally-seeded low-value cards granted their
+  OWN extra play from their own printed ability ("you may play an
+  additional mood this turn"), independent of Validation's own reactive
+  "each time you play a mood worth 0 or 1, you may play an additional
+  mood" trigger -- so the puzzle's intended lesson was never actually
+  load-bearing; the two cards' own grants already supplied enough extra
+  plays regardless. Replaced with Sadness(0, black) and
+  Vulnerability(1, green), both purely value-scaling cards with no
+  "after playing" ability of their own, so `ValidationEffect::
+  reactToAnotherPlay()`'s own reactive grant (checked against printed
+  base value, never either card's own dynamic value) is now the only
+  source of the two extra plays the solve needs. Its own inline
+  explanation of that reactive trigger was moved behind a Hint, matching
+  the pattern already established elsewhere in this arc.
 
 ### Duel: separate per-player decks
 

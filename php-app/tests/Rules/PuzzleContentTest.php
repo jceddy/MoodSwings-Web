@@ -625,8 +625,12 @@ final class PuzzleContentTest extends TestCase
     {
         ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('validation-loop');
 
-        $this->play($gameId, $p, $this->instanceId($gameId, 16, 'hand'), []); // Idealism (0)
-        $this->play($gameId, $p, $this->instanceId($gameId, 37, 'hand'), []); // Duplicity (0)
+        // Sadness and Vulnerability have no "after playing" ability of
+        // their own -- unlike the original Idealism/Duplicity, neither
+        // grants its own extra play, so the two extra plays this solve
+        // needs can only come from Validation's own reactive grant.
+        $this->play($gameId, $p, $this->instanceId($gameId, 74, 'hand'), []); // Sadness (0)
+        $this->play($gameId, $p, $this->instanceId($gameId, 132, 'hand'), []); // Vulnerability (1)
         $result = $this->play($gameId, $p, $this->instanceId($gameId, 83, 'hand'), []); // Boredom (4)
 
         self::assertTrue($result['game_completed']);
@@ -640,11 +644,23 @@ final class PuzzleContentTest extends TestCase
         // Boredom (4) doesn't trigger Validation's reactive grant and has
         // no ability of its own -- playing it first stalls the turn.
         $this->play($gameId, $p, $this->instanceId($gameId, 83, 'hand'), []);
-        $this->play($gameId, $p, $this->instanceId($gameId, 16, 'hand'), []);
-        $result = $this->play($gameId, $p, $this->instanceId($gameId, 37, 'hand'), []);
+        $this->play($gameId, $p, $this->instanceId($gameId, 74, 'hand'), []);
+        $result = $this->play($gameId, $p, $this->instanceId($gameId, 132, 'hand'), []);
 
         self::assertFalse($result['game_completed']);
         $this->assertGameNotSolved($gameId);
+    }
+
+    public function testValidationLoopExposesItsHintViaGetState(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('validation-loop');
+
+        $state = $this->games->getState($gameId, $this->userIdForGamePlayer($p));
+
+        self::assertSame(
+            'Validation quietly grants you another play every time you play a mood worth 0 or 1.',
+            $state['game']['puzzle_hint']
+        );
     }
 
     public function testKindredColorsSolvedByFollowingEagernessWithASharedColor(): void
