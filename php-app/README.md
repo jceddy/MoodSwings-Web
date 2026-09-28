@@ -13063,7 +13063,19 @@ than a parallel bespoke system:
   empty) = 12 exactly (the goal's own new target). Playing Friendliness
   instead of sacrificing it is legal (its own value satisfies Ambition's
   even-value restriction) but caps the total at just 5, with nothing left
-  to grant Vanity's own play.
+  to grant Vanity's own play. Its own inline description spoiler about
+  Vanity's dynamic value was later moved behind a Hint instead.
+- **"Wonder's Choice" moved its two color-fodder cards into the discard
+  pile**: Complacency(4, white) and Idealism(0, white) used to sit in play
+  alongside Indifference(4, blue); WonderEffect's own "+2 per mood of the
+  chosen color, counting both in-play moods AND the discard pile" means
+  moving them to the discard pile instead doesn't change how many white
+  matches choosing white finds (still 2), but it does drop their own base
+  values out of the board-value total -- only Indifference(4) remains in
+  play alongside Wonder. Goal retuned from 12 to 8 to match: choosing
+  white now totals Indifference(4) + Wonder(0 + 2*2 = 4) = 8 exactly,
+  while the minority choice (blue) still falls short at
+  Indifference(4) + Wonder(0 + 2*1 = 2) = 6.
 
 ### Duel: separate per-player decks
 

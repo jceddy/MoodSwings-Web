@@ -246,6 +246,15 @@ final class PuzzleContentTest extends TestCase
         self::assertNull($state['game']['puzzle_hint']);
     }
 
+    public function testVainEffortExposesItsHintViaGetState(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('vain-effort');
+
+        $state = $this->games->getState($gameId, $this->userIdForGamePlayer($p));
+
+        self::assertSame('Vanity is worth a lot more once your hand is completely empty.', $state['game']['puzzle_hint']);
+    }
+
     /**
      * Bug caught live via a manual smoke test through the real HTTP
      * route (which -- unlike every other test here -- calls
@@ -550,7 +559,10 @@ final class PuzzleContentTest extends TestCase
     {
         ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('wonders-choice');
 
-        // Complacency and Idealism are white (2 matches); Indifference alone is blue (1 match).
+        // Complacency(4) and Idealism(0) are white and sit in the discard pile
+        // (2 matches, since WonderEffect counts discard too); Indifference(4)
+        // alone is in play and blue (1 match). Choosing white:
+        // Indifference(4) + Wonder(0 + 2*2 = 4) = 8, exactly the target.
         $result = $this->play($gameId, $p, $this->instanceId($gameId, 133, 'hand'), ['color' => 'white']);
 
         self::assertTrue($result['game_completed']);
@@ -561,6 +573,7 @@ final class PuzzleContentTest extends TestCase
     {
         ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('wonders-choice');
 
+        // Choosing blue: Indifference(4) + Wonder(0 + 2*1 = 2) = 6, short of 8.
         $result = $this->play($gameId, $p, $this->instanceId($gameId, 133, 'hand'), ['color' => 'blue']);
 
         self::assertFalse($result['game_completed']);
