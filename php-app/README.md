@@ -12981,6 +12981,15 @@ than a parallel bespoke system:
   redesigned around this (Ambition's own discard-gated extra play is a
   trap -- taking it feeds the opponent's own Vulnerability instead of the
   solver's score).
+- **Hints**: `puzzles.hint` is an optional per-puzzle string (`NULL` for
+  most puzzles), surfaced as `game.puzzle_hint` in `getState()` for a
+  `format = 'puzzle'` game. The frontend shows a "Hint" button on the
+  puzzle's own board only when this is non-null, opening a dialog with
+  that text rather than showing it unprompted -- so a puzzle with no hint
+  set shows no button at all, and one with a hint doesn't spoil itself for
+  a player who hasn't asked for help. "One Fell Swoop" is the debut hint,
+  warning about Ambition's own discard trap without giving the solution
+  away outright.
 
 ### Duel: separate per-player decks
 

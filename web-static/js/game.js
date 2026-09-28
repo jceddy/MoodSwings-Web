@@ -4732,6 +4732,10 @@
         puzzlesDialog.close();
     });
 
+    document.getElementById('puzzle-hint-close-button').addEventListener('click', () => {
+        document.getElementById('puzzle-hint-dialog').close();
+    });
+
     // -- New tournament dialog --
 
     // #new-tournament-format's own 'sealed_deck'/'booster_draft' options
@@ -8146,6 +8150,7 @@
 
         renderDraftMatchScoreline(state);
         renderRematchButton(state);
+        renderPuzzleHintButton(state);
 
         const inProgressArea = document.getElementById('in-progress-area');
 
@@ -9483,6 +9488,23 @@
         const show = canRematch(state);
         button.hidden = !show;
         button.onclick = show ? () => openNewGameDialog(buildRematchPrefill(state)) : null;
+    }
+
+    // Puzzle hint (reported live: "Add a 'hint' button when in the
+    // puzzle") -- shown only for a puzzle whose own row actually has a
+    // hint set (state.game.puzzle_hint, null otherwise -- see
+    // GameService::buildGameState()'s own docblock). Shown for the whole
+    // lifetime of the attempt (including after it's solved), the same as
+    // the board itself stays visible -- there's no reason to hide the
+    // hint once you no longer need it.
+    function renderPuzzleHintButton(state) {
+        const button = document.getElementById('puzzle-hint-button');
+        const show = state.game.format === 'puzzle' && !!state.game.puzzle_hint;
+        button.hidden = !show;
+        button.onclick = show ? () => {
+            document.getElementById('puzzle-hint-text').textContent = state.game.puzzle_hint;
+            document.getElementById('puzzle-hint-dialog').showModal();
+        } : null;
     }
 
     // Shared scoreline for every draft-based deck_type's own match --

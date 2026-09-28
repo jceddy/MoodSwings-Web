@@ -172,6 +172,14 @@ final class PuzzleContentTest extends TestCase
         self::assertSame('in_progress', $stmt->fetchColumn());
     }
 
+    private function userIdForGamePlayer(int $gamePlayerId): int
+    {
+        $stmt = $this->pdo->prepare('SELECT user_id FROM game_players WHERE id = :id');
+        $stmt->execute(['id' => $gamePlayerId]);
+
+        return (int) $stmt->fetchColumn();
+    }
+
     public function testOneFellSwoopSolvedByDecliningAmbitionsDiscard(): void
     {
         ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('one-fell-swoop');
@@ -209,6 +217,33 @@ final class PuzzleContentTest extends TestCase
 
         self::assertFalse($result['game_completed']);
         $this->assertGameNotSolved($gameId);
+    }
+
+    /**
+     * Reported live: "Add a 'hint' button when in the puzzle, that pops
+     * up a dialog with the following hint". getState()'s own
+     * game.puzzle_hint is what that button reads (see game.js'
+     * renderPuzzleHintButton()) -- One Fell Swoop is the one puzzle
+     * seeded with a real hint (migration 0396), everything else stays
+     * null so the frontend hides the button entirely for a puzzle with
+     * no hint set.
+     */
+    public function testOneFellSwoopExposesItsHintViaGetState(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('one-fell-swoop');
+
+        $state = $this->games->getState($gameId, $this->userIdForGamePlayer($p));
+
+        self::assertSame("Think carefully before taking Ambition's discard option.", $state['game']['puzzle_hint']);
+    }
+
+    public function testChainReactionHasNoHint(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('chain-reaction');
+
+        $state = $this->games->getState($gameId, $this->userIdForGamePlayer($p));
+
+        self::assertNull($state['game']['puzzle_hint']);
     }
 
     /**
