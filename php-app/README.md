@@ -13052,6 +13052,18 @@ than a parallel bespoke system:
   directly (the original "different color" lesson survives), but now also
   genuinely stalls one play short of clearing the hand even when the
   color rule itself is respected, unlike before.
+- **"Vain Effort" widened from 3 cards to 4**: Idealism is replaced with
+  both Friendliness (a conditionally-gated extra play, restricted to a
+  mood with an even printed value) and Ambition (an extra play gated
+  behind discarding a card from hand first). With only 4 cards and just 3
+  ways to earn an extra play, playing all 4 outright is never possible in
+  one turn -- clearing the hand (and tripling Vanity's own value) instead
+  means DISCARDING Friendliness via Ambition's own cost rather than ever
+  playing it: Charity(1) + Ambition(2) + Vanity(3 moods x 3, hand now
+  empty) = 12 exactly (the goal's own new target). Playing Friendliness
+  instead of sacrificing it is legal (its own value satisfies Ambition's
+  even-value restriction) but caps the total at just 5, with nothing left
+  to grant Vanity's own play.
 
 ### Duel: separate per-player decks
 
