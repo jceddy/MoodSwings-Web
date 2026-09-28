@@ -2515,6 +2515,25 @@ if ($path === '/games/notes' && $method === 'POST') {
     }
 }
 
+// Reported live: the "Puzzle Solver" achievement should only unlock on a
+// solve where the player never opened the Hint dialog -- the frontend's
+// Hint button (renderPuzzleHintButton() in game.js) calls this the
+// moment it's clicked, before showing the hint text, so the flag is set
+// regardless of whether the player reads the whole thing. A no-op for
+// anything but an in-progress puzzle-format game; no response body
+// beyond the usual status, since the frontend never needs to read this
+// flag back.
+if ($path === '/games/puzzle-hint-viewed' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $gameId = (int) ($body['game_id'] ?? 0);
+
+    $gamePlayerId = requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    $games->markPuzzleHintViewed($gameId, $gamePlayerId);
+    respond(200, ['status' => 'ok']);
+}
+
 // In-game chat (issue #109): no GET route -- unlike /games/notes above,
 // chat is delivered entirely via GET /games/state's own new
 // 'chat_messages' field (piggybacked on the existing 4s poll rather than

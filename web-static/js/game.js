@@ -9502,6 +9502,10 @@
         const show = state.game.format === 'puzzle' && !!state.game.puzzle_hint;
         button.hidden = !show;
         button.onclick = show ? () => {
+            // Reported live: "Puzzle Solver" should only unlock on a solve
+            // that never opened this dialog -- fire-and-forget, since the
+            // dialog itself doesn't depend on this succeeding.
+            markPuzzleHintViewed(state.game.id);
             document.getElementById('puzzle-hint-text').textContent = state.game.puzzle_hint;
             document.getElementById('puzzle-hint-dialog').showModal();
         } : null;

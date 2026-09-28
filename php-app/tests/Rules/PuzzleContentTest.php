@@ -114,6 +114,13 @@ final class PuzzleContentTest extends TestCase
     private function attempt(string $slug): array
     {
         $userId = $this->insertUser("solver_{$slug}_" . bin2hex(random_bytes(4)));
+
+        return $this->attemptAs($userId, $slug);
+    }
+
+    /** Same as attempt(), but for an already-existing $userId -- needed to solve more than one puzzle as the SAME user (e.g. to exercise achievement progress across attempts). */
+    private function attemptAs(int $userId, string $slug): array
+    {
         $gameId = $this->games->createPuzzleAttempt($userId, $this->puzzleIdForSlug($slug));
 
         $stmt = $this->pdo->prepare('SELECT id FROM game_players WHERE game_id = :game_id');
@@ -754,5 +761,72 @@ final class PuzzleContentTest extends TestCase
             'Conviction has to send SOME mood to the bottom of the deck when you play it, including itself -- choose wisely.',
             $state['game']['puzzle_hint']
         );
+    }
+
+    /**
+     * Reported live: puzzles should list Easy, Medium, Hard --
+     * GameService::listActivePuzzles()'s own ORDER BY p.difficulty
+     * relies on MySQL sorting the ENUM by declaration index. Asserted
+     * against the real debut catalog (migration 0394 + this arc's own
+     * redesigns) rather than a synthetic fixture, so a future puzzle
+     * seeded with the wrong difficulty spelling would fail loudly here.
+     */
+    public function testListActivePuzzlesOrdersByDifficultyEasyMediumHard(): void
+    {
+        $userId = $this->insertUser('puzzle-list-order');
+
+        $difficulties = array_column($this->games->listActivePuzzles($userId), 'difficulty');
+        $rank = ['easy' => 0, 'medium' => 1, 'hard' => 2];
+        $ranks = array_map(static fn (string $d) => $rank[$d], $difficulties);
+
+        self::assertNotEmpty($ranks);
+        self::assertSame($ranks, (function (array $r) {
+            sort($r);
+
+            return $r;
+        })($ranks), 'Puzzles are not listed Easy, Medium, Hard: ' . implode(', ', $difficulties));
+    }
+
+    /**
+     * Reported live: "Puzzle Solver" should only unlock on a solve where
+     * the player never opened the Hint dialog -- end-to-end proof (see
+     * AchievementServiceIntegrationTest for the achievement-only logic
+     * in isolation) that checkPuzzleGoal() actually reads
+     * games.puzzle_hint_viewed (set by markPuzzleHintViewed(), the same
+     * method POST /games/puzzle-hint-viewed calls) and passes it through
+     * correctly: solving "One Fell Swoop" (which has a hint) after
+     * viewing it does NOT unlock the achievement, but the SAME user then
+     * solving "The Lesser Sacrifice" without ever viewing IT hint does.
+     */
+    public function testSolvingAPuzzleAfterViewingItsHintDoesNotUnlockPuzzleSolverButALaterHintlessSolveDoes(): void
+    {
+        $userId = $this->insertUser('hint-gated-solver');
+
+        ['gameId' => $gameId1, 'gamePlayerId' => $p1] = $this->attemptAs($userId, 'one-fell-swoop');
+        $this->games->markPuzzleHintViewed($gameId1, $p1);
+        $this->play($gameId1, $p1, $this->instanceId($gameId1, 13, 'hand'), []); // Friendliness
+        $this->play($gameId1, $p1, $this->instanceId($gameId1, 17, 'hand'), []); // Kindness
+        $this->play($gameId1, $p1, $this->instanceId($gameId1, 3, 'hand'), []); // Charity
+        $result1 = $this->play($gameId1, $p1, $this->instanceId($gameId1, 53, 'hand'), []); // Ambition, no discard
+        self::assertTrue($result1['game_completed']);
+        self::assertFalse($this->isAchievementUnlocked($userId, 'puzzle-solver'), 'Viewing the hint should have blocked this solve from unlocking Puzzle Solver');
+
+        ['gameId' => $gameId2, 'gamePlayerId' => $p2] = $this->attemptAs($userId, 'the-lesser-sacrifice');
+        $convictionId = $this->instanceId($gameId2, 6, 'hand');
+        $result2 = $this->play($gameId2, $p2, $convictionId, ['target_mood_id' => $convictionId]);
+        self::assertTrue($result2['game_completed']);
+        self::assertTrue($this->isAchievementUnlocked($userId, 'puzzle-solver'), 'A later hintless solve should still unlock Puzzle Solver');
+    }
+
+    private function isAchievementUnlocked(int $userId, string $slug): bool
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT ua.unlocked_at FROM user_achievements ua JOIN achievements a ON a.id = ua.achievement_id
+             WHERE ua.user_id = :u AND a.slug = :slug'
+        );
+        $stmt->execute(['u' => $userId, 'slug' => $slug]);
+        $value = $stmt->fetchColumn();
+
+        return $value !== false && $value !== null;
     }
 }

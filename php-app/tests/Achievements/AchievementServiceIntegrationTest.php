@@ -809,6 +809,63 @@ final class AchievementServiceIntegrationTest extends TestCase
         self::assertTrue($this->isUnlocked($userId, 'getting-the-hang-of-it'));
     }
 
+    /**
+     * Reported live: "Puzzle Solver" should only unlock on a solve where
+     * the player never opened the Hint dialog -- see
+     * AchievementService::onPuzzleSolved()'s own docblock.
+     */
+    public function testPuzzleSolvedWithoutViewingTheHintUnlocksPuzzleSolver(): void
+    {
+        $userId = $this->insertUser('puzzle-solver-no-hint');
+        $achievements = new AchievementService();
+
+        $achievements->onPuzzleSolved($userId, isNewPuzzleSolve: true, hintViewed: false);
+
+        self::assertTrue($this->isUnlocked($userId, 'puzzle-solver'));
+    }
+
+    /**
+     * A solve where the player DID open the Hint dialog must not unlock
+     * "Puzzle Solver" -- but a later solve (even of a different puzzle)
+     * that doesn't use a hint still can, since unlock() is idempotent
+     * and just keeps checking until one qualifying solve comes along.
+     */
+    public function testPuzzleSolvedAfterViewingTheHintDoesNotUnlockPuzzleSolverUntilALaterHintlessSolve(): void
+    {
+        $userId = $this->insertUser('puzzle-solver-with-hint');
+        $achievements = new AchievementService();
+
+        $achievements->onPuzzleSolved($userId, isNewPuzzleSolve: true, hintViewed: true);
+        self::assertFalse($this->isUnlocked($userId, 'puzzle-solver'));
+
+        $achievements->onPuzzleSolved($userId, isNewPuzzleSolve: true, hintViewed: false);
+        self::assertTrue($this->isUnlocked($userId, 'puzzle-solver'));
+    }
+
+    /**
+     * "Puzzle Enthusiast" ('Solve 10 puzzles') counts DISTINCT puzzles --
+     * $isNewPuzzleSolve = false (a repeat solve of an already-solved
+     * puzzle, e.g. a new personal best) must never bump its progress.
+     */
+    public function testSolvingTenDistinctPuzzlesUnlocksPuzzleEnthusiast(): void
+    {
+        $userId = $this->insertUser('puzzle-enthusiast');
+        $achievements = new AchievementService();
+
+        for ($i = 1; $i <= 9; $i++) {
+            $achievements->onPuzzleSolved($userId, isNewPuzzleSolve: true, hintViewed: false);
+        }
+        self::assertSame(9, $this->progress($userId, 'puzzle-enthusiast'));
+        self::assertFalse($this->isUnlocked($userId, 'puzzle-enthusiast'));
+
+        // A repeat solve of an already-solved puzzle must not count.
+        $achievements->onPuzzleSolved($userId, isNewPuzzleSolve: false, hintViewed: false);
+        self::assertSame(9, $this->progress($userId, 'puzzle-enthusiast'));
+
+        $achievements->onPuzzleSolved($userId, isNewPuzzleSolve: true, hintViewed: false);
+        self::assertTrue($this->isUnlocked($userId, 'puzzle-enthusiast'));
+    }
+
     /** @param array<int, array<string, mixed>> $rows */
     private static function findBySlug(array $rows, string $slug): array
     {

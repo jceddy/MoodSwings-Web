@@ -3785,13 +3785,19 @@ final class GameService
      */
     public function listActivePuzzles(int $userId): array
     {
+        // Reported live: list easiest first. puzzles.difficulty is
+        // declared ENUM('easy', 'medium', 'hard') (migration 0394), and
+        // MySQL sorts an ENUM by its declaration index rather than
+        // alphabetically, so a plain ORDER BY on it already reads
+        // Easy < Medium < Hard with no FIELD()/CASE needed. p.id stays
+        // as the tiebreaker to keep a stable order within each tier.
         $stmt = Connection::get()->prepare(
             'SELECT p.id, p.slug, p.title, p.description, p.difficulty, p.max_plays,
                     s.first_solved_at, s.best_plays, s.solve_count
              FROM puzzles p
              LEFT JOIN puzzle_solves s ON s.puzzle_id = p.id AND s.user_id = :user_id
              WHERE p.active = 1
-             ORDER BY p.id'
+             ORDER BY p.difficulty, p.id'
         );
         $stmt->execute(['user_id' => $userId]);
 
@@ -11397,8 +11403,13 @@ final class GameService
      * solver's own seat -- there's no real "winner" concept otherwise,
      * but this keeps the ordinary completed-game board treatment
      * working unchanged), upserts puzzle_solves (first solve or a new
-     * personal best), and fires the achievement hook. Deliberately does
-     * NOT call recordGameCompletionStats() -- that's the real win/loss
+     * personal best), and fires the achievement hook -- passing whether
+     * this specific attempt is a brand-new distinct-puzzle solve (see
+     * AchievementService::onPuzzleSolved()'s own "Solve 10 puzzles"
+     * counter) and whether games.puzzle_hint_viewed was ever set on this
+     * attempt (see that same method's own "Puzzle Solver" hint gate).
+     * Deliberately does NOT call recordGameCompletionStats() -- that's
+     * the real win/loss
      * lifetime-stats/achievement pipeline, and a solitaire puzzle isn't
      * a real game in that sense.
      */
@@ -11474,6 +11485,14 @@ final class GameService
         $userIdStmt->execute(['id' => $gamePlayerId]);
         $userId = (int) $userIdStmt->fetchColumn();
 
+        // Reported live: "Solve 10 puzzles" counts DISTINCT puzzles, not
+        // solve events -- checked BEFORE the upsert below so a repeat
+        // solve of an already-solved puzzle (a new best_plays, or just
+        // replaying it) never bumps that count again.
+        $existingSolveStmt = $pdo->prepare('SELECT 1 FROM puzzle_solves WHERE user_id = :user_id AND puzzle_id = :puzzle_id');
+        $existingSolveStmt->execute(['user_id' => $userId, 'puzzle_id' => (int) $puzzle['id']]);
+        $isNewPuzzleSolve = $existingSolveStmt->fetchColumn() === false;
+
         $pdo->prepare(
             'INSERT INTO puzzle_solves (user_id, puzzle_id, best_plays, solve_count)
              VALUES (:user_id, :puzzle_id, :plays_made, 1)
@@ -11485,7 +11504,7 @@ final class GameService
             'plays_made2' => $playsMade,
         ]);
 
-        $this->achievements->onPuzzleSolved($userId);
+        $this->achievements->onPuzzleSolved($userId, $isNewPuzzleSolve, (bool) $game['puzzle_hint_viewed']);
 
         return true;
     }
@@ -11971,6 +11990,27 @@ final class GameService
         $userId = $this->userIdForGamePlayer($gamePlayerId);
 
         $this->notes->upsert($gamePlayerId, $draftMatchId, $userId, $noteText);
+    }
+
+    /**
+     * Reported live: the "Puzzle Solver" achievement should only unlock
+     * on a solve where the player never opened the Hint dialog. The
+     * frontend's Hint button calls this (see renderPuzzleHintButton() in
+     * game.js) the moment it's clicked, before showing the dialog text --
+     * a no-op for anything but an in-progress puzzle-format game, and
+     * idempotent (a second click just re-sets the same flag). Checked
+     * later by checkPuzzleGoal() via games.puzzle_hint_viewed, passed
+     * straight through to AchievementService::onPuzzleSolved().
+     */
+    public function markPuzzleHintViewed(int $gameId, int $gamePlayerId): void
+    {
+        $game = $this->fetchGame($gameId);
+        if ($game['format'] !== 'puzzle' || $game['status'] !== 'in_progress') {
+            return;
+        }
+
+        Connection::get()->prepare('UPDATE games SET puzzle_hint_viewed = 1 WHERE id = :id')
+            ->execute(['id' => $gameId]);
     }
 
     private function userIdForGamePlayer(int $gamePlayerId): int
