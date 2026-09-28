@@ -13075,7 +13075,10 @@ than a parallel bespoke system:
   play alongside Wonder. Goal retuned from 12 to 8 to match: choosing
   white now totals Indifference(4) + Wonder(0 + 2*2 = 4) = 8 exactly,
   while the minority choice (blue) still falls short at
-  Indifference(4) + Wonder(0 + 2*1 = 2) = 6.
+  Indifference(4) + Wonder(0 + 2*1 = 2) = 6. Its own inline explanation of
+  which cards Wonder counts was later moved behind a Hint ("Which cards
+  does Wonder count?"), matching the pattern already established for One
+  Fell Swoop and Vain Effort.
 
 ### Duel: separate per-player decks
 

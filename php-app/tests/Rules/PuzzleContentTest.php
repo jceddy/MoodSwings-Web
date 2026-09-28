@@ -255,6 +255,15 @@ final class PuzzleContentTest extends TestCase
         self::assertSame('Vanity is worth a lot more once your hand is completely empty.', $state['game']['puzzle_hint']);
     }
 
+    public function testWondersChoiceExposesItsHintViaGetState(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('wonders-choice');
+
+        $state = $this->games->getState($gameId, $this->userIdForGamePlayer($p));
+
+        self::assertSame('Which cards does Wonder count?', $state['game']['puzzle_hint']);
+    }
+
     /**
      * Bug caught live via a manual smoke test through the real HTTP
      * route (which -- unlike every other test here -- calls
