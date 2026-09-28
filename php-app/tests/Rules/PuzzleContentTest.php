@@ -485,27 +485,62 @@ final class PuzzleContentTest extends TestCase
         $this->assertGameNotSolved($gameId);
     }
 
-    public function testVainEffortSolvedByPlayingVanityLast(): void
+    /**
+     * Reported live: "For Vain Effort, let's take out Idealism and
+     * replace it with both Friendliness and Ambition. Change the goal to
+     * exactly 12 points." With only 4 cards and just 3 ways to earn an
+     * extra play, playing all 4 outright is never possible in one turn --
+     * the only way to also empty the hand (tripling Vanity's own value)
+     * is to DISCARD Friendliness via Ambition's own "discard a card, then
+     * you may play an additional mood" cost instead of ever playing it:
+     * Charity(1) + Ambition(2) + Vanity(3 moods x 3, hand now empty) =
+     * 1 + 2 + 9 = 12.
+     */
+    public function testVainEffortSolvedByDiscardingFriendlinessViaAmbition(): void
     {
         ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('vain-effort');
 
         $this->play($gameId, $p, $this->instanceId($gameId, 3, 'hand'), []); // Charity
-        $this->play($gameId, $p, $this->instanceId($gameId, 16, 'hand'), []); // Idealism
+        $friendlinessId = $this->instanceId($gameId, 13, 'hand');
+        $this->play($gameId, $p, $this->instanceId($gameId, 53, 'hand'), ['discard_card_id' => $friendlinessId]); // Ambition, discards Friendliness
         $result = $this->play($gameId, $p, $this->instanceId($gameId, 79, 'hand'), []); // Vanity, hand now empty
 
         self::assertTrue($result['game_completed']);
         $this->assertGameSolved($gameId, $p);
     }
 
-    public function testVainEffortPlayingVanityFirstDoesNotReachTenEfficiently(): void
+    /**
+     * The tempting wrong line: playing Friendliness instead of sacrificing
+     * it. Friendliness's own grant is satisfied by Ambition's even (2)
+     * printed value, so Charity -> Friendliness -> Ambition is a legal
+     * chain -- but declining Ambition's own discard (nothing worth
+     * discarding is left except Vanity itself) strands Vanity in hand,
+     * capping the total at Charity(1) + Friendliness(2) + Ambition(2) = 5,
+     * far short of 12.
+     */
+    public function testVainEffortPlayingFriendlinessInsteadOfDiscardingItFallsShort(): void
     {
         ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('vain-effort');
 
-        // Vanity first: hand isn't empty yet, so it's only worth +1/mood
-        // (itself), forcing a refresh before the other two can be played.
-        $this->play($gameId, $p, $this->instanceId($gameId, 79, 'hand'), []);
-        $this->play($gameId, $p, $this->instanceId($gameId, 3, 'hand'), []);
-        $result = $this->play($gameId, $p, $this->instanceId($gameId, 16, 'hand'), []);
+        $this->play($gameId, $p, $this->instanceId($gameId, 3, 'hand'), []); // Charity
+        $this->play($gameId, $p, $this->instanceId($gameId, 13, 'hand'), []); // Friendliness
+        $result = $this->play($gameId, $p, $this->instanceId($gameId, 53, 'hand'), []); // Ambition, no discard
+
+        self::assertFalse($result['game_completed']);
+        $this->assertGameNotSolved($gameId);
+    }
+
+    /**
+     * Vanity has no after-playing effect of its own -- playing it first
+     * (while hand isn't empty yet, worth only +1/mood) stalls the turn
+     * immediately, matching the same "vanilla card can't open the chain"
+     * lesson the other chaining puzzles already test.
+     */
+    public function testVainEffortPlayingVanityFirstStallsImmediately(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('vain-effort');
+
+        $result = $this->play($gameId, $p, $this->instanceId($gameId, 79, 'hand'), []);
 
         self::assertFalse($result['game_completed']);
         $this->assertGameNotSolved($gameId);
