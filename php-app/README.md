@@ -10651,22 +10651,40 @@ since it already holds that dependency):
   `convictionBestOpponentMoodId()`/`sortPriorityValue()` once more: the
   same `PHP_INT_MIN` deprioritization as Contempt above, unless either a
   non-teammate opponent currently has ANY mood in play for Conviction to
-  remove (`convictionBestOpponentMoodId()` -- the highest-value mood
-  among non-teammate opponents only; `ConvictionEffect`'s own field has
-  no owner or color restriction at all, so the bot's own or a teammate's
-  mood is deliberately excluded the same way Contempt's own targeting
-  already excludes them), OR playing it for its own plain printed value
-  (2, no ability at all) would be the deciding difference between the
-  bot's own group NOT currently having the highest score this round and
-  having it (`wouldBecomeHighestScore()`, reused with an
-  `$unboostedValue` of 0, the identical reuse Contempt's own policy
-  already makes of it). Unlike Contempt's own optional "you may" field,
-  though, `ConvictionEffect`'s `target_mood_id` is REQUIRED -- once the
-  bot commits to playing it at all, `convictionTargetMoodId()` must
-  still supply SOME legal target even with no qualifying opponent mood,
-  so it falls back to the LOWEST-value other mood currently in play (the
-  bot's own, or a teammate's in Open/Closed Team Play) rather than
-  leaving the field empty.
+  remove (`convictionBestOpponentMoodId()` -- the non-teammate-opponent
+  mood whose removal costs its owner the most round score, ranked by a
+  real simulated `RoundScorer::score()` before/after
+  `BoardState::moveInPlayToBottomOfDeck()` on a clone rather than raw
+  `valueOf()`; `ConvictionEffect`'s own field has no owner or color
+  restriction at all, so the bot's own or a teammate's mood is
+  deliberately excluded the same way Contempt's own targeting already
+  excludes them), OR playing it for its own plain printed value (2, no
+  ability at all) would be the deciding difference between the bot's own
+  group NOT currently having the highest score this round and having it
+  (`wouldBecomeHighestScore()`, reused with an `$unboostedValue` of 0,
+  the identical reuse Contempt's own policy already makes of it). Unlike
+  Contempt's own optional "you may" field, though, `ConvictionEffect`'s
+  `target_mood_id` is REQUIRED -- once the bot commits to playing it at
+  all, `convictionTargetMoodId()` must still supply SOME legal target
+  even with no qualifying opponent mood, so it falls back to the
+  LOWEST-value other mood currently in play (the bot's own, or a
+  teammate's in Open/Closed Team Play) rather than leaving the field
+  empty.
+
+  Reported live: a raw `valueOf()` comparison picked the wrong target
+  whenever Bliss ("while in play, triple your own moods sharing a color
+  with whatever paid its cost") was in play alongside one of the moods
+  it was boosting -- Bliss's own bonus is applied entirely inside
+  `RoundScorer::score()`, never reflected in `BoardState::valueOf()` for
+  either Bliss or the mood it's boosting, so a mediocre-value Bliss
+  never looked worth targeting next to whichever boosted mood happened
+  to have the higher raw value, even though bottoming Bliss itself
+  erases the WHOLE bonus rather than just one card's own share of it. A
+  live example cost a human opponent the round (and the match): the bot
+  bottomed their boosted Joy instead of their Bliss, leaving them with
+  enough points to still win on the "ties go to whoever played first"
+  tiebreak. The score-impact simulation above fixes this generally,
+  without special-casing Bliss by name.
 - **Hate's own "never leave it untargeted, except..." policy** (confirmed
   by the maintainer), via `hateTargetMoodId()`: unlike every OTHER
   optional `CardChoiceSchema` field (left blank by default per
@@ -10720,9 +10738,9 @@ since it already holds that dependency):
   it (and, per `RecklessnessEffect`'s own "give the mood back after
   scoring if you still have it" text, hands the bot itself that same
   extra play in the meantime). With neither in play anywhere on the
-  board, falls back to `convictionBestOpponentMoodId()`'s own highest-
-  CURRENT-value non-teammate-opponent-mood policy; `null` (leaving the
-  field unfilled, same as before this fix) only once no non-teammate
+  board, falls back to `convictionBestOpponentMoodId()`'s own
+  score-impact-ranked non-teammate-opponent-mood policy; `null` (leaving
+  the field unfilled, same as before this fix) only once no non-teammate
   opponent has any mood in play at all.
 - `chooseDecisionAnswer(BoardState $state, array $field, int
   $botGamePlayerId, string $decisionType = '', ?int $sourceCardId =

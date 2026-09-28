@@ -1,0 +1,37 @@
+-- Reported live: "bots need to target Bliss for removal when it will
+-- win a game, instead of targeting one of the other moods that Bliss is
+-- pumping." Example given: the human opponent had Eagerness, a
+-- Creativity copy of Joy, and Bliss in play; the bot had Conviction in
+-- hand as its last move of the game. The bot bottomed the opponent's
+-- Joy (the mood Bliss was boosting) instead of Bliss itself -- the
+-- opponent still won the round (and the match) on the "ties go to
+-- whoever played first" tiebreak, where bottoming Bliss instead would
+-- have flipped the round to the bot.
+--
+-- Root cause: BotPlayerService::convictionBestOpponentMoodId() ranked
+-- candidate targets by raw BoardState::valueOf(), but Bliss's own
+-- "triple your own moods sharing a color with whatever paid its cost"
+-- bonus is applied entirely inside RoundScorer::score() -- never
+-- reflected in valueOf() for either Bliss or the mood(s) it boosts. A
+-- mediocre-value Bliss card never looked worth targeting next to
+-- whichever boosted mood happened to have the higher raw value, even
+-- though bottoming Bliss itself erases the WHOLE bonus rather than just
+-- one card's own share of it.
+--
+-- Fixed generally, without special-casing Bliss by name:
+-- convictionBestOpponentMoodId() now ranks each non-teammate opponent's
+-- candidate mood by the real score IMPACT of removing it -- a clone of
+-- the board with that one mood bottomed via
+-- BoardState::moveInPlayToBottomOfDeck(), scored via a real
+-- RoundScorer::score() before and after, and compared for that mood's
+-- owner. This automatically favors Bliss (or any future card whose
+-- value is likewise realized entirely through another card's scoring)
+-- whenever removing it costs its owner more than removing whatever it's
+-- boosting. recklessnessTargetMoodId()'s own fallback reuses the same
+-- helper, so it benefits from the same fix. See
+-- php-app/tests/Bot/BotPlayerServiceTest.php for the new regression
+-- test reproducing this exact Bliss/Joy scenario.
+--
+-- No schema change, just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.56.12' WHERE id = 1;
