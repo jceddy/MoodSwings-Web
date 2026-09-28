@@ -13036,6 +13036,22 @@ than a parallel bespoke system:
   Deliberately a different trap mechanism (mood count, not the discard-
   pile/Vulnerability reaction "One Fell Swoop" already uses) even though
   Self-Loathing's own cost also happens to discard a card.
+- **"Color Chain" tightened by swapping out its own third card**:
+  Duplicity's own unconditional "you may play an additional mood this
+  turn" used to make the puzzle's last two cards interchangeable once
+  Benevolence's own "doesn't share a color with any of your moods" rule
+  was satisfied -- any differently-colored second card worked, since
+  Duplicity's own grant covered the third play regardless of order.
+  Indifference (no ability at all) in that slot instead makes exactly one
+  of the six possible orders clear the hand: Idealism's own unconditional
+  grant has to come FIRST (nothing else grants a third play), Benevolence
+  second (satisfied since Indifference, not yet played, is the only thing
+  left that could still violate its color rule), and Indifference last,
+  since it has nothing of its own to spend a grant on. Playing Benevolence
+  first still illegally strands Idealism if Indifference follows it
+  directly (the original "different color" lesson survives), but now also
+  genuinely stalls one play short of clearing the hand even when the
+  color rule itself is respected, unlike before.
 
 ### Duel: separate per-player decks
 

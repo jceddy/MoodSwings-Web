@@ -432,13 +432,26 @@ final class PuzzleContentTest extends TestCase
         $this->assertGameNotSolved($gameId);
     }
 
-    public function testColorChainSolvedByFollowingBenevolenceWithADifferentColor(): void
+    /**
+     * Reported live: "For Color Chain, we need to swap Duplicity out for
+     * a card that doesn't itself give an extra play, maybe Indifference".
+     * Duplicity's own unconditional extra play used to make the last two
+     * cards interchangeable once Benevolence's own color rule was
+     * satisfied. With Indifference (no ability at all) in that slot,
+     * exactly one of the six possible orders clears the hand: Idealism's
+     * own unconditional grant has to come FIRST to cover the third play
+     * at all, Benevolence second (its own conditional grant satisfied --
+     * Indifference, not yet played, is the only thing left that could
+     * still violate its "doesn't share a color" rule), and Indifference
+     * last, since it has no grant of its own to spend on anything.
+     */
+    public function testColorChainSolvedByPlayingIdealismBeforeBenevolence(): void
     {
         ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('color-chain');
 
+        $this->play($gameId, $p, $this->instanceId($gameId, 16, 'hand'), []); // Idealism (white) -- its own unconditional grant covers the third play
         $this->play($gameId, $p, $this->instanceId($gameId, 2, 'hand'), []); // Benevolence (white)
-        $this->play($gameId, $p, $this->instanceId($gameId, 37, 'hand'), []); // Duplicity (blue) -- satisfies the grant
-        $result = $this->play($gameId, $p, $this->instanceId($gameId, 16, 'hand'), []); // Idealism (white)
+        $result = $this->play($gameId, $p, $this->instanceId($gameId, 44, 'hand'), []); // Indifference (blue) -- satisfies Benevolence's own grant
 
         self::assertTrue($result['game_completed']);
         $this->assertGameSolved($gameId, $p);
@@ -452,6 +465,24 @@ final class PuzzleContentTest extends TestCase
 
         $this->expectException(IllegalPlayException::class);
         $this->play($gameId, $p, $this->instanceId($gameId, 16, 'hand'), []); // Idealism (white) -- shares Benevolence's own color
+    }
+
+    /**
+     * A second, more subtle wrong line the color rule alone doesn't
+     * catch: Benevolence -> Indifference is perfectly legal (blue doesn't
+     * share Benevolence's white), but Indifference has no grant of its
+     * own to spend, so that's the last play available this turn --
+     * Idealism, never played, leaves the hand non-empty.
+     */
+    public function testColorChainBenevolenceThenIndifferenceStallsWithIdealismStranded(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('color-chain');
+
+        $this->play($gameId, $p, $this->instanceId($gameId, 2, 'hand'), []); // Benevolence (white)
+        $result = $this->play($gameId, $p, $this->instanceId($gameId, 44, 'hand'), []); // Indifference (blue) -- legal, but grants nothing further
+
+        self::assertFalse($result['game_completed']);
+        $this->assertGameNotSolved($gameId);
     }
 
     public function testVainEffortSolvedByPlayingVanityLast(): void
