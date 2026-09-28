@@ -13075,7 +13075,18 @@ than a parallel bespoke system:
   play alongside Wonder. Goal retuned from 12 to 8 to match: choosing
   white now totals Indifference(4) + Wonder(0 + 2*2 = 4) = 8 exactly,
   while the minority choice (blue) still falls short at
-  Indifference(4) + Wonder(0 + 2*1 = 2) = 6.
+  Indifference(4) + Wonder(0 + 2*1 = 2) = 6. Its own inline explanation of
+  which cards Wonder counts was later moved behind a Hint ("Which cards
+  does Wonder count?"), matching the pattern already established for One
+  Fell Swoop and Vain Effort.
+- **"Envious Timing" moved its own inline cost explanation behind a
+  Hint**: the description used to spell out Envy's own "discard one of
+  your own moods already in play" cost directly; that explanation now
+  lives behind the Hint button instead ("Envy can only be played by
+  moving one of your OWN moods already in play to the discard pile --
+  with an empty board, it can't be played at all yet."), matching the
+  pattern already established for One Fell Swoop, Vain Effort, and
+  Wonder's Choice.
 
 ### Duel: separate per-player decks
 

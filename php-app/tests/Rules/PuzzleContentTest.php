@@ -255,6 +255,15 @@ final class PuzzleContentTest extends TestCase
         self::assertSame('Vanity is worth a lot more once your hand is completely empty.', $state['game']['puzzle_hint']);
     }
 
+    public function testWondersChoiceExposesItsHintViaGetState(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('wonders-choice');
+
+        $state = $this->games->getState($gameId, $this->userIdForGamePlayer($p));
+
+        self::assertSame('Which cards does Wonder count?', $state['game']['puzzle_hint']);
+    }
+
     /**
      * Bug caught live via a manual smoke test through the real HTTP
      * route (which -- unlike every other test here -- calls
@@ -598,6 +607,18 @@ final class PuzzleContentTest extends TestCase
 
         $this->expectException(IllegalPlayException::class);
         $this->play($gameId, $p, $this->instanceId($gameId, 64, 'hand'), []); // Envy with an empty board -- no mood to pay its cost with
+    }
+
+    public function testEnviousTimingExposesItsHintViaGetState(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('envious-timing');
+
+        $state = $this->games->getState($gameId, $this->userIdForGamePlayer($p));
+
+        self::assertSame(
+            "Envy can only be played by moving one of your OWN moods already in play to the discard pile -- with an empty board, it can't be played at all yet.",
+            $state['game']['puzzle_hint']
+        );
     }
 
     public function testValidationLoopSolvedByChainingThroughTheLowValueCards(): void
