@@ -3647,6 +3647,18 @@ final class GameService
      * same pattern Rematch already uses -- rather than resetting one in
      * place, so an old abandoned/solved attempt just sits there like any
      * other finished game.
+     *
+     * `puzzles.starting_discard_card_ids` (issue #524 follow-up, reported
+     * live: "There is a Joy in the discard pile") seeds the shared
+     * discard pile itself, owned by the solver -- for a puzzle whose
+     * intended solution depends on a reactive card like Vulnerability
+     * ("...if a card was put into the discard pile this round") already
+     * being satisfied, or simply flavors a card as already played earlier
+     * this round. `puzzles.extra_play_source_card_id`, alongside it,
+     * covers a puzzle that also opens with an extra play already banked
+     * (e.g. "you have... one extra play from Joy") -- see the grant-
+     * building block below for why this can't just reuse
+     * computeFreshGrants()'s own live bankExtraPlay() path.
      */
     public function createPuzzleAttempt(int $userId, int $puzzleId): int
     {
@@ -3664,9 +3676,11 @@ final class GameService
         $handCardIds = json_decode((string) $puzzle['starting_hand_card_ids'], true);
         $inPlayCardIds = json_decode((string) $puzzle['starting_in_play_card_ids'], true);
         $deckCardIds = json_decode((string) $puzzle['deck_card_ids'], true);
+        $discardCardIds = json_decode((string) $puzzle['starting_discard_card_ids'], true);
         $opponentHandCardIds = json_decode((string) $puzzle['opponent_hand_card_ids'], true);
         $opponentInPlayCardIds = json_decode((string) $puzzle['opponent_in_play_card_ids'], true);
         $hasOpponent = $opponentHandCardIds !== [] || $opponentInPlayCardIds !== [];
+        $extraPlaySourceCatalogCardId = $puzzle['extra_play_source_card_id'] !== null ? (int) $puzzle['extra_play_source_card_id'] : null;
 
         $pdo = Connection::get();
         $pdo->beginTransaction();
@@ -3710,16 +3724,45 @@ final class GameService
             foreach ($opponentInPlayCardIds as $catalogCardId) {
                 $insertCard->execute(['game_id' => $gameId, 'card_id' => $catalogCardId, 'zone' => 'in_play', 'owner' => $opponentGamePlayerId, 'deck_position' => null]);
             }
+            foreach ($discardCardIds as $catalogCardId) {
+                $insertCard->execute(['game_id' => $gameId, 'card_id' => $catalogCardId, 'zone' => 'discard', 'owner' => $gamePlayerId, 'deck_position' => null]);
+            }
+
+            // A puzzle whose intended solution needs an extra play already
+            // in hand at turn start (e.g. "you have one extra play from
+            // Joy", reported live) can't just rely on computeFreshGrants()
+            // -- that only fires from a live bankExtraPlay() call earlier
+            // in the SAME game, which a puzzle attempt never has (it opens
+            // straight into round 1, turn 1). puzzles.extra_play_source_card_id
+            // instead names the catalog card whose own already-dealt
+            // instance (wherever it landed -- $discardCardIds above, in
+            // this puzzle's case) backs a second grant here, in exactly
+            // the shape computeFreshGrants() itself builds for a real
+            // banked Joy/Generosity play (['sourceCardId' => ...], no
+            // 'requiresSourceInPlay' -- the source needn't still be in
+            // play for the grant to remain usable, matching Joy's own
+            // real behavior once its own play is already banked).
+            $extraPlayGrant = null;
+            if ($extraPlaySourceCatalogCardId !== null) {
+                $sourceInstanceStmt = $pdo->prepare('SELECT id FROM game_cards WHERE game_id = :game_id AND card_id = :card_id LIMIT 1');
+                $sourceInstanceStmt->execute(['game_id' => $gameId, 'card_id' => $extraPlaySourceCatalogCardId]);
+                $sourceInstanceId = $sourceInstanceStmt->fetchColumn();
+                if ($sourceInstanceId !== false) {
+                    $extraPlayGrant = ['sourceCardId' => (int) $sourceInstanceId];
+                }
+            }
+            $playGrants = $extraPlayGrant !== null ? [null, $extraPlayGrant] : [null];
 
             $insertRound = $pdo->prepare(
                 "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, pending_play_grants, status)
-                 VALUES (:game_id, 1, :first_player, :current_player, 1, :pending_play_grants, 'in_progress')"
+                 VALUES (:game_id, 1, :first_player, :current_player, :plays_remaining, :pending_play_grants, 'in_progress')"
             );
             $insertRound->execute([
                 'game_id' => $gameId,
                 'first_player' => $opponentGamePlayerId ?? $gamePlayerId,
                 'current_player' => $gamePlayerId,
-                'pending_play_grants' => json_encode([null]),
+                'plays_remaining' => count($playGrants),
+                'pending_play_grants' => json_encode($playGrants),
             ]);
 
             $pdo->commit();

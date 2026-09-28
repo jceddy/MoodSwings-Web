@@ -276,19 +276,66 @@ final class PuzzleContentTest extends TestCase
         $this->assertGameSolved($gameId, $p);
     }
 
+    /**
+     * Reported live: "There is a Joy in the discard pile. You have
+     * Conviction in your hand, and one extra play from Joy... Win the
+     * game in one turn." Conviction's own "choose a mood, its player
+     * bottoms it and draws a card" is a legal target on ANY mood in play
+     * -- targeting Conviction itself (rather than one of the opponent's
+     * own Benevolence/Shock, see the two tests below) is what makes the
+     * solver themselves the one who draws. That draw is Chivalry, seeded
+     * on top of the deck -- worth 5 while in play since the solver didn't
+     * go first this round. Playing it with the extra play already banked
+     * from Joy puts the solver at exactly 5, outscoring the opponent's
+     * Benevolence(2) + Shock(2) = 4.
+     */
     public function testTurnItOnYourselfSolvedByTargetingConvictionItself(): void
     {
         ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('turn-it-on-yourself');
 
         $convictionId = $this->instanceId($gameId, 6, 'hand');
-        $result = $this->play($gameId, $p, $convictionId, ['target_mood_id' => $convictionId]);
+        $firstResult = $this->play($gameId, $p, $convictionId, ['target_mood_id' => $convictionId]);
+        self::assertFalse($firstResult['game_completed']);
+
+        $chivalryId = $this->instanceId($gameId, 4, 'hand');
+        $result = $this->play($gameId, $p, $chivalryId, []);
 
         self::assertTrue($result['game_completed']);
         $this->assertGameSolved($gameId, $p);
+    }
 
-        $stmt = $this->pdo->prepare("SELECT 1 FROM game_cards WHERE game_id = :game_id AND card_id = 16 AND zone = 'hand'");
-        $stmt->execute(['game_id' => $gameId]);
-        self::assertNotFalse($stmt->fetchColumn(), 'Idealism should have been drawn into hand');
+    /**
+     * The tempting wrong line: Conviction's own text never says "one of
+     * YOUR moods" -- targeting the opponent's own Benevolence is just as
+     * legal. But its OWNER draws the replacement card, not the acting
+     * player, so the solver's own hand stays empty and their extra play
+     * from Joy goes unused. Final board: solver's own Conviction(2) vs
+     * the opponent's remaining Shock(2) -- a tie, which goes to the
+     * opponent (they went first this round), not a solver win.
+     */
+    public function testTurnItOnYourselfTargetingBenevolenceInsteadEndsInATieTheOpponentWins(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('turn-it-on-yourself');
+
+        $convictionId = $this->instanceId($gameId, 6, 'hand');
+        $benevolenceId = $this->instanceId($gameId, 2, 'in_play');
+        $result = $this->play($gameId, $p, $convictionId, ['target_mood_id' => $benevolenceId]);
+
+        self::assertFalse($result['game_completed']);
+        $this->assertGameNotSolved($gameId);
+    }
+
+    /** Same trap as above, targeting Shock instead -- leaves the opponent's Benevolence(2) tied against the solver's own Conviction(2). */
+    public function testTurnItOnYourselfTargetingShockInsteadEndsInATieTheOpponentWins(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('turn-it-on-yourself');
+
+        $convictionId = $this->instanceId($gameId, 6, 'hand');
+        $shockId = $this->instanceId($gameId, 101, 'in_play');
+        $result = $this->play($gameId, $p, $convictionId, ['target_mood_id' => $shockId]);
+
+        self::assertFalse($result['game_completed']);
+        $this->assertGameNotSolved($gameId);
     }
 
     public function testChainReactionSolvedByPlayingVanillaLast(): void
