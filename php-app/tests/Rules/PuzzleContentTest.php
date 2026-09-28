@@ -609,6 +609,18 @@ final class PuzzleContentTest extends TestCase
         $this->play($gameId, $p, $this->instanceId($gameId, 64, 'hand'), []); // Envy with an empty board -- no mood to pay its cost with
     }
 
+    public function testEnviousTimingExposesItsHintViaGetState(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('envious-timing');
+
+        $state = $this->games->getState($gameId, $this->userIdForGamePlayer($p));
+
+        self::assertSame(
+            "Envy can only be played by moving one of your OWN moods already in play to the discard pile -- with an empty board, it can't be played at all yet.",
+            $state['game']['puzzle_hint']
+        );
+    }
+
     public function testValidationLoopSolvedByChainingThroughTheLowValueCards(): void
     {
         ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('validation-loop');
