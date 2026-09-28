@@ -17755,6 +17755,18 @@ final class GameService
             }
         }
 
+        // Puzzle hint (reported live: "Add a 'hint' button when in the
+        // puzzle") -- a puzzle's own optional hint text, shown by the
+        // frontend behind a "Hint" button rather than always visible, so
+        // it doesn't spoil the puzzle for anyone who doesn't need it. Null
+        // for every non-puzzle game, and for a puzzle with no hint set.
+        $puzzleHint = null;
+        if ($game['format'] === 'puzzle' && $game['puzzle_id'] !== null) {
+            $puzzleHintStmt = $pdo->prepare('SELECT hint FROM puzzles WHERE id = :id');
+            $puzzleHintStmt->execute(['id' => (int) $game['puzzle_id']]);
+            $puzzleHint = $puzzleHintStmt->fetchColumn() ?: null;
+        }
+
         $response = [
             'game' => [
                 'id' => $gameId,
@@ -17897,6 +17909,9 @@ final class GameService
                 // completed-game rendering). Null otherwise; cheap to
                 // compute even then since it's gated on format first.
                 'puzzle_plays_made' => $game['format'] === 'puzzle' ? $this->countMoodsPlayed($gameId) : null,
+                // The puzzle's own optional hint text -- see $puzzleHint's
+                // own comment above.
+                'puzzle_hint' => $puzzleHint,
             ],
             'players' => $players,
             'round' => null,
