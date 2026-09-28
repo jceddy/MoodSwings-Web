@@ -13134,6 +13134,13 @@ than a parallel bespoke system:
   (Laziness), leaving Charity with no further grant to use it. Its own
   inline explanation of Eagerness's color restriction was moved behind a
   Hint, matching the pattern already established elsewhere in this arc.
+- **"The Lesser Sacrifice" moved its own Conviction targeting
+  explanation behind a Hint**: the description used to spell out that
+  Conviction must send SOME mood to the bottom of the deck, including
+  itself, directly; that explanation now lives behind the Hint button
+  instead ("Conviction has to send SOME mood to the bottom of the deck
+  when you play it, including itself -- choose wisely."), matching the
+  pattern already established elsewhere in this arc.
 
 ### Duel: separate per-player decks
 

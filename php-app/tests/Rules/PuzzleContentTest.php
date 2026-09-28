@@ -743,4 +743,16 @@ final class PuzzleContentTest extends TestCase
         self::assertFalse($result['game_completed']);
         $this->assertGameNotSolved($gameId);
     }
+
+    public function testTheLesserSacrificeExposesItsHintViaGetState(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('the-lesser-sacrifice');
+
+        $state = $this->games->getState($gameId, $this->userIdForGamePlayer($p));
+
+        self::assertSame(
+            'Conviction has to send SOME mood to the bottom of the deck when you play it, including itself -- choose wisely.',
+            $state['game']['puzzle_hint']
+        );
+    }
 }
