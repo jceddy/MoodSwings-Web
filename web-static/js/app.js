@@ -996,6 +996,18 @@ function saveGameNote(gameId, noteText) {
     });
 }
 
+// Reported live: the "Puzzle Solver" achievement only unlocks on a solve
+// where the Hint dialog was never opened -- see
+// GameService::markPuzzleHintViewed()'s own docblock. Fire-and-forget
+// from renderPuzzleHintButton() in game.js; the dialog itself doesn't
+// wait on this.
+function markPuzzleHintViewed(gameId) {
+    return apiRequest('/games/puzzle-hint-viewed', {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId }),
+    });
+}
+
 // In-game chat (issue #109) -- unlike the notepad above, there's no
 // getGameChat(): chat messages arrive piggybacked on the existing
 // getGameState() poll's own 'chat_messages' field rather than a

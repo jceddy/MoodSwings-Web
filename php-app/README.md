@@ -12892,8 +12892,10 @@ engine-verified puzzles spanning easy/medium/hard (see
 `php-app/tests/Rules/PuzzleContentTest.php`, which builds each one from
 its own stored definition and drives the intended solution -- and, where
 there's a tempting wrong line, asserts that line does NOT solve it --
-through the real engine) and a new achievement, "Puzzle Solver" (category
-J, unlocked on a player's first solve).
+through the real engine) and two achievements in a new category, J
+("Puzzles"): "Puzzle Solver" (unlocked the first time a solve doesn't
+use the puzzle's own Hint) and "Puzzle Enthusiast" (solve 10 distinct
+puzzles).
 
 A puzzle attempt is a real, minimal `games` row (`format = 'puzzle'`,
 exactly one seat), reusing the entire existing rules engine, persistence
@@ -13141,6 +13143,31 @@ than a parallel bespoke system:
   instead ("Conviction has to send SOME mood to the bottom of the deck
   when you play it, including itself -- choose wisely."), matching the
   pattern already established elsewhere in this arc.
+- **Listed Easy, Medium, Hard** (reported live): `listActivePuzzles()`'s
+  own `ORDER BY` now reads `p.difficulty, p.id` instead of just `p.id`.
+  No schema change needed -- `puzzles.difficulty` is declared
+  `ENUM('easy', 'medium', 'hard')` (migration 0394), and MySQL already
+  sorts an ENUM by its declaration index rather than alphabetically, so
+  a plain `ORDER BY` on it is already Easy < Medium < Hard; `p.id` stays
+  as the tiebreaker for a stable order within each tier.
+- **"Puzzle Solver" now requires solving without a hint, and a new
+  "Puzzle Enthusiast" achievement** (reported live): `games` gets a new
+  `puzzle_hint_viewed` column, set by the new
+  `POST /games/puzzle-hint-viewed` endpoint (`GameService::
+  markPuzzleHintViewed()`) that the frontend's Hint button now calls the
+  moment it's clicked, before showing the hint text -- fire-and-forget,
+  since the dialog itself doesn't depend on it succeeding.
+  `checkPuzzleGoal()` reads that flag on a solve and passes it straight
+  through to `AchievementService::onPuzzleSolved()`, which now only
+  calls `unlock()` for 'puzzle-solver' when it's false; `unlock()`'s own
+  idempotency means a player whose first several solves all used a hint
+  simply keeps missing it until a later solve (of any puzzle) finally
+  qualifies, rather than permanently losing their shot at it. The new
+  "Puzzle Enthusiast" achievement (target 10, tier Silver) counts
+  DISTINCT puzzles solved via `bumpProgress()`, gated on a fresh
+  `SELECT` against `puzzle_solves` taken before that solve's own upsert
+  so a repeat solve of an already-solved puzzle (even for a new personal
+  best) never bumps it again.
 
 ### Duel: separate per-player decks
 
@@ -13631,9 +13658,10 @@ database with real data.
 
 ## Achievements
 
-A 109-entry catalog (108 from the original design doc, plus Puzzle Solver
--- design doc: "MoodSwings-Web Achievements -- Draft
-List"), covering every achievement whose condition is knowable at
+A 110-entry catalog (108 from the original design doc, plus Puzzle
+Solver and Puzzle Enthusiast -- design doc: "MoodSwings-Web
+Achievements -- Draft List"), covering every achievement whose
+condition is knowable at
 game-completion or tournament-completion time, the four meta rows, and
 every account/social trigger with a real call site. `achievements`
 (migration 0357) is static reference data --
@@ -13692,9 +13720,15 @@ Sharing is Caring, the last on `visibility === 'friends'`),
 `GameService::createGame()` (Bot Wrangler, 2+ bot seats) and
 `GET /games/spectate/state`/`POST /games/replay/import`/
 `GET /stats/cards` in `public/index.php` (Spectator Sport/Replay
-Enthusiast/Card Counter). Puzzle Solver (category J, "Puzzles" above) is
-its own one-row category, unlocked via `onPuzzleSolved()` from
-`GameService`'s puzzle goal-check hook.
+Enthusiast/Card Counter). Puzzle Solver and Puzzle Enthusiast (category
+J, "Puzzles" above) are unlocked via `onPuzzleSolved()` from
+`GameService`'s puzzle goal-check hook: Puzzle Solver only when the
+solve's own `games.puzzle_hint_viewed` flag is false (reported live --
+see the Puzzles section for the full "no hint" gate and
+`markPuzzleHintViewed()`), Puzzle Enthusiast a `bumpProgress()` counter
+(target 10) of DISTINCT puzzles solved, gated on a fresh
+`puzzle_solves` check taken before that solve's own upsert so a repeat
+solve of an already-solved puzzle never bumps it again.
 
 Night Owl/Early Bird/Marathon Session ("...your local time"/"a single
 calendar day") need each player's own timezone, which the server has no

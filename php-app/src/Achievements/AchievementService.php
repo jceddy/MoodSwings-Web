@@ -1102,10 +1102,33 @@ final class AchievementService
     // Puzzles (category J)
     // ---------------------------------------------------------------
 
-    /** Called from GameService's puzzle goal-check hook the first time a solve is recorded for $userId (any puzzle). */
-    public function onPuzzleSolved(int $userId): void
+    /**
+     * Called from GameService's puzzle goal-check hook after every
+     * successful puzzle solve for $userId.
+     *
+     * Reported live: "Puzzle Solver" now requires solving a puzzle
+     * without ever opening its Hint dialog during that attempt --
+     * $hintViewed reflects games.puzzle_hint_viewed for the game that
+     * was just solved. unlock() is idempotent (a no-op once already
+     * unlocked), so a player whose first several solves all used a hint
+     * simply keeps missing it until a later solve -- of any puzzle --
+     * finally qualifies.
+     *
+     * $isNewPuzzleSolve is true only the first time THIS SPECIFIC puzzle
+     * is solved by $userId (see checkPuzzleGoal()'s own pre-upsert check
+     * against puzzle_solves) -- "Puzzle Enthusiast" ('Solve 10 puzzles')
+     * counts distinct puzzles, so replaying an already-solved puzzle
+     * (even for a new personal best) must never bump its progress again.
+     */
+    public function onPuzzleSolved(int $userId, bool $isNewPuzzleSolve, bool $hintViewed): void
     {
-        $this->unlock($userId, 'puzzle-solver');
+        if (!$hintViewed) {
+            $this->unlock($userId, 'puzzle-solver');
+        }
+
+        if ($isNewPuzzleSolve) {
+            $this->bumpProgress($userId, 'puzzle-enthusiast');
+        }
     }
 
     // ---------------------------------------------------------------
