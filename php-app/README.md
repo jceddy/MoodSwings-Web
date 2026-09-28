@@ -12990,6 +12990,32 @@ than a parallel bespoke system:
   a player who hasn't asked for help. "One Fell Swoop" is the debut hint,
   warning about Ambition's own discard trap without giving the solution
   away outright.
+- **Discard-pile seeding and pre-banked extra plays**: `puzzles.starting_discard_card_ids`
+  seeds the shared discard pile itself at attempt creation (owned by the
+  solver), same "`'[]'` means unused" convention as
+  `opponent_hand_card_ids`/`opponent_in_play_card_ids`. `puzzles.extra_play_source_card_id`
+  covers a puzzle whose solution needs an extra play already banked at
+  turn start (e.g. "you have... one extra play from Joy") rather than
+  earned live during the attempt -- `createPuzzleAttempt()` resolves that
+  catalog card to wherever its own instance actually landed and adds a
+  second play grant sourced from it, in exactly the shape a real banked
+  Joy/Generosity play already takes (no `computeFreshGrants()` call
+  needed, since a puzzle attempt never had a live turn before this one for
+  that to have fired from). "Turn It On Yourself" is the debut puzzle
+  built on both: Joy sits in the discard pile, Conviction is the solver's
+  only card in hand, and Conviction's own "choose a mood, its player
+  bottoms it and draws a card" is legal against ANY mood in play --
+  targeting the opponent's own Benevolence or Shock is tempting (it's
+  legal) but bounces the draw to THEM, not the solver, leaving the
+  solver's own Conviction tied against whichever opponent mood is left (a
+  tie the opponent wins, having gone first) instead of targeting
+  Conviction itself to draw the deck's own top card (a seeded Chivalry,
+  worth 5 while in play since the solver didn't go first) and outscore
+  the opponent's Benevolence(2) + Shock(2) = 4 with the banked extra play.
+  The puzzle's own full 45-card decklist is a real structure-deck rarity
+  mix (`GameService::STRUCTURE_DECK_RARITY_COUNTS`) so a player checking
+  the deck list can see Chivalry is genuinely one of the 45 cards in the
+  game, without knowing it's specifically the very next draw.
 
 ### Duel: separate per-player decks
 
