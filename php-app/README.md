@@ -12909,8 +12909,9 @@ than a parallel bespoke system:
   call `checkPuzzleGoal()` right after a play resolves, evaluating the
   puzzle's own `goal_type`/`goal_params` against the live `BoardState`:
   `hand_empty`, `card_in_hand`/`card_in_play` (a specific catalog card in
-  that zone), or `min_score` (the solver's own total in-play value at
-  least a target). Checked *before* `finishPlay()`'s own turn-advance
+  that zone), `min_score` (the solver's own total in-play value at
+  least a target), or `outscore_opponent` (see below). Checked *before*
+  `finishPlay()`'s own turn-advance
   logic runs, not after -- otherwise a puzzle with a `max_plays` cap
   couldn't tell a clean single-turn solve apart from one that only
   finished after a `puzzle_turn_refreshed` reset, since that reset would
@@ -12950,7 +12951,36 @@ than a parallel bespoke system:
   over -- X won" one (`games.puzzle_plays_made`, exposed only for
   `format = 'puzzle'`).
 - Deliberately out of scope for this debut: a "give up / show solution"
-  reveal, and multi-seat/opponent-board puzzles -- solitaire only for now.
+  reveal.
+- **Opponent puzzles**: a puzzle can optionally seat a second, fixed,
+  never-acting board alongside the solver
+  (`puzzles.opponent_hand_card_ids`/`opponent_in_play_card_ids`, both
+  `'[]'` for every solitaire puzzle). `createPuzzleAttempt()` deals these
+  into a second `game_players` seat -- always the fixed `PuzzleOpponent`
+  user (`is_bot = 1`, same fixed-real-`users`-row convention
+  `0090_add_practice_bots.sql` established for practice bots, looked up or
+  self-healingly created by `GameService::puzzleOpponentUserId()` so a
+  test suite that truncates `users` between runs never depends on
+  migration seed order) -- with `first_game_player_id` pointed at the
+  opponent and `current_turn_game_player_id` still the solver, so "who
+  went first" reads correctly for any card that cares. The opponent's own
+  seat is never given a real or automated turn -- `advancePuzzleTurn()`
+  only ever refreshes `current_turn_game_player_id`, which is set to the
+  solver once and never changed, so the real
+  `scoreRoundAndAdvance()`/`recordGameCompletionStats()` pipeline (which
+  would pollute real win/loss stats and achievements) is never reached;
+  the opponent's cards are simply pre-set board state. New `goal_type`
+  `outscore_opponent` (`GameService::puzzleSolverOutscoresOpponent()`)
+  reuses the real `RoundScorer::score()`/`winner()` math directly -- not a
+  puzzle-specific approximation, so a reactive card like Vulnerability
+  ("value is 7 if a card was put into the discard pile this round")
+  responds to the actual board the solver's plays produced -- with the
+  opponent's seat first in `winner()`'s own turn-order argument, so a tied
+  score goes to the opponent, matching the Extended Rules' "ties go to
+  whoever played first" tiebreak. Debut puzzle: "One Fell Swoop" was
+  redesigned around this (Ambition's own discard-gated extra play is a
+  trap -- taking it feeds the opponent's own Vulnerability instead of the
+  solver's score).
 
 ### Duel: separate per-player decks
 
