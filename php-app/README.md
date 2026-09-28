@@ -13063,7 +13063,8 @@ than a parallel bespoke system:
   empty) = 12 exactly (the goal's own new target). Playing Friendliness
   instead of sacrificing it is legal (its own value satisfies Ambition's
   even-value restriction) but caps the total at just 5, with nothing left
-  to grant Vanity's own play.
+  to grant Vanity's own play. Its own inline description spoiler about
+  Vanity's dynamic value was later moved behind a Hint instead.
 
 ### Duel: separate per-player decks
 
