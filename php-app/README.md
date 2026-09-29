@@ -13259,23 +13259,27 @@ than a parallel bespoke system:
   built around a subtlety that's already caused a real bug once (the
   Conviction/Bliss bot-targeting fix above) -- a Creativity copy's color,
   for anything that cares about color, is whatever it's COPYING, not
-  Creativity's own printed blue. Play Joy, then Bliss (discarding
-  Eagerness, green, so Bliss's own bonus color locks to green) -- alone
-  that only reaches 15, still short of the opponent's fixed 16, so
-  Creativity isn't optional flavor. Playing Creativity as a copy of the
-  already-in-play Joy adds a THIRD green mood (Creativity-as-Joy is
-  green, not blue), and Bliss's bonus applies to all three for a final
-  24. The tempting wrong line -- discarding Indifference (blue) instead,
-  on the theory that Creativity's own printed blue needs a blue-keyed
-  Bliss -- never scores above 8, since nothing is ever actually blue in
-  play once Creativity becomes a copy. The opponent's own board
+  Creativity's own printed blue. Joy starts already in play with its own
+  extra play pre-banked (the same "you already played Joy earlier"
+  device "Turn It On Yourself" uses, via `extra_play_source_card_id`),
+  so the whole two-play solution resolves within a single turn -- no
+  mid-attempt refresh, unlike the original version shipped in migration
+  0412, whose three-play solution genuinely spanned several silent
+  mini-turns and was redesigned live after playtesting flagged the
+  confusion. Play Bliss (discarding Eagerness, green, so Bliss's own
+  bonus color locks to green) -- alone that only reaches 15, still short
+  of the opponent's fixed 16, so Creativity isn't optional flavor.
+  Playing Creativity as a copy of the already-in-play Joy adds a THIRD
+  green mood (Creativity-as-Joy is green, not blue), and Bliss's bonus
+  applies to all three for a final 24. The tempting wrong line --
+  discarding Indifference (blue) instead, on the theory that Creativity's
+  own printed blue needs a blue-keyed Bliss -- never scores above 8,
+  since nothing is ever actually blue in play once Creativity becomes a
+  copy, and both real plays (and the puzzle's own `max_plays` of 2) are
+  already spent by then. The opponent's own board
   (Complacency/Apathy/Boredom/Laziness) is deliberately four
   ability-less catalog rows, so its total stays a fixed 16 no matter what
-  the solver's board looks like. No card here grants an immediate extra
-  play, so the intended solution genuinely spans several separate
-  mini-turns -- `max_plays` is left unset, per this section's own "a
-  puzzle whose intended solution needs a mid-attempt turn refresh simply
-  leaves `max_plays` unset" convention above.
+  the solver's board looks like.
 
 ### Duel: separate per-player decks
 

@@ -819,18 +819,21 @@ final class PuzzleContentTest extends TestCase
     }
 
     /**
-     * "Perfect Disguise" (issue #524 follow-up): Joy(125)/Bliss(108) alone
-     * only reach 15 -- Creativity(32) copying the already-in-play Joy adds
-     * a THIRD green mood, and Bliss's own bonus (keyed green via the
-     * Eagerness(114) discard) applies to all three, for 24, clearing the
-     * opponent's fixed 16. See migration 0412's own docblock for the full
-     * arithmetic.
+     * "Perfect Disguise" (issue #524 follow-up, redesigned live after
+     * playtesting: the original three-play version needed a mid-attempt
+     * turn refresh the UI gave no visible cue for). Joy(125) now starts
+     * already in play with its own extra play pre-banked, so the whole
+     * solution is exactly two plays in the SAME turn: Bliss(108) alone
+     * (keyed green via the Eagerness(114) discard) only reaches 15 --
+     * still short of the opponent's fixed 16 -- then Creativity(32)
+     * copying the already-in-play Joy adds a THIRD green mood, and
+     * Bliss's own bonus applies to all three, for 24. See migration
+     * 0413's own docblock for the full arithmetic.
      */
     public function testPerfectDisguiseSolvedByCopyingJoyUnderAGreenKeyedBliss(): void
     {
         ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('perfect-disguise');
 
-        $this->play($gameId, $p, $this->instanceId($gameId, 125, 'hand'), []); // Joy
         $this->play($gameId, $p, $this->instanceId($gameId, 108, 'hand'), [
             'discard_card_id' => $this->instanceId($gameId, 114, 'hand'), // Eagerness (green)
         ]);
@@ -848,13 +851,13 @@ final class PuzzleContentTest extends TestCase
      * needs a blue-keyed Bliss to benefit. Nothing is ever actually blue
      * in play (Creativity becomes green the instant it copies Joy), so
      * the bonus is always 0 -- final total 8, never enough to clear the
-     * opponent's 16, no matter how many mini-turns it takes.
+     * opponent's 16, and both real plays (and the attempt's max_plays=2
+     * budget) are already spent within this same turn.
      */
     public function testPerfectDisguiseDiscardingIndifferenceToBlissInsteadOfEagernessFallsShort(): void
     {
         ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('perfect-disguise');
 
-        $this->play($gameId, $p, $this->instanceId($gameId, 125, 'hand'), []); // Joy
         $this->play($gameId, $p, $this->instanceId($gameId, 108, 'hand'), [
             'discard_card_id' => $this->instanceId($gameId, 44, 'hand'), // Indifference (blue) -- the trap
         ]);
