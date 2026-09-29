@@ -13229,6 +13229,19 @@ than a parallel bespoke system:
   instead ("Conviction has to send SOME mood to the bottom of the deck
   when you play it, including itself -- choose wisely."), matching the
   pattern already established elsewhere in this arc.
+- **"The Lesser Sacrifice" redesigned to start short of its own goal**
+  (reported live while playtesting: Boredom(4) + Apathy(4) already summed
+  to the old min_score target of 8, so the puzzle started already
+  "solved" with nothing played -- not directly exploitable, since passing
+  never checks the puzzle goal, but there was no real puzzle left to
+  solve either). Joy now joins the starting board with its own extra play
+  pre-banked (the same device Perfect Disguise uses), and the goal is 12:
+  playing Conviction alone only nets back to the 11 already on the board
+  even via the correct self-targeting "lesser sacrifice" line, so the
+  banked second play matters too -- the deck holds exactly one card,
+  Courage(1), which Conviction's own forced draw puts in hand for that
+  second play to spend. Targeting anything other than Conviction itself
+  nets a strict loss neither play can make back up.
 - **Listed Easy, Medium, Hard** (reported live): `listActivePuzzles()`'s
   own `ORDER BY` now reads `p.difficulty, p.id` instead of just `p.id`.
   No schema change needed -- `puzzles.difficulty` is declared

@@ -729,23 +729,43 @@ final class PuzzleContentTest extends TestCase
         );
     }
 
-    public function testTheLesserSacrificeSolvedByTargetingConvictionItself(): void
+    /**
+     * "The Lesser Sacrifice" (redesigned live after playtesting: the
+     * original version started already AT its own goal -- Boredom(4) +
+     * Apathy(4) = 8 with a min_score target of 8 -- so there was no real
+     * puzzle to solve). Joy(125) now starts in play with its own extra
+     * play pre-banked, and the goal is 12: Conviction(6) alone only gets
+     * to 13 - 2 = 11 (targeting itself, the "lesser sacrifice," nets zero
+     * change from the 11 already on the board), so the banked second play
+     * is needed too -- Courage(7), drawn off the top of the otherwise
+     * empty deck by Conviction's own forced draw, brings it to 12. See
+     * migration 0414's own docblock for the full arithmetic.
+     */
+    public function testTheLesserSacrificeSolvedByTargetingConvictionItselfThenPlayingTheDrawnCourage(): void
     {
         ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('the-lesser-sacrifice');
 
         $convictionId = $this->instanceId($gameId, 6, 'hand');
-        $result = $this->play($gameId, $p, $convictionId, ['target_mood_id' => $convictionId]);
+        $this->play($gameId, $p, $convictionId, ['target_mood_id' => $convictionId]);
+        $result = $this->play($gameId, $p, $this->instanceId($gameId, 7, 'hand'), []); // Courage, decline its own optional effect
 
         self::assertTrue($result['game_completed']);
         $this->assertGameSolved($gameId, $p);
     }
 
+    /**
+     * Targeting a board mood instead of Conviction itself nets a strict
+     * loss (13 minus that mood's own value, rather than 13 minus
+     * Conviction's 2), and playing the drawn Courage afterward can't make
+     * up the difference -- both plays are already spent either way.
+     */
     public function testTheLesserSacrificeTargetingAHigherValueMoodFallsShort(): void
     {
         ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('the-lesser-sacrifice');
 
         $boredomInPlayId = $this->instanceId($gameId, 83, 'in_play');
-        $result = $this->play($gameId, $p, $this->instanceId($gameId, 6, 'hand'), ['target_mood_id' => $boredomInPlayId]);
+        $this->play($gameId, $p, $this->instanceId($gameId, 6, 'hand'), ['target_mood_id' => $boredomInPlayId]);
+        $result = $this->play($gameId, $p, $this->instanceId($gameId, 7, 'hand'), []); // Courage
 
         self::assertFalse($result['game_completed']);
         $this->assertGameNotSolved($gameId);
@@ -813,7 +833,8 @@ final class PuzzleContentTest extends TestCase
 
         ['gameId' => $gameId2, 'gamePlayerId' => $p2] = $this->attemptAs($userId, 'the-lesser-sacrifice');
         $convictionId = $this->instanceId($gameId2, 6, 'hand');
-        $result2 = $this->play($gameId2, $p2, $convictionId, ['target_mood_id' => $convictionId]);
+        $this->play($gameId2, $p2, $convictionId, ['target_mood_id' => $convictionId]);
+        $result2 = $this->play($gameId2, $p2, $this->instanceId($gameId2, 7, 'hand'), []); // Courage
         self::assertTrue($result2['game_completed']);
         self::assertTrue($this->isAchievementUnlocked($userId, 'puzzle-solver'), 'A later hintless solve should still unlock Puzzle Solver');
     }
