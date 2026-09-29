@@ -7775,7 +7775,8 @@ full reasoning):
   effects) this class has no rendering for yet -- any other format (or
   any status other than `in_progress`) gets a plain "open the web app
   for this" message with a link, never a crash.
-- A hand card is only offered to play here if EVERY one of its own
+- A hand OR discard pile card (see "Playing from the discard pile"
+  below) is only offered to play here if EVERY one of its own
   `choice_fields`, up to `MAX_CHOICE_FIELDS` (2 -- the most any
   hand-playable card actually has) total, is one of a `mode`/`value`/
   `bool`/`mood`/`player`/`hand_card`/`discard_card` type -- covers not
@@ -7840,6 +7841,34 @@ full reasoning):
   -- a candidate not actually in play yet (a card still in the player's
   own hand, offered only via that field's own `includes_self`) gets no
   suffix, since it's always unambiguously "yourself."
+- **Playing from the discard pile** (reported live: "the discord client
+  needs to support playing cards from discard when allowed to by Grace
+  or similar effects") -- `playableCardOptions()` (renamed from
+  `playableHandOptions()`) now scans `state['discard_pile']` alongside
+  `state['you']['hand']` for the "Play a card" select, offering exactly
+  the discard entries whose own `is_playable` is already true. No new
+  state or engine logic was needed: a discard-sourced play grant
+  (Grace's own perpetual "while in play" grant, Harmony/Grief/Angst's
+  own after-playing grant, or Melancholy's blanket "play from discard as
+  though it were your hand") already makes `GameService::getState()`'s
+  own `serializeCard()` mark that `discard_pile` entry `is_playable`
+  exactly the same way it would a hand card -- this is the Discord
+  equivalent of `web-static/js/game.js`'s own `renderDiscardPile()`,
+  which has opened the same Play panel for a playable discard card since
+  issue #524's own follow-up (see "`GameService::getState()`'s
+  `discard_pile` mapping now passes the viewer's own game-player id..."
+  above). Each discard option is labeled with a `-- from discard` suffix
+  so a single merged select never leaves the zone ambiguous, hand
+  options listed first. `applyPlaySelection()`/`submitPlayField()`'s own
+  card lookup now searches both zones too (a discard `card_id` can never
+  collide with a hand one -- both are distinct `game_cards` rows) --
+  `MoodPlayService::playMood()` itself already detects which zone a
+  given card id is actually sitting in and moves it into play from
+  there, so `GameService::playMood()` needed no changes at all. A
+  `grant_choice` field (2+ distinct grants covering the same card, e.g.
+  Grace AND Harmony both active at once) stays out of
+  `SUPPORTED_FIELD_TYPES`, same as every other out-of-scope field type --
+  that card still falls into "needs the web app," regardless of zone.
 - Legal candidates for a rendered field reuse `BotChoiceResolver`'s own
   already-tested `moodFieldCandidates()`/`playerFieldCandidates()`/
   `handCardFieldCandidates()`/`discardCardFieldCandidates()` against a

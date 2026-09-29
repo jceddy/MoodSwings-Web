@@ -22471,6 +22471,56 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame('in_play', $this->cardZone($sadnessId));
     }
 
+    /**
+     * Reported live: "the discord client needs to support playing cards
+     * from discard when allowed to by Grace or similar effects" --
+     * playableCardOptions() now also offers a discard_pile entry once its
+     * own `is_playable` is true, labeled distinctly ("-- from discard")
+     * so a merged select doesn't leave the zone ambiguous. Grace 121 is
+     * played from hand first (the exact same setup
+     * MoodPlayServiceTest::testGraceGrantsADiscardSourcedColorMatchingPlayTheTurnItsPlayed()
+     * already verifies at the engine level -- see that test's own
+     * docblock) so its own "while in play" discard-sourced grant is
+     * active for the rest of this turn, matching Cheer 110's own green
+     * color already sitting in the discard pile.
+     */
+    public function testDiscordCommandOffersAndPlaysADiscardCardAGraceGrantAllows(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-71');
+        $u2 = $this->insertDiscordUser('discord-player-72');
+        $this->linkDiscordAccount($u1, 'discord-71');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+        $graceId = $this->insertGameCard($gameId, 121, 'hand', $p1); // Grace, green
+        $cheerId = $this->insertGameCard($gameId, 110, 'discard'); // Cheer, green -- matches Grace's own color
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        // Play Grace itself first (from hand, the ordinary way) so its
+        // "while in play" discard-sourced grant is active for the
+        // remainder of this same turn -- exactly the engine-level setup
+        // this class's own docblock cites.
+        $this->games->playMood($gameId, $p1, $graceId, []);
+
+        $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-71'));
+
+        $playOptions = $response['data']['components'][0]['components'][0]['options'];
+        self::assertContains(['label' => 'Cheer (3, Green) -- from discard', 'value' => (string) $cheerId], $playOptions);
+
+        $playResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-71', "ms:play:{$gameId}", [(string) $cheerId])
+        );
+
+        self::assertSame(7, $playResponse['type']);
+        self::assertSame('in_play', $this->cardZone($cheerId));
+    }
+
     public function testDiscordComponentPlayThenPlayfieldForASingleRequiredFieldCard(): void
     {
         $u1 = $this->insertDiscordUser('discord-player-8');
