@@ -32,6 +32,15 @@ use MoodSwings\Config;
  * a bare PONG, same as before this existed) only for a caller that never
  * constructed one -- see this class's own tests, which cover PING alone
  * without needing GameService's own full dependency graph.
+ *
+ * MODAL_SUBMIT (type 5) is Power Duel's own "paste a decklist" feature
+ * (issue #233 follow-up, reported live: "add support for a constructed
+ * format... let people submit their deck list or choose from one they've
+ * previously saved") -- the first interaction type this app has ever
+ * needed a free-text input for, since every prior one (a card to play, a
+ * target, a friend to invite) is a bounded choice a button/select menu
+ * already covers. Delegated the same way as the other two, straight to
+ * $gameCommands::handleModalSubmit().
  */
 final class DiscordInteractionsService
 {
@@ -39,6 +48,7 @@ final class DiscordInteractionsService
     private const TYPE_PONG = 1;
     private const TYPE_APPLICATION_COMMAND = 2;
     private const TYPE_MESSAGE_COMPONENT = 3;
+    private const TYPE_MODAL_SUBMIT = 5;
 
     public function __construct(
         private readonly ?DiscordGameCommandService $gameCommands = null,
@@ -122,6 +132,10 @@ final class DiscordInteractionsService
 
         if ($type === self::TYPE_MESSAGE_COMPONENT && $this->gameCommands !== null) {
             return $this->gameCommands->handleComponent($payload);
+        }
+
+        if ($type === self::TYPE_MODAL_SUBMIT && $this->gameCommands !== null) {
+            return $this->gameCommands->handleModalSubmit($payload);
         }
 
         // Anything else (no $gameCommands configured, or an interaction

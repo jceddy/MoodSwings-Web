@@ -7952,6 +7952,68 @@ app's own `POST /games` route, which doesn't notify either; the friend
 learns about it the same way they always have, by checking their own
 games list or a `notifyYourTurn()` push once play reaches them.
 
+**Power Duel + saved decklists** (issue #233 follow-up, reported live:
+"add support for a constructed format... let people submit their deck
+list or choose from one they've previously saved," "if they upload a
+text decklist that they could at least save it and update it from the
+Discord interface") -- two new root-menu buttons, `My Decks` and
+`Power Duel`, joining `New Practice Game`/`Invite a Friend` everywhere
+those already appear (factored into one shared `utilityButtonsRow()`
+now that there are four). Scoped to setup only, deliberately: once
+`startGame()` actually flips a Power Duel game `in_progress`, this
+class's own existing `format !== 'standard'` fallback already hands the
+player off to the web app to play it out -- nothing here teaches
+`boardMessage()` to render a `duel`-format board turn-by-turn, a
+separate, bigger scope decision this feature doesn't need to make.
+
+- **My Decks** (`ms:deck:0`) wraps `UserDecklistService` -- list
+  (`ms:deckview:0`), create/edit via a MODAL (Discord interaction type
+  9, this app's first: a "Deck name" short input plus a "Decklist"
+  paragraph input, `ms:deckcreateopen:0`/`ms:deckeditopen:{id}` opening
+  it, `ms:deckcreatesubmit:0`/`ms:deckeditsubmit:{id}` its own
+  MODAL_SUBMIT), and delete (`ms:deckdelete:{id}`). `decklistToText()`
+  is the exact inverse of `DecklistParser::parse()` (grouped/counted
+  `"N CardName"` lines) so an Edit modal opens pre-filled and
+  round-trips unchanged if resubmitted as-is. `DiscordInteractionsService`
+  gained a `TYPE_MODAL_SUBMIT` (5) branch dispatching to
+  `DiscordGameCommandService::handleModalSubmit()`, the first interaction
+  type this app has ever needed a free-text input for -- every prior one
+  (a card to play, a target, a friend to invite) was already a bounded
+  choice a button/select menu could cover.
+- **Power Duel** (`ms:powerduel:0`) lists the caller's own active Power
+  Duel games (`format` `duel`, `deck_type` `custom_duel`, `power` rules
+  preset -- `GameService::listGamesForUser()`'s own summary now also
+  exposes `custom_duel_rules_preset` so Discord can tell a Power Duel
+  custom_duel game apart from any other preset), each flagged "needs
+  your decklist," "waiting on their decklist," or its real status.
+  `Invite a Friend` (`ms:powerduelinvite:0`/`ms:powerduelwith:0`) mirrors
+  the Traditional friend-game flow above -- `createGame()` seats the
+  friend immediately, no invite/accept step -- but stops there instead
+  of also calling `startGame()`: a `custom_duel` game has no deck to
+  deal yet, so the very next step is prompting the caller for their own,
+  either `Choose Saved Deck` (`ms:deckchooseopen:{gameId}`/
+  `ms:deckchooseforgame:{gameId}`) or `Paste New Decklist` (a
+  single-field MODAL, `ms:deckpasteopen:{gameId}`/
+  `ms:deckpastesubmit:{gameId}`) -- both end at
+  `GameService::submitCustomDuelDeck()`, the exact same call the web
+  app's own `POST /games/decklist` route already makes. `startGame()`
+  itself is the only signal needed for whether the OTHER seat has
+  submitted yet: it throws until every seat has, so catching that
+  exception IS "still waiting on your opponent," never a real error.
+  `GameService` gained `customDuelDeckStillNeededFrom()` (a still-
+  `'waiting'` `custom_duel` game has no existing "waiting on you" signal
+  at all -- `gameSummaryFor()`'s own `is_awaiting_your_response` only
+  special-cases a still-`'waiting'` DRAFT-based `deck_type`, since this
+  pre-game step never existed for a non-draft format before `custom_duel`
+  shipped) and a new hook on `submitCustomDuelDeck()` itself
+  (`notifyRemainingCustomDuelDecksNeeded()`, reusing the exact same
+  `notifyYourTurn()` "waiting on you" fan-out every other pending-action
+  case already goes through, its own `deck-needed` tag) -- on the web
+  this was never a problem in practice (both seats are usually filled
+  and prompted in the very same New Game dialog session), but a
+  Discord-invited friend isn't present for that; without a push they
+  might never realize a game is waiting on them at all.
+
 **Score line, card details, and the game log** (reported live: "show ...
 number of rounds each player has won so far, number of cards each player
 had in hand," "some way to view the card details for the cards in

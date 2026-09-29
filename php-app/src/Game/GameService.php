@@ -3022,6 +3022,66 @@ final class GameService
         if ($allowedCardIds !== null) {
             $this->tournamentObserver?->onCustomDuelDeckSubmitted($gameId, $gameMatchId, $gamePlayerId, $ownerUserId, $mainCardIds);
         }
+
+        $this->notifyRemainingCustomDuelDecksNeeded($gameId, $gamePlayerId);
+    }
+
+    /**
+     * Power Duel via Discord (issue #233 follow-up): unlike every other
+     * deck_type, a still-'waiting' 'custom_duel' game has no existing
+     * "waiting on you" signal at all -- gameSummaryFor()'s own
+     * is_awaiting_your_response/awaiting_response_usernames only special-
+     * case a still-'waiting' DRAFT-based deck_type (see that method's own
+     * docblock), since this pre-game step never existed for a non-draft
+     * format before custom_duel shipped. On the web this was never a
+     * problem in practice -- both seats are usually filled and prompted
+     * for a deck in the very same New Game dialog session -- but a
+     * Discord-invited friend isn't present for that; without a push they
+     * might never realize a game is waiting on them at all. Reuses the
+     * exact same "waiting on you" fan-out every other pending-action case
+     * in this class already goes through, just with its own $tag so it's
+     * never collapsed against an ordinary turn notification for the same
+     * game.
+     *
+     * @param int $justSubmittedGamePlayerId excluded from the notified set
+     *     -- there's nothing to tell the player who was JUST here.
+     */
+    private function notifyRemainingCustomDuelDecksNeeded(int $gameId, int $justSubmittedGamePlayerId): void
+    {
+        $stmt = Connection::get()->prepare('SELECT id FROM game_players WHERE game_id = :game_id AND id != :just_submitted AND custom_deck_card_ids IS NULL');
+        $stmt->execute(['game_id' => $gameId, 'just_submitted' => $justSubmittedGamePlayerId]);
+        $remainingGamePlayerIds = array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
+
+        $this->notifyGamePlayersItsYourTurn($gameId, $remainingGamePlayerIds, "Game #{$gameId} needs your decklist before it can start.", 'deck-needed');
+    }
+
+    /**
+     * Power Duel via Discord (issue #233 follow-up): whether $gameId is a
+     * still-'waiting' custom_duel game specifically blocked on $userId's
+     * own seat submitting a decklist -- see
+     * notifyRemainingCustomDuelDecksNeeded()'s own docblock for why
+     * nothing else in this class already answers that question.
+     * DiscordGameCommandService uses this to recognize a Power Duel
+     * invite still needing the viewer's own deck and prompt for it, the
+     * same way it already prompts for a first field of a multi-field
+     * card.
+     */
+    public function customDuelDeckStillNeededFrom(int $gameId, int $userId): bool
+    {
+        $game = $this->fetchGame($gameId);
+        if ($game['deck_type'] !== 'custom_duel' || $game['status'] !== 'waiting') {
+            return false;
+        }
+
+        $gamePlayerId = $this->gamePlayerIdFor($gameId, $userId);
+        if ($gamePlayerId === null) {
+            return false;
+        }
+
+        $stmt = Connection::get()->prepare('SELECT custom_deck_card_ids FROM game_players WHERE id = :id');
+        $stmt->execute(['id' => $gamePlayerId]);
+
+        return $stmt->fetchColumn() === null;
     }
 
     /**
@@ -14425,7 +14485,7 @@ final class GameService
     }
 
     /**
-     * @return array<int, array{id:int,format:string,deck_type:string,status:string,wins_needed:int,created_at:string,started_at:?string,last_move_at:?string,completed_at:?string,players:array<int,array{user_id:int,username:string,seat_order:int}>,is_your_turn:bool,is_awaiting_your_response:bool,current_turn_username:?string,awaiting_response_usernames:array<int,string>,winner_usernames:array<int,string>,draft_match_id:?int,match_game_number:?int,draft_match:?array{status:string,your_wins:int,opponent_wins:int,games_to_win:int,winner_username:?string}}>
+     * @return array<int, array{id:int,format:string,deck_type:string,custom_duel_rules_preset:?string,status:string,wins_needed:int,created_at:string,started_at:?string,last_move_at:?string,completed_at:?string,players:array<int,array{user_id:int,username:string,seat_order:int}>,is_your_turn:bool,is_awaiting_your_response:bool,current_turn_username:?string,awaiting_response_usernames:array<int,string>,winner_usernames:array<int,string>,draft_match_id:?int,match_game_number:?int,draft_match:?array{status:string,your_wins:int,opponent_wins:int,games_to_win:int,winner_username:?string}}>
      */
     public function listGamesForUser(int $userId): array
     {
@@ -15506,6 +15566,11 @@ final class GameService
             'format' => $game['format'],
             'deck_type' => $game['deck_type'],
             'custom_deck_name' => $game['custom_deck_name'],
+            // Power Duel via Discord (issue #233 follow-up) distinguishes
+            // a 'custom_duel' game under the 'power' rules preset from any
+            // other custom_duel preset -- 'deck_type' alone can't, since
+            // every preset shares that same deck_type value.
+            'custom_duel_rules_preset' => $game['custom_duel_rules_preset'],
             'status' => $game['status'],
             'wins_needed' => (int) $game['wins_needed'],
             'default_selections_mode' => (bool) $game['default_selections_mode'],

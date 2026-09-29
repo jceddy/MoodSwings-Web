@@ -22243,6 +22243,7 @@ final class GameServiceIntegrationTest extends TestCase
             new BoardStateRepository(DefaultEffectRegistry::build()),
             new DiscordAccountRepository(),
             new FriendshipService(new UserRepository(), new FriendshipRepository()),
+            new UserDecklistService(new UserDecklistRepository(), new FriendshipService(new UserRepository(), new FriendshipRepository())),
             new BotChoiceResolver(),
         );
     }
@@ -23689,5 +23690,155 @@ final class GameServiceIntegrationTest extends TestCase
         $stmt->execute(['id' => $gameCardId]);
 
         return (string) $stmt->fetchColumn();
+    }
+
+    // --- Power Duel + saved decklists via Discord (issue #233 follow-up) ---
+
+    /** @param array<string, string> $fieldValues @return array<string, mixed> */
+    private function discordModalPayload(string $discordUserId, string $customId, array $fieldValues): array
+    {
+        $components = [];
+        foreach ($fieldValues as $key => $value) {
+            $components[] = ['type' => 1, 'components' => [['type' => 4, 'custom_id' => $key, 'value' => $value]]];
+        }
+
+        return ['type' => 5, 'data' => ['custom_id' => $customId, 'components' => $components], 'user' => ['id' => $discordUserId]];
+    }
+
+    public function testDiscordRootMenuOffersMyDecksAndPowerDuelButtons(): void
+    {
+        $userId = $this->insertDiscordUser('discord-pd-menu');
+        $this->linkDiscordAccount($userId, 'discord-pd-menu');
+
+        $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-pd-menu'));
+
+        $labels = array_column($response['data']['components'][0]['components'], 'label');
+        self::assertContains('My Decks', $labels);
+        self::assertContains('Power Duel', $labels);
+    }
+
+    public function testPowerDuelInviteCreatesAWaitingGameAndPromptsForADeck(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-pd-inviter');
+        $friendUserId = $this->insertDiscordUser('discord-pd-invitee');
+        $this->linkDiscordAccount($u1, 'discord-pd-inviter');
+
+        $friendships = new FriendshipService(new UserRepository(), new FriendshipRepository());
+        $friendships->sendInvite($u1, 'discord-pd-invitee');
+        $friendships->respondToInvite($friendUserId, $u1, 'accept');
+
+        $response = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-pd-inviter', 'ms:powerduelwith:0', [(string) $friendUserId])
+        );
+
+        self::assertSame(7, $response['type']);
+        self::assertStringContainsString('Power Duel created', $response['data']['content']);
+        $buttons = $response['data']['components'][0]['components'];
+        self::assertSame('Choose Saved Deck', $buttons[0]['label']);
+        self::assertSame('Paste New Decklist', $buttons[1]['label']);
+
+        $games = $this->activePowerDuelGamesFor($u1);
+        self::assertCount(1, $games);
+        self::assertSame('waiting', $games[0]['status']);
+    }
+
+    /**
+     * The full two-sided setup flow: inviter pastes a decklist via the
+     * MODAL_SUBMIT path (the button click that opens it is covered by
+     * the create-game test above), invitee chooses a SAVED decklist
+     * instead -- the game only actually starts once BOTH have submitted,
+     * proven here by checking it's still 'waiting' after just the first.
+     */
+    public function testPowerDuelStartsOnceBothSidesSubmitADeckEitherPastedOrSaved(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-pd-paster');
+        $u2 = $this->insertDiscordUser('discord-pd-chooser');
+        $this->linkDiscordAccount($u1, 'discord-pd-paster');
+        $this->linkDiscordAccount($u2, 'discord-pd-chooser');
+
+        $gameId = $this->games->createGame($u1, [$u1, $u2], format: 'duel', deckType: 'custom_duel', duelDeckRules: ['preset' => 'power']);
+
+        // u1 pastes a fresh decklist directly into the pending seat via
+        // the MODAL_SUBMIT path -- no saved decklist involved at all.
+        $pastedResponse = $this->discordCommandService()->handleModalSubmit($this->discordModalPayload(
+            'discord-pd-paster',
+            "ms:deckpastesubmit:{$gameId}",
+            ['decklist' => $this->buildPowerDuelDecklistText($this->fetchNonMythicCardNames(15))],
+        ));
+        self::assertSame(7, $pastedResponse['type']);
+        self::assertStringContainsString('Waiting on your opponent', $pastedResponse['data']['content']);
+        self::assertSame('waiting', $this->fetchGame($gameId)['status'], 'only one of two seats has submitted so far');
+
+        // u2 already has a SAVED decklist and picks it instead of pasting.
+        $userDecklists = new UserDecklistService(new UserDecklistRepository(), new FriendshipService(new UserRepository(), new FriendshipRepository()));
+        $decklistId = $userDecklists->create($u2, 'My Power Deck', $this->buildPowerDuelDecklistText($this->fetchNonMythicCardNames(15, 15)), null, null, 'private');
+
+        $chosenResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-pd-chooser', "ms:deckchooseforgame:{$gameId}", [(string) $decklistId])
+        );
+
+        self::assertSame(7, $chosenResponse['type']);
+        $game = $this->fetchGame($gameId);
+        self::assertSame('in_progress', $game['status'], 'both seats have now submitted a decklist');
+        // boardMessage()'s own existing SUPPORTED_FORMAT check hands a
+        // 'duel' format game off to the web app rather than trying to
+        // render it turn-by-turn -- see this feature's own class docblock.
+        self::assertStringContainsString('Discord only supports Traditional games so far', $chosenResponse['data']['content']);
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    private function activePowerDuelGamesFor(int $userId): array
+    {
+        return array_values(array_filter(
+            $this->games->listGamesForUser($userId),
+            static fn (array $g): bool => $g['format'] === 'duel' && $g['deck_type'] === 'custom_duel' && $g['custom_duel_rules_preset'] === 'power',
+        ));
+    }
+
+    public function testMyDecksCreateEditAndDeleteRoundTripViaDiscord(): void
+    {
+        $userId = $this->insertDiscordUser('discord-decks-owner');
+        $this->linkDiscordAccount($userId, 'discord-decks-owner');
+        $cardNames = $this->fetchNonMythicCardNames(15);
+
+        // Create, via the "New Decklist" modal.
+        $createResponse = $this->discordCommandService()->handleModalSubmit($this->discordModalPayload(
+            'discord-decks-owner',
+            'ms:deckcreatesubmit:0',
+            ['name' => 'Discord Deck', 'decklist' => $this->buildPowerDuelDecklistText($cardNames)],
+        ));
+        self::assertSame(7, $createResponse['type']);
+        self::assertStringContainsString('Discord Deck', $createResponse['data']['content']);
+        self::assertStringContainsString('15 card', $createResponse['data']['content']);
+
+        $decklistId = (int) $this->pdo->query("SELECT id FROM user_decklists WHERE user_id = {$userId}")->fetchColumn();
+
+        // The menu lists it.
+        $menuResponse = $this->discordCommandService()->handleComponent($this->discordComponentPayload('discord-decks-owner', 'ms:deck:0'));
+        self::assertStringContainsString('Discord Deck', json_encode($menuResponse['data']['components']));
+
+        // Edit -- opening the modal comes back pre-filled with the
+        // existing name/decklist text (decklistToText()'s own round-trip
+        // of DecklistParser::parse()'s format).
+        $editOpenResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-decks-owner', "ms:deckeditopen:{$decklistId}")
+        );
+        self::assertSame(9, $editOpenResponse['type']);
+        $nameField = $editOpenResponse['data']['components'][0]['components'][0];
+        self::assertSame('Discord Deck', $nameField['value']);
+
+        $editSubmitResponse = $this->discordCommandService()->handleModalSubmit($this->discordModalPayload(
+            'discord-decks-owner',
+            "ms:deckeditsubmit:{$decklistId}",
+            ['name' => 'Renamed Deck', 'decklist' => $this->buildPowerDuelDecklistText($cardNames)],
+        ));
+        self::assertStringContainsString('Renamed Deck', $editSubmitResponse['data']['content']);
+
+        // Delete.
+        $deleteResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-decks-owner', "ms:deckdelete:{$decklistId}")
+        );
+        self::assertStringContainsString('no saved decklists yet', $deleteResponse['data']['content']);
+        self::assertSame(0, (int) $this->pdo->query("SELECT COUNT(*) FROM user_decklists WHERE id = {$decklistId}")->fetchColumn());
     }
 }
