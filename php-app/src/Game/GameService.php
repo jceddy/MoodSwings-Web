@@ -17938,11 +17938,21 @@ final class GameService
         // frontend behind a "Hint" button rather than always visible, so
         // it doesn't spoil the puzzle for anyone who doesn't need it. Null
         // for every non-puzzle game, and for a puzzle with no hint set.
+        //
+        // puzzle_description (reported live: "show the puzzle goal in the
+        // game display") is fetched in the same query -- unlike the hint,
+        // it's never a spoiler (it's the puzzle's own stated objective,
+        // already shown on the puzzle list before the attempt even
+        // starts), so the frontend shows it unconditionally rather than
+        // behind a button -- see renderPuzzleGoal() in game.js.
         $puzzleHint = null;
+        $puzzleDescription = null;
         if ($game['format'] === 'puzzle' && $game['puzzle_id'] !== null) {
-            $puzzleHintStmt = $pdo->prepare('SELECT hint FROM puzzles WHERE id = :id');
-            $puzzleHintStmt->execute(['id' => (int) $game['puzzle_id']]);
-            $puzzleHint = $puzzleHintStmt->fetchColumn() ?: null;
+            $puzzleStmt = $pdo->prepare('SELECT hint, description FROM puzzles WHERE id = :id');
+            $puzzleStmt->execute(['id' => (int) $game['puzzle_id']]);
+            $puzzleRow = $puzzleStmt->fetch();
+            $puzzleHint = $puzzleRow['hint'] ?: null;
+            $puzzleDescription = $puzzleRow['description'] ?: null;
         }
 
         $response = [
@@ -18090,6 +18100,9 @@ final class GameService
                 // The puzzle's own optional hint text -- see $puzzleHint's
                 // own comment above.
                 'puzzle_hint' => $puzzleHint,
+                // The puzzle's own stated goal/flavor text -- see
+                // $puzzleDescription's own comment above.
+                'puzzle_description' => $puzzleDescription,
             ],
             'players' => $players,
             'round' => null,

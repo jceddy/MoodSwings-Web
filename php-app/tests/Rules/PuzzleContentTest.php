@@ -244,6 +244,26 @@ final class PuzzleContentTest extends TestCase
         self::assertSame("Think carefully before taking Ambition's discard option.", $state['game']['puzzle_hint']);
     }
 
+    /**
+     * Reported live: "show the puzzle goal in the game display" --
+     * getState()'s own game.puzzle_description is what renderPuzzleGoal()
+     * in game.js reads to show the puzzle's stated objective unconditionally
+     * on the board itself, not just on the puzzle list before the attempt
+     * starts.
+     */
+    public function testOneFellSwoopExposesItsDescriptionViaGetState(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('one-fell-swoop');
+
+        $state = $this->games->getState($gameId, $this->userIdForGamePlayer($p));
+
+        self::assertSame(
+            "Your hand: Charity, Ambition, Friendliness, Kindness. Your opponent has Vulnerability and Neurosis in play, went first this round, and you're both one win from taking the match. Win the game in a single turn.",
+            $state['game']['puzzle_description'],
+        );
+    }
+
+
     public function testChainReactionHasNoHint(): void
     {
         ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('chain-reaction');

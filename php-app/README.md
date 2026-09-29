@@ -13158,6 +13158,15 @@ than a parallel bespoke system:
   a player who hasn't asked for help. "One Fell Swoop" is the debut hint,
   warning about Ambition's own discard trap without giving the solution
   away outright.
+- **Goal display** (reported live: "show the puzzle goal in the game
+  display"): `puzzles.description` -- already shown on the puzzle list
+  before an attempt starts -- is now also surfaced as
+  `game.puzzle_description` in `getState()`, and the board shows it
+  unconditionally (`renderPuzzleGoal()`) rather than behind a button the
+  way the Hint above is. Unlike the hint, the description is never a
+  spoiler -- it's the puzzle's own stated objective, the same text the
+  player already saw before starting -- so there's no reason to hide it
+  once the attempt is under way.
 - **Discard-pile seeding and pre-banked extra plays**: `puzzles.starting_discard_card_ids`
   seeds the shared discard pile itself at attempt creation (owned by the
   solver), same "`'[]'` means unused" convention as
