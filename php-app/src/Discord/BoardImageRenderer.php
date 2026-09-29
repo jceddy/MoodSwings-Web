@@ -34,6 +34,13 @@ namespace MoodSwings\Discord;
  * inPlaySummary() already lists them in -- stable and identical for
  * every viewer, exactly like every other public board-image URL.
  *
+ * This class has no notion of "player" at all beyond render()'s own
+ * $players param name -- each entry is really just "a label and some
+ * cards," which is why DiscordGameCommandService can append a synthetic
+ * "Discard Pile (N)" row after every real player row (discardImageRow())
+ * or render a lone "Your Hand" row on its own (renderHandImage())
+ * without this class needing to change at all.
+ *
  * Text rendering deliberately uses GD's own built-in bitmap fonts
  * (imagestring()/imagefilledellipse() below) rather than imagettftext() --
  * TTF rendering needs FreeType support in GD's own build AND a font file
