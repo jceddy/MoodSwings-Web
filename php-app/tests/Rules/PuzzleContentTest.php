@@ -818,6 +818,66 @@ final class PuzzleContentTest extends TestCase
         self::assertTrue($this->isAchievementUnlocked($userId, 'puzzle-solver'), 'A later hintless solve should still unlock Puzzle Solver');
     }
 
+    /**
+     * "Perfect Disguise" (issue #524 follow-up): Joy(125)/Bliss(108) alone
+     * only reach 15 -- Creativity(32) copying the already-in-play Joy adds
+     * a THIRD green mood, and Bliss's own bonus (keyed green via the
+     * Eagerness(114) discard) applies to all three, for 24, clearing the
+     * opponent's fixed 16. See migration 0412's own docblock for the full
+     * arithmetic.
+     */
+    public function testPerfectDisguiseSolvedByCopyingJoyUnderAGreenKeyedBliss(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('perfect-disguise');
+
+        $this->play($gameId, $p, $this->instanceId($gameId, 125, 'hand'), []); // Joy
+        $this->play($gameId, $p, $this->instanceId($gameId, 108, 'hand'), [
+            'discard_card_id' => $this->instanceId($gameId, 114, 'hand'), // Eagerness (green)
+        ]);
+        $result = $this->play($gameId, $p, $this->instanceId($gameId, 32, 'hand'), [
+            'copy_card_id' => $this->instanceId($gameId, 125, 'in_play'), // copy the already-in-play Joy
+        ]);
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameSolved($gameId, $p);
+    }
+
+    /**
+     * The tempting wrong line: discarding Indifference (blue) to Bliss's
+     * cost instead, on the theory that Creativity's own printed blue
+     * needs a blue-keyed Bliss to benefit. Nothing is ever actually blue
+     * in play (Creativity becomes green the instant it copies Joy), so
+     * the bonus is always 0 -- final total 8, never enough to clear the
+     * opponent's 16, no matter how many mini-turns it takes.
+     */
+    public function testPerfectDisguiseDiscardingIndifferenceToBlissInsteadOfEagernessFallsShort(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('perfect-disguise');
+
+        $this->play($gameId, $p, $this->instanceId($gameId, 125, 'hand'), []); // Joy
+        $this->play($gameId, $p, $this->instanceId($gameId, 108, 'hand'), [
+            'discard_card_id' => $this->instanceId($gameId, 44, 'hand'), // Indifference (blue) -- the trap
+        ]);
+        $result = $this->play($gameId, $p, $this->instanceId($gameId, 32, 'hand'), [
+            'copy_card_id' => $this->instanceId($gameId, 125, 'in_play'),
+        ]);
+
+        self::assertFalse($result['game_completed']);
+        $this->assertGameNotSolved($gameId);
+    }
+
+    public function testPerfectDisguiseExposesItsHintViaGetState(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('perfect-disguise');
+
+        $state = $this->games->getState($gameId, $this->userIdForGamePlayer($p));
+
+        self::assertSame(
+            "Once Creativity copies another mood, it takes on that mood's own color -- not its own printed blue -- for anything that cares about color.",
+            $state['game']['puzzle_hint']
+        );
+    }
+
     private function isAchievementUnlocked(int $userId, string $slug): bool
     {
         $stmt = $this->pdo->prepare(
