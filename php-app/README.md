@@ -7769,12 +7769,14 @@ a hand's contents are exactly as private here as on the web board.
 **V1 scope, deliberately narrow** (this class's own docblock has the
 full reasoning):
 
-- Format `standard` (Traditional Duel) only. Team/Closed Team/Duel/
-  draft/chaos_draft all have their own extra state (teammate hand
-  visibility, per-seat decks, propose/confirm decisions, attached chaos
-  effects) this class has no rendering for yet -- any other format (or
-  any status other than `in_progress`) gets a plain "open the web app
-  for this" message with a link, never a crash.
+- Format `standard` (Traditional Duel), plus format `duel` restricted to
+  exactly 2 seated players (`isPlayableFormat()` -- see "Playing a 2-player
+  Duel game via Discord" below). Team/Closed Team/3-4 player Duel/draft/
+  chaos_draft all have their own extra state (teammate hand visibility,
+  per-seat decks, propose/confirm decisions, attached chaos effects)
+  this class has no rendering for yet -- any other format (or any status
+  other than `in_progress`) gets a plain "open the web app for this"
+  message with a link, never a crash.
 - A hand OR discard pile card (see "Playing from the discard pile"
   below) is only offered to play here if EVERY one of its own
   `choice_fields`, up to `MAX_CHOICE_FIELDS` (2 -- the most any
@@ -7959,12 +7961,12 @@ text decklist that they could at least save it and update it from the
 Discord interface") -- two new root-menu buttons, `My Decks` and
 `Power Duel`, joining `New Practice Game`/`Invite a Friend` everywhere
 those already appear (factored into one shared `utilityButtonsRow()`
-now that there are four). Scoped to setup only, deliberately: once
-`startGame()` actually flips a Power Duel game `in_progress`, this
-class's own existing `format !== 'standard'` fallback already hands the
-player off to the web app to play it out -- nothing here teaches
-`boardMessage()` to render a `duel`-format board turn-by-turn, a
-separate, bigger scope decision this feature doesn't need to make.
+now that there are four). This section covers setup only: inviting a
+friend or bot and getting both seats' own decklists in. What happens
+once `startGame()` actually flips the game `in_progress` is covered by
+"Playing a 2-player Duel game via Discord" below -- Power Duel needs no
+separate handling there since it's just format `duel` with exactly 2
+seats.
 
 - **My Decks** (`ms:deck:0`) wraps `UserDecklistService` -- list
   (`ms:deckview:0`), create/edit via a MODAL (Discord interaction type
@@ -8031,6 +8033,31 @@ separate, bigger scope decision this feature doesn't need to make.
   the game is created, and only the caller's own decklist is still
   needed, via the exact same `deckSubmissionPromptMessage()` the
   friend flow already ends its own creation step with.
+
+**Playing a 2-player Duel game via Discord** (issue #233 follow-up,
+reported live right after Power Duel's own first ship let a player
+create and start a `duel` game via Discord but not play it: "I was able
+to initiate the game in the discord client, but not able to actually
+play it") -- `boardMessage()`'s own `isPlayableFormat()` now treats a
+2-player `duel` game exactly like a `standard` one, rather than always
+handing it off to the web app. Confirmed by re-reading
+`GameService::getState()` that a 2-player `duel` game's own state shape
+is byte-for-byte identical to a 2-player `standard` game's -- every
+format-conditional branch in `buildGameState()` is gated on
+`team`/`closed_team`/`puzzle`, never `duel` -- so every rendering/
+interaction method already in this class needed no changes at all to
+support it. `activeStandardGameIdsFor()` (feeding `handleCommand()`'s
+own root view) was generalized into `activePlayableGameIdsFor()` the
+same way, so an in-progress 2-player Duel/Power Duel game is listed and
+directly playable from the main `/moodswings` command, not just
+reachable through Power Duel's own separate `ms:powerduel:0` sub-menu.
+3-4 player Duel games are explicitly out of scope for this pass, and
+still get the same "open the web app" hand-off every other unsupported
+format already does. A Power Duel needs no separate carve-out here: it's
+just format `duel` under the hood, and Discord never creates a
+best-of-three/sideboarding Power Duel itself, so it starts rendering the
+instant its 2 seats have both submitted a deck and `startGame()` flips
+it `in_progress`.
 
 **Score line, card details, and the game log** (reported live: "show ...
 number of rounds each player has won so far, number of cards each player
@@ -8177,8 +8204,9 @@ confirmed either way for the target hosting -- the built-in fonts work
 in every GD build unconditionally. Every OTHER badge
 `buildCardThumb()` can show (chaos delta/override, Copy, recolor,
 suppressed, ...) is deliberately out of scope -- those only ever apply
-to a `chaos_draft`-format game, and this class only ever supports
-`'standard'` (see its own `SUPPORTED_FORMAT`).
+to a `chaos_draft`-format game, entirely out of scope for this class's
+own `isPlayableFormat()` (see its own docblock, and "Playing a 2-player
+Duel game via Discord" below).
 
 `DiscordGameCommandService::cardArtFilePath()` locates each card's art
 file ON DISK (unlike `cardArtUrl()`'s public URL) by probing two

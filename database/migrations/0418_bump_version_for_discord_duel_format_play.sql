@@ -1,0 +1,11 @@
+-- Issue #233 follow-up (reported live, right after Power Duel's own
+-- first ship: "I was able to initiate the game in the discord client,
+-- but not able to actually play it" -- Discord only rendered format
+-- 'standard'). Pure code change, no schema change -- widens
+-- DiscordGameCommandService's own format gate (SUPPORTED_FORMAT ->
+-- isPlayableFormat()) to also cover a 2-player 'duel' game, which
+-- makes Power Duel playable end-to-end from Discord for the first time.
+-- Same "schema-version-only migration" pattern as every other
+-- pure-code-change Discord follow-up in this arc (0387-0393, 0410-0411,
+-- 0415-0417) -- see php-app/README.md.
+UPDATE schema_version SET version = '1.58.0' WHERE id = 1;

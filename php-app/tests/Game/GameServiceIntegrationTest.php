@@ -22312,7 +22312,7 @@ final class GameServiceIntegrationTest extends TestCase
         $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-1'));
 
         self::assertSame(4, $response['type']);
-        self::assertStringContainsString("don't have an active Traditional game", $response['data']['content']);
+        self::assertStringContainsString("don't have an active game", $response['data']['content']);
     }
 
     public function testDiscordCommandRendersBoardWithPlayAndPassForOneActiveGame(): void
@@ -23692,6 +23692,128 @@ final class GameServiceIntegrationTest extends TestCase
         return (string) $stmt->fetchColumn();
     }
 
+    /**
+     * Reported live, right after Power Duel's own first ship let a player
+     * create and start a 'duel' game via Discord: "I was able to initiate
+     * the game in the discord client, but not able to actually play it."
+     * A 2-player 'duel' game (Power Duel or otherwise) renders and plays
+     * exactly like a 'standard' one -- see isPlayableFormat()'s own
+     * docblock for why GameService::getState() returns an identical shape
+     * in that case.
+     */
+    public function testDiscordCommandRendersAndPlaysATwoPlayerDuelGame(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-duel-player-1');
+        $u2 = $this->insertDiscordUser('discord-duel-player-2');
+        $this->linkDiscordAccount($u1, 'discord-duel-1');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('duel', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $sadnessId = $this->insertGameCard($gameId, 74, 'hand', $p1); // Sadness -- no required choice_fields
+        $this->insertGameCard($gameId, 5, 'in_play', $p2);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-duel-1'));
+
+        self::assertSame(4, $response['type']);
+        self::assertStringContainsString("Game #{$gameId}", $response['data']['content']);
+        self::assertStringContainsString("It's your turn", $response['data']['content']);
+        self::assertStringContainsString('discord-duel-player-2\'s moods in play: Complacency (4, White)', $response['data']['content']);
+
+        $playSelect = $response['data']['components'][0]['components'][0];
+        self::assertSame("ms:play:{$gameId}", $playSelect['custom_id']);
+        self::assertSame(['label' => 'Sadness (0, Black)', 'value' => (string) $sadnessId], $playSelect['options'][0]);
+
+        $playResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-duel-1', "ms:play:{$gameId}", [(string) $sadnessId])
+        );
+        self::assertSame(7, $playResponse['type']);
+        self::assertSame($p2, (int) $this->fetchRound($gameId)['current_turn_game_player_id'], "the play should have advanced the turn to player 2");
+    }
+
+    /**
+     * The player-count restriction actually holds: a 3+ seat 'duel' game
+     * still gets the same "open the web app" hand-off every other
+     * out-of-scope format already does -- see isPlayableFormat()'s own
+     * docblock for why only exactly 2 seats qualify. Reached directly via
+     * ms:view: (the same way a stale link or notification would reach
+     * it), since activePlayableGameIdsFor() itself never lists a 3+ seat
+     * 'duel' game as "active" in the first place -- same as any other
+     * out-of-scope format already didn't before this feature.
+     */
+    public function testDiscordCommandStillRedirectsAThreePlayerDuelGameToTheWebApp(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-duel-player-3');
+        $u2 = $this->insertDiscordUser('discord-duel-player-4');
+        $u3 = $this->insertDiscordUser('discord-duel-player-5');
+        $this->linkDiscordAccount($u1, 'discord-duel-2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('duel', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGamePlayer($gameId, $u3, 2);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $response = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-duel-2', "ms:view:{$gameId}")
+        );
+
+        self::assertSame(7, $response['type']);
+        self::assertStringContainsString('Discord only supports Traditional games so far', $response['data']['content']);
+    }
+
+    /**
+     * activePlayableGameIdsFor()'s own generalization (used by
+     * handleCommand()'s root view): an in-progress 2-player 'duel' game
+     * is counted and offered alongside an in-progress 'standard' one, not
+     * just reachable through Power Duel's own separate ms:powerduel:0
+     * sub-menu.
+     */
+    public function testDiscordCommandRootViewListsAStandardGameAndATwoPlayerDuelGameTogether(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-duel-player-6');
+        $u2 = $this->insertDiscordUser('discord-duel-player-7');
+        $this->linkDiscordAccount($u1, 'discord-duel-3');
+
+        $standardStmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $standardStmt->execute(['created_by' => $u1]);
+        $standardGameId = (int) $this->pdo->lastInsertId();
+        $sp1 = $this->insertGamePlayer($standardGameId, $u1, 0);
+        $this->insertGamePlayer($standardGameId, $u2, 1);
+        $this->insertGameRound($standardGameId, 1, $sp1, $sp1, 1);
+
+        $duelStmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('duel', 'in_progress', :created_by, 3)"
+        );
+        $duelStmt->execute(['created_by' => $u1]);
+        $duelGameId = (int) $this->pdo->lastInsertId();
+        $dp1 = $this->insertGamePlayer($duelGameId, $u1, 0);
+        $this->insertGamePlayer($duelGameId, $u2, 1);
+        $this->insertGameRound($duelGameId, 1, $dp1, $dp1, 1);
+
+        $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-duel-3'));
+
+        self::assertSame(4, $response['type']);
+        $gameButtons = $response['data']['components'][0]['components'];
+        self::assertEqualsCanonicalizing(
+            ["ms:view:{$standardGameId}", "ms:view:{$duelGameId}"],
+            array_column($gameButtons, 'custom_id'),
+        );
+    }
+
     // --- Power Duel + saved decklists via Discord (issue #233 follow-up) ---
 
     /** @param array<string, string> $fieldValues @return array<string, mixed> */
@@ -23780,10 +23902,12 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame(7, $chosenResponse['type']);
         $game = $this->fetchGame($gameId);
         self::assertSame('in_progress', $game['status'], 'both seats have now submitted a decklist');
-        // boardMessage()'s own existing SUPPORTED_FORMAT check hands a
-        // 'duel' format game off to the web app rather than trying to
-        // render it turn-by-turn -- see this feature's own class docblock.
-        self::assertStringContainsString('Discord only supports Traditional games so far', $chosenResponse['data']['content']);
+        // boardMessage()'s own isPlayableFormat() check treats a 2-player
+        // 'duel' game (Power Duel included) exactly like a 'standard' one
+        // -- see this class's own SCOPE docblock -- so the response here
+        // is the real board, not the "open the web app" hand-off.
+        self::assertStringContainsString('round(s) won', $chosenResponse['data']['content']);
+        self::assertStringNotContainsString('Discord only supports Traditional games so far', $chosenResponse['data']['content']);
     }
 
     /**
@@ -23856,7 +23980,8 @@ final class GameServiceIntegrationTest extends TestCase
             ['decklist' => $this->buildPowerDuelDecklistText($this->fetchNonMythicCardNames(15, 15))],
         ));
         self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
-        self::assertStringContainsString('Discord only supports Traditional games so far', $ownDeckResponse['data']['content']);
+        self::assertStringContainsString('round(s) won', $ownDeckResponse['data']['content']);
+        self::assertStringNotContainsString('Discord only supports Traditional games so far', $ownDeckResponse['data']['content']);
     }
 
     public function testPowerDuelVsBotWithNoSavedDecklistsPointsAtMyDecks(): void
