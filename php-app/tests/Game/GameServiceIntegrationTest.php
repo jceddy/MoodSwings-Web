@@ -23037,6 +23037,143 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * Reported live: "add support for playing Denial, Recklessness, and
+     * Panic to the discord client." All three turn out to already be
+     * fully playable, with no code change needed -- each one's own
+     * CardChoiceSchema entry is a plain `mood`-typed field (already in
+     * SUPPORTED_FIELD_TYPES), and Denial's own `same_color_or_value`
+     * `constraint` is exactly the same "not re-validated client-side,
+     * rejected server-side if illegal" shape this class's own docblock
+     * already documents for Rejection. This test (and the two below) are
+     * the missing regression coverage, not a fix -- Denial's optional
+     * `target_mood_ids` field returns 2 moods sharing a color to their
+     * owners' hands.
+     */
+    public function testDiscordComponentPlaysDenialReturningTwoSameColorMoodsToHand(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-denial-1');
+        $u2 = $this->insertDiscordUser('discord-denial-2');
+        $this->linkDiscordAccount($u1, 'discord-denial-1');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $denialId = $this->insertGameCard($gameId, 34, 'hand', $p1); // Denial, blue
+        $complacencyId = $this->insertGameCard($gameId, 5, 'in_play', $p2); // Complacency, white, 4
+        $dignityId = $this->insertGameCard($gameId, 8, 'in_play', $p1); // Dignity, white, 3 -- shares color with Complacency
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $playResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-denial-1', "ms:play:{$gameId}", [(string) $denialId])
+        );
+
+        self::assertSame(7, $playResponse['type']);
+        $fieldSelect = $playResponse['data']['components'][0]['components'][0];
+        self::assertStringStartsWith("ms:playfield:{$gameId}:{$denialId}:0:", $fieldSelect['custom_id']);
+        self::assertSame(0, $fieldSelect['min_values'], 'optional -- selecting nobody is Denial\'s own "may" clause');
+        self::assertSame(2, $fieldSelect['max_values']);
+
+        $fieldResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-denial-1', $fieldSelect['custom_id'], [(string) $complacencyId, (string) $dignityId])
+        );
+
+        self::assertSame(7, $fieldResponse['type']);
+        self::assertSame('hand', $this->cardZone($complacencyId));
+        self::assertSame('hand', $this->cardZone($dignityId));
+    }
+
+    /**
+     * Same report as Denial above -- Panic's own optional
+     * `target_mood_ids` field returns up to 2 moods (one per player,
+     * `distinct_owners`) to their owners' hands.
+     */
+    public function testDiscordComponentPlaysPanicReturningOneMoodPerPlayerToHand(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-panic-1');
+        $u2 = $this->insertDiscordUser('discord-panic-2');
+        $this->linkDiscordAccount($u1, 'discord-panic-1');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $panicId = $this->insertGameCard($gameId, 48, 'hand', $p1); // Panic
+        $complacencyId = $this->insertGameCard($gameId, 5, 'in_play', $p1);
+        $apathyId = $this->insertGameCard($gameId, 55, 'in_play', $p2);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $playResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-panic-1', "ms:play:{$gameId}", [(string) $panicId])
+        );
+
+        self::assertSame(7, $playResponse['type']);
+        $fieldSelect = $playResponse['data']['components'][0]['components'][0];
+        self::assertStringStartsWith("ms:playfield:{$gameId}:{$panicId}:0:", $fieldSelect['custom_id']);
+        self::assertSame(0, $fieldSelect['min_values']);
+        self::assertSame(2, $fieldSelect['max_values']);
+
+        $fieldResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-panic-1', $fieldSelect['custom_id'], [(string) $complacencyId, (string) $apathyId])
+        );
+
+        self::assertSame(7, $fieldResponse['type']);
+        self::assertSame('hand', $this->cardZone($complacencyId));
+        self::assertSame('hand', $this->cardZone($apathyId));
+    }
+
+    /**
+     * Same report as Denial/Panic above -- Recklessness's own optional
+     * `target_mood_id` field is a plain single-value `mood` field scoped
+     * to an opponent (`scope => 'other'`), so it already gets the same
+     * Skip-sentinel treatment as any other optional single-value field
+     * (`fieldSelectComponent()`'s own `withSkipOptionIfOptional()`).
+     */
+    public function testDiscordComponentPlaysRecklessnessTakingAnOpponentsMood(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-reck-1');
+        $u2 = $this->insertDiscordUser('discord-reck-2');
+        $this->linkDiscordAccount($u1, 'discord-reck-1');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $recklessnessId = $this->insertGameCard($gameId, 100, 'hand', $p1); // Recklessness
+        $apathyId = $this->insertGameCard($gameId, 55, 'in_play', $p2);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $playResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-reck-1', "ms:play:{$gameId}", [(string) $recklessnessId])
+        );
+
+        self::assertSame(7, $playResponse['type']);
+        $fieldSelect = $playResponse['data']['components'][0]['components'][0];
+        self::assertStringStartsWith("ms:playfield:{$gameId}:{$recklessnessId}:0:", $fieldSelect['custom_id']);
+        self::assertSame(['label' => 'Skip -- play without this effect', 'value' => '__skip__'], $fieldSelect['options'][0]);
+        self::assertSame((string) $apathyId, $fieldSelect['options'][1]['value']);
+
+        $fieldResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-reck-1', $fieldSelect['custom_id'], [(string) $apathyId])
+        );
+
+        self::assertSame(7, $fieldResponse['type']);
+        self::assertSame($p1, (int) $this->pdo->query("SELECT owner_game_player_id FROM game_cards WHERE id = {$apathyId}")->fetchColumn(), "Recklessness takes the mood immediately");
+    }
+
+    /**
      * The same report, but for a card with a SECOND choice_field --
      * Faith's own target_mood_id ("required if discarding a card above")
      * only needs asking once the first field (discard_card_id) is
