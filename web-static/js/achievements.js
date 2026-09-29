@@ -25,6 +25,7 @@
         G: 'Social & Account',
         H: 'Fun, Flavor & Meta',
         I: 'Card Cycles',
+        J: 'Puzzles',
     };
 
     const categoryTemplate = document.getElementById('achievement-category-template');

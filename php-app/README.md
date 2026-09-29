@@ -7622,10 +7622,9 @@ actually sending a notification as a Discord DM
 (`Discord\DiscordNotificationChannel`, one of the `NotificationChannel`s
 `NotificationService` fans a notification out to -- see "Browser push
 notifications" above for the shared trigger/preference/cooldown/queue
-orchestration both channels sit behind). A slash-command/button-driven
-"play the game via Discord" is still out of scope here -- that's issue
-#233's own territory, and the only interaction type
-`DiscordInteractionsService` handles today is still just `PING`.
+orchestration both channels sit behind). The slash-command/button-driven
+"play the game via Discord" surface built on top of this is issue #233's
+own territory -- see "Playing the game via Discord" below.
 
 **Account linking** is Discord's standard OAuth2 authorization-code flow,
 `identify` scope only (`DiscordOAuthService`) -- `GET /discord/oauth/start`
@@ -7675,13 +7674,13 @@ Ed25519-signature-verified (`sodium_crypto_sign_verify_detached()` over
 the exact raw body, no new Composer dependency needed --
 `ext-sodium` ships with PHP) against `DISCORD_PUBLIC_KEY` before its JSON
 is even parsed -- a request that fails verification gets a bare `401`,
-never a rendered response. The only interaction type handled so far is
-`PING` (Discord's own one-time "is this endpoint alive and correctly
-verified" check, sent the moment the Interactions Endpoint URL is saved
-in the Developer Portal), answered with a bare `PONG` -- no slash command
-is registered yet (that's issue #233's own "play the game via Discord"
-territory), so nothing else is ever actually sent here today. Every
-rejected request (missing/malformed signature headers, no
+never a rendered response. `PING` (Discord's own one-time "is this
+endpoint alive and correctly verified" check, sent the moment the
+Interactions Endpoint URL is saved in the Developer Portal) is answered
+with a bare `PONG`; `APPLICATION_COMMAND`/`MESSAGE_COMPONENT` (the
+`/moodswings` slash command and its own buttons/select menus) delegate to
+`DiscordGameCommandService` -- see "Playing the game via Discord" below.
+Every rejected request (missing/malformed signature headers, no
 `DISCORD_PUBLIC_KEY` configured, a signature that doesn't verify, or --
 defensively -- `ext-sodium` itself unavailable) logs why to its own
 `discord-errors.log` (same convention as `notification-errors.log`), so a
@@ -7740,6 +7739,513 @@ Endpoint URL) -- the same reasoning `DB_*`/`FTP_*` already get a
 unprefixed `DISCORD_*` `.env` keys `deploy.yml` writes from the
 unprefixed secrets -- the application code itself has no notion of
 "which environment," same as every other `Config::get()` value.
+
+**`DISCORD_COMMAND_NAME`** (optional, defaults to `moodswings`) is the
+one exception to "the application code has no notion of which
+environment" above, and deliberately so: issue #233's own `/moodswings`
+command is a USER-installed app command (see "Playing the game via
+Discord" below), so outside a DM it's visible in the picker in ANY
+server/channel a linked player happens to be in -- including, for
+whoever tests dev while also using prod day to day, both environments'
+commands at once, identically named, distinguishable only by a small
+app-name label most people would never notice before tapping the wrong
+one. `DEV_DISCORD_COMMAND_NAME` (a `vars.*` GitHub Actions variable, not
+a secret -- a command's own name isn't sensitive) lets dev register
+under a visibly different name (e.g. `moodswingsdev`) instead; unset
+(the default), dev registers as plain `/moodswings` too, same as before
+this existed.
+
+### Playing the game via Discord (issue #233)
+
+`Discord\DiscordGameCommandService`, dispatched to by
+`DiscordInteractionsService` for `APPLICATION_COMMAND`/`MESSAGE_COMPONENT`
+interactions (see "Discord" above) -- a single `/moodswings` slash
+command, registered once per environment via
+`bin/register_discord_commands.php` (a bulk-overwrite `PUT` to
+`/applications/{id}/commands`, safe to rerun any time the command's own
+definition changes). Every response is **ephemeral** (`flags: 64`) --
+a hand's contents are exactly as private here as on the web board.
+
+**V1 scope, deliberately narrow** (this class's own docblock has the
+full reasoning):
+
+- Format `standard` (Traditional Duel) only. Team/Closed Team/Duel/
+  draft/chaos_draft all have their own extra state (teammate hand
+  visibility, per-seat decks, propose/confirm decisions, attached chaos
+  effects) this class has no rendering for yet -- any other format (or
+  any status other than `in_progress`) gets a plain "open the web app
+  for this" message with a link, never a crash.
+- A hand OR discard pile card (see "Playing from the discard pile"
+  below) is only offered to play here if EVERY one of its own
+  `choice_fields`, up to `MAX_CHOICE_FIELDS` (2 -- the most any
+  hand-playable card actually has) total, is one of a `mode`/`value`/
+  `bool`/`mood`/`player`/`hand_card`/`discard_card` type -- covers not
+  just single-target cards (Pride's own `target_player_id`,
+  Compulsion's `discard_card_id`, Conviction's self-targetable
+  `target_mood_id`, Hate's optional "any mood in play," ...) but also a
+  `multi` (checkbox-style) field and a card with a SECOND field. Cards
+  needing more than 2 fields, or a `nested` sub-form (Duplicity's own
+  repeat offer, any chaos_draft attachment), are still listed as "needs
+  the web app" instead. An OPTIONAL single-value field's select menu
+  (`withSkipOptionIfOptional()`) always gets a leading "Skip -- play
+  without this effect" option (`SKIP_FIELD_VALUE`) so declining it is a
+  deliberate choice sent back to `castFieldValue()`/`choicesFor()` as
+  "leave this key out of the submitted choices entirely," never a
+  silent default -- this class's first ship never rendered an optional
+  field's choice at all (Hate's own `target_mood_id` is `required =>
+  false`, so it always played with no target and no way to pick one;
+  reported live as "select options for cards we choose to play (such as
+  a target for Hate)").
+- A `multi` field (Suspicion's own "choose any number of players,"
+  Guile's "exactly 2 cards to discard," Malice's decision-side "choose
+  two of your moods," ...) -- reported live as "we need some way to
+  play targeted cards like Insecurity/Suspicion" -- gets Discord's own
+  native multi-select (`min_values`/`max_values`) instead of the
+  single-value Skip sentinel (`fieldSelectComponent()`): selecting
+  nobody, when `min_values` is 0, IS the "leave this optional field
+  blank" signal, so there's no fake option occupying a real slot the
+  way Skip needs for a single-select field. `min_values` honors a
+  `count.min` (Guile's "exactly 2") over the plain required/optional
+  flag where `CardChoiceSchema` sets one, except when `count.zero_ok`
+  is set (Rejection/Denial's own "0 or exactly 2") -- there 0 is always
+  legal regardless of `count.min`. Deliberately doesn't re-validate a
+  `multi` field's own cross-selection `constraint` (`distinct_owners`,
+  `same_color_or_value`, ...) -- an illegal combination the select's
+  own candidate list didn't rule out still gets rejected server-side,
+  surfaced the same way any other failed play already is.
+- A card with a SECOND `choice_field` (Faith, Guile, Condescension,
+  Guilt, Regret, Worry, Contempt, Cynicism, Hostility, Hesitation,
+  Rationalization, Corruption, Fascination -- confirmed by walking
+  every effect_key in `CardChoiceSchema`, nothing has 3+) is asked one
+  field at a time (`promptOrPlay()`), the first field's own select
+  handing off to a second one via its custom_id (below) rather than a
+  new top-level slash command -- Discord slash-command options are
+  static/single-valued at the protocol level (no true multi-select, and
+  dynamic per-game candidates would need implementing autocomplete
+  interactions), so extending the existing ephemeral component flow
+  covers both this and the `multi` case above without that extra
+  plumbing. A field that doesn't need answering right now -- a
+  `requires_mode` gate (Guilt/Contempt/Hesitation's own `target_mood_id`
+  only matters once their `mode` field is `single`) that the first
+  field's answer doesn't satisfy, or simply zero legal candidates, the
+  same `optional_if_no_targets` carve-out a single-field card already
+  got -- is silently left blank and skipped, the same way reaching the
+  end of every field just plays the card with whatever was gathered.
+- Every board view now opens with an in-play summary (`inPlaySummary()`)
+  listing each player's own moods currently in play, alongside their own
+  hand -- public information (unlike a hand), and the only way to make
+  an informed choice for a `mood`-type field like Hate's, whose
+  candidates can span both players. A `mood` field's own select options
+  (`fieldOptions()`) are labelled with their owning player's username
+  (e.g. `Complacency (4) -- discord-player-17`) for exactly that reason
+  -- a candidate not actually in play yet (a card still in the player's
+  own hand, offered only via that field's own `includes_self`) gets no
+  suffix, since it's always unambiguously "yourself."
+- **Playing from the discard pile** (reported live: "the discord client
+  needs to support playing cards from discard when allowed to by Grace
+  or similar effects") -- `playableCardOptions()` (renamed from
+  `playableHandOptions()`) now scans `state['discard_pile']` alongside
+  `state['you']['hand']` for the "Play a card" select, offering exactly
+  the discard entries whose own `is_playable` is already true. No new
+  state or engine logic was needed: a discard-sourced play grant
+  (Grace's own perpetual "while in play" grant, Harmony/Grief/Angst's
+  own after-playing grant, or Melancholy's blanket "play from discard as
+  though it were your hand") already makes `GameService::getState()`'s
+  own `serializeCard()` mark that `discard_pile` entry `is_playable`
+  exactly the same way it would a hand card -- this is the Discord
+  equivalent of `web-static/js/game.js`'s own `renderDiscardPile()`,
+  which has opened the same Play panel for a playable discard card since
+  issue #524's own follow-up (see "`GameService::getState()`'s
+  `discard_pile` mapping now passes the viewer's own game-player id..."
+  above). Each discard option is labeled with a `-- from discard` suffix
+  so a single merged select never leaves the zone ambiguous, hand
+  options listed first. `applyPlaySelection()`/`submitPlayField()`'s own
+  card lookup now searches both zones too (a discard `card_id` can never
+  collide with a hand one -- both are distinct `game_cards` rows) --
+  `MoodPlayService::playMood()` itself already detects which zone a
+  given card id is actually sitting in and moves it into play from
+  there, so `GameService::playMood()` needed no changes at all. A
+  `grant_choice` field (2+ distinct grants covering the same card, e.g.
+  Grace AND Harmony both active at once) stays out of
+  `SUPPORTED_FIELD_TYPES`, same as every other out-of-scope field type --
+  that card still falls into "needs the web app," regardless of zone.
+- Legal candidates for a rendered field reuse `BotChoiceResolver`'s own
+  already-tested `moodFieldCandidates()`/`playerFieldCandidates()`/
+  `handCardFieldCandidates()`/`discardCardFieldCandidates()` against a
+  freshly loaded `BoardState`, rather than re-deriving
+  `CardChoiceSchema`'s own filter/scope logic a third time
+  (`web-static/js/game.js`'s `fieldOptions()` is the second) -- this
+  class only supplies the Discord embed/component layer on top of an
+  already-correct legal-candidate list. `BotChoiceResolver` gained two
+  new public methods for this (`handCardFieldCandidates()`/
+  `discardCardFieldCandidates()`, mirroring its own pre-existing
+  `moodFieldCandidates()`/`playerFieldCandidates()`), since it previously
+  only ever needed to return ONE non-strategic pick, never every legal
+  option.
+
+**Custom_id scheme** (colon-delimited, always well under Discord's own
+100-char cap): `ms:view:{gameId}` (refresh/select-a-game buttons),
+`ms:pass:{gameId}`, `ms:play:{gameId}` (the "play a card" select menu --
+its own value is the chosen card id),
+`ms:playfield:{gameId}:{cardId}:{stepIndex}:{answers}` (that card's own
+`stepIndex`'th field's value select -- `answers` is every EARLIER
+field's own already-submitted choice for this same card, round-tripped
+via `encodeAnswers()`/`decodeAnswers()` (URL-safe base64 of the JSON
+choices array so far) since a 2-field card's second select needs to
+remember the first one's answer across the trip; `stepIndex` is always
+`0` for a single-field card, so its own custom_id looks the same as
+before this class supported a second field), `ms:decision:{gameId}`
+(the current pending decision's own single field's value select --
+decisions never have more than one field), `ms:newgame:0`/
+`ms:newgamebot:0` (starting a practice game -- below; the trailing `0`
+is always a dummy, never a real game id), `ms:cards:{gameId}` (the
+"View Cards" button -- switches to a browse screen offering
+`ms:cardhand:{gameId}`/`ms:cardplay:{gameId}`/`ms:carddiscard:{gameId}`
+select menus, one per zone, each value the chosen card's own game_cards
+id), `ms:log:{gameId}` (the "Game Log" button). A field's own KEY is
+never encoded in a custom_id (only an earlier field's already-submitted
+VALUE) -- it's always re-derived server-side from the current board
+state and `stepIndex`.
+
+**Starting a practice game** (reported live right after this feature's
+own first ship: "Can we add a command to start a game from inside
+discord?") is the one action here that doesn't act on an already-existing
+game -- a `New Practice Game` button, offered wherever this class already
+shows a message (no active game, the multi-game picker, and every board
+view, so there's always a way to start another one). `deck_type`
+`structure` (`GameService::createGame()`'s own default) needs no
+deck-building step at all, and seating a practice bot is just naming its
+own user id alongside the caller's own in `createGame()`'s `$userIds` --
+so this is fully completable inside Discord, unlike almost everything
+else this class still points at the web app for. Exactly one practice
+bot configured (`GameService::listPracticeBots()`) starts immediately;
+2+ shows a select menu (`ms:newgamebot:0`) first. `createGame()` alone
+only ever leaves a game `waiting` (see its own docblock) -- `startGame()`
+(deals every seat's cards, flips it to `in_progress`) and
+`advanceAutomatedTurns()` (covers the bot's own very first turn, or an
+auto-passed empty hand) both have to run too, the same two-call sequence
+`POST /games/start` already runs for a web-created game.
+
+**Starting a game against a friend** (reported live: "let's add the
+ability to create a game for another human on the friend list") -- an
+`Invite a Friend` button alongside `New Practice Game` everywhere that
+already appears. Turned out not to need the "real design work" this
+class's own docblock originally flagged a human opponent as needing:
+`createGame()` seats ANY user id immediately, friend or not (the same
+way it already seats a practice bot's own user id), so the friend
+doesn't need to be present in this Discord interaction, already
+Discord-linked, or to explicitly accept anything -- exactly like the
+web app's own New Game dialog friend-picker, which has no invite/accept
+step either (see `createFriendGameMessage()`'s own docblock).
+`FriendshipService::listFriends()` (accepted friendships only) supplies
+the picker (`ms:friendgamewith:0`) in place of `listPracticeBots()`; an
+empty list gets its own message pointing at
+`/game/?open_friends=1` instead. Once created, `startGame()`/
+`advanceAutomatedTurns()` still both run (the latter now purely for its
+OTHER trigger, a default-on empty-hand auto-pass, since a human
+opponent is never a bot) -- but unlike a practice bot, nothing plays
+the friend's own first turn for them if the coin flip lands on them;
+the board just renders an ordinary "waiting on {username}'s turn," the
+same as any other game with an idle opponent. No notification is sent
+to the invited friend (on Discord or otherwise) -- matching the web
+app's own `POST /games` route, which doesn't notify either; the friend
+learns about it the same way they always have, by checking their own
+games list or a `notifyYourTurn()` push once play reaches them.
+
+**Score line, card details, and the game log** (reported live: "show ...
+number of rounds each player has won so far, number of cards each player
+had in hand," "some way to view the card details for the cards in
+hand/play/discard," and "some way to view the text game log") -- three
+small additions on top of what the board already showed, all reusing
+data `GameService::getState()` already returns rather than adding any
+new query of their own:
+
+- Each player's score line now reads `{username}: {points} pts,
+  {rounds} round(s) won, {n} card(s) in hand`, the same
+  `players[].total_wins`/`hand_count` the web board's own player list
+  already shows (see `buildGameState()`), just never surfaced here
+  before.
+- A "View Cards" button switches the message to a browse screen
+  (`cardsMessage()`) offering up to three select menus -- one per zone
+  with anything in it (your own hand, everyone's in-play moods, the
+  discard pile) -- each option's value the card's own unique
+  `game_cards` id. Picking one (`ms:cardhand:`/`ms:cardplay:`/
+  `ms:carddiscard:{gameId}`) shows that single card's full catalog
+  detail (name, value, color, `rules_text`) via `cardDetailMessage()`,
+  with a "Back" button returning to the browse screen. The discard
+  pile's own select keeps the MOST RECENT `MAX_SELECT_OPTIONS` (25)
+  discards (a negative-length `array_slice()`) rather than the earliest
+  ones, once a long game's discard pile exceeds that cap, since those
+  are the ones a player is actually likely to want to check.
+- A "Game Log" button (`gameLogMessage()`) shows `recent_events` --
+  `GameService::recentEvents()`'s own already-bounded 15-row, newest-
+  first feed (the same one the web board's own "Recent plays" panel
+  reads) -- as plain text, with a defensive second cap (`substr()`
+  around 1900 chars) in case even 15 rows of unusually verbose
+  descriptions would still overflow Discord's own 2000-char message
+  content limit. Deliberately reuses this bounded feed rather than the
+  unbounded `fullEventLog()` (the web app's own "download log" export),
+  which has no such cap at all.
+
+**Discard pile summary** (reported live: "the user needs to be able to
+see the discard pile in the discord client") -- `discardPileSummary()`
+adds a `Discard pile ({n}): {name} ({value}), ...` line to every board
+view, right alongside `inPlaySummary()`'s own "moods in play" lines,
+the same public-information treatment. The "View Cards" button above
+already let a player look up ONE discard-pile card's own full detail,
+but there was still no way to see the pile at a glance the way in-play
+moods already could be. Capped at 900 chars (`substr()`) -- unlike
+in-play moods, a long game's discard pile can run to 100+ cards, which
+could otherwise push this one line, on top of everything else
+`boardMessage()` already shows, past Discord's own 2000-char message
+content limit.
+
+**Who went first this round** (reported live: "the discord client game
+display needs to show which player went first this round") --
+`boardMessage()` now opens with a `Round {n} -- {username} went first.`
+line, reading `round.went_first_game_player_id`
+(`BoardState::roundFirstPlayerId()`) rather than the round's own bare
+`first_game_player_id` column -- deliberately, even though Discord only
+supports format `standard` today: for format `team`, that column only
+ever names a representative member of whichever TEAM went first, not
+necessarily the player who actually did (see that method's own
+docblock), so using the field that's already correct for every format
+means nothing here needs revisiting if Discord ever supports `team`.
+
+**Announcing who won** (reported live: "the ephemeral message
+announcing the game ending should mention who the winner was") -- a
+`completed` game used to fall into the same generic "Game #X is
+'completed'" message every other non-`in_progress` status still gets,
+even though every action's own `handleComponent()` catch-all
+re-renders the board via `boardMessage()` right after it runs -- so the
+very last thing a player who just won a game saw was that plain status
+line, with the actual result nowhere on screen. `boardMessage()` now
+special-cases `completed` first, reading `game.winner_usernames` (both
+teammates' names for a format `team` win -- moot for the
+`standard`-only format Discord supports, but the same field the web
+board's own "Game over" banner already reads) alongside each player's
+final `total_wins` tally.
+
+**Card colors** (reported live: "let's show the colors of the cards in
+the discord client as well as the name/value") -- every card listing
+this class builds (a hand, `inPlaySummary()`, `discardPileSummary()`, a
+select-menu option, `cardDetailMessage()`'s own single-card view, a
+`mood`/`hand_card`/`discard_card` field's own candidate labels, ...)
+used to build its own "{name} ({value})" string inline; `cardLabel()`
+is now the one place that format lives, reading `serializeCard()`'s own
+`color` field to produce "{name} ({value}, {Color})" everywhere
+instead.
+
+**Card art in the single-card detail view** (issue #233's own
+follow-up: "is there any way we can show card thumbnails instead of
+text?", then "either way, let's add the card image to the card detail
+display") -- `cardDetailMessage()` now attaches one Discord embed
+carrying that card's own MSW print, via `cardArtUrl()`, the same
+`web-static/img/cards/MSW/{catalog_card_id}-{slug}.webp` URL
+`web-static/js/game.js`'s own `defaultCardArtUrl()` builds (a Creativity
+copy's own `catalog_card_id` already switches to whatever it's
+currently copying, matching its name/rules_text, so the art shown
+always matches what's actually displayed -- see `serializeCard()`'s own
+comment). These `.webp` files are ordinary public static assets (no
+auth), so Discord's own servers can fetch one directly the same way a
+browser already does for the web board. `ephemeralMessage()`/
+`updateMessage()` both gained an optional third `$embeds` parameter for
+this -- every other call site still passes none, so this is the only
+message that carries one. Deliberately still text-only for every
+MULTI-card list (a hand, `inPlaySummary()`, `discardPileSummary()`) --
+Discord caps a message at 10 embeds total, each holding at most one
+image, so a full hand or in-play board would either break down past
+~10 cards or need a far bulkier one-embed-per-card layout in place of
+today's compact lines. See "Composite in-play board image" below for
+the SINGLE-image alternative that follow-up question led to.
+
+**Composite in-play board image** (issue #233's own follow-up: "would
+it be possible to use some kind of image library to render, say, the
+cards in play as a single image to embed in the game display
+message?", scoped by explicit decisions: directly in the main board
+message, in-play only for now) -- `boardMessage()` now attaches one
+embed, whenever at least one mood is currently in play, pointing at
+`boardImageUrl()`'s own signed URL. `BoardImageRenderer` tiles every
+in-play card's own MSW print (GD -- confirmed bundled with PHP on the
+target Bluehost hosting, including `.webp` DECODE support, unlike the
+Imagick PECL extension shared hosting can't install), output as PNG
+regardless of the source format (GD's own WEBP *encode* support is
+less universally guaranteed than decode).
+
+Reported live, right after this first shipped: "would it be possible
+to arrange the cards similarly to how we do in the web client,
+including the player's names, badges on the cards to indicate current
+value, etc." -- `renderBoardImage()` now groups `in_play` by
+`owner_game_player_id`, the exact same way `inPlaySummary()`'s own text
+listing already does (same `$state['players']` seat order, a player
+with nothing in play gets no row at all), and `BoardImageRenderer` lays
+those groups out as one labeled row per player instead of an
+undifferentiated grid, with a current-value badge (dark pill, top-right
+corner) on any card whose `value` no longer matches its `base_value` --
+mirroring `web-static/js/game.js`'s own `buildCardThumb()` (`if
+(card.value !== card.base_value)`). Deliberately NOT the web board's
+own viewer-relative north/south/east/west seating
+(`inPlayZoneAssignments()`) -- this image is fetched once by Discord's
+own servers and cached at a single URL keyed only by game id, with no
+per-viewer variant, so "south is always the viewer's own seat" can't
+apply here; whichever player happened to invoke `/moodswings` first
+would otherwise freeze everyone else's own view into THEIR
+perspective. Text rendering deliberately stays on GD's own built-in
+bitmap fonts (`imagestring()`) rather than `imagettftext()`, which needs
+FreeType support in GD's own build AND a font file on disk that isn't
+confirmed either way for the target hosting -- the built-in fonts work
+in every GD build unconditionally. Every OTHER badge
+`buildCardThumb()` can show (chaos delta/override, Copy, recolor,
+suppressed, ...) is deliberately out of scope -- those only ever apply
+to a `chaos_draft`-format game, and this class only ever supports
+`'standard'` (see its own `SUPPORTED_FORMAT`).
+
+`DiscordGameCommandService::cardArtFilePath()` locates each card's art
+file ON DISK (unlike `cardArtUrl()`'s public URL) by probing two
+candidate paths, since local dev and production disagree on where
+`web-static/img/` sits relative to that file -- production's
+`deploy.yml` flattens `web-static/`'s own contents straight into the
+doc root alongside `src/` (the same relative depth `dirname(__DIR__, 2)`
+already reaches `bin/` at), but locally `web-static/` is a sibling of
+`php-app/` ITSELF, one level shallower.
+
+Unlike every other route this class's responses point at, the new
+`GET /discord/board-image` route in `public/index.php` is deliberately
+UNAUTHENTICATED -- Discord's own servers fetch an embed's `image.url`
+directly, with no session cookie of the viewer's to send. Reported
+live in response to "how should the board-image URL be protected from
+guessing/enumeration?": rather than a new dedicated secret, or
+shipping unsigned, `boardImageUrl()`/`verifyBoardImageSignature()`
+reuse the existing `DISCORD_CLIENT_SECRET` as an HMAC-SHA256 key over
+the game id, so only a URL this class itself generated can pass. The
+route renders via `renderBoardImage()`, which uses `getSpectatorState()`
+(public information -- moods in play, never a hand) rather than
+`getState()`, since there's no per-viewer session for the signed
+request to carry the way every other method in this class has
+`$userId` for; a missing/invalid signature or nothing renderable
+(game gone/still `waiting`/`abandoned`, or simply no cards in play)
+gets a plain 404.
+
+Reported live: the embed shipped blank in production -- `boardImageUrl()`
+originally built off `SiteUrl::root()` (the bare domain, meant for
+STATIC frontend links like `cardArtUrl()`'s own `.webp` URLs) instead
+of `APP_URL` (which includes the PHP app's own `/app` path prefix on
+shared hosting -- see `SiteUrl`'s own docblock). `/discord/board-image`
+is a `public/index.php` ROUTE, the same category as
+`DiscordOAuthService::redirectUri()`'s own `/discord/oauth/callback`
+link, which already builds off `Config::get('APP_URL')` for exactly
+this reason -- `SiteUrl::root()` pointed Discord's own fetch at the
+bare domain, missing the `/app` prefix entirely, a 404 Discord just
+renders as no image at all. Fixed to match `redirectUri()`'s own
+convention.
+
+**The image wasn't updating as moods got played** (reported live: "the
+discord in play image is not being updated as moods are played in the
+game") -- `boardImageUrl()`'s own URL used to be a bare function of the
+game id alone, identical on every single render for the same game.
+Discord's own CDN caches an embed image by URL the same way any HTTP
+client would, so once it fetched the image for a game once, it just
+kept serving that same cached copy back forever, no matter how many
+moods got played afterward -- `boardMessage()` itself was already
+correctly re-rendering fresh state on every call, just at an
+UNCHANGED url Discord had no reason to ever re-fetch. `boardImageUrl()`
+now takes a `$cacheKey` -- `boardImageCacheKey()` fingerprints exactly
+what `BoardImageRenderer` actually draws from `in_play` (each card's
+own `card_id`/`catalog_card_id`/`owner_game_player_id`/`value`,
+truncated to 12 hex chars of an `md5()`), appended as a plain, UNSIGNED
+`v=` query param. Deliberately not fed into `verifyBoardImageSignature()`'s
+own HMAC (still only ever a function of the game id) -- it's purely a
+cache-busting hint for Discord's own fetch, never anything the
+`/discord/board-image` route itself trusts for authorization, which
+still always re-renders fresh from the current database state
+regardless of what `v` says. An unchanged board (a plain "Refresh"
+click with nothing new having happened) keeps the exact same URL, so
+Discord still gets to reuse its own cache exactly when it should.
+
+**Discard pile row + a separate hand image** (reported live: "can we
+show the discard pile as an image, as well? It could be part of the
+same image that the play area is in, with clearly delineated/labeled
+zones, or a second image, though they both require labeling. I would
+also like to show the active user's hand as a composite image, labeled
+'your hand' -- I suspect that this requires a separate image since a
+composite would be problematic with hidden information") -- both public
+information, but handled two different ways:
+
+- The discard pile is public exactly like in-play cards are, so
+  `renderBoardImage()`'s own `discardImageRow()` folds it into the SAME
+  composite image as one more labeled row ("Discard Pile (N)", or
+  "Discard Pile (12 of N, most recent)" once it's been truncated -- see
+  below), appended after every real player row. `BoardImageRenderer`
+  itself needed no changes at all: it has no notion of "player" beyond
+  render()'s own param name, just "a label and some cards," so a
+  synthetic discard row is exactly as valid an entry as a real player's.
+  Capped to the most recent `MAX_DISCARD_CARDS_SHOWN` (12, matching
+  `BoardImageRenderer::MAX_CARDS_PER_PLAYER` so every row in the image
+  stays the same width) -- a long game's pile can run to 100+ cards (see
+  `discardPileSummary()`'s own docblock), and the label says so whenever
+  the cap actually truncated anything. `boardMessage()`'s own embed
+  condition changed from "only when `in_play` is non-empty" to "when
+  `in_play` OR `discard_pile` is non-empty" -- a game with nothing
+  currently in play but something already discarded used to show no
+  board image at all. `boardImageCacheKey()` now fingerprints
+  `discard_pile` (its own most recent `MAX_DISCARD_CARDS_SHOWN`) too, not
+  just `in_play` -- a card discarded straight from hand (a
+  `discard_card` effect target) changes the discard pile while leaving
+  `in_play` completely untouched, which would otherwise repeat, for the
+  discard row specifically, the exact stale-cache bug fixed above.
+
+- A hand is NOT public information, so it gets its own SEPARATE embed
+  and its own SEPARATE signed, unauthenticated route --
+  `GET /discord/hand-image` -- rather than folding into
+  `/discord/board-image`'s existing public URL. `handImageUrl()`'s
+  signature is keyed to `$gamePlayerId` (one single seat) instead of
+  `$gameId` (every seat's shared board), with its own `hand:`-prefixed
+  HMAC message (domain separation from `signBoardImage()`'s bare game
+  id, so a board-image signature can never also verify as a valid
+  hand-image one even for a coincidentally equal number). This doesn't
+  (and, over plain HTTP image URLs Discord's own servers fetch with no
+  viewer session attached, largely can't) stop the player who
+  legitimately receives the URL from sharing it further -- exactly as
+  true of a screenshot of their own hand -- but it does stop anyone else
+  from discovering or guessing another player's own hand-image URL from
+  the outside, the same guarantee the board image's signature already
+  gives against enumeration. `renderHandImage()` calls the new
+  `GameService::getHandForGamePlayer()`, which resolves `$gamePlayerId`
+  back to its own game/user id and defers straight to `getState()` --
+  deliberately NOT a new, separately privacy-reviewed read path, just
+  the exact same `'you'.'hand'` a normal session-authenticated call for
+  that same seat's own user would already return. `boardMessage()`
+  appends this as a second embed only when the viewer's own hand is
+  non-empty, reusing `BoardImageRenderer::render()` completely unchanged
+  -- a single row labeled "Your Hand."
+
+**Bot turns/auto-passes weren't happening at all via Discord** (reported
+live: "every bot decision ... is not running until the 15 minute CRON
+recovery job runs") -- every equivalent web write route (`POST /games/pass`,
+`/games/play`, ...) already calls `GameService::advanceAutomatedTurns()`
+right after its own mutation, and the web client's own ~4s
+`GET /games/state` poll ALSO calls it on every single poll as a
+backstop, so a bot's own turn (or even a human's own default-on
+empty-hand auto-pass) there gets driven forward even if nothing else
+does. `handleComponent()` never called it at all after a human's own
+pass/play/decision, and `handleCommand()` (the `/moodswings` command
+itself) never called it either -- so via Discord, a following bot turn
+just sat there with nothing to drive it forward until the periodic cron
+fallback eventually caught it. Both now call it: `handleComponent()`
+right after a mutating verb's own switch case falls through (skipped
+when a further field-select is still pending, i.e. nothing was actually
+played yet), and `handleCommand()` defensively before rendering the
+board, matching `GET /games/state`'s own best-effort
+`try`/`catch (GameStateException)` so a transient failure there (e.g.
+lock contention from a concurrent write) never blocks the board from
+rendering.
+
+**No new persistence** -- every interaction re-fetches `GameService::getState()`
+(for display) and, when rendering a field select, a fresh `BoardState`
+(for `BotChoiceResolver`'s candidate enumeration) fresh from the
+database; nothing about "which card is mid-play" or "which field is
+being answered" needs its own table, since it all fits in the custom_id
+above and gets re-validated against the live board on every round trip.
 
 ### Lifetime stats
 
@@ -10231,22 +10737,40 @@ since it already holds that dependency):
   `convictionBestOpponentMoodId()`/`sortPriorityValue()` once more: the
   same `PHP_INT_MIN` deprioritization as Contempt above, unless either a
   non-teammate opponent currently has ANY mood in play for Conviction to
-  remove (`convictionBestOpponentMoodId()` -- the highest-value mood
-  among non-teammate opponents only; `ConvictionEffect`'s own field has
-  no owner or color restriction at all, so the bot's own or a teammate's
-  mood is deliberately excluded the same way Contempt's own targeting
-  already excludes them), OR playing it for its own plain printed value
-  (2, no ability at all) would be the deciding difference between the
-  bot's own group NOT currently having the highest score this round and
-  having it (`wouldBecomeHighestScore()`, reused with an
-  `$unboostedValue` of 0, the identical reuse Contempt's own policy
-  already makes of it). Unlike Contempt's own optional "you may" field,
-  though, `ConvictionEffect`'s `target_mood_id` is REQUIRED -- once the
-  bot commits to playing it at all, `convictionTargetMoodId()` must
-  still supply SOME legal target even with no qualifying opponent mood,
-  so it falls back to the LOWEST-value other mood currently in play (the
-  bot's own, or a teammate's in Open/Closed Team Play) rather than
-  leaving the field empty.
+  remove (`convictionBestOpponentMoodId()` -- the non-teammate-opponent
+  mood whose removal costs its owner the most round score, ranked by a
+  real simulated `RoundScorer::score()` before/after
+  `BoardState::moveInPlayToBottomOfDeck()` on a clone rather than raw
+  `valueOf()`; `ConvictionEffect`'s own field has no owner or color
+  restriction at all, so the bot's own or a teammate's mood is
+  deliberately excluded the same way Contempt's own targeting already
+  excludes them), OR playing it for its own plain printed value (2, no
+  ability at all) would be the deciding difference between the bot's own
+  group NOT currently having the highest score this round and having it
+  (`wouldBecomeHighestScore()`, reused with an `$unboostedValue` of 0,
+  the identical reuse Contempt's own policy already makes of it). Unlike
+  Contempt's own optional "you may" field, though, `ConvictionEffect`'s
+  `target_mood_id` is REQUIRED -- once the bot commits to playing it at
+  all, `convictionTargetMoodId()` must still supply SOME legal target
+  even with no qualifying opponent mood, so it falls back to the
+  LOWEST-value other mood currently in play (the bot's own, or a
+  teammate's in Open/Closed Team Play) rather than leaving the field
+  empty.
+
+  Reported live: a raw `valueOf()` comparison picked the wrong target
+  whenever Bliss ("while in play, triple your own moods sharing a color
+  with whatever paid its cost") was in play alongside one of the moods
+  it was boosting -- Bliss's own bonus is applied entirely inside
+  `RoundScorer::score()`, never reflected in `BoardState::valueOf()` for
+  either Bliss or the mood it's boosting, so a mediocre-value Bliss
+  never looked worth targeting next to whichever boosted mood happened
+  to have the higher raw value, even though bottoming Bliss itself
+  erases the WHOLE bonus rather than just one card's own share of it. A
+  live example cost a human opponent the round (and the match): the bot
+  bottomed their boosted Joy instead of their Bliss, leaving them with
+  enough points to still win on the "ties go to whoever played first"
+  tiebreak. The score-impact simulation above fixes this generally,
+  without special-casing Bliss by name.
 - **Hate's own "never leave it untargeted, except..." policy** (confirmed
   by the maintainer), via `hateTargetMoodId()`: unlike every OTHER
   optional `CardChoiceSchema` field (left blank by default per
@@ -10300,9 +10824,9 @@ since it already holds that dependency):
   it (and, per `RecklessnessEffect`'s own "give the mood back after
   scoring if you still have it" text, hands the bot itself that same
   extra play in the meantime). With neither in play anywhere on the
-  board, falls back to `convictionBestOpponentMoodId()`'s own highest-
-  CURRENT-value non-teammate-opponent-mood policy; `null` (leaving the
-  field unfilled, same as before this fix) only once no non-teammate
+  board, falls back to `convictionBestOpponentMoodId()`'s own
+  score-impact-ranked non-teammate-opponent-mood policy; `null` (leaving
+  the field unfilled, same as before this fix) only once no non-teammate
   opponent has any mood in play at all.
 - `chooseDecisionAnswer(BoardState $state, array $field, int
   $botGamePlayerId, string $decisionType = '', ?int $sourceCardId =
@@ -12445,6 +12969,292 @@ further if that's ever worth the added surface; every prefilled field
 stays freely editable before submitting regardless, so this is a
 starting point, not a silent one-click recreate.
 
+### Puzzles (issue #524)
+
+A curated, freely-replayable library of standalone solitaire puzzles: a
+fixed starting hand/board and a specific goal, no live opponent, no
+daily/weekly cadence, no leaderboard. Debuted with 10 hand-authored,
+engine-verified puzzles spanning easy/medium/hard (see
+`php-app/tests/Rules/PuzzleContentTest.php`, which builds each one from
+its own stored definition and drives the intended solution -- and, where
+there's a tempting wrong line, asserts that line does NOT solve it --
+through the real engine) and two achievements in a new category, J
+("Puzzles"): "Puzzle Solver" (unlocked the first time a solve doesn't
+use the puzzle's own Hint) and "Puzzle Enthusiast" (solve 10 distinct
+puzzles).
+
+A puzzle attempt is a real, minimal `games` row (`format = 'puzzle'`,
+exactly one seat), reusing the entire existing rules engine, persistence
+layer, API surface, and board-rendering frontend almost unchanged, rather
+than a parallel bespoke system:
+
+- `GameService::createPuzzleAttempt(int $userId, int $puzzleId): int`
+  deals a puzzle's own stored `starting_hand_card_ids`/
+  `starting_in_play_card_ids`/`deck_card_ids` (ordered catalog card id
+  arrays, no shuffling) directly into `game_cards`, and inserts one
+  `game_players`/one `game_rounds` row. Deliberately bypasses
+  `createGame()`/`startGame()` entirely -- both hard-enforce
+  `MIN_PLAYERS = 2`, which a solitaire puzzle can never satisfy -- and
+  starts the game `'in_progress'` immediately rather than `'waiting'`.
+  "Try Again" is just calling this again -- a fresh `games` row, the same
+  pattern Rematch already uses -- rather than resetting one in place, so
+  an old abandoned/solved attempt just sits there like any other finished
+  game.
+- `advanceTurn()`'s ordinary "no next player? score the round" fallback
+  would wrongly invoke the real scoring pipeline the instant a 1-seat
+  puzzle's `plays_remaining` hits 0 -- `advancePuzzleTurn()` is a new
+  early special case (mirroring the existing `'team'`-format one right
+  above it) that instead just grants the same seat a fresh mini-turn
+  (recomputed via `computeFreshGrants()`, so any Hope/Grace/Stubbornness
+  already in play on the puzzle's board still applies) and logs a
+  `puzzle_turn_refreshed` event, keeping the attempt open indefinitely
+  until the player solves it or runs out of legal plays.
+- The goal itself is never checked by scoring -- `playMood()`/
+  `respondToDecision()` (a play that itself pauses on a decision, e.g. a
+  Duplicity repeat offer, only ever finishes resolving in the latter) each
+  call `checkPuzzleGoal()` right after a play resolves, evaluating the
+  puzzle's own `goal_type`/`goal_params` against the live `BoardState`:
+  `hand_empty`, `card_in_hand`/`card_in_play` (a specific catalog card in
+  that zone), `min_score` (the solver's own total in-play value at
+  least a target), or `outscore_opponent` (see below). Checked *before*
+  `finishPlay()`'s own turn-advance
+  logic runs, not after -- otherwise a puzzle with a `max_plays` cap
+  couldn't tell a clean single-turn solve apart from one that only
+  finished after a `puzzle_turn_refreshed` reset, since that reset would
+  already be logged by the time a check running after `finishPlay()` saw
+  it, even for the correct solution.
+- `max_plays` (optional, per puzzle) means "solved within this many total
+  plays, in one unbroken turn" -- both the play count
+  (`COUNT(*) FROM game_events WHERE event_type = 'mood_played'`) and a
+  check that no `puzzle_turn_refreshed` event happened yet must hold. A
+  puzzle whose intended solution genuinely needs a mid-attempt turn
+  refresh (e.g. establishing a mood in play on one mini-turn before a
+  card that costs discarding one becomes legal on the next) simply leaves
+  `max_plays` unset.
+- Solving marks `games.status = 'completed'` (`winner_game_player_id` is
+  the solver's own seat, purely so the ordinary completed-game board
+  treatment applies -- there's no real "winner" concept otherwise),
+  upserts `puzzle_solves` (first solve or a new personal best), and fires
+  `AchievementService::onPuzzleSolved()`. Deliberately does NOT call
+  `recordGameCompletionStats()` -- that's the real win/loss lifetime-stats
+  pipeline, and a solitaire puzzle isn't a real game in that sense. If a
+  `max_plays` cap is exceeded (or a turn refresh already happened) before
+  the goal is reached, the puzzle simply stays `in_progress` and
+  replayable -- there's no separate "you failed" state; the player just
+  keeps playing or starts a fresh attempt.
+- `GET /puzzles` lists every active puzzle plus the caller's own solve
+  status (`GameService::listActivePuzzles()`); `POST /puzzles/attempt`
+  (`{puzzle_id}`) starts one, returning `{game_id}`.
+- Frontend: a "Puzzles" button in the lobby opens a dialog listing every
+  puzzle (title, difficulty, description, solved checkmark + best play
+  count) with an "Attempt"/"Try Again" button per row that calls
+  `POST /puzzles/attempt` and reuses the exact same `showBoard()`/
+  `refreshBoard()`/`renderBoard()` pipeline every other game already
+  uses. The one rendering gap a single-seat game exposed:
+  `IN_PLAY_ZONE_ORDER_BY_PLAYER_COUNT`/`.in-play-board--N` only handled
+  2-4 players; both now have a `1` entry. A completed puzzle's board shows
+  a "Puzzle solved in N plays!" banner in place of the ordinary "Game
+  over -- X won" one (`games.puzzle_plays_made`, exposed only for
+  `format = 'puzzle'`).
+- Deliberately out of scope for this debut: a "give up / show solution"
+  reveal.
+- **Opponent puzzles**: a puzzle can optionally seat a second, fixed,
+  never-acting board alongside the solver
+  (`puzzles.opponent_hand_card_ids`/`opponent_in_play_card_ids`, both
+  `'[]'` for every solitaire puzzle). `createPuzzleAttempt()` deals these
+  into a second `game_players` seat -- always the fixed `PuzzleOpponent`
+  user (`is_bot = 1`, same fixed-real-`users`-row convention
+  `0090_add_practice_bots.sql` established for practice bots, looked up or
+  self-healingly created by `GameService::puzzleOpponentUserId()` so a
+  test suite that truncates `users` between runs never depends on
+  migration seed order) -- with `first_game_player_id` pointed at the
+  opponent and `current_turn_game_player_id` still the solver, so "who
+  went first" reads correctly for any card that cares. The opponent's own
+  seat is never given a real or automated turn -- `advancePuzzleTurn()`
+  only ever refreshes `current_turn_game_player_id`, which is set to the
+  solver once and never changed, so the real
+  `scoreRoundAndAdvance()`/`recordGameCompletionStats()` pipeline (which
+  would pollute real win/loss stats and achievements) is never reached;
+  the opponent's cards are simply pre-set board state. New `goal_type`
+  `outscore_opponent` (`GameService::puzzleSolverOutscoresOpponent()`)
+  reuses the real `RoundScorer::score()`/`winner()` math directly -- not a
+  puzzle-specific approximation, so a reactive card like Vulnerability
+  ("value is 7 if a card was put into the discard pile this round")
+  responds to the actual board the solver's plays produced -- with the
+  opponent's seat first in `winner()`'s own turn-order argument, so a tied
+  score goes to the opponent, matching the Extended Rules' "ties go to
+  whoever played first" tiebreak. Debut puzzle: "One Fell Swoop" was
+  redesigned around this (Ambition's own discard-gated extra play is a
+  trap -- taking it feeds the opponent's own Vulnerability instead of the
+  solver's score).
+- **Hints**: `puzzles.hint` is an optional per-puzzle string (`NULL` for
+  most puzzles), surfaced as `game.puzzle_hint` in `getState()` for a
+  `format = 'puzzle'` game. The frontend shows a "Hint" button on the
+  puzzle's own board only when this is non-null, opening a dialog with
+  that text rather than showing it unprompted -- so a puzzle with no hint
+  set shows no button at all, and one with a hint doesn't spoil itself for
+  a player who hasn't asked for help. "One Fell Swoop" is the debut hint,
+  warning about Ambition's own discard trap without giving the solution
+  away outright.
+- **Discard-pile seeding and pre-banked extra plays**: `puzzles.starting_discard_card_ids`
+  seeds the shared discard pile itself at attempt creation (owned by the
+  solver), same "`'[]'` means unused" convention as
+  `opponent_hand_card_ids`/`opponent_in_play_card_ids`. `puzzles.extra_play_source_card_id`
+  covers a puzzle whose solution needs an extra play already banked at
+  turn start (e.g. "you have... one extra play from Joy") rather than
+  earned live during the attempt -- `createPuzzleAttempt()` resolves that
+  catalog card to wherever its own instance actually landed and adds a
+  second play grant sourced from it, in exactly the shape a real banked
+  Joy/Generosity play already takes (no `computeFreshGrants()` call
+  needed, since a puzzle attempt never had a live turn before this one for
+  that to have fired from). "Turn It On Yourself" is the debut puzzle
+  built on both: Joy sits in the discard pile, Conviction is the solver's
+  only card in hand, and Conviction's own "choose a mood, its player
+  bottoms it and draws a card" is legal against ANY mood in play --
+  targeting the opponent's own Benevolence or Shock is tempting (it's
+  legal) but bounces the draw to THEM, not the solver, leaving the
+  solver's own Conviction tied against whichever opponent mood is left (a
+  tie the opponent wins, having gone first) instead of targeting
+  Conviction itself to draw the deck's own top card (a seeded Chivalry,
+  worth 5 while in play since the solver didn't go first) and outscore
+  the opponent's Benevolence(2) + Shock(2) = 4 with the banked extra play.
+  The puzzle's own full 45-card decklist is a real structure-deck rarity
+  mix (`GameService::STRUCTURE_DECK_RARITY_COUNTS`) so a player checking
+  the deck list can see Chivalry is genuinely one of the 45 cards in the
+  game, without knowing it's specifically the very next draw.
+- **"Chain Reaction" redesigned around a fourth trap card**: the original
+  solitaire version (`hand_empty` goal, Charity/Idealism/Indifference --
+  clear the whole hand by playing the vanilla card last, since it grants
+  no extra play of its own) now adds an opponent
+  (`outscore_opponent`) and a fourth hand card, Self-Loathing. Self-Loathing's
+  own flat value (6) beats Indifference's (4) outright, but its own
+  "to play this card, put one or more of your moods into the discard
+  pile" cost is genuinely illegal before at least one of Charity/Idealism
+  is already down (nothing to discard yet) -- so unlike an initially-tried
+  Animosity (whose own boosted value turned out to already be true from
+  turn 1 in a puzzle, since the opponent's hand size never changes,
+  letting it solve the puzzle alone in one play with no chain at all),
+  there's no one-move shortcut here. Paying that cost also shrinks the
+  solver back down to 2 moods -- fewer than the opponent's fixed 3
+  (Superiority + two otherwise-inert fillers) -- which spikes Superiority
+  ("value is 7 if its owner has more moods than every other player") from
+  3 to 7, a decisive loss despite Self-Loathing's own tempting value.
+  Deliberately a different trap mechanism (mood count, not the discard-
+  pile/Vulnerability reaction "One Fell Swoop" already uses) even though
+  Self-Loathing's own cost also happens to discard a card.
+- **"Color Chain" tightened by swapping out its own third card**:
+  Duplicity's own unconditional "you may play an additional mood this
+  turn" used to make the puzzle's last two cards interchangeable once
+  Benevolence's own "doesn't share a color with any of your moods" rule
+  was satisfied -- any differently-colored second card worked, since
+  Duplicity's own grant covered the third play regardless of order.
+  Indifference (no ability at all) in that slot instead makes exactly one
+  of the six possible orders clear the hand: Idealism's own unconditional
+  grant has to come FIRST (nothing else grants a third play), Benevolence
+  second (satisfied since Indifference, not yet played, is the only thing
+  left that could still violate its color rule), and Indifference last,
+  since it has nothing of its own to spend a grant on. Playing Benevolence
+  first still illegally strands Idealism if Indifference follows it
+  directly (the original "different color" lesson survives), but now also
+  genuinely stalls one play short of clearing the hand even when the
+  color rule itself is respected, unlike before.
+- **"Vain Effort" widened from 3 cards to 4**: Idealism is replaced with
+  both Friendliness (a conditionally-gated extra play, restricted to a
+  mood with an even printed value) and Ambition (an extra play gated
+  behind discarding a card from hand first). With only 4 cards and just 3
+  ways to earn an extra play, playing all 4 outright is never possible in
+  one turn -- clearing the hand (and tripling Vanity's own value) instead
+  means DISCARDING Friendliness via Ambition's own cost rather than ever
+  playing it: Charity(1) + Ambition(2) + Vanity(3 moods x 3, hand now
+  empty) = 12 exactly (the goal's own new target). Playing Friendliness
+  instead of sacrificing it is legal (its own value satisfies Ambition's
+  even-value restriction) but caps the total at just 5, with nothing left
+  to grant Vanity's own play. Its own inline description spoiler about
+  Vanity's dynamic value was later moved behind a Hint instead.
+- **"Wonder's Choice" moved its two color-fodder cards into the discard
+  pile**: Complacency(4, white) and Idealism(0, white) used to sit in play
+  alongside Indifference(4, blue); WonderEffect's own "+2 per mood of the
+  chosen color, counting both in-play moods AND the discard pile" means
+  moving them to the discard pile instead doesn't change how many white
+  matches choosing white finds (still 2), but it does drop their own base
+  values out of the board-value total -- only Indifference(4) remains in
+  play alongside Wonder. Goal retuned from 12 to 8 to match: choosing
+  white now totals Indifference(4) + Wonder(0 + 2*2 = 4) = 8 exactly,
+  while the minority choice (blue) still falls short at
+  Indifference(4) + Wonder(0 + 2*1 = 2) = 6. Its own inline explanation of
+  which cards Wonder counts was later moved behind a Hint ("Which cards
+  does Wonder count?"), matching the pattern already established for One
+  Fell Swoop and Vain Effort.
+- **"Envious Timing" moved its own inline cost explanation behind a
+  Hint**: the description used to spell out Envy's own "discard one of
+  your own moods already in play" cost directly; that explanation now
+  lives behind the Hint button instead ("Envy can only be played by
+  moving one of your OWN moods already in play to the discard pile --
+  with an empty board, it can't be played at all yet."), matching the
+  pattern already established for One Fell Swoop, Vain Effort, and
+  Wonder's Choice.
+- **"Validation Loop" swapped Idealism and Duplicity for two inert
+  filler cards**: both originally-seeded low-value cards granted their
+  OWN extra play from their own printed ability ("you may play an
+  additional mood this turn"), independent of Validation's own reactive
+  "each time you play a mood worth 0 or 1, you may play an additional
+  mood" trigger -- so the puzzle's intended lesson was never actually
+  load-bearing; the two cards' own grants already supplied enough extra
+  plays regardless. Replaced with Sadness(0, black) and
+  Vulnerability(1, green), both purely value-scaling cards with no
+  "after playing" ability of their own, so `ValidationEffect::
+  reactToAnotherPlay()`'s own reactive grant (checked against printed
+  base value, never either card's own dynamic value) is now the only
+  source of the two extra plays the solve needs. Its own inline
+  explanation of that reactive trigger was moved behind a Hint, matching
+  the pattern already established elsewhere in this arc.
+- **"Kindred Colors" swapped both of its non-Eagerness cards**: Duplicity
+  traded for Charity, and Nostalgia traded for Laziness (a vanilla green
+  common with no ability at all). This inverts which grant has to be
+  saved for last -- Charity's own UNCONDITIONAL grant must be spent
+  early (on Eagerness itself, since Eagerness's printed color, green,
+  doesn't match Charity's white), while Eagerness's own CONDITIONAL
+  grant ("...if it shares a color with one of your moods") has to be
+  saved for the very end, since Laziness (green) is the only card left
+  that can satisfy it once Eagerness is in play: Charity -> Eagerness ->
+  Laziness. Playing Eagerness first instead stalls one card short -- its
+  own conditional grant is immediately spent on the only qualifying card
+  (Laziness), leaving Charity with no further grant to use it. Its own
+  inline explanation of Eagerness's color restriction was moved behind a
+  Hint, matching the pattern already established elsewhere in this arc.
+- **"The Lesser Sacrifice" moved its own Conviction targeting
+  explanation behind a Hint**: the description used to spell out that
+  Conviction must send SOME mood to the bottom of the deck, including
+  itself, directly; that explanation now lives behind the Hint button
+  instead ("Conviction has to send SOME mood to the bottom of the deck
+  when you play it, including itself -- choose wisely."), matching the
+  pattern already established elsewhere in this arc.
+- **Listed Easy, Medium, Hard** (reported live): `listActivePuzzles()`'s
+  own `ORDER BY` now reads `p.difficulty, p.id` instead of just `p.id`.
+  No schema change needed -- `puzzles.difficulty` is declared
+  `ENUM('easy', 'medium', 'hard')` (migration 0394), and MySQL already
+  sorts an ENUM by its declaration index rather than alphabetically, so
+  a plain `ORDER BY` on it is already Easy < Medium < Hard; `p.id` stays
+  as the tiebreaker for a stable order within each tier.
+- **"Puzzle Solver" now requires solving without a hint, and a new
+  "Puzzle Enthusiast" achievement** (reported live): `games` gets a new
+  `puzzle_hint_viewed` column, set by the new
+  `POST /games/puzzle-hint-viewed` endpoint (`GameService::
+  markPuzzleHintViewed()`) that the frontend's Hint button now calls the
+  moment it's clicked, before showing the hint text -- fire-and-forget,
+  since the dialog itself doesn't depend on it succeeding.
+  `checkPuzzleGoal()` reads that flag on a solve and passes it straight
+  through to `AchievementService::onPuzzleSolved()`, which now only
+  calls `unlock()` for 'puzzle-solver' when it's false; `unlock()`'s own
+  idempotency means a player whose first several solves all used a hint
+  simply keeps missing it until a later solve (of any puzzle) finally
+  qualifies, rather than permanently losing their shot at it. The new
+  "Puzzle Enthusiast" achievement (target 10, tier Silver) counts
+  DISTINCT puzzles solved via `bumpProgress()`, gated on a fresh
+  `SELECT` against `puzzle_solves` taken before that solve's own upsert
+  so a repeat solve of an already-solved puzzle (even for a new personal
+  best) never bumps it again.
+
 ### Duel: separate per-player decks
 
 `format: 'duel'` and `format: 'draft'` (see "Draft format" below) are the
@@ -12934,8 +13744,10 @@ database with real data.
 
 ## Achievements
 
-A 108-entry catalog (design doc: "MoodSwings-Web Achievements -- Draft
-List"), covering every achievement whose condition is knowable at
+A 110-entry catalog (108 from the original design doc, plus Puzzle
+Solver and Puzzle Enthusiast -- design doc: "MoodSwings-Web
+Achievements -- Draft List"), covering every achievement whose
+condition is knowable at
 game-completion or tournament-completion time, the four meta rows, and
 every account/social trigger with a real call site. `achievements`
 (migration 0357) is static reference data --
@@ -12994,7 +13806,15 @@ Sharing is Caring, the last on `visibility === 'friends'`),
 `GameService::createGame()` (Bot Wrangler, 2+ bot seats) and
 `GET /games/spectate/state`/`POST /games/replay/import`/
 `GET /stats/cards` in `public/index.php` (Spectator Sport/Replay
-Enthusiast/Card Counter).
+Enthusiast/Card Counter). Puzzle Solver and Puzzle Enthusiast (category
+J, "Puzzles" above) are unlocked via `onPuzzleSolved()` from
+`GameService`'s puzzle goal-check hook: Puzzle Solver only when the
+solve's own `games.puzzle_hint_viewed` flag is false (reported live --
+see the Puzzles section for the full "no hint" gate and
+`markPuzzleHintViewed()`), Puzzle Enthusiast a `bumpProgress()` counter
+(target 10) of DISTINCT puzzles solved, gated on a fresh
+`puzzle_solves` check taken before that solve's own upsert so a repeat
+solve of an already-solved puzzle never bumps it again.
 
 Night Owl/Early Bird/Marathon Session ("...your local time"/"a single
 calendar day") need each player's own timezone, which the server has no

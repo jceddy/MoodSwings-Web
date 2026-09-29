@@ -4668,6 +4668,74 @@
         tournamentsDialog.close();
     });
 
+    // -- Puzzles dialog (issue #524) --
+
+    const puzzlesDialog = document.getElementById('puzzles-dialog');
+
+    async function loadPuzzlesDialog() {
+        const puzzlesError = document.getElementById('puzzles-error');
+        puzzlesError.hidden = true;
+
+        const { ok, body } = await listPuzzles();
+        const puzzles = ok ? body.puzzles : [];
+
+        const list = document.getElementById('puzzles-list');
+        list.innerHTML = '';
+        document.getElementById('puzzles-empty').hidden = puzzles.length !== 0;
+
+        for (const puzzle of puzzles) {
+            const item = document.createElement('li');
+
+            const heading = document.createElement('strong');
+            heading.textContent = `${puzzle.title} (${puzzle.difficulty})`;
+            item.appendChild(heading);
+
+            const description = document.createElement('p');
+            description.textContent = puzzle.description;
+            item.appendChild(description);
+
+            if (puzzle.solved) {
+                const solvedNote = document.createElement('p');
+                solvedNote.textContent = puzzle.best_plays === null
+                    ? 'Solved!'
+                    : `Solved! Best: ${puzzle.best_plays} play${puzzle.best_plays === 1 ? '' : 's'}.`;
+                item.appendChild(solvedNote);
+            }
+
+            const attemptButton = document.createElement('button');
+            attemptButton.type = 'button';
+            attemptButton.textContent = puzzle.solved ? 'Try Again' : 'Attempt';
+            attemptButton.addEventListener('click', async () => {
+                attemptButton.disabled = true;
+                const attemptResult = await attemptPuzzle(puzzle.id);
+                if (!attemptResult.ok) {
+                    puzzlesError.textContent = attemptResult.body.message || 'Could not start this puzzle.';
+                    puzzlesError.hidden = false;
+                    attemptButton.disabled = false;
+                    return;
+                }
+                puzzlesDialog.close();
+                showBoard(attemptResult.body.game_id);
+            });
+            item.appendChild(attemptButton);
+
+            list.appendChild(item);
+        }
+    }
+
+    document.getElementById('puzzles-button').addEventListener('click', async () => {
+        await loadPuzzlesDialog();
+        puzzlesDialog.showModal();
+    });
+
+    document.getElementById('puzzles-close-button').addEventListener('click', () => {
+        puzzlesDialog.close();
+    });
+
+    document.getElementById('puzzle-hint-close-button').addEventListener('click', () => {
+        document.getElementById('puzzle-hint-dialog').close();
+    });
+
     // -- New tournament dialog --
 
     // #new-tournament-format's own 'sealed_deck'/'booster_draft' options
@@ -6452,6 +6520,9 @@
     // "east"/"northeast" (right), and (for 3-4 players) whichever index
     // sits directly across is "north".
     const IN_PLAY_ZONE_ORDER_BY_PLAYER_COUNT = {
+        // Issue #524: a puzzle attempt is always exactly one seat -- just
+        // the viewer's own "south" zone, no one else's to place.
+        1: ['south'],
         2: ['south', 'north'],
         3: ['south', 'northwest', 'northeast'],
         4: ['south', 'west', 'north', 'east'],
@@ -6490,7 +6561,7 @@
         board.hidden = false;
         emptyEl.hidden = true;
 
-        board.classList.remove('in-play-board--2', 'in-play-board--3', 'in-play-board--4');
+        board.classList.remove('in-play-board--1', 'in-play-board--2', 'in-play-board--3', 'in-play-board--4');
         board.classList.add('in-play-board--' + state.players.length);
 
         const zoneByGamePlayerId = inPlayZoneAssignments(state);
@@ -8079,6 +8150,7 @@
 
         renderDraftMatchScoreline(state);
         renderRematchButton(state);
+        renderPuzzleHintButton(state);
 
         const inProgressArea = document.getElementById('in-progress-area');
 
@@ -8472,11 +8544,20 @@
         // same as 'completed' -- state.round stays null for both, so both
         // need to skip the "Round N" branch below that assumes a real one.
         if (state.game.status === 'completed' || state.game.status === 'abandoned') {
-            const winnerNames = state.game.winner_usernames && state.game.winner_usernames.length
-                ? state.game.winner_usernames.join(' & ')
-                : 'nobody';
-            document.getElementById('board-round-status').textContent =
-                'Game over — ' + winnerNames + ' won.';
+            // Issue #524: no real "winner" to name for a solitaire puzzle
+            // -- its own distinct banner instead, naming the efficiency
+            // metric (puzzle_plays_made) rather than who beat whom.
+            if (state.game.format === 'puzzle') {
+                document.getElementById('board-round-status').textContent =
+                    'Puzzle solved in ' + state.game.puzzle_plays_made + ' play'
+                    + (state.game.puzzle_plays_made === 1 ? '' : 's') + '!';
+            } else {
+                const winnerNames = state.game.winner_usernames && state.game.winner_usernames.length
+                    ? state.game.winner_usernames.join(' & ')
+                    : 'nobody';
+                document.getElementById('board-round-status').textContent =
+                    'Game over — ' + winnerNames + ' won.';
+            }
         } else {
             // Spectator mode (issue #128)/Tournament spectator mode
             // (issue #238): there's no "you" to say "your turn" relative
@@ -9336,6 +9417,15 @@
         if (state.game.is_tournament_match) {
             return false;
         }
+        // Issue #524: a solved puzzle already has its own "Try Again"
+        // (the Puzzles dialog's own button, which starts a correctly-
+        // seeded fresh attempt) -- Rematch's own New Game dialog has
+        // no way to recreate a single-seat puzzle attempt at all, and
+        // would just offer a confusing "new game" with format 'puzzle'
+        // and no real opponents.
+        if (state.game.format === 'puzzle') {
+            return false;
+        }
         if (state.game.status !== 'completed') {
             return false;
         }
@@ -9398,6 +9488,27 @@
         const show = canRematch(state);
         button.hidden = !show;
         button.onclick = show ? () => openNewGameDialog(buildRematchPrefill(state)) : null;
+    }
+
+    // Puzzle hint (reported live: "Add a 'hint' button when in the
+    // puzzle") -- shown only for a puzzle whose own row actually has a
+    // hint set (state.game.puzzle_hint, null otherwise -- see
+    // GameService::buildGameState()'s own docblock). Shown for the whole
+    // lifetime of the attempt (including after it's solved), the same as
+    // the board itself stays visible -- there's no reason to hide the
+    // hint once you no longer need it.
+    function renderPuzzleHintButton(state) {
+        const button = document.getElementById('puzzle-hint-button');
+        const show = state.game.format === 'puzzle' && !!state.game.puzzle_hint;
+        button.hidden = !show;
+        button.onclick = show ? () => {
+            // Reported live: "Puzzle Solver" should only unlock on a solve
+            // that never opened this dialog -- fire-and-forget, since the
+            // dialog itself doesn't depend on this succeeding.
+            markPuzzleHintViewed(state.game.id);
+            document.getElementById('puzzle-hint-text').textContent = state.game.puzzle_hint;
+            document.getElementById('puzzle-hint-dialog').showModal();
+        } : null;
     }
 
     // Shared scoreline for every draft-based deck_type's own match --

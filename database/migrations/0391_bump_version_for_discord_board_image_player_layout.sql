@@ -1,0 +1,18 @@
+-- Issue #233 follow-up (reported live, right after the composite
+-- in-play board image first shipped: "would it be possible to arrange
+-- the cards similarly to how we do in the web client, including the
+-- player's names, badges on the cards to indicate current value,
+-- etc."). DiscordGameCommandService::renderBoardImage() now groups
+-- in_play by owner_game_player_id (same seat order/omit-empty-players
+-- rule boardMessage()'s own inPlaySummary() already uses), and
+-- BoardImageRenderer lays those groups out as one labeled row per
+-- player, with a current-value badge on any card whose value no longer
+-- matches its base_value -- mirroring web-static/js/game.js's own
+-- buildCardThumb(). See php-app/README.md's "Composite in-play board
+-- image" section for the full design, including why this stays on
+-- GD's own built-in bitmap fonts and why every other badge
+-- buildCardThumb() can show stays out of scope.
+--
+-- No schema change -- just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.55.13' WHERE id = 1;

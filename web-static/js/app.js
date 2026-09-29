@@ -622,6 +622,19 @@ function cancelTournament(tournamentId) {
     });
 }
 
+// Issue #524: the puzzle collection -- see GameService::listActivePuzzles()/
+// createPuzzleAttempt() for what each of these actually returns.
+function listPuzzles() {
+    return apiRequest('/puzzles');
+}
+
+function attemptPuzzle(puzzleId) {
+    return apiRequest('/puzzles/attempt', {
+        method: 'POST',
+        body: JSON.stringify({ puzzle_id: puzzleId }),
+    });
+}
+
 // Booster Draft's own pod-drafting phase (issue #91 follow-up) -- see
 // TournamentService::getPodDraftState()'s own docblock.
 function getPodDraftState(tournamentId) {
@@ -980,6 +993,18 @@ function saveGameNote(gameId, noteText) {
     return apiRequest('/games/notes', {
         method: 'POST',
         body: JSON.stringify({ game_id: gameId, note_text: noteText }),
+    });
+}
+
+// Reported live: the "Puzzle Solver" achievement only unlocks on a solve
+// where the Hint dialog was never opened -- see
+// GameService::markPuzzleHintViewed()'s own docblock. Fire-and-forget
+// from renderPuzzleHintButton() in game.js; the dialog itself doesn't
+// wait on this.
+function markPuzzleHintViewed(gameId) {
+    return apiRequest('/games/puzzle-hint-viewed', {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId }),
     });
 }
 

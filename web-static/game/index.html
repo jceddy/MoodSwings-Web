@@ -103,6 +103,7 @@
                 <button id="open-games-button" type="button">Open games</button>
                 <button id="weekly-sealed-pool-button" type="button">Weekly Sealed Pool</button>
                 <button id="tournaments-button" type="button">Tournaments</button>
+                <button id="puzzles-button" type="button">Puzzles</button>
                 <div id="lobby-secondary-actions">
                     <button id="past-games-button" type="button">Past games</button>
                     <!-- "Is there a way I can replay these in the dev site using
@@ -177,6 +178,15 @@
                  same #new-game-dialog the New game button does, pre-filled
                  from this game's own settings. -->
             <button id="rematch-button" type="button" hidden>Rematch</button>
+
+            <!-- Puzzle hint (reported live: "Add a 'hint' button when in
+                 the puzzle") -- shown only for format 'puzzle' games whose
+                 own puzzle has a non-null hint (state.game.puzzle_hint) --
+                 see renderBoard()'s own gating in game.js. Opens
+                 #puzzle-hint-dialog with that puzzle's own hint text,
+                 rather than showing it unprompted, so it doesn't spoil the
+                 puzzle for anyone who doesn't need it. -->
+            <button id="puzzle-hint-button" type="button" hidden>Hint</button>
 
             <!-- Watch game replay (issue #240) -- step controls for a
                  completed game's history, shown only while isReplaying is
@@ -1149,6 +1159,31 @@
         </section>
         <p id="tournaments-error" class="error" hidden></p>
         <button id="tournaments-close-button" type="button">Close</button>
+    </dialog>
+
+    <!-- Issue #524: the puzzle collection -- a curated, freely-replayable
+         library of standalone solitaire puzzles (fixed starting hand/
+         board, a specific goal, no live opponent). Each row's own
+         "Attempt"/"Try Again" button starts a fresh single-seat game
+         (POST /puzzles/attempt) and points the board at it -- the SAME
+         #board-view/refreshBoard() pipeline every other game already
+         uses, see showPuzzleBoard() in game.js. -->
+    <dialog id="puzzles-dialog">
+        <h2>Puzzles</h2>
+        <ul id="puzzles-list"></ul>
+        <p id="puzzles-empty" hidden>No puzzles available yet.</p>
+        <p id="puzzles-error" class="error" hidden></p>
+        <button id="puzzles-close-button" type="button">Close</button>
+    </dialog>
+
+    <!-- Puzzle hint (reported live) -- opened by #puzzle-hint-button on
+         the board itself, see renderBoard()/its click handler in game.js.
+         Just the one puzzle's own hint text; no per-puzzle state to load,
+         unlike #puzzles-dialog above. -->
+    <dialog id="puzzle-hint-dialog">
+        <h2>Hint</h2>
+        <p id="puzzle-hint-text"></p>
+        <button id="puzzle-hint-close-button" type="button">Close</button>
     </dialog>
 
     <!-- match_params fields here are deliberately a curated subset of

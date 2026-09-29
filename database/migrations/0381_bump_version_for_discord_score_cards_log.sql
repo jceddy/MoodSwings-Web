@@ -1,0 +1,20 @@
+-- Issue #233 follow-up (reported live: "show ... number of rounds each
+-- player has won so far, number of cards each player had in hand", "some
+-- way to view the card details for the cards in hand/play/discard", and
+-- "some way to view the text game log"):
+--
+--   * Each player's Discord score line now also shows their own rounds
+--     won and current hand count, alongside points -- already-public
+--     data (players[].total_wins/hand_count) never surfaced there before.
+--   * A new "View Cards" button offers a per-zone (hand/in play/discard)
+--     select menu; picking a card shows its full catalog detail (name,
+--     value, color, rules text).
+--   * A new "Game Log" button shows the same bounded, newest-first
+--     recent_events feed the web board's own "Recent plays" panel reads.
+--
+-- See php-app/README.md's "Playing the game via Discord" section for the
+-- full design.
+--
+-- No schema change -- just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.55.3' WHERE id = 1;

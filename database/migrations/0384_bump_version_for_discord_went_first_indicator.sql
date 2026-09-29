@@ -1,0 +1,16 @@
+-- Issue #233 follow-up (reported live: "the discord client game display
+-- needs to show which player went first this round"): every
+-- DiscordGameCommandService board view now opens with a
+-- "Round {n} -- {username} went first." line, reading
+-- round.went_first_game_player_id (BoardState::roundFirstPlayerId())
+-- rather than the round's own bare first_game_player_id column, since
+-- the former stays correct for format 'team' too (a representative-
+-- member-only column there) even though Discord only supports
+-- 'standard' today.
+--
+-- See php-app/README.md's "Playing the game via Discord" section for the
+-- full design.
+--
+-- No schema change -- just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.55.6' WHERE id = 1;

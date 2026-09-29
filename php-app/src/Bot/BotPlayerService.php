@@ -3248,27 +3248,53 @@ final class BotPlayerService
 
     /**
      * Conviction's own "who to target" policy (confirmed by the
-     * maintainer): the highest-CURRENT-value mood owned by a
-     * non-teammate opponent, or null if no opponent currently has one in
-     * play. Deliberately excludes both the acting player itself and any
-     * teammate -- ConvictionEffect's own field is scope 'any' with no
-     * restriction against the acting player or a teammate (its own
-     * docblock even calls out "the acting player's own moods" as a legal
-     * target), so BotChoiceResolver's own generic default would happily
-     * let the bot send its OWN highest-value mood to the bottom of the
-     * deck -- exactly backwards from what removing an opponent's points
-     * should accomplish for the acting side. "An opponent" per the
-     * maintainer means neither the acting player nor a teammate.
+     * maintainer): the mood owned by a non-teammate opponent whose
+     * REMOVAL costs that opponent the most round score, or null if no
+     * opponent currently has one in play. Deliberately excludes both the
+     * acting player itself and any teammate -- ConvictionEffect's own
+     * field is scope 'any' with no restriction against the acting player
+     * or a teammate (its own docblock even calls out "the acting
+     * player's own moods" as a legal target), so BotChoiceResolver's own
+     * generic default would happily let the bot send its OWN
+     * highest-value mood to the bottom of the deck -- exactly backwards
+     * from what removing an opponent's points should accomplish for the
+     * acting side. "An opponent" per the maintainer means neither the
+     * acting player nor a teammate.
+     *
+     * Ranked by simulated score IMPACT (each candidate's own
+     * moveInPlayToBottomOfDeck() applied to a clone, then compared via a
+     * real RoundScorer::score() before/after), not by raw valueOf() --
+     * a card like Bliss ("while in play, triple your own moods sharing a
+     * color with whatever paid its cost") can be a mediocre-value mood
+     * in its own right while its removal costs its owner far more than
+     * any single card it's boosting, since removing Bliss itself erases
+     * the WHOLE bonus rather than just one card's own share of it. A
+     * plain valueOf() comparison never sees that -- it credits the
+     * bonus to whichever boosted mood happens to look biggest, not to
+     * the card actually generating it -- so it would target that boosted
+     * mood instead of Bliss even when doing so leaves the opponent with
+     * a materially higher score (reported live: a human opponent kept
+     * the round, and the match, because Conviction bottomed their Joy
+     * instead of their Bliss).
      */
     private function convictionBestOpponentMoodId(BoardState $state, int $botGamePlayerId): ?int
     {
+        $scoresBeforeRemoval = (new RoundScorer())->score($state);
+
         $bestMoodId = null;
+        $bestScoreDrop = null;
         foreach ($state->activePlayerOrder() as $playerId) {
             if ($playerId === $botGamePlayerId || $state->isTeammate($botGamePlayerId, $playerId)) {
                 continue;
             }
             foreach ($state->moodsOwnedBy($playerId) as $mood) {
-                if ($bestMoodId === null || $state->valueOf($mood->cardId) > $state->valueOf($bestMoodId)) {
+                $hypothetical = clone $state;
+                $hypothetical->moveInPlayToBottomOfDeck($mood->cardId);
+                $scoreAfterRemoval = (new RoundScorer())->score($hypothetical)[$playerId] ?? 0;
+                $scoreDrop = ($scoresBeforeRemoval[$playerId] ?? 0) - $scoreAfterRemoval;
+
+                if ($bestScoreDrop === null || $scoreDrop > $bestScoreDrop) {
+                    $bestScoreDrop = $scoreDrop;
                     $bestMoodId = $mood->cardId;
                 }
             }

@@ -1,0 +1,20 @@
+-- Reported live: "the discord in play image is not being updated as
+-- moods are played in the game." Root cause -- boardImageUrl()'s own
+-- URL used to be a bare function of the game id alone, identical on
+-- every single render for the same game; Discord's own CDN caches an
+-- embed image by URL the same way any HTTP client would, so once it
+-- fetched the image for a game once, it just kept serving that same
+-- cached copy forever, no matter how many moods got played afterward.
+--
+-- boardImageUrl() now takes a $cacheKey -- boardImageCacheKey()
+-- fingerprints exactly what BoardImageRenderer actually draws from
+-- in_play (each card's own card_id/catalog_card_id/
+-- owner_game_player_id/value), appended as a plain, UNSIGNED `v=`
+-- query param -- never fed into verifyBoardImageSignature()'s own HMAC
+-- (still only ever a function of the game id), purely a cache-busting
+-- hint for Discord's own fetch. See php-app/README.md's "Composite
+-- in-play board image" section for the full design.
+--
+-- No schema change -- just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.55.14' WHERE id = 1;

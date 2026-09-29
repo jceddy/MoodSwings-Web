@@ -4,9 +4,12 @@ declare(strict_types=1);
 
 namespace MoodSwings\Tests\Game;
 
+use MoodSwings\Bot\BotChoiceResolver;
+use MoodSwings\Config;
 use MoodSwings\Database\Connection;
 use MoodSwings\Deck\NotAuthorizedToAccessDecklistException;
 use MoodSwings\Deck\UserDecklistService;
+use MoodSwings\Discord\DiscordGameCommandService;
 use MoodSwings\Friends\FriendshipService;
 use MoodSwings\Game\BoardStateRepository;
 use MoodSwings\Game\Exceptions\GameStateException;
@@ -15,6 +18,7 @@ use MoodSwings\Game\ReplayStateBuilder;
 use MoodSwings\Notifications\NotificationScope;
 use MoodSwings\Notifications\NotificationService;
 use MoodSwings\Notifications\PushNotificationChannel;
+use MoodSwings\Repository\DiscordAccountRepository;
 use MoodSwings\Repository\FriendshipRepository;
 use MoodSwings\Repository\NotificationCooldownRepository;
 use MoodSwings\Repository\NotificationPreferenceRepository;
@@ -100,6 +104,14 @@ final class GameServiceIntegrationTest extends TestCase
         $pdo->exec('TRUNCATE TABLE user_daily_game_counts');
         $pdo->exec('TRUNCATE TABLE user_opponent_game_counts');
         $pdo->exec('TRUNCATE TABLE friendships');
+        // Issue #233's own DiscordGameCommandServiceTest coverage below is
+        // the only thing in this file that ever links a Discord account --
+        // without this, a stale (user_id, discord_user_id) row from an
+        // earlier test would still exist once TRUNCATE TABLE users resets
+        // auto-increment back to 1, silently resolving THIS test's own
+        // freshly-created user id 1 to whatever discord_user_id a
+        // completely unrelated earlier test happened to link it to.
+        $pdo->exec('TRUNCATE TABLE discord_accounts');
         $pdo->exec('TRUNCATE TABLE users');
         $pdo->exec('SET FOREIGN_KEY_CHECKS = 1');
 
@@ -22220,5 +22232,1462 @@ final class GameServiceIntegrationTest extends TestCase
         // text -- purely so this play needs no further setup.
         $this->games->playMood($gameId, $p1, $convictionId, ['target_mood_id' => $convictionId]);
         self::assertSame($p1, (int) $this->fetchRound($gameId)['current_turn_game_player_id'], "still player 1's own turn -- the reactivated grant let them keep playing");
+    }
+
+    // --- Issue #233: playing the game via Discord (DiscordGameCommandService) ---
+
+    private function discordCommandService(): DiscordGameCommandService
+    {
+        return new DiscordGameCommandService(
+            $this->games,
+            new BoardStateRepository(DefaultEffectRegistry::build()),
+            new DiscordAccountRepository(),
+            new FriendshipService(new UserRepository(), new FriendshipRepository()),
+            new BotChoiceResolver(),
+        );
+    }
+
+    private function linkDiscordAccount(int $userId, string $discordUserId): void
+    {
+        (new DiscordAccountRepository())->link($userId, $discordUserId, "discord-{$discordUserId}");
+    }
+
+    /**
+     * Every Discord test's own human player -- unlike plain insertUser(),
+     * this opts OUT of auto_pass_on_empty_hand/auto_apply_scoring_bonuses
+     * (both default ON for every real user -- see
+     * testAdvanceAutomatedTurnsNeverAutoPassesAPlayerMidComboWhoStillHasALegalPlay()'s
+     * own docblock: "true for virtually every human"). Needed only
+     * because handleCommand()/handleComponent() now call
+     * advanceAutomatedTurns() (see that fix's own docblock: "every bot
+     * decision ... is not running until the 15 minute CRON recovery job
+     * runs") -- these tests' own bare fixtures (a single game_rounds row,
+     * no real dealt deck) give a player a genuinely EMPTY hand purely as
+     * a display-testing shortcut, which a real default-on human would
+     * otherwise have auto-passed (and, once BOTH seats stay perpetually
+     * empty-handed across every synthetic follow-up round this test
+     * fixture never deals real cards into either, auto-scored straight
+     * through to game completion) the instant advanceAutomatedTurns()
+     * actually runs -- something a REAL game's own always-dealt deck
+     * could never do turn after turn. A seated bot (insertBotUser()) is
+     * deliberately NOT given this treatment -- its whole point in a test
+     * like testDiscordComponentPassImmediatelyDrivesTheFollowingBotTurn()
+     * is to actually act on its own.
+     */
+    private function insertDiscordUser(string $username): int
+    {
+        $userId = $this->insertUser($username);
+        $this->pdo->prepare('UPDATE users SET auto_pass_on_empty_hand = 0, auto_apply_scoring_bonuses = 0 WHERE id = :id')
+            ->execute(['id' => $userId]);
+
+        return $userId;
+    }
+
+    /** @return array<string, mixed> */
+    private function discordCommandPayload(string $discordUserId): array
+    {
+        return ['type' => 2, 'data' => ['name' => 'moodswings'], 'user' => ['id' => $discordUserId]];
+    }
+
+    /** @param mixed[] $values @return array<string, mixed> */
+    private function discordComponentPayload(string $discordUserId, string $customId, array $values = []): array
+    {
+        return ['type' => 3, 'data' => ['custom_id' => $customId, 'values' => $values], 'user' => ['id' => $discordUserId]];
+    }
+
+    public function testDiscordCommandWithoutLinkedAccountAsksToLink(): void
+    {
+        $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('unlinked-discord-id'));
+
+        self::assertSame(4, $response['type']);
+        self::assertStringContainsString("isn't linked", $response['data']['content']);
+    }
+
+    public function testDiscordCommandWithNoActiveGameSaysSo(): void
+    {
+        $userId = $this->insertDiscordUser('discord-player-1');
+        $this->linkDiscordAccount($userId, 'discord-1');
+
+        $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-1'));
+
+        self::assertSame(4, $response['type']);
+        self::assertStringContainsString("don't have an active Traditional game", $response['data']['content']);
+    }
+
+    public function testDiscordCommandRendersBoardWithPlayAndPassForOneActiveGame(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-2');
+        $u2 = $this->insertDiscordUser('discord-player-3');
+        $this->linkDiscordAccount($u1, 'discord-2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $sadnessId = $this->insertGameCard($gameId, 74, 'hand', $p1); // Sadness -- no required choice_fields
+        $this->insertGameCard($gameId, 5, 'in_play', $p2);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-2'));
+
+        self::assertSame(4, $response['type']);
+        self::assertStringContainsString("Game #{$gameId}", $response['data']['content']);
+        self::assertStringContainsString("It's your turn", $response['data']['content']);
+        // Reported live: "we need to be able to see what cards are in
+        // play" -- public board info, shown to every viewer regardless
+        // of whose turn it is.
+        self::assertStringContainsString('discord-player-2\'s moods in play: (none)', $response['data']['content']);
+        self::assertStringContainsString('discord-player-3\'s moods in play: Complacency (4, White)', $response['data']['content']);
+
+        $playSelect = $response['data']['components'][0]['components'][0];
+        self::assertSame("ms:play:{$gameId}", $playSelect['custom_id']);
+        self::assertSame(['label' => 'Sadness (0, Black)', 'value' => (string) $sadnessId], $playSelect['options'][0]);
+
+        $passButton = $response['data']['components'][1]['components'][0];
+        self::assertSame("ms:pass:{$gameId}", $passButton['custom_id']);
+    }
+
+    public function testDiscordComponentPassAdvancesTheTurn(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-4');
+        $u2 = $this->insertDiscordUser('discord-player-5');
+        $this->linkDiscordAccount($u1, 'discord-4');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $response = $this->discordCommandService()->handleComponent($this->discordComponentPayload('discord-4', "ms:pass:{$gameId}"));
+
+        self::assertSame(7, $response['type']);
+        self::assertSame($p2, (int) $this->fetchRound($gameId)['current_turn_game_player_id']);
+    }
+
+    /**
+     * Reported live: "every bot decision ... is not running until the 15
+     * minute CRON recovery job runs" -- root cause: unlike every
+     * equivalent web write route (POST /games/pass, /games/play, ...),
+     * which all call GameService::advanceAutomatedTurns() right after
+     * their own mutation, and unlike the web client's own ~4s
+     * GET /games/state poll (which calls it on every single poll as a
+     * backstop), handleComponent() never called it at all -- a human's
+     * own pass/play/decision via Discord left a following bot turn just
+     * sitting there with nothing to drive it forward until the periodic
+     * cron fallback eventually caught it. This seats a real bot (not a
+     * hand-rolled game_player row -- BotPlayerService needs users.is_bot
+     * to recognize the seat as its own) as p2, gives it one simple,
+     * unconditionally-playable card, and confirms that after the human's
+     * OWN pass via Discord -- one single handleComponent() call, nothing
+     * else -- the bot's own turn already resolved on its own: the round
+     * has moved past the bot's seat, not stuck waiting on it.
+     */
+    public function testDiscordComponentPassImmediatelyDrivesTheFollowingBotTurn(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-49');
+        $botUserId = $this->insertBotUser('discord-player-49-bot');
+        $this->linkDiscordAccount($u1, 'discord-49');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $botUserId, 1);
+        $this->insertGameCard($gameId, 5, 'hand', $p2); // Complacency -- no choice_fields, always playable
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->discordCommandService()->handleComponent($this->discordComponentPayload('discord-49', "ms:pass:{$gameId}"));
+
+        self::assertNotSame($p2, (int) $this->fetchRound($gameId)['current_turn_game_player_id']);
+    }
+
+    /**
+     * The other half of the same fix: opening `/moodswings` itself
+     * (handleCommand(), not a component click) is the other moment,
+     * alongside the equivalent web client's own ~4s GET /games/state
+     * poll, where a bot turn already stuck from BEFORE this fix (e.g.
+     * one left over from an old client, or simply never driven by
+     * anything else) gets a chance to catch up -- this simulates
+     * already-stuck state directly (current_turn_game_player_id pointed
+     * at the bot from the start, nothing having just passed to it) and
+     * confirms a single /moodswings invocation resolves it.
+     */
+    public function testDiscordCommandCatchesUpAnAlreadyStuckBotTurn(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-50');
+        $botUserId = $this->insertBotUser('discord-player-50-bot');
+        $this->linkDiscordAccount($u1, 'discord-50');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $botUserId, 1);
+        $this->insertGameCard($gameId, 5, 'hand', $p2); // Complacency -- no choice_fields, always playable
+        $this->insertGameRound($gameId, 1, $p2, $p2, 1);
+
+        $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-50'));
+
+        self::assertNotSame($p2, (int) $this->fetchRound($gameId)['current_turn_game_player_id']);
+    }
+
+    public function testDiscordComponentPlaysAZeroFieldCardDirectly(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-6');
+        $u2 = $this->insertDiscordUser('discord-player-7');
+        $this->linkDiscordAccount($u1, 'discord-6');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+        $sadnessId = $this->insertGameCard($gameId, 74, 'hand', $p1);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $response = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-6', "ms:play:{$gameId}", [(string) $sadnessId])
+        );
+
+        self::assertSame(7, $response['type']);
+        self::assertSame('in_play', $this->cardZone($sadnessId));
+    }
+
+    /**
+     * Reported live: "the discord client needs to support playing cards
+     * from discard when allowed to by Grace or similar effects" --
+     * playableCardOptions() now also offers a discard_pile entry once its
+     * own `is_playable` is true, labeled distinctly ("-- from discard")
+     * so a merged select doesn't leave the zone ambiguous. Grace 121 is
+     * played from hand first (the exact same setup
+     * MoodPlayServiceTest::testGraceGrantsADiscardSourcedColorMatchingPlayTheTurnItsPlayed()
+     * already verifies at the engine level -- see that test's own
+     * docblock) so its own "while in play" discard-sourced grant is
+     * active for the rest of this turn, matching Cheer 110's own green
+     * color already sitting in the discard pile.
+     */
+    public function testDiscordCommandOffersAndPlaysADiscardCardAGraceGrantAllows(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-71');
+        $u2 = $this->insertDiscordUser('discord-player-72');
+        $this->linkDiscordAccount($u1, 'discord-71');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+        $graceId = $this->insertGameCard($gameId, 121, 'hand', $p1); // Grace, green
+        $cheerId = $this->insertGameCard($gameId, 110, 'discard'); // Cheer, green -- matches Grace's own color
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        // Play Grace itself first (from hand, the ordinary way) so its
+        // "while in play" discard-sourced grant is active for the
+        // remainder of this same turn -- exactly the engine-level setup
+        // this class's own docblock cites.
+        $this->games->playMood($gameId, $p1, $graceId, []);
+
+        $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-71'));
+
+        $playOptions = $response['data']['components'][0]['components'][0]['options'];
+        self::assertContains(['label' => 'Cheer (3, Green) -- from discard', 'value' => (string) $cheerId], $playOptions);
+
+        $playResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-71', "ms:play:{$gameId}", [(string) $cheerId])
+        );
+
+        self::assertSame(7, $playResponse['type']);
+        self::assertSame('in_play', $this->cardZone($cheerId));
+    }
+
+    public function testDiscordComponentPlayThenPlayfieldForASingleRequiredFieldCard(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-8');
+        $u2 = $this->insertDiscordUser('discord-player-9');
+        $this->linkDiscordAccount($u1, 'discord-8');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+        $convictionId = $this->insertGameCard($gameId, 6, 'hand', $p1);
+        // A real deck card to draw, not just Conviction's own eventual
+        // discard -- otherwise, self-targeting Conviction moves itself to
+        // the bottom of an otherwise-empty deck and then immediately
+        // redraws that exact same (only) card, landing right back in
+        // hand and making "did this actually play" impossible to tell
+        // apart from "never played at all". Owner left null -- 'standard'
+        // format shares one deck across every player (BoardState::deckKeyFor()),
+        // so an explicit owner here would load into the wrong ($p1-keyed,
+        // never actually consulted for this format) bucket instead.
+        $this->insertGameCard($gameId, 5, 'deck', null, 1);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $playResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-8', "ms:play:{$gameId}", [(string) $convictionId])
+        );
+
+        self::assertSame(7, $playResponse['type']);
+        self::assertSame('hand', $this->cardZone($convictionId), 'not played yet -- still waiting on its own required field');
+        $fieldSelect = $playResponse['data']['components'][0]['components'][0];
+        // ms:playfield:{gameId}:{cardId}:{stepIndex}:{encoded prior answers}
+        // -- stepIndex 0 and no prior answers yet, since this is the
+        // first (and, for Conviction, only) field.
+        self::assertStringStartsWith("ms:playfield:{$gameId}:{$convictionId}:0:", $fieldSelect['custom_id']);
+        self::assertContains((string) $convictionId, array_column($fieldSelect['options'], 'value'), 'Conviction can legally target itself');
+
+        $fieldResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-8', $fieldSelect['custom_id'], [(string) $convictionId])
+        );
+
+        self::assertSame(7, $fieldResponse['type']);
+        self::assertNotSame('hand', $this->cardZone($convictionId));
+    }
+
+    public function testDiscordComponentDecisionRespondsToASingleFieldPendingDecision(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-10');
+        $u2 = $this->insertDiscordUser('discord-player-11');
+        $this->linkDiscordAccount($u1, 'discord-10');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameCard($gameId, 5, 'in_play', $p2);
+        $this->insertGameCard($gameId, 32, 'in_play', $p2);
+        $prideId = $this->insertGameCard($gameId, 22, 'hand', $p1);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $prideId, []);
+        self::assertNotNull($this->games->getState($gameId, $u1)['round']['pending_decision']);
+
+        $response = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-10', "ms:decision:{$gameId}", [(string) $p2])
+        );
+
+        self::assertSame(7, $response['type']);
+        self::assertNull($this->games->getState($gameId, $u1)['round']['pending_decision']);
+        self::assertSame(1, (int) $this->fetchRound($gameId)['plays_remaining'], "Pride's grant should now be active -- player 2 has more moods");
+    }
+
+    /**
+     * Reported live right after this feature's own first ship: "Can we
+     * add a command to start a game from inside discord?" -- exactly one
+     * practice bot configured skips the picker and starts immediately,
+     * fully `in_progress` (createGame() alone only ever leaves a game
+     * 'waiting' -- see createPracticeGameMessage()'s own docblock for why
+     * startGame()/advanceAutomatedTurns() both have to run too).
+     */
+    public function testDiscordComponentNewGameStartsImmediatelyWithExactlyOnePracticeBot(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-12');
+        $this->linkDiscordAccount($u1, 'discord-12');
+        $bot = $this->insertBotUser('discord-practice-bot-1');
+
+        $response = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-12', 'ms:newgame:0')
+        );
+
+        self::assertSame(7, $response['type']);
+        self::assertStringContainsString('Game #', $response['data']['content']);
+
+        $gameIds = $this->activeStandardGameIdsForTest($u1);
+        self::assertCount(1, $gameIds);
+        $game = $this->fetchGame($gameIds[0]);
+        self::assertSame('in_progress', $game['status']);
+        self::assertSame('standard', $game['format']);
+
+        $playerUserIds = array_column($this->pdo->query(
+            "SELECT user_id FROM game_players WHERE game_id = {$gameIds[0]}"
+        )->fetchAll(), 'user_id');
+        self::assertEqualsCanonicalizing([$u1, $bot], array_map(intval(...), $playerUserIds));
+    }
+
+    /**
+     * 2+ practice bots configured -- rather than guessing which one the
+     * player wants, this offers a select menu (ms:newgamebot:0) instead
+     * of creating anything yet.
+     */
+    public function testDiscordComponentNewGameOffersAPickerWithMultiplePracticeBots(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-13');
+        $this->linkDiscordAccount($u1, 'discord-13');
+        $bot1 = $this->insertBotUser('discord-practice-bot-2');
+        $bot2 = $this->insertBotUser('discord-practice-bot-3');
+
+        $response = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-13', 'ms:newgame:0')
+        );
+
+        self::assertSame(7, $response['type']);
+        $select = $response['data']['components'][0]['components'][0];
+        self::assertSame('ms:newgamebot:0', $select['custom_id']);
+        self::assertEqualsCanonicalizing([(string) $bot1, (string) $bot2], array_column($select['options'], 'value'));
+
+        self::assertSame([], $this->activeStandardGameIdsForTest($u1), 'nothing created yet -- still waiting on a pick');
+    }
+
+    /** Completes the picker flow above: picking a specific bot creates and starts a game against exactly that one. */
+    public function testDiscordComponentNewGameBotCreatesAGameAgainstTheChosenBot(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-14');
+        $this->linkDiscordAccount($u1, 'discord-14');
+        $this->insertBotUser('discord-practice-bot-4');
+        $bot2 = $this->insertBotUser('discord-practice-bot-5');
+
+        $response = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-14', 'ms:newgamebot:0', [(string) $bot2])
+        );
+
+        self::assertSame(7, $response['type']);
+        $gameIds = $this->activeStandardGameIdsForTest($u1);
+        self::assertCount(1, $gameIds);
+        $playerUserIds = array_map(intval(...), array_column($this->pdo->query(
+            "SELECT user_id FROM game_players WHERE game_id = {$gameIds[0]}"
+        )->fetchAll(), 'user_id'));
+        self::assertContains($bot2, $playerUserIds);
+    }
+
+    public function testDiscordCommandNoActiveGameOffersTheNewGameButton(): void
+    {
+        $userId = $this->insertDiscordUser('discord-player-15');
+        $this->linkDiscordAccount($userId, 'discord-15');
+
+        $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-15'));
+
+        self::assertSame('ms:newgame:0', $response['data']['components'][0]['components'][0]['custom_id']);
+        // Reported live: "let's add the ability to create a game for
+        // another human on the friend list" -- offered right alongside
+        // the practice-game button, same "nothing to show yet" moment.
+        self::assertSame('ms:friendgame:0', $response['data']['components'][0]['components'][1]['custom_id']);
+    }
+
+    /**
+     * Reported live: "let's add the ability to create a game for another
+     * human on the friend list." FriendshipService::listFriends() --
+     * accepted friendships only -- supplies the picker; a pending
+     * invite (never accepted) and an unrelated third user must both be
+     * left out.
+     */
+    public function testDiscordComponentFriendGameOffersAPickerOfAcceptedFriendsOnly(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-53');
+        $acceptedFriend = $this->insertDiscordUser('discord-player-54');
+        $pendingFriend = $this->insertDiscordUser('discord-player-55');
+        $this->insertDiscordUser('discord-player-56'); // unrelated -- not a friend at all
+        $this->linkDiscordAccount($u1, 'discord-53');
+
+        $friendships = new FriendshipService(new UserRepository(), new FriendshipRepository());
+        $friendships->sendInvite($u1, 'discord-player-54');
+        $friendships->respondToInvite($acceptedFriend, $u1, 'accept');
+        $friendships->sendInvite($u1, 'discord-player-55'); // left pending -- never accepted
+
+        $response = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-53', 'ms:friendgame:0')
+        );
+
+        self::assertSame(7, $response['type']);
+        $select = $response['data']['components'][0]['components'][0];
+        self::assertSame('ms:friendgamewith:0', $select['custom_id']);
+        self::assertSame([['label' => 'discord-player-54', 'value' => (string) $acceptedFriend]], $select['options']);
+    }
+
+    public function testDiscordComponentFriendGameWithNoAcceptedFriendsShowsAMessageInstead(): void
+    {
+        $userId = $this->insertDiscordUser('discord-player-57');
+        $this->linkDiscordAccount($userId, 'discord-57');
+
+        $response = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-57', 'ms:friendgame:0')
+        );
+
+        self::assertSame(7, $response['type']);
+        self::assertStringContainsString("don't have any friends added yet", $response['data']['content']);
+        self::assertSame([], $response['data']['components']);
+    }
+
+    /** Completes the picker flow above: picking a specific friend creates and immediately starts a real game against them -- no invite/accept step, same as the web app's own New Game dialog. */
+    public function testDiscordComponentFriendGameWithCreatesAndStartsAGameAgainstThatFriend(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-58');
+        $friendUserId = $this->insertDiscordUser('discord-player-59');
+        $this->linkDiscordAccount($u1, 'discord-58');
+
+        $friendships = new FriendshipService(new UserRepository(), new FriendshipRepository());
+        $friendships->sendInvite($u1, 'discord-player-59');
+        $friendships->respondToInvite($friendUserId, $u1, 'accept');
+
+        $response = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-58', 'ms:friendgamewith:0', [(string) $friendUserId])
+        );
+
+        self::assertSame(7, $response['type']);
+        $gameIds = $this->activeStandardGameIdsForTest($u1);
+        self::assertCount(1, $gameIds);
+        $game = $this->fetchGame($gameIds[0]);
+        self::assertSame('in_progress', $game['status']);
+        self::assertSame('standard', $game['format']);
+
+        $playerUserIds = array_map(intval(...), array_column($this->pdo->query(
+            "SELECT user_id FROM game_players WHERE game_id = {$gameIds[0]}"
+        )->fetchAll(), 'user_id'));
+        self::assertEqualsCanonicalizing([$u1, $friendUserId], $playerUserIds);
+    }
+
+    /**
+     * Reported live alongside "we need to be able to see what cards are
+     * in play": Hate's own 'mood' field ("put any mood on the bottom of
+     * the deck," no owner restriction) offers candidates across BOTH
+     * players -- without an owner label, two moods with the same name/
+     * value would be indistinguishable, and even a single opponent's
+     * mood is a guess without knowing whose it is.
+     */
+    public function testDiscordComponentPlayfieldOptionsLabelEachMoodsOwner(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-16');
+        $u2 = $this->insertDiscordUser('discord-player-17');
+        $this->linkDiscordAccount($u1, 'discord-16');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $hateId = $this->insertGameCard($gameId, 66, 'hand', $p1);
+        $ownMoodId = $this->insertGameCard($gameId, 74, 'in_play', $p1); // Sadness
+        $opponentMoodId = $this->insertGameCard($gameId, 5, 'in_play', $p2); // Complacency
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $response = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-16', "ms:play:{$gameId}", [(string) $hateId])
+        );
+
+        self::assertSame(7, $response['type']);
+        $fieldSelect = $response['data']['components'][0]['components'][0];
+        self::assertStringStartsWith("ms:playfield:{$gameId}:{$hateId}:0:", $fieldSelect['custom_id']);
+        $labelsByValue = array_column($fieldSelect['options'], 'label', 'value');
+        self::assertSame('Sadness (0, Black) -- discord-player-16', $labelsByValue[(string) $ownMoodId]);
+        self::assertSame('Complacency (4, White) -- discord-player-17', $labelsByValue[(string) $opponentMoodId]);
+    }
+
+    /**
+     * The bug this whole batch of fixes was chasing: Hate's own field is
+     * OPTIONAL ("you MAY put any mood on the bottom of the deck"), and
+     * before withSkipOptionIfOptional()/SKIP_FIELD_VALUE existed, this
+     * class never rendered a choice for it at all -- it always played
+     * blank, indistinguishable from a player deliberately declining. Now
+     * that the field select offers an explicit Skip option, submitting
+     * it must actually leave the target blank: Hate itself gets played,
+     * but the opponent's other mood already in play stays untouched.
+     */
+    public function testDiscordComponentPlayfieldSkipLeavesTargetBlank(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-18');
+        $u2 = $this->insertDiscordUser('discord-player-19');
+        $this->linkDiscordAccount($u1, 'discord-18');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $hateId = $this->insertGameCard($gameId, 66, 'hand', $p1);
+        $opponentMoodId = $this->insertGameCard($gameId, 5, 'in_play', $p2); // Complacency
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $response = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-18', "ms:playfield:{$gameId}:{$hateId}", ['__skip__'])
+        );
+
+        self::assertSame(7, $response['type']);
+        self::assertSame('in_play', $this->cardZone($hateId));
+        self::assertSame('in_play', $this->cardZone($opponentMoodId));
+    }
+
+    /**
+     * Reported live: "show ... number of rounds each player has won so
+     * far, number of cards each player had in hand" -- both already
+     * public information the web board shows (players[].total_wins/
+     * hand_count), just never surfaced in the Discord score line before.
+     */
+    public function testDiscordCommandBoardShowsRoundsWonAndHandCount(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-20');
+        $u2 = $this->insertDiscordUser('discord-player-21');
+        $this->linkDiscordAccount($u1, 'discord-20');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameCard($gameId, 74, 'hand', $p1); // Sadness
+        $this->insertGameCard($gameId, 5, 'hand', $p2); // Complacency
+        $this->insertGameCard($gameId, 66, 'hand', $p2); // Hate -- p2 has 2 cards, p1 has 1
+
+        $wonRoundStmt = $this->pdo->prepare(
+            "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, status, winner_game_player_id, wins_awarded, scored_at)
+             VALUES (:game_id, 1, :first_player, NULL, 0, 'scored', :winner, 1, NOW())"
+        );
+        $wonRoundStmt->execute(['game_id' => $gameId, 'first_player' => $p2, 'winner' => $p2]);
+        $this->insertGameRound($gameId, 2, $p2, $p1, 1);
+
+        $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-20'));
+
+        self::assertStringContainsString('discord-player-20: 0 pts, 0 round(s) won, 1 card(s) in hand', $response['data']['content']);
+        self::assertStringContainsString('discord-player-21: 0 pts, 1 round(s) won, 2 card(s) in hand', $response['data']['content']);
+    }
+
+    /**
+     * Reported live alongside the above: "some way to view the card
+     * details for the cards in hand/play/discard" -- the board only ever
+     * shows a bare name/value; this checks the "View Cards" button leads
+     * to a hand-card select whose own choice reveals the full rules text.
+     */
+    public function testDiscordComponentViewCardsShowsHandCardRulesText(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-22');
+        $u2 = $this->insertDiscordUser('discord-player-23');
+        $this->linkDiscordAccount($u1, 'discord-22');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+        $hateId = $this->insertGameCard($gameId, 66, 'hand', $p1); // Hate
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $cardsResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-22', "ms:cards:{$gameId}")
+        );
+
+        self::assertSame(7, $cardsResponse['type']);
+        $handSelect = $cardsResponse['data']['components'][0]['components'][0];
+        self::assertSame("ms:cardhand:{$gameId}", $handSelect['custom_id']);
+        self::assertSame((string) $hateId, $handSelect['options'][0]['value']);
+
+        $detailResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-22', "ms:cardhand:{$gameId}", [(string) $hateId])
+        );
+
+        self::assertSame(7, $detailResponse['type']);
+        self::assertStringContainsString('Hate (0, Black)', $detailResponse['data']['content']);
+        self::assertStringContainsString('bottom of the deck', $detailResponse['data']['content']);
+        self::assertSame("ms:cards:{$gameId}", $detailResponse['data']['components'][0]['components'][0]['custom_id']);
+        // Reported live: "let's add the card image to the card detail
+        // display" -- the same MSW-print .webp file web-static/js/game.js's
+        // own defaultCardArtUrl() builds, embedded as a real Discord
+        // embed image (Discord's own servers fetch it directly, so it
+        // has to be a real public URL, not a relative path).
+        self::assertStringEndsWith('/img/cards/MSW/66-hate.webp', $detailResponse['data']['embeds'][0]['image']['url']);
+    }
+
+    /** The same card-detail flow, but for a card already in play, owned by another player. */
+    public function testDiscordComponentViewCardsShowsInPlayCardOwnerAndRulesText(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-24');
+        $u2 = $this->insertDiscordUser('discord-player-25');
+        $this->linkDiscordAccount($u1, 'discord-24');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $complacencyId = $this->insertGameCard($gameId, 5, 'in_play', $p2); // Complacency
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $cardsResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-24', "ms:cards:{$gameId}")
+        );
+
+        $inPlaySelect = $cardsResponse['data']['components'][0]['components'][0];
+        self::assertSame("ms:cardplay:{$gameId}", $inPlaySelect['custom_id']);
+        self::assertSame('Complacency (4, White) -- discord-player-25', $inPlaySelect['options'][0]['label']);
+
+        $detailResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-24', "ms:cardplay:{$gameId}", [(string) $complacencyId])
+        );
+
+        self::assertStringContainsString('Complacency (4, White)', $detailResponse['data']['content']);
+    }
+
+    /**
+     * Reported live alongside the above: "some way to view the text game
+     * log" -- reuses getState()'s own already-bounded recent_events.
+     */
+    public function testDiscordComponentGameLogShowsRecentPlays(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-26');
+        $u2 = $this->insertDiscordUser('discord-player-27');
+        $this->linkDiscordAccount($u1, 'discord-26');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->discordCommandService()->handleComponent($this->discordComponentPayload('discord-26', "ms:pass:{$gameId}"));
+
+        $logResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-26', "ms:log:{$gameId}")
+        );
+
+        self::assertSame(7, $logResponse['type']);
+        self::assertStringContainsString('discord-player-26 passed', $logResponse['data']['content']);
+        self::assertSame("ms:view:{$gameId}", $logResponse['data']['components'][0]['components'][0]['custom_id']);
+    }
+
+    /**
+     * Reported live: "we need some way to play targeted cards like
+     * Insecurity/Suspicion" -- Suspicion's own field ('player_ids') is
+     * `multi => true`, which this class's earlier v1 scope excluded
+     * outright. Now it gets Discord's own native multi-select
+     * (min_values/max_values) instead of the single-value Skip sentinel
+     * -- selecting zero players IS "skip," since min_values is 0 for
+     * this optional field.
+     */
+    public function testDiscordComponentPlayMultiFieldSelectsMultiplePlayers(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-28');
+        $u2 = $this->insertDiscordUser('discord-player-29');
+        $this->linkDiscordAccount($u1, 'discord-28');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $suspicionId = $this->insertGameCard($gameId, 78, 'hand', $p1); // Suspicion
+        $this->insertGameCard($gameId, 5, 'hand', $p2); // gives p2 a hand card, satisfying Suspicion's own min_hand_count filter
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $playResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-28', "ms:play:{$gameId}", [(string) $suspicionId])
+        );
+
+        self::assertSame(7, $playResponse['type']);
+        $fieldSelect = $playResponse['data']['components'][0]['components'][0];
+        self::assertStringStartsWith("ms:playfield:{$gameId}:{$suspicionId}:0:", $fieldSelect['custom_id']);
+        self::assertSame(0, $fieldSelect['min_values'], 'optional multi field -- selecting nobody is itself a legal answer');
+        self::assertSame(count($fieldSelect['options']), $fieldSelect['max_values']);
+        self::assertContains((string) $p2, array_column($fieldSelect['options'], 'value'));
+
+        $fieldResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-28', $fieldSelect['custom_id'], [(string) $p2])
+        );
+
+        self::assertSame(7, $fieldResponse['type']);
+        self::assertSame('in_play', $this->cardZone($suspicionId));
+    }
+
+    /**
+     * The same report, but for a card with a SECOND choice_field --
+     * Faith's own target_mood_id ("required if discarding a card above")
+     * only needs asking once the first field (discard_card_id) is
+     * actually answered. promptOrPlay() walks both fields one at a time,
+     * carrying the first field's own answer forward through the second
+     * select's own custom_id (encodeAnswers()/decodeAnswers()).
+     */
+    public function testDiscordComponentPlayChainsASecondChoiceField(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-30');
+        $u2 = $this->insertDiscordUser('discord-player-31');
+        $this->linkDiscordAccount($u1, 'discord-30');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $faithId = $this->insertGameCard($gameId, 12, 'hand', $p1); // Faith
+        $creativityId = $this->insertGameCard($gameId, 32, 'hand', $p1); // Creativity -- blue, a legal discard candidate
+        $complacencyId = $this->insertGameCard($gameId, 5, 'in_play', $p2); // Complacency, a legal suppression target
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $playResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-30', "ms:play:{$gameId}", [(string) $faithId])
+        );
+
+        self::assertSame(7, $playResponse['type']);
+        $firstSelect = $playResponse['data']['components'][0]['components'][0];
+        self::assertStringStartsWith("ms:playfield:{$gameId}:{$faithId}:0:", $firstSelect['custom_id']);
+        self::assertContains((string) $creativityId, array_column($firstSelect['options'], 'value'));
+
+        $secondResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-30', $firstSelect['custom_id'], [(string) $creativityId])
+        );
+
+        self::assertSame(7, $secondResponse['type']);
+        self::assertSame('hand', $this->cardZone($faithId), 'not played yet -- still waiting on its own second field');
+        $secondSelect = $secondResponse['data']['components'][0]['components'][0];
+        self::assertStringStartsWith("ms:playfield:{$gameId}:{$faithId}:1:", $secondSelect['custom_id']);
+        self::assertContains((string) $complacencyId, array_column($secondSelect['options'], 'value'));
+
+        $thirdResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-30', $secondSelect['custom_id'], [(string) $complacencyId])
+        );
+
+        self::assertSame(7, $thirdResponse['type']);
+        self::assertSame('in_play', $this->cardZone($faithId));
+        self::assertSame('discard', $this->cardZone($creativityId));
+    }
+
+    /**
+     * Reported live: "the user needs to be able to see the discard pile
+     * in the discord client" -- the "View Cards" button already let a
+     * player look up one discard-pile card's own full detail, but there
+     * was no way to see the pile AT A GLANCE the way inPlaySummary()
+     * already does for moods in play.
+     */
+    public function testDiscordCommandBoardShowsDiscardPileSummary(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-32');
+        $u2 = $this->insertDiscordUser('discord-player-33');
+        $this->linkDiscordAccount($u1, 'discord-32');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameCard($gameId, 74, 'discard'); // Sadness
+        $this->insertGameCard($gameId, 5, 'discard'); // Complacency
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-32'));
+
+        self::assertStringContainsString('Discard pile (2): Sadness (0, Black), Complacency (4, White)', $response['data']['content']);
+    }
+
+    /**
+     * Reported live: "the discord client game display needs to show
+     * which player went first this round" -- uses the round's own
+     * went_first_game_player_id (BoardState::roundFirstPlayerId()), not
+     * the bare first_game_player_id column, since the former is the one
+     * that stays correct for format 'team' (a representative-member-only
+     * column there) even though Discord only supports 'standard' today.
+     */
+    public function testDiscordCommandBoardShowsWhoWentFirst(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-34');
+        $u2 = $this->insertDiscordUser('discord-player-35');
+        $this->linkDiscordAccount($u1, 'discord-34');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameRound($gameId, 3, $p2, $p1, 1);
+
+        $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-34'));
+
+        self::assertStringContainsString('Round 3 -- discord-player-35 went first.', $response['data']['content']);
+    }
+
+    /**
+     * Reported live: "the ephemeral message announcing the game ending
+     * should mention who the winner was" -- previously fell into the
+     * generic "Game #X is 'completed'" message every action's own
+     * post-play boardMessage() re-render already produces, with no
+     * mention of who actually won.
+     */
+    public function testDiscordComponentCompletedGameAnnouncesTheWinner(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-36');
+        $u2 = $this->insertDiscordUser('discord-player-37');
+        $this->linkDiscordAccount($u1, 'discord-36');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameRound($gameId, 3, $p1, $p1, 1);
+        $this->pdo->prepare(
+            "UPDATE games SET status = 'completed', completed_at = NOW(), winner_game_player_id = :winner WHERE id = :id"
+        )->execute(['winner' => $p1, 'id' => $gameId]);
+
+        $response = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-36', "ms:view:{$gameId}")
+        );
+
+        self::assertSame(7, $response['type']);
+        self::assertStringContainsString('discord-player-36 won', $response['data']['content']);
+    }
+
+    /**
+     * Reported live: "Let's show the colors of the cards in the discord
+     * client as well as the name/value" -- every card listing in this
+     * class (a hand, in-play summary, discard pile, a select-menu
+     * option, the single-card detail view, ...) shares cardLabel(), so
+     * this checks the color shows up in each of those places at once.
+     */
+    public function testDiscordCommandShowsCardColorsEverywhere(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-38');
+        $u2 = $this->insertDiscordUser('discord-player-39');
+        $this->linkDiscordAccount($u1, 'discord-38');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameCard($gameId, 74, 'hand', $p1); // Sadness -- black
+        $this->insertGameCard($gameId, 5, 'in_play', $p2); // Complacency -- white
+        $this->insertGameCard($gameId, 6, 'discard'); // Conviction -- white
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-38'));
+
+        self::assertStringContainsString('Your hand: Sadness (0, Black)', $response['data']['content']);
+        self::assertStringContainsString('Complacency (4, White)', $response['data']['content']);
+        self::assertStringContainsString('Discard pile (1): Conviction (2, White)', $response['data']['content']);
+    }
+
+    /**
+     * Reported live: "would it be possible to use some kind of image
+     * library to render, say, the cards in play as a single image to
+     * embed in the game display message?" -- followed by the explicit
+     * decision "directly in the main board message." boardMessage() only
+     * attaches this embed once there's actually at least one mood in
+     * play (a fresh 'in_progress' game has none yet) -- see the sibling
+     * test below for that empty case.
+     */
+    public function testDiscordCommandBoardEmbedsCompositeImageWhenCardsAreInPlay(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-40');
+        $u2 = $this->insertDiscordUser('discord-player-41');
+        $this->linkDiscordAccount($u1, 'discord-40');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameCard($gameId, 5, 'in_play', $p2); // Complacency
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-40'));
+
+        self::assertCount(1, $response['data']['embeds']);
+        $imageUrl = $response['data']['embeds'][0]['image']['url'];
+        self::assertStringContainsString("/discord/board-image?game_id={$gameId}&sig=", $imageUrl);
+    }
+
+    /**
+     * Reported live: "the discord in play image is not being updated as
+     * moods are played in the game." Root cause -- boardImageUrl()'s own
+     * URL used to be a bare function of $gameId alone, identical on
+     * every single render for the same game; Discord's own CDN caches
+     * an embed image by URL the same way any HTTP client would, so once
+     * it fetched the image for this game once, it just kept reusing
+     * that cached copy forever, no matter how many moods got played
+     * afterward -- boardMessage() itself was already correctly embedding
+     * a fresh render's own worth of state, but at an UNCHANGED url
+     * Discord had no reason to ever re-fetch. This checks the actual
+     * observable fix: the embedded image URL for the exact same game
+     * differs before vs. after a card enters play (boardImageCacheKey()'s
+     * own `v=` query param -- see that method's docblock for what
+     * changes it and why), so Discord's cache can no longer mask a real
+     * change to the board.
+     */
+    public function testDiscordCommandBoardImageUrlChangesWhenInPlayCardsChange(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-51');
+        $u2 = $this->insertDiscordUser('discord-player-52');
+        $this->linkDiscordAccount($u1, 'discord-51');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameCard($gameId, 5, 'in_play', $p2); // Complacency
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $beforeResponse = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-51'));
+        $beforeUrl = $beforeResponse['data']['embeds'][0]['image']['url'];
+
+        $this->insertGameCard($gameId, 66, 'in_play', $p1); // Hate joins the board
+
+        $afterResponse = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-51'));
+        $afterUrl = $afterResponse['data']['embeds'][0]['image']['url'];
+
+        self::assertNotSame($beforeUrl, $afterUrl);
+
+        // The signature itself never changes (still only ever a function
+        // of $gameId -- see boardImageUrl()'s own docblock for why the
+        // cache-busting param stays deliberately unsigned); only the
+        // trailing `v=` cache-busting param should differ.
+        parse_str((string) parse_url($beforeUrl, PHP_URL_QUERY), $beforeQuery);
+        parse_str((string) parse_url($afterUrl, PHP_URL_QUERY), $afterQuery);
+        self::assertSame($beforeQuery['sig'], $afterQuery['sig']);
+        self::assertNotSame($beforeQuery['v'], $afterQuery['v']);
+    }
+
+    public function testDiscordCommandBoardHasNoEmbedWhenNothingIsInPlay(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-42');
+        $this->linkDiscordAccount($u1, 'discord-42');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $this->insertDiscordUser('discord-player-43'), 1);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-42'));
+
+        self::assertSame([], $response['data']['embeds']);
+    }
+
+    /**
+     * boardImageUrl()/verifyBoardImageSignature() are the whole access
+     * control for the new unauthenticated `/discord/board-image` route
+     * (see that route's own docblock in public/index.php) -- a tampered
+     * game id or signature must be rejected the same way a missing one
+     * would be.
+     */
+    public function testBoardImageSignatureRejectsTamperedGameIdOrSignature(): void
+    {
+        $service = $this->discordCommandService();
+        $url = $service->boardImageUrl(123, 'v1');
+        parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
+        $signature = $query['sig'];
+
+        self::assertTrue($service->verifyBoardImageSignature(123, $signature));
+        self::assertFalse($service->verifyBoardImageSignature(456, $signature));
+        self::assertFalse($service->verifyBoardImageSignature(123, $signature . 'a'));
+    }
+
+    /**
+     * Reported live: the embed showed up blank in Discord in production.
+     * Root cause -- boardImageUrl() built off SiteUrl::root() (the bare
+     * domain, meant for STATIC frontend links like cardArtUrl()'s own
+     * .webp URLs) instead of APP_URL (which includes the PHP app's own
+     * '/app' path prefix on shared hosting -- see SiteUrl's own
+     * docblock, and DiscordOAuthService::redirectUri()'s identical
+     * '/discord/oauth/callback' link, which already builds off APP_URL
+     * for exactly this reason). Locally APP_URL and SITE_URL happen to
+     * be identical (both `http://localhost:8000`, no `/app` suffix), so
+     * this only reproduces by overriding Config's own cached values for
+     * the duration of the test -- restored in finally so no later test
+     * in this process sees a stale APP_URL.
+     */
+    public function testBoardImageUrlUsesAppUrlNotSiteUrlSoItSurvivesAnAppPathPrefix(): void
+    {
+        $configValues = new \ReflectionProperty(Config::class, 'values');
+        $configValues->setAccessible(true);
+        $original = $configValues->getValue();
+
+        try {
+            $configValues->setValue(null, [
+                'APP_URL' => 'https://moodswings.example.com/app',
+                'SITE_URL' => 'https://moodswings.example.com',
+            ]);
+
+            $url = $this->discordCommandService()->boardImageUrl(123, 'v1');
+
+            self::assertStringStartsWith('https://moodswings.example.com/app/discord/board-image?game_id=123&sig=', $url);
+        } finally {
+            $configValues->setValue(null, $original);
+        }
+    }
+
+    /**
+     * renderBoardImage() is what the signed route actually serves --
+     * this checks it produces a real, decodable PNG whenever there's at
+     * least one mood in play, using its own already-tested public
+     * getSpectatorState() rather than a per-viewer session (there's no
+     * viewer at all for Discord's own server-to-server embed fetch).
+     */
+    public function testRenderBoardImageProducesPngWhenCardsAreInPlay(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-44');
+        $u2 = $this->insertDiscordUser('discord-player-45');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameCard($gameId, 66, 'in_play', $p1); // Hate
+        $this->insertGameCard($gameId, 5, 'in_play', $p2); // Complacency
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $image = $this->discordCommandService()->renderBoardImage($gameId);
+
+        self::assertNotNull($image);
+        self::assertStringStartsWith("\x89PNG\r\n\x1a\n", $image);
+        $decoded = imagecreatefromstring($image);
+        self::assertNotFalse($decoded);
+        self::assertGreaterThan(0, imagesx($decoded));
+        self::assertGreaterThan(0, imagesy($decoded));
+    }
+
+    public function testRenderBoardImageReturnsNullWhenNothingIsInPlay(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-46');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $this->insertDiscordUser('discord-player-47'), 1);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        self::assertNull($this->discordCommandService()->renderBoardImage($gameId));
+    }
+
+    public function testRenderBoardImageReturnsNullForAGameThatCannotBeSpectated(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-48');
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'waiting', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        self::assertNull($this->discordCommandService()->renderBoardImage($gameId));
+    }
+
+    /**
+     * Reported live: "can we show the discard pile as an image, as well?"
+     * -- boardMessage()'s own embed used to attach only when
+     * $state['in_play'] was non-empty, so a game with cards ALREADY
+     * discarded but nothing currently in play (e.g. right after the only
+     * mood in play got discarded) would still show no board image at all,
+     * even though there was now something to render.
+     */
+    public function testDiscordCommandBoardEmbedsImageForADiscardPileEvenWithNothingInPlay(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-60');
+        $this->linkDiscordAccount($u1, 'discord-60');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $this->insertDiscordUser('discord-player-61'), 1);
+        $this->insertGameCard($gameId, 9, 'discard'); // Discipline, nobody's turn played it
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-60'));
+
+        self::assertCount(1, $response['data']['embeds']);
+        self::assertStringContainsString("/discord/board-image?game_id={$gameId}&sig=", $response['data']['embeds'][0]['image']['url']);
+    }
+
+    /**
+     * The discard-pile row folded into the composite board image
+     * (discardImageRow()) is its own extra source of change Discord's own
+     * CDN needs to notice -- a card discarded straight from hand
+     * (Compulsion's own target, a `discard_card` effect, ...) changes
+     * $state['discard_pile'] while $state['in_play'] stays completely
+     * untouched, which would otherwise repeat, for the discard row
+     * specifically, the exact bug
+     * testDiscordCommandBoardImageUrlChangesWhenInPlayCardsChange() above
+     * already covers for in-play.
+     */
+    public function testDiscordCommandBoardImageUrlChangesWhenOnlyDiscardPileChanges(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-62');
+        $u2 = $this->insertDiscordUser('discord-player-63');
+        $this->linkDiscordAccount($u1, 'discord-62');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameCard($gameId, 5, 'in_play', $p2); // Complacency -- stays in play the whole test
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $beforeResponse = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-62'));
+        $beforeUrl = $beforeResponse['data']['embeds'][0]['image']['url'];
+
+        $this->insertGameCard($gameId, 9, 'discard', $p1); // Discipline discarded straight from hand -- in_play never changes
+
+        $afterResponse = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-62'));
+        $afterUrl = $afterResponse['data']['embeds'][0]['image']['url'];
+
+        self::assertNotSame($beforeUrl, $afterUrl);
+        parse_str((string) parse_url($beforeUrl, PHP_URL_QUERY), $beforeQuery);
+        parse_str((string) parse_url($afterUrl, PHP_URL_QUERY), $afterQuery);
+        self::assertSame($beforeQuery['sig'], $afterQuery['sig']);
+        self::assertNotSame($beforeQuery['v'], $afterQuery['v']);
+    }
+
+    public function testRenderBoardImageIncludesDiscardPileRowAndStaysBoundedForALargePile(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-64');
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $this->insertDiscordUser('discord-player-64b'), 1);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        // Well past MAX_DISCARD_CARDS_SHOWN (12) -- this must silently
+        // truncate to the most recent ones rather than exceptioning or
+        // rendering an unbounded canvas, the same defensive spirit as
+        // discardPileSummary()'s own strlen() cap on the text listing.
+        for ($i = 0; $i < 20; $i++) {
+            $this->insertGameCard($gameId, 9, 'discard'); // Discipline, repeated
+        }
+
+        $image = $this->discordCommandService()->renderBoardImage($gameId);
+
+        self::assertNotNull($image);
+        $decoded = imagecreatefromstring($image);
+        self::assertNotFalse($decoded);
+        self::assertGreaterThan(0, imagesx($decoded));
+        self::assertGreaterThan(0, imagesy($decoded));
+    }
+
+    /**
+     * Reported live: "show the active user's hand as a composite image,
+     * labeled 'your hand.'" Its own SEPARATE embed (see handImageUrl()'s
+     * own docblock for why it can't share the public board-image embed
+     * above) -- keyed to $you['game_player_id'] specifically, so this
+     * also checks the two embeds don't get confused with each other.
+     */
+    public function testDiscordCommandBoardEmbedsAHandImageForTheViewersOwnSeatWhenHandIsNonEmpty(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-65');
+        $u2 = $this->insertDiscordUser('discord-player-66');
+        $this->linkDiscordAccount($u1, 'discord-65');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameCard($gameId, 74, 'hand', $p1); // Sadness
+        $this->insertGameCard($gameId, 5, 'in_play', $p2); // Complacency
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-65'));
+
+        self::assertCount(2, $response['data']['embeds']);
+        self::assertStringContainsString('/discord/board-image?game_id=', $response['data']['embeds'][0]['image']['url']);
+        self::assertStringContainsString("/discord/hand-image?gp={$p1}&sig=", $response['data']['embeds'][1]['image']['url']);
+    }
+
+    public function testDiscordCommandBoardHasNoHandImageEmbedWhenHandIsEmpty(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-67');
+        $this->linkDiscordAccount($u1, 'discord-67');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $this->insertDiscordUser('discord-player-68'), 1);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-67'));
+
+        $embedUrls = array_map(static fn (array $embed) => $embed['image']['url'], $response['data']['embeds']);
+        self::assertSame([], array_filter($embedUrls, static fn (string $url) => str_contains($url, '/discord/hand-image')));
+    }
+
+    /**
+     * handImageUrl()/verifyHandImageSignature() are the whole access
+     * control for the new unauthenticated `/discord/hand-image` route --
+     * a tampered game_player_id or signature must be rejected the same
+     * way testBoardImageSignatureRejectsTamperedGameIdOrSignature() above
+     * already checks for the public board image.
+     */
+    public function testHandImageSignatureRejectsTamperedGamePlayerIdOrSignature(): void
+    {
+        $service = $this->discordCommandService();
+        $url = $service->handImageUrl(123, 'v1');
+        parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
+        $signature = $query['sig'];
+
+        self::assertTrue($service->verifyHandImageSignature(123, $signature));
+        self::assertFalse($service->verifyHandImageSignature(456, $signature));
+        self::assertFalse($service->verifyHandImageSignature(123, $signature . 'a'));
+    }
+
+    /**
+     * signHandImage() HMACs a distinct `hand:`-prefixed message rather
+     * than a bare id the way signBoardImage() does -- domain separation
+     * so a board-image signature (computed over a bare $gameId) can never
+     * also verify as a valid hand-image signature for a $gamePlayerId
+     * that happens to equal that same id.
+     */
+    public function testHandImageSignatureIsDistinctFromABoardImageSignatureForTheSameNumber(): void
+    {
+        $service = $this->discordCommandService();
+        $boardUrl = $service->boardImageUrl(777, 'v1');
+        parse_str((string) parse_url($boardUrl, PHP_URL_QUERY), $boardQuery);
+
+        self::assertFalse($service->verifyHandImageSignature(777, $boardQuery['sig']));
+    }
+
+    /**
+     * renderHandImage() is what the signed `/discord/hand-image` route
+     * actually serves -- checks it renders ONLY the requested seat's own
+     * hand (never another seat's, even in the same game), using
+     * GameService::getHandForGamePlayer() rather than a per-viewer
+     * session (there's no viewer at all for Discord's own server-to-
+     * server embed fetch).
+     */
+    public function testRenderHandImageProducesPngForThatSeatsOwnHandOnly(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-69');
+        $u2 = $this->insertDiscordUser('discord-player-70');
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameCard($gameId, 74, 'hand', $p1); // Sadness -- only p1's own hand
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $image = $this->discordCommandService()->renderHandImage($p1);
+        self::assertNotNull($image);
+        $decoded = imagecreatefromstring($image);
+        self::assertNotFalse($decoded);
+
+        // p2's own hand is empty -- render() itself already returns null
+        // for a lone row with no cards (see BoardImageRenderer's own
+        // docblock/tests), so this also proves p1's cards weren't somehow
+        // leaking into p2's own rendered hand.
+        self::assertNull($this->discordCommandService()->renderHandImage($p2));
+    }
+
+    public function testRenderHandImageReturnsNullForAGamePlayerThatDoesNotExist(): void
+    {
+        self::assertNull($this->discordCommandService()->renderHandImage(999999999));
+    }
+
+    /** @return int[] */
+    private function activeStandardGameIdsForTest(int $userId): array
+    {
+        $gameIds = [];
+        foreach ($this->games->listGamesForUser($userId) as $game) {
+            if ($game['format'] === 'standard' && $game['status'] === 'in_progress') {
+                $gameIds[] = $game['id'];
+            }
+        }
+
+        return $gameIds;
+    }
+
+    private function cardZone(int $gameCardId): string
+    {
+        $stmt = $this->pdo->prepare('SELECT zone FROM game_cards WHERE id = :id');
+        $stmt->execute(['id' => $gameCardId]);
+
+        return (string) $stmt->fetchColumn();
     }
 }

@@ -1,0 +1,15 @@
+-- Issue #233: playing the game via Discord. A new `/moodswings` slash
+-- command (registered separately per environment via
+-- bin/register_discord_commands.php, not by this migration) lets a
+-- player with a linked Discord account (issue #232) view and, for a v1
+-- scope of single-choice-field cards/decisions, actually play their
+-- active Traditional (format 'standard') game(s) via Discord buttons and
+-- select menus -- see php-app/README.md's "Playing the game via Discord"
+-- section for the full design.
+--
+-- No schema change -- every interaction re-derives its response from the
+-- existing games/game_players/game_cards/game_rounds/game_pending_decisions
+-- tables already backing the web board, nothing new to persist -- just
+-- the version bump MaintenanceGate needs to see this deploy as caught up
+-- with the code.
+UPDATE schema_version SET version = '1.55.0' WHERE id = 1;

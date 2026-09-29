@@ -1,0 +1,26 @@
+-- Issue #233 follow-up (reported live: "we need some way to play targeted
+-- cards like Insecurity in the discord client -- is it possible that we
+-- add new slash commands for things like this, instead of routing all
+-- play through the ephemeral game board message?" -- answered by
+-- extending the existing ephemeral component flow rather than adding new
+-- slash commands, since a new command can't offer a true multi-select or
+-- dynamic per-game candidates without implementing autocomplete
+-- interactions):
+--
+--   * A `multi` field (Suspicion's "choose any number of players,"
+--     Guile's "exactly 2 cards to discard," Malice's decision-side
+--     "choose two of your moods," ...) now gets Discord's own native
+--     multi-select (min_values/max_values) instead of being excluded
+--     from Discord entirely.
+--   * A card with a SECOND choice_field (Faith, Guile, Condescension,
+--     Guilt, Regret, Worry, Contempt, Cynicism, Hostility, Hesitation,
+--     Rationalization, Corruption, Fascination) is now asked one field
+--     at a time (promptOrPlay()), the first field's own answer carried
+--     forward through the second select's own custom_id.
+--
+-- See php-app/README.md's "Playing the game via Discord" section for the
+-- full design.
+--
+-- No schema change -- just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.55.4' WHERE id = 1;

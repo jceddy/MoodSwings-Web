@@ -22,20 +22,28 @@ use MoodSwings\Config;
  * request that fails verification must be rejected with 401 before any of
  * its JSON is even parsed -- see `verify()`'s own docblock.
  *
- * The only interaction type handled so far is PING (type 1, Discord's own
- * one-time "is this URL alive and does it verify correctly" check, sent
- * the moment the Interactions Endpoint URL is saved in the Developer
- * Portal) -- answered with a bare PONG (type 1). Slash commands/buttons
- * (issue #233's own "play the game via Discord" territory) aren't
- * registered yet, so no APPLICATION_COMMAND (type 2) interaction is ever
- * actually sent here today; handle() still switches on `type` rather than
- * assuming PING, so adding a real command later is a new case, not a
- * rewrite.
+ * PING (type 1, Discord's own one-time "is this URL alive and does it
+ * verify correctly" check, sent the moment the Interactions Endpoint URL
+ * is saved in the Developer Portal) is answered with a bare PONG (type
+ * 1). APPLICATION_COMMAND (type 2, the `/moodswings` slash command) and
+ * MESSAGE_COMPONENT (type 3, its own buttons/select menus) are issue
+ * #233's own "play the game via Discord" territory -- both delegated
+ * straight to $gameCommands, which is null (and both types fall back to
+ * a bare PONG, same as before this existed) only for a caller that never
+ * constructed one -- see this class's own tests, which cover PING alone
+ * without needing GameService's own full dependency graph.
  */
 final class DiscordInteractionsService
 {
     private const TYPE_PING = 1;
     private const TYPE_PONG = 1;
+    private const TYPE_APPLICATION_COMMAND = 2;
+    private const TYPE_MESSAGE_COMPONENT = 3;
+
+    public function __construct(
+        private readonly ?DiscordGameCommandService $gameCommands = null,
+    ) {
+    }
 
     /**
      * Ed25519 signature check over the exact raw request body Discord
@@ -108,9 +116,18 @@ final class DiscordInteractionsService
             return ['type' => self::TYPE_PONG];
         }
 
-        // No command is registered yet (see this class's own docblock),
-        // so nothing else is expected to arrive -- acknowledged the same
-        // shape as PING rather than left unanswered.
+        if ($type === self::TYPE_APPLICATION_COMMAND && $this->gameCommands !== null) {
+            return $this->gameCommands->handleCommand($payload);
+        }
+
+        if ($type === self::TYPE_MESSAGE_COMPONENT && $this->gameCommands !== null) {
+            return $this->gameCommands->handleComponent($payload);
+        }
+
+        // Anything else (no $gameCommands configured, or an interaction
+        // type this pass still doesn't handle) is acknowledged the same
+        // shape as PING rather than left unanswered -- Discord requires
+        // SOME response within 3 seconds of every interaction it sends.
         return ['type' => self::TYPE_PONG];
     }
 

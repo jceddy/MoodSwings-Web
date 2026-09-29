@@ -1,0 +1,17 @@
+-- Issue #233 follow-up (reported live: "let's add the ability to create
+-- a game for another human on the friend list"). An "Invite a Friend"
+-- button alongside "New Practice Game" everywhere that already appears.
+-- FriendshipService::listFriends() (accepted friendships only) supplies
+-- the picker in place of GameService::listPracticeBots() -- picking a
+-- friend goes straight to createGame()/startGame()/advanceAutomatedTurns(),
+-- the exact same sequence a practice game already runs, since
+-- createGame() seats any user id immediately with no invite/accept step
+-- either way (matching the web app's own New Game dialog). See
+-- php-app/README.md's "Playing the game via Discord" section for the
+-- full design, including why no notification is sent to the invited
+-- friend (matching the web app's own POST /games route, which doesn't
+-- notify either).
+--
+-- No schema change -- just the version bump MaintenanceGate needs to see
+-- this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.55.15' WHERE id = 1;

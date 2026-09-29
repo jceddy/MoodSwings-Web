@@ -797,6 +797,41 @@ final class BotGameplayIntegrationTest extends TestCase
     }
 
     /**
+     * Reported live: "bots need to target Bliss for removal when it
+     * will win a game, instead of targeting one of the other moods that
+     * Bliss is pumping." End-to-end proof (see
+     * convictionBestOpponentMoodId()'s own docblock for the fix in
+     * isolation): the human has Bliss (blissColor 'green') and Joy
+     * (green, value 3) in play -- Joy's own flat value (3) beats
+     * Bliss's own flat value (2), but bottoming Bliss costs the human
+     * far more of their round score (it erases the whole "triple your
+     * green moods" bonus) than bottoming Joy would (which only removes
+     * Joy's own share of it). The bot, holding only Conviction, must
+     * bottom Bliss itself rather than the tempting higher-value Joy.
+     */
+    public function testBotTargetsBlissWithConvictionInsteadOfTheHigherValueMoodItIsBoosting(): void
+    {
+        $u1 = $this->insertUser('human_conviction_bliss');
+        $botUserId = $this->insertBotUser('bot_conviction_bliss');
+        $gameId = $this->insertGame('standard', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+
+        $blissId = $this->insertGameCard($gameId, 108, 'in_play', $p1); // Bliss (value 2, green)
+        $this->insertGameCard($gameId, 125, 'in_play', $p1); // Joy (value 3, green) -- the tempting higher-value decoy
+        $this->pdo->prepare('UPDATE game_cards SET effect_state = :effect_state WHERE id = :id')
+            ->execute(['effect_state' => json_encode(['blissColor' => 'green']), 'id' => $blissId]);
+        $this->insertGameCard($gameId, 6, 'hand', $botPlayerId); // Conviction -- the bot's only hand card
+        $this->insertGameCard($gameId, 3, 'deck', $p1, 0); // human needs a deck card for Conviction's own forced draw to succeed
+        $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
+
+        self::assertNotNull($this->games->advanceAutomatedTurns($gameId));
+
+        self::assertFalse($this->cardIsInPlay($gameId, 108), 'Bliss should have been bottomed by Conviction');
+        self::assertTrue($this->cardIsInPlay($gameId, 125), "Joy should still be in play -- it's not the intended target");
+    }
+
+    /**
      * The exact scenario reported live -- a bot ("stuck in a Creativity
      * loop") repeatedly played Creativity as a copy of the human's own
      * in-play Compulsion, crashing with "Missing required choice

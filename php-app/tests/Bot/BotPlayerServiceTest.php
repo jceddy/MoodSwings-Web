@@ -2366,6 +2366,35 @@ final class BotPlayerServiceTest extends TestCase
     }
 
     /**
+     * Reported live: a human opponent had Bliss (id 108, green, value 2,
+     * blissColor 'green') and Joy (id 125, green, value 3) in play.
+     * Joy's own flat valueOf() (3) beats Bliss's own flat valueOf() (2)
+     * -- Bliss's bonus is applied entirely inside RoundScorer::score(),
+     * never reflected in BoardState::valueOf() for either card -- so the
+     * old "highest raw valueOf()" policy targeted Joy, which only costs
+     * the opponent Joy's own 3 points and leaves Bliss's bonus intact
+     * (now doubling Bliss's own remaining value instead). Bottoming
+     * Bliss instead erases the WHOLE bonus: opponent's total drops from
+     * Bliss(2) + Joy(3) + bonus 2*(Bliss(2)+Joy(3))=10 = 15 down to just
+     * Joy(3) with Bliss gone, a drop of 12 -- far more than the drop of
+     * 9 from bottoming Joy alone (down to Bliss(2) + 2*Bliss(2)=4 = 6).
+     * convictionBestOpponentMoodId() must rank by that simulated score
+     * IMPACT, not raw valueOf(), to target Bliss here.
+     */
+    public function testChooseActionTargetsBlissOverAHigherValueMoodItIsBoostingWhenPlayingConviction(): void
+    {
+        $state = $this->boardState(hands: [1 => [6, 105], 2 => [108, 125]]);
+        $state->moveHandToInPlay(2, 108);
+        $state->moveHandToInPlay(2, 125);
+        $state->setEffectState(108, 'blissColor', 'green');
+
+        $action = $this->bot->chooseAction($state, [6, 105], 1);
+
+        self::assertSame(6, $action['card_id']);
+        self::assertSame(['target_mood_id' => 108], $action['choices']);
+    }
+
+    /**
      * A teammate's own Complacency doesn't count as "an opponent" either
      * (the same exclusion Contempt/Pacifism already apply) -- and since
      * it already contributes to the bot's own GROUP total (Open Team

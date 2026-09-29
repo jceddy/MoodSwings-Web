@@ -19,6 +19,7 @@ use MoodSwings\Deck\DecklistNotFoundException;
 use MoodSwings\Deck\DecklistValidationException;
 use MoodSwings\Deck\NotAuthorizedToAccessDecklistException;
 use MoodSwings\Deck\UserDecklistService;
+use MoodSwings\Discord\DiscordGameCommandService;
 use MoodSwings\Discord\DiscordInteractionsService;
 use MoodSwings\Discord\DiscordLinkException;
 use MoodSwings\Discord\DiscordNotificationChannel;
@@ -709,7 +710,6 @@ if ($path === '/notifications/preferences' && $method === 'POST') {
 // $discordAccounts itself was already constructed above, alongside
 // $notifications.
 $discordOAuth = new DiscordOAuthService($discordAccounts, new DiscordOAuthStateRepository(), achievements: $achievements);
-$discordInteractions = new DiscordInteractionsService();
 
 if ($path === '/discord/status' && $method === 'GET') {
     $currentUser = requireAuth($auth);
@@ -745,25 +745,6 @@ if ($path === '/discord/unlink' && $method === 'POST') {
     $currentUser = requireAuth($auth);
     $discordAccounts->unlink((int) $currentUser['id']);
     respond(200, ['status' => 'ok', 'message' => 'Discord account unlinked.']);
-}
-
-// Discord's own Interactions Endpoint -- called by Discord itself, never
-// by this site's own JS, so it's authenticated by Ed25519 signature
-// (DiscordInteractionsService::verify()) instead of the session cookie
-// every other route here uses. The raw, exact request body is what gets
-// signed, so it has to be read (and handed to verify()) before anything
-// touches requestBody()'s own json_decode()'d copy.
-if ($path === '/discord/interactions' && $method === 'POST') {
-    $rawBody = (string) file_get_contents('php://input');
-    $signature = $_SERVER['HTTP_X_SIGNATURE_ED25519'] ?? null;
-    $timestamp = $_SERVER['HTTP_X_SIGNATURE_TIMESTAMP'] ?? null;
-
-    if (!is_string($signature) || !is_string($timestamp) || !$discordInteractions->verify($rawBody, $signature, $timestamp)) {
-        respond(401, ['status' => 'error', 'message' => 'Invalid request signature']);
-    }
-
-    $payload = json_decode($rawBody, true);
-    respond(200, $discordInteractions->handle(is_array($payload) ? $payload : []));
 }
 
 $userDecklists = new UserDecklistService(new UserDecklistRepository(), $friendships, $achievements);
@@ -859,6 +840,98 @@ $gameRegistry = DefaultEffectRegistry::build();
 $chaosRegistry = ChaosDefaultEffectRegistry::build();
 $cardStats = new CardStatsService();
 $games = new GameService(new BoardStateRepository($gameRegistry, $chaosRegistry), new MoodPlayService($gameRegistry, $chaosRegistry), new RoundScorer(), $userDecklists, new ReplayStateBuilder($gameRegistry), notifications: $notifications, cardStats: $cardStats, achievements: $achievements, chaosRegistry: $chaosRegistry);
+
+// Issue #233: "play the game via Discord" -- constructed here (rather
+// than alongside $discordOAuth/$discordAccounts above) since it needs
+// $games itself, plus its own BoardState loader for BotChoiceResolver's
+// candidate enumeration (see DiscordGameCommandService's own docblock).
+// Kept as its own variable (not just inlined into $discordInteractions
+// below) since the composite board-image route further down also needs
+// to call boardImageUrl()'s own signature-verifying counterpart on this
+// exact same instance.
+$discordGames = new DiscordGameCommandService($games, new BoardStateRepository($gameRegistry, $chaosRegistry), $discordAccounts, $friendships);
+$discordInteractions = new DiscordInteractionsService($discordGames);
+
+// Discord's own Interactions Endpoint -- called by Discord itself, never
+// by this site's own JS, so it's authenticated by Ed25519 signature
+// (DiscordInteractionsService::verify()) instead of the session cookie
+// every other route here uses. The raw, exact request body is what gets
+// signed, so it has to be read (and handed to verify()) before anything
+// touches requestBody()'s own json_decode()'d copy.
+if ($path === '/discord/interactions' && $method === 'POST') {
+    $rawBody = (string) file_get_contents('php://input');
+    $signature = $_SERVER['HTTP_X_SIGNATURE_ED25519'] ?? null;
+    $timestamp = $_SERVER['HTTP_X_SIGNATURE_TIMESTAMP'] ?? null;
+
+    if (!is_string($signature) || !is_string($timestamp) || !$discordInteractions->verify($rawBody, $signature, $timestamp)) {
+        respond(401, ['status' => 'error', 'message' => 'Invalid request signature']);
+    }
+
+    $payload = json_decode($rawBody, true);
+    respond(200, $discordInteractions->handle(is_array($payload) ? $payload : []));
+}
+
+// The composite in-play board image DiscordGameCommandService::boardMessage()
+// embeds (issue #233 follow-up: "would it be possible to ... render, say,
+// the cards in play as a single image?"). Unlike every other route here,
+// this one is deliberately UNAUTHENTICATED -- Discord's own servers fetch
+// an embed's image.url directly, with no session cookie of the viewer's
+// to send -- so it's gated by boardImageUrl()'s own HMAC signature
+// instead (see that method's docblock for why). A missing/invalid sig,
+// or a game with nothing renderable (gone, still 'waiting'/'abandoned',
+// or simply no cards in play right now), gets a plain 404, same as any
+// other not-found resource.
+if ($path === '/discord/board-image' && $method === 'GET') {
+    $gameId = (int) ($_GET['game_id'] ?? 0);
+    $signature = (string) ($_GET['sig'] ?? '');
+
+    if ($gameId <= 0 || $signature === '' || !$discordGames->verifyBoardImageSignature($gameId, $signature)) {
+        http_response_code(404);
+        exit;
+    }
+
+    $image = $discordGames->renderBoardImage($gameId);
+    if ($image === null) {
+        http_response_code(404);
+        exit;
+    }
+
+    header('Content-Type: image/png');
+    header('Content-Length: ' . strlen($image));
+    echo $image;
+    exit;
+}
+
+// DiscordGameCommandService::boardMessage()'s own SEPARATE embed for the
+// active user's own hand (reported live: "show the active user's hand as
+// a composite image, labeled 'your hand.' I suspect that this requires a
+// separate image since a composite would be problematic with hidden
+// information" -- exactly right, and exactly why this is its own route
+// rather than a flag on /discord/board-image above). Same unauthenticated-
+// but-signed shape as that route, except the signature is keyed to
+// $gamePlayerId (one single seat), not $gameId (every seat's shared
+// public board) -- see handImageUrl()'s own docblock for why a hand can
+// never reuse that broader, per-game signature.
+if ($path === '/discord/hand-image' && $method === 'GET') {
+    $gamePlayerId = (int) ($_GET['gp'] ?? 0);
+    $signature = (string) ($_GET['sig'] ?? '');
+
+    if ($gamePlayerId <= 0 || $signature === '' || !$discordGames->verifyHandImageSignature($gamePlayerId, $signature)) {
+        http_response_code(404);
+        exit;
+    }
+
+    $image = $discordGames->renderHandImage($gamePlayerId);
+    if ($image === null) {
+        http_response_code(404);
+        exit;
+    }
+
+    header('Content-Type: image/png');
+    header('Content-Length: ' . strlen($image));
+    echo $image;
+    exit;
+}
 $matchmaking = new MatchmakingService(new OpenGameListingRepository(), new UserRepository(), new FriendshipRepository(), $games);
 $weeklySealedPoolQueue = new WeeklySealedPoolQueueService($games);
 // Issue #91 -- see TournamentMatchObserver's own docblock for why this
@@ -1280,6 +1353,31 @@ if ($path === '/games' && $method === 'POST') {
         respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
     } catch (\PDOException $e) {
         respond(400, ['status' => 'error', 'message' => 'One or more opponents could not be found.']);
+    }
+}
+
+// Issue #524: the puzzle collection's own lobby list -- every active
+// puzzle, plus the caller's own solve status/best_plays for each one
+// (GameService::listActivePuzzles()' own LEFT JOIN).
+if ($path === '/puzzles' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    respond(200, ['status' => 'ok', 'puzzles' => $games->listActivePuzzles((int) $currentUser['id'])]);
+}
+
+// Starts (or restarts -- "Try Again" just calls this again, a fresh
+// games row each time, same as Rematch) one attempt at a puzzle.
+// createPuzzleAttempt() deals the puzzle's own stored starting
+// hand/in-play/deck arrays directly -- no shuffling, no MIN_PLAYERS gate.
+if ($path === '/puzzles/attempt' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $puzzleId = (int) ($body['puzzle_id'] ?? 0);
+
+    try {
+        $gameId = $games->createPuzzleAttempt((int) $currentUser['id'], $puzzleId);
+        respond(201, ['status' => 'ok', 'game_id' => $gameId]);
+    } catch (GameStateException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
     }
 }
 
@@ -2446,6 +2544,25 @@ if ($path === '/games/notes' && $method === 'POST') {
     } catch (\InvalidArgumentException $e) {
         respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
     }
+}
+
+// Reported live: the "Puzzle Solver" achievement should only unlock on a
+// solve where the player never opened the Hint dialog -- the frontend's
+// Hint button (renderPuzzleHintButton() in game.js) calls this the
+// moment it's clicked, before showing the hint text, so the flag is set
+// regardless of whether the player reads the whole thing. A no-op for
+// anything but an in-progress puzzle-format game; no response body
+// beyond the usual status, since the frontend never needs to read this
+// flag back.
+if ($path === '/games/puzzle-hint-viewed' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $gameId = (int) ($body['game_id'] ?? 0);
+
+    $gamePlayerId = requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    $games->markPuzzleHintViewed($gameId, $gamePlayerId);
+    respond(200, ['status' => 'ok']);
 }
 
 // In-game chat (issue #109): no GET route -- unlike /games/notes above,

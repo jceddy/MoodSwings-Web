@@ -289,4 +289,47 @@ final class BotChoiceResolverTest extends TestCase
 
         self::assertNull($this->resolver->resolve($state, $field, 1, 0, 'malice'));
     }
+
+    /**
+     * Issue #233 (DiscordGameCommandService's own single-field choice
+     * rendering): the full candidate list, not just resolve()'s single
+     * non-strategic pick -- same filter/exclude-self behavior
+     * resolveOwnResourceField() already applies, just exposed instead of
+     * collapsed to one answer.
+     */
+    public function testHandCardFieldCandidatesReturnsEveryLegalCandidate(): void
+    {
+        $state = $this->boardState(hands: [1 => [8, 55]]); // Dignity, Apathy
+        $field = ['key' => 'discard_card_id', 'type' => 'hand_card', 'required' => true];
+
+        self::assertSame([8, 55], $this->resolver->handCardFieldCandidates($state, $field, 1, 0, 'bliss'));
+    }
+
+    public function testHandCardFieldCandidatesExcludesHopeForAmbition(): void
+    {
+        $state = $this->boardState(hands: [1 => [124, 55]]); // Hope, Apathy
+        $field = ['key' => 'discard_card_id', 'type' => 'hand_card', 'required' => true];
+
+        self::assertSame([55], $this->resolver->handCardFieldCandidates($state, $field, 1, 0, 'ambition'));
+    }
+
+    public function testDiscardCardFieldCandidatesReturnsEveryLegalCandidate(): void
+    {
+        $state = $this->boardState(hands: [1 => [8, 55]]);
+        $state->moveHandToDiscard(1, 8);
+        $state->moveHandToDiscard(1, 55);
+        $field = ['key' => 'discard_card_id', 'type' => 'discard_card', 'required' => true];
+
+        self::assertSame([8, 55], $this->resolver->discardCardFieldCandidates($state, $field, 0));
+    }
+
+    public function testDiscardCardFieldCandidatesAppliesItsOwnFilter(): void
+    {
+        $state = $this->boardState(hands: [1 => [8, 55]]); // Dignity (base 3), Apathy (base 4)
+        $state->moveHandToDiscard(1, 8);
+        $state->moveHandToDiscard(1, 55);
+        $field = ['key' => 'discard_card_id', 'type' => 'discard_card', 'required' => true, 'filter' => ['values' => [4]]];
+
+        self::assertSame([55], $this->resolver->discardCardFieldCandidates($state, $field, 0));
+    }
 }

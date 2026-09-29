@@ -1,0 +1,26 @@
+-- Issue #233 follow-up (reported live: "we need to be able to see what
+-- cards are in play, and select options for cards we choose to play
+-- (such as a target for Hate)"):
+--
+--   * Every DiscordGameCommandService board view now opens with an
+--     in-play summary (inPlaySummary()) listing each player's own
+--     moods currently in play -- public information a Discord viewer
+--     previously never saw at all, only their own hand.
+--   * A 'mood'-type field's select options (fieldOptions()) are now
+--     labelled with their owning player's username, since Hate's own
+--     "any mood in play" candidates can span both players.
+--   * Fixed a real bug: this class's "single supported field" check
+--     only ever considered REQUIRED choice_fields, so an OPTIONAL one
+--     (Hate's own target_mood_id is required => false) was never
+--     rendered as a choice at all -- it always played blank, with no
+--     way to ever pick a target. Generalized to any single field,
+--     required or optional, with an explicit "Skip" option
+--     (SKIP_FIELD_VALUE) so declining an optional effect is now a
+--     deliberate, visible choice.
+--
+-- See php-app/README.md's "Playing the game via Discord" section for
+-- the full design.
+--
+-- No schema change -- just the version bump MaintenanceGate needs to
+-- see this deploy as caught up with the code.
+UPDATE schema_version SET version = '1.55.2' WHERE id = 1;

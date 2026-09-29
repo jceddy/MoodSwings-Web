@@ -3576,6 +3576,248 @@ final class GameService
     }
 
     /**
+     * The fixed, real `users` row a two-seat "vs opponent" puzzle
+     * (`puzzles.opponent_hand_card_ids`/`opponent_in_play_card_ids`
+     * non-empty -- see createPuzzleAttempt()) seats as its own second
+     * game_player, the same "a real users row, is_bot = 1" convention
+     * 0090_add_practice_bots.sql's own fixed roster already established
+     * -- game_players.user_id is NOT NULL, so a puzzle's opponent needs a
+     * real row to reference regardless of the fact it never actually
+     * acts. Looked up first (production already has it seeded by
+     * migration 0395); created on the fly otherwise -- self-healing
+     * against a test suite that truncates `users` between runs, so
+     * neither environment ever depends on migration seed order.
+     */
+    private const PUZZLE_OPPONENT_USERNAME = 'PuzzleOpponent';
+
+    private function puzzleOpponentUserId(): int
+    {
+        $pdo = Connection::get();
+        $stmt = $pdo->prepare('SELECT id FROM users WHERE username = :username');
+        $stmt->execute(['username' => self::PUZZLE_OPPONENT_USERNAME]);
+        $id = $stmt->fetchColumn();
+        if ($id !== false) {
+            return (int) $id;
+        }
+
+        $insert = $pdo->prepare(
+            "INSERT INTO users (username, email, password_hash, share_presence, is_bot, email_verified_at)
+             VALUES (:username, 'puzzle-opponent@moodswings.invalid', :password_hash, 0, 1, NOW())"
+        );
+        $insert->execute([
+            'username' => self::PUZZLE_OPPONENT_USERNAME,
+            'password_hash' => password_hash(bin2hex(random_bytes(16)), PASSWORD_DEFAULT),
+        ]);
+
+        return (int) $pdo->lastInsertId();
+    }
+
+    /**
+     * Issue #524: a puzzle attempt is a real, minimal `games` row
+     * (format = 'puzzle') built directly from a curated `puzzles` row's
+     * own stored card-id arrays -- no shuffling, no deck-building step,
+     * and deliberately bypassing createGame()/startGame() entirely (both
+     * hard-enforce self::MIN_PLAYERS, which a solitaire puzzle can never
+     * satisfy; the game starts 'in_progress' immediately here instead of
+     * the usual 'waiting'). This reuses the SAME rules engine/persistence
+     * layer/board-rendering pipeline every other format does -- see
+     * advancePuzzleTurn() for the one other spot format = 'puzzle' needs
+     * special-casing (the turn-advance fallback that would otherwise
+     * trigger real round scoring/match-completion bookkeeping this isn't
+     * a real game for), and playMood()'s own goal-check hook for how a
+     * puzzle is actually detected as solved.
+     *
+     * Most puzzles are pure solitaire (a single seat), but one whose
+     * `puzzles.opponent_hand_card_ids`/`opponent_in_play_card_ids` are
+     * non-empty (issue #524 follow-up, reported live: "I want to up the
+     * ante on some of the puzzles, and it would require an opponent")
+     * seats a second game_player -- puzzleOpponentUserId()'s own fixed
+     * PuzzleOpponent row -- dealt from those same two arrays, with
+     * first_game_player_id pointed at THAT seat (so a card that cares who
+     * went first this round reads correctly, and so a goal_type
+     * 'outscore_opponent' tie -- see puzzleSolverOutscoresOpponent() --
+     * goes to the opponent, matching the Extended Rules' own "ties go to
+     * whoever played first" tiebreak). current_turn_game_player_id still
+     * always starts on the solver directly: PuzzleOpponent's own board is
+     * pre-set state to solve around, never a real turn to actually take
+     * -- advanceAutomatedTurns() never has a reason to touch it, since
+     * current_turn is never its own seat.
+     *
+     * "Try Again" is just calling this again -- a fresh games row, the
+     * same pattern Rematch already uses -- rather than resetting one in
+     * place, so an old abandoned/solved attempt just sits there like any
+     * other finished game.
+     *
+     * `puzzles.starting_discard_card_ids` (issue #524 follow-up, reported
+     * live: "There is a Joy in the discard pile") seeds the shared
+     * discard pile itself, owned by the solver -- for a puzzle whose
+     * intended solution depends on a reactive card like Vulnerability
+     * ("...if a card was put into the discard pile this round") already
+     * being satisfied, or simply flavors a card as already played earlier
+     * this round. `puzzles.extra_play_source_card_id`, alongside it,
+     * covers a puzzle that also opens with an extra play already banked
+     * (e.g. "you have... one extra play from Joy") -- see the grant-
+     * building block below for why this can't just reuse
+     * computeFreshGrants()'s own live bankExtraPlay() path.
+     */
+    public function createPuzzleAttempt(int $userId, int $puzzleId): int
+    {
+        $puzzleStmt = Connection::get()->prepare('SELECT * FROM puzzles WHERE id = :id');
+        $puzzleStmt->execute(['id' => $puzzleId]);
+        $puzzle = $puzzleStmt->fetch();
+
+        if ($puzzle === false) {
+            throw new GameStateException("No such puzzle {$puzzleId}");
+        }
+        if (!(bool) $puzzle['active']) {
+            throw new GameStateException("Puzzle {$puzzleId} is not currently active");
+        }
+
+        $handCardIds = json_decode((string) $puzzle['starting_hand_card_ids'], true);
+        $inPlayCardIds = json_decode((string) $puzzle['starting_in_play_card_ids'], true);
+        $deckCardIds = json_decode((string) $puzzle['deck_card_ids'], true);
+        $discardCardIds = json_decode((string) $puzzle['starting_discard_card_ids'], true);
+        $opponentHandCardIds = json_decode((string) $puzzle['opponent_hand_card_ids'], true);
+        $opponentInPlayCardIds = json_decode((string) $puzzle['opponent_in_play_card_ids'], true);
+        $hasOpponent = $opponentHandCardIds !== [] || $opponentInPlayCardIds !== [];
+        $extraPlaySourceCatalogCardId = $puzzle['extra_play_source_card_id'] !== null ? (int) $puzzle['extra_play_source_card_id'] : null;
+
+        $pdo = Connection::get();
+        $pdo->beginTransaction();
+
+        try {
+            $insertGame = $pdo->prepare(
+                "INSERT INTO games (format, status, created_by_user_id, puzzle_id, started_at)
+                 VALUES ('puzzle', 'in_progress', :created_by, :puzzle_id, NOW())"
+            );
+            $insertGame->execute(['created_by' => $userId, 'puzzle_id' => $puzzleId]);
+            $gameId = (int) $pdo->lastInsertId();
+
+            $insertPlayer = $pdo->prepare(
+                'INSERT INTO game_players (game_id, user_id, seat_order) VALUES (:game_id, :user_id, :seat_order)'
+            );
+            $insertPlayer->execute(['game_id' => $gameId, 'user_id' => $userId, 'seat_order' => 0]);
+            $gamePlayerId = (int) $pdo->lastInsertId();
+
+            $opponentGamePlayerId = null;
+            if ($hasOpponent) {
+                $insertPlayer->execute(['game_id' => $gameId, 'user_id' => $this->puzzleOpponentUserId(), 'seat_order' => 1]);
+                $opponentGamePlayerId = (int) $pdo->lastInsertId();
+            }
+
+            $insertCard = $pdo->prepare(
+                'INSERT INTO game_cards (game_id, card_id, zone, owner_game_player_id, deck_position)
+                 VALUES (:game_id, :card_id, :zone, :owner, :deck_position)'
+            );
+            foreach ($handCardIds as $catalogCardId) {
+                $insertCard->execute(['game_id' => $gameId, 'card_id' => $catalogCardId, 'zone' => 'hand', 'owner' => $gamePlayerId, 'deck_position' => null]);
+            }
+            foreach ($inPlayCardIds as $catalogCardId) {
+                $insertCard->execute(['game_id' => $gameId, 'card_id' => $catalogCardId, 'zone' => 'in_play', 'owner' => $gamePlayerId, 'deck_position' => null]);
+            }
+            foreach (array_values($deckCardIds) as $position => $catalogCardId) {
+                $insertCard->execute(['game_id' => $gameId, 'card_id' => $catalogCardId, 'zone' => 'deck', 'owner' => null, 'deck_position' => $position]);
+            }
+            foreach ($opponentHandCardIds as $catalogCardId) {
+                $insertCard->execute(['game_id' => $gameId, 'card_id' => $catalogCardId, 'zone' => 'hand', 'owner' => $opponentGamePlayerId, 'deck_position' => null]);
+            }
+            foreach ($opponentInPlayCardIds as $catalogCardId) {
+                $insertCard->execute(['game_id' => $gameId, 'card_id' => $catalogCardId, 'zone' => 'in_play', 'owner' => $opponentGamePlayerId, 'deck_position' => null]);
+            }
+            foreach ($discardCardIds as $catalogCardId) {
+                $insertCard->execute(['game_id' => $gameId, 'card_id' => $catalogCardId, 'zone' => 'discard', 'owner' => $gamePlayerId, 'deck_position' => null]);
+            }
+
+            // A puzzle whose intended solution needs an extra play already
+            // in hand at turn start (e.g. "you have one extra play from
+            // Joy", reported live) can't just rely on computeFreshGrants()
+            // -- that only fires from a live bankExtraPlay() call earlier
+            // in the SAME game, which a puzzle attempt never has (it opens
+            // straight into round 1, turn 1). puzzles.extra_play_source_card_id
+            // instead names the catalog card whose own already-dealt
+            // instance (wherever it landed -- $discardCardIds above, in
+            // this puzzle's case) backs a second grant here, in exactly
+            // the shape computeFreshGrants() itself builds for a real
+            // banked Joy/Generosity play (['sourceCardId' => ...], no
+            // 'requiresSourceInPlay' -- the source needn't still be in
+            // play for the grant to remain usable, matching Joy's own
+            // real behavior once its own play is already banked).
+            $extraPlayGrant = null;
+            if ($extraPlaySourceCatalogCardId !== null) {
+                $sourceInstanceStmt = $pdo->prepare('SELECT id FROM game_cards WHERE game_id = :game_id AND card_id = :card_id LIMIT 1');
+                $sourceInstanceStmt->execute(['game_id' => $gameId, 'card_id' => $extraPlaySourceCatalogCardId]);
+                $sourceInstanceId = $sourceInstanceStmt->fetchColumn();
+                if ($sourceInstanceId !== false) {
+                    $extraPlayGrant = ['sourceCardId' => (int) $sourceInstanceId];
+                }
+            }
+            $playGrants = $extraPlayGrant !== null ? [null, $extraPlayGrant] : [null];
+
+            $insertRound = $pdo->prepare(
+                "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, pending_play_grants, status)
+                 VALUES (:game_id, 1, :first_player, :current_player, :plays_remaining, :pending_play_grants, 'in_progress')"
+            );
+            $insertRound->execute([
+                'game_id' => $gameId,
+                'first_player' => $opponentGamePlayerId ?? $gamePlayerId,
+                'current_player' => $gamePlayerId,
+                'plays_remaining' => count($playGrants),
+                'pending_play_grants' => json_encode($playGrants),
+            ]);
+
+            $pdo->commit();
+        } catch (Throwable $e) {
+            $pdo->rollBack();
+            throw $e;
+        }
+
+        return $gameId;
+    }
+
+    /**
+     * GET /puzzles: every active puzzle plus $userId's own puzzle_solves
+     * row, if any -- one LEFT JOIN, not a separate query per puzzle.
+     * 'solved' is just whether that join matched at all;
+     * best_plays/solve_count/first_solved_at are null for a puzzle never
+     * solved.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function listActivePuzzles(int $userId): array
+    {
+        // Reported live: list easiest first. puzzles.difficulty is
+        // declared ENUM('easy', 'medium', 'hard') (migration 0394), and
+        // MySQL sorts an ENUM by its declaration index rather than
+        // alphabetically, so a plain ORDER BY on it already reads
+        // Easy < Medium < Hard with no FIELD()/CASE needed. p.id stays
+        // as the tiebreaker to keep a stable order within each tier.
+        $stmt = Connection::get()->prepare(
+            'SELECT p.id, p.slug, p.title, p.description, p.difficulty, p.max_plays,
+                    s.first_solved_at, s.best_plays, s.solve_count
+             FROM puzzles p
+             LEFT JOIN puzzle_solves s ON s.puzzle_id = p.id AND s.user_id = :user_id
+             WHERE p.active = 1
+             ORDER BY p.difficulty, p.id'
+        );
+        $stmt->execute(['user_id' => $userId]);
+
+        return array_map(static function (array $row): array {
+            return [
+                'id' => (int) $row['id'],
+                'slug' => $row['slug'],
+                'title' => $row['title'],
+                'description' => $row['description'],
+                'difficulty' => $row['difficulty'],
+                'max_plays' => $row['max_plays'] !== null ? (int) $row['max_plays'] : null,
+                'solved' => $row['first_solved_at'] !== null,
+                'first_solved_at' => $row['first_solved_at'],
+                'best_plays' => $row['best_plays'] !== null ? (int) $row['best_plays'] : null,
+                'solve_count' => $row['solve_count'] !== null ? (int) $row['solve_count'] : 0,
+            ];
+        }, $stmt->fetchAll());
+    }
+
+    /**
      * Synchronous mode's own pre-game "I'm actually here, deal me in"
      * confirmation (see self::SYNCHRONOUS_MODE_ALLOWED_FORMATS' own
      * docblock) -- idempotent (a second call from the same seat is a
@@ -6427,6 +6669,22 @@ final class GameService
             }
 
             $this->logEvent($gameId, $roundId, $gamePlayerId, 'mood_played', $cardId, $this->withPlayedFrom($state, $cardId, $choices), $state);
+
+            // Issue #524: checked BEFORE finishPlay() -- not after --
+            // specifically so a puzzle with a max_plays cap can tell a
+            // clean, single-turn solve (this exact play was the goal,
+            // full stop) apart from one that only got there after
+            // running out of plays_remaining and being handed a fresh
+            // mini-turn by advancePuzzleTurn() below. Checking after
+            // finishPlay() would have that refresh already logged by
+            // the time this runs even for the CORRECT solution, the
+            // instant its own final play happens to also exhaust
+            // plays_remaining -- see checkPuzzleGoal()'s own docblock.
+            if ($this->checkPuzzleGoal($gameId, $gamePlayerId, $state)) {
+                $this->boardStates->save($gameId, $state);
+
+                return ['round_scored' => false, 'game_completed' => true, 'winner_game_player_id' => $gamePlayerId];
+            }
 
             return $this->finishPlay($gameId, $round, $gamePlayerId, $state, $gamePlayerId);
         });
@@ -9783,6 +10041,19 @@ final class GameService
         // this point is reached, so a second 'mood_played' entry here
         // would only ever repeat "played {$cardName} ({$choiceSummary})",
         // a second time, with nothing new to say.
+        //
+        // Issue #524: same puzzle goal-check short-circuit as playMood()'s
+        // own, and for the same reason -- a puzzle play that itself paused
+        // on a decision (e.g. a Duplicity repeat offer on the card that
+        // actually solves it) only ever finishes resolving HERE, not in
+        // playMood(), so without this the goal would never be checked at
+        // all for that solution.
+        if ($this->checkPuzzleGoal($gameId, $initiatingPlayerId, $state)) {
+            $this->boardStates->save($gameId, $state);
+
+            return ['round_scored' => false, 'game_completed' => true, 'winner_game_player_id' => $initiatingPlayerId];
+        }
+
         return $this->finishPlay($gameId, $round, $initiatingPlayerId, $state, $gamePlayerId);
     }
 
@@ -11034,6 +11305,10 @@ final class GameService
             return $this->advanceTeamTurn($gameId, $round, $state, $requestingGamePlayerId);
         }
 
+        if ($this->fetchGame($gameId)['format'] === 'puzzle') {
+            return $this->advancePuzzleTurn($gameId, $round, $state, $requestingGamePlayerId);
+        }
+
         // Positioned against the FULL (unfiltered) seat rotation, not just
         // the active players -- current_turn_game_player_id can itself be
         // a player who just resigned this exact call (see
@@ -11075,6 +11350,213 @@ final class GameService
         $this->updateRoundTurnState((int) $round['id'], $nextPlayerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId(), $state);
 
         return ['round_scored' => false, 'game_completed' => false];
+    }
+
+    /**
+     * A puzzle attempt (format = 'puzzle', see createPuzzleAttempt()) is
+     * always exactly one seat, so the ordinary scan above never finds a
+     * "next player" -- left alone, that falls through to
+     * scoreRoundAndAdvance() the instant plays_remaining hits 0, wrongly
+     * invoking the real scoring pipeline for a solitaire puzzle. Puzzles
+     * are solved (or not) entirely by the goal-check hook in playMood(),
+     * never by scoring, so this just grants the same seat a fresh
+     * mini-turn -- computeFreshGrants() recomputed exactly as if they
+     * were the "next" player, so any Hope/Grace/Stubbornness already in
+     * play on the puzzle's board still applies -- and keeps the attempt
+     * open indefinitely until the player solves it or runs out of legal
+     * plays entirely (at which point "Try Again" starts a fresh attempt).
+     *
+     * Logs 'puzzle_turn_refreshed' -- a puzzle with goal_type =
+     * 'hand_empty' and no card-removal effects always takes exactly
+     * hand-size total plays to solve regardless of order, so a bare
+     * max_plays count can't by itself tell a clean single-turn chain
+     * apart from the same cards trickled in one at a time across
+     * however many of these refreshes it takes; checkPuzzleGoal() reads
+     * this event back to fail a puzzle with max_plays set the instant
+     * even one refresh happened before the goal was reached, no matter
+     * how far under the play-count cap it finished.
+     */
+    private function advancePuzzleTurn(int $gameId, array $round, BoardState $state, int $requestingGamePlayerId): array
+    {
+        $playerId = (int) $round['current_turn_game_player_id'];
+
+        $this->logEvent($gameId, (int) $round['id'], $playerId, 'puzzle_turn_refreshed', null, []);
+
+        $freshGrants = $this->computeFreshGrants($state, $playerId, 1);
+        $this->logFreshGrants($gameId, (int) $round['id'], $playerId, $freshGrants);
+        $this->boardStates->save($gameId, $state);
+        $this->updateRoundTurnState((int) $round['id'], $playerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId(), $state);
+
+        return ['round_scored' => false, 'game_completed' => false];
+    }
+
+    /**
+     * Issue #524: called from playMood() right after every successful
+     * puzzle-format play -- $state already reflects the play that just
+     * happened, so this is a pure read against it plus one COUNT(*)
+     * against the existing 'mood_played' game_events rows (the puzzle's
+     * own efficiency metric; no dedicated counter column needed). A
+     * no-op for every non-puzzle game and for a puzzle already marked
+     * completed (playing on after solving is harmless, not an error).
+     *
+     * On a solve: marks the game completed (winner_game_player_id is the
+     * solver's own seat -- there's no real "winner" concept otherwise,
+     * but this keeps the ordinary completed-game board treatment
+     * working unchanged), upserts puzzle_solves (first solve or a new
+     * personal best), and fires the achievement hook -- passing whether
+     * this specific attempt is a brand-new distinct-puzzle solve (see
+     * AchievementService::onPuzzleSolved()'s own "Solve 10 puzzles"
+     * counter) and whether games.puzzle_hint_viewed was ever set on this
+     * attempt (see that same method's own "Puzzle Solver" hint gate).
+     * Deliberately does NOT call recordGameCompletionStats() -- that's
+     * the real win/loss
+     * lifetime-stats/achievement pipeline, and a solitaire puzzle isn't
+     * a real game in that sense.
+     */
+    private function countMoodsPlayed(int $gameId): int
+    {
+        $stmt = Connection::get()->prepare("SELECT COUNT(*) FROM game_events WHERE game_id = :game_id AND event_type = 'mood_played'");
+        $stmt->execute(['game_id' => $gameId]);
+
+        return (int) $stmt->fetchColumn();
+    }
+
+    private function checkPuzzleGoal(int $gameId, int $gamePlayerId, BoardState $state): bool
+    {
+        $game = $this->fetchGame($gameId);
+        if ($game['format'] !== 'puzzle' || $game['status'] !== 'in_progress') {
+            return false;
+        }
+
+        $pdo = Connection::get();
+        $puzzleStmt = $pdo->prepare('SELECT * FROM puzzles WHERE id = :id');
+        $puzzleStmt->execute(['id' => (int) $game['puzzle_id']]);
+        $puzzle = $puzzleStmt->fetch();
+        $goalParams = json_decode((string) $puzzle['goal_params'], true);
+
+        $goalMet = match ($puzzle['goal_type']) {
+            'hand_empty' => $state->hand($gamePlayerId) === [],
+            'card_in_hand' => $this->puzzleZoneHasCatalogCard($state, $state->hand($gamePlayerId), (int) $goalParams['catalog_card_id']),
+            'card_in_play' => $this->puzzleZoneHasCatalogCard($state, array_keys($state->moodsOwnedBy($gamePlayerId)), (int) $goalParams['catalog_card_id']),
+            'min_score' => $this->puzzleScoreFor($state, $gamePlayerId) >= (int) $goalParams['target'],
+            'outscore_opponent' => $this->puzzleSolverOutscoresOpponent($gameId, $gamePlayerId, $state),
+            default => false,
+        };
+
+        if (!$goalMet) {
+            return false;
+        }
+
+        $playsMade = $this->countMoodsPlayed($gameId);
+
+        if ($puzzle['max_plays'] !== null) {
+            if ($playsMade > (int) $puzzle['max_plays']) {
+                return false;
+            }
+
+            // See advancePuzzleTurn()'s own docblock -- a max_plays cap
+            // means "within this many plays, in one unbroken turn," not
+            // just "within this many plays total."
+            $refreshedStmt = $pdo->prepare("SELECT 1 FROM game_events WHERE game_id = :game_id AND event_type = 'puzzle_turn_refreshed' LIMIT 1");
+            $refreshedStmt->execute(['game_id' => $gameId]);
+            if ($refreshedStmt->fetch() !== false) {
+                return false;
+            }
+        }
+
+        $pdo->prepare("UPDATE games SET status = 'completed', winner_game_player_id = :winner, completed_at = NOW() WHERE id = :game_id")
+            ->execute(['winner' => $gamePlayerId, 'game_id' => $gameId]);
+        // Bug caught live: without this, the round's own row stays
+        // status = 'in_progress' forever (advancePuzzleTurn() only ever
+        // refreshes it, never scores it) even after games.status flips to
+        // 'completed' -- currentRound() (WHERE status = 'in_progress')
+        // then still finds it, so advanceAutomatedTurns() (called
+        // unconditionally after every POST /games/play, and every user
+        // defaults to auto_pass_on_empty_hand = 1) kept auto-passing this
+        // now-empty-handed, already-solved puzzle right up to
+        // MAX_AUTOMATED_ACTIONS_PER_REQUEST, clobbering this exact
+        // solve's own game_completed => true response with whatever that
+        // last auto-pass call returned. 'scored' is the closest existing
+        // status, even though nothing here was actually scored.
+        $pdo->prepare("UPDATE game_rounds SET status = 'scored' WHERE game_id = :game_id AND status = 'in_progress'")
+            ->execute(['game_id' => $gameId]);
+
+        $userIdStmt = $pdo->prepare('SELECT user_id FROM game_players WHERE id = :id');
+        $userIdStmt->execute(['id' => $gamePlayerId]);
+        $userId = (int) $userIdStmt->fetchColumn();
+
+        // Reported live: "Solve 10 puzzles" counts DISTINCT puzzles, not
+        // solve events -- checked BEFORE the upsert below so a repeat
+        // solve of an already-solved puzzle (a new best_plays, or just
+        // replaying it) never bumps that count again.
+        $existingSolveStmt = $pdo->prepare('SELECT 1 FROM puzzle_solves WHERE user_id = :user_id AND puzzle_id = :puzzle_id');
+        $existingSolveStmt->execute(['user_id' => $userId, 'puzzle_id' => (int) $puzzle['id']]);
+        $isNewPuzzleSolve = $existingSolveStmt->fetchColumn() === false;
+
+        $pdo->prepare(
+            'INSERT INTO puzzle_solves (user_id, puzzle_id, best_plays, solve_count)
+             VALUES (:user_id, :puzzle_id, :plays_made, 1)
+             ON DUPLICATE KEY UPDATE best_plays = LEAST(best_plays, :plays_made2), solve_count = solve_count + 1'
+        )->execute([
+            'user_id' => $userId,
+            'puzzle_id' => (int) $puzzle['id'],
+            'plays_made' => $playsMade,
+            'plays_made2' => $playsMade,
+        ]);
+
+        $this->achievements->onPuzzleSolved($userId, $isNewPuzzleSolve, (bool) $game['puzzle_hint_viewed']);
+
+        return true;
+    }
+
+    /** @param int[] $cardIds */
+    private function puzzleZoneHasCatalogCard(BoardState $state, array $cardIds, int $catalogCardId): bool
+    {
+        foreach ($cardIds as $cardId) {
+            if ($state->catalogCardId($cardId) === $catalogCardId) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function puzzleScoreFor(BoardState $state, int $gamePlayerId): int
+    {
+        $total = 0;
+        foreach (array_keys($state->moodsOwnedBy($gamePlayerId)) as $cardId) {
+            $total += $state->valueOf($cardId);
+        }
+
+        return $total;
+    }
+
+    /**
+     * goal_type 'outscore_opponent' (issue #524 follow-up): the real
+     * RoundScorer math, not a puzzle-specific approximation -- so a card
+     * like Vulnerability ("value is 7 if a card was put into the discard
+     * pile this round") reacts to whatever the solver's own plays
+     * actually did to the board, the same as it would in a real game.
+     * $this->scorer->winner() takes the opponent's seat first in its own
+     * turn-order argument, matching createPuzzleAttempt()'s own
+     * first_game_player_id -- a tied score goes to the opponent, per the
+     * Extended Rules' "ties go to whoever played first" rule, exactly
+     * like a real round would rule it.
+     */
+    private function puzzleSolverOutscoresOpponent(int $gameId, int $gamePlayerId, BoardState $state): bool
+    {
+        $opponentIdStmt = Connection::get()->prepare('SELECT id FROM game_players WHERE game_id = :game_id AND id != :solver_id');
+        $opponentIdStmt->execute(['game_id' => $gameId, 'solver_id' => $gamePlayerId]);
+        $opponentId = $opponentIdStmt->fetchColumn();
+
+        if ($opponentId === false) {
+            return false;
+        }
+
+        $opponentId = (int) $opponentId;
+        $scores = $this->scorer->score($state);
+
+        return $this->scorer->winner($scores, [$opponentId, $gamePlayerId]) === $gamePlayerId;
     }
 
     /**
@@ -11508,6 +11990,27 @@ final class GameService
         $userId = $this->userIdForGamePlayer($gamePlayerId);
 
         $this->notes->upsert($gamePlayerId, $draftMatchId, $userId, $noteText);
+    }
+
+    /**
+     * Reported live: the "Puzzle Solver" achievement should only unlock
+     * on a solve where the player never opened the Hint dialog. The
+     * frontend's Hint button calls this (see renderPuzzleHintButton() in
+     * game.js) the moment it's clicked, before showing the dialog text --
+     * a no-op for anything but an in-progress puzzle-format game, and
+     * idempotent (a second click just re-sets the same flag). Checked
+     * later by checkPuzzleGoal() via games.puzzle_hint_viewed, passed
+     * straight through to AchievementService::onPuzzleSolved().
+     */
+    public function markPuzzleHintViewed(int $gameId, int $gamePlayerId): void
+    {
+        $game = $this->fetchGame($gameId);
+        if ($game['format'] !== 'puzzle' || $game['status'] !== 'in_progress') {
+            return;
+        }
+
+        Connection::get()->prepare('UPDATE games SET puzzle_hint_viewed = 1 WHERE id = :id')
+            ->execute(['id' => $gameId]);
     }
 
     private function userIdForGamePlayer(int $gamePlayerId): int
@@ -16917,6 +17420,36 @@ final class GameService
     }
 
     /**
+     * Issue #233 follow-up ("show the active user's hand as an image,
+     * labeled 'your hand'") -- DiscordGameCommandService::renderHandImage()
+     * calls this from the unauthenticated, HMAC-signed `/discord/hand-image`
+     * route, which has no per-viewer session to pass a $viewerUserId for
+     * the way every other caller of getState() does -- just $gamePlayerId
+     * itself, already verified by that route's own signature check (see
+     * DiscordGameCommandService::verifyHandImageSignature()'s docblock).
+     * Deliberately NOT a new, separately privacy-reviewed read of a hand's
+     * contents: resolves $gamePlayerId back to its own game/user id and
+     * defers straight to getState(), so this only ever returns the exact
+     * same 'you'.'hand' a normal session-authenticated call for that same
+     * seat's own user would already get.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function getHandForGamePlayer(int $gamePlayerId): array
+    {
+        $stmt = Connection::get()->prepare('SELECT game_id, user_id FROM game_players WHERE id = :id');
+        $stmt->execute(['id' => $gamePlayerId]);
+        $row = $stmt->fetch();
+        if ($row === false) {
+            throw new GameStateException("Game player {$gamePlayerId} does not exist.");
+        }
+
+        $state = $this->getState((int) $row['game_id'], (int) $row['user_id']);
+
+        return $state['you']['hand'] ?? [];
+    }
+
+    /**
      * Spectator mode (issue #128): the public-information view of a game
      * nobody watching is actually seated in. buildGameState() below simply
      * never populates a 'you' key at all for a null viewer -- the same
@@ -17335,6 +17868,18 @@ final class GameService
             }
         }
 
+        // Puzzle hint (reported live: "Add a 'hint' button when in the
+        // puzzle") -- a puzzle's own optional hint text, shown by the
+        // frontend behind a "Hint" button rather than always visible, so
+        // it doesn't spoil the puzzle for anyone who doesn't need it. Null
+        // for every non-puzzle game, and for a puzzle with no hint set.
+        $puzzleHint = null;
+        if ($game['format'] === 'puzzle' && $game['puzzle_id'] !== null) {
+            $puzzleHintStmt = $pdo->prepare('SELECT hint FROM puzzles WHERE id = :id');
+            $puzzleHintStmt->execute(['id' => (int) $game['puzzle_id']]);
+            $puzzleHint = $puzzleHintStmt->fetchColumn() ?: null;
+        }
+
         $response = [
             'game' => [
                 'id' => $gameId,
@@ -17472,6 +18017,14 @@ final class GameService
                 // match's own 'waiting' window, without re-deriving it from
                 // deck_type/format itself.
                 'draft_match_id' => $game['draft_match_id'] !== null ? (int) $game['draft_match_id'] : null,
+                // Only meaningful for format = 'puzzle' -- the "Puzzle
+                // solved in N plays!" banner's own N (see game.js'
+                // completed-game rendering). Null otherwise; cheap to
+                // compute even then since it's gated on format first.
+                'puzzle_plays_made' => $game['format'] === 'puzzle' ? $this->countMoodsPlayed($gameId) : null,
+                // The puzzle's own optional hint text -- see $puzzleHint's
+                // own comment above.
+                'puzzle_hint' => $puzzleHint,
             ],
             'players' => $players,
             'round' => null,
