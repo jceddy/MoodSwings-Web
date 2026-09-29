@@ -328,6 +328,12 @@ final class DiscordGameCommandService
                     return $this->updateMessage(...$this->newPowerDuelFriendMessage($userId));
                 case 'powerduelwith':
                     return $this->updateMessage(...$this->createPowerDuelGameMessage($userId, (int) ($values[0] ?? 0)));
+                case 'powerduelbotmenu':
+                    return $this->updateMessage(...$this->newPowerDuelBotMessage($userId));
+                case 'powerduelbot':
+                    return $this->updateMessage(...$this->choosePowerDuelBotDeckMessage($userId, (int) ($values[0] ?? 0)));
+                case 'powerduelbotdeck':
+                    return $this->updateMessage(...$this->createPowerDuelGameWithBotMessage($userId, $gameId, (int) ($values[0] ?? 0)));
                 case 'powerduelgame':
                     return $this->updateMessage(...$this->deckSubmissionPromptMessage($gameId, "Submit your decklist for Game #{$gameId}:"));
                 case 'deckchooseopen':
@@ -1073,7 +1079,10 @@ final class DiscordGameCommandService
         foreach (array_chunk($actionButtons, 5) as $row) {
             $components[] = ['type' => 1, 'components' => $row];
         }
-        $components[] = ['type' => 1, 'components' => [['type' => 2, 'style' => 2, 'label' => 'Invite a Friend', 'custom_id' => 'ms:powerduelinvite:0']]];
+        $components[] = ['type' => 1, 'components' => [
+            ['type' => 2, 'style' => 2, 'label' => 'Invite a Friend', 'custom_id' => 'ms:powerduelinvite:0'],
+            ['type' => 2, 'style' => 2, 'label' => 'vs Practice Bot', 'custom_id' => 'ms:powerduelbotmenu:0'],
+        ]];
 
         return [implode("\n", $lines), $components];
     }
@@ -1146,6 +1155,118 @@ final class DiscordGameCommandService
     {
         try {
             $gameId = $this->games->createGame($userId, [$userId, $opponentUserId], format: 'duel', deckType: 'custom_duel', duelDeckRules: ['preset' => 'power']);
+        } catch (\Throwable $e) {
+            return ["Couldn't start a Power Duel: " . $e->getMessage(), []];
+        }
+
+        return $this->deckSubmissionPromptMessage($gameId, "Power Duel created (Game #{$gameId})! Submit your own decklist to get it started:");
+    }
+
+    /**
+     * Power Duel vs. a practice bot (reported live: "I want to be able to
+     * create a power duel game with a bot opponent, as well"). Unlike a
+     * friend, a bot never calls submitCustomDuelDeck() for itself -- there
+     * has to be a real decklist supplied for its seat at createGame() time
+     * or that call throws (see createGame()'s own docblock: "A decklist
+     * for each seated practice bot is required for a custom_duel game").
+     * Rather than asking the caller to type/paste a decklist ON THE BOT'S
+     * BEHALF, this reuses their own saved-decklist picker for its seat too
+     * (`botSavedDecklistId` -- the exact param the web app's own New Game
+     * dialog already feeds from its per-bot "Use a saved deck" select when
+     * deck_type is custom_duel) -- no random/generated-deck logic needed,
+     * and the caller always knows exactly what the bot is playing.
+     *
+     * Custom_id scheme: `ms:powerduelbotmenu:0` (bot picker, this method),
+     * `ms:powerduelbot:0` (values[0] = chosen bot's user id) ->
+     * choosePowerDuelBotDeckMessage(), `ms:powerduelbotdeck:{botUserId}`
+     * (values[0] = chosen saved decklist id) ->
+     * createPowerDuelGameWithBotMessage().
+     *
+     * @return array{0: string, 1: array<int, array<string, mixed>>}
+     */
+    private function newPowerDuelBotMessage(int $userId): array
+    {
+        $bots = $this->games->listPracticeBots();
+        if ($bots === []) {
+            return ['No practice bots are configured on this deployment.', []];
+        }
+
+        if (count($bots) === 1) {
+            return $this->choosePowerDuelBotDeckMessage($userId, $bots[0]['user_id']);
+        }
+
+        $options = array_map(
+            fn (array $bot) => ['label' => $bot['username'], 'value' => (string) $bot['user_id']],
+            array_slice($bots, 0, self::MAX_SELECT_OPTIONS),
+        );
+
+        $components = [['type' => 1, 'components' => [[
+            'type' => 3,
+            'custom_id' => 'ms:powerduelbot:0',
+            'placeholder' => 'Choose a practice bot...',
+            'options' => $options,
+        ]]]];
+
+        return ['Choose a practice bot for a Power Duel:', $components];
+    }
+
+    /**
+     * The bot's OWN deck for the game about to be created -- picked from
+     * the caller's own saved decklists (listForViewer()'s own 'own' key,
+     * same as every other saved-decklist picker in this class), since
+     * there's no random-deck generator in this codebase to fall back on.
+     * An empty list points at My Decks instead of offering a dead end.
+     *
+     * @return array{0: string, 1: array<int, array<string, mixed>>}
+     */
+    private function choosePowerDuelBotDeckMessage(int $userId, int $botUserId): array
+    {
+        $decklists = $this->userDecklists->listForViewer($userId)['own'];
+        if ($decklists === []) {
+            return [
+                'You have no saved decklists yet -- save one from My Decks first, then start this Power Duel again.',
+                [['type' => 1, 'components' => [$this->myDecksButton()]]],
+            ];
+        }
+
+        $options = array_map(
+            fn (array $d) => ['label' => "{$d['name']} ({$d['card_count']} cards)", 'value' => (string) $d['id']],
+            array_slice($decklists, 0, self::MAX_SELECT_OPTIONS),
+        );
+
+        $components = [['type' => 1, 'components' => [[
+            'type' => 3,
+            'custom_id' => "ms:powerduelbotdeck:{$botUserId}",
+            'placeholder' => "Choose the bot's decklist...",
+            'options' => $options,
+        ]]]];
+
+        return ["Choose a decklist for the bot to play:", $components];
+    }
+
+    /**
+     * Completes the bot-picker/bot-deck-picker flow above -- createGame()
+     * resolves $botDecklistId into a real submitCustomDuelDeck() call for
+     * the bot's own seat SYNCHRONOUSLY, inside its own transaction (see
+     * that method's own docblock), so unlike createPowerDuelGameMessage()
+     * (the human-vs-human path) the bot's side of this game is already
+     * fully set up the instant this returns -- only the caller's own
+     * decklist is still needed, via the exact same
+     * deckSubmissionPromptMessage() the friend flow already ends with.
+     *
+     * @return array{0: string, 1: array<int, array<string, mixed>>}
+     */
+    private function createPowerDuelGameWithBotMessage(int $userId, int $botUserId, int $botDecklistId): array
+    {
+        try {
+            $gameId = $this->games->createGame(
+                $userId,
+                [$userId, $botUserId],
+                format: 'duel',
+                deckType: 'custom_duel',
+                duelDeckRules: ['preset' => 'power'],
+                botSavedDecklistId: $botDecklistId,
+            );
         } catch (\Throwable $e) {
             return ["Couldn't start a Power Duel: " . $e->getMessage(), []];
         }

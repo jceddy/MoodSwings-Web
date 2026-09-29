@@ -23786,6 +23786,94 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertStringContainsString('Discord only supports Traditional games so far', $chosenResponse['data']['content']);
     }
 
+    /**
+     * Power Duel vs. a practice bot (reported live: "I want to be able to
+     * create a power duel game with a bot opponent, as well") -- the bot
+     * never submits its own deck, so createGame() must be given one for
+     * it up front (botSavedDecklistId), resolved here from the CALLER's
+     * own saved decklist, chosen through the exact same picker their own
+     * seat already uses. Because other tests in the same suite run may
+     * have left other practice bots (or saved decklists) in the database,
+     * this asserts our own bot/decklist appear among the options rather
+     * than asserting the options list is exactly one item.
+     */
+    public function testPowerDuelVsBotUsesTheCallersChosenSavedDeckForTheBotsSeat(): void
+    {
+        $userId = $this->insertDiscordUser('discord-pd-vs-bot');
+        $this->linkDiscordAccount($userId, 'discord-pd-vs-bot');
+        $botUserId = $this->insertBotUser('discord-pd-bot-' . uniqid());
+        // A second bot guarantees newPowerDuelBotMessage()'s own picker
+        // actually renders as a select menu -- like newPracticeGameMessage(),
+        // it skips straight past the picker to the next step when exactly
+        // one practice bot exists at all (which this test can't otherwise
+        // guarantee, since other tests in the same suite run may also
+        // have left bots behind).
+        $this->insertBotUser('discord-pd-decoy-bot-' . uniqid());
+
+        $userDecklists = new UserDecklistService(new UserDecklistRepository(), new FriendshipService(new UserRepository(), new FriendshipRepository()));
+        $botDecklistId = $userDecklists->create($userId, "Bot's Deck", $this->buildPowerDuelDecklistText($this->fetchNonMythicCardNames(15)), null, null, 'private');
+
+        // Bot picker lists our freshly inserted bot among its options.
+        $botMenuResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-pd-vs-bot', 'ms:powerduelbotmenu:0')
+        );
+        self::assertSame(7, $botMenuResponse['type']);
+        $botOptions = $botMenuResponse['data']['components'][0]['components'][0]['options'];
+        self::assertContains(['label' => $this->pdo->query("SELECT username FROM users WHERE id = {$botUserId}")->fetchColumn(), 'value' => (string) $botUserId], $botOptions);
+
+        // Picking that bot offers a decklist picker for ITS seat, listing
+        // our own saved decklist.
+        $deckMenuResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-pd-vs-bot', 'ms:powerduelbot:0', [(string) $botUserId])
+        );
+        self::assertSame(7, $deckMenuResponse['type']);
+        self::assertSame("ms:powerduelbotdeck:{$botUserId}", $deckMenuResponse['data']['components'][0]['components'][0]['custom_id']);
+
+        // Choosing that decklist creates the game with the bot's seat
+        // already fully submitted, and prompts the caller for their OWN
+        // deck next -- the exact same prompt the human-vs-friend flow
+        // ends its own creation step with.
+        $createResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-pd-vs-bot', "ms:powerduelbotdeck:{$botUserId}", [(string) $botDecklistId])
+        );
+        self::assertSame(7, $createResponse['type']);
+        self::assertStringContainsString('Power Duel created', $createResponse['data']['content']);
+        self::assertSame('Choose Saved Deck', $createResponse['data']['components'][0]['components'][0]['label']);
+
+        $games = $this->activePowerDuelGamesFor($userId);
+        self::assertCount(1, $games);
+        $gameId = $games[0]['id'];
+        self::assertSame('waiting', $this->fetchGame($gameId)['status'], 'still waiting on the human caller\'s own deck');
+        $botGamePlayerId = $this->games->gamePlayerIdFor($gameId, $botUserId);
+        self::assertNotNull($this->fetchGamePlayer($botGamePlayerId)['custom_deck_card_ids'], 'the bot\'s own seat should already have its chosen decklist submitted');
+
+        // The caller submits their own deck next, exactly like the
+        // human-vs-friend flow -- and since the bot's side is already
+        // done, the game starts immediately.
+        $ownDeckResponse = $this->discordCommandService()->handleModalSubmit($this->discordModalPayload(
+            'discord-pd-vs-bot',
+            "ms:deckpastesubmit:{$gameId}",
+            ['decklist' => $this->buildPowerDuelDecklistText($this->fetchNonMythicCardNames(15, 15))],
+        ));
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
+        self::assertStringContainsString('Discord only supports Traditional games so far', $ownDeckResponse['data']['content']);
+    }
+
+    public function testPowerDuelVsBotWithNoSavedDecklistsPointsAtMyDecks(): void
+    {
+        $userId = $this->insertDiscordUser('discord-pd-vs-bot-nodeck');
+        $this->linkDiscordAccount($userId, 'discord-pd-vs-bot-nodeck');
+        $botUserId = $this->insertBotUser('discord-pd-nodeck-bot-' . uniqid());
+
+        $response = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-pd-vs-bot-nodeck', 'ms:powerduelbot:0', [(string) $botUserId])
+        );
+
+        self::assertSame(7, $response['type']);
+        self::assertStringContainsString('no saved decklists yet', $response['data']['content']);
+        self::assertSame('My Decks', $response['data']['components'][0]['components'][0]['label']);
+    }
+
     /** @return array<int, array<string, mixed>> */
     private function activePowerDuelGamesFor(int $userId): array
     {
