@@ -1,0 +1,14 @@
+-- Issue #233 follow-up (reported live: a player's entire hand showed
+-- "needs the web app to play" with no card-specific pattern -- root
+-- cause was 2 simultaneously usable, unrestricted extra-play grants
+-- active at once, e.g. two copies of Validation both in play, which
+-- prepends a `grant_choice` field to every hand/discard card's own
+-- choice_fields and that field type wasn't supported by the Discord
+-- client yet). Pure code change, no schema change -- adds 'grant_choice'
+-- to DiscordGameCommandService::SUPPORTED_FIELD_TYPES and teaches
+-- fieldOptions() to read its own already-labeled {value, label} options
+-- straight through, the same way a 'mode' field's own options list
+-- already works. Same "schema-version-only migration" pattern as every
+-- other pure-code-change Discord follow-up in this arc -- see
+-- php-app/README.md.
+UPDATE schema_version SET version = '1.58.1' WHERE id = 1;

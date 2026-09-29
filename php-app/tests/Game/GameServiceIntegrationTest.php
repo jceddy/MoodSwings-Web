@@ -22315,6 +22315,158 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertStringContainsString("don't have an active game", $response['data']['content']);
     }
 
+    /**
+     * Reported live: a player whose entire hand showed "needs the web
+     * app" with no card-specific cause -- root cause turned out to be 2
+     * simultaneously usable, unrestricted extra-play grants (2 copies of
+     * Validation both currently active), which prepends a `grant_choice`
+     * field (GameService::grantChoiceOptions()) to EVERY hand card's own
+     * choice_fields, and that field type wasn't in SUPPORTED_FIELD_TYPES
+     * yet. This is the regression test for the fix -- confirms the field
+     * itself renders correctly (a Skip option plus one option per usable
+     * grant, each labeled with its own source card) and that picking one
+     * explicitly plays the card using that specific grant.
+     */
+    public function testDiscordComponentOffersAGrantChoiceFieldWhenTwoUnrestrictedGrantsAreActive(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-grant-1');
+        $u2 = $this->insertDiscordUser('discord-grant-2');
+        $this->linkDiscordAccount($u1, 'discord-grant-1');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $validation1 = $this->insertGameCard($gameId, 26, 'in_play', $p1); // Validation
+        $validation2 = $this->insertGameCard($gameId, 26, 'in_play', $p1); // 2nd Validation
+        $complacencyId = $this->insertGameCard($gameId, 5, 'hand', $p1); // Complacency -- no choice_fields of its own
+        $roundId = $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+        $this->pdo->prepare('UPDATE game_rounds SET pending_play_grants = :grants WHERE id = :id')->execute([
+            'grants' => json_encode([['sourceCardId' => $validation1], ['sourceCardId' => $validation2]]),
+            'id' => $roundId,
+        ]);
+
+        $playResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-grant-1', "ms:play:{$gameId}", [(string) $complacencyId])
+        );
+
+        self::assertSame(7, $playResponse['type']);
+        $fieldSelect = $playResponse['data']['components'][0]['components'][0];
+        self::assertStringStartsWith("ms:playfield:{$gameId}:{$complacencyId}:0:", $fieldSelect['custom_id']);
+        self::assertCount(3, $fieldSelect['options'], 'Skip + one option per usable grant');
+        self::assertSame(['label' => 'Skip -- use whichever grant comes first', 'value' => '__skip__'], $fieldSelect['options'][0]);
+        self::assertStringContainsString('Validation', $fieldSelect['options'][1]['label']);
+        self::assertStringContainsString('Validation', $fieldSelect['options'][2]['label']);
+        self::assertEqualsCanonicalizing([(string) $validation1, (string) $validation2], [$fieldSelect['options'][1]['value'], $fieldSelect['options'][2]['value']]);
+
+        $fieldResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-grant-1', $fieldSelect['custom_id'], [(string) $validation1])
+        );
+
+        self::assertSame(7, $fieldResponse['type']);
+        self::assertSame('in_play', $this->cardZone($complacencyId));
+        $remainingGrants = json_decode((string) $this->pdo->query("SELECT pending_play_grants FROM game_rounds WHERE id = {$roundId}")->fetchColumn(), true);
+        self::assertCount(1, $remainingGrants, 'the chosen grant (Validation 1) should be consumed, leaving the other');
+        self::assertSame($validation2, $remainingGrants[0]['sourceCardId']);
+    }
+
+    /** Same setup as above, but skipping the grant choice falls back to MoodPlayService's own "whichever comes first" behavior. */
+    public function testDiscordComponentSkippingAGrantChoiceUsesWhicheverGrantComesFirst(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-grant-3');
+        $u2 = $this->insertDiscordUser('discord-grant-4');
+        $this->linkDiscordAccount($u1, 'discord-grant-3');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $validation1 = $this->insertGameCard($gameId, 26, 'in_play', $p1);
+        $validation2 = $this->insertGameCard($gameId, 26, 'in_play', $p1);
+        $complacencyId = $this->insertGameCard($gameId, 5, 'hand', $p1);
+        $roundId = $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+        $this->pdo->prepare('UPDATE game_rounds SET pending_play_grants = :grants WHERE id = :id')->execute([
+            'grants' => json_encode([['sourceCardId' => $validation1], ['sourceCardId' => $validation2]]),
+            'id' => $roundId,
+        ]);
+
+        $playResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-grant-3', "ms:play:{$gameId}", [(string) $complacencyId])
+        );
+        $fieldSelect = $playResponse['data']['components'][0]['components'][0];
+
+        $fieldResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-grant-3', $fieldSelect['custom_id'], ['__skip__'])
+        );
+
+        self::assertSame(7, $fieldResponse['type']);
+        self::assertSame('in_play', $this->cardZone($complacencyId));
+    }
+
+    /**
+     * The exact scenario reported live: Denial (a card with its OWN
+     * choice_field) still showed "needs the web app" whenever 2+
+     * unrestricted grants were active, since the prepended grant_choice
+     * field pushed it out of scope entirely. Confirms the two fields now
+     * chain correctly -- grant_choice first, then Denial's own
+     * target_mood_ids -- exactly the way a 2-field card's own two fields
+     * already chain (see testDiscordComponentPlayChainsASecondChoiceField).
+     */
+    public function testDiscordComponentChainsAGrantChoiceIntoDenialsOwnField(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-grant-5');
+        $u2 = $this->insertDiscordUser('discord-grant-6');
+        $this->linkDiscordAccount($u1, 'discord-grant-5');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $validation1 = $this->insertGameCard($gameId, 26, 'in_play', $p1);
+        $validation2 = $this->insertGameCard($gameId, 26, 'in_play', $p1);
+        $denialId = $this->insertGameCard($gameId, 34, 'hand', $p1); // Denial
+        $complacencyId = $this->insertGameCard($gameId, 5, 'in_play', $p2);
+        $dignityId = $this->insertGameCard($gameId, 8, 'in_play', $p1); // shares color (white) with Complacency
+        $roundId = $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+        $this->pdo->prepare('UPDATE game_rounds SET pending_play_grants = :grants WHERE id = :id')->execute([
+            'grants' => json_encode([['sourceCardId' => $validation1], ['sourceCardId' => $validation2]]),
+            'id' => $roundId,
+        ]);
+
+        $playResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-grant-5', "ms:play:{$gameId}", [(string) $denialId])
+        );
+        self::assertSame(7, $playResponse['type']);
+        $grantSelect = $playResponse['data']['components'][0]['components'][0];
+        self::assertStringStartsWith("ms:playfield:{$gameId}:{$denialId}:0:", $grantSelect['custom_id']);
+
+        $denialFieldResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-grant-5', $grantSelect['custom_id'], ['__skip__'])
+        );
+        self::assertSame(7, $denialFieldResponse['type']);
+        $denialSelect = $denialFieldResponse['data']['components'][0]['components'][0];
+        self::assertStringStartsWith("ms:playfield:{$gameId}:{$denialId}:1:", $denialSelect['custom_id']);
+
+        $finalResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-grant-5', $denialSelect['custom_id'], [(string) $complacencyId, (string) $dignityId])
+        );
+        self::assertSame(7, $finalResponse['type']);
+        self::assertSame('hand', $this->cardZone($complacencyId));
+        self::assertSame('hand', $this->cardZone($dignityId));
+    }
+
     public function testDiscordCommandRendersBoardWithPlayAndPassForOneActiveGame(): void
     {
         $u1 = $this->insertDiscordUser('discord-player-2');
