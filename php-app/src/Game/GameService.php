@@ -17420,6 +17420,36 @@ final class GameService
     }
 
     /**
+     * Issue #233 follow-up ("show the active user's hand as an image,
+     * labeled 'your hand'") -- DiscordGameCommandService::renderHandImage()
+     * calls this from the unauthenticated, HMAC-signed `/discord/hand-image`
+     * route, which has no per-viewer session to pass a $viewerUserId for
+     * the way every other caller of getState() does -- just $gamePlayerId
+     * itself, already verified by that route's own signature check (see
+     * DiscordGameCommandService::verifyHandImageSignature()'s docblock).
+     * Deliberately NOT a new, separately privacy-reviewed read of a hand's
+     * contents: resolves $gamePlayerId back to its own game/user id and
+     * defers straight to getState(), so this only ever returns the exact
+     * same 'you'.'hand' a normal session-authenticated call for that same
+     * seat's own user would already get.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function getHandForGamePlayer(int $gamePlayerId): array
+    {
+        $stmt = Connection::get()->prepare('SELECT game_id, user_id FROM game_players WHERE id = :id');
+        $stmt->execute(['id' => $gamePlayerId]);
+        $row = $stmt->fetch();
+        if ($row === false) {
+            throw new GameStateException("Game player {$gamePlayerId} does not exist.");
+        }
+
+        $state = $this->getState((int) $row['game_id'], (int) $row['user_id']);
+
+        return $state['you']['hand'] ?? [];
+    }
+
+    /**
      * Spectator mode (issue #128): the public-information view of a game
      * nobody watching is actually seated in. buildGameState() below simply
      * never populates a 'you' key at all for a null viewer -- the same

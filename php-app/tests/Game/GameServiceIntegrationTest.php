@@ -23389,6 +23389,237 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertNull($this->discordCommandService()->renderBoardImage($gameId));
     }
 
+    /**
+     * Reported live: "can we show the discard pile as an image, as well?"
+     * -- boardMessage()'s own embed used to attach only when
+     * $state['in_play'] was non-empty, so a game with cards ALREADY
+     * discarded but nothing currently in play (e.g. right after the only
+     * mood in play got discarded) would still show no board image at all,
+     * even though there was now something to render.
+     */
+    public function testDiscordCommandBoardEmbedsImageForADiscardPileEvenWithNothingInPlay(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-60');
+        $this->linkDiscordAccount($u1, 'discord-60');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $this->insertDiscordUser('discord-player-61'), 1);
+        $this->insertGameCard($gameId, 9, 'discard'); // Discipline, nobody's turn played it
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-60'));
+
+        self::assertCount(1, $response['data']['embeds']);
+        self::assertStringContainsString("/discord/board-image?game_id={$gameId}&sig=", $response['data']['embeds'][0]['image']['url']);
+    }
+
+    /**
+     * The discard-pile row folded into the composite board image
+     * (discardImageRow()) is its own extra source of change Discord's own
+     * CDN needs to notice -- a card discarded straight from hand
+     * (Compulsion's own target, a `discard_card` effect, ...) changes
+     * $state['discard_pile'] while $state['in_play'] stays completely
+     * untouched, which would otherwise repeat, for the discard row
+     * specifically, the exact bug
+     * testDiscordCommandBoardImageUrlChangesWhenInPlayCardsChange() above
+     * already covers for in-play.
+     */
+    public function testDiscordCommandBoardImageUrlChangesWhenOnlyDiscardPileChanges(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-62');
+        $u2 = $this->insertDiscordUser('discord-player-63');
+        $this->linkDiscordAccount($u1, 'discord-62');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameCard($gameId, 5, 'in_play', $p2); // Complacency -- stays in play the whole test
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $beforeResponse = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-62'));
+        $beforeUrl = $beforeResponse['data']['embeds'][0]['image']['url'];
+
+        $this->insertGameCard($gameId, 9, 'discard', $p1); // Discipline discarded straight from hand -- in_play never changes
+
+        $afterResponse = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-62'));
+        $afterUrl = $afterResponse['data']['embeds'][0]['image']['url'];
+
+        self::assertNotSame($beforeUrl, $afterUrl);
+        parse_str((string) parse_url($beforeUrl, PHP_URL_QUERY), $beforeQuery);
+        parse_str((string) parse_url($afterUrl, PHP_URL_QUERY), $afterQuery);
+        self::assertSame($beforeQuery['sig'], $afterQuery['sig']);
+        self::assertNotSame($beforeQuery['v'], $afterQuery['v']);
+    }
+
+    public function testRenderBoardImageIncludesDiscardPileRowAndStaysBoundedForALargePile(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-64');
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $this->insertDiscordUser('discord-player-64b'), 1);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        // Well past MAX_DISCARD_CARDS_SHOWN (12) -- this must silently
+        // truncate to the most recent ones rather than exceptioning or
+        // rendering an unbounded canvas, the same defensive spirit as
+        // discardPileSummary()'s own strlen() cap on the text listing.
+        for ($i = 0; $i < 20; $i++) {
+            $this->insertGameCard($gameId, 9, 'discard'); // Discipline, repeated
+        }
+
+        $image = $this->discordCommandService()->renderBoardImage($gameId);
+
+        self::assertNotNull($image);
+        $decoded = imagecreatefromstring($image);
+        self::assertNotFalse($decoded);
+        self::assertGreaterThan(0, imagesx($decoded));
+        self::assertGreaterThan(0, imagesy($decoded));
+    }
+
+    /**
+     * Reported live: "show the active user's hand as a composite image,
+     * labeled 'your hand.'" Its own SEPARATE embed (see handImageUrl()'s
+     * own docblock for why it can't share the public board-image embed
+     * above) -- keyed to $you['game_player_id'] specifically, so this
+     * also checks the two embeds don't get confused with each other.
+     */
+    public function testDiscordCommandBoardEmbedsAHandImageForTheViewersOwnSeatWhenHandIsNonEmpty(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-65');
+        $u2 = $this->insertDiscordUser('discord-player-66');
+        $this->linkDiscordAccount($u1, 'discord-65');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameCard($gameId, 74, 'hand', $p1); // Sadness
+        $this->insertGameCard($gameId, 5, 'in_play', $p2); // Complacency
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-65'));
+
+        self::assertCount(2, $response['data']['embeds']);
+        self::assertStringContainsString('/discord/board-image?game_id=', $response['data']['embeds'][0]['image']['url']);
+        self::assertStringContainsString("/discord/hand-image?gp={$p1}&sig=", $response['data']['embeds'][1]['image']['url']);
+    }
+
+    public function testDiscordCommandBoardHasNoHandImageEmbedWhenHandIsEmpty(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-67');
+        $this->linkDiscordAccount($u1, 'discord-67');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $this->insertDiscordUser('discord-player-68'), 1);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-67'));
+
+        $embedUrls = array_map(static fn (array $embed) => $embed['image']['url'], $response['data']['embeds']);
+        self::assertSame([], array_filter($embedUrls, static fn (string $url) => str_contains($url, '/discord/hand-image')));
+    }
+
+    /**
+     * handImageUrl()/verifyHandImageSignature() are the whole access
+     * control for the new unauthenticated `/discord/hand-image` route --
+     * a tampered game_player_id or signature must be rejected the same
+     * way testBoardImageSignatureRejectsTamperedGameIdOrSignature() above
+     * already checks for the public board image.
+     */
+    public function testHandImageSignatureRejectsTamperedGamePlayerIdOrSignature(): void
+    {
+        $service = $this->discordCommandService();
+        $url = $service->handImageUrl(123, 'v1');
+        parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
+        $signature = $query['sig'];
+
+        self::assertTrue($service->verifyHandImageSignature(123, $signature));
+        self::assertFalse($service->verifyHandImageSignature(456, $signature));
+        self::assertFalse($service->verifyHandImageSignature(123, $signature . 'a'));
+    }
+
+    /**
+     * signHandImage() HMACs a distinct `hand:`-prefixed message rather
+     * than a bare id the way signBoardImage() does -- domain separation
+     * so a board-image signature (computed over a bare $gameId) can never
+     * also verify as a valid hand-image signature for a $gamePlayerId
+     * that happens to equal that same id.
+     */
+    public function testHandImageSignatureIsDistinctFromABoardImageSignatureForTheSameNumber(): void
+    {
+        $service = $this->discordCommandService();
+        $boardUrl = $service->boardImageUrl(777, 'v1');
+        parse_str((string) parse_url($boardUrl, PHP_URL_QUERY), $boardQuery);
+
+        self::assertFalse($service->verifyHandImageSignature(777, $boardQuery['sig']));
+    }
+
+    /**
+     * renderHandImage() is what the signed `/discord/hand-image` route
+     * actually serves -- checks it renders ONLY the requested seat's own
+     * hand (never another seat's, even in the same game), using
+     * GameService::getHandForGamePlayer() rather than a per-viewer
+     * session (there's no viewer at all for Discord's own server-to-
+     * server embed fetch).
+     */
+    public function testRenderHandImageProducesPngForThatSeatsOwnHandOnly(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-player-69');
+        $u2 = $this->insertDiscordUser('discord-player-70');
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameCard($gameId, 74, 'hand', $p1); // Sadness -- only p1's own hand
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $image = $this->discordCommandService()->renderHandImage($p1);
+        self::assertNotNull($image);
+        $decoded = imagecreatefromstring($image);
+        self::assertNotFalse($decoded);
+
+        // p2's own hand is empty -- render() itself already returns null
+        // for a lone row with no cards (see BoardImageRenderer's own
+        // docblock/tests), so this also proves p1's cards weren't somehow
+        // leaking into p2's own rendered hand.
+        self::assertNull($this->discordCommandService()->renderHandImage($p2));
+    }
+
+    public function testRenderHandImageReturnsNullForAGamePlayerThatDoesNotExist(): void
+    {
+        self::assertNull($this->discordCommandService()->renderHandImage(999999999));
+    }
+
     /** @return int[] */
     private function activeStandardGameIdsForTest(int $userId): array
     {

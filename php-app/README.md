@@ -8133,6 +8133,63 @@ regardless of what `v` says. An unchanged board (a plain "Refresh"
 click with nothing new having happened) keeps the exact same URL, so
 Discord still gets to reuse its own cache exactly when it should.
 
+**Discard pile row + a separate hand image** (reported live: "can we
+show the discard pile as an image, as well? It could be part of the
+same image that the play area is in, with clearly delineated/labeled
+zones, or a second image, though they both require labeling. I would
+also like to show the active user's hand as a composite image, labeled
+'your hand' -- I suspect that this requires a separate image since a
+composite would be problematic with hidden information") -- both public
+information, but handled two different ways:
+
+- The discard pile is public exactly like in-play cards are, so
+  `renderBoardImage()`'s own `discardImageRow()` folds it into the SAME
+  composite image as one more labeled row ("Discard Pile (N)", or
+  "Discard Pile (12 of N, most recent)" once it's been truncated -- see
+  below), appended after every real player row. `BoardImageRenderer`
+  itself needed no changes at all: it has no notion of "player" beyond
+  render()'s own param name, just "a label and some cards," so a
+  synthetic discard row is exactly as valid an entry as a real player's.
+  Capped to the most recent `MAX_DISCARD_CARDS_SHOWN` (12, matching
+  `BoardImageRenderer::MAX_CARDS_PER_PLAYER` so every row in the image
+  stays the same width) -- a long game's pile can run to 100+ cards (see
+  `discardPileSummary()`'s own docblock), and the label says so whenever
+  the cap actually truncated anything. `boardMessage()`'s own embed
+  condition changed from "only when `in_play` is non-empty" to "when
+  `in_play` OR `discard_pile` is non-empty" -- a game with nothing
+  currently in play but something already discarded used to show no
+  board image at all. `boardImageCacheKey()` now fingerprints
+  `discard_pile` (its own most recent `MAX_DISCARD_CARDS_SHOWN`) too, not
+  just `in_play` -- a card discarded straight from hand (a
+  `discard_card` effect target) changes the discard pile while leaving
+  `in_play` completely untouched, which would otherwise repeat, for the
+  discard row specifically, the exact stale-cache bug fixed above.
+
+- A hand is NOT public information, so it gets its own SEPARATE embed
+  and its own SEPARATE signed, unauthenticated route --
+  `GET /discord/hand-image` -- rather than folding into
+  `/discord/board-image`'s existing public URL. `handImageUrl()`'s
+  signature is keyed to `$gamePlayerId` (one single seat) instead of
+  `$gameId` (every seat's shared board), with its own `hand:`-prefixed
+  HMAC message (domain separation from `signBoardImage()`'s bare game
+  id, so a board-image signature can never also verify as a valid
+  hand-image one even for a coincidentally equal number). This doesn't
+  (and, over plain HTTP image URLs Discord's own servers fetch with no
+  viewer session attached, largely can't) stop the player who
+  legitimately receives the URL from sharing it further -- exactly as
+  true of a screenshot of their own hand -- but it does stop anyone else
+  from discovering or guessing another player's own hand-image URL from
+  the outside, the same guarantee the board image's signature already
+  gives against enumeration. `renderHandImage()` calls the new
+  `GameService::getHandForGamePlayer()`, which resolves `$gamePlayerId`
+  back to its own game/user id and defers straight to `getState()` --
+  deliberately NOT a new, separately privacy-reviewed read path, just
+  the exact same `'you'.'hand'` a normal session-authenticated call for
+  that same seat's own user would already return. `boardMessage()`
+  appends this as a second embed only when the viewer's own hand is
+  non-empty, reusing `BoardImageRenderer::render()` completely unchanged
+  -- a single row labeled "Your Hand."
+
 **Bot turns/auto-passes weren't happening at all via Discord** (reported
 live: "every bot decision ... is not running until the 15 minute CRON
 recovery job runs") -- every equivalent web write route (`POST /games/pass`,

@@ -134,6 +134,21 @@ final class DiscordGameCommandService
      */
     private const SKIP_FIELD_VALUE = '__skip__';
 
+    /**
+     * Reported live: "can we show the discard pile as an image too?" --
+     * the discard pile row appended to the composite board image
+     * (discardImageRow()) shows only its own most recent cards, the same
+     * "most recent are most relevant" reasoning cardsMessage()'s own
+     * discard select already uses, rather than growing the image without
+     * bound for a long game's 100+-card pile. Matches
+     * BoardImageRenderer::MAX_CARDS_PER_PLAYER's own value so every row in
+     * the composite (a player's in-play cards, or this one) stays the same
+     * width -- kept as its own constant here (rather than reading that
+     * private one) since this class needs the number BEFORE calling
+     * render(), to word discardImageRow()'s own label correctly.
+     */
+    private const MAX_DISCARD_CARDS_SHOWN = 12;
+
     public function __construct(
         private readonly GameService $games,
         private readonly BoardStateRepository $boardStates,
@@ -575,11 +590,21 @@ final class DiscordGameCommandService
      * library to render, say, the cards in play as a single image to
      * embed in the game display message?" -- followed by explicit
      * scoping decisions ("directly in the main board message," "in-play
-     * only for now"), so the 3rd tuple element below carries exactly one
-     * embed, only for an 'in_progress' game with at least one mood
-     * actually in play, pointing at boardImageUrl()'s own signed,
-     * unauthenticated endpoint (see its docblock for why that's needed
-     * at all).
+     * only for now"), so the 3rd tuple element below carries an embed
+     * whenever there's a mood in play or a discard pile to show, pointing
+     * at boardImageUrl()'s own signed, unauthenticated endpoint (see its
+     * docblock for why that's needed at all).
+     *
+     * Two later follow-ups extend this same tuple element: "can we show
+     * the discard pile as an image too?" -- folded into the SAME composite
+     * image as an extra labeled row (discardImageRow()) rather than a
+     * second embed, since it's public information exactly like in-play
+     * cards are (see that method's own docblock for the row's own cap/
+     * labeling); and "show the active user's hand as a composite image,
+     * labeled 'your hand'" -- a SEPARATE embed/endpoint instead
+     * (handImageUrl()), since a hand is private, per-viewer information
+     * that can never share the public board image's own
+     * signed-by-game-id-alone URL (see handImageUrl()'s own docblock).
      *
      * @return array{0: string, 1: array<int, array<string, mixed>>, 2?: array<int, array<string, mixed>>}
      */
@@ -732,7 +757,18 @@ final class DiscordGameCommandService
         // covers $gameId), so it's purely a cache-busting hint for
         // Discord's own fetch, never anything the server itself trusts
         // for authorization.
-        $embeds = $state['in_play'] === [] ? [] : [['image' => ['url' => $this->boardImageUrl($gameId, $this->boardImageCacheKey($state['in_play']))]]];
+        $embeds = [];
+        if ($state['in_play'] !== [] || $state['discard_pile'] !== []) {
+            $embeds[] = ['image' => ['url' => $this->boardImageUrl($gameId, $this->boardImageCacheKey($state['in_play'], $state['discard_pile']))]];
+        }
+        // Reported live: "show the active user's hand as a composite
+        // image, labeled 'your hand'" -- its own embed/endpoint, never
+        // folded into the board image above the way the discard pile was
+        // (see handImageUrl()'s own docblock for why a hand can't share
+        // that public, signed-by-game-id-alone URL).
+        if ($you['hand'] !== []) {
+            $embeds[] = ['image' => ['url' => $this->handImageUrl($you['game_player_id'], $this->handImageCacheKey($you['hand']))]];
+        }
 
         return [implode("\n", $lines), $components, $embeds];
     }
@@ -756,14 +792,32 @@ final class DiscordGameCommandService
      * unique; the real access control is verifyBoardImageSignature()'s
      * own HMAC, computed over $gameId alone, never this value.
      *
+     * $discardPile is folded into this same fingerprint (only its own
+     * most recent MAX_DISCARD_CARDS_SHOWN, matching discardImageRow()'s
+     * own slice -- an older discard falling further off-screen either way
+     * shouldn't force a needless re-fetch of a picture that would render
+     * identically) since a card discarded straight from hand (Compulsion's
+     * own target, a `discard_card` effect, ...) changes the discard pile
+     * with $inPlay staying completely untouched -- without this, that
+     * case would silently repeat this method's own earlier in-play-only
+     * bug (see the docblock above the call site) for the discard row
+     * specifically.
+     *
      * @param array<int, array<string, mixed>> $inPlay
+     * @param array<int, array<string, mixed>> $discardPile
      */
-    private function boardImageCacheKey(array $inPlay): string
+    private function boardImageCacheKey(array $inPlay, array $discardPile): string
     {
-        $signature = array_map(
-            static fn (array $card) => [$card['card_id'], $card['catalog_card_id'], $card['owner_game_player_id'], $card['value']],
-            $inPlay,
-        );
+        $signature = [
+            array_map(
+                static fn (array $card) => [$card['card_id'], $card['catalog_card_id'], $card['owner_game_player_id'], $card['value']],
+                $inPlay,
+            ),
+            array_map(
+                static fn (array $card) => [$card['card_id'], $card['catalog_card_id'], $card['value']],
+                array_slice($discardPile, -self::MAX_DISCARD_CARDS_SHOWN),
+            ),
+        ];
 
         return substr(md5(json_encode($signature)), 0, 12);
     }
@@ -1235,6 +1289,111 @@ final class DiscordGameCommandService
     }
 
     /**
+     * The signed, UNAUTHENTICATED URL boardMessage() embeds for the
+     * active user's OWN composite hand image -- reported live: "show the
+     * active user's hand as a composite image, labeled 'your hand.' I
+     * suspect that this requires a separate image since a composite would
+     * be problematic with hidden information." That instinct is exactly
+     * right, and is why this is its own endpoint/signature rather than
+     * boardImageUrl()'s own (public, in-play/discard) URL with an extra
+     * flag: a hand is PRIVATE, unlike anything else boardImageUrl() ever
+     * renders, so its signature is keyed to $gamePlayerId (one single
+     * seat) rather than $gameId (every seat's shared public board) --
+     * knowing one player's own signed hand-image URL must never also
+     * satisfy another player's, or the other seat's own hand, even in the
+     * SAME game. signHandImage() below also HMACs a distinct `hand:`-
+     * prefixed message (not a bare id the way signBoardImage() does) --
+     * cheap domain separation so this signature can never coincide with a
+     * board-image one even in principle (e.g. a $gameId that happens to
+     * equal some $gamePlayerId).
+     *
+     * This doesn't (and, over plain HTTP image URLs Discord's own servers
+     * fetch with no viewer session attached, largely can't) prevent the
+     * player who legitimately receives this URL from copying and sharing
+     * it further -- exactly as true of a screenshot of their own hand.
+     * What it DOES prevent is anyone else discovering or guessing another
+     * player's own hand-image URL from the outside, the same guarantee
+     * boardImageUrl()'s own signature gives the public board image against
+     * enumeration.
+     */
+    public function handImageUrl(int $gamePlayerId, string $cacheKey): string
+    {
+        return rtrim((string) Config::get('APP_URL', ''), '/') . "/discord/hand-image?gp={$gamePlayerId}&sig=" . $this->signHandImage($gamePlayerId) . '&v=' . rawurlencode($cacheKey);
+    }
+
+    /** @see handImageUrl()'s own docblock for why this exists at all. */
+    public function verifyHandImageSignature(int $gamePlayerId, string $signature): bool
+    {
+        return hash_equals($this->signHandImage($gamePlayerId), $signature);
+    }
+
+    private function signHandImage(int $gamePlayerId): string
+    {
+        return hash_hmac('sha256', "hand:{$gamePlayerId}", (string) Config::get('DISCORD_CLIENT_SECRET', ''));
+    }
+
+    /**
+     * A short fingerprint of $hand's own contents -- see
+     * boardImageCacheKey()'s own docblock for the identical reasoning
+     * (Discord's own CDN caches an embed image by URL, so this needs to
+     * change exactly when the rendered picture actually would: a card
+     * played out of hand, drawn into it, or a Creativity copy's own
+     * current print changing without the card itself leaving the hand).
+     * Not part of signHandImage()'s own HMAC -- purely a cache-busting
+     * hint, never anything `/discord/hand-image` itself trusts for
+     * authorization.
+     *
+     * @param array<int, array<string, mixed>> $hand
+     */
+    private function handImageCacheKey(array $hand): string
+    {
+        $signature = array_map(
+            static fn (array $card) => [$card['card_id'], $card['catalog_card_id'], $card['value']],
+            $hand,
+        );
+
+        return substr(md5(json_encode($signature)), 0, 12);
+    }
+
+    /**
+     * The actual PNG bytes for $gamePlayerId's own current hand -- called
+     * by the new `/discord/hand-image` route in public/index.php only
+     * after verifyHandImageSignature() already passed, so this itself does
+     * no authorization of its own. Uses GameService::getHandForGamePlayer()
+     * (see that method's own docblock) rather than getState(), since
+     * there's no per-viewer session here for the signed URL's request to
+     * carry -- $gamePlayerId, already verified by the signature, stands in
+     * for it. Returns null (never throws) for a $gamePlayerId that no
+     * longer exists, or an empty/all-missing-art hand -- either way the
+     * caller responds 404 rather than serving a broken image, same as
+     * renderBoardImage()'s own contract.
+     *
+     * Reuses BoardImageRenderer::render() completely unchanged -- a single
+     * row labeled "Your Hand," the exact same per-row layout/value-badge
+     * treatment a player's own in-play row already gets (see that class's
+     * own docblock for why nothing there needed to change to support
+     * this).
+     */
+    public function renderHandImage(int $gamePlayerId): ?string
+    {
+        try {
+            $hand = $this->games->getHandForGamePlayer($gamePlayerId);
+        } catch (GameStateException) {
+            return null;
+        }
+
+        $cards = [];
+        foreach ($hand as $card) {
+            $path = $this->cardArtFilePath($card);
+            if ($path !== null) {
+                $cards[] = ['path' => $path, 'value' => (int) $card['value'], 'base_value' => (int) $card['base_value']];
+            }
+        }
+
+        return $this->boardImageRenderer->render([['username' => 'Your Hand', 'cards' => $cards]]);
+    }
+
+    /**
      * The actual PNG bytes for $gameId's composite in-play board image --
      * called by the new `/discord/board-image` route in public/index.php
      * only after verifyBoardImageSignature() already passed, so this
@@ -1292,7 +1451,59 @@ final class DiscordGameCommandService
             }
         }
 
+        $discardRow = $this->discardImageRow($state['discard_pile'] ?? []);
+        if ($discardRow !== null) {
+            // Appended as an ordinary extra "player row" -- BoardImageRenderer
+            // itself has no notion of "player" vs. "discard pile," it just
+            // draws whatever label/cards pairs it's given (see its own
+            // docblock), so a synthetic row here needs no changes there at
+            // all.
+            $players[] = $discardRow;
+        }
+
         return $this->boardImageRenderer->render($players);
+    }
+
+    /**
+     * Reported live: "can we show the discard pile as an image, as well?
+     * It could be part of the same image that the play area is in, with
+     * clearly delineated/labeled zones." -- folded into the SAME composite
+     * image as one more labeled row (rather than a second embed), the same
+     * public information inPlaySummary()/discardPileSummary() already show
+     * as text regardless of whose turn it is. Capped to the most recent
+     * MAX_DISCARD_CARDS_SHOWN (a long game's pile can run to 100+ cards --
+     * see discardPileSummary()'s own docblock) -- the label says so
+     * whenever that cap actually truncated anything, so "why don't I see
+     * my card from 40 plays ago" is self-explanatory rather than looking
+     * like a bug.
+     *
+     * @param array<int, array<string, mixed>> $pile
+     * @return array{username: string, cards: array<int, array{path: string, value: int, base_value: int}>}|null
+     */
+    private function discardImageRow(array $pile): ?array
+    {
+        if ($pile === []) {
+            return null;
+        }
+
+        $shown = array_slice($pile, -self::MAX_DISCARD_CARDS_SHOWN);
+        $cards = [];
+        foreach ($shown as $card) {
+            $path = $this->cardArtFilePath($card);
+            if ($path !== null) {
+                $cards[] = ['path' => $path, 'value' => (int) $card['value'], 'base_value' => (int) $card['base_value']];
+            }
+        }
+
+        if ($cards === []) {
+            return null;
+        }
+
+        $label = count($shown) < count($pile)
+            ? 'Discard Pile (' . count($shown) . ' of ' . count($pile) . ', most recent)'
+            : 'Discard Pile (' . count($pile) . ')';
+
+        return ['username' => $label, 'cards' => $cards];
     }
 
     /**

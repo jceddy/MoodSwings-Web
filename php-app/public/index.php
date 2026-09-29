@@ -901,6 +901,37 @@ if ($path === '/discord/board-image' && $method === 'GET') {
     echo $image;
     exit;
 }
+
+// DiscordGameCommandService::boardMessage()'s own SEPARATE embed for the
+// active user's own hand (reported live: "show the active user's hand as
+// a composite image, labeled 'your hand.' I suspect that this requires a
+// separate image since a composite would be problematic with hidden
+// information" -- exactly right, and exactly why this is its own route
+// rather than a flag on /discord/board-image above). Same unauthenticated-
+// but-signed shape as that route, except the signature is keyed to
+// $gamePlayerId (one single seat), not $gameId (every seat's shared
+// public board) -- see handImageUrl()'s own docblock for why a hand can
+// never reuse that broader, per-game signature.
+if ($path === '/discord/hand-image' && $method === 'GET') {
+    $gamePlayerId = (int) ($_GET['gp'] ?? 0);
+    $signature = (string) ($_GET['sig'] ?? '');
+
+    if ($gamePlayerId <= 0 || $signature === '' || !$discordGames->verifyHandImageSignature($gamePlayerId, $signature)) {
+        http_response_code(404);
+        exit;
+    }
+
+    $image = $discordGames->renderHandImage($gamePlayerId);
+    if ($image === null) {
+        http_response_code(404);
+        exit;
+    }
+
+    header('Content-Type: image/png');
+    header('Content-Length: ' . strlen($image));
+    echo $image;
+    exit;
+}
 $matchmaking = new MatchmakingService(new OpenGameListingRepository(), new UserRepository(), new FriendshipRepository(), $games);
 $weeklySealedPoolQueue = new WeeklySealedPoolQueueService($games);
 // Issue #91 -- see TournamentMatchObserver's own docblock for why this
