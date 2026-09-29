@@ -32,7 +32,19 @@ use MoodSwings\SiteUrl;
  *   same as an unsupported choice shape below.
  * - A card is only offered to PLAY here (in the "Play a card" select) if
  *   every one of its own choice_fields, up to MAX_CHOICE_FIELDS total
- *   (see supportedChoiceFields()), is one of SUPPORTED_FIELD_TYPES below
+ *   (see supportedChoiceFields()), is one of SUPPORTED_FIELD_TYPES below.
+ *   playableCardOptions() offers a card from EITHER the viewer's own hand
+ *   OR the discard pile -- a discard-sourced play grant (Grace/Harmony/
+ *   Grief/Angst, or Melancholy's own blanket "play from discard as though
+ *   it were your hand") already shows up as `is_playable` on a
+ *   `discard_pile` entry exactly the same way it does on a hand entry
+ *   (see `GameService::getState()`'s own `serializeCard()`), so no new
+ *   state field was needed here -- just reading the zone the web client's
+ *   own `renderDiscardPile()` already reads. A `grant_choice` field
+ *   (2+ distinct grants covering the same card, e.g. Grace AND Harmony
+ *   both active) stays out of SUPPORTED_FIELD_TYPES below, same as every
+ *   other still-out-of-scope field type -- that card falls into "needs
+ *   the web app" regardless of which zone it's in.
  *   -- covers not just single-target cards (Pride's own
  *   target_player_id, Compulsion's discard_card_id, Hate's optional "you
  *   may put any mood on the bottom of the deck," ...) but also a `multi`
@@ -352,9 +364,9 @@ final class DiscordGameCommandService
     private function submitPlayField(int $gameId, int $userId, int $gamePlayerId, int $cardId, int $stepIndex, array $priorAnswers, array $values): ?array
     {
         $state = $this->games->getState($gameId, $userId);
-        $card = $this->findCard($state['you']['hand'] ?? [], $cardId);
+        $card = $this->findCard([...$state['you']['hand'] ?? [], ...$state['discard_pile'] ?? []], $cardId);
         if ($card === null) {
-            throw new GameStateException('That card is no longer in your hand.');
+            throw new GameStateException('That card is no longer playable from your hand or the discard pile.');
         }
 
         $fields = $this->supportedChoiceFields($card['choice_fields'] ?? []);
@@ -416,14 +428,14 @@ final class DiscordGameCommandService
     private function applyPlaySelection(int $gameId, int $userId, int $gamePlayerId, int $cardId): ?array
     {
         $state = $this->games->getState($gameId, $userId);
-        $card = $this->findCard($state['you']['hand'] ?? [], $cardId);
+        $card = $this->findCard([...$state['you']['hand'] ?? [], ...$state['discard_pile'] ?? []], $cardId);
         if ($card === null) {
-            throw new GameStateException('That card is no longer in your hand.');
+            throw new GameStateException('That card is no longer playable from your hand or the discard pile.');
         }
 
         $fields = $this->supportedChoiceFields($card['choice_fields'] ?? []);
         if ($fields === null) {
-            // playableHandOptions() already keeps a card shaped like this
+            // playableCardOptions() already keeps a card shaped like this
             // out of the "Play a card" select entirely -- reaching here
             // means a stale/forged interaction outran that check, so this
             // is a real error, not a silent blank play.
@@ -705,7 +717,7 @@ final class DiscordGameCommandService
             }
         } elseif ($you['is_your_turn'] ?? false) {
             $lines[] = "It's your turn -- {$round['plays_remaining']} play(s) remaining.";
-            [$playOptions, $unsupportedNames] = $this->playableHandOptions($state);
+            [$playOptions, $unsupportedNames] = $this->playableCardOptions($state);
             if ($playOptions !== []) {
                 $components[] = ['type' => 1, 'components' => [[
                     'type' => 3,
@@ -1547,40 +1559,64 @@ final class DiscordGameCommandService
     }
 
     /**
-     * Splits the viewer's own hand into cards this class can offer to
-     * play directly (a select option) vs. ones that need the web app --
-     * more than MAX_CHOICE_FIELDS choice_fields, or any unsupported one
-     * among them (see supportedChoiceFields()). Every field is consulted
-     * here regardless of required/optional/multi -- an OPTIONAL field
-     * (Hate's own "you may put any mood on the bottom of the deck") is
-     * just as much a real in-game choice as a required one, see this
-     * class's own SKIP_FIELD_VALUE docblock for the bug report that
-     * caught an earlier required-only check silently always leaving it
-     * blank.
+     * Splits every card this class could offer to PLAY -- the viewer's
+     * own hand, plus (reported live: "the discord client needs to
+     * support playing cards from discard when allowed to by Grace or
+     * similar effects") the discard pile -- into ones it can offer
+     * directly (a select option) vs. ones that need the web app: more
+     * than MAX_CHOICE_FIELDS choice_fields, or any unsupported one among
+     * them (see supportedChoiceFields()). Every field is consulted here
+     * regardless of required/optional/multi -- an OPTIONAL field (Hate's
+     * own "you may put any mood on the bottom of the deck") is just as
+     * much a real in-game choice as a required one, see this class's own
+     * SKIP_FIELD_VALUE docblock for the bug report that caught an
+     * earlier required-only check silently always leaving it blank.
+     *
+     * A discard_pile entry's own `is_playable` already accounts for
+     * whether some active play grant (Grace/Harmony/Grief/Angst,
+     * Melancholy's own blanket allowance) actually covers it right now --
+     * see `BoardState::grantAllows()` -- so this needs no new logic of
+     * its own to decide THAT; it only needs to also look at that zone.
+     * Most of the time nothing in the discard pile is playable at all, so
+     * this returns exactly what it always did. Hand options are listed
+     * first, discard options after, each labeled with its own zone so a
+     * player picking from a single merged select isn't left guessing
+     * which one they chose -- see cardLabel()'s own docblock for the
+     * "(value, Color)" suffix this adds "-- from discard" after.
+     * MAX_SELECT_OPTIONS is shared across both zones, same cap Discord's
+     * own select menu enforces regardless of where the candidates came
+     * from.
      *
      * @param array<string, mixed> $state
      * @return array{0: array<int, array{label: string, value: string}>, 1: string[]}
      */
-    private function playableHandOptions(array $state): array
+    private function playableCardOptions(array $state): array
     {
         $options = [];
         $unsupported = [];
 
-        foreach ($state['you']['hand'] as $card) {
-            if (!($card['is_playable'] ?? false)) {
-                continue;
-            }
+        $zones = [
+            ['cards' => $state['you']['hand'] ?? [], 'suffix' => ''],
+            ['cards' => $state['discard_pile'] ?? [], 'suffix' => ' -- from discard'],
+        ];
 
-            if ($this->supportedChoiceFields($card['choice_fields'] ?? []) === null) {
-                $unsupported[] = $card['name'];
-                continue;
-            }
+        foreach ($zones as $zone) {
+            foreach ($zone['cards'] as $card) {
+                if (!($card['is_playable'] ?? false)) {
+                    continue;
+                }
 
-            if (count($options) >= self::MAX_SELECT_OPTIONS) {
-                continue;
-            }
+                if ($this->supportedChoiceFields($card['choice_fields'] ?? []) === null) {
+                    $unsupported[] = $card['name'];
+                    continue;
+                }
 
-            $options[] = ['label' => $this->cardLabel($card), 'value' => (string) $card['card_id']];
+                if (count($options) >= self::MAX_SELECT_OPTIONS) {
+                    continue;
+                }
+
+                $options[] = ['label' => $this->cardLabel($card) . $zone['suffix'], 'value' => (string) $card['card_id']];
+            }
         }
 
         return [$options, $unsupported];
