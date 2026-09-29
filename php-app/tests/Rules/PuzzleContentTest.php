@@ -729,23 +729,43 @@ final class PuzzleContentTest extends TestCase
         );
     }
 
-    public function testTheLesserSacrificeSolvedByTargetingConvictionItself(): void
+    /**
+     * "The Lesser Sacrifice" (redesigned live after playtesting: the
+     * original version started already AT its own goal -- Boredom(4) +
+     * Apathy(4) = 8 with a min_score target of 8 -- so there was no real
+     * puzzle to solve). Joy(125) now starts in play with its own extra
+     * play pre-banked, and the goal is 12: Conviction(6) alone only gets
+     * to 13 - 2 = 11 (targeting itself, the "lesser sacrifice," nets zero
+     * change from the 11 already on the board), so the banked second play
+     * is needed too -- Courage(7), drawn off the top of the otherwise
+     * empty deck by Conviction's own forced draw, brings it to 12. See
+     * migration 0414's own docblock for the full arithmetic.
+     */
+    public function testTheLesserSacrificeSolvedByTargetingConvictionItselfThenPlayingTheDrawnCourage(): void
     {
         ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('the-lesser-sacrifice');
 
         $convictionId = $this->instanceId($gameId, 6, 'hand');
-        $result = $this->play($gameId, $p, $convictionId, ['target_mood_id' => $convictionId]);
+        $this->play($gameId, $p, $convictionId, ['target_mood_id' => $convictionId]);
+        $result = $this->play($gameId, $p, $this->instanceId($gameId, 7, 'hand'), []); // Courage, decline its own optional effect
 
         self::assertTrue($result['game_completed']);
         $this->assertGameSolved($gameId, $p);
     }
 
+    /**
+     * Targeting a board mood instead of Conviction itself nets a strict
+     * loss (13 minus that mood's own value, rather than 13 minus
+     * Conviction's 2), and playing the drawn Courage afterward can't make
+     * up the difference -- both plays are already spent either way.
+     */
     public function testTheLesserSacrificeTargetingAHigherValueMoodFallsShort(): void
     {
         ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('the-lesser-sacrifice');
 
         $boredomInPlayId = $this->instanceId($gameId, 83, 'in_play');
-        $result = $this->play($gameId, $p, $this->instanceId($gameId, 6, 'hand'), ['target_mood_id' => $boredomInPlayId]);
+        $this->play($gameId, $p, $this->instanceId($gameId, 6, 'hand'), ['target_mood_id' => $boredomInPlayId]);
+        $result = $this->play($gameId, $p, $this->instanceId($gameId, 7, 'hand'), []); // Courage
 
         self::assertFalse($result['game_completed']);
         $this->assertGameNotSolved($gameId);
@@ -813,24 +833,28 @@ final class PuzzleContentTest extends TestCase
 
         ['gameId' => $gameId2, 'gamePlayerId' => $p2] = $this->attemptAs($userId, 'the-lesser-sacrifice');
         $convictionId = $this->instanceId($gameId2, 6, 'hand');
-        $result2 = $this->play($gameId2, $p2, $convictionId, ['target_mood_id' => $convictionId]);
+        $this->play($gameId2, $p2, $convictionId, ['target_mood_id' => $convictionId]);
+        $result2 = $this->play($gameId2, $p2, $this->instanceId($gameId2, 7, 'hand'), []); // Courage
         self::assertTrue($result2['game_completed']);
         self::assertTrue($this->isAchievementUnlocked($userId, 'puzzle-solver'), 'A later hintless solve should still unlock Puzzle Solver');
     }
 
     /**
-     * "Perfect Disguise" (issue #524 follow-up): Joy(125)/Bliss(108) alone
-     * only reach 15 -- Creativity(32) copying the already-in-play Joy adds
-     * a THIRD green mood, and Bliss's own bonus (keyed green via the
-     * Eagerness(114) discard) applies to all three, for 24, clearing the
-     * opponent's fixed 16. See migration 0412's own docblock for the full
-     * arithmetic.
+     * "Perfect Disguise" (issue #524 follow-up, redesigned live after
+     * playtesting: the original three-play version needed a mid-attempt
+     * turn refresh the UI gave no visible cue for). Joy(125) now starts
+     * already in play with its own extra play pre-banked, so the whole
+     * solution is exactly two plays in the SAME turn: Bliss(108) alone
+     * (keyed green via the Eagerness(114) discard) only reaches 15 --
+     * still short of the opponent's fixed 16 -- then Creativity(32)
+     * copying the already-in-play Joy adds a THIRD green mood, and
+     * Bliss's own bonus applies to all three, for 24. See migration
+     * 0413's own docblock for the full arithmetic.
      */
     public function testPerfectDisguiseSolvedByCopyingJoyUnderAGreenKeyedBliss(): void
     {
         ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('perfect-disguise');
 
-        $this->play($gameId, $p, $this->instanceId($gameId, 125, 'hand'), []); // Joy
         $this->play($gameId, $p, $this->instanceId($gameId, 108, 'hand'), [
             'discard_card_id' => $this->instanceId($gameId, 114, 'hand'), // Eagerness (green)
         ]);
@@ -848,13 +872,13 @@ final class PuzzleContentTest extends TestCase
      * needs a blue-keyed Bliss to benefit. Nothing is ever actually blue
      * in play (Creativity becomes green the instant it copies Joy), so
      * the bonus is always 0 -- final total 8, never enough to clear the
-     * opponent's 16, no matter how many mini-turns it takes.
+     * opponent's 16, and both real plays (and the attempt's max_plays=2
+     * budget) are already spent within this same turn.
      */
     public function testPerfectDisguiseDiscardingIndifferenceToBlissInsteadOfEagernessFallsShort(): void
     {
         ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('perfect-disguise');
 
-        $this->play($gameId, $p, $this->instanceId($gameId, 125, 'hand'), []); // Joy
         $this->play($gameId, $p, $this->instanceId($gameId, 108, 'hand'), [
             'discard_card_id' => $this->instanceId($gameId, 44, 'hand'), // Indifference (blue) -- the trap
         ]);
