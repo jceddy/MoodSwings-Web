@@ -1,0 +1,14 @@
+-- Issue #233 follow-up (reported live: "add support for a constructed
+-- format... let people submit their deck list or choose from one they've
+-- previously saved," "if they upload a text decklist that they could at
+-- least save it and update it from the Discord interface"). Pure code
+-- change, no schema change -- Power Duel + saved decklists via Discord
+-- reuse UserDecklistService/DecklistParser/DuelDeckRules/
+-- submitCustomDuelDeck() exactly as the web app's own decklist submission
+-- already does. Same "schema-version-only migration" pattern as every
+-- other pure-code-change Discord follow-up (0387-0393, 0410-0411) -- see
+-- php-app/README.md. This migration was mistakenly left out of the
+-- commit that actually bumped VERSION to 1.57.0; added here as a
+-- follow-up fix while that same PR was still open, rather than after
+-- merge.
+UPDATE schema_version SET version = '1.57.0' WHERE id = 1;

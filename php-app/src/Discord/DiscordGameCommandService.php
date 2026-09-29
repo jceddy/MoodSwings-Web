@@ -6,8 +6,10 @@ namespace MoodSwings\Discord;
 
 use MoodSwings\Bot\BotChoiceResolver;
 use MoodSwings\Config;
+use MoodSwings\Deck\UserDecklistService;
 use MoodSwings\Friends\FriendshipService;
 use MoodSwings\Game\BoardStateRepository;
+use MoodSwings\Game\CardCatalog;
 use MoodSwings\Game\Exceptions\GameStateException;
 use MoodSwings\Game\GameService;
 use MoodSwings\Repository\DiscordAccountRepository;
@@ -24,12 +26,19 @@ use MoodSwings\SiteUrl;
  *
  * SCOPE (deliberately narrower than the web app -- see issue #233's own
  * "needs a decision on scope for a first pass" note):
- * - Format 'standard' (Traditional Duel) ONLY. Team/Closed Team/Duel/
- *   draft/chaos_draft formats all have their own extra state (teammate
- *   hand visibility, per-seat decks, propose/confirm decisions, attached
- *   chaos effects, ...) this class has no rendering for yet -- a game in
- *   any other format gets a plain "open the web app for this" message,
- *   same as an unsupported choice shape below.
+ * - Format 'standard' (Traditional Duel) ONLY for actually PLAYING a
+ *   game turn-by-turn. Team/Closed Team/Duel/draft/chaos_draft formats
+ *   all have their own extra state (teammate hand visibility, per-seat
+ *   decks, propose/confirm decisions, attached chaos effects, ...) this
+ *   class has no rendering for yet -- a game in any other format gets a
+ *   plain "open the web app for this" message, same as an unsupported
+ *   choice shape below. Power Duel (format 'duel', deck_type
+ *   'custom_duel', 'power' rules preset -- see powerDuelMenuMessage()'s
+ *   own docblock) is the one deliberate exception: Discord fully covers
+ *   INVITING a friend and SUBMITTING a decklist for it (issue #233
+ *   follow-up), stopping exactly at the same "open the web app" hand-off
+ *   the instant startGame() actually flips it 'in_progress' -- setup, not
+ *   play, is this feature's whole scope.
  * - A card is only offered to PLAY here (in the "Play a card" select) if
  *   every one of its own choice_fields, up to MAX_CHOICE_FIELDS total
  *   (see supportedChoiceFields()), is one of SUPPORTED_FIELD_TYPES below.
@@ -166,6 +175,7 @@ final class DiscordGameCommandService
         private readonly BoardStateRepository $boardStates,
         private readonly DiscordAccountRepository $accounts,
         private readonly FriendshipService $friendships,
+        private readonly UserDecklistService $userDecklists,
         private readonly BotChoiceResolver $choiceResolver = new BotChoiceResolver(),
         private readonly BoardImageRenderer $boardImageRenderer = new BoardImageRenderer(),
     ) {
@@ -191,7 +201,7 @@ final class DiscordGameCommandService
         if ($gameIds === []) {
             return $this->ephemeralMessage(
                 "You don't have an active Traditional game right now. Start or join one at " . SiteUrl::root() . '/game/, or start one below.',
-                [['type' => 1, 'components' => [$this->newGameButton(), $this->inviteFriendButton()]]],
+                [$this->utilityButtonsRow()],
             );
         }
 
@@ -229,7 +239,7 @@ final class DiscordGameCommandService
             // A separate row -- Discord caps a single action row at 5
             // components total, and the game-picker row above can
             // already hold 4 on its own.
-            ['type' => 1, 'components' => [$this->newGameButton(), $this->inviteFriendButton()]],
+            $this->utilityButtonsRow(),
         ];
 
         return $this->ephemeralMessage('You have more than one active Traditional game -- pick one:', components: $components);
@@ -300,6 +310,35 @@ final class DiscordGameCommandService
                     return $this->updateMessage(...$this->newFriendGameMessage($userId));
                 case 'friendgamewith':
                     return $this->updateMessage(...$this->createFriendGameMessage($userId, (int) ($values[0] ?? 0)));
+                case 'deck':
+                    return $this->updateMessage(...$this->deckMenuMessage($userId));
+                case 'deckview':
+                    return $this->updateMessage(...$this->deckDetailMessage($userId, (int) ($values[0] ?? 0)));
+                case 'deckcreateopen':
+                    return $this->decklistModalResponse('ms:deckcreatesubmit:0', 'New Decklist', '', '');
+                case 'deckeditopen':
+                    return $this->deckEditModalResponse($userId, $gameId);
+                case 'deckdelete':
+                    $this->userDecklists->delete($userId, $gameId);
+
+                    return $this->updateMessage(...$this->deckMenuMessage($userId));
+                case 'powerduel':
+                    return $this->updateMessage(...$this->powerDuelMenuMessage($userId));
+                case 'powerduelinvite':
+                    return $this->updateMessage(...$this->newPowerDuelFriendMessage($userId));
+                case 'powerduelwith':
+                    return $this->updateMessage(...$this->createPowerDuelGameMessage($userId, (int) ($values[0] ?? 0)));
+                case 'powerduelgame':
+                    return $this->updateMessage(...$this->deckSubmissionPromptMessage($gameId, "Submit your decklist for Game #{$gameId}:"));
+                case 'deckchooseopen':
+                    return $this->updateMessage(...$this->chooseSavedDeckForGameMessage($userId, $gameId));
+                case 'deckchooseforgame':
+                    $gamePlayerId = $this->requireSeatedIn($gameId, $userId);
+                    $this->games->submitCustomDuelDeck($gameId, $gamePlayerId, null, (int) ($values[0] ?? 0), $userId);
+
+                    return $this->updateMessage(...$this->afterDeckSubmittedMessage($gameId, $userId));
+                case 'deckpasteopen':
+                    return $this->singleDecklistModalResponse("ms:deckpastesubmit:{$gameId}", 'Submit Decklist');
                 case 'cards':
                     return $this->updateMessage(...$this->cardsMessage($gameId, $userId));
                 case 'cardhand':
@@ -748,7 +787,7 @@ final class DiscordGameCommandService
         ]];
         // Its own row -- the row above is already at Discord's own
         // 5-components-per-row cap.
-        $components[] = ['type' => 1, 'components' => [$this->newGameButton(), $this->inviteFriendButton()]];
+        $components[] = $this->utilityButtonsRow();
 
         if ($notice !== null) {
             array_unshift($lines, $notice);
@@ -976,6 +1015,489 @@ final class DiscordGameCommandService
         return $this->boardMessage($gameId, $userId);
     }
 
+    /**
+     * Power Duel via Discord (issue #233 follow-up, reported live: "add
+     * support for a constructed format... let people submit their deck
+     * list or choose from one they've previously saved"). Unlike the
+     * 'standard'/'structure' games above, `format => 'duel'` with
+     * `deck_type => 'custom_duel'` under the 'power' rules preset (≥15
+     * cards, singleton, ≤1 Mythic -- see DuelDeckRules::forPreset())
+     * leaves createGame() in status 'waiting' with BOTH seats deckless --
+     * there's no auto-dealt deck for it to fall back on the way
+     * 'structure' games have. Deliberately scoped to friend invites only
+     * (matches createFriendGameMessage()'s own no-invite-step design,
+     * same reasoning: real design work turns out not to be needed), and
+     * to setup/deck-submission only -- once both sides have submitted and
+     * startGame() actually flips the game 'in_progress', boardMessage()'s
+     * own existing SUPPORTED_FORMAT check already sends the player to the
+     * web app to actually play it out, exactly the same "needs more than
+     * Discord supports yet" treatment Team/Closed Team/draft formats
+     * already get. Nothing here teaches this class to render a 'duel'
+     * format board turn-by-turn -- that's a separate, bigger scope
+     * decision this feature doesn't need to make.
+     *
+     * Custom_id scheme, all new for this feature: `ms:powerduel:0` (the
+     * root menu, listing the caller's own active Power Duel games),
+     * `ms:powerduelinvite:0` (friend picker), `ms:powerduelwith:0`
+     * (creates the game against the chosen friend), `ms:powerduelgame:
+     * {gameId}` (re-opens the deck-submission prompt for an
+     * already-created game still needing the caller's own deck),
+     * `ms:deckchooseopen:{gameId}`/`ms:deckchooseforgame:{gameId}`
+     * (choose a saved decklist for that seat), `ms:deckpasteopen:
+     * {gameId}` (opens the paste-a-decklist MODAL) /
+     * `ms:deckpastesubmit:{gameId}` (that modal's own MODAL_SUBMIT).
+     */
+    private function powerDuelMenuMessage(int $userId): array
+    {
+        $games = $this->activePowerDuelGamesFor($userId);
+
+        $lines = [];
+        $actionButtons = [];
+        foreach (array_slice($games, 0, 4) as $game) {
+            $opponent = $this->otherPlayerUsername($game, $userId);
+
+            if ($game['status'] === 'waiting' && $this->games->customDuelDeckStillNeededFrom($game['id'], $userId)) {
+                $lines[] = "Game #{$game['id']} vs {$opponent}: needs your decklist.";
+                $actionButtons[] = ['type' => 2, 'style' => 1, 'label' => "Submit deck (#{$game['id']})", 'custom_id' => "ms:powerduelgame:{$game['id']}"];
+            } elseif ($game['status'] === 'waiting') {
+                $lines[] = "Game #{$game['id']} vs {$opponent}: waiting on their decklist.";
+            } else {
+                $lines[] = "Game #{$game['id']} vs {$opponent}: {$game['status']}.";
+            }
+        }
+        if ($games === []) {
+            $lines[] = 'No active Power Duel games yet.';
+        }
+
+        $components = [];
+        foreach (array_chunk($actionButtons, 5) as $row) {
+            $components[] = ['type' => 1, 'components' => $row];
+        }
+        $components[] = ['type' => 1, 'components' => [['type' => 2, 'style' => 2, 'label' => 'Invite a Friend', 'custom_id' => 'ms:powerduelinvite:0']]];
+
+        return [implode("\n", $lines), $components];
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    private function activePowerDuelGamesFor(int $userId): array
+    {
+        return array_values(array_filter(
+            $this->games->listGamesForUser($userId),
+            static fn (array $game): bool => $game['format'] === 'duel'
+                && $game['deck_type'] === 'custom_duel'
+                && $game['custom_duel_rules_preset'] === 'power',
+        ));
+    }
+
+    /** @param array<string, mixed> $game */
+    private function otherPlayerUsername(array $game, int $viewerUserId): string
+    {
+        foreach ($game['players'] as $player) {
+            if ($player['user_id'] !== $viewerUserId) {
+                return $player['username'];
+            }
+        }
+
+        return 'your opponent';
+    }
+
+    /** @return array{0: string, 1: array<int, array<string, mixed>>} */
+    private function newPowerDuelFriendMessage(int $userId): array
+    {
+        $friends = $this->friendships->listFriends($userId);
+        if ($friends === []) {
+            return [
+                'You don\'t have any friends added yet. Add one at ' . SiteUrl::root() . '/game/?open_friends=1, then try again.',
+                [],
+            ];
+        }
+
+        $options = array_map(
+            fn (array $friend) => ['label' => $friend['friend_username'], 'value' => (string) $friend['friend_id']],
+            array_slice($friends, 0, self::MAX_SELECT_OPTIONS),
+        );
+
+        $components = [['type' => 1, 'components' => [[
+            'type' => 3,
+            'custom_id' => 'ms:powerduelwith:0',
+            'placeholder' => 'Choose a friend...',
+            'options' => $options,
+        ]]]];
+
+        return ['Choose a friend for a Power Duel:', $components];
+    }
+
+    /**
+     * Same "no invite/accept step" reasoning as createFriendGameMessage()
+     * -- createGame() seats $opponentUserId immediately -- but stops
+     * there instead of also calling startGame(): a custom_duel game has
+     * no deck to deal yet, so the very next step is prompting the caller
+     * for their own (deckSubmissionPromptMessage() below). The invited
+     * friend gets no notification from THIS call -- only once the caller
+     * actually submits a deck does notifyRemainingCustomDuelDecksNeeded()
+     * (GameService::submitCustomDuelDeck()'s own hook) tell them a game
+     * is waiting on them, the same "nothing to notify about until there's
+     * actually something to act on" reasoning bare game creation follows
+     * everywhere else in this app.
+     *
+     * @return array{0: string, 1: array<int, array<string, mixed>>}
+     */
+    private function createPowerDuelGameMessage(int $userId, int $opponentUserId): array
+    {
+        try {
+            $gameId = $this->games->createGame($userId, [$userId, $opponentUserId], format: 'duel', deckType: 'custom_duel', duelDeckRules: ['preset' => 'power']);
+        } catch (\Throwable $e) {
+            return ["Couldn't start a Power Duel: " . $e->getMessage(), []];
+        }
+
+        return $this->deckSubmissionPromptMessage($gameId, "Power Duel created (Game #{$gameId})! Submit your own decklist to get it started:");
+    }
+
+    /** @return array{0: string, 1: array<int, array<string, mixed>>} */
+    private function deckSubmissionPromptMessage(int $gameId, string $intro): array
+    {
+        $components = [['type' => 1, 'components' => [
+            ['type' => 2, 'style' => 1, 'label' => 'Choose Saved Deck', 'custom_id' => "ms:deckchooseopen:{$gameId}"],
+            ['type' => 2, 'style' => 2, 'label' => 'Paste New Decklist', 'custom_id' => "ms:deckpasteopen:{$gameId}"],
+        ]]];
+
+        return [$intro, $components];
+    }
+
+    /** @return array{0: string, 1: array<int, array<string, mixed>>} */
+    private function chooseSavedDeckForGameMessage(int $userId, int $gameId): array
+    {
+        $decklists = $this->userDecklists->listForViewer($userId)['own'];
+        if ($decklists === []) {
+            return [
+                'You have no saved decklists yet -- paste a new one instead.',
+                [['type' => 1, 'components' => [['type' => 2, 'style' => 2, 'label' => 'Paste New Decklist', 'custom_id' => "ms:deckpasteopen:{$gameId}"]]]],
+            ];
+        }
+
+        $options = array_map(
+            fn (array $d) => ['label' => "{$d['name']} ({$d['card_count']} cards)", 'value' => (string) $d['id']],
+            array_slice($decklists, 0, self::MAX_SELECT_OPTIONS),
+        );
+
+        $components = [['type' => 1, 'components' => [[
+            'type' => 3,
+            'custom_id' => "ms:deckchooseforgame:{$gameId}",
+            'placeholder' => 'Choose a decklist...',
+            'options' => $options,
+        ]]]];
+
+        return ['Choose a saved decklist for this game:', $components];
+    }
+
+    /**
+     * The common tail of every "a deck was just submitted for $gameId"
+     * path (a saved decklist picked, or a pasted one just parsed) --
+     * startGame() itself is the only signal needed for whether the OTHER
+     * seat has submitted yet: it throws GameStateException (caught,
+     * swallowed) until every seat has, so catching it IS the "still
+     * waiting on your opponent" case, never a real error to surface.
+     * Once it succeeds, boardMessage()'s own existing SUPPORTED_FORMAT
+     * check takes over -- see this section's own docblock for why
+     * nothing further is needed here to hand off to the web app.
+     *
+     * @return array{0: string, 1: array<int, array<string, mixed>>, 2?: array<int, array<string, mixed>>}
+     */
+    private function afterDeckSubmittedMessage(int $gameId, int $userId): array
+    {
+        try {
+            $this->games->startGame($gameId);
+        } catch (GameStateException) {
+            return ["Deck submitted for Game #{$gameId}! Waiting on your opponent to submit theirs.", []];
+        }
+
+        $this->games->advanceAutomatedTurns($gameId);
+
+        return $this->boardMessage($gameId, $userId);
+    }
+
+    /**
+     * "My Decks" (issue #233 follow-up, reported live: "if they upload a
+     * text decklist that they could at least save it and update it from
+     * the Discord interface") -- a standalone deck-management menu,
+     * reachable independent of any specific game, wrapping
+     * UserDecklistService exactly the way this class already wraps
+     * GameService for everything else. Only the caller's OWN decklists
+     * (listForViewer()'s own 'own' key) -- a friend's shared decklists
+     * are for USING in a game (submitCustomDuelDeck()'s own
+     * $savedDecklistId), not managing here.
+     *
+     * Custom_id scheme: `ms:deck:0` (this menu), `ms:deckview:0` (a
+     * select; its value is the chosen decklist id), `ms:deckcreateopen:0`
+     * / `ms:deckeditopen:{decklistId}` (open the create/edit MODAL --
+     * see decklistModalResponse()), `ms:deckdelete:{decklistId}`.
+     *
+     * @return array{0: string, 1: array<int, array<string, mixed>>}
+     */
+    private function deckMenuMessage(int $userId): array
+    {
+        $decklists = $this->userDecklists->listForViewer($userId)['own'];
+        $newDecklistButton = ['type' => 2, 'style' => 1, 'label' => 'New Decklist', 'custom_id' => 'ms:deckcreateopen:0'];
+
+        if ($decklists === []) {
+            return ['You have no saved decklists yet.', [['type' => 1, 'components' => [$newDecklistButton]]]];
+        }
+
+        $options = array_map(
+            fn (array $d) => ['label' => "{$d['name']} ({$d['card_count']} cards)", 'value' => (string) $d['id']],
+            array_slice($decklists, 0, self::MAX_SELECT_OPTIONS),
+        );
+
+        $components = [
+            ['type' => 1, 'components' => [[
+                'type' => 3,
+                'custom_id' => 'ms:deckview:0',
+                'placeholder' => 'Choose a decklist...',
+                'options' => $options,
+            ]]],
+            ['type' => 1, 'components' => [$newDecklistButton]],
+        ];
+
+        return ['Your saved decklists:', $components];
+    }
+
+    /** @return array{0: string, 1: array<int, array<string, mixed>>} */
+    private function deckDetailMessage(int $userId, int $decklistId): array
+    {
+        try {
+            $deck = $this->userDecklists->cardIdsForUse($userId, $decklistId);
+        } catch (\Throwable $e) {
+            return ["Couldn't open that decklist: " . $e->getMessage(), []];
+        }
+
+        $lines = ['**' . ($deck['name'] ?? 'Untitled deck') . '** -- ' . count($deck['cardIds']) . ' card(s)'];
+        if ($deck['sideboardCardIds'] !== []) {
+            $lines[] = count($deck['sideboardCardIds']) . ' sideboard card(s)';
+        }
+
+        $components = [['type' => 1, 'components' => [
+            ['type' => 2, 'style' => 1, 'label' => 'Edit', 'custom_id' => "ms:deckeditopen:{$decklistId}"],
+            ['type' => 2, 'style' => 4, 'label' => 'Delete', 'custom_id' => "ms:deckdelete:{$decklistId}"],
+            ['type' => 2, 'style' => 2, 'label' => 'Back', 'custom_id' => 'ms:deck:0'],
+        ]]];
+
+        return [implode("\n", $lines), $components];
+    }
+
+    /**
+     * Opens the edit MODAL pre-filled with $decklistId's own current
+     * contents -- decklistToText() is the exact inverse of
+     * DecklistParser::parse() (grouped/counted, "N CardName" per line),
+     * so re-submitting the modal unchanged round-trips to the same
+     * cardIds it started from.
+     *
+     * @return array<string, mixed>
+     */
+    private function deckEditModalResponse(int $userId, int $decklistId): array
+    {
+        try {
+            $deck = $this->userDecklists->cardIdsForUse($userId, $decklistId);
+        } catch (\Throwable $e) {
+            return $this->updateMessage("Couldn't open that decklist: " . $e->getMessage());
+        }
+
+        return $this->decklistModalResponse(
+            "ms:deckeditsubmit:{$decklistId}",
+            'Edit Decklist',
+            $deck['name'] ?? '',
+            $this->decklistToText($deck['cardIds'], $deck['sideboardCardIds']),
+        );
+    }
+
+    /**
+     * The inverse of DecklistParser::parse() -- $cardIds/$sideboardCardIds
+     * legally contain the same catalog id more than once (a deck's own
+     * "2 Joy"), so this groups and counts rather than emitting one line
+     * per array entry. No "About"/"Name" header emitted here (unlike the
+     * text format DecklistParser itself also accepts) -- the modal this
+     * feeds already has its own separate "Deck name" field, so folding a
+     * second copy of the name into the decklist body text itself would
+     * just be redundant.
+     *
+     * @param int[] $cardIds
+     * @param int[] $sideboardCardIds
+     */
+    private function decklistToText(array $cardIds, array $sideboardCardIds): string
+    {
+        $rowsById = CardCatalog::load()['rowsById'];
+        $lines = $this->countedCardLines($cardIds, $rowsById);
+
+        if ($sideboardCardIds !== []) {
+            $lines[] = '';
+            $lines[] = 'Sideboard';
+            $lines = [...$lines, ...$this->countedCardLines($sideboardCardIds, $rowsById)];
+        }
+
+        return implode("\n", $lines);
+    }
+
+    /**
+     * @param int[] $cardIds
+     * @param array<int, array<string, mixed>> $rowsById
+     * @return string[]
+     */
+    private function countedCardLines(array $cardIds, array $rowsById): array
+    {
+        $counts = [];
+        foreach ($cardIds as $cardId) {
+            $counts[$cardId] = ($counts[$cardId] ?? 0) + 1;
+        }
+
+        $lines = [];
+        foreach ($counts as $cardId => $count) {
+            $lines[] = "{$count} " . $rowsById[$cardId]['name'];
+        }
+
+        return $lines;
+    }
+
+    /**
+     * The MODAL (interaction response type 9) Discord shows for "New
+     * Decklist"/"Edit" -- two separate text inputs (a short "Deck name"
+     * and a paragraph "Decklist," 4000 chars, comfortably covering even a
+     * generous Power Duel list plus sideboard) rather than folding the
+     * name into the decklist text's own optional "About/Name" header the
+     * way a raw file upload would -- Discord's own modal already gives a
+     * natural separate field for it, so there's no reason to also make
+     * users type a two-line header block by hand.
+     *
+     * @return array<string, mixed>
+     */
+    private function decklistModalResponse(string $customId, string $title, string $prefillName, string $prefillDecklist): array
+    {
+        return ['type' => 9, 'data' => [
+            'custom_id' => $customId,
+            'title' => $title,
+            'components' => [
+                ['type' => 1, 'components' => [[
+                    'type' => 4,
+                    'custom_id' => 'name',
+                    'style' => 1,
+                    'label' => 'Deck name',
+                    'value' => $prefillName,
+                    'max_length' => 120,
+                    'required' => true,
+                ]]],
+                ['type' => 1, 'components' => [[
+                    'type' => 4,
+                    'custom_id' => 'decklist',
+                    'style' => 2,
+                    'label' => 'Decklist (e.g. "2 Joy", one card per line)',
+                    'value' => $prefillDecklist,
+                    'max_length' => 4000,
+                    'required' => true,
+                ]]],
+            ],
+        ]];
+    }
+
+    /**
+     * The single-field variant, for pasting a decklist directly into a
+     * pending Power Duel seat -- submitCustomDuelDeck() has no separate
+     * "deck name" parameter of its own to set from a second field here
+     * (unlike UserDecklistService::create()/update()), so there's nothing
+     * for a second input to feed.
+     *
+     * @return array<string, mixed>
+     */
+    private function singleDecklistModalResponse(string $customId, string $title): array
+    {
+        return ['type' => 9, 'data' => [
+            'custom_id' => $customId,
+            'title' => $title,
+            'components' => [
+                ['type' => 1, 'components' => [[
+                    'type' => 4,
+                    'custom_id' => 'decklist',
+                    'style' => 2,
+                    'label' => 'Decklist (e.g. "2 Joy", one card per line)',
+                    'value' => '',
+                    'max_length' => 4000,
+                    'required' => true,
+                ]]],
+            ],
+        ]];
+    }
+
+    /**
+     * @param array<string, mixed> $payload
+     * @return array<string, string> custom_id => submitted value, for
+     *     every text input in a MODAL_SUBMIT payload's own components
+     */
+    private function modalFieldValues(array $payload): array
+    {
+        $values = [];
+        foreach ($payload['data']['components'] ?? [] as $row) {
+            foreach ($row['components'] ?? [] as $field) {
+                if (isset($field['custom_id'])) {
+                    $values[$field['custom_id']] = (string) ($field['value'] ?? '');
+                }
+            }
+        }
+
+        return $values;
+    }
+
+    /**
+     * MODAL_SUBMIT (Discord interaction type 5) -- see
+     * DiscordInteractionsService::handle()'s own docblock for why this is
+     * a whole separate interaction type from handleComponent()'s
+     * MESSAGE_COMPONENT (a modal's own text inputs arrive nested under
+     * `data.components`, never `data.values`). Always responds with type
+     * 7 (UPDATE_MESSAGE) -- every modal this class ever opens is itself
+     * opened FROM a component click on an existing ephemeral message
+     * (never a fresh slash command), so updating that same message in
+     * place is the right response here too, same convention
+     * handleComponent() already follows for everything else.
+     *
+     * @param array<string, mixed> $payload
+     * @return array<string, mixed>
+     */
+    public function handleModalSubmit(array $payload): array
+    {
+        $userId = $this->resolveUserId($payload);
+        if ($userId === null) {
+            return $this->updateMessage($this->unlinkedAccountMessage());
+        }
+
+        $customId = (string) ($payload['data']['custom_id'] ?? '');
+        $parts = explode(':', $customId);
+        if (($parts[0] ?? '') !== 'ms' || !isset($parts[1], $parts[2])) {
+            return $this->updateMessage('Something about that action was not recognized -- try running /moodswings again.');
+        }
+
+        $verb = $parts[1];
+        $arg = (int) $parts[2];
+        $fields = $this->modalFieldValues($payload);
+
+        try {
+            switch ($verb) {
+                case 'deckcreatesubmit':
+                    $decklistId = $this->userDecklists->create($userId, $fields['name'] ?? '', $fields['decklist'] ?? '', null, null, 'private');
+
+                    return $this->updateMessage(...$this->deckDetailMessage($userId, $decklistId));
+                case 'deckeditsubmit':
+                    $this->userDecklists->update($userId, $arg, $fields['name'] ?? '', $fields['decklist'] ?? '', null, null, 'private');
+
+                    return $this->updateMessage(...$this->deckDetailMessage($userId, $arg));
+                case 'deckpastesubmit':
+                    $gamePlayerId = $this->requireSeatedIn($arg, $userId);
+                    $this->games->submitCustomDuelDeck($arg, $gamePlayerId, $fields['decklist'] ?? '', null, $userId);
+
+                    return $this->updateMessage(...$this->afterDeckSubmittedMessage($arg, $userId));
+                default:
+                    return $this->updateMessage('Something about that action was not recognized -- try running /moodswings again.');
+            }
+        } catch (\Throwable $e) {
+            return $this->updateMessage("Couldn't do that: " . $e->getMessage());
+        }
+    }
+
     /** @return array<string, mixed> */
     private function newGameButton(): array
     {
@@ -986,6 +1508,40 @@ final class DiscordGameCommandService
     private function inviteFriendButton(): array
     {
         return ['type' => 2, 'style' => 2, 'label' => 'Invite a Friend', 'custom_id' => 'ms:friendgame:0'];
+    }
+
+    /** @return array<string, mixed> */
+    private function myDecksButton(): array
+    {
+        return ['type' => 2, 'style' => 2, 'label' => 'My Decks', 'custom_id' => 'ms:deck:0'];
+    }
+
+    /** @return array<string, mixed> */
+    private function powerDuelButton(): array
+    {
+        return ['type' => 2, 'style' => 2, 'label' => 'Power Duel', 'custom_id' => 'ms:powerduel:0'];
+    }
+
+    /**
+     * The row of "start/manage something new" buttons appended to every
+     * message this class ever shows that has room for it (the no-active-
+     * game message, the multi-game picker, and every ordinary board
+     * render) -- factored out once "My Decks"/"Power Duel" joined the
+     * original "New Practice Game"/"Invite a Friend" pair below, so all
+     * three call sites stay in sync automatically rather than needing the
+     * same 4-button array kept hand-in-sync in three places. 4 buttons is
+     * still comfortably under Discord's own 5-per-row cap.
+     *
+     * @return array<string, mixed>
+     */
+    private function utilityButtonsRow(): array
+    {
+        return ['type' => 1, 'components' => [
+            $this->newGameButton(),
+            $this->inviteFriendButton(),
+            $this->myDecksButton(),
+            $this->powerDuelButton(),
+        ]];
     }
 
     /**

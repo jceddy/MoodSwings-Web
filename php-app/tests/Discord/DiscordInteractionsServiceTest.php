@@ -155,6 +155,7 @@ final class DiscordInteractionsServiceTest extends TestCase
                 new BoardStateRepository($registry),
                 new DiscordAccountRepository(),
                 new FriendshipService(new UserRepository(), new FriendshipRepository()),
+                $userDecklists,
             )
         );
     }
@@ -170,6 +171,23 @@ final class DiscordInteractionsServiceTest extends TestCase
     public function testMessageComponentDispatchesToGameCommands(): void
     {
         $response = $this->gameCommandsBackedService()->handle(['type' => 3, 'data' => ['custom_id' => 'ms:view:1', 'values' => []]]);
+
+        self::assertSame(7, $response['type']);
+        self::assertStringContainsString("isn't linked", $response['data']['content']);
+    }
+
+    /**
+     * Power Duel's own "paste a decklist" feature (issue #233 follow-up)
+     * is the first thing this app has ever needed MODAL_SUBMIT (type 5)
+     * for -- same dispatch proof as the component test above, just for
+     * the newer interaction type.
+     */
+    public function testModalSubmitDispatchesToGameCommands(): void
+    {
+        $response = $this->gameCommandsBackedService()->handle([
+            'type' => 5,
+            'data' => ['custom_id' => 'ms:deckpastesubmit:1', 'components' => []],
+        ]);
 
         self::assertSame(7, $response['type']);
         self::assertStringContainsString("isn't linked", $response['data']['content']);
