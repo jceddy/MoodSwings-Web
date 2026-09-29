@@ -60,11 +60,14 @@ use MoodSwings\SiteUrl;
  *   `discard_pile` entry exactly the same way it does on a hand entry
  *   (see `GameService::getState()`'s own `serializeCard()`), so no new
  *   state field was needed here -- just reading the zone the web client's
- *   own `renderDiscardPile()` already reads. A `grant_choice` field
- *   (2+ distinct grants covering the same card, e.g. Grace AND Harmony
- *   both active) stays out of SUPPORTED_FIELD_TYPES below, same as every
- *   other still-out-of-scope field type -- that card falls into "needs
- *   the web app" regardless of which zone it's in.
+ *   own `renderDiscardPile()` already reads. A `grant_choice` field (2+
+ *   distinct simultaneously-active, unrestricted extra-play grants, e.g.
+ *   two copies of Validation both currently usable -- reported live: a
+ *   player's entire hand showed "needs the web app" with no card-specific
+ *   cause) is offered the same as a `mode` field -- see
+ *   `GameService::grantChoiceOptions()`'s own docblock for why its
+ *   options are already-labeled `{value, label}` pairs rather than
+ *   candidates this class has to look up and describe itself.
  *   -- covers not just single-target cards (Pride's own
  *   target_player_id, Compulsion's discard_card_id, Hate's optional "you
  *   may put any mood on the bottom of the deck," ...) but also a `multi`
@@ -132,8 +135,8 @@ use MoodSwings\SiteUrl;
  */
 final class DiscordGameCommandService
 {
-    /** @see this class's own docblock -- 'nested'/'card_order'/'grant_choice' fall outside scope; every one of these supports `multi` too. */
-    private const SUPPORTED_FIELD_TYPES = ['mode', 'value', 'bool', 'mood', 'player', 'hand_card', 'discard_card'];
+    /** @see this class's own docblock -- 'nested'/'card_order' fall outside scope; every one of these supports `multi` too (except 'grant_choice', which is never `multi` -- see GameService::grantChoiceOptions()). */
+    private const SUPPORTED_FIELD_TYPES = ['mode', 'value', 'bool', 'mood', 'player', 'hand_card', 'discard_card', 'grant_choice'];
 
     private const MAX_SELECT_OPTIONS = 25;
 
@@ -147,7 +150,12 @@ final class DiscordGameCommandService
      * this is purely the "is this card even in scope" gate in
      * supportedChoiceFields() -- a future card with a 3rd field would
      * still just need the web app, the same as `nested`/an unsupported
-     * field type already does.
+     * field type already does. A prepended `grant_choice` field (see
+     * GameService::serializeCard()) counts against this same total -- a
+     * 2-field card played while 2+ unrestricted grants are simultaneously
+     * active would need 3 total and still falls into "needs the web app";
+     * a 0- or 1-field card gains a `grant_choice` field for free within
+     * the existing cap.
      */
     private const MAX_CHOICE_FIELDS = 2;
 
@@ -634,7 +642,15 @@ final class DiscordGameCommandService
             return $options;
         }
 
-        array_unshift($options, ['label' => 'Skip -- play without this effect', 'value' => self::SKIP_FIELD_VALUE]);
+        // Unlike every other optional field here, skipping a grant_choice
+        // doesn't mean "play without this effect" -- the play still
+        // happens, using MoodPlayService::playMood()'s own "whichever
+        // grant comes first" fallback (see its own docblock) since none
+        // was named.
+        $skipLabel = $field['type'] === 'grant_choice'
+            ? 'Skip -- use whichever grant comes first'
+            : 'Skip -- play without this effect';
+        array_unshift($options, ['label' => $skipLabel, 'value' => self::SKIP_FIELD_VALUE]);
 
         // fieldOptions() itself already capped the real candidates at
         // MAX_SELECT_OPTIONS -- re-capping AFTER prepending Skip (rather
@@ -2385,6 +2401,12 @@ final class DiscordGameCommandService
             'player' => $this->choiceResolver->playerFieldCandidates($boardState, $field, $actingGamePlayerId),
             'hand_card' => $this->choiceResolver->handCardFieldCandidates($boardState, $field, $actingGamePlayerId, $cardId, $effectKey),
             'discard_card' => $this->choiceResolver->discardCardFieldCandidates($boardState, $field, $cardId),
+            // GameService::grantChoiceOptions() already returns each usable
+            // grant's own {value, label} pair fully described (source card
+            // name and restriction, if any) -- unlike every other field
+            // type above, there's no live board lookup left to do here,
+            // just the same value/label split every other branch produces.
+            'grant_choice' => array_column($field['options'] ?? [], 'value'),
             default => [],
         };
 
@@ -2411,6 +2433,7 @@ final class DiscordGameCommandService
         foreach ($state['in_play'] ?? [] as $card) {
             $moodOwners[$card['card_id']] = $usernames[$card['owner_game_player_id']] ?? null;
         }
+        $grantLabels = array_column($field['options'] ?? [], 'label', 'value');
 
         $options = [];
         foreach (array_slice($candidates, 0, self::MAX_SELECT_OPTIONS) as $candidate) {
@@ -2422,6 +2445,7 @@ final class DiscordGameCommandService
                     : ($cardNames[$candidate] ?? "Card #{$candidate}"),
                 'hand_card', 'discard_card' => $cardNames[$candidate] ?? "Card #{$candidate}",
                 'player' => $usernames[$candidate] ?? "Player #{$candidate}",
+                'grant_choice' => $grantLabels[$candidate] ?? "Grant #{$candidate}",
                 default => (string) $candidate,
             };
             $options[] = ['label' => $label, 'value' => (string) $candidate];

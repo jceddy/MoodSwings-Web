@@ -7780,15 +7780,17 @@ full reasoning):
 - A hand OR discard pile card (see "Playing from the discard pile"
   below) is only offered to play here if EVERY one of its own
   `choice_fields`, up to `MAX_CHOICE_FIELDS` (2 -- the most any
-  hand-playable card actually has) total, is one of a `mode`/`value`/
-  `bool`/`mood`/`player`/`hand_card`/`discard_card` type -- covers not
-  just single-target cards (Pride's own `target_player_id`,
-  Compulsion's `discard_card_id`, Conviction's self-targetable
-  `target_mood_id`, Hate's optional "any mood in play," ...) but also a
-  `multi` (checkbox-style) field and a card with a SECOND field. Cards
-  needing more than 2 fields, or a `nested` sub-form (Duplicity's own
-  repeat offer, any chaos_draft attachment), are still listed as "needs
-  the web app" instead. An OPTIONAL single-value field's select menu
+  hand-playable card's OWN fields actually has, though a prepended
+  `grant_choice` field -- see below -- counts against this same total)
+  total, is one of a `mode`/`value`/`bool`/`mood`/`player`/`hand_card`/
+  `discard_card`/`grant_choice` type -- covers not just single-target
+  cards (Pride's own `target_player_id`, Compulsion's `discard_card_id`,
+  Conviction's self-targetable `target_mood_id`, Hate's optional "any
+  mood in play," ...) but also a `multi` (checkbox-style) field and a
+  card with a SECOND field. Cards needing more than 2 fields, or a
+  `nested` sub-form (Duplicity's own repeat offer, any chaos_draft
+  attachment), are still listed as "needs the web app" instead. An
+  OPTIONAL single-value field's select menu
   (`withSkipOptionIfOptional()`) always gets a leading "Skip -- play
   without this effect" option (`SKIP_FIELD_VALUE`) so declining it is a
   deliberate choice sent back to `castFieldValue()`/`choicesFor()` as
@@ -7867,10 +7869,9 @@ full reasoning):
   `MoodPlayService::playMood()` itself already detects which zone a
   given card id is actually sitting in and moves it into play from
   there, so `GameService::playMood()` needed no changes at all. A
-  `grant_choice` field (2+ distinct grants covering the same card, e.g.
-  Grace AND Harmony both active at once) stays out of
-  `SUPPORTED_FIELD_TYPES`, same as every other out-of-scope field type --
-  that card still falls into "needs the web app," regardless of zone.
+  `grant_choice` field (2+ distinct simultaneously usable, unrestricted
+  extra-play grants -- see "Playing a card with a `grant_choice` field"
+  below) is now offered too, like a `mode` field.
 - Legal candidates for a rendered field reuse `BotChoiceResolver`'s own
   already-tested `moodFieldCandidates()`/`playerFieldCandidates()`/
   `handCardFieldCandidates()`/`discardCardFieldCandidates()` against a
@@ -8058,6 +8059,34 @@ just format `duel` under the hood, and Discord never creates a
 best-of-three/sideboarding Power Duel itself, so it starts rendering the
 instant its 2 seats have both submitted a deck and `startGame()` flips
 it `in_progress`.
+
+**Playing a card with a `grant_choice` field** (reported live: a
+player's entire hand showed "needs the web app to play" with no
+card-specific pattern -- root cause turned out to be 2 simultaneously
+usable, unrestricted extra-play grants active at once, e.g. two copies
+of Validation both currently in play; `GameService::serializeCard()`
+prepends a `grant_source_card_id` field (`type => 'grant_choice'`) to
+EVERY hand/discard card's own `choice_fields` whenever
+`grantChoiceOptions()` finds 2+ of these, and that field type wasn't in
+`SUPPORTED_FIELD_TYPES` yet -- so every card in the player's hand fell
+out of scope at once, regardless of which cards they actually were).
+`grant_choice` is now offered exactly like a `mode` field: its own
+`options` are already fully-described `{value, label}` pairs (each
+naming the source card and any restriction, via
+`GameService::describePlayGrant()`) rather than raw candidates this
+class has to look up and label itself, so `fieldOptions()`'s own
+`grant_choice` branch just reads them straight through. Optional like
+every other field here, but with its own Skip wording ("Skip -- use
+whichever grant comes first," not the generic "play without this
+effect") since skipping it doesn't decline anything -- the play still
+happens, using `MoodPlayService::playMood()`'s own already-existing
+"whichever comes first" fallback when no `grant_source_card_id` is
+given. Counts against the same `MAX_CHOICE_FIELDS` total as a card's own
+fields (see that constant's own docblock): a 0- or 1-field card gains
+this field for free, while a card that already has 2 of its own (Faith,
+Guile, ...) still needs the web app if 2+ grants are active at the same
+time -- a rare combination, and the same conservative "needs the web
+app" fallback this class already uses for every other over-the-cap case.
 
 **Score line, card details, and the game log** (reported live: "show ...
 number of rounds each player has won so far, number of cards each player
