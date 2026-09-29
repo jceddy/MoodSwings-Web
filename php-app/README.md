@@ -8013,6 +8013,24 @@ separate, bigger scope decision this feature doesn't need to make.
   and prompted in the very same New Game dialog session), but a
   Discord-invited friend isn't present for that; without a push they
   might never realize a game is waiting on them at all.
+- **vs Practice Bot** (reported live: "I want to be able to create a
+  power duel game with a bot opponent, as well") -- `vs Practice Bot`
+  button alongside `Invite a Friend` on the Power Duel menu
+  (`ms:powerduelbotmenu:0`, mirroring `listPracticeBots()`'s own
+  `newPracticeGameMessage()` picker, same single-bot skip-ahead). Unlike
+  a friend, a bot never calls `submitCustomDuelDeck()` for itself --
+  `createGame()` requires a real decklist for a seated `custom_duel` bot
+  up front or it throws -- so instead of asking the caller to type/paste
+  a decklist on the BOT's behalf, `ms:powerduelbot:0` next asks the
+  caller to pick one of their OWN saved decklists for the bot's seat
+  (`ms:powerduelbotdeck:{botUserId}`), resolved into `createGame()`'s own
+  `botSavedDecklistId` param -- the same one the web app's New Game
+  dialog already feeds from its per-bot "Use a saved deck" select
+  whenever `deck_type` is `custom_duel`. No random/generated-deck logic
+  needed: the bot's side of the game is already fully set up the instant
+  the game is created, and only the caller's own decklist is still
+  needed, via the exact same `deckSubmissionPromptMessage()` the
+  friend flow already ends its own creation step with.
 
 **Score line, card details, and the game log** (reported live: "show ...
 number of rounds each player has won so far, number of cards each player
