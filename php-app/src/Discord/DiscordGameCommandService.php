@@ -26,19 +26,30 @@ use MoodSwings\SiteUrl;
  *
  * SCOPE (deliberately narrower than the web app -- see issue #233's own
  * "needs a decision on scope for a first pass" note):
- * - Format 'standard' (Traditional Duel) ONLY for actually PLAYING a
- *   game turn-by-turn. Team/Closed Team/Duel/draft/chaos_draft formats
- *   all have their own extra state (teammate hand visibility, per-seat
- *   decks, propose/confirm decisions, attached chaos effects, ...) this
- *   class has no rendering for yet -- a game in any other format gets a
- *   plain "open the web app for this" message, same as an unsupported
- *   choice shape below. Power Duel (format 'duel', deck_type
- *   'custom_duel', 'power' rules preset -- see powerDuelMenuMessage()'s
- *   own docblock) is the one deliberate exception: Discord fully covers
- *   INVITING a friend and SUBMITTING a decklist for it (issue #233
- *   follow-up), stopping exactly at the same "open the web app" hand-off
- *   the instant startGame() actually flips it 'in_progress' -- setup, not
- *   play, is this feature's whole scope.
+ * - Format 'standard' (Traditional Duel), and format 'duel' restricted to
+ *   exactly 2 seated players, for actually PLAYING a game turn-by-turn --
+ *   see isPlayableFormat(). Reported live after Power Duel's own first
+ *   ship let a player create and start a 'duel' game but not play it:
+ *   "I was able to initiate the game in the discord client, but not able
+ *   to actually play it." Confirmed by re-reading GameService::getState()
+ *   that a 2-player 'duel' game's own state shape is byte-for-byte
+ *   identical to a 2-player 'standard' game's -- every format-conditional
+ *   branch in buildGameState() is gated on 'team'/'closed_team'/'puzzle',
+ *   never 'duel' -- so every rendering/interaction method already in this
+ *   class (boardMessage(), playableCardOptions(), promptOrPlay(),
+ *   cardsMessage(), gameLogMessage(), ...) needed no changes at all to
+ *   support it. Team/Closed Team/3-4 player Duel/draft/chaos_draft
+ *   formats all still have their own extra state (teammate hand
+ *   visibility, per-seat decks, propose/confirm decisions, attached chaos
+ *   effects, ...) this class has no rendering for -- a game in any of
+ *   those still gets a plain "open the web app for this" message, same as
+ *   an unsupported choice shape below. Power Duel (format 'duel',
+ *   deck_type 'custom_duel', 'power' rules preset -- see
+ *   powerDuelMenuMessage()'s own docblock) needs no separate carve-out
+ *   here: it's just format 'duel' under the hood, and Discord never
+ *   creates a best-of-three/sideboarding Power Duel itself, so it starts
+ *   rendering the instant its 2 seats have both submitted a deck and
+ *   startGame() flips it 'in_progress' -- setup AND play, not just setup.
  * - A card is only offered to PLAY here (in the "Play a card" select) if
  *   every one of its own choice_fields, up to MAX_CHOICE_FIELDS total
  *   (see supportedChoiceFields()), is one of SUPPORTED_FIELD_TYPES below.
@@ -121,8 +132,6 @@ use MoodSwings\SiteUrl;
  */
 final class DiscordGameCommandService
 {
-    private const SUPPORTED_FORMAT = 'standard';
-
     /** @see this class's own docblock -- 'nested'/'card_order'/'grant_choice' fall outside scope; every one of these supports `multi` too. */
     private const SUPPORTED_FIELD_TYPES = ['mode', 'value', 'bool', 'mood', 'player', 'hand_card', 'discard_card'];
 
@@ -184,8 +193,9 @@ final class DiscordGameCommandService
     /**
      * `/moodswings` itself -- Discord's APPLICATION_COMMAND (type 2)
      * interaction. No sub-options in v1: it just finds the caller's own
-     * active 'standard' game(s) and either renders the one it finds, asks
-     * which of several to view, or explains why there's nothing to show.
+     * active playable game(s) -- see isPlayableFormat() -- and either
+     * renders the one it finds, asks which of several to view, or
+     * explains why there's nothing to show.
      *
      * @param array<string, mixed> $payload
      * @return array<string, mixed>
@@ -197,10 +207,10 @@ final class DiscordGameCommandService
             return $this->ephemeralMessage($this->unlinkedAccountMessage());
         }
 
-        $gameIds = $this->activeStandardGameIdsFor($userId);
+        $gameIds = $this->activePlayableGameIdsFor($userId);
         if ($gameIds === []) {
             return $this->ephemeralMessage(
-                "You don't have an active Traditional game right now. Start or join one at " . SiteUrl::root() . '/game/, or start one below.',
+                "You don't have an active game right now. Start or join one at " . SiteUrl::root() . '/game/, or start one below.',
                 [$this->utilityButtonsRow()],
             );
         }
@@ -242,7 +252,7 @@ final class DiscordGameCommandService
             $this->utilityButtonsRow(),
         ];
 
-        return $this->ephemeralMessage('You have more than one active Traditional game -- pick one:', components: $components);
+        return $this->ephemeralMessage('You have more than one active game -- pick one:', components: $components);
     }
 
     /**
@@ -637,6 +647,20 @@ final class DiscordGameCommandService
     }
 
     /**
+     * Whether this class knows how to render/play $format turn-by-turn --
+     * see this class's own SCOPE docblock. 'standard' always qualifies;
+     * 'duel' qualifies only with exactly 2 seated players, since
+     * GameService::getState() returns a shape identical to a 2-player
+     * 'standard' game only in that case (a 3-4 player 'duel' game, and
+     * every other format -- team/closed_team/draft/chaos_draft/puzzle --
+     * has its own extra state this class has no rendering for yet).
+     */
+    private function isPlayableFormat(string $format, int $playerCount): bool
+    {
+        return $format === 'standard' || ($format === 'duel' && $playerCount === 2);
+    }
+
+    /**
      * The embed + components for $gameId as $userId currently sees it --
      * shared by every command/component response that ends in "show the
      * board" (which is almost all of them). $notice, when given, is
@@ -676,7 +700,7 @@ final class DiscordGameCommandService
         $game = $state['game'];
         $webUrl = SiteUrl::root() . "/game/?id={$gameId}";
 
-        if ($game['format'] !== self::SUPPORTED_FORMAT) {
+        if (!$this->isPlayableFormat($game['format'], count($state['players']))) {
             return ["Game #{$gameId} is a '{$game['format']}' game -- Discord only supports Traditional games so far. Open it in the web app: {$webUrl}", []];
         }
 
@@ -1032,15 +1056,13 @@ final class DiscordGameCommandService
      * there's no auto-dealt deck for it to fall back on the way
      * 'structure' games have. Deliberately scoped to friend invites only
      * (matches createFriendGameMessage()'s own no-invite-step design,
-     * same reasoning: real design work turns out not to be needed), and
-     * to setup/deck-submission only -- once both sides have submitted and
-     * startGame() actually flips the game 'in_progress', boardMessage()'s
-     * own existing SUPPORTED_FORMAT check already sends the player to the
-     * web app to actually play it out, exactly the same "needs more than
-     * Discord supports yet" treatment Team/Closed Team/draft formats
-     * already get. Nothing here teaches this class to render a 'duel'
-     * format board turn-by-turn -- that's a separate, bigger scope
-     * decision this feature doesn't need to make.
+     * same reasoning: real design work turns out not to be needed). This
+     * section covers setup/deck-submission only -- once both sides have
+     * submitted and startGame() actually flips the game 'in_progress',
+     * boardMessage()'s own isPlayableFormat() check (see this class's own
+     * SCOPE docblock) is what renders the actual board from there; Power
+     * Duel needs no separate handling there since it's just format
+     * 'duel' with exactly 2 seats.
      *
      * Custom_id scheme, all new for this feature: `ms:powerduel:0` (the
      * root menu, listing the caller's own active Power Duel games),
@@ -1318,9 +1340,10 @@ final class DiscordGameCommandService
      * seat has submitted yet: it throws GameStateException (caught,
      * swallowed) until every seat has, so catching it IS the "still
      * waiting on your opponent" case, never a real error to surface.
-     * Once it succeeds, boardMessage()'s own existing SUPPORTED_FORMAT
-     * check takes over -- see this section's own docblock for why
-     * nothing further is needed here to hand off to the web app.
+     * Once it succeeds, boardMessage()'s own isPlayableFormat() check
+     * takes over from here and renders the real board -- see this
+     * class's own SCOPE docblock for why a Power Duel needs no separate
+     * handling to become playable the instant it starts.
      *
      * @return array{0: string, 1: array<int, array<string, mixed>>, 2?: array<int, array<string, mixed>>}
      */
@@ -2109,8 +2132,7 @@ final class DiscordGameCommandService
      * rather than every other badge that function can also show (chaos
      * delta/override, Copy, recolor, suppressed, ...): those only ever
      * apply to a chaos_draft-format game, entirely out of scope for this
-     * class's own 'standard'-only SUPPORTED_FORMAT (see this class's own
-     * docblock).
+     * class's own isPlayableFormat() (see this class's own docblock).
      */
     public function renderBoardImage(int $gameId): ?string
     {
@@ -2451,11 +2473,11 @@ final class DiscordGameCommandService
     }
 
     /** @return int[] */
-    private function activeStandardGameIdsFor(int $userId): array
+    private function activePlayableGameIdsFor(int $userId): array
     {
         $gameIds = [];
         foreach ($this->games->listGamesForUser($userId) as $game) {
-            if ($game['format'] === self::SUPPORTED_FORMAT && $game['status'] === 'in_progress') {
+            if ($game['status'] === 'in_progress' && $this->isPlayableFormat($game['format'], count($game['players']))) {
                 $gameIds[] = $game['id'];
             }
         }
