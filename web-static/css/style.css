@@ -373,6 +373,22 @@ body {
    elsewhere (#resign-button, .icon-action-button, .grid-draft-arrow-button,
    etc.) still wins by specificity for its own one-off sizing/color/layout
    needs. */
+/* Inline expansion of the "MOOD" recursive acronym, inside the h1 itself
+   ("MOOD: Obstructs Objective Directives"). Smaller/lighter than the
+   "MOOD" wordmark so it reads as a subtitle even while sharing the same
+   line -- an inline element (not a block), so it wraps onto its own
+   line(s) under "MOOD:" on narrow phones instead of forcing the whole
+   heading to shrink. */
+.tagline {
+    display: inline-block;
+    font-size: 0.52em;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--color-text-secondary);
+    vertical-align: middle;
+}
+
 button {
     font: inherit;
     color: var(--color-text);
