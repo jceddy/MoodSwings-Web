@@ -7,10 +7,13 @@ written and tested against what the server really sends rather than against
 guesses from reading PHP.
 
 Credentials come from the environment (never the command line, so they stay
-out of shell history). Use a throwaway dev-server account:
+out of shell history). Use a throwaway dev-server account. Set them in the
+same shell you run the script from:
 
-    set MOODSWINGS_USER=...
-    set MOODSWINGS_PASSWORD=...
+    PowerShell:  $env:MOODSWINGS_USER = "..."; $env:MOODSWINGS_PASSWORD = "..."
+    Git Bash:    export MOODSWINGS_USER=... MOODSWINGS_PASSWORD=...
+    cmd.exe:     set MOODSWINGS_USER=...   (and likewise MOODSWINGS_PASSWORD)
+
     python tools/capture_fixtures.py
     python tools/capture_fixtures.py --game-id 123 --game-id 456   # also capture game state
 
@@ -29,6 +32,7 @@ from pathlib import Path
 UNITY_CLIENT = Path(__file__).resolve().parent.parent
 OUT_DIR = UNITY_CLIENT / "Assets" / "Tests" / "Fixtures"
 DEFAULT_SITE = "https://moodswings-dev.jceddy.com"
+USER_AGENT = "MoodSwingsFixtureCapture/0.1"
 
 REDACTED_KEYS = {"email", "phone_number"}
 
@@ -68,8 +72,13 @@ class Client:
 
     def request(self, path, body=None):
         data = json.dumps(body).encode() if body is not None else None
+        # The host's filter answers 406 to Python's default User-Agent
+        # (and to a bare "Mozilla/5.0"), so identify ourselves explicitly.
         req = urllib.request.Request(
-            self.api + path, data=data, headers={"Content-Type": "application/json"}, method="POST" if body is not None else "GET"
+            self.api + path,
+            data=data,
+            headers={"Content-Type": "application/json", "User-Agent": USER_AGENT},
+            method="POST" if body is not None else "GET",
         )
         try:
             with self.opener.open(req, timeout=30) as response:
