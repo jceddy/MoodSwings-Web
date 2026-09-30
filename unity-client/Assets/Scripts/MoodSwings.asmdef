@@ -1,0 +1,17 @@
+{
+    "name": "MoodSwings",
+    "rootNamespace": "MoodSwings",
+    "references": [
+        "Unity.Nuget.Newtonsoft-Json",
+        "UnityEngine.UI"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

@@ -1,0 +1,123 @@
+# Unity client implementation plan
+
+Goal: a desktop/mobile native client on top of the `php-app/` REST service,
+implementing most/all of what `web-static/` does, with an interface closer to
+Magic Arena -- but supporting up to four players per game.
+
+## Decisions
+
+| Decision | Choice |
+|---|---|
+| UI framework | uGUI (`com.unity.ugui`) |
+| JSON | Newtonsoft (`com.unity.nuget.newtonsoft-json`), replacing `JsonUtility` |
+| First target platforms | Windows desktop + Android (iOS last -- needs a Mac/Xcode) |
+| Mobile orientation | Landscape only |
+
+Still open (to be raised when the relevant phase approaches -- see "Open
+decisions"): push notifications, card art licensing, four-seat table layout.
+
+## What the repo gives us
+
+- **Backend:** ~130 JSON routes in `php-app/public/index.php`. Auth is a
+  `session_token` cookie; `ApiClient.cs` already replays it manually for
+  `Login`/`Logout`/`GetMe`.
+- **No push channel:** the web client polls. Lobby ~4s; `GET /games/state`
+  ~4s during play. That endpoint also advances bot turns and enforces
+  timers, so the client must keep polling it.
+- **Card art:** 141 `.webp` files in `web-static/img/cards/MSW/`, named
+  `<catalog_id>-<slug>.webp`. Unity can't decode WebP out of the box, so they
+  need converting.
+- **Breadth:** traditional (2-4 players), duel, six draft variants, sealed,
+  open/closed team play, tournaments, puzzles, etc. `web-static/js/game.js`
+  is ~12.9k lines. The plan goes smallest to largest.
+- **Server-driven prompts:** the server sends `pending_decision` and per-card
+  `choice_fields`, so the client needs one generic decision UI, not a screen
+  per card effect.
+
+## Phases
+
+Each phase ends with something runnable against the dev server
+(`moodswings-dev.jceddy.com`).
+
+### Phase 0 -- Foundations (in progress)
+- Add Newtonsoft; move `ApiClient` off `JsonUtility`.
+- `ApiClient` returns typed results, handles the `{status}` envelope and
+  `503` maintenance responses.
+- Environment switching (dev/prod), scene/screen router, uGUI theme and
+  `CanvasScaler` setup, EditMode test setup.
+- Capture real JSON fixtures from the dev server (`/me`, `/games/state` for
+  2/3/4 players, `/cards/catalog`, `/open-games`, ...).
+- Card art pipeline: convert WebP to PNG/ASTC, bundle, load by catalog id.
+- **Done when:** fixtures deserialize in tests and art loads in a sample scene.
+- **Status:** Newtonsoft, `ApiClient` rewrite (also fixes a missing `/app`
+  path prefix in the original), `ScreenRouter`, `UiTheme`/`CanvasSetup`,
+  landscape enforcement, asmdefs, `ApiClient` EditMode tests, card art
+  conversion and `CardArtLibrary` are written. Remaining: confirm it compiles
+  and the tests pass in the Editor, run `capture_fixtures.py` with a dev
+  account, and a sample scene showing card art.
+
+### Phase 1 -- Splash + login
+- Splash, version/health check, maintenance screen, login, session restore
+  (saved cookie, then `/me`), logout.
+- Register / forgot-password / verify-email open the web pages in the system
+  browser.
+- **Done when:** cold start, log in, relaunch, still logged in.
+
+### Phase 2 -- Main menu shell
+- Home screen, user info, friends list and invites, preferences
+  (`/user/*-preference` routes).
+- **Done when:** friends and preferences work end to end.
+
+### Phase 3 -- Lobby
+- Decklists, open games (list/create/join/leave/cancel), create game vs bot
+  (`/games/bots`, `POST /games`), active and past games, rematch.
+- **Done when:** you can create or join a game and reach the pre-game ready
+  state.
+
+### Phase 4 -- Read-only game board
+- Render `GET /games/state` for 2-4 seats: hand, board, discard, scores,
+  round/turn, log, chat.
+- Build against spectate/replay first -- no input needed.
+- **Done when:** a spectated 4-player game renders correctly (incl. Hurt
+  Feelings).
+
+### Phase 5 -- Playable core
+- Ready/start, play, pass, advance-turn, resign, generic `pending_decision`
+  UI, turn/decision timers.
+- Traditional format vs bots first, then vs humans.
+- **Done when:** a full 2-4 player traditional game is playable.
+
+### Phase 6 -- Arena feel
+- Drag-to-play, card zoom/inspect, turn and scoring animations, audio,
+  haptics, landscape layouts, four-seat table layout, "pause before own turn"
+  and "auto-pass" prefs.
+- **Done when:** playtest pass on desktop and phone.
+
+### Phase 7 -- More play modes
+- Duel (separate decks), open/closed team play, best-of-three, synchronous
+  mode (ready check + clocks), puzzles.
+
+### Phase 8 -- Draft, sealed, deck builder
+- Quick, Winston, Grid, Rotisserie, Tiered Rotisserie, Chaos drafts; sealed
+  deck and daily/weekly sealed pool; custom deck builder.
+
+### Phase 9 -- Meta features
+- Tournaments and pod drafts, stats, achievements, card stats, notifications.
+
+### Phase 10 -- Ship
+- Android and Windows builds first; iOS and macOS after.
+- Icons, signing, store listings, real mobile push.
+
+## Open decisions
+
+Raise each of these with the user before the phase that depends on it.
+
+1. **Push notifications** (before Phase 10, or earlier if wanted). The
+   backend only sends browser Web Push (VAPID). Native needs FCM/APNs, which
+   means backend changes -- the one place `php-app/` will need work for this
+   client.
+2. **Card art licensing** (before any store/public build). The art is WotC's
+   Mood Swings content. Fine for the hobby web site; shipping it in app-store
+   builds is a separate question.
+3. **Four-seat table layout** (before Phase 4). Arena's board assumes two
+   players; need a layout for you + up to three others around the table.
