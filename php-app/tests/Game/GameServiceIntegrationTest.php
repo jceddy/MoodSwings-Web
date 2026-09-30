@@ -22768,7 +22768,7 @@ final class GameServiceIntegrationTest extends TestCase
         $bot = $this->insertBotUser('discord-practice-bot-1');
 
         $response = $this->discordCommandService()->handleComponent(
-            $this->discordComponentPayload('discord-12', 'ms:newgame:0')
+            $this->discordComponentPayload('discord-12', 'ms:newgamemode:0')
         );
 
         self::assertSame(7, $response['type']);
@@ -22799,7 +22799,7 @@ final class GameServiceIntegrationTest extends TestCase
         $bot2 = $this->insertBotUser('discord-practice-bot-3');
 
         $response = $this->discordCommandService()->handleComponent(
-            $this->discordComponentPayload('discord-13', 'ms:newgame:0')
+            $this->discordComponentPayload('discord-13', 'ms:newgamemode:0')
         );
 
         self::assertSame(7, $response['type']);
@@ -22866,7 +22866,7 @@ final class GameServiceIntegrationTest extends TestCase
         $friendships->sendInvite($u1, 'discord-player-55'); // left pending -- never accepted
 
         $response = $this->discordCommandService()->handleComponent(
-            $this->discordComponentPayload('discord-53', 'ms:friendgame:0')
+            $this->discordComponentPayload('discord-53', 'ms:friendgamemode:0')
         );
 
         self::assertSame(7, $response['type']);
@@ -22881,7 +22881,7 @@ final class GameServiceIntegrationTest extends TestCase
         $this->linkDiscordAccount($userId, 'discord-57');
 
         $response = $this->discordCommandService()->handleComponent(
-            $this->discordComponentPayload('discord-57', 'ms:friendgame:0')
+            $this->discordComponentPayload('discord-57', 'ms:friendgamemode:0')
         );
 
         self::assertSame(7, $response['type']);
@@ -24271,6 +24271,267 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
         self::assertStringContainsString('round(s) won', $ownDeckResponse['data']['content']);
         self::assertStringNotContainsString('Discord only supports Traditional games so far', $ownDeckResponse['data']['content']);
+    }
+
+    /** Practice and Friend games ask "single or best of three?" first; Power Duel offers its own best-of-three entries on its menu. */
+    public function testDiscordPracticeAndFriendGameOfferSingleOrBestOfThreeFirst(): void
+    {
+        $userId = $this->insertDiscordUser('discord-bo3-mode');
+        $this->linkDiscordAccount($userId, 'discord-bo3-mode');
+
+        foreach (['ms:newgame:0' => 'ms:newgamemode', 'ms:friendgame:0' => 'ms:friendgamemode'] as $entry => $nextVerb) {
+            $response = $this->discordCommandService()->handleComponent($this->discordComponentPayload('discord-bo3-mode', $entry));
+            self::assertStringContainsString('best-of-three', $response['data']['content']);
+            $buttons = $response['data']['components'][0]['components'];
+            self::assertSame(['Single game', 'Best of three'], array_column($buttons, 'label'));
+            self::assertSame(["{$nextVerb}:0", "{$nextVerb}:1"], array_column($buttons, 'custom_id'));
+        }
+
+        $menu = $this->discordCommandService()->handleComponent($this->discordComponentPayload('discord-bo3-mode', 'ms:powerduel:0'));
+        $customIds = array_column($menu['data']['components'][0]['components'], 'custom_id');
+        self::assertContains('ms:powerduelinvite:1', $customIds);
+        self::assertContains('ms:powerduelbotmenu:1', $customIds);
+    }
+
+    public function testDiscordBestOfThreePracticeGameCreatesAMatchAndLabelsTheBoard(): void
+    {
+        $userId = $this->insertDiscordUser('discord-bo3-practice');
+        $this->linkDiscordAccount($userId, 'discord-bo3-practice');
+        $botUserId = $this->insertBotUser('discord-bo3-bot-' . uniqid());
+
+        $response = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-bo3-practice', 'ms:newgamebot:1', [(string) $botUserId])
+        );
+
+        self::assertStringContainsString('Game 1 of 3', $response['data']['content']);
+        self::assertStringContainsString('Best of three: you 0 - 0 opponent', $response['data']['content']);
+        $games = $this->games->listGamesForUser($userId);
+        self::assertCount(1, $games);
+        self::assertNotNull($this->fetchGame($games[0]['id'])['game_match_id']);
+
+        // A plain single game stays a plain single game.
+        $single = $this->insertDiscordUser('discord-bo3-single');
+        $this->linkDiscordAccount($single, 'discord-bo3-single');
+        $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-bo3-single', 'ms:newgamebot:0', [(string) $botUserId])
+        );
+        $singleGameId = $this->games->listGamesForUser($single)[0]['id'];
+        self::assertNull($this->fetchGame($singleGameId)['game_match_id']);
+    }
+
+    /** Power Duel best of three: same creation flow, just matched. */
+    public function testDiscordBestOfThreePowerDuelWithFriendCreatesAMatch(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-bo3-pd-a');
+        $u2 = $this->insertDiscordUser('discord-bo3-pd-b');
+        $this->linkDiscordAccount($u1, 'discord-bo3-pd-a');
+
+        $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-bo3-pd-a', 'ms:powerduelwith:1', [(string) $u2])
+        );
+
+        $games = $this->activePowerDuelGamesFor($u1);
+        self::assertCount(1, $games);
+        self::assertNotNull($this->fetchGame($games[0]['id'])['game_match_id']);
+    }
+
+    /**
+     * The whole match loop from one seat: game 1 ends, the completed
+     * board offers "Next game", starting it freezes round 1 until the
+     * previous loser picks who goes first, and that pick unfreezes it.
+     */
+    public function testDiscordBestOfThreeNextGameAndFirstPlayerChoice(): void
+    {
+        $loser = $this->insertDiscordUser('discord-bo3-loser');
+        $winner = $this->insertDiscordUser('discord-bo3-winner');
+        $this->linkDiscordAccount($loser, 'discord-bo3-loser');
+        $this->linkDiscordAccount($winner, 'discord-bo3-winner');
+
+        $gameId = $this->games->createGame($loser, [$loser, $winner], bestOfThree: true);
+        $this->games->startGame($gameId);
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $loser));
+
+        $completed = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-bo3-loser', "ms:view:{$gameId}")
+        );
+        self::assertStringContainsString('is complete', $completed['data']['content']);
+        self::assertStringContainsString('you 0 - 1 opponent', $completed['data']['content']);
+        $next = $completed['data']['components'][0]['components'][0];
+        self::assertSame('Next game', $next['label']);
+        $game2Id = (int) substr($next['custom_id'], strlen('ms:startgame:'));
+        self::assertSame('waiting', $this->fetchGame($game2Id)['status']);
+
+        // The still-'waiting' game 2 is the caller's one active game, so the root view shows it (with its Start button) directly.
+        $root = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-bo3-loser'));
+        self::assertStringContainsString("ms:startgame:{$game2Id}", json_encode($root['data']['components']));
+
+        $started = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-bo3-loser', "ms:startgame:{$game2Id}")
+        );
+        self::assertSame('in_progress', $this->fetchGame($game2Id)['status']);
+        self::assertStringContainsString('Game 2 of 3', $started['data']['content']);
+        self::assertStringContainsString('you choose who goes first', $started['data']['content']);
+        self::assertSame(
+            ['ms:firstplay:' . $game2Id, 'ms:firstdraw:' . $game2Id],
+            array_column($started['data']['components'][0]['components'], 'custom_id'),
+        );
+
+        $winnerView = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-bo3-winner', "ms:view:{$game2Id}")
+        );
+        self::assertStringContainsString('Waiting on your opponent to choose who goes first', $winnerView['data']['content']);
+
+        $chosen = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-bo3-loser', "ms:firstplay:{$game2Id}")
+        );
+        self::assertStringNotContainsString('choose who goes first', $chosen['data']['content']);
+        self::assertStringContainsString($this->games->getState($game2Id, $loser)['round']['went_first_game_player_id'] === $this->games->gamePlayerIdFor($game2Id, $loser) ? 'discord-bo3-loser went first' : 'discord-bo3-winner went first', $chosen['data']['content']);
+    }
+
+    /** Power Duel best of three without sideboarding: decks stay locked, so game 2 just needs "Start game" -- no resubmission prompt. */
+    public function testDiscordBestOfThreePowerDuelNextGameStartsWithoutResubmittingDecks(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-bo3-pd-next-a');
+        $u2 = $this->insertDiscordUser('discord-bo3-pd-next-b');
+        $this->linkDiscordAccount($u1, 'discord-bo3-pd-next-a');
+        $this->linkDiscordAccount($u2, 'discord-bo3-pd-next-b');
+
+        $gameId = $this->games->createGame($u1, [$u1, $u2], format: 'duel', deckType: 'custom_duel', duelDeckRules: ['preset' => 'power'], bestOfThree: true);
+        foreach ([[$u1, 0], [$u2, 15]] as [$userId, $offset]) {
+            $this->games->submitCustomDuelDeck($gameId, $this->games->gamePlayerIdFor($gameId, $userId), $this->buildPowerDuelDecklistText($this->fetchNonMythicCardNames(15, $offset)), null, $userId);
+        }
+        $this->games->startGame($gameId);
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $u1));
+
+        $completed = $this->discordCommandService()->handleComponent($this->discordComponentPayload('discord-bo3-pd-next-a', "ms:view:{$gameId}"));
+        $game2Id = (int) substr($completed['data']['components'][0]['components'][0]['custom_id'], strlen('ms:startgame:'));
+
+        $waiting = $this->discordCommandService()->handleComponent($this->discordComponentPayload('discord-bo3-pd-next-a', "ms:view:{$game2Id}"));
+        self::assertStringContainsString('is ready', $waiting['data']['content']);
+
+        $started = $this->discordCommandService()->handleComponent($this->discordComponentPayload('discord-bo3-pd-next-a', "ms:startgame:{$game2Id}"));
+        self::assertSame('in_progress', $this->fetchGame($game2Id)['status']);
+        self::assertStringContainsString('Game 2 of 3', $started['data']['content']);
+    }
+
+    /** Sealed Deck vs a practice bot: pool screen, suggested deck, then a playable board. */
+    public function testDiscordSealedDeckVsBotSuggestedDeckStartsTheGame(): void
+    {
+        $userId = $this->insertDiscordUser('discord-sealed-bot');
+        $this->linkDiscordAccount($userId, 'discord-sealed-bot');
+        $botUserId = $this->insertBotUser('discord-sealed-bot-opp-' . uniqid());
+
+        $menu = $this->discordCommandService()->handleComponent($this->discordComponentPayload('discord-sealed-bot', 'ms:sealed:0'));
+        self::assertSame(['ms:sealedbotmenu:0', 'ms:sealedinvite:0'], array_column($menu['data']['components'][0]['components'], 'custom_id'));
+
+        $created = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-sealed-bot', 'ms:sealedbot:0', [(string) $botUserId])
+        );
+        self::assertStringContainsString('Sealed Deck, Game 1 of 3', $created['data']['content']);
+        self::assertStringContainsString('Your pool (45 cards)', $created['data']['content']);
+        $labels = array_column($created['data']['components'][0]['components'], 'label');
+        self::assertSame(['Use suggested deck', 'Build deck', 'Refresh'], $labels);
+
+        $gameId = $this->games->listGamesForUser($userId)[0]['id'];
+        self::assertSame('waiting', $this->fetchGame($gameId)['status']);
+
+        $started = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-sealed-bot', "ms:sealedsuggest:{$gameId}")
+        );
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
+        self::assertStringContainsString('Game 1 of 3', $started['data']['content']);
+        self::assertStringContainsString('round(s) won', $started['data']['content']);
+    }
+
+    /** "Build deck" opens a modal prefilled with the pool; a trimmed list submits, an undersized one is refused with a reason. */
+    public function testDiscordSealedDeckBuildModalRoundTrip(): void
+    {
+        $userId = $this->insertDiscordUser('discord-sealed-modal');
+        $this->linkDiscordAccount($userId, 'discord-sealed-modal');
+        $botUserId = $this->insertBotUser('discord-sealed-modal-opp-' . uniqid());
+        $gameId = $this->games->createGame($userId, [$userId, $botUserId], format: 'draft', deckType: 'sealed_deck');
+        $this->games->advanceAutomatedTurns($gameId);
+
+        $modal = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-sealed-modal', "ms:sealedbuild:{$gameId}")
+        );
+        self::assertSame(9, $modal['type']);
+        self::assertSame("ms:sealedbuildsubmit:{$gameId}", $modal['data']['custom_id']);
+        $prefill = $modal['data']['components'][0]['components'][0]['value'];
+        $lines = array_values(array_filter(explode("\n", $prefill)));
+
+        $tooSmall = $this->discordCommandService()->handleModalSubmit($this->discordModalPayload(
+            'discord-sealed-modal', "ms:sealedbuildsubmit:{$gameId}", ['decklist' => $lines[0]]
+        ));
+        self::assertStringContainsString("Couldn't do that", $tooSmall['data']['content']);
+        self::assertSame('waiting', $this->fetchGame($gameId)['status']);
+
+        $submitted = $this->discordCommandService()->handleModalSubmit($this->discordModalPayload(
+            'discord-sealed-modal', "ms:sealedbuildsubmit:{$gameId}", ['decklist' => $prefill]
+        ));
+        self::assertSame(7, $submitted['type']);
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status'], 'the bot already had its deck in, so the last submission starts the game');
+    }
+
+    /** Human vs human: the first submitter waits, the second submission starts the game, and the first sees the board on Refresh. */
+    public function testDiscordSealedDeckVsFriendStartsWhenBothHaveSubmitted(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-sealed-h1');
+        $u2 = $this->insertDiscordUser('discord-sealed-h2');
+        $this->linkDiscordAccount($u1, 'discord-sealed-h1');
+        $this->linkDiscordAccount($u2, 'discord-sealed-h2');
+
+        $friendships = new FriendshipService(new UserRepository(), new FriendshipRepository());
+        $friendships->sendInvite($u1, 'discord-sealed-h2');
+        $friendships->respondToInvite($u2, $u1, 'accept');
+
+        $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-sealed-h1', 'ms:sealedwith:0', [(string) $u2])
+        );
+        $gameId = $this->games->listGamesForUser($u1)[0]['id'];
+
+        $first = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-sealed-h1', "ms:sealedsuggest:{$gameId}")
+        );
+        self::assertStringContainsString('Waiting on discord-sealed-h2 to submit theirs', $first['data']['content']);
+        self::assertSame('waiting', $this->fetchGame($gameId)['status']);
+        self::assertContains('Change deck', array_column($first['data']['components'][0]['components'], 'label'));
+
+        $second = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-sealed-h2', "ms:sealedsuggest:{$gameId}")
+        );
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
+        self::assertStringContainsString('round(s) won', $second['data']['content']);
+
+        $refresh = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-sealed-h1', "ms:view:{$gameId}")
+        );
+        self::assertStringContainsString('round(s) won', $refresh['data']['content']);
+    }
+
+    /** Games 2 and 3 of a sealed match: the pool stays, decks get rebuilt -- "Keep same deck" resubmits the last one. */
+    public function testDiscordSealedDeckNextGameOffersKeepSameDeck(): void
+    {
+        $userId = $this->insertDiscordUser('discord-sealed-next');
+        $this->linkDiscordAccount($userId, 'discord-sealed-next');
+        $botUserId = $this->insertBotUser('discord-sealed-next-opp-' . uniqid());
+        $gameId = $this->games->createGame($userId, [$userId, $botUserId], format: 'draft', deckType: 'sealed_deck');
+        $this->games->advanceAutomatedTurns($gameId);
+        $this->discordCommandService()->handleComponent($this->discordComponentPayload('discord-sealed-next', "ms:sealedsuggest:{$gameId}"));
+        $firstDeck = $this->games->getState($gameId, $userId)['sealed_deck']['deck_building']['deck_card_ids'] ?? null;
+        $this->games->resignGame($gameId, $this->games->gamePlayerIdFor($gameId, $userId));
+
+        $completed = $this->discordCommandService()->handleComponent($this->discordComponentPayload('discord-sealed-next', "ms:view:{$gameId}"));
+        self::assertStringContainsString('you 0 - 1 opponent', $completed['data']['content']);
+        $game2Id = (int) substr($completed['data']['components'][0]['components'][0]['custom_id'], strlen('ms:startgame:'));
+
+        $building = $this->discordCommandService()->handleComponent($this->discordComponentPayload('discord-sealed-next', "ms:startgame:{$game2Id}"));
+        self::assertStringContainsString('Sealed Deck, Game 2 of 3', $building['data']['content']);
+        self::assertContains('Keep same deck', array_column($building['data']['components'][0]['components'], 'label'));
+
+        $kept = $this->discordCommandService()->handleComponent($this->discordComponentPayload('discord-sealed-next', "ms:sealedkeep:{$game2Id}"));
+        self::assertSame('in_progress', $this->fetchGame($game2Id)['status']);
+        self::assertStringContainsString('Game 2 of 3', $kept['data']['content']);
     }
 
     public function testPowerDuelVsBotWithNoSavedDecklistsPointsAtMyDecks(): void
