@@ -1,0 +1,12 @@
+{
+  "friends": [
+    {
+      "created_at": "2026-07-24 21:40:56",
+      "friend_id": 1,
+      "friend_username": "jceddy",
+      "id": 17,
+      "presence": "online"
+    }
+  ],
+  "status": "ok"
+}

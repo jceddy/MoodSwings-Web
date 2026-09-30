@@ -1,0 +1,17 @@
+{
+  "status": "ok",
+  "user": {
+    "allow_custom_content": true,
+    "auto_apply_scoring_bonuses": true,
+    "auto_pass_on_empty_hand": true,
+    "board_layout_preference": "above_play_area",
+    "default_selections_mode_preference": true,
+    "email": "<redacted>",
+    "id": 2,
+    "matchmaking_discoverable": true,
+    "pause_before_own_turn": false,
+    "phone_number": "<redacted>",
+    "share_presence": false,
+    "username": "bshaftoe"
+  }
+}

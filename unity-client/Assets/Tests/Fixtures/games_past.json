@@ -1,0 +1,4460 @@
+{
+  "games": [
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-09-27 17:06:21",
+      "created_at": "2026-09-27 16:11:20",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "structure",
+      "default_selections_mode": false,
+      "draft_match": null,
+      "draft_match_id": null,
+      "format": "standard",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 362,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-09-27 17:06:21",
+      "match_game_number": null,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        }
+      ],
+      "started_at": "2026-09-27 16:11:22",
+      "status": "completed",
+      "winner_usernames": [
+        "bshaftoe"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-09-25 17:02:35",
+      "created_at": "2026-09-25 16:59:38",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": "user_defined",
+      "deck_type": "custom_duel",
+      "default_selections_mode": true,
+      "draft_match": null,
+      "draft_match_id": null,
+      "format": "duel",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 356,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-09-25 17:02:35",
+      "match_game_number": null,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        }
+      ],
+      "started_at": "2026-09-25 17:00:24",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-09-23 13:44:23",
+      "created_at": "2026-09-23 13:39:01",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "sealed_deck",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 2,
+        "opponent_wins": 2,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 2
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 1
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 1
+      },
+      "draft_match_id": 132,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 351,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-09-23 13:44:25",
+      "match_game_number": 3,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        }
+      ],
+      "started_at": "2026-09-23 13:39:19",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-09-23 13:39:01",
+      "created_at": "2026-09-23 12:45:50",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "sealed_deck",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 2,
+        "opponent_wins": 2,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 2
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 1
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 1
+      },
+      "draft_match_id": 132,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 350,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-09-23 13:39:02",
+      "match_game_number": 2,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        }
+      ],
+      "started_at": "2026-09-23 12:49:13",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-09-23 12:45:50",
+      "created_at": "2026-09-23 12:25:13",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "sealed_deck",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 2,
+        "opponent_wins": 2,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 2
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 1
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 1
+      },
+      "draft_match_id": 132,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 349,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-09-23 12:45:51",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        }
+      ],
+      "started_at": "2026-09-23 12:29:43",
+      "status": "completed",
+      "winner_usernames": [
+        "bshaftoe"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-09-23 11:47:48",
+      "created_at": "2026-09-23 11:44:34",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "sealed_deck",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 2,
+        "opponent_wins": 2,
+        "players": [
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 1
+          },
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 2
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 1
+      },
+      "draft_match_id": 131,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 348,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-09-23 11:47:50",
+      "match_game_number": 3,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 2,
+          "username": "bshaftoe"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 1,
+          "username": "jceddy"
+        }
+      ],
+      "started_at": "2026-09-23 11:45:14",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-09-23 11:44:33",
+      "created_at": "2026-09-23 10:30:12",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "sealed_deck",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 2,
+        "opponent_wins": 2,
+        "players": [
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 1
+          },
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 2
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 1
+      },
+      "draft_match_id": 131,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 347,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-09-23 11:44:35",
+      "match_game_number": 2,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 2,
+          "username": "bshaftoe"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 1,
+          "username": "jceddy"
+        }
+      ],
+      "started_at": "2026-09-23 10:30:31",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-09-23 10:30:11",
+      "created_at": "2026-09-23 10:23:07",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "sealed_deck",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 2,
+        "opponent_wins": 2,
+        "players": [
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 1
+          },
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 2
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 1
+      },
+      "draft_match_id": 131,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 346,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-09-23 10:30:13",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 2,
+          "username": "bshaftoe"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 1,
+          "username": "jceddy"
+        }
+      ],
+      "started_at": "2026-09-23 10:24:53",
+      "status": "completed",
+      "winner_usernames": [
+        "bshaftoe"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-09-23 03:15:58",
+      "created_at": "2026-09-23 03:13:26",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "sealed_deck",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 2,
+        "opponent_wins": 2,
+        "players": [
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          },
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 2
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 0
+      },
+      "draft_match_id": 130,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 345,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-09-23 03:16:00",
+      "match_game_number": 2,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 2,
+          "username": "bshaftoe"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 1,
+          "username": "jceddy"
+        }
+      ],
+      "started_at": "2026-09-23 03:13:46",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-09-23 03:13:20",
+      "created_at": "2026-09-23 03:06:49",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "sealed_deck",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 2,
+        "opponent_wins": 2,
+        "players": [
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          },
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 2
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 0
+      },
+      "draft_match_id": 130,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 344,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-09-23 03:13:28",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 2,
+          "username": "bshaftoe"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 1,
+          "username": "jceddy"
+        }
+      ],
+      "started_at": "2026-09-23 03:09:00",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-09-17 13:49:05",
+      "created_at": "2026-09-17 12:57:08",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": "power",
+      "deck_type": "custom_duel",
+      "default_selections_mode": false,
+      "draft_match": null,
+      "draft_match_id": null,
+      "format": "duel",
+      "game_match": {
+        "allow_sideboarding": true,
+        "games_to_win": 2,
+        "opponent_wins": 2,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 2
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          }
+        ],
+        "status": "completed",
+        "winner_usernames": [
+          "jceddy"
+        ],
+        "your_wins": 0
+      },
+      "game_match_id": 11,
+      "id": 338,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-09-17 13:49:06",
+      "match_game_number": 2,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        }
+      ],
+      "started_at": "2026-09-17 12:57:42",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-09-17 12:57:08",
+      "created_at": "2026-09-17 12:37:37",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": "power",
+      "deck_type": "custom_duel",
+      "default_selections_mode": false,
+      "draft_match": null,
+      "draft_match_id": null,
+      "format": "duel",
+      "game_match": {
+        "allow_sideboarding": true,
+        "games_to_win": 2,
+        "opponent_wins": 2,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 2
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          }
+        ],
+        "status": "completed",
+        "winner_usernames": [
+          "jceddy"
+        ],
+        "your_wins": 0
+      },
+      "game_match_id": 11,
+      "id": 337,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-09-17 12:57:09",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        }
+      ],
+      "started_at": "2026-09-17 12:50:10",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-09-17 12:37:37",
+      "created_at": "2026-09-17 11:52:11",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": "power",
+      "deck_type": "custom_duel",
+      "default_selections_mode": false,
+      "draft_match": null,
+      "draft_match_id": null,
+      "format": "duel",
+      "game_match": {
+        "allow_sideboarding": true,
+        "games_to_win": 2,
+        "opponent_wins": 0,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 5,
+            "username": "Bob",
+            "wins": 0
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 2
+          }
+        ],
+        "status": "completed",
+        "winner_usernames": [
+          "bshaftoe"
+        ],
+        "your_wins": 2
+      },
+      "game_match_id": 9,
+      "id": 336,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-09-17 12:37:37",
+      "match_game_number": 2,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 5,
+          "username": "Bob"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        }
+      ],
+      "started_at": "2026-09-17 11:52:27",
+      "status": "completed",
+      "winner_usernames": [
+        "bshaftoe"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-09-17 11:52:11",
+      "created_at": "2026-09-17 01:03:26",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": "power",
+      "deck_type": "custom_duel",
+      "default_selections_mode": false,
+      "draft_match": null,
+      "draft_match_id": null,
+      "format": "duel",
+      "game_match": {
+        "allow_sideboarding": true,
+        "games_to_win": 2,
+        "opponent_wins": 0,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 5,
+            "username": "Bob",
+            "wins": 0
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 2
+          }
+        ],
+        "status": "completed",
+        "winner_usernames": [
+          "bshaftoe"
+        ],
+        "your_wins": 2
+      },
+      "game_match_id": 9,
+      "id": 332,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-09-17 11:52:11",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 5,
+          "username": "Bob"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        }
+      ],
+      "started_at": "2026-09-17 11:42:21",
+      "status": "completed",
+      "winner_usernames": [
+        "bshaftoe"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-09-16 00:33:01",
+      "created_at": "2026-09-15 20:49:54",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "structure",
+      "default_selections_mode": true,
+      "draft_match": null,
+      "draft_match_id": null,
+      "format": "standard",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 324,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-09-16 00:33:02",
+      "match_game_number": null,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        }
+      ],
+      "started_at": "2026-09-15 20:49:56",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-09-15 23:45:16",
+      "created_at": "2026-09-15 23:28:27",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "sealed_deck",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 2,
+        "opponent_wins": 2,
+        "players": [
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          },
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 2
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 0
+      },
+      "draft_match_id": 127,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 330,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-09-15 23:45:16",
+      "match_game_number": 2,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 2,
+          "username": "bshaftoe"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 1,
+          "username": "jceddy"
+        }
+      ],
+      "started_at": "2026-09-15 23:41:33",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-09-15 23:28:27",
+      "created_at": "2026-09-15 23:23:11",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "sealed_deck",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 2,
+        "opponent_wins": 2,
+        "players": [
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          },
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 2
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 0
+      },
+      "draft_match_id": 127,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 329,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-09-15 23:28:28",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 2,
+          "username": "bshaftoe"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 1,
+          "username": "jceddy"
+        }
+      ],
+      "started_at": "2026-09-15 23:24:50",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-09-15 21:51:07",
+      "created_at": "2026-09-15 21:40:22",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "sealed_deck",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 2,
+        "opponent_wins": 1,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 1
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 0
+      },
+      "draft_match_id": 126,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 327,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-09-15 21:51:09",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 2,
+          "username": "bshaftoe"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 1,
+          "username": "jceddy"
+        }
+      ],
+      "started_at": "2026-09-15 21:41:41",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-09-15 21:39:26",
+      "created_at": "2026-09-15 21:24:35",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "sealed_deck",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 2,
+        "opponent_wins": 2,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 2
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 0
+      },
+      "draft_match_id": 125,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 326,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-09-15 21:39:26",
+      "match_game_number": 2,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        }
+      ],
+      "started_at": "2026-09-15 21:31:27",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-09-15 21:24:35",
+      "created_at": "2026-09-15 21:15:42",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "sealed_deck",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 2,
+        "opponent_wins": 2,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 2
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 0
+      },
+      "draft_match_id": 125,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 325,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-09-15 21:24:36",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        }
+      ],
+      "started_at": "2026-09-15 21:17:33",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-09-10 20:58:56",
+      "created_at": "2026-09-10 20:22:26",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "weekly_sealed_pool",
+      "default_selections_mode": false,
+      "draft_match": {
+        "games_to_win": 2,
+        "opponent_wins": 2,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 2
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 0
+      },
+      "draft_match_id": 122,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 319,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-09-10 20:58:56",
+      "match_game_number": 2,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        }
+      ],
+      "started_at": "2026-09-10 20:24:01",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-09-10 20:22:24",
+      "created_at": "2026-09-10 20:03:39",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "weekly_sealed_pool",
+      "default_selections_mode": false,
+      "draft_match": {
+        "games_to_win": 2,
+        "opponent_wins": 2,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 2
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 0
+      },
+      "draft_match_id": 122,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 318,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-09-10 20:22:27",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        }
+      ],
+      "started_at": "2026-09-10 20:11:15",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": null,
+      "created_at": "2026-09-03 11:10:11",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "grid_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 2,
+        "opponent_wins": 0,
+        "players": [
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          }
+        ],
+        "status": "completed",
+        "winner_username": "bshaftoe",
+        "your_wins": 0
+      },
+      "draft_match_id": 93,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 218,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-09-03 11:10:29",
+      "match_game_number": 2,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 2,
+          "username": "bshaftoe"
+        }
+      ],
+      "started_at": null,
+      "status": "abandoned",
+      "winner_usernames": [],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-09-03 11:10:11",
+      "created_at": "2026-09-03 11:05:11",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "grid_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 2,
+        "opponent_wins": 0,
+        "players": [
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          }
+        ],
+        "status": "completed",
+        "winner_username": "bshaftoe",
+        "your_wins": 0
+      },
+      "draft_match_id": 93,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 217,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-09-03 11:10:12",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 2,
+          "username": "bshaftoe"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 1,
+          "username": "jceddy"
+        }
+      ],
+      "started_at": "2026-09-03 11:06:33",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-09-03 11:04:39",
+      "created_at": "2026-09-03 10:47:28",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "structure",
+      "default_selections_mode": true,
+      "draft_match": null,
+      "draft_match_id": null,
+      "format": "standard",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 216,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-09-03 11:04:39",
+      "match_game_number": null,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        }
+      ],
+      "started_at": "2026-09-03 10:47:30",
+      "status": "completed",
+      "winner_usernames": [
+        "bshaftoe"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-09-01 02:59:03",
+      "created_at": "2026-09-01 02:53:27",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "sealed_deck",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 2,
+        "opponent_wins": 2,
+        "players": [
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          },
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 2
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 0
+      },
+      "draft_match_id": 86,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 198,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-09-01 02:59:03",
+      "match_game_number": 2,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 2,
+          "username": "bshaftoe"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 1,
+          "username": "jceddy"
+        }
+      ],
+      "started_at": "2026-09-01 02:55:21",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-09-01 02:53:26",
+      "created_at": "2026-09-01 02:42:12",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "sealed_deck",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 2,
+        "opponent_wins": 2,
+        "players": [
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          },
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 2
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 0
+      },
+      "draft_match_id": 86,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 197,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-09-01 02:53:27",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 2,
+          "username": "bshaftoe"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 1,
+          "username": "jceddy"
+        }
+      ],
+      "started_at": "2026-09-01 02:45:35",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-27 20:51:33",
+      "created_at": "2026-08-27 17:58:30",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "chaos_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 1,
+        "opponent_wins": 1,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 1
+          },
+          {
+            "is_you": false,
+            "user_id": 4,
+            "username": "Alice",
+            "wins": 0
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 0
+      },
+      "draft_match_id": 80,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 190,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-27 20:51:34",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 4,
+          "username": "Alice"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 2,
+          "user_id": 2,
+          "username": "bshaftoe"
+        }
+      ],
+      "started_at": "2026-08-27 18:12:28",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": null,
+      "created_at": "2026-08-27 17:57:26",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "chaos_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 2,
+        "opponent_wins": 0,
+        "players": [
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          },
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 0
+          }
+        ],
+        "status": "completed",
+        "winner_username": null,
+        "your_wins": 0
+      },
+      "draft_match_id": 79,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 189,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-27 17:57:35",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 2,
+          "username": "bshaftoe"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 1,
+          "username": "jceddy"
+        }
+      ],
+      "started_at": null,
+      "status": "abandoned",
+      "winner_usernames": [],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-27 17:32:19",
+      "created_at": "2026-08-27 16:04:29",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "chaos_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 1,
+        "opponent_wins": 1,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 1
+          },
+          {
+            "is_you": false,
+            "user_id": 4,
+            "username": "Alice",
+            "wins": 0
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 0
+      },
+      "draft_match_id": 78,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 188,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-27 17:32:20",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 4,
+          "username": "Alice"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 2,
+          "user_id": 2,
+          "username": "bshaftoe"
+        }
+      ],
+      "started_at": "2026-08-27 17:05:24",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-27 15:13:46",
+      "created_at": "2026-08-27 15:07:47",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "structure",
+      "default_selections_mode": true,
+      "draft_match": null,
+      "draft_match_id": null,
+      "format": "standard",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 186,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-27 15:13:46",
+      "match_game_number": null,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        }
+      ],
+      "started_at": "2026-08-27 15:07:50",
+      "status": "completed",
+      "winner_usernames": [
+        "bshaftoe"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-20 01:58:22",
+      "created_at": "2026-08-19 20:29:57",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "tiered_rotisserie_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 1,
+        "opponent_wins": 0,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 0
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 1
+          },
+          {
+            "is_you": false,
+            "user_id": 5,
+            "username": "Bob",
+            "wins": 0
+          },
+          {
+            "is_you": false,
+            "user_id": 4,
+            "username": "Alice",
+            "wins": 0
+          }
+        ],
+        "status": "completed",
+        "winner_username": "bshaftoe",
+        "your_wins": 1
+      },
+      "draft_match_id": 43,
+      "format": "team",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 127,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-20 01:58:22",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 2,
+          "user_id": 5,
+          "username": "Bob"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 3,
+          "user_id": 4,
+          "username": "Alice"
+        }
+      ],
+      "started_at": "2026-08-20 00:50:06",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy",
+        "bshaftoe"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-19 19:16:29",
+      "created_at": "2026-08-19 14:00:31",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "tiered_rotisserie_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 1,
+        "opponent_wins": 1,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 1
+          },
+          {
+            "is_you": false,
+            "user_id": 5,
+            "username": "Bob",
+            "wins": 0
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          },
+          {
+            "is_you": false,
+            "user_id": 4,
+            "username": "Alice",
+            "wins": 0
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 0
+      },
+      "draft_match_id": 42,
+      "format": "closed_team",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 126,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-19 19:16:29",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 5,
+          "username": "Bob"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 2,
+          "user_id": 2,
+          "username": "bshaftoe"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 3,
+          "user_id": 4,
+          "username": "Alice"
+        }
+      ],
+      "started_at": "2026-08-19 19:02:41",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy",
+        "bshaftoe"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-19 13:48:11",
+      "created_at": "2026-08-19 01:25:00",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "tiered_rotisserie_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 1,
+        "opponent_wins": 1,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 4,
+            "username": "Alice",
+            "wins": 1
+          },
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 0
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          },
+          {
+            "is_you": false,
+            "user_id": 5,
+            "username": "Bob",
+            "wins": 0
+          }
+        ],
+        "status": "completed",
+        "winner_username": "Alice",
+        "your_wins": 0
+      },
+      "draft_match_id": 41,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 124,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-19 13:48:12",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 4,
+          "username": "Alice"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 2,
+          "user_id": 2,
+          "username": "bshaftoe"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 3,
+          "user_id": 5,
+          "username": "Bob"
+        }
+      ],
+      "started_at": "2026-08-19 01:57:27",
+      "status": "completed",
+      "winner_usernames": [
+        "Alice"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-19 00:41:49",
+      "created_at": "2026-08-18 18:59:11",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "tiered_rotisserie_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 1,
+        "opponent_wins": 0,
+        "players": [
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          },
+          {
+            "is_you": false,
+            "user_id": 4,
+            "username": "Alice",
+            "wins": 0
+          },
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 1
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 0
+      },
+      "draft_match_id": 40,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 123,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-19 00:41:49",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 2,
+          "username": "bshaftoe"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 4,
+          "username": "Alice"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 2,
+          "user_id": 1,
+          "username": "jceddy"
+        }
+      ],
+      "started_at": "2026-08-18 21:39:23",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-18 18:53:23",
+      "created_at": "2026-08-18 16:12:19",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "tiered_rotisserie_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 1,
+        "opponent_wins": 1,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 4,
+            "username": "Alice",
+            "wins": 1
+          },
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 0
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          }
+        ],
+        "status": "completed",
+        "winner_username": "Alice",
+        "your_wins": 0
+      },
+      "draft_match_id": 39,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 122,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-18 18:53:24",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 4,
+          "username": "Alice"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 2,
+          "user_id": 2,
+          "username": "bshaftoe"
+        }
+      ],
+      "started_at": "2026-08-18 18:11:55",
+      "status": "completed",
+      "winner_usernames": [
+        "Alice"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-18 16:00:56",
+      "created_at": "2026-08-18 15:46:28",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "tiered_rotisserie_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 2,
+        "opponent_wins": 2,
+        "players": [
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 1
+          },
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 2
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 1
+      },
+      "draft_match_id": 38,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 121,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-18 16:00:57",
+      "match_game_number": 3,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 2,
+          "username": "bshaftoe"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 1,
+          "username": "jceddy"
+        }
+      ],
+      "started_at": "2026-08-18 15:46:50",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-18 15:46:28",
+      "created_at": "2026-08-18 15:41:39",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "tiered_rotisserie_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 2,
+        "opponent_wins": 2,
+        "players": [
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 1
+          },
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 2
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 1
+      },
+      "draft_match_id": 38,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 120,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-18 15:46:29",
+      "match_game_number": 2,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 2,
+          "username": "bshaftoe"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 1,
+          "username": "jceddy"
+        }
+      ],
+      "started_at": "2026-08-18 15:42:02",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-18 15:41:39",
+      "created_at": "2026-08-18 03:08:53",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "tiered_rotisserie_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 2,
+        "opponent_wins": 2,
+        "players": [
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 1
+          },
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 2
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 1
+      },
+      "draft_match_id": 38,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 119,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-18 15:41:39",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 2,
+          "username": "bshaftoe"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 1,
+          "username": "jceddy"
+        }
+      ],
+      "started_at": "2026-08-18 14:49:01",
+      "status": "completed",
+      "winner_usernames": [
+        "bshaftoe"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-18 00:18:40",
+      "created_at": "2026-08-18 00:13:25",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "tiered_rotisserie_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 2,
+        "opponent_wins": 2,
+        "players": [
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 1
+          },
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 2
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 1
+      },
+      "draft_match_id": 37,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 118,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-18 00:18:41",
+      "match_game_number": 3,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 2,
+          "username": "bshaftoe"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 1,
+          "username": "jceddy"
+        }
+      ],
+      "started_at": "2026-08-18 00:14:00",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-18 00:13:25",
+      "created_at": "2026-08-18 00:09:48",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "tiered_rotisserie_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 2,
+        "opponent_wins": 2,
+        "players": [
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 1
+          },
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 2
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 1
+      },
+      "draft_match_id": 37,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 117,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-18 00:13:26",
+      "match_game_number": 2,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 2,
+          "username": "bshaftoe"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 1,
+          "username": "jceddy"
+        }
+      ],
+      "started_at": "2026-08-18 00:10:15",
+      "status": "completed",
+      "winner_usernames": [
+        "bshaftoe"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-18 00:09:47",
+      "created_at": "2026-08-17 23:18:56",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "tiered_rotisserie_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 2,
+        "opponent_wins": 2,
+        "players": [
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 1
+          },
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 2
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 1
+      },
+      "draft_match_id": 37,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 116,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-18 00:09:49",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 2,
+          "username": "bshaftoe"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 1,
+          "username": "jceddy"
+        }
+      ],
+      "started_at": "2026-08-17 23:36:34",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-17 21:55:47",
+      "created_at": "2026-08-17 11:01:47",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "rotisserie_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 1,
+        "opponent_wins": 0,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 0
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          },
+          {
+            "is_you": false,
+            "user_id": 5,
+            "username": "Bob",
+            "wins": 1
+          },
+          {
+            "is_you": false,
+            "user_id": 4,
+            "username": "Alice",
+            "wins": 0
+          }
+        ],
+        "status": "completed",
+        "winner_username": "Bob",
+        "your_wins": 0
+      },
+      "draft_match_id": 36,
+      "format": "team",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 115,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-17 21:55:48",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 2,
+          "user_id": 5,
+          "username": "Bob"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 3,
+          "user_id": 4,
+          "username": "Alice"
+        }
+      ],
+      "started_at": "2026-08-17 21:12:06",
+      "status": "completed",
+      "winner_usernames": [
+        "Bob",
+        "Alice"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-17 10:58:59",
+      "created_at": "2026-08-16 22:19:27",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "rotisserie_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 1,
+        "opponent_wins": 0,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 0
+          },
+          {
+            "is_you": false,
+            "user_id": 5,
+            "username": "Bob",
+            "wins": 1
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          },
+          {
+            "is_you": false,
+            "user_id": 4,
+            "username": "Alice",
+            "wins": 0
+          }
+        ],
+        "status": "completed",
+        "winner_username": "Bob",
+        "your_wins": 0
+      },
+      "draft_match_id": 35,
+      "format": "closed_team",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 114,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-17 10:58:59",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 5,
+          "username": "Bob"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 2,
+          "user_id": 2,
+          "username": "bshaftoe"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 3,
+          "user_id": 4,
+          "username": "Alice"
+        }
+      ],
+      "started_at": "2026-08-16 23:58:44",
+      "status": "completed",
+      "winner_usernames": [
+        "Bob",
+        "Alice"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-16 22:03:40",
+      "created_at": "2026-08-16 17:53:42",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "rotisserie_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 1,
+        "opponent_wins": 1,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 1
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          },
+          {
+            "is_you": false,
+            "user_id": 5,
+            "username": "Bob",
+            "wins": 0
+          },
+          {
+            "is_you": false,
+            "user_id": 4,
+            "username": "Alice",
+            "wins": 0
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 0
+      },
+      "draft_match_id": 34,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 113,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-16 22:03:41",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 2,
+          "user_id": 5,
+          "username": "Bob"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 3,
+          "user_id": 4,
+          "username": "Alice"
+        }
+      ],
+      "started_at": "2026-08-16 21:39:13",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-16 17:50:28",
+      "created_at": "2026-08-16 01:10:49",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "rotisserie_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 1,
+        "opponent_wins": 1,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 1
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          },
+          {
+            "is_you": false,
+            "user_id": 5,
+            "username": "Bob",
+            "wins": 0
+          },
+          {
+            "is_you": false,
+            "user_id": 4,
+            "username": "Alice",
+            "wins": 0
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 0
+      },
+      "draft_match_id": 33,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 112,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-16 17:50:29",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 2,
+          "user_id": 5,
+          "username": "Bob"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 3,
+          "user_id": 4,
+          "username": "Alice"
+        }
+      ],
+      "started_at": "2026-08-16 13:44:31",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-15 21:03:23",
+      "created_at": "2026-08-15 17:56:10",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "rotisserie_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 1,
+        "opponent_wins": 1,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 1
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          },
+          {
+            "is_you": false,
+            "user_id": 5,
+            "username": "Bob",
+            "wins": 0
+          },
+          {
+            "is_you": false,
+            "user_id": 4,
+            "username": "Alice",
+            "wins": 0
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 0
+      },
+      "draft_match_id": 32,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 111,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-15 21:03:24",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 2,
+          "user_id": 5,
+          "username": "Bob"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 3,
+          "user_id": 4,
+          "username": "Alice"
+        }
+      ],
+      "started_at": "2026-08-15 18:45:34",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-15 17:48:20",
+      "created_at": "2026-08-15 16:37:07",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "rotisserie_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 1,
+        "opponent_wins": 1,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 1
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          },
+          {
+            "is_you": false,
+            "user_id": 4,
+            "username": "Alice",
+            "wins": 0
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 0
+      },
+      "draft_match_id": 31,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 110,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-15 17:48:21",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 2,
+          "user_id": 4,
+          "username": "Alice"
+        }
+      ],
+      "started_at": "2026-08-15 17:07:56",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-15 16:30:52",
+      "created_at": "2026-08-15 14:26:10",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "rotisserie_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 1,
+        "opponent_wins": 0,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 0
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          },
+          {
+            "is_you": false,
+            "user_id": 4,
+            "username": "Alice",
+            "wins": 1
+          }
+        ],
+        "status": "completed",
+        "winner_username": "Alice",
+        "your_wins": 0
+      },
+      "draft_match_id": 30,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 109,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-15 16:30:53",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 2,
+          "user_id": 4,
+          "username": "Alice"
+        }
+      ],
+      "started_at": "2026-08-15 15:15:32",
+      "status": "completed",
+      "winner_usernames": [
+        "Alice"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-15 14:19:57",
+      "created_at": "2026-08-15 11:44:54",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "rotisserie_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 1,
+        "opponent_wins": 1,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 1
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          },
+          {
+            "is_you": false,
+            "user_id": 4,
+            "username": "Alice",
+            "wins": 0
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 0
+      },
+      "draft_match_id": 29,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 108,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-15 14:19:58",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 2,
+          "user_id": 4,
+          "username": "Alice"
+        }
+      ],
+      "started_at": "2026-08-15 14:08:18",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-15 11:21:14",
+      "created_at": "2026-08-14 22:37:42",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "rotisserie_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 1,
+        "opponent_wins": 0,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 0
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          },
+          {
+            "is_you": false,
+            "user_id": 4,
+            "username": "Alice",
+            "wins": 1
+          }
+        ],
+        "status": "completed",
+        "winner_username": "Alice",
+        "your_wins": 0
+      },
+      "draft_match_id": 28,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 107,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-15 11:21:15",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 2,
+          "user_id": 4,
+          "username": "Alice"
+        }
+      ],
+      "started_at": "2026-08-15 00:27:16",
+      "status": "completed",
+      "winner_usernames": [
+        "Alice"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-14 22:30:10",
+      "created_at": "2026-08-14 19:34:08",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "rotisserie_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 2,
+        "opponent_wins": 2,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 2
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 0
+      },
+      "draft_match_id": 27,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 106,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-14 22:30:11",
+      "match_game_number": 2,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        }
+      ],
+      "started_at": "2026-08-14 19:34:22",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-14 19:34:07",
+      "created_at": "2026-08-14 19:01:52",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "rotisserie_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 2,
+        "opponent_wins": 2,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 2
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 0
+      },
+      "draft_match_id": 27,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 105,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-14 19:34:09",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        }
+      ],
+      "started_at": "2026-08-14 19:11:45",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-14 19:00:37",
+      "created_at": "2026-08-14 18:53:32",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "rotisserie_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 2,
+        "opponent_wins": 2,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 2
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 0
+      },
+      "draft_match_id": 26,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 104,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-14 19:00:38",
+      "match_game_number": 2,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        }
+      ],
+      "started_at": "2026-08-14 18:53:48",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-14 18:53:32",
+      "created_at": "2026-08-14 18:30:18",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "rotisserie_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 2,
+        "opponent_wins": 2,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 2
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 0
+      },
+      "draft_match_id": 26,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 103,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-14 18:53:33",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        }
+      ],
+      "started_at": "2026-08-14 18:44:54",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-14 18:22:21",
+      "created_at": "2026-08-14 16:49:42",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "rotisserie_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 2,
+        "opponent_wins": 2,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 2
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 1
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 1
+      },
+      "draft_match_id": 25,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 102,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-14 18:22:21",
+      "match_game_number": 3,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        }
+      ],
+      "started_at": "2026-08-14 16:50:16",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-14 16:49:41",
+      "created_at": "2026-08-14 16:41:57",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "rotisserie_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 2,
+        "opponent_wins": 2,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 2
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 1
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 1
+      },
+      "draft_match_id": 25,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 101,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-14 16:49:44",
+      "match_game_number": 2,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        }
+      ],
+      "started_at": "2026-08-14 16:42:14",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-14 16:41:57",
+      "created_at": "2026-08-14 14:21:54",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "rotisserie_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 2,
+        "opponent_wins": 2,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 2
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 1
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 1
+      },
+      "draft_match_id": 25,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 100,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-14 16:41:58",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        }
+      ],
+      "started_at": "2026-08-14 14:32:22",
+      "status": "completed",
+      "winner_usernames": [
+        "bshaftoe"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-14 14:18:14",
+      "created_at": "2026-08-14 14:03:21",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "rotisserie_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 2,
+        "opponent_wins": 2,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 2
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 0
+      },
+      "draft_match_id": 24,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 99,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-14 14:18:14",
+      "match_game_number": 2,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        }
+      ],
+      "started_at": "2026-08-14 14:03:56",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-14 14:03:21",
+      "created_at": "2026-08-14 13:18:22",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "rotisserie_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 2,
+        "opponent_wins": 2,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 2
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 0
+      },
+      "draft_match_id": 24,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 98,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-14 14:03:22",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        }
+      ],
+      "started_at": "2026-08-14 13:59:34",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": null,
+      "created_at": "2026-08-14 09:12:16",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "rotisserie_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 2,
+        "opponent_wins": 0,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 0
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          }
+        ],
+        "status": "completed",
+        "winner_username": null,
+        "your_wins": 0
+      },
+      "draft_match_id": 23,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 97,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-14 09:13:07",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        }
+      ],
+      "started_at": null,
+      "status": "abandoned",
+      "winner_usernames": [],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-12 21:59:37",
+      "created_at": "2026-08-12 21:59:30",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "structure",
+      "default_selections_mode": true,
+      "draft_match": null,
+      "draft_match_id": null,
+      "format": "team",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 95,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-12 21:59:37",
+      "match_game_number": null,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 5,
+          "username": "Bob"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 2,
+          "user_id": 2,
+          "username": "bshaftoe"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 3,
+          "user_id": 4,
+          "username": "Alice"
+        }
+      ],
+      "started_at": "2026-08-12 21:59:33",
+      "status": "completed",
+      "winner_usernames": [
+        "bshaftoe",
+        "Alice"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-12 21:10:44",
+      "created_at": "2026-08-12 16:19:43",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "grid_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 1,
+        "opponent_wins": 0,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 0
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 1
+          },
+          {
+            "is_you": false,
+            "user_id": 5,
+            "username": "Bob",
+            "wins": 0
+          },
+          {
+            "is_you": false,
+            "user_id": 4,
+            "username": "Alice",
+            "wins": 0
+          }
+        ],
+        "status": "completed",
+        "winner_username": "bshaftoe",
+        "your_wins": 1
+      },
+      "draft_match_id": 22,
+      "format": "team",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 94,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-12 21:10:45",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 2,
+          "user_id": 5,
+          "username": "Bob"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 3,
+          "user_id": 4,
+          "username": "Alice"
+        }
+      ],
+      "started_at": "2026-08-12 19:33:11",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy",
+        "bshaftoe"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-12 16:17:39",
+      "created_at": "2026-08-12 14:17:34",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "winston_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 1,
+        "opponent_wins": 0,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 0
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 1
+          },
+          {
+            "is_you": false,
+            "user_id": 5,
+            "username": "Bob",
+            "wins": 0
+          },
+          {
+            "is_you": false,
+            "user_id": 4,
+            "username": "Alice",
+            "wins": 0
+          }
+        ],
+        "status": "completed",
+        "winner_username": "bshaftoe",
+        "your_wins": 1
+      },
+      "draft_match_id": 21,
+      "format": "team",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 93,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-12 16:17:40",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 2,
+          "user_id": 5,
+          "username": "Bob"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 3,
+          "user_id": 4,
+          "username": "Alice"
+        }
+      ],
+      "started_at": "2026-08-12 15:44:30",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy",
+        "bshaftoe"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-12 14:14:54",
+      "created_at": "2026-08-12 01:08:26",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "quick_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 1,
+        "opponent_wins": 0,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 0
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 1
+          },
+          {
+            "is_you": false,
+            "user_id": 5,
+            "username": "Bob",
+            "wins": 0
+          },
+          {
+            "is_you": false,
+            "user_id": 4,
+            "username": "Alice",
+            "wins": 0
+          }
+        ],
+        "status": "completed",
+        "winner_username": "bshaftoe",
+        "your_wins": 1
+      },
+      "draft_match_id": 20,
+      "format": "team",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 92,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-12 14:14:55",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 2,
+          "user_id": 5,
+          "username": "Bob"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 3,
+          "user_id": 4,
+          "username": "Alice"
+        }
+      ],
+      "started_at": "2026-08-12 12:32:40",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy",
+        "bshaftoe"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-12 01:07:35",
+      "created_at": "2026-08-11 22:57:57",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "grid_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 1,
+        "opponent_wins": 1,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 1
+          },
+          {
+            "is_you": false,
+            "user_id": 5,
+            "username": "Bob",
+            "wins": 0
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          },
+          {
+            "is_you": false,
+            "user_id": 4,
+            "username": "Alice",
+            "wins": 0
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 0
+      },
+      "draft_match_id": 19,
+      "format": "closed_team",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 91,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-12 01:07:35",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 5,
+          "username": "Bob"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 2,
+          "user_id": 2,
+          "username": "bshaftoe"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 3,
+          "user_id": 4,
+          "username": "Alice"
+        }
+      ],
+      "started_at": "2026-08-11 23:25:29",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy",
+        "bshaftoe"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-11 22:22:41",
+      "created_at": "2026-08-11 20:10:26",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "winston_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 1,
+        "opponent_wins": 1,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 1
+          },
+          {
+            "is_you": false,
+            "user_id": 5,
+            "username": "Bob",
+            "wins": 0
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          },
+          {
+            "is_you": false,
+            "user_id": 4,
+            "username": "Alice",
+            "wins": 0
+          }
+        ],
+        "status": "completed",
+        "winner_username": "jceddy",
+        "your_wins": 0
+      },
+      "draft_match_id": 18,
+      "format": "closed_team",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 90,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-11 22:22:42",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 5,
+          "username": "Bob"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 2,
+          "user_id": 2,
+          "username": "bshaftoe"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 3,
+          "user_id": 4,
+          "username": "Alice"
+        }
+      ],
+      "started_at": "2026-08-11 21:33:05",
+      "status": "completed",
+      "winner_usernames": [
+        "jceddy",
+        "bshaftoe"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": "2026-08-11 20:08:29",
+      "created_at": "2026-08-11 16:09:35",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "quick_draft",
+      "default_selections_mode": true,
+      "draft_match": {
+        "games_to_win": 1,
+        "opponent_wins": 0,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 0
+          },
+          {
+            "is_you": false,
+            "user_id": 5,
+            "username": "Bob",
+            "wins": 0
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          },
+          {
+            "is_you": false,
+            "user_id": 4,
+            "username": "Alice",
+            "wins": 1
+          }
+        ],
+        "status": "completed",
+        "winner_username": "Alice",
+        "your_wins": 0
+      },
+      "draft_match_id": 17,
+      "format": "closed_team",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 89,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-11 20:08:31",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 5,
+          "username": "Bob"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 2,
+          "user_id": 2,
+          "username": "bshaftoe"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 3,
+          "user_id": 4,
+          "username": "Alice"
+        }
+      ],
+      "started_at": "2026-08-11 16:38:24",
+      "status": "completed",
+      "winner_usernames": [
+        "Bob",
+        "Alice"
+      ],
+      "wins_needed": 3
+    },
+    {
+      "awaiting_response_usernames": [],
+      "completed_at": null,
+      "created_at": "2026-07-31 15:43:58",
+      "current_turn_username": null,
+      "custom_deck_name": null,
+      "custom_duel_rules_preset": null,
+      "deck_type": "grid_draft",
+      "default_selections_mode": false,
+      "draft_match": {
+        "games_to_win": 2,
+        "opponent_wins": 0,
+        "players": [
+          {
+            "is_you": false,
+            "user_id": 1,
+            "username": "jceddy",
+            "wins": 0
+          },
+          {
+            "is_you": true,
+            "user_id": 2,
+            "username": "bshaftoe",
+            "wins": 0
+          }
+        ],
+        "status": "completed",
+        "winner_username": null,
+        "your_wins": 0
+      },
+      "draft_match_id": 13,
+      "format": "draft",
+      "game_match": null,
+      "game_match_id": null,
+      "id": 58,
+      "is_awaiting_your_response": false,
+      "is_your_turn": false,
+      "last_move_at": "2026-08-04 03:51:49",
+      "match_game_number": 1,
+      "players": [
+        {
+          "is_bot": false,
+          "seat_order": 0,
+          "user_id": 1,
+          "username": "jceddy"
+        },
+        {
+          "is_bot": false,
+          "seat_order": 1,
+          "user_id": 2,
+          "username": "bshaftoe"
+        }
+      ],
+      "started_at": null,
+      "status": "abandoned",
+      "winner_usernames": [],
+      "wins_needed": 3
+    }
+  ],
+  "status": "ok"
+}

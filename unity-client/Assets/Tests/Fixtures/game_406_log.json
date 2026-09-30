@@ -1,0 +1,88 @@
+{
+  "events": [
+    {
+      "acting_game_player_id": 911,
+      "acting_username": "BotSageQuick",
+      "card_id": 14181,
+      "card_name": "Frustration",
+      "created_at": "2026-09-30 16:28:33",
+      "description": "BotSageQuick played Frustration from hand",
+      "details": {
+        "effect_state_changes": [
+          {
+            "card_id": 14181,
+            "cleared": false,
+            "key": "playedFromZone",
+            "value": "hand"
+          },
+          {
+            "card_id": 14181,
+            "cleared": false,
+            "key": "playedInRound",
+            "value": 1
+          },
+          {
+            "card_id": 14181,
+            "cleared": false,
+            "key": "playedByPlayerId",
+            "value": 911
+          }
+        ],
+        "played_from": "hand"
+      },
+      "event_type": "mood_played",
+      "id": 11165,
+      "round_number": 1
+    },
+    {
+      "acting_game_player_id": 909,
+      "acting_username": "bshaftoe",
+      "card_id": 14173,
+      "card_name": "Ambition",
+      "created_at": "2026-09-30 16:29:01",
+      "description": "bshaftoe played Ambition from hand (discard card: Confusion); Confusion moved from bshaftoe's hand to the discard pile; bshaftoe was granted an extra play from Ambition",
+      "details": {
+        "card_moves": [
+          {
+            "card_id": 14174,
+            "from_player_id": 909,
+            "from_zone": "hand",
+            "to_player_id": null,
+            "to_zone": "discard"
+          }
+        ],
+        "discard_card_id": 14174,
+        "effect_state_changes": [
+          {
+            "card_id": 14173,
+            "cleared": false,
+            "key": "playedFromZone",
+            "value": "hand"
+          },
+          {
+            "card_id": 14173,
+            "cleared": false,
+            "key": "playedInRound",
+            "value": 1
+          },
+          {
+            "card_id": 14173,
+            "cleared": false,
+            "key": "playedByPlayerId",
+            "value": 909
+          }
+        ],
+        "grants_created": [
+          {
+            "sourceCardId": 14173
+          }
+        ],
+        "played_from": "hand"
+      },
+      "event_type": "mood_played",
+      "id": 11168,
+      "round_number": 1
+    }
+  ],
+  "status": "ok"
+}

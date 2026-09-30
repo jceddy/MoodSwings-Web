@@ -52,13 +52,41 @@ Committed:
 `Assets/Scripts/Networking/ApiClient.cs` wraps the same JSON HTTP API
 `web-static/js/app.js` already calls (see `php-app/public/index.php`
 for the full route list and `php-app/README.md` for what each one
-expects/returns). The one thing worth understanding up front: auth is a
-server-issued **cookie** (`session_token`), not a bearer token --
-`UnityWebRequest` doesn't persist cookies across requests the way a
-browser does, so `ApiClient` captures the `Set-Cookie` response header
-on login and replays it as a plain `Cookie` request header on every
-later call. Only `Login`/`Logout`/`GetMe` are wired up so far; extend it
-with the same pattern for whatever routes the game actually needs.
+expects/returns). Things worth understanding up front:
+
+- The API is mounted under **`/app`** on the site root
+  (`ApiConfig.ApiBase`); static files (card art, `VERSION`) are at the
+  site root.
+- Auth is a server-issued **cookie** (`session_token`), not a bearer
+  token -- `UnityWebRequest` doesn't persist cookies the way a browser
+  does, so `ApiClient` captures `Set-Cookie` itself and replays it as a
+  `Cookie` header. Where the token is kept between launches is an
+  `ISessionStore` (in-memory for now; Phase 1 adds a persistent one).
+- Calls return `ApiResult<T>`: `Ok`, or a `Failure` kind (`Network`,
+  `Unauthorized`, `Maintenance`, `Rejected`, `Server`, `InvalidResponse`)
+  plus the server's message. `MaintenanceEntered` / `SessionExpired`
+  events cover the two cases every screen needs to react to.
+- JSON is Newtonsoft (`[JsonProperty("snake_case")]` models, not
+  `JsonUtility`).
+- HTTP goes through `IHttpTransport`, so `ApiClient` is tested against
+  `FakeHttpTransport` (`Assets/Tests/EditMode`) -- run them from
+  Window > General > Test Runner > EditMode.
+
+Add routes as extension methods next to `AuthEndpoints` rather than
+growing `ApiClient` itself.
+
+## Tools
+
+Python scripts in `tools/` (`pip install pillow` for the first):
+
+- `convert_card_art.py` -- converts `web-static/img` card art from WebP
+  (which Unity can't import) to PNGs in `Assets/Resources/CardArt/`,
+  named by catalog id. That folder is git-ignored; run the script after
+  cloning. `CardArtLibrary.ForCard(id)` loads from it.
+- `capture_fixtures.py` -- logs in to a server with a throwaway account
+  (credentials from `MOODSWINGS_USER`/`MOODSWINGS_PASSWORD`) and saves
+  read-only API responses, email/phone redacted, to
+  `Assets/Tests/Fixtures/` for model tests.
 
 ## Mobile + desktop from one project
 

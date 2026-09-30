@@ -1,157 +1,192 @@
 using System;
-using System.Collections;
-using System.Text;
-using UnityEngine;
-using UnityEngine.Networking;
+using System.Threading;
+using System.Threading.Tasks;
+using Newtonsoft.Json;
 
 namespace MoodSwings.Networking
 {
     /// <summary>
-    /// Thin wrapper over the same JSON HTTP API php-app/public/index.php
-    /// already serves to web-static/'s own app.js -- every response is a
-    /// JSON object with a "status" key ("ok"/"error"), and auth is a
-    /// server-issued cookie (AuthService::COOKIE_NAME, "session_token"),
-    /// not a bearer token. UnityWebRequest doesn't persist cookies across
-    /// requests the way a browser does, so this class captures the
-    /// Set-Cookie response header itself on login and replays it as a
-    /// plain Cookie request header on every later call -- see
-    /// SetRequestHeader("Cookie", ...) below.
+    /// Thin wrapper over the JSON HTTP API php-app/public/index.php serves
+    /// (and web-static/js/app.js's apiRequest() consumes). Every response is
+    /// a JSON object with a "status" key; auth is a server-issued cookie
+    /// (AuthService::COOKIE_NAME, "session_token"), not a bearer token.
+    /// Unity has no cookie jar, so this class captures the Set-Cookie header
+    /// itself and replays it as a plain Cookie header on later requests.
     ///
-    /// This is a starting point, not a full client: only Login/Logout/Me
-    /// are wired up. Extend with the same Get/PostJson helpers for
-    /// whatever routes the game actually needs (see php-app/public/index.php
-    /// for the full route list, and php-app/README.md for what each one
-    /// expects/returns).
+    /// Plain C# rather than a MonoBehaviour so it can be unit-tested against
+    /// a fake <see cref="IHttpTransport"/>. Endpoint-specific wrappers live
+    /// in *Endpoints.cs extension classes (see AuthEndpoints) -- add new
+    /// routes there, not here.
     /// </summary>
-    public class ApiClient : MonoBehaviour
+    public sealed class ApiClient
     {
-        // Same cookie name AuthService::COOKIE_NAME defines server-side --
-        // duplicated here since Unity C# can't reference the PHP constant.
+        // Same name AuthService::COOKIE_NAME defines server-side.
         private const string SessionCookieName = "session_token";
 
-        [Tooltip("e.g. https://moodswings-dev.jceddy.com -- no trailing slash. Point this at the dev domain while testing, the production domain for a real build.")]
-        [SerializeField]
-        private string baseUrl = "https://moodswings-dev.jceddy.com";
-
-        private string _sessionCookie;
-
-        public bool IsLoggedIn => !string.IsNullOrEmpty(_sessionCookie);
-
-        [Serializable]
-        public class LoginResponse
+        private static readonly JsonSerializerSettings JsonSettings = new JsonSerializerSettings
         {
-            public string status;
-            public string message; // present only when status == "error"
-            public UserPayload user; // present only when status == "ok"
-        }
+            NullValueHandling = NullValueHandling.Ignore,
+        };
 
-        [Serializable]
-        public class UserPayload
-        {
-            public int id;
-            public string username;
-        }
+        private readonly IHttpTransport _transport;
+        private readonly ISessionStore _sessionStore;
 
-        public void Login(string username, string password, Action<bool, string> onComplete)
-        {
-            StartCoroutine(LoginCoroutine(username, password, onComplete));
-        }
-
-        private IEnumerator LoginCoroutine(string username, string password, Action<bool, string> onComplete)
-        {
-            var body = JsonUtility.ToJson(new LoginRequest { username = username, password = password });
-
-            using var request = new UnityWebRequest($"{baseUrl}/login", UnityWebRequest.kHttpVerbPOST);
-            request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
-            request.downloadHandler = new DownloadHandlerBuffer();
-            request.SetRequestHeader("Content-Type", "application/json");
-
-            yield return request.SendWebRequest();
-
-            if (request.result != UnityWebRequest.Result.Success)
-            {
-                onComplete?.Invoke(false, request.error);
-                yield break;
-            }
-
-            CaptureSessionCookie(request);
-
-            var parsed = JsonUtility.FromJson<LoginResponse>(request.downloadHandler.text);
-            if (parsed.status != "ok")
-            {
-                onComplete?.Invoke(false, parsed.message ?? "Login failed");
-                yield break;
-            }
-
-            onComplete?.Invoke(true, null);
-        }
-
-        public void Logout(Action onComplete)
-        {
-            StartCoroutine(LogoutCoroutine(onComplete));
-        }
-
-        private IEnumerator LogoutCoroutine(Action onComplete)
-        {
-            using var request = new UnityWebRequest($"{baseUrl}/logout", UnityWebRequest.kHttpVerbPOST);
-            request.downloadHandler = new DownloadHandlerBuffer();
-            AttachSessionCookie(request);
-
-            yield return request.SendWebRequest();
-
-            _sessionCookie = null;
-            onComplete?.Invoke();
-        }
+        private string _sessionToken;
 
         /// <summary>
-        /// GET /me -- confirms the current session is still valid and
-        /// returns the logged-in user. Used the same way app.js uses it:
-        /// as a "am I still logged in" check on startup, since the cookie
-        /// itself can expire silently between sessions.
+        /// Raised when the server reports maintenance mode. Web redirects
+        /// to maintenance.html; here, the screen router is expected to show
+        /// a maintenance screen with this message.
         /// </summary>
-        public void GetMe(Action<bool, UserPayload> onComplete)
+        public event Action<string> MaintenanceEntered;
+
+        /// <summary>
+        /// Raised when an authenticated call comes back 401 -- the cookie
+        /// expired or was revoked. The stored session has already been
+        /// cleared by the time this fires.
+        /// </summary>
+        public event Action SessionExpired;
+
+        public ApiConfig Config { get; }
+
+        public bool HasSession => !string.IsNullOrEmpty(_sessionToken);
+
+        public ApiClient(ApiConfig config, IHttpTransport transport, ISessionStore sessionStore = null)
         {
-            StartCoroutine(GetMeCoroutine(onComplete));
+            Config = config;
+            _transport = transport;
+            _sessionStore = sessionStore ?? new InMemorySessionStore();
+            _sessionToken = _sessionStore.Load();
         }
 
-        private IEnumerator GetMeCoroutine(Action<bool, UserPayload> onComplete)
+        public Task<ApiResult<T>> GetAsync<T>(string path, CancellationToken cancellationToken = default)
         {
-            using var request = UnityWebRequest.Get($"{baseUrl}/me");
-            AttachSessionCookie(request);
+            return SendAsync<T>("GET", path, null, cancellationToken);
+        }
 
-            yield return request.SendWebRequest();
+        public Task<ApiResult<T>> PostAsync<T>(string path, object body = null, CancellationToken cancellationToken = default)
+        {
+            // Every POST route reads a JSON object body, even when it has
+            // no fields.
+            return SendAsync<T>("POST", path, body ?? new object(), cancellationToken);
+        }
 
-            if (request.result != UnityWebRequest.Result.Success)
+        public void ClearSession()
+        {
+            _sessionToken = null;
+            _sessionStore.Clear();
+        }
+
+        private async Task<ApiResult<T>> SendAsync<T>(string method, string path, object body, CancellationToken cancellationToken)
+        {
+            var request = new HttpRequest { Method = method, Url = Config.ApiBase + path };
+            request.Headers["Accept"] = "application/json";
+
+            if (body != null)
             {
-                onComplete?.Invoke(false, null);
-                yield break;
+                request.Body = JsonConvert.SerializeObject(body, JsonSettings);
+                request.Headers["Content-Type"] = "application/json";
             }
 
-            var parsed = JsonUtility.FromJson<LoginResponse>(request.downloadHandler.text);
-            onComplete?.Invoke(parsed.status == "ok", parsed.user);
-        }
-
-        private void AttachSessionCookie(UnityWebRequest request)
-        {
-            if (!string.IsNullOrEmpty(_sessionCookie))
+            var timezone = TimeZoneHeader.Current();
+            if (timezone != null)
             {
-                request.SetRequestHeader("Cookie", $"{SessionCookieName}={_sessionCookie}");
+                request.Headers["X-Timezone"] = timezone;
+            }
+
+            var hadSession = HasSession;
+            if (hadSession)
+            {
+                request.Headers["Cookie"] = $"{SessionCookieName}={_sessionToken}";
+            }
+
+            var response = await _transport.SendAsync(request, cancellationToken);
+
+            if (response.NetworkError != null)
+            {
+                return ApiResult<T>.Fail(ApiFailureKind.Network, 0, response.NetworkError);
+            }
+
+            CaptureSessionCookie(response);
+
+            var status = (int)response.StatusCode;
+            var envelope = ParseEnvelope(response.Body);
+
+            if (status == 503 && envelope?.Status == "maintenance")
+            {
+                MaintenanceEntered?.Invoke(envelope.Message);
+                return ApiResult<T>.Fail(ApiFailureKind.Maintenance, status, envelope.Message);
+            }
+
+            if (status == 401)
+            {
+                // /login answers 401 for bad credentials -- that's not an
+                // expired session, so only other routes count as one.
+                if (hadSession && path != "/login")
+                {
+                    ClearSession();
+                    SessionExpired?.Invoke();
+                }
+
+                return ApiResult<T>.Fail(ApiFailureKind.Unauthorized, status, envelope?.Message);
+            }
+
+            if (status >= 500)
+            {
+                return ApiResult<T>.Fail(ApiFailureKind.Server, status, envelope?.Message);
+            }
+
+            if (status >= 400 || (envelope != null && envelope.Status == "error"))
+            {
+                return ApiResult<T>.Fail(ApiFailureKind.Rejected, status, envelope?.Message);
+            }
+
+            try
+            {
+                var value = JsonConvert.DeserializeObject<T>(response.Body ?? string.Empty, JsonSettings);
+                if (value == null)
+                {
+                    return ApiResult<T>.Fail(ApiFailureKind.InvalidResponse, status, "Empty response body");
+                }
+
+                return ApiResult<T>.Success(status, value);
+            }
+            catch (JsonException e)
+            {
+                return ApiResult<T>.Fail(ApiFailureKind.InvalidResponse, status, e.Message);
             }
         }
 
-        private void CaptureSessionCookie(UnityWebRequest request)
+        private static ApiEnvelope ParseEnvelope(string body)
         {
-            // Set-Cookie looks like "session_token=<value>; Path=/; HttpOnly;
-            // Secure; SameSite=Lax; Expires=...". Only the name=value pair
-            // before the first ';' is needed to replay it as a plain Cookie
-            // header on later requests.
-            var setCookie = request.GetResponseHeader("Set-Cookie");
-            if (string.IsNullOrEmpty(setCookie))
+            if (string.IsNullOrEmpty(body))
+            {
+                return null;
+            }
+
+            try
+            {
+                return JsonConvert.DeserializeObject<ApiEnvelope>(body, JsonSettings);
+            }
+            catch (JsonException)
+            {
+                return null;
+            }
+        }
+
+        private void CaptureSessionCookie(HttpResponse response)
+        {
+            // Set-Cookie looks like "session_token=<value>; expires=...;
+            // path=/; secure; HttpOnly; SameSite=Lax". Only the name=value
+            // pair matters for replaying it. /me and every authed route
+            // re-send it to refresh the expiry, so this runs on every
+            // response, not just /login.
+            if (!response.Headers.TryGetValue("Set-Cookie", out var setCookie) || string.IsNullOrEmpty(setCookie))
             {
                 return;
             }
 
-            var prefix = $"{SessionCookieName}=";
+            var prefix = SessionCookieName + "=";
             var start = setCookie.IndexOf(prefix, StringComparison.Ordinal);
             if (start < 0)
             {
@@ -160,14 +195,34 @@ namespace MoodSwings.Networking
 
             start += prefix.Length;
             var end = setCookie.IndexOf(';', start);
-            _sessionCookie = end < 0 ? setCookie[start..] : setCookie[start..end];
-        }
+            var value = end < 0 ? setCookie.Substring(start) : setCookie.Substring(start, end - start);
 
-        [Serializable]
-        private class LoginRequest
+            // clearSessionCookie() on the server sends the cookie with an
+            // empty value (PHP serializes it as "deleted").
+            if (string.IsNullOrEmpty(value) || value == "deleted")
+            {
+                ClearSession();
+                return;
+            }
+
+            _sessionToken = value;
+            _sessionStore.Save(value);
+        }
+    }
+
+    internal static class TimeZoneHeader
+    {
+        /// <summary>
+        /// php-app stores the client's IANA timezone (X-Timezone) and
+        /// rejects anything else. Windows reports its own ids
+        /// ("Pacific Standard Time") rather than IANA ones, so send only
+        /// what already looks IANA ("America/Los_Angeles") and omit the
+        /// header otherwise. TODO: map Windows ids to IANA.
+        /// </summary>
+        public static string Current()
         {
-            public string username;
-            public string password;
+            var id = TimeZoneInfo.Local.Id;
+            return id != null && id.Contains("/") ? id : null;
         }
     }
 }

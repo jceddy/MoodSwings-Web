@@ -1,0 +1,22 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: fb6d36e2ac7851645a7a075eb92193a9, type: 3}
+  m_Name: UiTheme
+  m_EditorClassIdentifier: MoodSwings::MoodSwings.UI.UiTheme
+  background: {r: 0.07, g: 0.08, b: 0.1, a: 1}
+  panel: {r: 0.12, g: 0.14, b: 0.17, a: 1}
+  accent: {r: 0.95, g: 0.68, b: 0.2, a: 1}
+  textPrimary: {r: 0.94, g: 0.94, b: 0.92, a: 1}
+  textMuted: {r: 0.6, g: 0.62, b: 0.66, a: 1}
+  danger: {r: 0.85, g: 0.25, b: 0.25, a: 1}
+  spacing: 16
+  cornerRadius: 8
