@@ -13439,6 +13439,32 @@ than a parallel bespoke system:
   (Complacency/Apathy/Boredom/Laziness) is deliberately four
   ability-less catalog rows, so its total stays a fixed 16 no matter what
   the solver's board looks like.
+- **12th puzzle, "Shakedown"** (reported live: "I want to add another
+  puzzle, centered around the card Intimidation"), hard, `card_in_play`
+  (Bliss), `max_plays` 3: the first puzzle where the opponent seat makes a
+  real decision. `PuzzleOpponent` is an `is_bot` seat, so a pending
+  decision aimed at it (Intimidation's "reveal a card") is answered by
+  `advanceAutomatedTurns()` via `BotChoiceResolver` exactly as for a
+  practice bot -- the live `POST /games/play` and `/games/respond` routes
+  both call it, with no `format = 'puzzle'` exclusion anywhere. A bot
+  always reveals its WORST card: lowest `draft_priority_score`, then lowest
+  printed value (`ownResourceCandidateValue()`). The opponent holds Charity
+  (printed 1) and Bliss (printed 2), dealt Bliss-first on purpose, so a
+  lone Intimidation only ever takes Charity. Duplicity first, then
+  Intimidation with Duplicity's repeat accepted, takes both; Bliss then
+  pays its own "discard a card from your hand" cost with the Charity it
+  was forced to hand over. Three traps fail the puzzle: playing
+  Intimidation first (Duplicity isn't in play to repeat it), declining
+  the repeat (still only Charity), and spending Charity's free play on
+  Charity itself (Bliss is left with nothing to discard). An exhaustive
+  search of every legal play order and choice against the real engine
+  found this the only solving line. A three-card hand adding Creativity
+  was tried and abandoned: a Creativity copy of Duplicity hands out extra
+  plays fast enough to produce dozens of alternate solutions.
+  `PuzzleContentTest` uses a `playDriven()` helper (not the plain `play()`,
+  which answers every pending decision as if it were the solver's own
+  Duplicity offer) so the opponent bot answers its reveals the way the
+  live routes do.
 
 ### Duel: separate per-player decks
 
