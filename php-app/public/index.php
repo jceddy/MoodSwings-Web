@@ -405,7 +405,7 @@ if ($path === '/resend-verification' && $method === 'POST') {
 if ($path === '/verify-email' && $method === 'GET') {
     $maintenanceMessage = MaintenanceGate::activeMessage();
     if ($maintenanceMessage !== null) {
-        respondHtml(503, 'Maintenance - MoodSwings-Web', 'Under maintenance', $maintenanceMessage);
+        respondHtml(503, 'Maintenance - MOOD', 'Under maintenance', $maintenanceMessage);
     }
 
     $token = (string) ($_GET['token'] ?? '');
@@ -414,7 +414,7 @@ if ($path === '/verify-email' && $method === 'GET') {
         $user = $auth->verifyEmail($token);
         respondHtml(
             200,
-            'Email verified - MoodSwings-Web',
+            'Email verified - MOOD',
             'Email verified',
             "Thanks, {$user['username']}! Your account is verified and you can now log in. Redirecting you shortly...",
             '/'
@@ -422,7 +422,7 @@ if ($path === '/verify-email' && $method === 'GET') {
     } catch (InvalidVerificationTokenException $e) {
         respondHtml(
             400,
-            'Verification failed - MoodSwings-Web',
+            'Verification failed - MOOD',
             'Verification failed',
             $e->getMessage(),
             null,
