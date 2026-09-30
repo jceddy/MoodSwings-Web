@@ -745,6 +745,20 @@ final class BotPlayerService
             return $color === null ? [] : [$field['key'] => $color];
         }
 
+        // Enthusiasm's/Passion's own "take the scoring bonus?" decisions
+        // (GameService::ENTHUSIASM_DECISION_TYPE/PASSION_DECISION_TYPE) --
+        // both fields are optional, which the generic resolver below never
+        // fills, so without this a bot declined every such bonus, every
+        // round (reported live: a round lost 11-9 where Enthusiasm
+        // re-scoring a 3-point mood would have won it). Falls back to
+        // declining when Sneakiness was played this round, where a higher
+        // pre-swap score can work against its owner.
+        if ($decisionType === self::ENTHUSIASM_DECISION_TYPE || $decisionType === self::PASSION_DECISION_TYPE) {
+            return $state->sneakinessPlayedThisRound()
+                ? []
+                : $this->obviousScoringDecisionAnswer($state, $decisionType, $botGamePlayerId);
+        }
+
         // Duplicity's own "repeat this mood's own effect?" offer --
         // $field itself is a top-level 'nested' field (repeat/choices),
         // which the generic resolver below would never fill in (it's
@@ -759,6 +773,89 @@ final class BotPlayerService
         $value = $this->resolver->resolve($state, $field, $botGamePlayerId, 0, '');
 
         return $value === null ? [] : [$field['key'] => $value];
+    }
+
+    /** Mirrors GameService::ENTHUSIASM_DECISION_TYPE/PASSION_DECISION_TYPE (private there). */
+    public const ENTHUSIASM_DECISION_TYPE = 'enthusiasm_extra_score';
+    public const PASSION_DECISION_TYPE = 'passion_score_opponent_mood';
+
+    /**
+     * The obviously-correct answer to an Enthusiasm/Passion scoring
+     * decision (issue #397), in the `respondToDecision()`-ready shape
+     * chooseDecisionAnswer() returns: Enthusiasm's `take_bonus` is
+     * unconditionally `true` (accepting can only ever raise its owner's own
+     * score); Passion's `target_mood_id` is whichever OTHER player's in-play
+     * mood currently has the highest value (ties broken by whichever is
+     * found first -- the field is scope 'other' with no `excludes_teammate`,
+     * so a teammate's mood is as legal a target as an opponent's), or `[]`
+     * (declined) when nobody else has a mood in play. Does NOT consider
+     * Sneakiness -- callers decide whether that rules it out (see
+     * BoardState::sneakinessPlayedThisRound()).
+     *
+     * @return array<string, mixed>
+     */
+    public function obviousScoringDecisionAnswer(BoardState $state, string $decisionType, int $ownerGamePlayerId): array
+    {
+        if ($decisionType === self::ENTHUSIASM_DECISION_TYPE) {
+            return ['take_bonus' => true];
+        }
+
+        $bestMoodId = $this->highestOpponentMoodId($state, $ownerGamePlayerId);
+
+        return $bestMoodId !== null ? ['target_mood_id' => $bestMoodId] : [];
+    }
+
+    private function highestOpponentMoodId(BoardState $state, int $ownerGamePlayerId): ?int
+    {
+        $bestMoodId = null;
+        $bestValue = -1;
+        foreach ($state->moodsInPlay() as $mood) {
+            if ($mood->ownerId === $ownerGamePlayerId) {
+                continue;
+            }
+
+            $value = $state->valueOf($mood->cardId);
+            if ($value > $bestValue) {
+                $bestValue = $value;
+                $bestMoodId = $mood->cardId;
+            }
+        }
+
+        return $bestMoodId;
+    }
+
+    /**
+     * What every in-play Enthusiasm/Passion would add to its owner's score
+     * if its owner answered the way a bot does (see chooseDecisionAnswer())
+     * -- RoundScorer::score()'s `$scoringDecisions` argument for a
+     * simulated end of round, so a search bot values these bonuses instead
+     * of treating them as declined. cardId => bonus; empty when Sneakiness
+     * was played this round (the bonus is then declined, as in a real game).
+     *
+     * @return array<int, int>
+     */
+    public function projectedScoringDecisions(BoardState $state): array
+    {
+        if ($state->sneakinessPlayedThisRound()) {
+            return [];
+        }
+
+        $bonuses = [];
+        foreach ($state->moodsInPlay() as $mood) {
+            $effectKey = $state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'];
+            if ($effectKey === 'enthusiasm') {
+                $ownValues = array_map(
+                    static fn ($own) => $state->valueOf($own->cardId),
+                    $state->moodsOwnedBy($mood->ownerId),
+                );
+                $bonuses[$mood->cardId] = $ownValues === [] ? 0 : max($ownValues);
+            } elseif ($effectKey === 'passion') {
+                $targetId = $this->highestOpponentMoodId($state, $mood->ownerId);
+                $bonuses[$mood->cardId] = $targetId !== null ? $state->valueOf($targetId) : 0;
+            }
+        }
+
+        return $bonuses;
     }
 
     /**

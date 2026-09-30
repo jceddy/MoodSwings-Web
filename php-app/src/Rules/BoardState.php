@@ -2358,6 +2358,36 @@ final class BoardState
     }
 
     /**
+     * Whether any player played Sneakiness THIS round (not merely has one
+     * sitting in play from an earlier round, whose swap already resolved).
+     * Sneakiness swaps its owner's final score with an opponent's, so a
+     * higher pre-swap score -- which is what taking an Enthusiasm/Passion
+     * bonus produces -- isn't always in its owner's interest that round;
+     * both the opt-in auto-apply preference and the bots' own scoring-
+     * decision policy fall back to "don't assume" when this is true.
+     * Whole-game rather than per-player, for the same reason given at
+     * GameService::autoScoringDecisionAnswer().
+     */
+    public function sneakinessPlayedThisRound(): bool
+    {
+        $currentRound = $this->currentRoundNumber();
+        if ($currentRound === null) {
+            return false;
+        }
+
+        foreach ($this->moodsInPlay() as $mood) {
+            if ($this->catalogRow($this->effectiveCardId($mood->cardId))['effectKey'] !== 'sneakiness') {
+                continue;
+            }
+            if ($this->effectState($mood->cardId, 'playedInRound') === $currentRound) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * Colors banned from being played this round by any player, per Doubt's
      * "during the next round, players can't play moods that share a color
      * with any of the revealed cards" -- active for exactly the round

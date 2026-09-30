@@ -70,6 +70,48 @@ final class LegalChoiceEnumeratorTest extends TestCase
         self::assertCount(1, $actions, 'a bespoke-choice effect key must never be varied beyond the heuristic\'s own single built choice set');
     }
 
+    public function testEnumerateOffersPanicBouncingTheOpponentsHighestMoods(): void
+    {
+        // Panic is a bespoke-choice card whose heuristic targeting only ever
+        // bounces the bot's own Compulsion/Suspicion (with Validation in
+        // play), so a search never considered bouncing an opponent's mood
+        // -- reported live: a round lost where bouncing a 3-point mood won.
+        $state = $this->boardState([1 => [48], 2 => [5, 2, 3]]);
+        $state->moveHandToInPlay(2, 5); // Complacency, value 4
+        $state->moveHandToInPlay(2, 2); // Benevolence, value 2
+        $state->moveHandToInPlay(2, 3); // Charity, value 1
+        $state->startTurn(1);
+
+        $actions = $this->enumerator->enumerate($state, [48], 1);
+
+        $targetSets = array_map(static fn (array $action) => $action['choices']['target_mood_ids'] ?? [], $actions);
+        self::assertContains([], $targetSets, 'the no-bounce default stays on offer');
+        self::assertContains([5], $targetSets);
+        self::assertContains([2], $targetSets);
+        self::assertNotContains([3], $targetSets, 'only the top two opponent moods are offered, to bound the branching factor');
+        foreach ($actions as $action) {
+            self::assertSame(48, $action['card_id']);
+            self::assertLessThanOrEqual(2, count($action['choices']['target_mood_ids'] ?? []));
+        }
+    }
+
+    public function testEnumeratePanicNeverPairsTwoMoodsOfTheSameOwner(): void
+    {
+        $state = $this->boardState([1 => [48, 7], 2 => [5, 2]]);
+        $state->moveHandToInPlay(1, 7); // the bot's own Courage
+        $state->moveHandToInPlay(2, 5);
+        $state->moveHandToInPlay(2, 2);
+        $state->startTurn(1);
+
+        $actions = $this->enumerator->enumerate($state, [48], 1);
+
+        foreach ($actions as $action) {
+            $targets = $action['choices']['target_mood_ids'] ?? [];
+            $owners = array_map(static fn (int $id) => $state->ownerOf($id), $targets);
+            self::assertSame($owners, array_values(array_unique($owners)), 'Panic allows at most one mood per chosen player');
+        }
+    }
+
     public function testEnumerateSkipsACardWithNoLegalChoiceSetAtAll(): void
     {
         // Guile always needs 2 hand cards to discard as its own cost --

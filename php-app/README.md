@@ -11935,6 +11935,24 @@ un-launched forever on the pre-fix code, and correctly auto-launched it a
 few seconds later (via the real, detached `bin/recheck_automated_turn.php`
 process) on the fix.
 
+**Scoring bonuses and Panic (reported live: a round lost 11-9).** Two
+gaps, fixed together. (1) Enthusiasm's `take_bonus` and Passion's
+`target_mood_id` are optional fields, which the generic resolver never
+fills -- so every bot (heuristic and tactical alike) declined every such
+scoring bonus. `BotPlayerService::chooseDecisionAnswer()` now answers them
+(`obviousScoringDecisionAnswer()`: always take Enthusiasm's bonus, always
+target the highest opponent mood for Passion), except when Sneakiness was
+played this round (`BoardState::sneakinessPlayedThisRound()`, the same
+guard the opt-in auto-apply preference uses), where declining stays the
+safe answer. Search rollouts now score with the same bonuses
+(`projectedScoringDecisions()`) instead of treating them as declined.
+(2) Panic is a bespoke-choice card whose heuristic targeting only bounces
+the bot's own Compulsion/Suspicion, so search never considered bouncing an
+opponent's mood. `LegalChoiceEnumerator::panicVariants()` now offers no
+target, the heuristic's own pick, and/or the top two moods of each
+non-teammate opponent (at most one mood per owner, two total, 16 variants)
+and lets the rollouts decide whether a bounce is worth it.
+
 ### Diagnostic mode
 
 An opt-in, creation-time flag (`games.diagnostic_mode`, migration `0255`)
