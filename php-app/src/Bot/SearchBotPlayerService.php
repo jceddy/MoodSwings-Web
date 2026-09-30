@@ -204,7 +204,7 @@ final class SearchBotPlayerService
     {
         $deadline = microtime(true) + max(0.0, $timeBudgetSeconds);
 
-        $enumeratedActions = $this->enumerator->enumerate($state, $playableCardIds, $botGamePlayerId);
+        $enumeratedActions = $this->enumerator->enumerate($state, $playableCardIds, $botGamePlayerId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
         $rootActions = $this->withoutPrematurelyPlayedCards($state, $enumeratedActions, $botGamePlayerId, $playableCardIds, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
         // Every card the heuristic policy's own "hold this back" veto
         // (BotPlayerService::hasGoodReasonToPlayNow()) excluded before the
@@ -389,7 +389,47 @@ final class SearchBotPlayerService
             return -INF;
         }
 
-        return $this->rewardFor($sim, $botGamePlayerId, $this->scorer->score($sim, $this->heuristic->projectedScoringDecisions($sim)));
+        $reward = $this->rewardFor($sim, $botGamePlayerId, $this->scorer->score($sim, $this->heuristic->projectedScoringDecisions($sim)));
+
+        return $reward + $this->panicReplayBonus($state, $botGamePlayerId, $rootAction, $reward);
+    }
+
+    /**
+     * Rollouts only measure this round's score margin, which gives no
+     * credit for what bouncing one of the bot's OWN replay moods with Panic
+     * is actually for: replaying it later for another card (reported live:
+     * bots should do that whenever it won't put them behind points-wise
+     * and cost them a round). So, when the simulated round still ends with
+     * the bot strictly ahead, a Panic that bounced its own Compulsion/
+     * Suspicion/Intimidation/Paranoia gets back the points that mood was
+     * worth plus a little extra for the card advantage -- enough to beat
+     * the otherwise-identical play that kept it on the board, never enough
+     * to outweigh losing the round (no bonus unless still ahead).
+     *
+     * @param ?array{card_id: int, choices: array<string, mixed>} $rootAction
+     */
+    private function panicReplayBonus(BoardState $state, int $botGamePlayerId, ?array $rootAction, float $reward): float
+    {
+        if ($rootAction === null || $reward <= 0.0) {
+            return 0.0;
+        }
+        if ($state->catalogRow($state->effectiveCardId($rootAction['card_id']))['effectKey'] !== 'panic') {
+            return 0.0;
+        }
+
+        $bonus = 0.0;
+        foreach (($rootAction['choices']['target_mood_ids'] ?? []) as $targetMoodId) {
+            $targetMoodId = (int) $targetMoodId;
+            if (!$state->isInPlay($targetMoodId) || $state->ownerOf($targetMoodId) !== $botGamePlayerId) {
+                continue;
+            }
+            $effectKey = $state->catalogRow($state->effectiveCardId($targetMoodId))['effectKey'];
+            if (in_array($effectKey, BotPlayerService::PANIC_REPLAY_EFFECT_KEYS, true)) {
+                $bonus += $state->valueOf($targetMoodId) + 0.5;
+            }
+        }
+
+        return $bonus;
     }
 
     /**

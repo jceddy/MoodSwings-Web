@@ -1977,7 +1977,7 @@ final class BotPlayerService
         }
 
         if ($effectKey === 'panic') {
-            $targetMoodIds = $this->panicTargetMoodIds($state, $botGamePlayerId);
+            $targetMoodIds = $this->panicTargetMoodIds($state, $cardId, $botGamePlayerId);
 
             return $targetMoodIds !== [] ? ['target_mood_ids' => $targetMoodIds] : [];
         }
@@ -3649,42 +3649,49 @@ final class BotPlayerService
     }
 
     /**
+     * The moods Panic should bounce for a REPLAY, in priority order -- each
+     * re-triggers a card-advantage effect every time it is played again
+     * (Compulsion/Suspicion steal from an opponent's hand, Intimidation/
+     * Paranoia take a card the same way; see EARLY_PRIORITY_EFFECT_KEYS'
+     * own "steals from an opponent's hand" group), so getting one back in
+     * hand is worth a card -- but only for its OWNER. Bounced from an
+     * OPPONENT's side it hands them that same card-advantage replay (see
+     * panicOpponentBounceIsAllowed()).
+     */
+    public const PANIC_REPLAY_EFFECT_KEYS = ['compulsion', 'suspicion', 'intimidation', 'paranoia'];
+
+    /**
      * Panic's own "which of my own in-play moods to bounce back to my own
-     * hand" policy (reported live, from a game where Validation was
-     * already in play: "when the bot played Panic, it should have
-     * targeted its own Compulsion or Suspicion so it could re-play it to
-     * take another card from my hand" -- Panic had zero bot targeting
-     * logic at all, so target_mood_ids (optional, up to 2, one per
-     * distinct owner) was always left empty). Scoped exactly as narrowly
-     * as thrillHandMoodIds() above, for the same reason: PROVABLY
-     * risk-free, not merely plausible. Panic's own printed value is a
-     * fixed 1 (id 48, base_value 1, no alt_value), so playing it AT ALL
-     * is guaranteed to satisfy ValidationEffect::reactToAnotherPlay()'s
-     * own "0 or 1" check -- an in-play Validation the bot still owns
-     * therefore guarantees an extra play lands the instant Panic
-     * resolves, regardless of anything else on the board (this is
-     * exactly what happened in the reported game: Validation had already
-     * granted the play Panic itself was cast with, and was about to grant
-     * another the moment Panic finished). That guaranteed extra play is
-     * what makes bouncing the bot's own highest-value "steal a card from
-     * an opponent's hand" mood (Compulsion or Suspicion -- see
-     * EARLY_PRIORITY_EFFECT_KEYS' own "steals from an opponent's hand"
-     * pair) a strict gain: it comes right back into play via that
-     * guaranteed replay (auto-targeted correctly by the generic
-     * resolver/BotChoiceResolver::ALWAYS_FILLED_OPTIONAL_FIELDS the same
-     * as any other Compulsion/Suspicion play), stealing ANOTHER card in
-     * the process. Without a confirmed extra play waiting, bouncing
-     * either one would just forfeit its current round-scoring value for
-     * nothing, so this stays silent (no target at all) whenever
-     * Validation isn't in play, exactly as thrillHandMoodIds() stays
-     * silent without a worthwhile Nostalgia pickup waiting. Only ever
-     * fills ONE of Panic's own up-to-two target slots -- there's no
-     * confirmed-safe policy yet for the other (an opponent's mood would
-     * need its own denial-vs-tempo judgment call this doesn't attempt).
+     * hand" policy. Two reported-live rules (the first from a game where
+     * Validation was already in play: "when the bot played Panic, it
+     * should have targeted its own Compulsion or Suspicion so it could
+     * re-play it to take another card from my hand"; the second a
+     * follow-up: "if it won't put them behind points-wise and cause them
+     * to lose a round, bots should target their own Intimidation,
+     * Compulsion, Suspicion, or Paranoia with Panic to allow them to
+     * replay it for card advantage"):
+     *
+     * - With Validation in play, the bounce is PROVABLY free: Panic's own
+     *   printed value is a fixed 1, so playing it AT ALL satisfies
+     *   ValidationEffect::reactToAnotherPlay()'s "0 or 1" check and hands
+     *   back an extra play the instant Panic resolves -- the bounced mood
+     *   comes straight back into play that same turn, stealing ANOTHER
+     *   card. No score check needed.
+     * - Otherwise the bounce forfeits that mood's current round-scoring
+     *   value until it is replayed (this turn if a play remains, else
+     *   next), so it is only made when it does NOT turn a round the bot
+     *   is currently on track to win into one it loses
+     *   (panicOwnBounceKeepsTheLead()). A round the bot is already behind
+     *   in isn't made any worse by it.
+     *
+     * Only ever fills ONE of Panic's own up-to-two target slots -- the
+     * other would be an opponent's mood, which is a denial-vs-tempo call
+     * made only by the search bot (LegalChoiceEnumerator::panicVariants()),
+     * never by this fixed policy.
      *
      * @return int[]
      */
-    private function panicTargetMoodIds(BoardState $state, int $botGamePlayerId): array
+    private function panicTargetMoodIds(BoardState $state, int $panicCardId, int $botGamePlayerId): array
     {
         $ownsInPlayValidation = false;
         foreach ($state->moodsOwnedBy($botGamePlayerId) as $mood) {
@@ -3693,22 +3700,156 @@ final class BotPlayerService
                 break;
             }
         }
-        if (!$ownsInPlayValidation) {
-            return [];
-        }
 
-        $bestStealMoodId = null;
+        $candidates = []; // [priority rank, live value, mood card id]
         foreach ($state->moodsOwnedBy($botGamePlayerId) as $mood) {
-            $effectKey = $state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'];
-            if (!in_array($effectKey, ['compulsion', 'suspicion'], true)) {
+            if ($mood->cardId === $panicCardId) {
                 continue;
             }
-            if ($bestStealMoodId === null || $state->valueOf($mood->cardId) > $state->valueOf($bestStealMoodId)) {
-                $bestStealMoodId = $mood->cardId;
+            $rank = array_search($state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'], self::PANIC_REPLAY_EFFECT_KEYS, true);
+            if ($rank !== false) {
+                $candidates[] = [$rank, $state->valueOf($mood->cardId), $mood->cardId];
+            }
+        }
+        // Validation: the highest-value one (its points are the ones being
+        // "spent" for nothing); otherwise the cheapest one that still
+        // leaves the lead intact.
+        usort($candidates, static fn (array $a, array $b): int => $a[0] <=> $b[0] ?: ($ownsInPlayValidation ? $b[1] <=> $a[1] : $a[1] <=> $b[1]));
+
+        foreach ($candidates as [, , $moodId]) {
+            if ($ownsInPlayValidation || $this->panicOwnBounceKeepsTheLead($state, $panicCardId, $botGamePlayerId, $moodId)) {
+                return [$moodId];
             }
         }
 
-        return $bestStealMoodId !== null ? [$bestStealMoodId] : [];
+        return [];
+    }
+
+    /**
+     * Each side's round score if the bot played Panic ($panicCardId, its
+     * own printed value added by hand since it is still in hand while
+     * choices are built) and bounced $bouncedMoodIds: [the bot's own
+     * group's total, the highest rival group's total, each rival group's
+     * total keyed by its first member's game_player_id]. Enthusiasm/Passion
+     * bonuses count the way the bot itself would answer them
+     * (projectedScoringDecisions()).
+     *
+     * @param int[] $bouncedMoodIds
+     * @return array{0: int, 1: int, 2: array<int, int>}
+     */
+    private function panicProjectedTotals(BoardState $state, int $panicCardId, int $botGamePlayerId, array $bouncedMoodIds): array
+    {
+        $sim = clone $state;
+        foreach ($bouncedMoodIds as $moodId) {
+            if ($sim->isInPlay($moodId)) {
+                $sim->moveInPlayToHand($moodId);
+            }
+        }
+        $scores = (new RoundScorer())->score($sim, $this->projectedScoringDecisions($sim));
+
+        $activeIds = $sim->activePlayerOrder();
+        $myGroupIds = array_values(array_filter(
+            $activeIds,
+            fn (int $id): bool => $id === $botGamePlayerId || $sim->isTeammate($botGamePlayerId, $id),
+        ));
+        $myTotal = array_sum(array_map(fn (int $id) => $scores[$id] ?? 0, $myGroupIds)) + $this->baseValue($state, $panicCardId);
+
+        $rivalTotals = [];
+        $grouped = [];
+        foreach (array_diff($activeIds, $myGroupIds) as $id) {
+            if (in_array($id, $grouped, true)) {
+                continue;
+            }
+            $group = array_values(array_filter(
+                $activeIds,
+                fn (int $other): bool => !in_array($other, $myGroupIds, true) && ($other === $id || $sim->isTeammate($id, $other)),
+            ));
+            $grouped = array_merge($grouped, $group);
+            $rivalTotals[$id] = array_sum(array_map(fn (int $gid) => $scores[$gid] ?? 0, $group));
+        }
+
+        return [$myTotal, $rivalTotals === [] ? 0 : max($rivalTotals), $rivalTotals];
+    }
+
+    /**
+     * "If it won't put them behind points-wise and cause them to lose a
+     * round": false only when the bot would strictly lead the round with
+     * Panic played and NO bounce, but no longer would with
+     * $ownMoodId bounced.
+     */
+    private function panicOwnBounceKeepsTheLead(BoardState $state, int $panicCardId, int $botGamePlayerId, int $ownMoodId): bool
+    {
+        [$myWithout, $rivalWithout] = $this->panicProjectedTotals($state, $panicCardId, $botGamePlayerId, []);
+        if ($myWithout <= $rivalWithout) {
+            return true; // not leading anyway -- the bounce can't cost a round it isn't winning
+        }
+
+        [$myWith, $rivalWith] = $this->panicProjectedTotals($state, $panicCardId, $botGamePlayerId, [$ownMoodId]);
+
+        return $myWith > $rivalWith;
+    }
+
+    /**
+     * Whether bouncing $targetMoodId -- a mood owned by an OPPONENT -- with
+     * Panic is acceptable (reported live: "bots should not target an
+     * opponent's Intimidation, Compulsion, Suspicion, or Paranoia with
+     * Panic, unless the point swing will win them the game or keep them
+     * from losing the game. Allowing the opponent to replay these cards
+     * can cause serious card disadvantage to the bot"). Any other
+     * opponent mood is always fine here; one of PANIC_REPLAY_EFFECT_KEYS
+     * is allowed only when the swing decides the whole GAME, in the same
+     * two senses Rationalization/Shock already use (see
+     * rationalizationWouldClinchTheGame()/
+     * rationalizationWouldPreventLosingTheGame()): it takes the round's
+     * lead AND that round win completes the game for the bot's own side,
+     * or it denies a rival who is one round win from the game the round
+     * they'd otherwise take. $roundWinsNeededToWinGame /
+     * $roundWinsNeededToWinGameByPlayerId carry the same meaning as in
+     * chooseAction() (null/[] = unknown, which never allows an exception).
+     *
+     * @param array<int, int> $roundWinsNeededToWinGameByPlayerId
+     */
+    public function panicOpponentBounceIsAllowed(BoardState $state, int $panicCardId, int $botGamePlayerId, int $targetMoodId, ?int $roundWinsNeededToWinGame, array $roundWinsNeededToWinGameByPlayerId): bool
+    {
+        $effectKey = $state->catalogRow($state->effectiveCardId($targetMoodId))['effectKey'];
+        if (!in_array($effectKey, self::PANIC_REPLAY_EFFECT_KEYS, true)) {
+            return true;
+        }
+
+        $predictedRoundWinsAwarded = 1;
+        foreach ($state->moodsInPlay() as $mood) {
+            if ($state->effectState($mood->cardId, 'awardsExtraWin')) {
+                $predictedRoundWinsAwarded = 2;
+                break;
+            }
+        }
+
+        [$myWithout, $rivalWithout, $rivalTotalsWithout] = $this->panicProjectedTotals($state, $panicCardId, $botGamePlayerId, []);
+        [$myWith, $rivalWith, $rivalTotalsWith] = $this->panicProjectedTotals($state, $panicCardId, $botGamePlayerId, [$targetMoodId]);
+
+        // Win the game: the bounce is what takes the round's lead, and that
+        // round win finishes the game for the bot's own side.
+        if ($roundWinsNeededToWinGame !== null
+            && $roundWinsNeededToWinGame <= $predictedRoundWinsAwarded
+            && $myWithout <= $rivalWithout
+            && $myWith > $rivalWith
+        ) {
+            return true;
+        }
+
+        // Not lose the game: some rival one round win from the game would
+        // take this round without the bounce and no longer does with it.
+        foreach ($rivalTotalsWithout as $groupKey => $groupTotalWithout) {
+            $groupWinsNeeded = $roundWinsNeededToWinGameByPlayerId[$groupKey] ?? null;
+            if ($groupWinsNeeded === null || $groupWinsNeeded > $predictedRoundWinsAwarded) {
+                continue;
+            }
+            if ($myWithout < $groupTotalWithout && $myWith >= ($rivalTotalsWith[$groupKey] ?? 0)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

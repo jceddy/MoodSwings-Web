@@ -1870,25 +1870,104 @@ final class BotPlayerServiceTest extends TestCase
     }
 
     /**
-     * Without Validation in play, there's no guaranteed extra play to
-     * replay a bounced Compulsion with -- bouncing it would just forfeit
-     * its current round-scoring value for nothing, so Panic correctly
-     * leaves it alone.
+     * Reported live: "if it won't put them behind points-wise and cause
+     * them to lose a round, bots should target their own Intimidation,
+     * Compulsion, Suspicion, or Paranoia with Panic to allow them to
+     * replay it for card advantage." Without Validation there's no
+     * guaranteed same-turn replay, so the bounce is only made when it
+     * doesn't cost a round the bot is winning: here 1 (Panic) still leads
+     * an empty opposing board after Compulsion (3) goes back to hand.
      */
-    public function testChooseActionDoesNotBounceItsOwnCompulsionWithPanicWithoutValidationInPlay(): void
+    public function testChooseActionBouncesItsOwnCompulsionWithPanicWhenItKeepsTheLead(): void
     {
-        $state = new BoardState(
-            $this->sampleCatalog(),
-            DefaultEffectRegistry::build(),
-            [1, 2],
-            hands: [1 => [48, 86]],
-        );
+        $state = new BoardState($this->sampleCatalog(), DefaultEffectRegistry::build(), [1, 2], hands: [1 => [48, 86]]);
         $state->moveHandToInPlay(1, 86);
 
         $action = $this->bot->chooseAction($state, [48], 1);
 
         self::assertSame(48, $action['card_id']);
+        self::assertSame(['target_mood_ids' => [86]], $action['choices']);
+    }
+
+    /** Same, for every replay mood on the list -- Intimidation (67) and Paranoia (71) count too. */
+    public function testChooseActionBouncesItsOwnIntimidationOrParanoiaWithPanicWhenItKeepsTheLead(): void
+    {
+        foreach ([67, 71] as $replayCardId) {
+            $state = new BoardState($this->sampleCatalog(), DefaultEffectRegistry::build(), [1, 2], hands: [1 => [48, $replayCardId]]);
+            $state->moveHandToInPlay(1, $replayCardId);
+
+            $action = $this->bot->chooseAction($state, [48], 1);
+
+            self::assertSame(['target_mood_ids' => [$replayCardId]], $action['choices'], "card {$replayCardId}");
+        }
+    }
+
+    /**
+     * The bounce would turn a round the bot is winning (Compulsion 3 +
+     * Panic 1 = 4 against 3) into one it loses (Panic alone = 1 against
+     * 3), so Panic leaves its own Compulsion in play.
+     */
+    public function testChooseActionDoesNotBounceItsOwnCompulsionWithPanicWhenItWouldCostTheRound(): void
+    {
+        $state = new BoardState($this->sampleCatalog(), DefaultEffectRegistry::build(), [1, 2], hands: [1 => [48, 86], 2 => [2, 3]]);
+        $state->moveHandToInPlay(1, 86);
+        $state->moveHandToInPlay(2, 2); // Benevolence 2
+        $state->moveHandToInPlay(2, 3); // Charity 1
+
+        $action = $this->bot->chooseAction($state, [48], 1);
+
+        self::assertSame(48, $action['card_id']);
         self::assertSame([], $action['choices']);
+    }
+
+    /** A round the bot is already losing can't be made worse by the bounce, so it still goes for the replay. */
+    public function testChooseActionBouncesItsOwnCompulsionWithPanicWhenAlreadyBehind(): void
+    {
+        $state = new BoardState($this->sampleCatalog(), DefaultEffectRegistry::build(), [1, 2], hands: [1 => [48, 86], 2 => [55, 5]]);
+        $state->moveHandToInPlay(1, 86);
+        $state->moveHandToInPlay(2, 55); // Apathy 4
+        $state->moveHandToInPlay(2, 5);  // Complacency 4
+
+        $action = $this->bot->chooseAction($state, [48], 1);
+
+        self::assertSame(['target_mood_ids' => [86]], $action['choices']);
+    }
+
+    // -- panicOpponentBounceIsAllowed() (reported live) ---------------------
+
+    /** An opponent's Compulsion/Suspicion/Intimidation/Paranoia is off limits -- handing them a replay is a serious card disadvantage. */
+    public function testPanicOpponentBounceIsNeverAllowedForAReplayMoodWhenNothingDecidesTheGame(): void
+    {
+        $state = new BoardState($this->sampleCatalog(), DefaultEffectRegistry::build(), [1, 2], hands: [1 => [48], 2 => [86, 78, 67, 71, 55]]);
+        foreach ([86, 78, 67, 71, 55] as $cardId) {
+            $state->moveHandToInPlay(2, $cardId);
+        }
+
+        foreach ([86, 78, 67, 71] as $replayCardId) {
+            self::assertFalse($this->bot->panicOpponentBounceIsAllowed($state, 48, 1, $replayCardId, null, []), "card {$replayCardId}");
+            self::assertFalse($this->bot->panicOpponentBounceIsAllowed($state, 48, 1, $replayCardId, 2, [2 => 2]), "card {$replayCardId}: no round win ends the game");
+        }
+        self::assertTrue($this->bot->panicOpponentBounceIsAllowed($state, 48, 1, 55, null, []), 'any other opponent mood is fine');
+    }
+
+    /** ...unless the swing wins the game: one round win from the game, and the bounce takes the round's lead. */
+    public function testPanicOpponentBounceIsAllowedWhenItWinsTheGame(): void
+    {
+        $state = new BoardState($this->sampleCatalog(), DefaultEffectRegistry::build(), [1, 2], hands: [1 => [48], 2 => [86]]);
+        $state->moveHandToInPlay(2, 86); // their Compulsion (3) beats Panic's 1 -- until it is bounced
+
+        self::assertTrue($this->bot->panicOpponentBounceIsAllowed($state, 48, 1, 86, 1, []));
+        self::assertFalse($this->bot->panicOpponentBounceIsAllowed($state, 48, 1, 86, 2, []), 'this round win would not end the game');
+    }
+
+    /** ...or keeps the bot from losing it: the rival is one round win away and would take the round without the bounce. */
+    public function testPanicOpponentBounceIsAllowedWhenItPreventsLosingTheGame(): void
+    {
+        $state = new BoardState($this->sampleCatalog(), DefaultEffectRegistry::build(), [1, 2], hands: [1 => [48], 2 => [86]]);
+        $state->moveHandToInPlay(2, 86);
+
+        self::assertTrue($this->bot->panicOpponentBounceIsAllowed($state, 48, 1, 86, null, [2 => 1]));
+        self::assertFalse($this->bot->panicOpponentBounceIsAllowed($state, 48, 1, 86, null, [2 => 2]), 'the rival is not one win from the game');
     }
 
     /** With neither Compulsion nor Suspicion in play, Validation alone gives Panic nothing worth bouncing. */

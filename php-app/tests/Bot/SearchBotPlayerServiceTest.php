@@ -116,6 +116,27 @@ final class SearchBotPlayerServiceTest extends TestCase
         self::assertSame(116, $action['card_id']);
     }
 
+    /**
+     * Reported live: bots should bounce their own Compulsion/Suspicion/
+     * Intimidation/Paranoia with Panic for a replay whenever it won't cost
+     * them the round. Rollouts alone only see the round margin (which the
+     * bounce lowers by the mood's value), so the search credits a bounce
+     * that still ends with the bot ahead -- here Panic bouncing the bot's
+     * own Compulsion (3) still leads an empty opposing board.
+     */
+    public function testChooseActionBouncesItsOwnReplayMoodWithPanicWhenItStillWinsTheRound(): void
+    {
+        $state = $this->boardState([1 => [48, 86], 2 => []]);
+        $state->moveHandToInPlay(1, 86);
+        $state->startTurn(1);
+
+        $action = $this->search->chooseAction($state, [48], 1, timeBudgetSeconds: 0.5);
+
+        self::assertNotNull($action);
+        self::assertSame(48, $action['card_id']);
+        self::assertSame([86], $action['choices']['target_mood_ids'] ?? []);
+    }
+
     public function testChooseActionReturnsALegalActionEvenWithAnEffectivelyZeroBudget(): void
     {
         $state = $this->boardState([1 => [55, 32], 2 => []]);
