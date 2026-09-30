@@ -24,3 +24,11 @@ e.g. "Numerous practice-bot AI fixes across many mood cards" instead of
 ten separate one-line entries for ten separate card fixes. The file is
 never required; when it's absent (the common case), the auto-generated
 list is used exactly as before.
+
+None of this runs at all when a promotion doesn't actually move the
+repo-root `VERSION` file -- `deploy.yml`'s "Check whether VERSION
+changed" step skips the announce step entirely in that case (e.g. a
+promotion that only scaffolds `unity-client/`, which isn't part of the
+shared `php-app`/`database`/`web-static` version -- see the root
+README's "Versioning" section), so there's no need to add a release
+notes file for a promotion you already know won't bump `VERSION`.
