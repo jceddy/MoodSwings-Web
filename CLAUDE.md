@@ -20,6 +20,19 @@ not added after the fact — **unless the promotion doesn't bump
 changed" step skips the Discord announcement entirely, and no release
 notes file is needed since nothing will read it.
 
+## Puzzle additions/updates in announcements
+
+A puzzle's content is spoiler-sensitive -- working it out is the point --
+so anything that reaches Discord (the curated
+`.github/release-notes/<VERSION>.md` bullet, and the subject of any commit
+that might surface through `auto_changelog.sh`'s fallback) names the
+puzzle and **nothing else**: `Added puzzle <Name>` or `Updated puzzle
+<Name>`. No card names, mechanics, hints, difficulty, goal, or description
+of what changed. Several updated puzzles can share one bullet
+(`Updated puzzles <A>, <B>`). Puzzle *infrastructure* that players would
+notice (a new goal type, a display change) is announced like any other
+change, but without saying which puzzle's solution depends on it.
+
 ## Versioning (VERSION file / schema_version)
 
 `VERSION` follows `major.minor.patch`. A new full feature (a new
