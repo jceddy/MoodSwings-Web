@@ -1002,6 +1002,64 @@ final class PuzzleContentTest extends TestCase
 
         self::assertTrue($result['game_completed']);
         $this->assertGameSolved($gameId, $p);
+
+        // The solving round is recorded as a real win -- 2 banked + this
+        // one -- so the finished board reads 3 (wins_needed) to 2.
+        $finalPlayers = array_column($this->games->getState($gameId, $this->userIdForGamePlayer($p))['players'], 'total_wins', 'game_player_id');
+        self::assertSame(3, $finalPlayers[$p]);
+        self::assertSame(2, $finalPlayers[$opp]);
+    }
+
+    /**
+     * Shakedown opens mid-match: two round wins each (games.wins_needed is
+     * 3, so the next round win is the game), round 5 live, opponent first
+     * (so a tied score goes to them). Round wins aren't a counter -- they
+     * come from seeded 'scored' game_rounds rows (puzzles.solver_round_wins/
+     * opponent_round_wins) -- and getState()'s own total_wins reads them
+     * back exactly like a real game's.
+     */
+    public function testShakedownOpensMidMatchWithTwoRoundWinsEachAndTheOpponentFirst(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('shakedown');
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+
+        $state = $this->games->getState($gameId, $this->userIdForGamePlayer($p));
+
+        $wins = array_column($state['players'], 'total_wins', 'game_player_id');
+        self::assertSame(2, $wins[$p]);
+        self::assertSame(2, $wins[$opp]);
+        self::assertSame(3, $state['game']['wins_needed']);
+        self::assertSame(5, $state['round']['round_number']);
+        self::assertSame($opp, $state['round']['first_game_player_id']);
+        self::assertSame($p, $state['round']['current_turn_game_player_id']);
+    }
+
+    /**
+     * goal_type 'win_game' is "outscore the opponent AND have that round win
+     * clinch the game" -- outscoring alone isn't enough. Same solving line
+     * as above, but with one of the solver's seeded round wins removed
+     * first: the board still leads 3 to 2, yet 1 banked + 1 won = 2 is
+     * short of wins_needed, so the attempt stays open.
+     */
+    public function testShakedownWinGameGoalDoesNotSolveWhenTheRoundWinWouldNotClinchTheGame(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('shakedown');
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+
+        $this->pdo->prepare(
+            "DELETE FROM game_rounds WHERE game_id = :game_id AND status = 'scored' AND winner_game_player_id = :solver LIMIT 1"
+        )->execute(['game_id' => $gameId, 'solver' => $p]);
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 37, 'hand')); // Duplicity
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 67, 'hand'), ['target_player_id' => $opp], repeatTargetGamePlayerId: $opp); // Intimidation, repeated
+        $result = $this->playDriven($gameId, $p, $this->ownedInstanceId($gameId, 108, 'hand', $p), [
+            'discard_card_id' => $this->ownedInstanceId($gameId, 3, 'hand', $p),
+        ]);
+
+        $scores = array_column($this->games->getState($gameId, $this->userIdForGamePlayer($p))['players'], 'total_score', 'game_player_id');
+        self::assertGreaterThan($scores[$opp], $scores[$p], 'The solver leads on the board...');
+        self::assertFalse($result['game_completed'], '...but winning this round would only make 2 of 3 wins');
+        $this->assertGameNotSolved($gameId);
     }
 
     /**
@@ -1076,7 +1134,7 @@ final class PuzzleContentTest extends TestCase
             $state['game']['puzzle_hint']
         );
         self::assertSame(
-            'Your hand: Duplicity and Intimidation. Your opponent holds Charity and Bliss in hand, and always reveals their lowest-value card. Get Bliss into play.',
+            'Each player has two round wins, and your opponent played first. Your hand: Duplicity and Intimidation. Your opponent has Smugness and Unconcern (1 point each) in play and holds Charity and Bliss in hand, and always reveals their lowest-value card. Win the game this turn.',
             $state['game']['puzzle_description']
         );
     }
