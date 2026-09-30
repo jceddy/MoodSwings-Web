@@ -11,7 +11,7 @@
 // {title, body, url, tag}.
 
 self.addEventListener('push', (event) => {
-    let payload = { title: 'MoodSwings-Web', body: '' };
+    let payload = { title: 'MOOD', body: '' };
     try {
         payload = event.data ? event.data.json() : payload;
     } catch (e) {
@@ -20,7 +20,7 @@ self.addEventListener('push', (event) => {
     }
 
     event.waitUntil(
-        self.registration.showNotification(payload.title || 'MoodSwings-Web', {
+        self.registration.showNotification(payload.title || 'MOOD', {
             body: payload.body || '',
             tag: payload.tag,
             data: { url: payload.url || '/' },
