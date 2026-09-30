@@ -56,12 +56,19 @@ Each phase ends with something runnable against the dev server
 - **Noted for later:** `web-static/img/cards/MSW/{futuristic,neon,steampunk}/`
   hold themed card skins; the converter skips them for now.
 
-### Phase 1 -- Splash + login
+### Phase 1 -- Splash + login (code complete; needs a real-login check)
 - Splash, version/health check, maintenance screen, login, session restore
   (saved cookie, then `/me`), logout.
 - Register / forgot-password / verify-email open the web pages in the system
   browser.
+- Decisions: session stored via DPAPI (Windows) / Keystore (Android), failing
+  closed; login handles the unverified-email 403 with an inline resend form.
 - **Done when:** cold start, log in, relaunch, still logged in.
+- **Status:** built and verified headless against a scripted transport
+  (EditMode + PlayMode with screenshots, and live unauthenticated checks
+  against the dev server). **Not yet verified:** a real login (run the live
+  test with a dev account, or just try the Main scene), and the Android
+  Keystore path (no Android module installed here).
 
 ### Phase 2 -- Main menu shell
 - Home screen, user info, friends list and invites, preferences

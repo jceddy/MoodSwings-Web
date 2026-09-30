@@ -36,6 +36,7 @@ namespace MoodSwings.UI
                 }
 
                 _byId[screen.ScreenId] = screen;
+                screen.Router = this;
                 screen.gameObject.SetActive(false);
             }
         }

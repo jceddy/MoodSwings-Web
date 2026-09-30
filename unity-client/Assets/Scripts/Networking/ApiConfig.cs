@@ -16,10 +16,19 @@ namespace MoodSwings.Networking
 
         public string ApiBase => SiteRoot + "/app";
 
+        /// <summary>
+        /// Sent on every request. Always set it explicitly: the host's
+        /// filter answers 406 to some generic/default agents (Python's,
+        /// a bare "Mozilla/5.0"), and a real name also makes this client
+        /// identifiable in server logs.
+        /// </summary>
+        public string UserAgent { get; }
+
         /// <param name="siteRoot">e.g. https://moodswings-dev.jceddy.com -- no trailing slash required.</param>
-        public ApiConfig(string siteRoot)
+        public ApiConfig(string siteRoot, string userAgent = "MoodSwings")
         {
             SiteRoot = siteRoot.TrimEnd('/');
+            UserAgent = userAgent;
         }
     }
 }
