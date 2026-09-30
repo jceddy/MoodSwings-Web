@@ -15,11 +15,14 @@ A web-based simulator for the Mood Swings TCG.
 
 ## Repository structure
 
-This repository is organized into three independent projects:
+This repository holds the web product (three projects that deploy
+together as one site — see "Versioning" below) plus a separate native
+client:
 
 - [`php-app/`](php-app/) — The PHP application implementing the game/simulator logic.
 - [`database/`](database/) — The MySQL schema and related database assets.
 - [`web-static/`](web-static/) — Static web content (HTML/CSS/JS/images) served to the browser.
+- [`unity-client/`](unity-client/) — A Unity-based native client (mobile/desktop) for the same backend. Independently versioned/released — see its own README and this file's "Versioning" section below.
 
 See each project's own README for setup and details.
 
@@ -45,10 +48,10 @@ the dev environment can never touch production's already-live credentials.
 
 ## Versioning
 
-The three sub-projects deploy together as one site (see "Deployment" below),
-so they share a single product version rather than each having their own —
-tracked in the [`VERSION`](VERSION) file at the repo root, currently
-`0.2.0`. Follows [Semantic Versioning](https://semver.org/)
+`php-app`/`database`/`web-static` deploy together as one site (see
+"Deployment" below), so they share a single product version rather than
+each having their own — tracked in the [`VERSION`](VERSION) file at the
+repo root, currently `1.58.1`. Follows [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`), interpreted for this project as:
 
 - **MAJOR** — a breaking change to the game/save data model that makes
@@ -59,6 +62,10 @@ tracked in the [`VERSION`](VERSION) file at the repo root, currently
   format, deck type, etc.).
 - **PATCH** — a bug fix, or a change with no user-facing behavior at all
   (docs, refactors, internal cleanup).
+
+[`unity-client/`](unity-client/) is **not** part of this shared version
+— it's a separate client consuming the same backend as an API, and
+versions/releases on its own schedule.
 
 Starting at `0.1.0` rather than `1.0.0` follows SemVer's own convention for
 initial development: the public API/data model can still change in
