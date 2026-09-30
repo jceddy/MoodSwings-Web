@@ -2551,7 +2551,11 @@ final class GameService
      */
     public function listPracticeBots(): array
     {
-        $stmt = Connection::get()->query('SELECT id, username, uses_tactical_ai FROM users WHERE is_bot = 1 ORDER BY id ASC');
+        // PuzzleOpponent is an is_bot row too (puzzles need a real user to
+        // seat opposite the solver) but is never a playable opponent --
+        // keep it out of every New Game picker (web and Discord).
+        $stmt = Connection::get()->prepare('SELECT id, username, uses_tactical_ai FROM users WHERE is_bot = 1 AND username <> :puzzle_opponent ORDER BY id ASC');
+        $stmt->execute(['puzzle_opponent' => self::PUZZLE_OPPONENT_USERNAME]);
 
         return array_map(
             static fn (array $row) => [

@@ -24534,6 +24534,18 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertStringContainsString('Game 2 of 3', $kept['data']['content']);
     }
 
+    /** PuzzleOpponent is an is_bot user too, but must never show up as a practice-bot choice. */
+    public function testListPracticeBotsExcludesThePuzzleOpponent(): void
+    {
+        $this->pdo->exec("INSERT IGNORE INTO users (username, email, password_hash, email_verified_at, is_bot) VALUES ('PuzzleOpponent', 'puzzle-opponent@moodswings.invalid', 'hash', NOW(), 1)");
+        $realBot = $this->insertBotUser('list-bots-real-' . uniqid());
+
+        $usernames = array_column($this->games->listPracticeBots(), 'username');
+
+        self::assertNotContains('PuzzleOpponent', $usernames);
+        self::assertContains($this->pdo->query("SELECT username FROM users WHERE id = {$realBot}")->fetchColumn(), $usernames);
+    }
+
     public function testPowerDuelVsBotWithNoSavedDecklistsPointsAtMyDecks(): void
     {
         $userId = $this->insertDiscordUser('discord-pd-vs-bot-nodeck');
