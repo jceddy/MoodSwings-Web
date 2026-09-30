@@ -44,13 +44,14 @@ use Throwable;
  *   the SAME rollout -- including the acting player's own further grants
  *   this same turn, and every other player's/team's entire turn -- is
  *   answered by the existing heuristic bot, not recursively searched.
- * - Scoring a rollout's resulting position always treats every
- *   Enthusiasm/Passion "would you like the bonus" decision as declined
- *   (RoundScorer::score()'s own well-supported default for "no entry
- *   yet"), rather than modeling that end-of-round negotiation -- which
- *   lives entirely in GameService, not the pure Rules layer this class
- *   operates in. This slightly UNDER-values a board with Enthusiasm/
- *   Passion in play; it never over-values one.
+ * - Scoring a rollout's resulting position folds in every Enthusiasm/
+ *   Passion bonus the way a bot would actually answer it
+ *   (BotPlayerService::projectedScoringDecisions(): always take it,
+ *   unless Sneakiness was played this round), rather than modeling that
+ *   end-of-round negotiation -- which lives entirely in GameService, not
+ *   the pure Rules layer this class operates in. (It used to read every
+ *   such bonus as declined, which matched neither a real bot's answer nor
+ *   a human's, and undervalued boards with Enthusiasm/Passion in play.)
  * - A simulated FUTURE turn (any player besides the one taking the ROOT
  *   action) always starts with just the ordinary base allowance --
  *   Hurt Feelings' extra play and any already-banked Generosity/Joy play
@@ -388,7 +389,7 @@ final class SearchBotPlayerService
             return -INF;
         }
 
-        return $this->rewardFor($sim, $botGamePlayerId, $this->scorer->score($sim));
+        return $this->rewardFor($sim, $botGamePlayerId, $this->scorer->score($sim, $this->heuristic->projectedScoringDecisions($sim)));
     }
 
     /**

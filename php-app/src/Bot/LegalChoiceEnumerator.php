@@ -62,6 +62,10 @@ final class LegalChoiceEnumerator
      */
     private const MAX_TARGET_VARIANTS = 6;
 
+    /** See panicVariants(). */
+    private const PANIC_MAX_CANDIDATES_PER_OPPONENT = 2;
+    private const PANIC_MAX_VARIANTS = 16;
+
     public function __construct(
         private readonly BotPlayerService $heuristic,
         private readonly BotChoiceResolver $resolver = new BotChoiceResolver(),
@@ -103,6 +107,9 @@ final class LegalChoiceEnumerator
     private function choiceVariantsForCard(BoardState $state, int $cardId, int $actingPlayerId, array $defaultChoices): array
     {
         $effectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
+        if ($effectKey === 'panic') {
+            return $this->panicVariants($state, $cardId, $actingPlayerId, $defaultChoices);
+        }
         if ($this->heuristic->usesBespokeChoiceBuilding($effectKey)) {
             return [$defaultChoices];
         }
@@ -123,6 +130,77 @@ final class LegalChoiceEnumerator
         return ($targetField['multi'] ?? false)
             ? $this->multiTargetVariants($targetField, $candidates, $defaultChoices)
             : $this->singleTargetVariants($targetField, $candidates, $defaultChoices);
+    }
+
+    /**
+     * Panic ("choose up to two players; for each, put one of their moods
+     * into their hand") is one of the bespoke-branch cards whose heuristic
+     * targeting only ever bounces the bot's OWN Compulsion/Suspicion, and
+     * only with Validation in play -- so a search bot never considered
+     * bouncing an opponent's mood at all (reported live: a round lost 11-9
+     * where Panic bouncing the opponent's 3-point mood would have won it).
+     * Varies exactly the targeting Panic's own rules allow: no target, the
+     * heuristic's own pick, and/or the highest-valued moods of each
+     * non-teammate opponent (top PANIC_MAX_CANDIDATES_PER_OPPONENT each,
+     * to bound the branching factor), combined up to Panic's two-target
+     * cap with at most one mood per owner. A time-boxed search then
+     * decides by simulation whether bouncing is actually worth it (it can
+     * cost tempo, e.g. bouncing a mood the opponent simply replays).
+     *
+     * @param array<string, mixed> $defaultChoices
+     * @return array<int, array<string, mixed>>
+     */
+    private function panicVariants(BoardState $state, int $cardId, int $actingPlayerId, array $defaultChoices): array
+    {
+        $candidates = []; // each: ['owner' => game_player_id, 'id' => mood card id]
+        foreach (($defaultChoices['target_mood_ids'] ?? []) as $defaultTargetId) {
+            if ($state->isInPlay((int) $defaultTargetId)) {
+                $candidates[] = ['owner' => $state->ownerOf((int) $defaultTargetId), 'id' => (int) $defaultTargetId];
+            }
+        }
+
+        $moodsByOpponent = [];
+        foreach ($state->moodsInPlay() as $mood) {
+            if ($mood->cardId === $cardId || $mood->ownerId === $actingPlayerId || $state->isTeammate($actingPlayerId, $mood->ownerId)) {
+                continue;
+            }
+            $moodsByOpponent[$mood->ownerId][] = $mood->cardId;
+        }
+        foreach ($moodsByOpponent as $ownerId => $moodIds) {
+            usort($moodIds, static fn (int $a, int $b): int => $state->valueOf($b) <=> $state->valueOf($a));
+            foreach (array_slice($moodIds, 0, self::PANIC_MAX_CANDIDATES_PER_OPPONENT) as $moodId) {
+                $candidates[] = ['owner' => $ownerId, 'id' => $moodId];
+            }
+        }
+
+        $subsets = [[]];
+        foreach ($candidates as $i => $first) {
+            $subsets[] = [$first];
+            foreach (array_slice($candidates, $i + 1) as $second) {
+                if ($second['owner'] !== $first['owner']) {
+                    $subsets[] = [$first, $second];
+                }
+            }
+        }
+
+        $variants = [$defaultChoices];
+        $seen = [json_encode($defaultChoices)];
+        foreach (array_slice($subsets, 0, self::PANIC_MAX_VARIANTS) as $subset) {
+            $choices = $defaultChoices;
+            unset($choices['target_mood_ids']);
+            if ($subset !== []) {
+                $choices['target_mood_ids'] = array_column($subset, 'id');
+            }
+
+            $key = json_encode($choices);
+            if (in_array($key, $seen, true)) {
+                continue;
+            }
+            $seen[] = $key;
+            $variants[] = $choices;
+        }
+
+        return $variants;
     }
 
     /**

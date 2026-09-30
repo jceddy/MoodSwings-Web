@@ -67,6 +67,55 @@ final class SearchBotPlayerServiceTest extends TestCase
         self::assertSame([], $action['choices']);
     }
 
+    /**
+     * Reported live: a round lost 11-9 where Panic bouncing the opponent's
+     * 3-point mood would have won it -- the heuristic's own Panic targeting
+     * never touches an opponent's mood, and search never varied it. Here
+     * player 2 (the bot, taking the last turn of the round) trails 5 to 7
+     * and Panic alone only reaches 6; bouncing the opponent's Apathy (4)
+     * wins 6 to 3, and nothing the opponent can do afterward matters since
+     * their turn is already over.
+     */
+    public function testChooseActionUsesPanicToBounceTheOpponentsMoodWhenThatWinsTheRound(): void
+    {
+        $state = $this->boardState([1 => [55, 2, 3], 2 => [48, 5, 7]]);
+        foreach ([55, 2, 3] as $cardId) {
+            $state->moveHandToInPlay(1, $cardId); // Apathy 4, Benevolence 2, Charity 1 = 7
+        }
+        foreach ([5, 7] as $cardId) {
+            $state->moveHandToInPlay(2, $cardId); // Complacency 4, Courage 1 = 5
+        }
+        $state->startTurn(2);
+
+        $action = $this->search->chooseAction($state, [48], 2, timeBudgetSeconds: 0.5);
+
+        self::assertNotNull($action);
+        self::assertSame(48, $action['card_id']);
+        self::assertContains(55, $action['choices']['target_mood_ids'] ?? [], 'bouncing the opponent\'s highest mood is what wins the round');
+    }
+
+    /**
+     * Enthusiasm/Passion bonuses used to be scored as declined inside
+     * rollouts. Player 2 (the bot, last to act) trails 4 to 7: Courage
+     * only reaches 5, but Enthusiasm (worth 0 itself) re-scores the bot's
+     * own 4-point Complacency for 4 + 4 = 8 and wins -- which search can
+     * only see if it counts the bonus.
+     */
+    public function testChooseActionValuesEnthusiasmsScoringBonus(): void
+    {
+        $state = $this->boardState([1 => [55, 2, 3], 2 => [116, 7, 5]]);
+        foreach ([55, 2, 3] as $cardId) {
+            $state->moveHandToInPlay(1, $cardId); // Apathy 4, Benevolence 2, Charity 1 = 7
+        }
+        $state->moveHandToInPlay(2, 5); // Complacency 4
+        $state->startTurn(2);
+
+        $action = $this->search->chooseAction($state, [116, 7], 2, timeBudgetSeconds: 0.5);
+
+        self::assertNotNull($action);
+        self::assertSame(116, $action['card_id']);
+    }
+
     public function testChooseActionReturnsALegalActionEvenWithAnEffectivelyZeroBudget(): void
     {
         $state = $this->boardState([1 => [55, 32], 2 => []]);
