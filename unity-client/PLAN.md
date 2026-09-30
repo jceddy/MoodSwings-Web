@@ -66,9 +66,11 @@ Each phase ends with something runnable against the dev server
 - **Done when:** cold start, log in, relaunch, still logged in.
 - **Status:** built and verified headless against a scripted transport
   (EditMode + PlayMode with screenshots, and live unauthenticated checks
-  against the dev server). **Not yet verified:** a real login (run the live
-  test with a dev account, or just try the Main scene), and the Android
-  Keystore path (no Android module installed here).
+  against the dev server). Android: the APK builds, installs and runs on an
+  API 36 x86_64 emulator (landscape, login screen, live server version), and
+  the 6 Keystore tests pass on it. **Not yet verified:** a real login (run the
+  live test with a dev account, or just try the Main scene), and anything on
+  a physical Android device.
 
 ### Phase 2 -- Main menu shell
 - Home screen, user info, friends list and invites, preferences

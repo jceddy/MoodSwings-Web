@@ -94,8 +94,8 @@ before it touches `PlayerPrefs`:
 
 - **Windows:** DPAPI (current-user key), via P/Invoke.
 - **Android:** Keystore AES-GCM, in `Assets/Plugins/Android/SecureStore.java`.
-  **Not yet built or run** -- the Android build module isn't installed here.
-  Verify on a device before relying on it.
+  Verified on an Android 16 (API 36) x86_64 emulator -- see "Android" below;
+  not yet run on a physical device.
 - **Anything else** (macOS/Linux/iOS): no secure storage yet, so sessions
   aren't remembered there.
 
@@ -117,9 +117,42 @@ Unticking "Remember me" keeps the session in memory only.
   account) to also run a real login -> `/me` -> logout, which proves the
   hand-set `Cookie` header is honored.
 
+- **Android Keystore** (`AndroidKeystoreTests`): only runs on an Android
+  device/emulator -- see "Android" below.
+
 Headless (Unity closed): `Unity.exe -batchmode -nographics -projectPath .
 -runTests -testPlatform EditMode -testResults results.xml`. PlayMode needs
 graphics for the screenshots, so omit `-nographics` there.
+
+## Android
+
+The Android module needs an editor install that includes it (the
+`6000.2.1f1-x86_64` Hub folder, not plain `6000.2.1f1`). It bundles its own
+JDK/NDK/SDK.
+
+- **Build an APK:** **MoodSwings > Build Android APK**, or headless:
+  `Unity.exe -batchmode -quit -buildTarget Android -executeMethod
+  MoodSwings.Editor.AndroidBuild.Build` -> `Build/Android/MoodSwings.apk`.
+  It forces IL2CPP and ARM64+x86_64 (the x86_64 is only so it runs on the
+  standard emulator). A first build takes ~40 minutes; later ones reuse the
+  IL2CPP cache. Running it saves those settings into `ProjectSettings`.
+- **Run the Keystore tests on a device:** `ANDROID_SERIAL=<device> Unity.exe
+  -batchmode -projectPath . -buildTarget Android -runTests -testPlatform
+  Android -testFilter MoodSwings.Tests.AndroidKeystoreTests -testResults
+  r.xml`. Unity builds a test player, installs it, and pulls results back.
+- **Emulator gotchas:** the default AVD has ~2 GB RAM, which a development
+  build full of card art can exhaust (the test player then freezes and Unity
+  reports "No activity received from the player in 600 seconds") -- move
+  `Assets/Resources/CardArt` aside for device test runs. Also turn off
+  Android's one-time full-screen prompt, which pauses the app until
+  dismissed: `adb shell settings put secure immersive_mode_confirmations
+  confirmed`.
+- **Don't kill a headless device test run:** the test framework temporarily
+  rewrites player settings (application id, splash screen, ...) and only
+  restores them on a clean exit. If it's interrupted, `git checkout
+  ProjectSettings/ProjectSettings.asset`.
+- **Package id** is still Unity's default (`com.DefaultCompany.unityclient`);
+  pick a real one before any release.
 
 ## Tools
 
@@ -128,7 +161,10 @@ Python scripts in `tools/` (`pip install pillow` for the first):
 - `convert_card_art.py` -- converts `web-static/img` card art from WebP
   (which Unity can't import) to PNGs in `Assets/Resources/CardArt/`,
   named by catalog id. That folder is git-ignored; run the script after
-  cloning. `CardArtLibrary.ForCard(id)` loads from it.
+  cloning. `CardArtLibrary.ForCard(id)` loads from it. Art is sized to a
+  multiple of 4 and imported without rescaling (`CardArtImporter`), which
+  GPU texture compression requires -- otherwise Unity silently keeps each
+  card as uncompressed RGBA32 (~3 MB instead of under 1 MB).
 - `capture_fixtures.py` -- logs in to a server with a throwaway account
   (credentials from `MOODSWINGS_USER`/`MOODSWINGS_PASSWORD`) and saves
   read-only API responses, email/phone redacted, to
