@@ -95,6 +95,29 @@ final class LegalChoiceEnumeratorTest extends TestCase
         }
     }
 
+    public function testEnumerateNeverOffersBouncingAnOpponentsReplayMoodUnlessItDecidesTheGame(): void
+    {
+        // Reported live: an opponent replaying their Compulsion/Suspicion/
+        // Intimidation/Paranoia is a serious long-run card disadvantage.
+        $state = $this->boardState([1 => [48], 2 => [86, 5]]);
+        $state->moveHandToInPlay(2, 86); // their Compulsion, value 3
+        $state->moveHandToInPlay(2, 5);  // Complacency, value 4
+        $state->startTurn(1);
+
+        $targetSets = array_map(static fn (array $a) => $a['choices']['target_mood_ids'] ?? [], $this->enumerator->enumerate($state, [48], 1));
+        self::assertNotContains([86], $targetSets);
+        self::assertContains([5], $targetSets);
+
+        // One round win from the game, and bouncing the Compulsion is what
+        // would take the round's lead here.
+        $state = $this->boardState([1 => [48], 2 => [86]]);
+        $state->moveHandToInPlay(2, 86);
+        $state->startTurn(1);
+
+        $targetSets = array_map(static fn (array $a) => $a['choices']['target_mood_ids'] ?? [], $this->enumerator->enumerate($state, [48], 1, 1, []));
+        self::assertContains([86], $targetSets);
+    }
+
     public function testEnumeratePanicNeverPairsTwoMoodsOfTheSameOwner(): void
     {
         $state = $this->boardState([1 => [48, 7], 2 => [5, 2]]);

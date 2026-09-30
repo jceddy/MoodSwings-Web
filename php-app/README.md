@@ -11953,6 +11953,26 @@ target, the heuristic's own pick, and/or the top two moods of each
 non-teammate opponent (at most one mood per owner, two total, 16 variants)
 and lets the rollouts decide whether a bounce is worth it.
 
+**Panic and replay moods (reported live).** Bouncing a card for a replay
+is card advantage for its owner and a serious long-run card disadvantage
+for whoever lets it happen, so Panic now treats Compulsion, Suspicion,
+Intimidation and Paranoia (`BotPlayerService::PANIC_REPLAY_EFFECT_KEYS`)
+asymmetrically. *Own:* a bot bounces one of its own whenever that doesn't
+turn a round it is winning into one it loses (`panicOwnBounceKeepsTheLead()`
+-- strict lead with Panic played, with versus without the bounce; a round it
+is already behind in can't be made worse; with Validation in play the bounce
+stays unconditional since the replay lands the same turn), and the search
+bot credits such a bounce in its rollouts (`SearchBotPlayerService::
+panicReplayBonus()` -- the mood's points back plus a little, only while the
+simulated round still ends with the bot ahead) so a safe replay isn't
+rejected purely for the points it gives up. *Opponent's:* never a target
+(`panicOpponentBounceIsAllowed()`, consulted by
+`LegalChoiceEnumerator::panicVariants()`) unless the swing wins the game
+(one round win from it, and the bounce takes the round's lead) or saves it
+(a rival one round win away would otherwise take the round) -- the same two
+tests Rationalization/Shock use. Every other opponent mood stays a normal
+Panic candidate.
+
 ### Diagnostic mode
 
 An opt-in, creation-time flag (`games.diagnostic_mode`, migration `0255`)
