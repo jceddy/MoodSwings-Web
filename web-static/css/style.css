@@ -373,6 +373,21 @@ body {
    elsewhere (#resign-button, .icon-action-button, .grid-draft-arrow-button,
    etc.) still wins by specificity for its own one-off sizing/color/layout
    needs. */
+/* Subtitle under the "MOOD" wordmark, spelling out the recursive acronym
+   ("MOOD: Obstructs Objective Directives"). Kept as a separate, smaller
+   line rather than appended to the <h1> itself so it never fights the
+   heading for space on a narrow phone -- the h1 stays exactly as short as
+   the old "MoodSwings-Web" title, and this line is free to wrap without
+   looking broken. */
+.tagline {
+    margin-top: -0.5rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--color-text-secondary);
+}
+
 button {
     font: inherit;
     color: var(--color-text);
