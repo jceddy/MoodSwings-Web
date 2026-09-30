@@ -24546,6 +24546,39 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertContains($this->pdo->query("SELECT username FROM users WHERE id = {$realBot}")->fetchColumn(), $usernames);
     }
 
+    /** "Pause at the start of your turn": play/pass are rejected until Advance Turn, so Discord must offer that button (not play/pass) or the game sticks. */
+    public function testDiscordShowsAdvanceTurnWhenTheTurnIsPendingAcknowledgment(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-pause-a');
+        $u2 = $this->insertDiscordUser('discord-pause-b');
+        $this->linkDiscordAccount($u1, 'discord-pause-a');
+        $this->linkDiscordAccount($u2, 'discord-pause-b');
+
+        $gameId = $this->games->createGame($u1, [$u1, $u2]);
+        $this->games->startGame($gameId);
+        // The gate is only ever raised after an after-scoring effect moves
+        // cards (notifyItsYourTurn()'s $worthPausingFor), which is awkward to
+        // stage; raise it directly on the current round instead.
+        $this->pdo->exec("UPDATE game_rounds SET turn_pending_acknowledgment = 1 WHERE game_id = {$gameId}");
+
+        $state = $this->games->getState($gameId, $u1);
+        $activeDiscordId = $state['you']['is_your_turn'] ? 'discord-pause-a' : 'discord-pause-b';
+        $activeUserId = $state['you']['is_your_turn'] ? $u1 : $u2;
+        self::assertTrue($this->games->getState($gameId, $activeUserId)['you']['turn_pending_acknowledgment'], 'precondition: the opening turn is gated');
+
+        $paused = $this->discordCommandService()->handleComponent($this->discordComponentPayload($activeDiscordId, "ms:view:{$gameId}"));
+        $customIds = array_merge(...array_map(static fn (array $row): array => array_column($row['components'], 'custom_id'), $paused['data']['components']));
+        self::assertContains("ms:advanceturn:{$gameId}", $customIds);
+        self::assertNotContains("ms:pass:{$gameId}", $customIds);
+        self::assertNotContains("ms:play:{$gameId}", $customIds);
+
+        $advanced = $this->discordCommandService()->handleComponent($this->discordComponentPayload($activeDiscordId, "ms:advanceturn:{$gameId}"));
+        self::assertFalse($this->games->getState($gameId, $activeUserId)['you']['turn_pending_acknowledgment']);
+        $customIds = array_merge(...array_map(static fn (array $row): array => array_column($row['components'], 'custom_id'), $advanced['data']['components']));
+        self::assertContains("ms:pass:{$gameId}", $customIds);
+        self::assertNotContains("ms:advanceturn:{$gameId}", $customIds);
+    }
+
     public function testPowerDuelVsBotWithNoSavedDecklistsPointsAtMyDecks(): void
     {
         $userId = $this->insertDiscordUser('discord-pd-vs-bot-nodeck');
