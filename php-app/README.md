@@ -13486,8 +13486,10 @@ than a parallel bespoke system:
   single 1-point mood an exhaustive search found 14 winning lines, 12 of
   them never touching Bliss (Intimidation's own 1 plus the stolen Charity's
   1 already scores 2 against 1); against 2 that cheap line only ties, and
-  a tie goes to the opponent, who played first -- which the puzzle's
-  description states outright. Courage was also tried as an extra card in
+  a tie goes to the opponent, who played first -- which the puzzle's hint
+  states (its description deliberately doesn't, and no longer lists the
+  opponent's hand or how it picks a card to reveal either; migration 0423).
+  Courage was also tried as an extra card in
   the solver's hand and dropped: at opponent totals of 1 and 2 it opened
   dozens of lines that skip Bliss.
   `PuzzleContentTest` uses a `playDriven()` helper (not the plain `play()`,

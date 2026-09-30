@@ -1130,11 +1130,14 @@ final class PuzzleContentTest extends TestCase
         $state = $this->games->getState($gameId, $this->userIdForGamePlayer($p));
 
         self::assertSame(
-            'Intimidation only ever takes the card your opponent values least -- and a card you\'re handed is yours to keep instead of playing.',
+            'Intimidation only ever takes the card your opponent values least -- and a card you\'re handed is yours to keep instead of playing. Ties go to the player who went first.',
             $state['game']['puzzle_hint']
         );
+        // Deliberately silent on the opponent's hand, how it picks a card to
+        // reveal, and who wins ties -- discovering the first two is part of
+        // the puzzle, and the tie rule lives in the hint.
         self::assertSame(
-            'Each player has two round wins, and your opponent played first, so ties go to them. Your hand: Duplicity and Intimidation. Your opponent has Benevolence (2 points) in play and holds Charity and Bliss in hand, and always reveals their lowest-value card. Win the game this turn.',
+            'Each player has two round wins, and your opponent played first. Your hand: Duplicity and Intimidation. Your opponent has Benevolence (2 points) in play. Win the game this turn.',
             $state['game']['puzzle_description']
         );
     }
