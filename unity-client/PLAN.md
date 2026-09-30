@@ -39,7 +39,7 @@ decisions"): push notifications, card art licensing, four-seat table layout.
 Each phase ends with something runnable against the dev server
 (`moodswings-dev.jceddy.com`).
 
-### Phase 0 -- Foundations (in progress)
+### Phase 0 -- Foundations (code complete; fixtures pending)
 - Add Newtonsoft; move `ApiClient` off `JsonUtility`.
 - `ApiClient` returns typed results, handles the `{status}` envelope and
   `503` maintenance responses.
@@ -49,12 +49,13 @@ Each phase ends with something runnable against the dev server
   2/3/4 players, `/cards/catalog`, `/open-games`, ...).
 - Card art pipeline: convert WebP to PNG/ASTC, bundle, load by catalog id.
 - **Done when:** fixtures deserialize in tests and art loads in a sample scene.
-- **Status:** Newtonsoft, `ApiClient` rewrite (also fixes a missing `/app`
-  path prefix in the original), `ScreenRouter`, `UiTheme`/`CanvasSetup`,
-  landscape enforcement, asmdefs, `ApiClient` EditMode tests, card art
-  conversion and `CardArtLibrary` are written. Remaining: confirm it compiles
-  and the tests pass in the Editor, run `capture_fixtures.py` with a dev
-  account, and a sample scene showing card art.
+- **Status:** everything is built and verified headless (14 EditMode tests,
+  plus a PlayMode test that loads `Assets/Scenes/CardArtSample.unity` and
+  checks the art renders). Remaining: run `tools/capture_fixtures.py` against
+  the dev server with a throwaway account (needs the user's credentials), then
+  write the fixture-deserialization tests as the models for each phase land.
+- **Noted for later:** `web-static/img/cards/MSW/{futuristic,neon,steampunk}/`
+  hold themed card skins; the converter skips them for now.
 
 ### Phase 1 -- Splash + login
 - Splash, version/health check, maintenance screen, login, session restore
