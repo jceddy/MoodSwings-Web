@@ -381,7 +381,7 @@ body {
    heading to shrink. */
 .tagline {
     display: inline-block;
-    font-size: 0.6em;
+    font-size: 0.52em;
     font-weight: 600;
     letter-spacing: 0.05em;
     text-transform: uppercase;
