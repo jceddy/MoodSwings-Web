@@ -1,0 +1,102 @@
+{
+  "friends": [
+    {
+      "decklists": [
+        {
+          "card_count": 11,
+          "created_at": "2026-08-18 03:04:32",
+          "id": 9,
+          "name": "2nd Tier",
+          "sideboard_card_count": 0,
+          "updated_at": "2026-08-18 16:02:00",
+          "visibility": "friends"
+        },
+        {
+          "card_count": 22,
+          "created_at": "2026-08-18 03:06:45",
+          "id": 10,
+          "name": "3rd Tier",
+          "sideboard_card_count": 0,
+          "updated_at": "2026-08-18 03:06:45",
+          "visibility": "friends"
+        },
+        {
+          "card_count": 94,
+          "created_at": "2026-08-18 02:56:14",
+          "id": 8,
+          "name": "4th Tier",
+          "sideboard_card_count": 0,
+          "updated_at": "2026-08-18 03:04:53",
+          "visibility": "friends"
+        },
+        {
+          "card_count": 15,
+          "created_at": "2026-07-23 10:20:51",
+          "id": 5,
+          "name": "Combo-Aggro",
+          "sideboard_card_count": 5,
+          "updated_at": "2026-09-03 17:24:08",
+          "visibility": "friends"
+        },
+        {
+          "card_count": 15,
+          "created_at": "2026-07-19 03:16:50",
+          "id": 2,
+          "name": "Combo-Control",
+          "sideboard_card_count": 5,
+          "updated_at": "2026-09-03 17:25:47",
+          "visibility": "friends"
+        },
+        {
+          "card_count": 75,
+          "created_at": "2026-08-04 03:57:34",
+          "id": 6,
+          "name": "Crazy Pool",
+          "sideboard_card_count": 0,
+          "updated_at": "2026-08-04 03:57:34",
+          "visibility": "friends"
+        },
+        {
+          "card_count": 15,
+          "created_at": "2026-07-21 11:39:40",
+          "id": 3,
+          "name": "Discard Midrange",
+          "sideboard_card_count": 0,
+          "updated_at": "2026-07-21 11:39:40",
+          "visibility": "friends"
+        },
+        {
+          "card_count": 15,
+          "created_at": "2026-07-23 10:20:36",
+          "id": 4,
+          "name": "Midrange",
+          "sideboard_card_count": 0,
+          "updated_at": "2026-07-23 10:20:36",
+          "visibility": "friends"
+        },
+        {
+          "card_count": 15,
+          "created_at": "2026-07-19 03:15:32",
+          "id": 1,
+          "name": "Mono-Green Big Points",
+          "sideboard_card_count": 0,
+          "updated_at": "2026-07-19 03:15:32",
+          "visibility": "friends"
+        },
+        {
+          "card_count": 6,
+          "created_at": "2026-08-18 01:54:39",
+          "id": 7,
+          "name": "Power Six",
+          "sideboard_card_count": 0,
+          "updated_at": "2026-08-18 16:01:45",
+          "visibility": "friends"
+        }
+      ],
+      "friend_id": 1,
+      "friend_username": "jceddy"
+    }
+  ],
+  "own": [],
+  "status": "ok"
+}

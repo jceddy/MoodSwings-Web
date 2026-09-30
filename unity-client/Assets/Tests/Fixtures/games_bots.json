@@ -1,0 +1,35 @@
+{
+  "bots": [
+    {
+      "user_id": 9,
+      "username": "BotAlice",
+      "uses_tactical_ai": false
+    },
+    {
+      "user_id": 10,
+      "username": "BotBen",
+      "uses_tactical_ai": false
+    },
+    {
+      "user_id": 11,
+      "username": "BotCleo",
+      "uses_tactical_ai": false
+    },
+    {
+      "user_id": 18,
+      "username": "BotSage",
+      "uses_tactical_ai": true
+    },
+    {
+      "user_id": 20,
+      "username": "BotSageQuick",
+      "uses_tactical_ai": true
+    },
+    {
+      "user_id": 21,
+      "username": "BotSageDeep",
+      "uses_tactical_ai": true
+    }
+  ],
+  "status": "ok"
+}
