@@ -2854,6 +2854,61 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame([], $this->bot->chooseDecisionAnswer($state, $field, 1));
     }
 
+    // -- Enthusiasm/Passion scoring decisions (reported live) --------------
+    //
+    // Both fields are optional, which the generic resolver never fills, so a
+    // bot used to decline every scoring bonus -- a round lost 11-9 where
+    // Enthusiasm re-scoring a 3-point mood would have won it.
+
+    public function testChooseDecisionAnswerTakesEnthusiasmsBonus(): void
+    {
+        $state = $this->boardState(hands: [1 => [116, 5], 2 => [3]]);
+        $state->moveHandToInPlay(1, 116); // Enthusiasm
+        $state->moveHandToInPlay(1, 5);   // Complacency, value 4
+
+        $field = ['key' => 'take_bonus', 'type' => 'bool', 'required' => false];
+
+        self::assertSame(['take_bonus' => true], $this->bot->chooseDecisionAnswer($state, $field, 1, 'enthusiasm_extra_score', 116));
+    }
+
+    public function testChooseDecisionAnswerTargetsTheHighestOpponentMoodForPassion(): void
+    {
+        $state = $this->boardState(hands: [1 => [97], 2 => [3, 5], 3 => [2]]);
+        $state->moveHandToInPlay(1, 97); // Passion
+        $state->moveHandToInPlay(2, 3);  // Charity, value 1
+        $state->moveHandToInPlay(2, 5);  // Complacency, value 4
+        $state->moveHandToInPlay(3, 2);  // Benevolence, value 2
+
+        $field = ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'other', 'required' => false];
+
+        self::assertSame(['target_mood_id' => 5], $this->bot->chooseDecisionAnswer($state, $field, 1, 'passion_score_opponent_mood', 97));
+    }
+
+    public function testChooseDecisionAnswerDeclinesAScoringBonusWhenSneakinessWasPlayedThisRound(): void
+    {
+        $state = $this->boardState(hands: [1 => [116, 5], 2 => [51]]);
+        $state->startRound(1, 3);
+        $state->moveHandToInPlay(1, 116);
+        $state->moveHandToInPlay(1, 5);
+        $state->moveHandToInPlay(2, 51); // Sneakiness
+        $state->setEffectState(51, 'playedInRound', 3);
+
+        $field = ['key' => 'take_bonus', 'type' => 'bool', 'required' => false];
+
+        self::assertSame([], $this->bot->chooseDecisionAnswer($state, $field, 1, 'enthusiasm_extra_score', 116), 'a higher pre-swap score can work against its owner this round');
+    }
+
+    public function testProjectedScoringDecisionsFoldsInEnthusiasmAndPassionBonuses(): void
+    {
+        $state = $this->boardState(hands: [1 => [116, 5], 2 => [97, 3]]);
+        $state->moveHandToInPlay(1, 116); // Enthusiasm
+        $state->moveHandToInPlay(1, 5);   // Complacency, value 4
+        $state->moveHandToInPlay(2, 97);  // Passion
+        $state->moveHandToInPlay(2, 3);   // Charity, value 1
+
+        self::assertSame([116 => 4, 97 => 4], $this->bot->projectedScoringDecisions($state));
+    }
+
     public function testChooseDecisionAnswerFillsARequiredHandCardField(): void
     {
         $state = $this->boardState(hands: [2 => [8, 55]]); // the bot itself is player 2 here, values 3 and 4

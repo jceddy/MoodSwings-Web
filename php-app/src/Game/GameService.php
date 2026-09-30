@@ -9354,17 +9354,7 @@ final class GameService
      */
     private function sneakinessPlayedThisRound(BoardState $state): bool
     {
-        $currentRound = $state->currentRoundNumber();
-        foreach ($state->moodsInPlay() as $mood) {
-            if ($state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'] !== 'sneakiness') {
-                continue;
-            }
-            if ($state->effectState($mood->cardId, 'playedInRound') === $currentRound) {
-                return true;
-            }
-        }
-
-        return false;
+        return $state->sneakinessPlayedThisRound();
     }
 
     /**
@@ -9388,25 +9378,7 @@ final class GameService
      */
     private function autoScoringDecisionAnswer(BoardState $state, string $decisionType, int $ownerGamePlayerId): array
     {
-        if ($decisionType === self::ENTHUSIASM_DECISION_TYPE) {
-            return ['take_bonus' => true];
-        }
-
-        $bestMoodId = null;
-        $bestValue = -1;
-        foreach ($state->moodsInPlay() as $mood) {
-            if ($mood->ownerId === $ownerGamePlayerId) {
-                continue;
-            }
-
-            $value = $state->valueOf($mood->cardId);
-            if ($value > $bestValue) {
-                $bestValue = $value;
-                $bestMoodId = $mood->cardId;
-            }
-        }
-
-        return $bestMoodId !== null ? ['target_mood_id' => $bestMoodId] : [];
+        return $this->bots->obviousScoringDecisionAnswer($state, $decisionType, $ownerGamePlayerId);
     }
 
     /**
