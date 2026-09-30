@@ -15,7 +15,10 @@ list, which does not respect the 10-bullet limit. So the
 `.github/release-notes/<VERSION>.md` file (named after the exact
 `VERSION` being promoted, ≤10 bullets — see
 `.github/release-notes/README.md`) whenever the promotion PR is opened,
-not added after the fact.
+not added after the fact — **unless the promotion doesn't bump
+`VERSION` at all**, in which case `deploy.yml`'s "Check whether VERSION
+changed" step skips the Discord announcement entirely, and no release
+notes file is needed since nothing will read it.
 
 ## Versioning (VERSION file / schema_version)
 
