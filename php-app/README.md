@@ -7771,8 +7771,9 @@ full reasoning):
 
 - Format `standard` (Traditional Duel), plus format `duel` restricted to
   exactly 2 seated players (`isPlayableFormat()` -- see "Playing a 2-player
-  Duel game via Discord" below). Team/Closed Team/3-4 player Duel/draft/
-  chaos_draft all have their own extra state (teammate hand visibility,
+  Duel game via Discord" below), plus 2-player Sealed Deck (see "Best of
+  three + Sealed Deck via Discord" below). Team/Closed Team/3-4 player
+  Duel/other draft formats/chaos_draft all have their own extra state (teammate hand visibility,
   per-seat decks, propose/confirm decisions, attached chaos effects)
   this class has no rendering for yet -- any other format (or any status
   other than `in_progress`) gets a plain "open the web app for this"
@@ -8056,9 +8057,48 @@ reachable through Power Duel's own separate `ms:powerduel:0` sub-menu.
 still get the same "open the web app" hand-off every other unsupported
 format already does. A Power Duel needs no separate carve-out here: it's
 just format `duel` under the hood, and Discord never creates a
-best-of-three/sideboarding Power Duel itself, so it starts rendering the
+sideboarding Power Duel itself (best of three is now offered -- see
+"Best of three + Sealed Deck via Discord" below), so it starts rendering the
 instant its 2 seats have both submitted a deck and `startGame()` flips
 it `in_progress`.
+
+**Best of three + Sealed Deck via Discord** (reported live: "implement
+sealed deck for the discord client, as well as best of three options for
+the two currently supported formats"):
+
+- **Best of three** -- `New Practice Game` and `Invite a Friend` now open
+  a "Single game / Best of three" step first (`ms:newgamemode:{0|1}`,
+  `ms:friendgamemode:{0|1}`; the flag then rides in the bot/friend
+  select's own custom_id arg), and the Power Duel menu gained
+  `Best of 3: Friend`/`Best of 3: Bot` buttons (`ms:powerduelinvite:1`,
+  `ms:powerduelbotmenu:1`, ... `ms:powerduelbotdeck:{botId}:1`). All
+  pass `bestOfThree: true` to `createGame()`. The board header reads
+  "Game N of 3" with the running standing; a completed game offers
+  `Next game` (`ms:startgame:{nextGameId}` -- `startGame()` on the game
+  `advanceGameMatch()` created `waiting`), and games 2/3 show the
+  previous loser `I'll go first`/`Let them go first` (`ms:firstplay`/
+  `ms:firstdraw` -> `setPlayFirstNextMatchGame()`) while round 1 is
+  frozen. Power Duel matches never enable sideboarding from Discord, so
+  the locked decks carry over and game 2 needs no resubmission. A
+  `waiting` Sealed Deck game, or game 2/3 awaiting its start, counts as
+  an active game for the root `/moodswings` view
+  (`waitingGameNeedsAction()`).
+- **Sealed Deck** -- a fifth utility button (`ms:sealed:0`) leads to
+  "vs Practice Bot"/"vs a Friend" (2 players only; always a best of
+  three, per the engine). While `waiting`, the board is the deck-building
+  screen: the pool grouped by color and `Use suggested deck`
+  (`GameService::suggestDraftDeck()`, the same `chooseDraftDeck()`
+  heuristic practice bots build with), `Build deck` (a modal prefilled
+  with the current/previous deck, else the whole pool, as a plain
+  decklist to trim to at least 12 cards -- submitted via
+  `GameService::submitDraftDeckFromText()`), and for games 2/3
+  `Keep same deck`. The game starts when both decks are in; since the
+  server never auto-starts a human-vs-human draft-family game,
+  whichever player's click lands last calls `startGame()`
+  (`startSealedIfReady()`), and the other sees the board on `Refresh`.
+  A practice bot builds and submits its own deck as soon as the game is
+  created (`advanceAutomatedTurns()`). 3-4 player sealed games stay
+  web-only.
 
 **Playing a card with a `grant_choice` field** (reported live: a
 player's entire hand showed "needs the web app to play" with no

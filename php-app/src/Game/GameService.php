@@ -5605,6 +5605,53 @@ final class GameService
     }
 
     /**
+     * Submits $decklistText (the same plain-text "2 Joy" format
+     * DecklistParser accepts everywhere else -- a Discord modal's own
+     * text field, most recently) as $userId's own draft/sealed deck,
+     * through submitDraftDeck() itself so every one of its checks (size,
+     * pool membership, rarity caps, deck_building status) applies
+     * unchanged. Any Sideboard section is ignored -- a drafted deck has
+     * no separate sideboard concept of its own here.
+     */
+    public function submitDraftDeckFromText(int $gameId, int $userId, string $decklistText): void
+    {
+        $parsed = (new DecklistParser($this->loadCardCatalog()['idsByName']))->parse($decklistText);
+        $this->submitDraftDeck($gameId, $userId, $parsed['cardIds']);
+    }
+
+    /**
+     * A reasonable starting deck for $userId's own draft/sealed pool --
+     * the exact same chooseDraftDeck() heuristic a practice bot builds
+     * its own deck with (see advanceBotDraftDeck()), drawn from the same
+     * pickableDraftPoolFor() pool submitDraftDeck() validates against, so
+     * the result is always submittable as-is. For clients (Discord) that
+     * can't offer the web app's own click-to-toggle deck builder.
+     *
+     * @return int[] catalog card ids, ready for submitDraftDeck()
+     */
+    public function suggestDraftDeck(int $gameId, int $userId): array
+    {
+        $game = $this->fetchGame($gameId);
+        if (!in_array($game['deck_type'], self::DRAFT_DECK_TYPES, true) || $game['draft_match_id'] === null) {
+            throw new GameStateException("Game {$gameId} is not a draft game");
+        }
+
+        $draftMatchId = (int) $game['draft_match_id'];
+        $teammateUserId = $this->openTeamPlayTeammateUserId($gameId, $game['format'], $userId);
+        $pickableCardIds = $this->pickableDraftPoolFor($draftMatchId, $userId, $teammateUserId);
+        $rarityCaps = array_key_exists($game['deck_type'], self::PERIODIC_SEALED_POOL_DECK_TYPES)
+            ? self::PERIODIC_SEALED_POOL_RARITY_DECK_CAPS
+            : null;
+
+        return $this->bots->chooseDraftDeck(
+            $pickableCardIds,
+            self::draftMinDeckSizeFor($game['deck_type']),
+            $this->draftBotScoringData(),
+            $rarityCaps,
+        );
+    }
+
+    /**
      * @return int[] every card $userId may legally include in their own
      *     draft deck submission right now -- their own drafted_card_ids
      *     alone, or (Open Team Play, $teammateUserId !== null) the whole
