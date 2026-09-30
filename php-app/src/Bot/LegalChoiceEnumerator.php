@@ -78,6 +78,9 @@ final class LegalChoiceEnumerator
      *     caller filters them -- this class only ever varies WITHIN a
      *     card's own targeting, never decides whether a card itself is
      *     legal to play at all.
+     * @param array<int, int> $roundWinsNeededToWinGameByPlayerId see
+     *     BotPlayerService::chooseAction()'s own docblock -- only Panic's
+     *     "is bouncing this opponent mood game-deciding" check reads these.
      * @return array<int, array{card_id: int, choices: array<string, mixed>}>
      *     every distinct (card, choices) action worth a search branching
      *     over -- always includes each playable card's own default
@@ -85,7 +88,7 @@ final class LegalChoiceEnumerator
      *     (buildChoicesForCard() returning null) is simply omitted, same
      *     as BotPlayerService::chooseAction() itself already skips it.
      */
-    public function enumerate(BoardState $state, array $playableCardIds, int $actingPlayerId): array
+    public function enumerate(BoardState $state, array $playableCardIds, int $actingPlayerId, ?int $roundWinsNeededToWinGame = null, array $roundWinsNeededToWinGameByPlayerId = []): array
     {
         $actions = [];
 
@@ -95,7 +98,7 @@ final class LegalChoiceEnumerator
                 continue;
             }
 
-            foreach ($this->choiceVariantsForCard($state, $cardId, $actingPlayerId, $defaultChoices) as $choices) {
+            foreach ($this->choiceVariantsForCard($state, $cardId, $actingPlayerId, $defaultChoices, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId) as $choices) {
                 $actions[] = ['card_id' => $cardId, 'choices' => $choices];
             }
         }
@@ -103,12 +106,12 @@ final class LegalChoiceEnumerator
         return $actions;
     }
 
-    /** @param array<string, mixed> $defaultChoices @return array<int, array<string, mixed>> */
-    private function choiceVariantsForCard(BoardState $state, int $cardId, int $actingPlayerId, array $defaultChoices): array
+    /** @param array<string, mixed> $defaultChoices @param array<int, int> $roundWinsNeededToWinGameByPlayerId @return array<int, array<string, mixed>> */
+    private function choiceVariantsForCard(BoardState $state, int $cardId, int $actingPlayerId, array $defaultChoices, ?int $roundWinsNeededToWinGame = null, array $roundWinsNeededToWinGameByPlayerId = []): array
     {
         $effectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
         if ($effectKey === 'panic') {
-            return $this->panicVariants($state, $cardId, $actingPlayerId, $defaultChoices);
+            return $this->panicVariants($state, $cardId, $actingPlayerId, $defaultChoices, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
         }
         if ($this->heuristic->usesBespokeChoiceBuilding($effectKey)) {
             return [$defaultChoices];
@@ -147,10 +150,17 @@ final class LegalChoiceEnumerator
      * decides by simulation whether bouncing is actually worth it (it can
      * cost tempo, e.g. bouncing a mood the opponent simply replays).
      *
+     * An opponent's Compulsion/Suspicion/Intimidation/Paranoia is never
+     * offered as a bounce target unless doing so decides the whole game
+     * (BotPlayerService::panicOpponentBounceIsAllowed()) -- handing them
+     * that card-advantage replay is a serious long-run cost a one-round
+     * point swing doesn't justify (reported live).
+     *
      * @param array<string, mixed> $defaultChoices
+     * @param array<int, int> $roundWinsNeededToWinGameByPlayerId
      * @return array<int, array<string, mixed>>
      */
-    private function panicVariants(BoardState $state, int $cardId, int $actingPlayerId, array $defaultChoices): array
+    private function panicVariants(BoardState $state, int $cardId, int $actingPlayerId, array $defaultChoices, ?int $roundWinsNeededToWinGame = null, array $roundWinsNeededToWinGameByPlayerId = []): array
     {
         $candidates = []; // each: ['owner' => game_player_id, 'id' => mood card id]
         foreach (($defaultChoices['target_mood_ids'] ?? []) as $defaultTargetId) {
@@ -167,6 +177,10 @@ final class LegalChoiceEnumerator
             $moodsByOpponent[$mood->ownerId][] = $mood->cardId;
         }
         foreach ($moodsByOpponent as $ownerId => $moodIds) {
+            $moodIds = array_values(array_filter(
+                $moodIds,
+                fn (int $moodId): bool => $this->heuristic->panicOpponentBounceIsAllowed($state, $cardId, $actingPlayerId, $moodId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId),
+            ));
             usort($moodIds, static fn (int $a, int $b): int => $state->valueOf($b) <=> $state->valueOf($a));
             foreach (array_slice($moodIds, 0, self::PANIC_MAX_CANDIDATES_PER_OPPONENT) as $moodId) {
                 $candidates[] = ['owner' => $ownerId, 'id' => $moodId];
