@@ -1134,7 +1134,7 @@ final class PuzzleContentTest extends TestCase
             $state['game']['puzzle_hint']
         );
         self::assertSame(
-            'Each player has two round wins, and your opponent played first. Your hand: Duplicity and Intimidation. Your opponent has Smugness and Unconcern (1 point each) in play and holds Charity and Bliss in hand, and always reveals their lowest-value card. Win the game this turn.',
+            'Each player has two round wins, and your opponent played first, so ties go to them. Your hand: Duplicity and Intimidation. Your opponent has Benevolence (2 points) in play and holds Charity and Bliss in hand, and always reveals their lowest-value card. Win the game this turn.',
             $state['game']['puzzle_description']
         );
     }

@@ -13480,11 +13480,16 @@ than a parallel bespoke system:
   1) reaching `wins_needed` (`puzzleGameWinningRoundWins()`). Outscoring
   while a win short of clinching is deliberately not a solve. A solve
   records the round as a real win, so the finished board reads 3-2.
-  Shakedown's opponent has two 1-point moods (Smugness, Unconcern)
-  rather than one because against a single 1-point mood an exhaustive
-  search found 14 winning lines, 12 of them never touching Bliss
-  (Intimidation then Charity alone scores 2 against 1); a total of 2
-  leaves the cheap lines only tying, and a tie goes to the opponent.
+  Shakedown's opponent has a single 2-point mood (Benevolence, whose text
+  is all "after playing" and so inert when pre-placed, the same way "Turn
+  It On Yourself" uses it) rather than a 1-point one, because against a
+  single 1-point mood an exhaustive search found 14 winning lines, 12 of
+  them never touching Bliss (Intimidation's own 1 plus the stolen Charity's
+  1 already scores 2 against 1); against 2 that cheap line only ties, and
+  a tie goes to the opponent, who played first -- which the puzzle's
+  description states outright. Courage was also tried as an extra card in
+  the solver's hand and dropped: at opponent totals of 1 and 2 it opened
+  dozens of lines that skip Bliss.
   `PuzzleContentTest` uses a `playDriven()` helper (not the plain `play()`,
   which answers every pending decision as if it were the solver's own
   Duplicity offer) so the opponent bot answers its reveals the way the

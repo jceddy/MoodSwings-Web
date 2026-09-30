@@ -27,16 +27,18 @@ ALTER TABLE puzzles
 -- Setup: each player has two round wins (games.wins_needed is 3), so
 -- winning this round wins the game; the opponent went first, so a tied
 -- score goes to them. Hand: Duplicity (37), Intimidation (67). Opponent in
--- play: Smugness (134) and Unconcern (135), two ability-less 1-point rows
--- (total 2). Opponent's hand: Charity (3, printed 1) and Bliss (108,
--- printed 2), dealt Bliss-first on purpose -- which card goes first is
--- decided by ranking, never by deal order. max_plays 3.
+-- play: Benevolence (2), a single 2-point mood. Its text is all "after
+-- playing," so pre-placed on the board it's inert (the same way "Turn It
+-- On Yourself" uses it). Opponent's hand: Charity (3, printed 1) and Bliss
+-- (108, printed 2), dealt Bliss-first on purpose -- which card goes first
+-- is decided by ranking, never by deal order. max_plays 3.
 --
--- Why TWO one-point moods rather than one: against a single 1-point mood,
--- an exhaustive search of every legal line found 14 that win the game,
--- 12 of them never touching Bliss (Intimidation then Charity alone scores
--- 2 against 1). Against a total of 2 the cheap lines only tie -- and a tie
--- goes to the opponent -- so exactly one line wins.
+-- Why a 2-point opponent rather than a 1-point one: against a single
+-- 1-point mood, an exhaustive search of every legal line found 14 that win
+-- the game, 12 of them never touching Bliss (Intimidation's own 1 plus the
+-- stolen Charity's 1 already scores 2 against 1). Against a total of 2
+-- that cheap line only ties -- and a tie goes to the opponent, who played
+-- first -- so exactly one line wins.
 --
 -- Correct (and, per that same exhaustive search, the ONLY) line:
 --   1. Play Duplicity -- its own extra play is generic, so it pays for
@@ -75,11 +77,11 @@ INSERT INTO puzzles (
 ) VALUES (
     'shakedown',
     'Shakedown',
-    'Each player has two round wins, and your opponent played first. Your hand: Duplicity and Intimidation. Your opponent has Smugness and Unconcern (1 point each) in play and holds Charity and Bliss in hand, and always reveals their lowest-value card. Win the game this turn.',
+    'Each player has two round wins, and your opponent played first, so ties go to them. Your hand: Duplicity and Intimidation. Your opponent has Benevolence (2 points) in play and holds Charity and Bliss in hand, and always reveals their lowest-value card. Win the game this turn.',
     'Intimidation only ever takes the card your opponent values least -- and a card you''re handed is yours to keep instead of playing.',
     'hard',
     '[37, 67]', '[]', '[]', '[]',
-    '[108, 3]', '[134, 135]',
+    '[108, 3]', '[2]',
     2, 2,
     'win_game', '{}', 3, NULL, 1
 );
