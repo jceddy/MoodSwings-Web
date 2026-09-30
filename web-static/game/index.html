@@ -144,6 +144,14 @@
             <button id="spectate-share-button" type="button" hidden>Share spectate code</button>
             <h2 id="board-title"></h2>
             <p id="board-round-status"></p>
+            <!-- Puzzle goal (reported live: "show the puzzle goal in the
+                 game display") -- unlike the Hint button below, this is
+                 never a spoiler (it's the puzzle's own stated objective,
+                 already shown on the puzzle list before the attempt even
+                 starts), so it's shown unconditionally for the whole
+                 lifetime of the attempt rather than behind a button. See
+                 renderPuzzleGoal() in game.js. -->
+            <p id="puzzle-goal-text" hidden></p>
             <!-- Synchronous mode's own live 30-second action timer
                  (reported live: "which should be visible in the game
                  display") -- a client-side ticking countdown (see

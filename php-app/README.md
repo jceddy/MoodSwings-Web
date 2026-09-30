@@ -7769,24 +7769,28 @@ a hand's contents are exactly as private here as on the web board.
 **V1 scope, deliberately narrow** (this class's own docblock has the
 full reasoning):
 
-- Format `standard` (Traditional Duel) only. Team/Closed Team/Duel/
-  draft/chaos_draft all have their own extra state (teammate hand
-  visibility, per-seat decks, propose/confirm decisions, attached chaos
-  effects) this class has no rendering for yet -- any other format (or
-  any status other than `in_progress`) gets a plain "open the web app
-  for this" message with a link, never a crash.
+- Format `standard` (Traditional Duel), plus format `duel` restricted to
+  exactly 2 seated players (`isPlayableFormat()` -- see "Playing a 2-player
+  Duel game via Discord" below). Team/Closed Team/3-4 player Duel/draft/
+  chaos_draft all have their own extra state (teammate hand visibility,
+  per-seat decks, propose/confirm decisions, attached chaos effects)
+  this class has no rendering for yet -- any other format (or any status
+  other than `in_progress`) gets a plain "open the web app for this"
+  message with a link, never a crash.
 - A hand OR discard pile card (see "Playing from the discard pile"
   below) is only offered to play here if EVERY one of its own
   `choice_fields`, up to `MAX_CHOICE_FIELDS` (2 -- the most any
-  hand-playable card actually has) total, is one of a `mode`/`value`/
-  `bool`/`mood`/`player`/`hand_card`/`discard_card` type -- covers not
-  just single-target cards (Pride's own `target_player_id`,
-  Compulsion's `discard_card_id`, Conviction's self-targetable
-  `target_mood_id`, Hate's optional "any mood in play," ...) but also a
-  `multi` (checkbox-style) field and a card with a SECOND field. Cards
-  needing more than 2 fields, or a `nested` sub-form (Duplicity's own
-  repeat offer, any chaos_draft attachment), are still listed as "needs
-  the web app" instead. An OPTIONAL single-value field's select menu
+  hand-playable card's OWN fields actually has, though a prepended
+  `grant_choice` field -- see below -- counts against this same total)
+  total, is one of a `mode`/`value`/`bool`/`mood`/`player`/`hand_card`/
+  `discard_card`/`grant_choice` type -- covers not just single-target
+  cards (Pride's own `target_player_id`, Compulsion's `discard_card_id`,
+  Conviction's self-targetable `target_mood_id`, Hate's optional "any
+  mood in play," ...) but also a `multi` (checkbox-style) field and a
+  card with a SECOND field. Cards needing more than 2 fields, or a
+  `nested` sub-form (Duplicity's own repeat offer, any chaos_draft
+  attachment), are still listed as "needs the web app" instead. An
+  OPTIONAL single-value field's select menu
   (`withSkipOptionIfOptional()`) always gets a leading "Skip -- play
   without this effect" option (`SKIP_FIELD_VALUE`) so declining it is a
   deliberate choice sent back to `castFieldValue()`/`choicesFor()` as
@@ -7865,10 +7869,9 @@ full reasoning):
   `MoodPlayService::playMood()` itself already detects which zone a
   given card id is actually sitting in and moves it into play from
   there, so `GameService::playMood()` needed no changes at all. A
-  `grant_choice` field (2+ distinct grants covering the same card, e.g.
-  Grace AND Harmony both active at once) stays out of
-  `SUPPORTED_FIELD_TYPES`, same as every other out-of-scope field type --
-  that card still falls into "needs the web app," regardless of zone.
+  `grant_choice` field (2+ distinct simultaneously usable, unrestricted
+  extra-play grants -- see "Playing a card with a `grant_choice` field"
+  below) is now offered too, like a `mode` field.
 - Legal candidates for a rendered field reuse `BotChoiceResolver`'s own
   already-tested `moodFieldCandidates()`/`playerFieldCandidates()`/
   `handCardFieldCandidates()`/`discardCardFieldCandidates()` against a
@@ -7951,6 +7954,139 @@ to the invited friend (on Discord or otherwise) -- matching the web
 app's own `POST /games` route, which doesn't notify either; the friend
 learns about it the same way they always have, by checking their own
 games list or a `notifyYourTurn()` push once play reaches them.
+
+**Power Duel + saved decklists** (issue #233 follow-up, reported live:
+"add support for a constructed format... let people submit their deck
+list or choose from one they've previously saved," "if they upload a
+text decklist that they could at least save it and update it from the
+Discord interface") -- two new root-menu buttons, `My Decks` and
+`Power Duel`, joining `New Practice Game`/`Invite a Friend` everywhere
+those already appear (factored into one shared `utilityButtonsRow()`
+now that there are four). This section covers setup only: inviting a
+friend or bot and getting both seats' own decklists in. What happens
+once `startGame()` actually flips the game `in_progress` is covered by
+"Playing a 2-player Duel game via Discord" below -- Power Duel needs no
+separate handling there since it's just format `duel` with exactly 2
+seats.
+
+- **My Decks** (`ms:deck:0`) wraps `UserDecklistService` -- list
+  (`ms:deckview:0`), create/edit via a MODAL (Discord interaction type
+  9, this app's first: a "Deck name" short input plus a "Decklist"
+  paragraph input, `ms:deckcreateopen:0`/`ms:deckeditopen:{id}` opening
+  it, `ms:deckcreatesubmit:0`/`ms:deckeditsubmit:{id}` its own
+  MODAL_SUBMIT), and delete (`ms:deckdelete:{id}`). `decklistToText()`
+  is the exact inverse of `DecklistParser::parse()` (grouped/counted
+  `"N CardName"` lines) so an Edit modal opens pre-filled and
+  round-trips unchanged if resubmitted as-is. `DiscordInteractionsService`
+  gained a `TYPE_MODAL_SUBMIT` (5) branch dispatching to
+  `DiscordGameCommandService::handleModalSubmit()`, the first interaction
+  type this app has ever needed a free-text input for -- every prior one
+  (a card to play, a target, a friend to invite) was already a bounded
+  choice a button/select menu could cover.
+- **Power Duel** (`ms:powerduel:0`) lists the caller's own active Power
+  Duel games (`format` `duel`, `deck_type` `custom_duel`, `power` rules
+  preset -- `GameService::listGamesForUser()`'s own summary now also
+  exposes `custom_duel_rules_preset` so Discord can tell a Power Duel
+  custom_duel game apart from any other preset), each flagged "needs
+  your decklist," "waiting on their decklist," or its real status.
+  `Invite a Friend` (`ms:powerduelinvite:0`/`ms:powerduelwith:0`) mirrors
+  the Traditional friend-game flow above -- `createGame()` seats the
+  friend immediately, no invite/accept step -- but stops there instead
+  of also calling `startGame()`: a `custom_duel` game has no deck to
+  deal yet, so the very next step is prompting the caller for their own,
+  either `Choose Saved Deck` (`ms:deckchooseopen:{gameId}`/
+  `ms:deckchooseforgame:{gameId}`) or `Paste New Decklist` (a
+  single-field MODAL, `ms:deckpasteopen:{gameId}`/
+  `ms:deckpastesubmit:{gameId}`) -- both end at
+  `GameService::submitCustomDuelDeck()`, the exact same call the web
+  app's own `POST /games/decklist` route already makes. `startGame()`
+  itself is the only signal needed for whether the OTHER seat has
+  submitted yet: it throws until every seat has, so catching that
+  exception IS "still waiting on your opponent," never a real error.
+  `GameService` gained `customDuelDeckStillNeededFrom()` (a still-
+  `'waiting'` `custom_duel` game has no existing "waiting on you" signal
+  at all -- `gameSummaryFor()`'s own `is_awaiting_your_response` only
+  special-cases a still-`'waiting'` DRAFT-based `deck_type`, since this
+  pre-game step never existed for a non-draft format before `custom_duel`
+  shipped) and a new hook on `submitCustomDuelDeck()` itself
+  (`notifyRemainingCustomDuelDecksNeeded()`, reusing the exact same
+  `notifyYourTurn()` "waiting on you" fan-out every other pending-action
+  case already goes through, its own `deck-needed` tag) -- on the web
+  this was never a problem in practice (both seats are usually filled
+  and prompted in the very same New Game dialog session), but a
+  Discord-invited friend isn't present for that; without a push they
+  might never realize a game is waiting on them at all.
+- **vs Practice Bot** (reported live: "I want to be able to create a
+  power duel game with a bot opponent, as well") -- `vs Practice Bot`
+  button alongside `Invite a Friend` on the Power Duel menu
+  (`ms:powerduelbotmenu:0`, mirroring `listPracticeBots()`'s own
+  `newPracticeGameMessage()` picker, same single-bot skip-ahead). Unlike
+  a friend, a bot never calls `submitCustomDuelDeck()` for itself --
+  `createGame()` requires a real decklist for a seated `custom_duel` bot
+  up front or it throws -- so instead of asking the caller to type/paste
+  a decklist on the BOT's behalf, `ms:powerduelbot:0` next asks the
+  caller to pick one of their OWN saved decklists for the bot's seat
+  (`ms:powerduelbotdeck:{botUserId}`), resolved into `createGame()`'s own
+  `botSavedDecklistId` param -- the same one the web app's New Game
+  dialog already feeds from its per-bot "Use a saved deck" select
+  whenever `deck_type` is `custom_duel`. No random/generated-deck logic
+  needed: the bot's side of the game is already fully set up the instant
+  the game is created, and only the caller's own decklist is still
+  needed, via the exact same `deckSubmissionPromptMessage()` the
+  friend flow already ends its own creation step with.
+
+**Playing a 2-player Duel game via Discord** (issue #233 follow-up,
+reported live right after Power Duel's own first ship let a player
+create and start a `duel` game via Discord but not play it: "I was able
+to initiate the game in the discord client, but not able to actually
+play it") -- `boardMessage()`'s own `isPlayableFormat()` now treats a
+2-player `duel` game exactly like a `standard` one, rather than always
+handing it off to the web app. Confirmed by re-reading
+`GameService::getState()` that a 2-player `duel` game's own state shape
+is byte-for-byte identical to a 2-player `standard` game's -- every
+format-conditional branch in `buildGameState()` is gated on
+`team`/`closed_team`/`puzzle`, never `duel` -- so every rendering/
+interaction method already in this class needed no changes at all to
+support it. `activeStandardGameIdsFor()` (feeding `handleCommand()`'s
+own root view) was generalized into `activePlayableGameIdsFor()` the
+same way, so an in-progress 2-player Duel/Power Duel game is listed and
+directly playable from the main `/moodswings` command, not just
+reachable through Power Duel's own separate `ms:powerduel:0` sub-menu.
+3-4 player Duel games are explicitly out of scope for this pass, and
+still get the same "open the web app" hand-off every other unsupported
+format already does. A Power Duel needs no separate carve-out here: it's
+just format `duel` under the hood, and Discord never creates a
+best-of-three/sideboarding Power Duel itself, so it starts rendering the
+instant its 2 seats have both submitted a deck and `startGame()` flips
+it `in_progress`.
+
+**Playing a card with a `grant_choice` field** (reported live: a
+player's entire hand showed "needs the web app to play" with no
+card-specific pattern -- root cause turned out to be 2 simultaneously
+usable, unrestricted extra-play grants active at once, e.g. two copies
+of Validation both currently in play; `GameService::serializeCard()`
+prepends a `grant_source_card_id` field (`type => 'grant_choice'`) to
+EVERY hand/discard card's own `choice_fields` whenever
+`grantChoiceOptions()` finds 2+ of these, and that field type wasn't in
+`SUPPORTED_FIELD_TYPES` yet -- so every card in the player's hand fell
+out of scope at once, regardless of which cards they actually were).
+`grant_choice` is now offered exactly like a `mode` field: its own
+`options` are already fully-described `{value, label}` pairs (each
+naming the source card and any restriction, via
+`GameService::describePlayGrant()`) rather than raw candidates this
+class has to look up and label itself, so `fieldOptions()`'s own
+`grant_choice` branch just reads them straight through. Optional like
+every other field here, but with its own Skip wording ("Skip -- use
+whichever grant comes first," not the generic "play without this
+effect") since skipping it doesn't decline anything -- the play still
+happens, using `MoodPlayService::playMood()`'s own already-existing
+"whichever comes first" fallback when no `grant_source_card_id` is
+given. Counts against the same `MAX_CHOICE_FIELDS` total as a card's own
+fields (see that constant's own docblock): a 0- or 1-field card gains
+this field for free, while a card that already has 2 of its own (Faith,
+Guile, ...) still needs the web app if 2+ grants are active at the same
+time -- a rare combination, and the same conservative "needs the web
+app" fallback this class already uses for every other over-the-cap case.
 
 **Score line, card details, and the game log** (reported live: "show ...
 number of rounds each player has won so far, number of cards each player
@@ -8097,8 +8233,9 @@ confirmed either way for the target hosting -- the built-in fonts work
 in every GD build unconditionally. Every OTHER badge
 `buildCardThumb()` can show (chaos delta/override, Copy, recolor,
 suppressed, ...) is deliberately out of scope -- those only ever apply
-to a `chaos_draft`-format game, and this class only ever supports
-`'standard'` (see its own `SUPPORTED_FORMAT`).
+to a `chaos_draft`-format game, entirely out of scope for this class's
+own `isPlayableFormat()` (see its own docblock, and "Playing a 2-player
+Duel game via Discord" below).
 
 `DiscordGameCommandService::cardArtFilePath()` locates each card's art
 file ON DISK (unlike `cardArtUrl()`'s public URL) by probing two
@@ -13096,6 +13233,15 @@ than a parallel bespoke system:
   a player who hasn't asked for help. "One Fell Swoop" is the debut hint,
   warning about Ambition's own discard trap without giving the solution
   away outright.
+- **Goal display** (reported live: "show the puzzle goal in the game
+  display"): `puzzles.description` -- already shown on the puzzle list
+  before an attempt starts -- is now also surfaced as
+  `game.puzzle_description` in `getState()`, and the board shows it
+  unconditionally (`renderPuzzleGoal()`) rather than behind a button the
+  way the Hint above is. Unlike the hint, the description is never a
+  spoiler -- it's the puzzle's own stated objective, the same text the
+  player already saw before starting -- so there's no reason to hide it
+  once the attempt is under way.
 - **Discard-pile seeding and pre-banked extra plays**: `puzzles.starting_discard_card_ids`
   seeds the shared discard pile itself at attempt creation (owned by the
   solver), same "`'[]'` means unused" convention as
@@ -13229,6 +13375,19 @@ than a parallel bespoke system:
   instead ("Conviction has to send SOME mood to the bottom of the deck
   when you play it, including itself -- choose wisely."), matching the
   pattern already established elsewhere in this arc.
+- **"The Lesser Sacrifice" redesigned to start short of its own goal**
+  (reported live while playtesting: Boredom(4) + Apathy(4) already summed
+  to the old min_score target of 8, so the puzzle started already
+  "solved" with nothing played -- not directly exploitable, since passing
+  never checks the puzzle goal, but there was no real puzzle left to
+  solve either). Joy now joins the starting board with its own extra play
+  pre-banked (the same device Perfect Disguise uses), and the goal is 12:
+  playing Conviction alone only nets back to the 11 already on the board
+  even via the correct self-targeting "lesser sacrifice" line, so the
+  banked second play matters too -- the deck holds exactly one card,
+  Courage(1), which Conviction's own forced draw puts in hand for that
+  second play to spend. Targeting anything other than Conviction itself
+  nets a strict loss neither play can make back up.
 - **Listed Easy, Medium, Hard** (reported live): `listActivePuzzles()`'s
   own `ORDER BY` now reads `p.difficulty, p.id` instead of just `p.id`.
   No schema change needed -- `puzzles.difficulty` is declared
@@ -13254,6 +13413,32 @@ than a parallel bespoke system:
   `SELECT` against `puzzle_solves` taken before that solve's own upsert
   so a repeat solve of an already-solved puzzle (even for a new personal
   best) never bumps it again.
+- **11th puzzle, "Perfect Disguise"** (reported live: "help me come up
+  with a new puzzle centered around Creativity"), hard, `outscore_opponent`:
+  built around a subtlety that's already caused a real bug once (the
+  Conviction/Bliss bot-targeting fix above) -- a Creativity copy's color,
+  for anything that cares about color, is whatever it's COPYING, not
+  Creativity's own printed blue. Joy starts already in play with its own
+  extra play pre-banked (the same "you already played Joy earlier"
+  device "Turn It On Yourself" uses, via `extra_play_source_card_id`),
+  so the whole two-play solution resolves within a single turn -- no
+  mid-attempt refresh, unlike the original version shipped in migration
+  0412, whose three-play solution genuinely spanned several silent
+  mini-turns and was redesigned live after playtesting flagged the
+  confusion. Play Bliss (discarding Eagerness, green, so Bliss's own
+  bonus color locks to green) -- alone that only reaches 15, still short
+  of the opponent's fixed 16, so Creativity isn't optional flavor.
+  Playing Creativity as a copy of the already-in-play Joy adds a THIRD
+  green mood (Creativity-as-Joy is green, not blue), and Bliss's bonus
+  applies to all three for a final 24. The tempting wrong line --
+  discarding Indifference (blue) instead, on the theory that Creativity's
+  own printed blue needs a blue-keyed Bliss -- never scores above 8,
+  since nothing is ever actually blue in play once Creativity becomes a
+  copy, and both real plays (and the puzzle's own `max_plays` of 2) are
+  already spent by then. The opponent's own board
+  (Complacency/Apathy/Boredom/Laziness) is deliberately four
+  ability-less catalog rows, so its total stays a fixed 16 no matter what
+  the solver's board looks like.
 
 ### Duel: separate per-player decks
 

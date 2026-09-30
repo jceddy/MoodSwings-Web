@@ -22243,6 +22243,7 @@ final class GameServiceIntegrationTest extends TestCase
             new BoardStateRepository(DefaultEffectRegistry::build()),
             new DiscordAccountRepository(),
             new FriendshipService(new UserRepository(), new FriendshipRepository()),
+            new UserDecklistService(new UserDecklistRepository(), new FriendshipService(new UserRepository(), new FriendshipRepository())),
             new BotChoiceResolver(),
         );
     }
@@ -22311,7 +22312,159 @@ final class GameServiceIntegrationTest extends TestCase
         $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-1'));
 
         self::assertSame(4, $response['type']);
-        self::assertStringContainsString("don't have an active Traditional game", $response['data']['content']);
+        self::assertStringContainsString("don't have an active game", $response['data']['content']);
+    }
+
+    /**
+     * Reported live: a player whose entire hand showed "needs the web
+     * app" with no card-specific cause -- root cause turned out to be 2
+     * simultaneously usable, unrestricted extra-play grants (2 copies of
+     * Validation both currently active), which prepends a `grant_choice`
+     * field (GameService::grantChoiceOptions()) to EVERY hand card's own
+     * choice_fields, and that field type wasn't in SUPPORTED_FIELD_TYPES
+     * yet. This is the regression test for the fix -- confirms the field
+     * itself renders correctly (a Skip option plus one option per usable
+     * grant, each labeled with its own source card) and that picking one
+     * explicitly plays the card using that specific grant.
+     */
+    public function testDiscordComponentOffersAGrantChoiceFieldWhenTwoUnrestrictedGrantsAreActive(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-grant-1');
+        $u2 = $this->insertDiscordUser('discord-grant-2');
+        $this->linkDiscordAccount($u1, 'discord-grant-1');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $validation1 = $this->insertGameCard($gameId, 26, 'in_play', $p1); // Validation
+        $validation2 = $this->insertGameCard($gameId, 26, 'in_play', $p1); // 2nd Validation
+        $complacencyId = $this->insertGameCard($gameId, 5, 'hand', $p1); // Complacency -- no choice_fields of its own
+        $roundId = $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+        $this->pdo->prepare('UPDATE game_rounds SET pending_play_grants = :grants WHERE id = :id')->execute([
+            'grants' => json_encode([['sourceCardId' => $validation1], ['sourceCardId' => $validation2]]),
+            'id' => $roundId,
+        ]);
+
+        $playResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-grant-1', "ms:play:{$gameId}", [(string) $complacencyId])
+        );
+
+        self::assertSame(7, $playResponse['type']);
+        $fieldSelect = $playResponse['data']['components'][0]['components'][0];
+        self::assertStringStartsWith("ms:playfield:{$gameId}:{$complacencyId}:0:", $fieldSelect['custom_id']);
+        self::assertCount(3, $fieldSelect['options'], 'Skip + one option per usable grant');
+        self::assertSame(['label' => 'Skip -- use whichever grant comes first', 'value' => '__skip__'], $fieldSelect['options'][0]);
+        self::assertStringContainsString('Validation', $fieldSelect['options'][1]['label']);
+        self::assertStringContainsString('Validation', $fieldSelect['options'][2]['label']);
+        self::assertEqualsCanonicalizing([(string) $validation1, (string) $validation2], [$fieldSelect['options'][1]['value'], $fieldSelect['options'][2]['value']]);
+
+        $fieldResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-grant-1', $fieldSelect['custom_id'], [(string) $validation1])
+        );
+
+        self::assertSame(7, $fieldResponse['type']);
+        self::assertSame('in_play', $this->cardZone($complacencyId));
+        $remainingGrants = json_decode((string) $this->pdo->query("SELECT pending_play_grants FROM game_rounds WHERE id = {$roundId}")->fetchColumn(), true);
+        self::assertCount(1, $remainingGrants, 'the chosen grant (Validation 1) should be consumed, leaving the other');
+        self::assertSame($validation2, $remainingGrants[0]['sourceCardId']);
+    }
+
+    /** Same setup as above, but skipping the grant choice falls back to MoodPlayService's own "whichever comes first" behavior. */
+    public function testDiscordComponentSkippingAGrantChoiceUsesWhicheverGrantComesFirst(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-grant-3');
+        $u2 = $this->insertDiscordUser('discord-grant-4');
+        $this->linkDiscordAccount($u1, 'discord-grant-3');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $validation1 = $this->insertGameCard($gameId, 26, 'in_play', $p1);
+        $validation2 = $this->insertGameCard($gameId, 26, 'in_play', $p1);
+        $complacencyId = $this->insertGameCard($gameId, 5, 'hand', $p1);
+        $roundId = $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+        $this->pdo->prepare('UPDATE game_rounds SET pending_play_grants = :grants WHERE id = :id')->execute([
+            'grants' => json_encode([['sourceCardId' => $validation1], ['sourceCardId' => $validation2]]),
+            'id' => $roundId,
+        ]);
+
+        $playResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-grant-3', "ms:play:{$gameId}", [(string) $complacencyId])
+        );
+        $fieldSelect = $playResponse['data']['components'][0]['components'][0];
+
+        $fieldResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-grant-3', $fieldSelect['custom_id'], ['__skip__'])
+        );
+
+        self::assertSame(7, $fieldResponse['type']);
+        self::assertSame('in_play', $this->cardZone($complacencyId));
+    }
+
+    /**
+     * The exact scenario reported live: Denial (a card with its OWN
+     * choice_field) still showed "needs the web app" whenever 2+
+     * unrestricted grants were active, since the prepended grant_choice
+     * field pushed it out of scope entirely. Confirms the two fields now
+     * chain correctly -- grant_choice first, then Denial's own
+     * target_mood_ids -- exactly the way a 2-field card's own two fields
+     * already chain (see testDiscordComponentPlayChainsASecondChoiceField).
+     */
+    public function testDiscordComponentChainsAGrantChoiceIntoDenialsOwnField(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-grant-5');
+        $u2 = $this->insertDiscordUser('discord-grant-6');
+        $this->linkDiscordAccount($u1, 'discord-grant-5');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $validation1 = $this->insertGameCard($gameId, 26, 'in_play', $p1);
+        $validation2 = $this->insertGameCard($gameId, 26, 'in_play', $p1);
+        $denialId = $this->insertGameCard($gameId, 34, 'hand', $p1); // Denial
+        $complacencyId = $this->insertGameCard($gameId, 5, 'in_play', $p2);
+        $dignityId = $this->insertGameCard($gameId, 8, 'in_play', $p1); // shares color (white) with Complacency
+        $roundId = $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+        $this->pdo->prepare('UPDATE game_rounds SET pending_play_grants = :grants WHERE id = :id')->execute([
+            'grants' => json_encode([['sourceCardId' => $validation1], ['sourceCardId' => $validation2]]),
+            'id' => $roundId,
+        ]);
+
+        $playResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-grant-5', "ms:play:{$gameId}", [(string) $denialId])
+        );
+        self::assertSame(7, $playResponse['type']);
+        $grantSelect = $playResponse['data']['components'][0]['components'][0];
+        self::assertStringStartsWith("ms:playfield:{$gameId}:{$denialId}:0:", $grantSelect['custom_id']);
+
+        $denialFieldResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-grant-5', $grantSelect['custom_id'], ['__skip__'])
+        );
+        self::assertSame(7, $denialFieldResponse['type']);
+        $denialSelect = $denialFieldResponse['data']['components'][0]['components'][0];
+        self::assertStringStartsWith("ms:playfield:{$gameId}:{$denialId}:1:", $denialSelect['custom_id']);
+
+        $finalResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-grant-5', $denialSelect['custom_id'], [(string) $complacencyId, (string) $dignityId])
+        );
+        self::assertSame(7, $finalResponse['type']);
+        self::assertSame('hand', $this->cardZone($complacencyId));
+        self::assertSame('hand', $this->cardZone($dignityId));
     }
 
     public function testDiscordCommandRendersBoardWithPlayAndPassForOneActiveGame(): void
@@ -23036,6 +23189,143 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * Reported live: "add support for playing Denial, Recklessness, and
+     * Panic to the discord client." All three turn out to already be
+     * fully playable, with no code change needed -- each one's own
+     * CardChoiceSchema entry is a plain `mood`-typed field (already in
+     * SUPPORTED_FIELD_TYPES), and Denial's own `same_color_or_value`
+     * `constraint` is exactly the same "not re-validated client-side,
+     * rejected server-side if illegal" shape this class's own docblock
+     * already documents for Rejection. This test (and the two below) are
+     * the missing regression coverage, not a fix -- Denial's optional
+     * `target_mood_ids` field returns 2 moods sharing a color to their
+     * owners' hands.
+     */
+    public function testDiscordComponentPlaysDenialReturningTwoSameColorMoodsToHand(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-denial-1');
+        $u2 = $this->insertDiscordUser('discord-denial-2');
+        $this->linkDiscordAccount($u1, 'discord-denial-1');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $denialId = $this->insertGameCard($gameId, 34, 'hand', $p1); // Denial, blue
+        $complacencyId = $this->insertGameCard($gameId, 5, 'in_play', $p2); // Complacency, white, 4
+        $dignityId = $this->insertGameCard($gameId, 8, 'in_play', $p1); // Dignity, white, 3 -- shares color with Complacency
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $playResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-denial-1', "ms:play:{$gameId}", [(string) $denialId])
+        );
+
+        self::assertSame(7, $playResponse['type']);
+        $fieldSelect = $playResponse['data']['components'][0]['components'][0];
+        self::assertStringStartsWith("ms:playfield:{$gameId}:{$denialId}:0:", $fieldSelect['custom_id']);
+        self::assertSame(0, $fieldSelect['min_values'], 'optional -- selecting nobody is Denial\'s own "may" clause');
+        self::assertSame(2, $fieldSelect['max_values']);
+
+        $fieldResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-denial-1', $fieldSelect['custom_id'], [(string) $complacencyId, (string) $dignityId])
+        );
+
+        self::assertSame(7, $fieldResponse['type']);
+        self::assertSame('hand', $this->cardZone($complacencyId));
+        self::assertSame('hand', $this->cardZone($dignityId));
+    }
+
+    /**
+     * Same report as Denial above -- Panic's own optional
+     * `target_mood_ids` field returns up to 2 moods (one per player,
+     * `distinct_owners`) to their owners' hands.
+     */
+    public function testDiscordComponentPlaysPanicReturningOneMoodPerPlayerToHand(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-panic-1');
+        $u2 = $this->insertDiscordUser('discord-panic-2');
+        $this->linkDiscordAccount($u1, 'discord-panic-1');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $panicId = $this->insertGameCard($gameId, 48, 'hand', $p1); // Panic
+        $complacencyId = $this->insertGameCard($gameId, 5, 'in_play', $p1);
+        $apathyId = $this->insertGameCard($gameId, 55, 'in_play', $p2);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $playResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-panic-1', "ms:play:{$gameId}", [(string) $panicId])
+        );
+
+        self::assertSame(7, $playResponse['type']);
+        $fieldSelect = $playResponse['data']['components'][0]['components'][0];
+        self::assertStringStartsWith("ms:playfield:{$gameId}:{$panicId}:0:", $fieldSelect['custom_id']);
+        self::assertSame(0, $fieldSelect['min_values']);
+        self::assertSame(2, $fieldSelect['max_values']);
+
+        $fieldResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-panic-1', $fieldSelect['custom_id'], [(string) $complacencyId, (string) $apathyId])
+        );
+
+        self::assertSame(7, $fieldResponse['type']);
+        self::assertSame('hand', $this->cardZone($complacencyId));
+        self::assertSame('hand', $this->cardZone($apathyId));
+    }
+
+    /**
+     * Same report as Denial/Panic above -- Recklessness's own optional
+     * `target_mood_id` field is a plain single-value `mood` field scoped
+     * to an opponent (`scope => 'other'`), so it already gets the same
+     * Skip-sentinel treatment as any other optional single-value field
+     * (`fieldSelectComponent()`'s own `withSkipOptionIfOptional()`).
+     */
+    public function testDiscordComponentPlaysRecklessnessTakingAnOpponentsMood(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-reck-1');
+        $u2 = $this->insertDiscordUser('discord-reck-2');
+        $this->linkDiscordAccount($u1, 'discord-reck-1');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $recklessnessId = $this->insertGameCard($gameId, 100, 'hand', $p1); // Recklessness
+        $apathyId = $this->insertGameCard($gameId, 55, 'in_play', $p2);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $playResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-reck-1', "ms:play:{$gameId}", [(string) $recklessnessId])
+        );
+
+        self::assertSame(7, $playResponse['type']);
+        $fieldSelect = $playResponse['data']['components'][0]['components'][0];
+        self::assertStringStartsWith("ms:playfield:{$gameId}:{$recklessnessId}:0:", $fieldSelect['custom_id']);
+        self::assertSame(['label' => 'Skip -- play without this effect', 'value' => '__skip__'], $fieldSelect['options'][0]);
+        self::assertSame((string) $apathyId, $fieldSelect['options'][1]['value']);
+
+        $fieldResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-reck-1', $fieldSelect['custom_id'], [(string) $apathyId])
+        );
+
+        self::assertSame(7, $fieldResponse['type']);
+        self::assertSame($p1, (int) $this->pdo->query("SELECT owner_game_player_id FROM game_cards WHERE id = {$apathyId}")->fetchColumn(), "Recklessness takes the mood immediately");
+    }
+
+    /**
      * The same report, but for a card with a SECOND choice_field --
      * Faith's own target_mood_id ("required if discarding a card above")
      * only needs asking once the first field (discard_card_id) is
@@ -23689,5 +23979,368 @@ final class GameServiceIntegrationTest extends TestCase
         $stmt->execute(['id' => $gameCardId]);
 
         return (string) $stmt->fetchColumn();
+    }
+
+    /**
+     * Reported live, right after Power Duel's own first ship let a player
+     * create and start a 'duel' game via Discord: "I was able to initiate
+     * the game in the discord client, but not able to actually play it."
+     * A 2-player 'duel' game (Power Duel or otherwise) renders and plays
+     * exactly like a 'standard' one -- see isPlayableFormat()'s own
+     * docblock for why GameService::getState() returns an identical shape
+     * in that case.
+     */
+    public function testDiscordCommandRendersAndPlaysATwoPlayerDuelGame(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-duel-player-1');
+        $u2 = $this->insertDiscordUser('discord-duel-player-2');
+        $this->linkDiscordAccount($u1, 'discord-duel-1');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('duel', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $sadnessId = $this->insertGameCard($gameId, 74, 'hand', $p1); // Sadness -- no required choice_fields
+        $this->insertGameCard($gameId, 5, 'in_play', $p2);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-duel-1'));
+
+        self::assertSame(4, $response['type']);
+        self::assertStringContainsString("Game #{$gameId}", $response['data']['content']);
+        self::assertStringContainsString("It's your turn", $response['data']['content']);
+        self::assertStringContainsString('discord-duel-player-2\'s moods in play: Complacency (4, White)', $response['data']['content']);
+
+        $playSelect = $response['data']['components'][0]['components'][0];
+        self::assertSame("ms:play:{$gameId}", $playSelect['custom_id']);
+        self::assertSame(['label' => 'Sadness (0, Black)', 'value' => (string) $sadnessId], $playSelect['options'][0]);
+
+        $playResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-duel-1', "ms:play:{$gameId}", [(string) $sadnessId])
+        );
+        self::assertSame(7, $playResponse['type']);
+        self::assertSame($p2, (int) $this->fetchRound($gameId)['current_turn_game_player_id'], "the play should have advanced the turn to player 2");
+    }
+
+    /**
+     * The player-count restriction actually holds: a 3+ seat 'duel' game
+     * still gets the same "open the web app" hand-off every other
+     * out-of-scope format already does -- see isPlayableFormat()'s own
+     * docblock for why only exactly 2 seats qualify. Reached directly via
+     * ms:view: (the same way a stale link or notification would reach
+     * it), since activePlayableGameIdsFor() itself never lists a 3+ seat
+     * 'duel' game as "active" in the first place -- same as any other
+     * out-of-scope format already didn't before this feature.
+     */
+    public function testDiscordCommandStillRedirectsAThreePlayerDuelGameToTheWebApp(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-duel-player-3');
+        $u2 = $this->insertDiscordUser('discord-duel-player-4');
+        $u3 = $this->insertDiscordUser('discord-duel-player-5');
+        $this->linkDiscordAccount($u1, 'discord-duel-2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('duel', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGamePlayer($gameId, $u3, 2);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $response = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-duel-2', "ms:view:{$gameId}")
+        );
+
+        self::assertSame(7, $response['type']);
+        self::assertStringContainsString('Discord only supports Traditional games so far', $response['data']['content']);
+    }
+
+    /**
+     * activePlayableGameIdsFor()'s own generalization (used by
+     * handleCommand()'s root view): an in-progress 2-player 'duel' game
+     * is counted and offered alongside an in-progress 'standard' one, not
+     * just reachable through Power Duel's own separate ms:powerduel:0
+     * sub-menu.
+     */
+    public function testDiscordCommandRootViewListsAStandardGameAndATwoPlayerDuelGameTogether(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-duel-player-6');
+        $u2 = $this->insertDiscordUser('discord-duel-player-7');
+        $this->linkDiscordAccount($u1, 'discord-duel-3');
+
+        $standardStmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $standardStmt->execute(['created_by' => $u1]);
+        $standardGameId = (int) $this->pdo->lastInsertId();
+        $sp1 = $this->insertGamePlayer($standardGameId, $u1, 0);
+        $this->insertGamePlayer($standardGameId, $u2, 1);
+        $this->insertGameRound($standardGameId, 1, $sp1, $sp1, 1);
+
+        $duelStmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('duel', 'in_progress', :created_by, 3)"
+        );
+        $duelStmt->execute(['created_by' => $u1]);
+        $duelGameId = (int) $this->pdo->lastInsertId();
+        $dp1 = $this->insertGamePlayer($duelGameId, $u1, 0);
+        $this->insertGamePlayer($duelGameId, $u2, 1);
+        $this->insertGameRound($duelGameId, 1, $dp1, $dp1, 1);
+
+        $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-duel-3'));
+
+        self::assertSame(4, $response['type']);
+        $gameButtons = $response['data']['components'][0]['components'];
+        self::assertEqualsCanonicalizing(
+            ["ms:view:{$standardGameId}", "ms:view:{$duelGameId}"],
+            array_column($gameButtons, 'custom_id'),
+        );
+    }
+
+    // --- Power Duel + saved decklists via Discord (issue #233 follow-up) ---
+
+    /** @param array<string, string> $fieldValues @return array<string, mixed> */
+    private function discordModalPayload(string $discordUserId, string $customId, array $fieldValues): array
+    {
+        $components = [];
+        foreach ($fieldValues as $key => $value) {
+            $components[] = ['type' => 1, 'components' => [['type' => 4, 'custom_id' => $key, 'value' => $value]]];
+        }
+
+        return ['type' => 5, 'data' => ['custom_id' => $customId, 'components' => $components], 'user' => ['id' => $discordUserId]];
+    }
+
+    public function testDiscordRootMenuOffersMyDecksAndPowerDuelButtons(): void
+    {
+        $userId = $this->insertDiscordUser('discord-pd-menu');
+        $this->linkDiscordAccount($userId, 'discord-pd-menu');
+
+        $response = $this->discordCommandService()->handleCommand($this->discordCommandPayload('discord-pd-menu'));
+
+        $labels = array_column($response['data']['components'][0]['components'], 'label');
+        self::assertContains('My Decks', $labels);
+        self::assertContains('Power Duel', $labels);
+    }
+
+    public function testPowerDuelInviteCreatesAWaitingGameAndPromptsForADeck(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-pd-inviter');
+        $friendUserId = $this->insertDiscordUser('discord-pd-invitee');
+        $this->linkDiscordAccount($u1, 'discord-pd-inviter');
+
+        $friendships = new FriendshipService(new UserRepository(), new FriendshipRepository());
+        $friendships->sendInvite($u1, 'discord-pd-invitee');
+        $friendships->respondToInvite($friendUserId, $u1, 'accept');
+
+        $response = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-pd-inviter', 'ms:powerduelwith:0', [(string) $friendUserId])
+        );
+
+        self::assertSame(7, $response['type']);
+        self::assertStringContainsString('Power Duel created', $response['data']['content']);
+        $buttons = $response['data']['components'][0]['components'];
+        self::assertSame('Choose Saved Deck', $buttons[0]['label']);
+        self::assertSame('Paste New Decklist', $buttons[1]['label']);
+
+        $games = $this->activePowerDuelGamesFor($u1);
+        self::assertCount(1, $games);
+        self::assertSame('waiting', $games[0]['status']);
+    }
+
+    /**
+     * The full two-sided setup flow: inviter pastes a decklist via the
+     * MODAL_SUBMIT path (the button click that opens it is covered by
+     * the create-game test above), invitee chooses a SAVED decklist
+     * instead -- the game only actually starts once BOTH have submitted,
+     * proven here by checking it's still 'waiting' after just the first.
+     */
+    public function testPowerDuelStartsOnceBothSidesSubmitADeckEitherPastedOrSaved(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-pd-paster');
+        $u2 = $this->insertDiscordUser('discord-pd-chooser');
+        $this->linkDiscordAccount($u1, 'discord-pd-paster');
+        $this->linkDiscordAccount($u2, 'discord-pd-chooser');
+
+        $gameId = $this->games->createGame($u1, [$u1, $u2], format: 'duel', deckType: 'custom_duel', duelDeckRules: ['preset' => 'power']);
+
+        // u1 pastes a fresh decklist directly into the pending seat via
+        // the MODAL_SUBMIT path -- no saved decklist involved at all.
+        $pastedResponse = $this->discordCommandService()->handleModalSubmit($this->discordModalPayload(
+            'discord-pd-paster',
+            "ms:deckpastesubmit:{$gameId}",
+            ['decklist' => $this->buildPowerDuelDecklistText($this->fetchNonMythicCardNames(15))],
+        ));
+        self::assertSame(7, $pastedResponse['type']);
+        self::assertStringContainsString('Waiting on your opponent', $pastedResponse['data']['content']);
+        self::assertSame('waiting', $this->fetchGame($gameId)['status'], 'only one of two seats has submitted so far');
+
+        // u2 already has a SAVED decklist and picks it instead of pasting.
+        $userDecklists = new UserDecklistService(new UserDecklistRepository(), new FriendshipService(new UserRepository(), new FriendshipRepository()));
+        $decklistId = $userDecklists->create($u2, 'My Power Deck', $this->buildPowerDuelDecklistText($this->fetchNonMythicCardNames(15, 15)), null, null, 'private');
+
+        $chosenResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-pd-chooser', "ms:deckchooseforgame:{$gameId}", [(string) $decklistId])
+        );
+
+        self::assertSame(7, $chosenResponse['type']);
+        $game = $this->fetchGame($gameId);
+        self::assertSame('in_progress', $game['status'], 'both seats have now submitted a decklist');
+        // boardMessage()'s own isPlayableFormat() check treats a 2-player
+        // 'duel' game (Power Duel included) exactly like a 'standard' one
+        // -- see this class's own SCOPE docblock -- so the response here
+        // is the real board, not the "open the web app" hand-off.
+        self::assertStringContainsString('round(s) won', $chosenResponse['data']['content']);
+        self::assertStringNotContainsString('Discord only supports Traditional games so far', $chosenResponse['data']['content']);
+    }
+
+    /**
+     * Power Duel vs. a practice bot (reported live: "I want to be able to
+     * create a power duel game with a bot opponent, as well") -- the bot
+     * never submits its own deck, so createGame() must be given one for
+     * it up front (botSavedDecklistId), resolved here from the CALLER's
+     * own saved decklist, chosen through the exact same picker their own
+     * seat already uses. Because other tests in the same suite run may
+     * have left other practice bots (or saved decklists) in the database,
+     * this asserts our own bot/decklist appear among the options rather
+     * than asserting the options list is exactly one item.
+     */
+    public function testPowerDuelVsBotUsesTheCallersChosenSavedDeckForTheBotsSeat(): void
+    {
+        $userId = $this->insertDiscordUser('discord-pd-vs-bot');
+        $this->linkDiscordAccount($userId, 'discord-pd-vs-bot');
+        $botUserId = $this->insertBotUser('discord-pd-bot-' . uniqid());
+        // A second bot guarantees newPowerDuelBotMessage()'s own picker
+        // actually renders as a select menu -- like newPracticeGameMessage(),
+        // it skips straight past the picker to the next step when exactly
+        // one practice bot exists at all (which this test can't otherwise
+        // guarantee, since other tests in the same suite run may also
+        // have left bots behind).
+        $this->insertBotUser('discord-pd-decoy-bot-' . uniqid());
+
+        $userDecklists = new UserDecklistService(new UserDecklistRepository(), new FriendshipService(new UserRepository(), new FriendshipRepository()));
+        $botDecklistId = $userDecklists->create($userId, "Bot's Deck", $this->buildPowerDuelDecklistText($this->fetchNonMythicCardNames(15)), null, null, 'private');
+
+        // Bot picker lists our freshly inserted bot among its options.
+        $botMenuResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-pd-vs-bot', 'ms:powerduelbotmenu:0')
+        );
+        self::assertSame(7, $botMenuResponse['type']);
+        $botOptions = $botMenuResponse['data']['components'][0]['components'][0]['options'];
+        self::assertContains(['label' => $this->pdo->query("SELECT username FROM users WHERE id = {$botUserId}")->fetchColumn(), 'value' => (string) $botUserId], $botOptions);
+
+        // Picking that bot offers a decklist picker for ITS seat, listing
+        // our own saved decklist.
+        $deckMenuResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-pd-vs-bot', 'ms:powerduelbot:0', [(string) $botUserId])
+        );
+        self::assertSame(7, $deckMenuResponse['type']);
+        self::assertSame("ms:powerduelbotdeck:{$botUserId}", $deckMenuResponse['data']['components'][0]['components'][0]['custom_id']);
+
+        // Choosing that decklist creates the game with the bot's seat
+        // already fully submitted, and prompts the caller for their OWN
+        // deck next -- the exact same prompt the human-vs-friend flow
+        // ends its own creation step with.
+        $createResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-pd-vs-bot', "ms:powerduelbotdeck:{$botUserId}", [(string) $botDecklistId])
+        );
+        self::assertSame(7, $createResponse['type']);
+        self::assertStringContainsString('Power Duel created', $createResponse['data']['content']);
+        self::assertSame('Choose Saved Deck', $createResponse['data']['components'][0]['components'][0]['label']);
+
+        $games = $this->activePowerDuelGamesFor($userId);
+        self::assertCount(1, $games);
+        $gameId = $games[0]['id'];
+        self::assertSame('waiting', $this->fetchGame($gameId)['status'], 'still waiting on the human caller\'s own deck');
+        $botGamePlayerId = $this->games->gamePlayerIdFor($gameId, $botUserId);
+        self::assertNotNull($this->fetchGamePlayer($botGamePlayerId)['custom_deck_card_ids'], 'the bot\'s own seat should already have its chosen decklist submitted');
+
+        // The caller submits their own deck next, exactly like the
+        // human-vs-friend flow -- and since the bot's side is already
+        // done, the game starts immediately.
+        $ownDeckResponse = $this->discordCommandService()->handleModalSubmit($this->discordModalPayload(
+            'discord-pd-vs-bot',
+            "ms:deckpastesubmit:{$gameId}",
+            ['decklist' => $this->buildPowerDuelDecklistText($this->fetchNonMythicCardNames(15, 15))],
+        ));
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
+        self::assertStringContainsString('round(s) won', $ownDeckResponse['data']['content']);
+        self::assertStringNotContainsString('Discord only supports Traditional games so far', $ownDeckResponse['data']['content']);
+    }
+
+    public function testPowerDuelVsBotWithNoSavedDecklistsPointsAtMyDecks(): void
+    {
+        $userId = $this->insertDiscordUser('discord-pd-vs-bot-nodeck');
+        $this->linkDiscordAccount($userId, 'discord-pd-vs-bot-nodeck');
+        $botUserId = $this->insertBotUser('discord-pd-nodeck-bot-' . uniqid());
+
+        $response = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-pd-vs-bot-nodeck', 'ms:powerduelbot:0', [(string) $botUserId])
+        );
+
+        self::assertSame(7, $response['type']);
+        self::assertStringContainsString('no saved decklists yet', $response['data']['content']);
+        self::assertSame('My Decks', $response['data']['components'][0]['components'][0]['label']);
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    private function activePowerDuelGamesFor(int $userId): array
+    {
+        return array_values(array_filter(
+            $this->games->listGamesForUser($userId),
+            static fn (array $g): bool => $g['format'] === 'duel' && $g['deck_type'] === 'custom_duel' && $g['custom_duel_rules_preset'] === 'power',
+        ));
+    }
+
+    public function testMyDecksCreateEditAndDeleteRoundTripViaDiscord(): void
+    {
+        $userId = $this->insertDiscordUser('discord-decks-owner');
+        $this->linkDiscordAccount($userId, 'discord-decks-owner');
+        $cardNames = $this->fetchNonMythicCardNames(15);
+
+        // Create, via the "New Decklist" modal.
+        $createResponse = $this->discordCommandService()->handleModalSubmit($this->discordModalPayload(
+            'discord-decks-owner',
+            'ms:deckcreatesubmit:0',
+            ['name' => 'Discord Deck', 'decklist' => $this->buildPowerDuelDecklistText($cardNames)],
+        ));
+        self::assertSame(7, $createResponse['type']);
+        self::assertStringContainsString('Discord Deck', $createResponse['data']['content']);
+        self::assertStringContainsString('15 card', $createResponse['data']['content']);
+
+        $decklistId = (int) $this->pdo->query("SELECT id FROM user_decklists WHERE user_id = {$userId}")->fetchColumn();
+
+        // The menu lists it.
+        $menuResponse = $this->discordCommandService()->handleComponent($this->discordComponentPayload('discord-decks-owner', 'ms:deck:0'));
+        self::assertStringContainsString('Discord Deck', json_encode($menuResponse['data']['components']));
+
+        // Edit -- opening the modal comes back pre-filled with the
+        // existing name/decklist text (decklistToText()'s own round-trip
+        // of DecklistParser::parse()'s format).
+        $editOpenResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-decks-owner', "ms:deckeditopen:{$decklistId}")
+        );
+        self::assertSame(9, $editOpenResponse['type']);
+        $nameField = $editOpenResponse['data']['components'][0]['components'][0];
+        self::assertSame('Discord Deck', $nameField['value']);
+
+        $editSubmitResponse = $this->discordCommandService()->handleModalSubmit($this->discordModalPayload(
+            'discord-decks-owner',
+            "ms:deckeditsubmit:{$decklistId}",
+            ['name' => 'Renamed Deck', 'decklist' => $this->buildPowerDuelDecklistText($cardNames)],
+        ));
+        self::assertStringContainsString('Renamed Deck', $editSubmitResponse['data']['content']);
+
+        // Delete.
+        $deleteResponse = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-decks-owner', "ms:deckdelete:{$decklistId}")
+        );
+        self::assertStringContainsString('no saved decklists yet', $deleteResponse['data']['content']);
+        self::assertSame(0, (int) $this->pdo->query("SELECT COUNT(*) FROM user_decklists WHERE id = {$decklistId}")->fetchColumn());
     }
 }

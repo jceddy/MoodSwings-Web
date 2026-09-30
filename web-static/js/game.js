@@ -8150,6 +8150,7 @@
 
         renderDraftMatchScoreline(state);
         renderRematchButton(state);
+        renderPuzzleGoal(state);
         renderPuzzleHintButton(state);
 
         const inProgressArea = document.getElementById('in-progress-area');
@@ -9488,6 +9489,20 @@
         const show = canRematch(state);
         button.hidden = !show;
         button.onclick = show ? () => openNewGameDialog(buildRematchPrefill(state)) : null;
+    }
+
+    // Puzzle goal (reported live: "show the puzzle goal in the game
+    // display") -- state.game.puzzle_description is the same text already
+    // shown on the puzzle list before the attempt starts, so unlike the
+    // hint below it's never a spoiler and is shown unconditionally for the
+    // whole lifetime of the attempt, including after it's solved (a player
+    // reviewing what they just solved still benefits from seeing the goal
+    // alongside the final board).
+    function renderPuzzleGoal(state) {
+        const el = document.getElementById('puzzle-goal-text');
+        const show = state.game.format === 'puzzle' && !!state.game.puzzle_description;
+        el.hidden = !show;
+        el.textContent = show ? state.game.puzzle_description : '';
     }
 
     // Puzzle hint (reported live: "Add a 'hint' button when in the
