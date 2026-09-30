@@ -123,6 +123,52 @@ namespace MoodSwings.UI
             return label;
         }
 
+        /// <summary>
+        /// The product title: "MOOD:" with its recursive-acronym expansion
+        /// beneath it, smaller and muted -- the same pairing web-static
+        /// shows in its h1 ("MOOD: Obstructs Objective Directives"), but
+        /// stacked rather than inline.
+        /// </summary>
+        /// <param name="maxWidth">The column the block sits in; the tagline shrinks to fit it.</param>
+        public static void TitleBlock(Transform parent, UiTheme theme, int titleSize = 88, float maxWidth = 640f)
+        {
+            // Own group, so the gap between wordmark and tagline is set here
+            // rather than by whatever spacing the parent column uses between
+            // its children. Text sits in a line box taller than its capitals
+            // (ascent above, descent below), so the wordmark is bottom-aligned
+            // and the tagline top-aligned, with slightly negative spacing to
+            // pull them together: the visible gap between them ends up
+            // smaller than the tagline's gap to the content below.
+            var block = Create("TitleBlock", parent);
+            var layout = block.gameObject.AddComponent<VerticalLayoutGroup>();
+            layout.spacing = -titleSize * 0.12f;
+            layout.childAlignment = TextAnchor.UpperCenter;
+            layout.childControlWidth = true;
+            layout.childControlHeight = true;
+            layout.childForceExpandWidth = true;
+            layout.childForceExpandHeight = false;
+
+            var title = Label(block, "MOOD:", titleSize, theme.accent, TextAnchor.LowerCenter, FontStyle.Bold);
+            Size(title.gameObject, height: titleSize * 1.15f);
+
+            var taglineSize = Mathf.RoundToInt(titleSize * 0.42f);
+            var tagline = Label(block, "Obstructs Objective Directives".ToUpperInvariant(), taglineSize, theme.textMuted,
+                TextAnchor.UpperCenter, FontStyle.Bold);
+
+            // All caps is wide, and it must stay on one line: a wrapped
+            // second line overlaps whatever is below. Legacy Text's own
+            // best-fit won't shrink while vertical overflow is allowed, so
+            // measure the one-line width and pick the largest size that fits.
+            tagline.horizontalOverflow = HorizontalWrapMode.Overflow;
+            var width = tagline.preferredWidth;
+            if (width > maxWidth)
+            {
+                tagline.fontSize = Mathf.FloorToInt(taglineSize * maxWidth / width);
+            }
+
+            Size(tagline.gameObject, height: taglineSize * 1.15f);
+        }
+
         public static Button Button(Transform parent, string text, UiTheme theme, UnityAction onClick, bool primary = true)
         {
             var rect = Create("Button", parent);

@@ -36,9 +36,8 @@ namespace MoodSwings.UI
             var theme = AppServices.Theme;
             UiFactory.Background(transform, theme.background);
 
-            var column = UiFactory.CenteredColumn(transform, 640f, 24f);
-            var title = UiFactory.Label(column, "MoodSwings", 96, theme.accent, TextAnchor.MiddleCenter, FontStyle.Bold);
-            UiFactory.Size(title.gameObject, height: 130f);
+            var column = UiFactory.CenteredColumn(transform, 640f, 48f);
+            UiFactory.TitleBlock(column, theme, 96);
 
             _status = UiFactory.Label(column, "Loading...", 28, theme.textMuted);
             _retry = UiFactory.Button(column, "Try again", theme, Begin, primary: false);

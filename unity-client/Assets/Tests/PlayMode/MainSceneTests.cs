@@ -104,6 +104,22 @@ namespace MoodSwings.Tests
             request.Url.EndsWith("/app/me") ? Reply(200, "{\"status\":\"ok\",\"user\":" + UserJson + "}") : Reply(404, "{}");
 
         [UnityTest]
+        public IEnumerator Splash_ShowsTheTitleWhileLoading()
+        {
+            yield return Launch(MeOk, rememberedSession: "tok");
+
+            // The splash holds for at least 0.8s; look at it well inside that.
+            for (var i = 0; i < 4; i++)
+            {
+                yield return null;
+            }
+
+            var router = UnityEngine.Object.FindFirstObjectByType<ScreenRouter>();
+            Assert.IsInstanceOf<SplashScreen>(router.Current);
+            ScreenshotHelper.Capture("splash-loading");
+        }
+
+        [UnityTest]
         public IEnumerator NoRememberedSession_GoesStraightToLogin()
         {
             yield return Launch(_ => Reply(404, "{}"));

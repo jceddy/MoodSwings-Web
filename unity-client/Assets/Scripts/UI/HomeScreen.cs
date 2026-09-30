@@ -36,8 +36,7 @@ namespace MoodSwings.UI
             UiFactory.Background(transform, theme.background);
 
             var column = UiFactory.CenteredColumn(transform, 640f, 24f);
-            var title = UiFactory.Label(column, "MoodSwings", 88, theme.accent, TextAnchor.MiddleCenter, FontStyle.Bold);
-            UiFactory.Size(title.gameObject, height: 120f);
+            UiFactory.TitleBlock(column, theme);
 
             _greeting = UiFactory.Label(column, string.Empty, 36, theme.textPrimary);
             UiFactory.Label(column, "The main menu is coming in the next phase.", 26, theme.textMuted);

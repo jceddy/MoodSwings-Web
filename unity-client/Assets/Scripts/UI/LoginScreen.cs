@@ -63,8 +63,7 @@ namespace MoodSwings.UI
 
             var column = UiFactory.CenteredColumn(transform, 640f, 20f);
 
-            var title = UiFactory.Label(column, "MoodSwings", 88, theme.accent, TextAnchor.MiddleCenter, FontStyle.Bold);
-            UiFactory.Size(title.gameObject, height: 120f);
+            UiFactory.TitleBlock(column, theme);
 
             _username = UiFactory.Input(column, "Username", theme);
             _password = UiFactory.Input(column, "Password", theme, password: true);
