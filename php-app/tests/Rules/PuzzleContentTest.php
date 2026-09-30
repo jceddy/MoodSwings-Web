@@ -14,6 +14,7 @@ use MoodSwings\Repository\UserDecklistRepository;
 use MoodSwings\Repository\UserRepository;
 use MoodSwings\Rules\DefaultEffectRegistry;
 use MoodSwings\Rules\Exceptions\IllegalPlayException;
+use MoodSwings\Rules\Exceptions\InvalidChoiceException;
 use MoodSwings\Rules\MoodPlayService;
 use MoodSwings\Rules\RoundScorer;
 use PDO;
@@ -919,6 +920,222 @@ final class PuzzleContentTest extends TestCase
         self::assertSame(
             "Once Creativity copies another mood, it takes on that mood's own color -- not its own printed blue -- for anything that cares about color.",
             $state['game']['puzzle_hint']
+        );
+    }
+
+    /**
+     * Plays a mood the way the live POST /games/play + /games/respond
+     * routes do: after the solver's own action, advanceAutomatedTurns()
+     * runs so PuzzleOpponent (an is_bot seat) answers any decision aimed
+     * at it -- e.g. Intimidation's "reveal a card" -- and the solver's own
+     * Duplicity repeat offer (the only decision left waiting on a human)
+     * is answered per $repeatTargetGamePlayerId: null declines it, a seat
+     * id accepts it and re-targets that seat. The plain play() helper
+     * above can't be used for this: it answers every pending decision as
+     * if it were the solver's own Duplicity offer.
+     */
+    private function playDriven(int $gameId, int $gamePlayerId, int $cardId, array $choices = [], ?int $repeatTargetGamePlayerId = null): array
+    {
+        $result = $this->games->playMood($gameId, $gamePlayerId, $cardId, $choices);
+        for ($i = 0; $i < 12 && ($result['pending_decision'] ?? false); $i++) {
+            $auto = $this->games->advanceAutomatedTurns($gameId);
+            if ($auto !== null) {
+                $result = $auto;
+                continue;
+            }
+
+            $result = $this->games->respondToDecision($gameId, $gamePlayerId, $repeatTargetGamePlayerId !== null
+                ? ['duplicity_repeat' => ['repeat' => true, 'choices' => ['target_player_id' => $repeatTargetGamePlayerId]]]
+                : ['duplicity_repeat' => ['repeat' => false]]);
+        }
+
+        return $result;
+    }
+
+    /** The other seat in a two-seat puzzle attempt -- PuzzleOpponent. */
+    private function opponentGamePlayerId(int $gameId, int $solverGamePlayerId): int
+    {
+        $stmt = $this->pdo->prepare('SELECT id FROM game_players WHERE game_id = :game_id AND id <> :me');
+        $stmt->execute(['game_id' => $gameId, 'me' => $solverGamePlayerId]);
+
+        return (int) $stmt->fetchColumn();
+    }
+
+    /** The in-game instance id of catalog card $catalogCardId in $zone owned by $gamePlayerId, or null if that seat doesn't hold it. */
+    private function ownedInstanceId(int $gameId, int $catalogCardId, string $zone, int $gamePlayerId): ?int
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT id FROM game_cards WHERE game_id = :game_id AND card_id = :card_id AND zone = :zone AND owner_game_player_id = :owner LIMIT 1'
+        );
+        $stmt->execute(['game_id' => $gameId, 'card_id' => $catalogCardId, 'zone' => $zone, 'owner' => $gamePlayerId]);
+        $id = $stmt->fetchColumn();
+
+        return $id === false ? null : (int) $id;
+    }
+
+    /**
+     * "Shakedown" (issue #524 follow-up: "a puzzle centered around
+     * Intimidation"). PuzzleOpponent always reveals its WORST card first
+     * (BotChoiceResolver::ownResourceCandidateValue()), so a single
+     * Intimidation only ever takes Charity(3) -- never Bliss(108), even
+     * though Bliss is dealt first. Duplicity(37) first, then Intimidation
+     * with Duplicity's repeat accepted, takes both; Bliss then pays its own
+     * "discard a card" cost with the Charity it was forced to hand over.
+     * See migration 0422's own docblock for the full reasoning, and for why
+     * this is the only line (verified by exhaustive search of the engine).
+     */
+    public function testShakedownSolvedByStealingTwiceAndDiscardingTheCheapCard(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('shakedown');
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 37, 'hand')); // Duplicity
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 67, 'hand'), ['target_player_id' => $opp], repeatTargetGamePlayerId: $opp); // Intimidation, repeated
+
+        self::assertNotNull($this->ownedInstanceId($gameId, 3, 'hand', $p), 'Charity should have been handed over');
+        self::assertNotNull($this->ownedInstanceId($gameId, 108, 'hand', $p), 'Bliss should have been handed over by the repeat');
+        self::assertNull($this->ownedInstanceId($gameId, 108, 'hand', $opp));
+
+        $result = $this->playDriven($gameId, $p, $this->ownedInstanceId($gameId, 108, 'hand', $p), [
+            'discard_card_id' => $this->ownedInstanceId($gameId, 3, 'hand', $p), // Charity pays for Bliss
+        ]);
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameSolved($gameId, $p);
+
+        // The solving round is recorded as a real win -- 2 banked + this
+        // one -- so the finished board reads 3 (wins_needed) to 2.
+        $finalPlayers = array_column($this->games->getState($gameId, $this->userIdForGamePlayer($p))['players'], 'total_wins', 'game_player_id');
+        self::assertSame(3, $finalPlayers[$p]);
+        self::assertSame(2, $finalPlayers[$opp]);
+    }
+
+    /**
+     * Shakedown opens mid-match: two round wins each (games.wins_needed is
+     * 3, so the next round win is the game), round 5 live, opponent first
+     * (so a tied score goes to them). Round wins aren't a counter -- they
+     * come from seeded 'scored' game_rounds rows (puzzles.solver_round_wins/
+     * opponent_round_wins) -- and getState()'s own total_wins reads them
+     * back exactly like a real game's.
+     */
+    public function testShakedownOpensMidMatchWithTwoRoundWinsEachAndTheOpponentFirst(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('shakedown');
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+
+        $state = $this->games->getState($gameId, $this->userIdForGamePlayer($p));
+
+        $wins = array_column($state['players'], 'total_wins', 'game_player_id');
+        self::assertSame(2, $wins[$p]);
+        self::assertSame(2, $wins[$opp]);
+        self::assertSame(3, $state['game']['wins_needed']);
+        self::assertSame(5, $state['round']['round_number']);
+        self::assertSame($opp, $state['round']['first_game_player_id']);
+        self::assertSame($p, $state['round']['current_turn_game_player_id']);
+    }
+
+    /**
+     * goal_type 'win_game' is "outscore the opponent AND have that round win
+     * clinch the game" -- outscoring alone isn't enough. Same solving line
+     * as above, but with one of the solver's seeded round wins removed
+     * first: the board still leads 3 to 2, yet 1 banked + 1 won = 2 is
+     * short of wins_needed, so the attempt stays open.
+     */
+    public function testShakedownWinGameGoalDoesNotSolveWhenTheRoundWinWouldNotClinchTheGame(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('shakedown');
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+
+        $this->pdo->prepare(
+            "DELETE FROM game_rounds WHERE game_id = :game_id AND status = 'scored' AND winner_game_player_id = :solver LIMIT 1"
+        )->execute(['game_id' => $gameId, 'solver' => $p]);
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 37, 'hand')); // Duplicity
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 67, 'hand'), ['target_player_id' => $opp], repeatTargetGamePlayerId: $opp); // Intimidation, repeated
+        $result = $this->playDriven($gameId, $p, $this->ownedInstanceId($gameId, 108, 'hand', $p), [
+            'discard_card_id' => $this->ownedInstanceId($gameId, 3, 'hand', $p),
+        ]);
+
+        $scores = array_column($this->games->getState($gameId, $this->userIdForGamePlayer($p))['players'], 'total_score', 'game_player_id');
+        self::assertGreaterThan($scores[$opp], $scores[$p], 'The solver leads on the board...');
+        self::assertFalse($result['game_completed'], '...but winning this round would only make 2 of 3 wins');
+        $this->assertGameNotSolved($gameId);
+    }
+
+    /**
+     * The natural opener -- Intimidation is the star -- fails: Duplicity
+     * isn't in play yet to repeat it, so the opponent's worst-first reveal
+     * hands over Charity and Bliss never leaves their hand. Duplicity
+     * can't rescue it afterwards either: Intimidation's own grant is
+     * restricted to Charity alone, so nothing pays for another play.
+     */
+    public function testShakedownPlayingIntimidationFirstOnlyEverYieldsTheCheapCard(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('shakedown');
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 67, 'hand'), ['target_player_id' => $opp]);
+
+        self::assertNotNull($this->ownedInstanceId($gameId, 3, 'hand', $p), 'Charity is the card the opponent gives up first, despite being dealt second');
+        self::assertNotNull($this->ownedInstanceId($gameId, 108, 'hand', $opp), 'Bliss stays with the opponent');
+        $this->assertGameNotSolved($gameId);
+
+        $this->expectException(IllegalPlayException::class);
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 37, 'hand')); // Duplicity has no play left to use
+    }
+
+    /** Duplicity first but declining its repeat is no better than no Duplicity: one steal, one cheap card. */
+    public function testShakedownDecliningDuplicitysRepeatStillOnlyYieldsTheCheapCard(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('shakedown');
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 37, 'hand'));
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 67, 'hand'), ['target_player_id' => $opp]); // repeat declined
+
+        self::assertNotNull($this->ownedInstanceId($gameId, 3, 'hand', $p));
+        self::assertNotNull($this->ownedInstanceId($gameId, 108, 'hand', $opp), 'Bliss stays with the opponent');
+        $this->assertGameNotSolved($gameId);
+    }
+
+    /**
+     * The tempting wrong line after a successful double steal: spend
+     * Charity's free play on Charity itself. It looks like pure upside --
+     * Charity even grants another play -- but it leaves Bliss with nothing
+     * in hand to discard, so Bliss is illegal to play.
+     */
+    public function testShakedownPlayingCharityFirstLeavesBlissNothingToDiscard(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('shakedown');
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 37, 'hand'));
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 67, 'hand'), ['target_player_id' => $opp], repeatTargetGamePlayerId: $opp);
+        $this->playDriven($gameId, $p, $this->ownedInstanceId($gameId, 3, 'hand', $p)); // Charity -- the trap
+
+        try {
+            $this->playDriven($gameId, $p, $this->ownedInstanceId($gameId, 108, 'hand', $p), []);
+            self::fail('Bliss should be unplayable with no other card in hand to discard');
+        } catch (IllegalPlayException | InvalidChoiceException) {
+            // expected
+        }
+
+        $this->assertGameNotSolved($gameId);
+    }
+
+    public function testShakedownExposesItsHintAndDescriptionViaGetState(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('shakedown');
+
+        $state = $this->games->getState($gameId, $this->userIdForGamePlayer($p));
+
+        self::assertSame(
+            'Intimidation only ever takes the card your opponent values least -- and a card you\'re handed is yours to keep instead of playing.',
+            $state['game']['puzzle_hint']
+        );
+        self::assertSame(
+            'Each player has two round wins, and your opponent played first, so ties go to them. Your hand: Duplicity and Intimidation. Your opponent has Benevolence (2 points) in play and holds Charity and Bliss in hand, and always reveals their lowest-value card. Win the game this turn.',
+            $state['game']['puzzle_description']
         );
     }
 

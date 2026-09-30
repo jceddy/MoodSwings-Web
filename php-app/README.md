@@ -13153,7 +13153,9 @@ than a parallel bespoke system:
   puzzle's own `goal_type`/`goal_params` against the live `BoardState`:
   `hand_empty`, `card_in_hand`/`card_in_play` (a specific catalog card in
   that zone), `min_score` (the solver's own total in-play value at
-  least a target), or `outscore_opponent` (see below). Checked *before*
+  least a target), `outscore_opponent` (see below), or `win_game` ("win the
+  game this turn" -- outscoring the opponent with a round win that clinches
+  the game; see "Shakedown" below). Checked *before*
   `finishPlay()`'s own turn-advance
   logic runs, not after -- otherwise a puzzle with a `max_plays` cap
   couldn't tell a clean single-turn solve apart from one that only
@@ -13439,6 +13441,59 @@ than a parallel bespoke system:
   (Complacency/Apathy/Boredom/Laziness) is deliberately four
   ability-less catalog rows, so its total stays a fixed 16 no matter what
   the solver's board looks like.
+- **12th puzzle, "Shakedown"** (reported live: "I want to add another
+  puzzle, centered around the card Intimidation"), hard, `win_game`,
+  `max_plays` 3: the first puzzle where the opponent seat makes a real
+  decision. `PuzzleOpponent` is an `is_bot` seat, so a pending decision
+  aimed at it (Intimidation's "reveal a card") is answered by
+  `advanceAutomatedTurns()` via `BotChoiceResolver` exactly as for a
+  practice bot -- the live `POST /games/play` and `/games/respond` routes
+  both call it, with no `format = 'puzzle'` exclusion anywhere. A bot
+  always reveals its WORST card: lowest `draft_priority_score`, then lowest
+  printed value (`ownResourceCandidateValue()`). The opponent holds Charity
+  (printed 1) and Bliss (printed 2), dealt Bliss-first on purpose, so a
+  lone Intimidation only ever takes Charity. Duplicity first, then
+  Intimidation with Duplicity's repeat accepted, takes both; Bliss then
+  pays its own "discard a card from your hand" cost with the Charity it
+  was forced to hand over, for a board of 3 against the opponent's 2.
+  Three traps fail the puzzle: playing Intimidation first (Duplicity isn't
+  in play to repeat it), declining the repeat (still only Charity), and
+  spending Charity's free play on Charity itself (Bliss is left with
+  nothing to discard). An exhaustive search of every legal play order and
+  choice against the real engine found this the only solving line. A
+  three-card hand adding Creativity was tried and abandoned: a Creativity
+  copy of Duplicity hands out extra plays fast enough to produce dozens of
+  alternate solutions.
+- **New puzzle infrastructure for "Shakedown": `win_game` and seeded round
+  wins.** Round wins aren't a stored counter -- they're always derived
+  from `'scored'` `game_rounds` rows (`totalWinsFor()`) against
+  `games.wins_needed` (3) -- so `puzzles.solver_round_wins`/
+  `opponent_round_wins` (both default 0, leaving every existing puzzle
+  untouched) make `createPuzzleAttempt()` seed that many already-scored
+  rounds, interleaved, with the live round taking the next `round_number`
+  (Shakedown opens at round 5, two wins each, so the board's own
+  `total_wins` already reads 2-2). `goal_type = 'win_game'` ("win the game
+  this turn") is solved the moment the solver would win the round
+  (`puzzleSolverOutscoresOpponent()`'s real-scorer math, ties to whoever
+  played first) AND that win would clinch the game -- banked wins plus
+  whatever the round awards (2 under Corruption's extra-win marker, else
+  1) reaching `wins_needed` (`puzzleGameWinningRoundWins()`). Outscoring
+  while a win short of clinching is deliberately not a solve. A solve
+  records the round as a real win, so the finished board reads 3-2.
+  Shakedown's opponent has a single 2-point mood (Benevolence, whose text
+  is all "after playing" and so inert when pre-placed, the same way "Turn
+  It On Yourself" uses it) rather than a 1-point one, because against a
+  single 1-point mood an exhaustive search found 14 winning lines, 12 of
+  them never touching Bliss (Intimidation's own 1 plus the stolen Charity's
+  1 already scores 2 against 1); against 2 that cheap line only ties, and
+  a tie goes to the opponent, who played first -- which the puzzle's
+  description states outright. Courage was also tried as an extra card in
+  the solver's hand and dropped: at opponent totals of 1 and 2 it opened
+  dozens of lines that skip Bliss.
+  `PuzzleContentTest` uses a `playDriven()` helper (not the plain `play()`,
+  which answers every pending decision as if it were the solver's own
+  Duplicity offer) so the opponent bot answers its reveals the way the
+  live routes do.
 
 ### Duel: separate per-player decks
 
