@@ -47,9 +47,31 @@ use MoodSwings\SiteUrl;
  *   deck_type 'custom_duel', 'power' rules preset -- see
  *   powerDuelMenuMessage()'s own docblock) needs no separate carve-out
  *   here: it's just format 'duel' under the hood, and Discord never
- *   creates a best-of-three/sideboarding Power Duel itself, so it starts
- *   rendering the instant its 2 seats have both submitted a deck and
- *   startGame() flips it 'in_progress' -- setup AND play, not just setup.
+ *   creates a sideboarding Power Duel itself, so it starts rendering
+ *   the instant its 2 seats have both submitted a deck and startGame()
+ *   flips it 'in_progress' -- setup AND play, not just setup.
+ * - Best of three (Practice, Friend and Power Duel games offer it at
+ *   creation; Sealed Deck is always one): the board is labeled "Game N
+ *   of 3" with the match standing (matchSummary()); a finished game
+ *   offers "Next game" (`ms:startgame:{nextGameId}`, since
+ *   advanceGameMatch()/advanceDraftMatch() create game N+1 'waiting' and
+ *   nothing starts it); and games 2/3 show "I'll go first"/"Let them go
+ *   first" (`ms:firstplay`/`ms:firstdraw`) to the previous game's loser
+ *   while round 1 is frozen (getState()'s 'first_player_decision'). A
+ *   Power Duel match never offers sideboarding from Discord
+ *   (allowSideboarding stays off), so its decks carry over untouched.
+ * - Sealed Deck (format 'draft', deck_type 'sealed_deck', 2 players only
+ *   -- isSealedDeckGame()): created vs a practice bot or a friend; while
+ *   'waiting' the board is a deck-building screen (sealedDeckBuildingMessage():
+ *   the pool grouped by color, then "Use suggested deck" -- the same
+ *   chooseDraftDeck() heuristic practice bots build with, via
+ *   GameService::suggestDraftDeck() -- "Build deck" (a modal prefilled
+ *   with the pool/current/previous deck as a plain decklist to edit,
+ *   submitted through GameService::submitDraftDeckFromText()) and, for
+ *   games 2/3, "Keep same deck"). The game starts once both decks are in
+ *   (startSealedIfReady(): the server never auto-starts a human-vs-human
+ *   draft-family game, so whichever click lands last does it), then plays
+ *   like any other 2-player game. 3-4 player sealed stays web-only.
  * - A card is only offered to PLAY here (in the "Play a card" select) if
  *   every one of its own choice_fields, up to MAX_CHOICE_FIELDS total
  *   (see supportedChoiceFields()), is one of SUPPORTED_FIELD_TYPES below.
@@ -293,7 +315,64 @@ final class DiscordGameCommandService
         try {
             switch ($verb) {
                 case 'view':
-                    break; // Just re-render below -- nothing to apply first.
+                    // Nothing to apply -- except a Sealed Deck game whose
+                    // last deck just landed from the other player's own
+                    // click, which only this (or any later) client action
+                    // can actually start. See startSealedIfReady().
+                    if ($this->sealedDecksAllSubmitted($this->games->getState($gameId, $userId))) {
+                        $this->startSealedIfReady($gameId);
+                    }
+                    break;
+                case 'advanceturn':
+                    // Clears turn_pending_acknowledgment; the fall-through
+                    // advanceAutomatedTurns() below also lets an
+                    // empty-hand auto-pass (blocked until now) fire.
+                    $gamePlayerId = $this->requireSeatedIn($gameId, $userId);
+                    $this->games->acknowledgeTurnStart($gameId, $gamePlayerId);
+                    break;
+                case 'startgame':
+                    // Game 2/3 of a best of three (advanceGameMatch()/
+                    // advanceDraftMatch() create it 'waiting'; nothing
+                    // starts it). A Sealed Deck next game still needs its
+                    // decks, so startGame() just throws and the board
+                    // below shows the deck-building screen.
+                    $this->requireSeatedIn($gameId, $userId);
+                    $this->startSealedIfReady($gameId);
+                    break;
+                case 'firstplay':
+                case 'firstdraw':
+                    $this->requireSeatedIn($gameId, $userId);
+                    $this->games->setPlayFirstNextMatchGame($gameId, $userId, $verb === 'firstplay');
+                    break;
+                case 'sealedsuggest':
+                    $this->requireSeatedIn($gameId, $userId);
+                    $this->games->submitDraftDeck($gameId, $userId, $this->games->suggestDraftDeck($gameId, $userId));
+                    $this->startSealedIfReady($gameId);
+                    break;
+                case 'sealedkeep':
+                    $this->requireSeatedIn($gameId, $userId);
+                    $deckBuilding = $this->sealedDeckBuildingState($this->games->getState($gameId, $userId));
+                    $previous = $deckBuilding['previous_deck_card_ids'] ?? null;
+                    if ($previous === null) {
+                        throw new GameStateException('There is no previous deck to keep.');
+                    }
+                    $this->games->submitDraftDeck($gameId, $userId, $previous);
+                    $this->startSealedIfReady($gameId);
+                    break;
+                case 'sealedbuild':
+                    $this->requireSeatedIn($gameId, $userId);
+
+                    return $this->sealedBuildModalResponse($gameId, $userId);
+                case 'sealed':
+                    return $this->updateMessage(...$this->sealedDeckMenuMessage());
+                case 'sealedbotmenu':
+                    return $this->updateMessage(...$this->newSealedBotMessage($userId));
+                case 'sealedbot':
+                    return $this->updateMessage(...$this->createSealedGameMessage($userId, (int) ($values[0] ?? 0)));
+                case 'sealedinvite':
+                    return $this->updateMessage(...$this->newSealedFriendMessage($userId));
+                case 'sealedwith':
+                    return $this->updateMessage(...$this->createSealedGameMessage($userId, (int) ($values[0] ?? 0)));
                 case 'pass':
                     $gamePlayerId = $this->requireSeatedIn($gameId, $userId);
                     $this->games->pass($gameId, $gamePlayerId);
@@ -321,13 +400,17 @@ final class DiscordGameCommandService
                     $this->submitDecisionField($gameId, $userId, $gamePlayerId, $values);
                     break;
                 case 'newgame':
-                    return $this->updateMessage(...$this->newPracticeGameMessage($userId));
+                    return $this->updateMessage(...$this->gameModeMessage('Practice game', 'newgamemode'));
+                case 'newgamemode':
+                    return $this->updateMessage(...$this->newPracticeGameMessage($userId, $gameId === 1));
                 case 'newgamebot':
-                    return $this->updateMessage(...$this->createPracticeGameMessage($userId, (int) ($values[0] ?? 0)));
+                    return $this->updateMessage(...$this->createPracticeGameMessage($userId, (int) ($values[0] ?? 0), $gameId === 1));
                 case 'friendgame':
-                    return $this->updateMessage(...$this->newFriendGameMessage($userId));
+                    return $this->updateMessage(...$this->gameModeMessage('Friend game', 'friendgamemode'));
+                case 'friendgamemode':
+                    return $this->updateMessage(...$this->newFriendGameMessage($userId, $gameId === 1));
                 case 'friendgamewith':
-                    return $this->updateMessage(...$this->createFriendGameMessage($userId, (int) ($values[0] ?? 0)));
+                    return $this->updateMessage(...$this->createFriendGameMessage($userId, (int) ($values[0] ?? 0), $gameId === 1));
                 case 'deck':
                     return $this->updateMessage(...$this->deckMenuMessage($userId));
                 case 'deckview':
@@ -343,15 +426,16 @@ final class DiscordGameCommandService
                 case 'powerduel':
                     return $this->updateMessage(...$this->powerDuelMenuMessage($userId));
                 case 'powerduelinvite':
-                    return $this->updateMessage(...$this->newPowerDuelFriendMessage($userId));
+                    return $this->updateMessage(...$this->newPowerDuelFriendMessage($userId, $gameId === 1));
                 case 'powerduelwith':
-                    return $this->updateMessage(...$this->createPowerDuelGameMessage($userId, (int) ($values[0] ?? 0)));
+                    return $this->updateMessage(...$this->createPowerDuelGameMessage($userId, (int) ($values[0] ?? 0), $gameId === 1));
                 case 'powerduelbotmenu':
-                    return $this->updateMessage(...$this->newPowerDuelBotMessage($userId));
+                    return $this->updateMessage(...$this->newPowerDuelBotMessage($userId, $gameId === 1));
                 case 'powerduelbot':
-                    return $this->updateMessage(...$this->choosePowerDuelBotDeckMessage($userId, (int) ($values[0] ?? 0)));
+                    return $this->updateMessage(...$this->choosePowerDuelBotDeckMessage($userId, (int) ($values[0] ?? 0), $gameId === 1));
                 case 'powerduelbotdeck':
-                    return $this->updateMessage(...$this->createPowerDuelGameWithBotMessage($userId, $gameId, (int) ($values[0] ?? 0)));
+                    // arg = the bot's user id; parts[3] = 1 for best of three.
+                    return $this->updateMessage(...$this->createPowerDuelGameWithBotMessage($userId, $gameId, (int) ($values[0] ?? 0), ($parts[3] ?? '0') === '1'));
                 case 'powerduelgame':
                     return $this->updateMessage(...$this->deckSubmissionPromptMessage($gameId, "Submit your decklist for Game #{$gameId}:"));
                 case 'deckchooseopen':
@@ -671,9 +755,23 @@ final class DiscordGameCommandService
      * every other format -- team/closed_team/draft/chaos_draft/puzzle --
      * has its own extra state this class has no rendering for yet).
      */
-    private function isPlayableFormat(string $format, int $playerCount): bool
+    private function isPlayableFormat(string $format, int $playerCount, ?string $deckType = null): bool
     {
-        return $format === 'standard' || ($format === 'duel' && $playerCount === 2);
+        return $format === 'standard'
+            || ($format === 'duel' && $playerCount === 2)
+            || $this->isSealedDeckGame($format, $deckType, $playerCount);
+    }
+
+    /**
+     * Sealed Deck (format 'draft', deck_type 'sealed_deck') -- 2 seats
+     * only. Once both decks are in and startGame() runs it plays exactly
+     * like any other 2-player game (getState()'s own shape matches), but
+     * while still 'waiting' it needs deck-building screens of its own (see
+     * sealedDeckBuildingMessage()) instead of a board.
+     */
+    private function isSealedDeckGame(string $format, ?string $deckType, int $playerCount): bool
+    {
+        return $format === 'draft' && $deckType === 'sealed_deck' && $playerCount === 2;
     }
 
     /**
@@ -716,9 +814,11 @@ final class DiscordGameCommandService
         $game = $state['game'];
         $webUrl = SiteUrl::root() . "/game/?id={$gameId}";
 
-        if (!$this->isPlayableFormat($game['format'], count($state['players']))) {
+        if (!$this->isPlayableFormat($game['format'], count($state['players']), $game['deck_type'])) {
             return ["Game #{$gameId} is a '{$game['format']}' game -- Discord only supports Traditional games so far. Open it in the web app: {$webUrl}", []];
         }
+
+        $match = $this->matchSummary($state);
 
         if ($game['status'] === 'completed') {
             // Reported live: "the ephemeral message announcing the game
@@ -730,7 +830,7 @@ final class DiscordGameCommandService
             // is 'completed'," with the actual result nowhere on screen).
             // winner_usernames (not the single winner_game_player_id) is
             // format 'team's own "both teammates" list -- moot for the
-            // 'standard'-only format this class supports, but the same
+            // 2-player formats this class supports, but the same
             // field the web board's own "Game over" banner already reads.
             $winnerText = $game['winner_usernames'] !== []
                 ? implode(' & ', $game['winner_usernames']) . ' won'
@@ -739,8 +839,28 @@ final class DiscordGameCommandService
                 fn (array $player) => "{$player['username']}: {$player['total_wins']} round(s) won",
                 $state['players'],
             ));
+            $lines = ["Game #{$gameId} is complete -- {$winnerText}! ({$scoreLine})"];
+            $components = [];
 
-            return ["Game #{$gameId} is complete -- {$winnerText}! ({$scoreLine}) Open it in the web app: {$webUrl}", []];
+            // A best-of-three match: say where it stands, and -- while it
+            // isn't over -- hand the player straight to the next game
+            // (advanceGameMatch()/advanceDraftMatch() already created it,
+            // 'waiting'; nothing starts it until a client does).
+            if ($match !== null) {
+                $lines[] = $this->matchStandingLine($match, $game['status']);
+                if ($match['next_game_id'] !== null) {
+                    $components[] = ['type' => 1, 'components' => [
+                        ['type' => 2, 'style' => 1, 'label' => 'Next game', 'custom_id' => "ms:startgame:{$match['next_game_id']}"],
+                    ]];
+                }
+            }
+            $lines[] = "Open it in the web app: {$webUrl}";
+
+            return [implode("\n", $lines), $components];
+        }
+
+        if ($game['status'] === 'waiting') {
+            return $this->waitingGameMessage($gameId, $userId, $state, $match, $notice);
         }
 
         if ($game['status'] !== 'in_progress') {
@@ -761,7 +881,10 @@ final class DiscordGameCommandService
 
         $round = $state['round'];
         $you = $state['you'];
-        $lines = ["**Game #{$gameId}** -- " . implode(', ', $scoreLines)];
+        $lines = ["**Game #{$gameId}**" . ($match !== null ? ' -- ' . $this->matchHeaderLabel($match) : '') . ' -- ' . implode(', ', $scoreLines)];
+        if ($match !== null) {
+            $lines[] = $this->matchStandingLine($match, $game['status']);
+        }
         // Reported live: "the discord client game display needs to show
         // which player went first this round" -- went_first_game_player_id
         // (not the round's own bare first_game_player_id) is deliberately
@@ -779,7 +902,22 @@ final class DiscordGameCommandService
         $decision = $round['pending_decision'] ?? null;
         $components = [];
 
-        if ($decision !== null) {
+        $firstPlayerDecision = $state['first_player_decision'] ?? null;
+
+        if ($firstPlayerDecision !== null) {
+            // Games 2/3 of a best-of-three: round 1 stays frozen until the
+            // previous game's loser picks who goes first (already decided
+            // by advanceAutomatedTurns() when that loser is a bot).
+            if ($firstPlayerDecision['you_are_previous_loser']) {
+                $lines[] = 'You lost the last game, so you choose who goes first this game.';
+                $components[] = ['type' => 1, 'components' => [
+                    ['type' => 2, 'style' => 1, 'label' => 'I\'ll go first', 'custom_id' => "ms:firstplay:{$gameId}"],
+                    ['type' => 2, 'style' => 2, 'label' => 'Let them go first', 'custom_id' => "ms:firstdraw:{$gameId}"],
+                ]];
+            } else {
+                $lines[] = 'Waiting on your opponent to choose who goes first this game.';
+            }
+        } elseif ($decision !== null) {
             if ($decision['is_you'] ?? false) {
                 $lines[] = "Waiting on YOUR response to {$decision['played_card_name']}.";
                 $field = $decision['field'] ?? null;
@@ -800,6 +938,16 @@ final class DiscordGameCommandService
                 $waitingOn = $usernames[$decision['target_game_player_id']] ?? 'another player';
                 $lines[] = "Waiting on {$waitingOn} to respond to {$decision['played_card_name']}.";
             }
+        } elseif (($you['is_your_turn'] ?? false) && ($you['turn_pending_acknowledgment'] ?? false)) {
+            // The opt-in "pause at the start of your turn" setting: play and
+            // pass are rejected server-side (assertTurnAcknowledged()) until
+            // the player clicks Advance Turn, so offering them here instead
+            // would leave the game stuck behind an error. The board above
+            // is already the paused view (before after-scoring effects).
+            $lines[] = "It's your turn -- review the board, then advance when you're ready.";
+            $components[] = ['type' => 1, 'components' => [
+                ['type' => 2, 'style' => 1, 'label' => 'Advance Turn', 'custom_id' => "ms:advanceturn:{$gameId}"],
+            ]];
         } elseif ($you['is_your_turn'] ?? false) {
             $lines[] = "It's your turn -- {$round['plays_remaining']} play(s) remaining.";
             [$playOptions, $unsupportedNames] = $this->playableCardOptions($state);
@@ -920,9 +1068,300 @@ final class DiscordGameCommandService
     }
 
     /**
+     * The best-of-three standing for $state, or null for a plain single
+     * game. Two engines feed it -- getState()'s own 'game_match' (Duel /
+     * Traditional / team, the game_matches wrapper) and 'sealed_deck'
+     * (draft_matches; sealed is always a best of three) -- which both
+     * carry the same your_wins/opponent_wins/games_to_win/status/
+     * next_game_id fields, so everything downstream reads this one shape.
+     *
+     * @param array<string, mixed> $state
+     * @return array{game_number: int, your_wins: int, opponent_wins: int, games_to_win: int, status: string, next_game_id: ?int}|null
+     */
+    private function matchSummary(array $state): ?array
+    {
+        $source = $state['game_match'] ?? $state['sealed_deck'] ?? null;
+        if ($source === null) {
+            return null;
+        }
+
+        return [
+            'game_number' => (int) ($state['game']['match_game_number'] ?? $source['match_game_number'] ?? 1),
+            'your_wins' => (int) $source['your_wins'],
+            'opponent_wins' => (int) $source['opponent_wins'],
+            'games_to_win' => (int) $source['games_to_win'],
+            'status' => (string) $source['status'],
+            'next_game_id' => isset($source['next_game_id']) ? (int) $source['next_game_id'] : null,
+        ];
+    }
+
+    /** @param array{game_number: int, games_to_win: int} $match */
+    private function matchHeaderLabel(array $match): string
+    {
+        $totalGames = $match['games_to_win'] * 2 - 1;
+
+        return "Game {$match['game_number']} of {$totalGames}";
+    }
+
+    /** @param array{game_number: int, your_wins: int, opponent_wins: int, games_to_win: int, status: string} $match */
+    private function matchStandingLine(array $match, string $gameStatus): string
+    {
+        $standing = "Best of three: you {$match['your_wins']} - {$match['opponent_wins']} opponent (first to {$match['games_to_win']}).";
+        if ($match['your_wins'] >= $match['games_to_win']) {
+            return $standing . ' You won the match!';
+        }
+        if ($match['opponent_wins'] >= $match['games_to_win']) {
+            return $standing . ' You lost the match.';
+        }
+
+        return $standing;
+    }
+
+    /**
+     * Whether a game in listGamesForUser()'s own summary shape is
+     * 'waiting' on something the player can act on from Discord -- a
+     * Sealed Deck still in (or done with) deck-building, or game 2/3 of a
+     * best-of-three that advanceGameMatch() created but nobody has
+     * started yet. A fresh game 1 is excluded: every one of those is
+     * either started right at creation, or is a Power Duel (surfaced by
+     * its own menu, powerDuelMenuMessage()).
+     *
+     * @param array<string, mixed> $game
+     */
+    private function waitingGameNeedsAction(array $game): bool
+    {
+        if ($game['status'] !== 'waiting') {
+            return false;
+        }
+
+        return $game['deck_type'] === 'sealed_deck' || ((int) ($game['match_game_number'] ?? 1)) > 1;
+    }
+
+    /**
+     * boardMessage() for a game still 'waiting' -- the Sealed Deck
+     * deck-building screen, the "start game N" prompt for game 2/3 of a
+     * best-of-three, or a Power Duel still needing a decklist. Anything
+     * else waiting (a web-created lobby game, say) keeps the plain "open
+     * it in the web app" message.
+     *
+     * @param array<string, mixed> $state
+     * @param array<string, mixed>|null $match
      * @return array{0: string, 1: array<int, array<string, mixed>>}
      */
-    private function newPracticeGameMessage(int $userId): array
+    private function waitingGameMessage(int $gameId, int $userId, array $state, ?array $match, ?string $notice): array
+    {
+        $game = $state['game'];
+        $webUrl = SiteUrl::root() . "/game/?id={$gameId}";
+        $prefix = $notice !== null ? $notice . "\n" : '';
+
+        $deckBuilding = $state['sealed_deck']['deck_building'] ?? null;
+        if ($deckBuilding !== null) {
+            [$content, $components] = $this->sealedDeckBuildingMessage($gameId, $state, $match, $deckBuilding);
+
+            return [$prefix . $content, $components];
+        }
+
+        if ($game['deck_type'] === 'custom_duel' && $this->games->customDuelDeckStillNeededFrom($gameId, $userId)) {
+            return $this->deckSubmissionPromptMessage($gameId, $prefix . "Game #{$gameId} needs your decklist:");
+        }
+
+        if ($match !== null && $match['game_number'] > 1) {
+            return [
+                $prefix . "**Game #{$gameId}** -- " . $this->matchHeaderLabel($match) . ' is ready.' . "\n" . $this->matchStandingLine($match, 'waiting'),
+                [['type' => 1, 'components' => [
+                    ['type' => 2, 'style' => 1, 'label' => 'Start game', 'custom_id' => "ms:startgame:{$gameId}"],
+                ]]],
+            ];
+        }
+
+        return [$prefix . "Game #{$gameId} is '{$game['status']}'. Open it in the web app: {$webUrl}", []];
+    }
+
+    /**
+     * The Sealed Deck deck-building screen: the viewer's own pool grouped
+     * by color, then whichever of "use the suggested deck" / "build one
+     * by hand" / (games 2 and 3) "keep last game's deck" still applies.
+     * The web app's click-to-toggle builder has no Discord equivalent, so
+     * hand-building is a modal prefilled with the pool (or the previous/
+     * current deck) as a plain decklist to trim down and resubmit -- see
+     * sealedBuildModalResponse().
+     *
+     * @param array<string, mixed> $state
+     * @param array<string, mixed>|null $match
+     * @param array<string, mixed> $deckBuilding getState()'s sealed_deck.deck_building
+     * @return array{0: string, 1: array<int, array<string, mixed>>}
+     */
+    private function sealedDeckBuildingMessage(int $gameId, array $state, ?array $match, array $deckBuilding): array
+    {
+        $label = $match !== null ? $this->matchHeaderLabel($match) : 'Game 1 of 3';
+        $lines = ["**Game #{$gameId}** -- Sealed Deck, {$label}"];
+        if ($match !== null) {
+            $lines[] = $this->matchStandingLine($match, 'waiting');
+        }
+
+        $cards = $deckBuilding['drafted_cards'];
+        $lines[] = 'Your pool (' . count($cards) . ' cards):';
+        $lines[] = $this->sealedPoolSummary($cards);
+
+        $minSize = (int) $deckBuilding['min_deck_size'];
+        $youSubmitted = (bool) $deckBuilding['you_submitted'];
+        $opponentNames = array_map(
+            static fn (array $other): string => (string) ($other['username'] ?? 'your opponent'),
+            $deckBuilding['other_players'],
+        );
+        $opponent = $opponentNames[0] ?? 'your opponent';
+
+        $buttons = [];
+        if ($youSubmitted) {
+            $lines[] = 'Your deck is in (' . count($deckBuilding['deck_card_ids']) . " cards). Waiting on {$opponent} to submit theirs.";
+            $buttons[] = ['type' => 2, 'style' => 2, 'label' => 'Change deck', 'custom_id' => "ms:sealedbuild:{$gameId}"];
+        } else {
+            $lines[] = "Choose a deck of {$minSize}-{$deckBuilding['max_deck_size']} cards from your pool.";
+            $buttons[] = ['type' => 2, 'style' => 1, 'label' => 'Use suggested deck', 'custom_id' => "ms:sealedsuggest:{$gameId}"];
+            $buttons[] = ['type' => 2, 'style' => 2, 'label' => 'Build deck', 'custom_id' => "ms:sealedbuild:{$gameId}"];
+            if ($deckBuilding['previous_deck_card_ids'] !== null) {
+                $buttons[] = ['type' => 2, 'style' => 2, 'label' => 'Keep same deck', 'custom_id' => "ms:sealedkeep:{$gameId}"];
+            }
+        }
+        $buttons[] = ['type' => 2, 'style' => 2, 'label' => 'Refresh', 'custom_id' => "ms:view:{$gameId}"];
+
+        return [implode("\n", $lines), [
+            ['type' => 1, 'components' => $buttons],
+            $this->utilityButtonsRow(),
+        ]];
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $cards serialized catalog cards (duplicates included)
+     */
+    private function sealedPoolSummary(array $cards): string
+    {
+        $byColor = [];
+        foreach ($cards as $card) {
+            $key = $card['name'] . ' (' . $card['value'] . ')';
+            $byColor[ucfirst((string) $card['color'])][$key] = ($byColor[ucfirst((string) $card['color'])][$key] ?? 0) + 1;
+        }
+        ksort($byColor);
+
+        $lines = [];
+        foreach ($byColor as $color => $counts) {
+            ksort($counts);
+            $entries = [];
+            foreach ($counts as $name => $count) {
+                $entries[] = $count > 1 ? "{$name} x{$count}" : $name;
+            }
+            $lines[] = "{$color}: " . implode(', ', $entries);
+        }
+
+        return implode("\n", $lines);
+    }
+
+    /**
+     * @param array<string, mixed> $state
+     * @return array<string, mixed>|null sealed_deck.deck_building, only while this game is still 'waiting' on decks
+     */
+    private function sealedDeckBuildingState(array $state): ?array
+    {
+        return ($state['game']['status'] ?? null) === 'waiting' ? ($state['sealed_deck']['deck_building'] ?? null) : null;
+    }
+
+    /**
+     * The MODAL behind "Build deck"/"Change deck": a decklist to edit --
+     * already-submitted deck if there is one, else the previous game's
+     * deck (sealed is a best of three; decks usually carry over with a
+     * tweak), else the whole pool to trim down to at least the minimum.
+     *
+     * @return array<string, mixed>
+     */
+    private function sealedBuildModalResponse(int $gameId, int $userId): array
+    {
+        $deckBuilding = $this->sealedDeckBuildingState($this->games->getState($gameId, $userId));
+        if ($deckBuilding === null) {
+            throw new GameStateException("Game #{$gameId} isn't waiting on a sealed deck.");
+        }
+
+        $cardIds = $deckBuilding['deck_card_ids']
+            ?? $deckBuilding['previous_deck_card_ids']
+            ?? array_map(static fn (array $card): int => (int) $card['card_id'], $deckBuilding['drafted_cards']);
+
+        return ['type' => 9, 'data' => [
+            'custom_id' => "ms:sealedbuildsubmit:{$gameId}",
+            'title' => 'Build your Sealed deck',
+            'components' => [
+                ['type' => 1, 'components' => [[
+                    'type' => 4,
+                    'custom_id' => 'decklist',
+                    'style' => 2,
+                    'label' => 'Deck (min ' . $deckBuilding['min_deck_size'] . ' cards, from your pool)',
+                    'value' => $this->decklistToText($cardIds, []),
+                    'max_length' => 4000,
+                    'required' => true,
+                ]]],
+            ],
+        ]];
+    }
+
+    /**
+     * Starts a Sealed Deck game whose every seat has now submitted --
+     * startGame() is the single source of truth for "ready", throwing
+     * until they have, and the server never auto-starts a human-vs-human
+     * draft-family game on its own (the web client's own poll does it),
+     * so whichever player's click lands last has to. Silent otherwise.
+     */
+    private function startSealedIfReady(int $gameId): void
+    {
+        try {
+            $this->games->startGame($gameId);
+        } catch (GameStateException) {
+            // Not everyone has submitted yet, or already started.
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $state
+     */
+    private function sealedDecksAllSubmitted(array $state): bool
+    {
+        $deckBuilding = $this->sealedDeckBuildingState($state);
+        if ($deckBuilding === null || !$deckBuilding['you_submitted']) {
+            return false;
+        }
+        foreach ($deckBuilding['other_players'] as $other) {
+            if (!$other['submitted']) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Sealed Deck entry point -- format 'draft', deck_type 'sealed_deck',
+     * 2 players. Always a best of three (the engine makes every 2-player
+     * draft-family match one), so there's no mode to pick; the creator
+     * just chooses a practice bot or a friend. Custom_id scheme:
+     * `ms:sealed:0` (this menu), `ms:sealedbotmenu:0` -> `ms:sealedbot:0`
+     * (values[0] = bot user id), `ms:sealedinvite:0` ->
+     * `ms:sealedwith:0` (values[0] = friend user id), then per game
+     * `ms:sealedsuggest:{gameId}`, `ms:sealedbuild:{gameId}` (opens the
+     * modal; `ms:sealedbuildsubmit:{gameId}` is its MODAL_SUBMIT) and
+     * `ms:sealedkeep:{gameId}`.
+     *
+     * @return array{0: string, 1: array<int, array<string, mixed>>}
+     */
+    private function sealedDeckMenuMessage(): array
+    {
+        return [
+            "Sealed Deck: you each get a fresh pool of 45 cards and build a deck of at least 12 from it, then play a best-of-three match. Who do you want to play?",
+            [['type' => 1, 'components' => [
+                ['type' => 2, 'style' => 1, 'label' => 'vs Practice Bot', 'custom_id' => 'ms:sealedbotmenu:0'],
+                ['type' => 2, 'style' => 2, 'label' => 'vs a Friend', 'custom_id' => 'ms:sealedinvite:0'],
+            ]]],
+        ];
+    }
+
+    /** @return array{0: string, 1: array<int, array<string, mixed>>} */
+    private function newSealedBotMessage(int $userId): array
     {
         $bots = $this->games->listPracticeBots();
         if ($bots === []) {
@@ -930,7 +1369,78 @@ final class DiscordGameCommandService
         }
 
         if (count($bots) === 1) {
-            return $this->createPracticeGameMessage($userId, $bots[0]['user_id']);
+            return $this->createSealedGameMessage($userId, $bots[0]['user_id']);
+        }
+
+        $options = array_map(
+            fn (array $bot) => ['label' => $bot['username'], 'value' => (string) $bot['user_id']],
+            array_slice($bots, 0, self::MAX_SELECT_OPTIONS),
+        );
+
+        return ['Choose a practice bot for Sealed Deck:', [['type' => 1, 'components' => [[
+            'type' => 3,
+            'custom_id' => 'ms:sealedbot:0',
+            'placeholder' => 'Choose a practice bot...',
+            'options' => $options,
+        ]]]]];
+    }
+
+    /** @return array{0: string, 1: array<int, array<string, mixed>>} */
+    private function newSealedFriendMessage(int $userId): array
+    {
+        $friends = $this->friendships->listFriends($userId);
+        if ($friends === []) {
+            return [
+                'You don\'t have any friends added yet. Add one at ' . SiteUrl::root() . '/game/?open_friends=1, then try again.',
+                [],
+            ];
+        }
+
+        $options = array_map(
+            fn (array $friend) => ['label' => $friend['friend_username'], 'value' => (string) $friend['friend_id']],
+            array_slice($friends, 0, self::MAX_SELECT_OPTIONS),
+        );
+
+        return ['Choose a friend for Sealed Deck:', [['type' => 1, 'components' => [[
+            'type' => 3,
+            'custom_id' => 'ms:sealedwith:0',
+            'placeholder' => 'Choose a friend...',
+            'options' => $options,
+        ]]]]];
+    }
+
+    /**
+     * Creates the match and shows its deck-building screen. No startGame()
+     * here -- every seat still has to build a deck first. The
+     * advanceAutomatedTurns() call is what makes a practice bot build and
+     * submit its own deck right away (a no-op against a human opponent).
+     *
+     * @return array{0: string, 1: array<int, array<string, mixed>>, 2?: array<int, array<string, mixed>>}
+     */
+    private function createSealedGameMessage(int $userId, int $opponentUserId): array
+    {
+        try {
+            $gameId = $this->games->createGame($userId, [$userId, $opponentUserId], format: 'draft', deckType: 'sealed_deck');
+            $this->games->advanceAutomatedTurns($gameId);
+        } catch (\Throwable $e) {
+            return ["Couldn't start a Sealed Deck game: " . $e->getMessage(), []];
+        }
+
+        return $this->boardMessage($gameId, $userId);
+    }
+
+    /**
+     * @return array{0: string, 1: array<int, array<string, mixed>>}
+     */
+    private function newPracticeGameMessage(int $userId, bool $bestOfThree = false): array
+    {
+        $bots = $this->games->listPracticeBots();
+        if ($bots === []) {
+            return ['No practice bots are configured on this deployment.', []];
+        }
+
+        if (count($bots) === 1) {
+            return $this->createPracticeGameMessage($userId, $bots[0]['user_id'], $bestOfThree);
         }
 
         $options = array_map(
@@ -940,7 +1450,7 @@ final class DiscordGameCommandService
 
         $components = [['type' => 1, 'components' => [[
             'type' => 3,
-            'custom_id' => 'ms:newgamebot:0',
+            'custom_id' => 'ms:newgamebot:' . ($bestOfThree ? '1' : '0'),
             'placeholder' => 'Choose a practice bot...',
             'options' => $options,
         ]]]];
@@ -964,10 +1474,10 @@ final class DiscordGameCommandService
      *
      * @return array{0: string, 1: array<int, array<string, mixed>>}
      */
-    private function createPracticeGameMessage(int $userId, int $botUserId): array
+    private function createPracticeGameMessage(int $userId, int $botUserId, bool $bestOfThree = false): array
     {
         try {
-            $gameId = $this->games->createGame($userId, [$userId, $botUserId]);
+            $gameId = $this->games->createGame($userId, [$userId, $botUserId], bestOfThree: $bestOfThree);
             $this->games->startGame($gameId);
             $this->games->advanceAutomatedTurns($gameId);
         } catch (\Throwable $e) {
@@ -997,7 +1507,7 @@ final class DiscordGameCommandService
      *
      * @return array{0: string, 1: array<int, array<string, mixed>>}
      */
-    private function newFriendGameMessage(int $userId): array
+    private function newFriendGameMessage(int $userId, bool $bestOfThree = false): array
     {
         $friends = $this->friendships->listFriends($userId);
         if ($friends === []) {
@@ -1014,7 +1524,7 @@ final class DiscordGameCommandService
 
         $components = [['type' => 1, 'components' => [[
             'type' => 3,
-            'custom_id' => 'ms:friendgamewith:0',
+            'custom_id' => 'ms:friendgamewith:' . ($bestOfThree ? '1' : '0'),
             'placeholder' => 'Choose a friend...',
             'options' => $options,
         ]]]];
@@ -1048,10 +1558,10 @@ final class DiscordGameCommandService
      *
      * @return array{0: string, 1: array<int, array<string, mixed>>}
      */
-    private function createFriendGameMessage(int $userId, int $opponentUserId): array
+    private function createFriendGameMessage(int $userId, int $opponentUserId, bool $bestOfThree = false): array
     {
         try {
-            $gameId = $this->games->createGame($userId, [$userId, $opponentUserId]);
+            $gameId = $this->games->createGame($userId, [$userId, $opponentUserId], bestOfThree: $bestOfThree);
             $this->games->startGame($gameId);
             $this->games->advanceAutomatedTurns($gameId);
         } catch (\Throwable $e) {
@@ -1120,6 +1630,8 @@ final class DiscordGameCommandService
         $components[] = ['type' => 1, 'components' => [
             ['type' => 2, 'style' => 2, 'label' => 'Invite a Friend', 'custom_id' => 'ms:powerduelinvite:0'],
             ['type' => 2, 'style' => 2, 'label' => 'vs Practice Bot', 'custom_id' => 'ms:powerduelbotmenu:0'],
+            ['type' => 2, 'style' => 2, 'label' => 'Best of 3: Friend', 'custom_id' => 'ms:powerduelinvite:1'],
+            ['type' => 2, 'style' => 2, 'label' => 'Best of 3: Bot', 'custom_id' => 'ms:powerduelbotmenu:1'],
         ]];
 
         return [implode("\n", $lines), $components];
@@ -1149,7 +1661,7 @@ final class DiscordGameCommandService
     }
 
     /** @return array{0: string, 1: array<int, array<string, mixed>>} */
-    private function newPowerDuelFriendMessage(int $userId): array
+    private function newPowerDuelFriendMessage(int $userId, bool $bestOfThree = false): array
     {
         $friends = $this->friendships->listFriends($userId);
         if ($friends === []) {
@@ -1166,12 +1678,12 @@ final class DiscordGameCommandService
 
         $components = [['type' => 1, 'components' => [[
             'type' => 3,
-            'custom_id' => 'ms:powerduelwith:0',
+            'custom_id' => 'ms:powerduelwith:' . ($bestOfThree ? '1' : '0'),
             'placeholder' => 'Choose a friend...',
             'options' => $options,
         ]]]];
 
-        return ['Choose a friend for a Power Duel:', $components];
+        return [($bestOfThree ? 'Choose a friend for a best-of-three Power Duel:' : 'Choose a friend for a Power Duel:'), $components];
     }
 
     /**
@@ -1189,10 +1701,10 @@ final class DiscordGameCommandService
      *
      * @return array{0: string, 1: array<int, array<string, mixed>>}
      */
-    private function createPowerDuelGameMessage(int $userId, int $opponentUserId): array
+    private function createPowerDuelGameMessage(int $userId, int $opponentUserId, bool $bestOfThree = false): array
     {
         try {
-            $gameId = $this->games->createGame($userId, [$userId, $opponentUserId], format: 'duel', deckType: 'custom_duel', duelDeckRules: ['preset' => 'power']);
+            $gameId = $this->games->createGame($userId, [$userId, $opponentUserId], format: 'duel', deckType: 'custom_duel', duelDeckRules: ['preset' => 'power'], bestOfThree: $bestOfThree);
         } catch (\Throwable $e) {
             return ["Couldn't start a Power Duel: " . $e->getMessage(), []];
         }
@@ -1222,7 +1734,7 @@ final class DiscordGameCommandService
      *
      * @return array{0: string, 1: array<int, array<string, mixed>>}
      */
-    private function newPowerDuelBotMessage(int $userId): array
+    private function newPowerDuelBotMessage(int $userId, bool $bestOfThree = false): array
     {
         $bots = $this->games->listPracticeBots();
         if ($bots === []) {
@@ -1230,7 +1742,7 @@ final class DiscordGameCommandService
         }
 
         if (count($bots) === 1) {
-            return $this->choosePowerDuelBotDeckMessage($userId, $bots[0]['user_id']);
+            return $this->choosePowerDuelBotDeckMessage($userId, $bots[0]['user_id'], $bestOfThree);
         }
 
         $options = array_map(
@@ -1240,7 +1752,7 @@ final class DiscordGameCommandService
 
         $components = [['type' => 1, 'components' => [[
             'type' => 3,
-            'custom_id' => 'ms:powerduelbot:0',
+            'custom_id' => 'ms:powerduelbot:' . ($bestOfThree ? '1' : '0'),
             'placeholder' => 'Choose a practice bot...',
             'options' => $options,
         ]]]];
@@ -1257,7 +1769,7 @@ final class DiscordGameCommandService
      *
      * @return array{0: string, 1: array<int, array<string, mixed>>}
      */
-    private function choosePowerDuelBotDeckMessage(int $userId, int $botUserId): array
+    private function choosePowerDuelBotDeckMessage(int $userId, int $botUserId, bool $bestOfThree = false): array
     {
         $decklists = $this->userDecklists->listForViewer($userId)['own'];
         if ($decklists === []) {
@@ -1274,7 +1786,7 @@ final class DiscordGameCommandService
 
         $components = [['type' => 1, 'components' => [[
             'type' => 3,
-            'custom_id' => "ms:powerduelbotdeck:{$botUserId}",
+            'custom_id' => "ms:powerduelbotdeck:{$botUserId}" . ($bestOfThree ? ':1' : ''),
             'placeholder' => "Choose the bot's decklist...",
             'options' => $options,
         ]]]];
@@ -1294,7 +1806,7 @@ final class DiscordGameCommandService
      *
      * @return array{0: string, 1: array<int, array<string, mixed>>}
      */
-    private function createPowerDuelGameWithBotMessage(int $userId, int $botUserId, int $botDecklistId): array
+    private function createPowerDuelGameWithBotMessage(int $userId, int $botUserId, int $botDecklistId, bool $bestOfThree = false): array
     {
         try {
             $gameId = $this->games->createGame(
@@ -1304,6 +1816,7 @@ final class DiscordGameCommandService
                 deckType: 'custom_duel',
                 duelDeckRules: ['preset' => 'power'],
                 botSavedDecklistId: $botDecklistId,
+                bestOfThree: $bestOfThree,
             );
         } catch (\Throwable $e) {
             return ["Couldn't start a Power Duel: " . $e->getMessage(), []];
@@ -1645,6 +2158,13 @@ final class DiscordGameCommandService
                     $this->userDecklists->update($userId, $arg, $fields['name'] ?? '', $fields['decklist'] ?? '', null, null, 'private');
 
                     return $this->updateMessage(...$this->deckDetailMessage($userId, $arg));
+                case 'sealedbuildsubmit':
+                    $this->requireSeatedIn($arg, $userId);
+                    $this->games->submitDraftDeckFromText($arg, $userId, $fields['decklist'] ?? '');
+                    $this->startSealedIfReady($arg);
+                    $this->games->advanceAutomatedTurns($arg);
+
+                    return $this->updateMessage(...$this->boardMessage($arg, $userId));
                 case 'deckpastesubmit':
                     $gamePlayerId = $this->requireSeatedIn($arg, $userId);
                     $this->games->submitCustomDuelDeck($arg, $gamePlayerId, $fields['decklist'] ?? '', null, $userId);
@@ -1701,7 +2221,24 @@ final class DiscordGameCommandService
             $this->inviteFriendButton(),
             $this->myDecksButton(),
             $this->powerDuelButton(),
+            ['type' => 2, 'style' => 2, 'label' => 'Sealed Deck', 'custom_id' => 'ms:sealed:0'],
         ]];
+    }
+
+    /**
+     * The "single game or best of three?" step in front of the Practice
+     * and Friend pickers. $nextVerb gets the answer as its arg (0 single,
+     * 1 best of three) -- Power Duel skips this step, offering its own
+     * best-of-three entries right on its menu instead.
+     *
+     * @return array{0: string, 1: array<int, array<string, mixed>>}
+     */
+    private function gameModeMessage(string $title, string $nextVerb): array
+    {
+        return ["{$title}: a single game, or a best-of-three match?", [['type' => 1, 'components' => [
+            ['type' => 2, 'style' => 1, 'label' => 'Single game', 'custom_id' => "ms:{$nextVerb}:0"],
+            ['type' => 2, 'style' => 2, 'label' => 'Best of three', 'custom_id' => "ms:{$nextVerb}:1"],
+        ]]]];
     }
 
     /**
@@ -2501,7 +3038,8 @@ final class DiscordGameCommandService
     {
         $gameIds = [];
         foreach ($this->games->listGamesForUser($userId) as $game) {
-            if ($game['status'] === 'in_progress' && $this->isPlayableFormat($game['format'], count($game['players']))) {
+            if ($this->isPlayableFormat($game['format'], count($game['players']), $game['deck_type'])
+                && ($game['status'] === 'in_progress' || $this->waitingGameNeedsAction($game))) {
                 $gameIds[] = $game['id'];
             }
         }

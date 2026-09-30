@@ -22,6 +22,7 @@ ExportedObj/
 *.csproj
 *.unityproj
 *.sln
+*.slnx
 *.suo
 *.tmp
 *.user
@@ -57,3 +58,9 @@ crashlytics-build.properties
 # Temporary auto-generated Android Assets
 /[Aa]ssets/[Ss]treamingAssets/aa.meta
 /[Aa]ssets/[Ss]treamingAssets/aa/*
+
+# Card art converted from ../web-static/img by tools/convert_card_art.py
+# (regenerated on demand, not a second checked-in copy of the art)
+/[Aa]ssets/[Rr]esources/CardArt/
+/[Aa]ssets/[Rr]esources/CardArt.meta
+/[Aa]ssets/[Rr]esources.meta

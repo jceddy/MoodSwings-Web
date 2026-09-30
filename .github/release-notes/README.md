@@ -25,6 +25,13 @@ ten separate one-line entries for ten separate card fixes. The file is
 never required; when it's absent (the common case), the auto-generated
 list is used exactly as before.
 
+A bullet about a puzzle being added or changed is name-only -- `Added
+puzzle <Name>` / `Updated puzzle <Name>` -- never which cards it uses, its
+goal, or what changed, since that would spoil it (see "Puzzle
+additions/updates in announcements" in the repo-root `CLAUDE.md`). The
+same goes for the subject of a puzzle commit, which is what the
+auto-generated fallback above would otherwise print.
+
 None of this runs at all when a promotion doesn't actually move the
 repo-root `VERSION` file -- `deploy.yml`'s "Check whether VERSION
 changed" step skips the announce step entirely in that case (e.g. a

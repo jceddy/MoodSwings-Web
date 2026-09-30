@@ -2551,7 +2551,11 @@ final class GameService
      */
     public function listPracticeBots(): array
     {
-        $stmt = Connection::get()->query('SELECT id, username, uses_tactical_ai FROM users WHERE is_bot = 1 ORDER BY id ASC');
+        // PuzzleOpponent is an is_bot row too (puzzles need a real user to
+        // seat opposite the solver) but is never a playable opponent --
+        // keep it out of every New Game picker (web and Discord).
+        $stmt = Connection::get()->prepare('SELECT id, username, uses_tactical_ai FROM users WHERE is_bot = 1 AND username <> :puzzle_opponent ORDER BY id ASC');
+        $stmt->execute(['puzzle_opponent' => self::PUZZLE_OPPONENT_USERNAME]);
 
         return array_map(
             static fn (array $row) => [
@@ -3813,13 +3817,48 @@ final class GameService
             }
             $playGrants = $extraPlayGrant !== null ? [null, $extraPlayGrant] : [null];
 
+            $firstPlayerId = $opponentGamePlayerId ?? $gamePlayerId;
+
+            // puzzles.solver_round_wins/opponent_round_wins: round wins
+            // aren't a stored counter anywhere -- they're always derived
+            // from 'scored' game_rounds rows (see totalWinsFor()) -- so a
+            // puzzle that opens mid-match ("each player has two round
+            // wins") seeds that many already-scored rounds, interleaved so
+            // the history reads naturally, and the live round below just
+            // takes the next round_number.
+            $seededWinners = [];
+            $solverRoundWins = (int) $puzzle['solver_round_wins'];
+            $opponentRoundWins = $opponentGamePlayerId !== null ? (int) $puzzle['opponent_round_wins'] : 0;
+            for ($i = 0; $i < max($solverRoundWins, $opponentRoundWins); $i++) {
+                if ($i < $solverRoundWins) {
+                    $seededWinners[] = $gamePlayerId;
+                }
+                if ($i < $opponentRoundWins) {
+                    $seededWinners[] = $opponentGamePlayerId;
+                }
+            }
+            $insertScoredRound = $pdo->prepare(
+                "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, status, winner_game_player_id, wins_awarded, scored_at)
+                 VALUES (:game_id, :round_number, :first_player, :first_player2, 0, 'scored', :winner, 1, NOW())"
+            );
+            foreach ($seededWinners as $index => $winnerId) {
+                $insertScoredRound->execute([
+                    'game_id' => $gameId,
+                    'round_number' => $index + 1,
+                    'first_player' => $firstPlayerId,
+                    'first_player2' => $firstPlayerId,
+                    'winner' => $winnerId,
+                ]);
+            }
+
             $insertRound = $pdo->prepare(
                 "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, pending_play_grants, status)
-                 VALUES (:game_id, 1, :first_player, :current_player, :plays_remaining, :pending_play_grants, 'in_progress')"
+                 VALUES (:game_id, :round_number, :first_player, :current_player, :plays_remaining, :pending_play_grants, 'in_progress')"
             );
             $insertRound->execute([
                 'game_id' => $gameId,
-                'first_player' => $opponentGamePlayerId ?? $gamePlayerId,
+                'round_number' => count($seededWinners) + 1,
+                'first_player' => $firstPlayerId,
                 'current_player' => $gamePlayerId,
                 'plays_remaining' => count($playGrants),
                 'pending_play_grants' => json_encode($playGrants),
@@ -5567,6 +5606,53 @@ final class GameService
         if ((bool) $game['synchronous_mode']) {
             $this->creditDeckBuildingTimeIfNeeded($gameId, $draftMatchId, $userId);
         }
+    }
+
+    /**
+     * Submits $decklistText (the same plain-text "2 Joy" format
+     * DecklistParser accepts everywhere else -- a Discord modal's own
+     * text field, most recently) as $userId's own draft/sealed deck,
+     * through submitDraftDeck() itself so every one of its checks (size,
+     * pool membership, rarity caps, deck_building status) applies
+     * unchanged. Any Sideboard section is ignored -- a drafted deck has
+     * no separate sideboard concept of its own here.
+     */
+    public function submitDraftDeckFromText(int $gameId, int $userId, string $decklistText): void
+    {
+        $parsed = (new DecklistParser($this->loadCardCatalog()['idsByName']))->parse($decklistText);
+        $this->submitDraftDeck($gameId, $userId, $parsed['cardIds']);
+    }
+
+    /**
+     * A reasonable starting deck for $userId's own draft/sealed pool --
+     * the exact same chooseDraftDeck() heuristic a practice bot builds
+     * its own deck with (see advanceBotDraftDeck()), drawn from the same
+     * pickableDraftPoolFor() pool submitDraftDeck() validates against, so
+     * the result is always submittable as-is. For clients (Discord) that
+     * can't offer the web app's own click-to-toggle deck builder.
+     *
+     * @return int[] catalog card ids, ready for submitDraftDeck()
+     */
+    public function suggestDraftDeck(int $gameId, int $userId): array
+    {
+        $game = $this->fetchGame($gameId);
+        if (!in_array($game['deck_type'], self::DRAFT_DECK_TYPES, true) || $game['draft_match_id'] === null) {
+            throw new GameStateException("Game {$gameId} is not a draft game");
+        }
+
+        $draftMatchId = (int) $game['draft_match_id'];
+        $teammateUserId = $this->openTeamPlayTeammateUserId($gameId, $game['format'], $userId);
+        $pickableCardIds = $this->pickableDraftPoolFor($draftMatchId, $userId, $teammateUserId);
+        $rarityCaps = array_key_exists($game['deck_type'], self::PERIODIC_SEALED_POOL_DECK_TYPES)
+            ? self::PERIODIC_SEALED_POOL_RARITY_DECK_CAPS
+            : null;
+
+        return $this->bots->chooseDraftDeck(
+            $pickableCardIds,
+            self::draftMinDeckSizeFor($game['deck_type']),
+            $this->draftBotScoringData(),
+            $rarityCaps,
+        );
     }
 
     /**
@@ -11494,12 +11580,14 @@ final class GameService
         $puzzle = $puzzleStmt->fetch();
         $goalParams = json_decode((string) $puzzle['goal_params'], true);
 
+        $winsAwardedThisRound = null;
         $goalMet = match ($puzzle['goal_type']) {
             'hand_empty' => $state->hand($gamePlayerId) === [],
             'card_in_hand' => $this->puzzleZoneHasCatalogCard($state, $state->hand($gamePlayerId), (int) $goalParams['catalog_card_id']),
             'card_in_play' => $this->puzzleZoneHasCatalogCard($state, array_keys($state->moodsOwnedBy($gamePlayerId)), (int) $goalParams['catalog_card_id']),
             'min_score' => $this->puzzleScoreFor($state, $gamePlayerId) >= (int) $goalParams['target'],
             'outscore_opponent' => $this->puzzleSolverOutscoresOpponent($gameId, $gamePlayerId, $state),
+            'win_game' => ($winsAwardedThisRound = $this->puzzleGameWinningRoundWins($gameId, $gamePlayerId, $state)) !== null,
             default => false,
         };
 
@@ -11538,8 +11626,18 @@ final class GameService
         // solve's own game_completed => true response with whatever that
         // last auto-pass call returned. 'scored' is the closest existing
         // status, even though nothing here was actually scored.
-        $pdo->prepare("UPDATE game_rounds SET status = 'scored' WHERE game_id = :game_id AND status = 'in_progress'")
-            ->execute(['game_id' => $gameId]);
+        // A 'win_game' solve actually won that round -- recorded as such
+        // so the board's own win tally ends at the clinching total rather
+        // than one short of it. Every other goal type never scored the
+        // round at all, so it stays unattributed.
+        $pdo->prepare(
+            "UPDATE game_rounds SET status = 'scored', winner_game_player_id = :winner, wins_awarded = :wins_awarded
+             WHERE game_id = :game_id AND status = 'in_progress'"
+        )->execute([
+            'winner' => $winsAwardedThisRound !== null ? $gamePlayerId : null,
+            'wins_awarded' => $winsAwardedThisRound ?? 0,
+            'game_id' => $gameId,
+        ]);
 
         $userIdStmt = $pdo->prepare('SELECT user_id FROM game_players WHERE id = :id');
         $userIdStmt->execute(['id' => $gamePlayerId]);
@@ -11617,6 +11715,30 @@ final class GameService
         $scores = $this->scorer->score($state);
 
         return $this->scorer->winner($scores, [$opponentId, $gamePlayerId]) === $gamePlayerId;
+    }
+
+    /**
+     * goal_type 'win_game': "win the game this turn." Solved the moment
+     * the solver would win the round (puzzleSolverOutscoresOpponent()'s own
+     * real-scorer math, ties to whoever played first) AND that round win
+     * would actually clinch the game -- the wins already banked by seeded
+     * rounds (puzzles.solver_round_wins), plus whatever this round awards
+     * (2 under Corruption's extra-win marker, else 1), reaching
+     * games.wins_needed, the same threshold scoreRoundAndAdvance() itself
+     * compares. Returns the wins this round would award if so, null if
+     * either half fails -- outscoring while a win short of clinching is
+     * deliberately NOT a solve.
+     */
+    private function puzzleGameWinningRoundWins(int $gameId, int $gamePlayerId, BoardState $state): ?int
+    {
+        if (!$this->puzzleSolverOutscoresOpponent($gameId, $gamePlayerId, $state)) {
+            return null;
+        }
+
+        $winsThisRound = $this->hasExtraWinMarker($state) ? 2 : 1;
+        $winsNeeded = (int) $this->fetchGame($gameId)['wins_needed'];
+
+        return $this->totalWinsFor($gameId, $gamePlayerId) + $winsThisRound >= $winsNeeded ? $winsThisRound : null;
     }
 
     /**
