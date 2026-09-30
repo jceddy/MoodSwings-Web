@@ -8100,6 +8100,16 @@ the two currently supported formats"):
   created (`advanceAutomatedTurns()`). 3-4 player sealed games stay
   web-only.
 
+**Advance Turn via Discord** (reported live: "the discord client needs to
+show the Advance turn button when appropriate, otherwise a game will get
+stuck") -- a player with the "pause at the start of your turn" setting
+gets `turn_pending_acknowledgment` raised after an after-scoring effect
+moves cards, and the server rejects play/pass until it's cleared
+(`assertTurnAcknowledged()`). `boardMessage()` now shows an `Advance Turn`
+button (`ms:advanceturn:{gameId}` -> `acknowledgeTurnStart()`, then the
+usual `advanceAutomatedTurns()` fall-through) instead of the play select
+and Pass while `you.turn_pending_acknowledgment` is set.
+
 **Playing a card with a `grant_choice` field** (reported live: a
 player's entire hand showed "needs the web app to play" with no
 card-specific pattern -- root cause turned out to be 2 simultaneously

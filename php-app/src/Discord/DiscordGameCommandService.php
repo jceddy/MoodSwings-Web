@@ -323,6 +323,13 @@ final class DiscordGameCommandService
                         $this->startSealedIfReady($gameId);
                     }
                     break;
+                case 'advanceturn':
+                    // Clears turn_pending_acknowledgment; the fall-through
+                    // advanceAutomatedTurns() below also lets an
+                    // empty-hand auto-pass (blocked until now) fire.
+                    $gamePlayerId = $this->requireSeatedIn($gameId, $userId);
+                    $this->games->acknowledgeTurnStart($gameId, $gamePlayerId);
+                    break;
                 case 'startgame':
                     // Game 2/3 of a best of three (advanceGameMatch()/
                     // advanceDraftMatch() create it 'waiting'; nothing
@@ -931,6 +938,16 @@ final class DiscordGameCommandService
                 $waitingOn = $usernames[$decision['target_game_player_id']] ?? 'another player';
                 $lines[] = "Waiting on {$waitingOn} to respond to {$decision['played_card_name']}.";
             }
+        } elseif (($you['is_your_turn'] ?? false) && ($you['turn_pending_acknowledgment'] ?? false)) {
+            // The opt-in "pause at the start of your turn" setting: play and
+            // pass are rejected server-side (assertTurnAcknowledged()) until
+            // the player clicks Advance Turn, so offering them here instead
+            // would leave the game stuck behind an error. The board above
+            // is already the paused view (before after-scoring effects).
+            $lines[] = "It's your turn -- review the board, then advance when you're ready.";
+            $components[] = ['type' => 1, 'components' => [
+                ['type' => 2, 'style' => 1, 'label' => 'Advance Turn', 'custom_id' => "ms:advanceturn:{$gameId}"],
+            ]];
         } elseif ($you['is_your_turn'] ?? false) {
             $lines[] = "It's your turn -- {$round['plays_remaining']} play(s) remaining.";
             [$playOptions, $unsupportedNames] = $this->playableCardOptions($state);
