@@ -13597,6 +13597,33 @@ than a parallel bespoke system:
   Duplicity offer) so the opponent bot answers its reveals the way the
   live routes do.
 
+- **13th puzzle, "Hostile Takeover"** (reported live: a puzzle focused on
+  Rationalization -- hit a point total that needs every card in your hand
+  and the opponent's played, in a specific order, with Rationalization
+  stealing the opponent's hand once it is your last card), hard,
+  `min_score` 13, `max_plays` 7, no new puzzle infrastructure. The solver
+  holds Rationalization, Validation, Charity and Friendliness; the opponent
+  holds Kindness, Benevolence and Eagerness; 13 is the seven printed values
+  added together, so every card has to be played. Rationalization's rotate
+  mode swaps whole hands, so played as the last card in hand it steals all
+  three at no cost (played earlier it gives the rest of your hand away),
+  and it grants no extra play itself -- the plays have to be banked first,
+  each with a string attached. The one winning order: Validation, Charity,
+  Friendliness (its even-value play is saved for later), Rationalization
+  (rotate), then Benevolence (even, paid by Friendliness; its own play
+  needs a color you don't have yet), Eagerness (green; its own play needs a
+  color you do have), Kindness. Traps that each fall one card short at 11:
+  Rationalization the moment it is playable (Friendliness goes to the
+  opponent), and Eagerness before Benevolence or Kindness first after the
+  steal (the leftover grant can't pay for the last stolen card). Found by
+  an exhaustive search of every legal line against the real engine,
+  including each choice of which play grant to spend
+  (`grant_source_card_id`) -- the first pass assumed the engine picks a
+  grant for you and found far fewer alternative lines than actually exist;
+  a card order counts as one solution however its grants are chosen.
+  Duplicity and Fear were tried in the card pool and dropped (multiple
+  winning orders, or an unreadable solution).
+
 ### Duel: separate per-player decks
 
 `format: 'duel'` and `format: 'draft'` (see "Draft format" below) are the
