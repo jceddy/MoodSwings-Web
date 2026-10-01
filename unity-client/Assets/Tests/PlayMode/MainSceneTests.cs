@@ -51,6 +51,9 @@ namespace MoodSwings.Tests
 
         private static IEnumerator Launch(Func<HttpRequest, HttpResponse> handler, string rememberedSession = null)
         {
+            ScreenshotHelper.UseFullHdScreen();
+            yield return null;
+
             var disk = new InMemoryKeyValueStore();
             var store = new SecureSessionStore(disk, new NullSecretProtector());
             if (rememberedSession != null)
@@ -67,7 +70,7 @@ namespace MoodSwings.Tests
 
         private static IEnumerator WaitFor<T>(float timeoutSeconds = 6f) where T : UiScreen
         {
-            var router = UnityEngine.Object.FindFirstObjectByType<ScreenRouter>();
+            var router = UnityEngine.Object.FindAnyObjectByType<ScreenRouter>();
             var waited = 0f;
             while (!(router.Current is T) && waited < timeoutSeconds)
             {
@@ -98,7 +101,7 @@ namespace MoodSwings.Tests
             }
         }
 
-        private static T Screen<T>() where T : UiScreen => UnityEngine.Object.FindFirstObjectByType<T>(FindObjectsInactive.Include);
+        private static T Screen<T>() where T : UiScreen => UnityEngine.Object.FindAnyObjectByType<T>(FindObjectsInactive.Include);
 
         private static HttpResponse MeOk(HttpRequest request) =>
             request.Url.EndsWith("/app/me") ? Reply(200, "{\"status\":\"ok\",\"user\":" + UserJson + "}") : Reply(404, "{}");
@@ -114,7 +117,7 @@ namespace MoodSwings.Tests
                 yield return null;
             }
 
-            var router = UnityEngine.Object.FindFirstObjectByType<ScreenRouter>();
+            var router = UnityEngine.Object.FindAnyObjectByType<ScreenRouter>();
             Assert.IsInstanceOf<SplashScreen>(router.Current);
             ScreenshotHelper.Capture("splash-loading");
         }
@@ -168,7 +171,7 @@ namespace MoodSwings.Tests
             yield return new WaitForSeconds(1.5f);
             yield return null;
 
-            var router = UnityEngine.Object.FindFirstObjectByType<ScreenRouter>();
+            var router = UnityEngine.Object.FindAnyObjectByType<ScreenRouter>();
             Assert.IsInstanceOf<SplashScreen>(router.Current);
             ScreenshotHelper.Capture("splash-offline");
         }

@@ -67,8 +67,9 @@ Each phase ends with something runnable against the dev server
 - **Status:** built and verified headless against a scripted transport
   (EditMode + PlayMode with screenshots, and live unauthenticated checks
   against the dev server). Android: the APK builds, installs and runs on an
-  API 36 x86_64 emulator (landscape, login screen, live server version), and
-  the 6 Keystore tests pass on it. **Not yet verified:** a real login (run the
+  API 36 x86_64 emulator under Unity 6000.2.1f1 (landscape, login screen, live
+  server version), and the 6 Keystore tests pass on it. Unity 6.6 dropped
+  x86_64 Android, so further Android checks need a physical ARM64 device. **Not yet verified:** a real login (run the
   live test with a dev account, or just try the Main scene), and anything on
   a physical Android device.
 

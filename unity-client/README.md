@@ -23,7 +23,7 @@ Committed:
   slightly stale.
 - `ProjectSettings/ProjectVersion.txt` -- pins an Editor version so
   Unity Hub knows what to open this with. Currently pinned to
-  **Unity 6000.2.1f1** (Unity 6.2); install that Editor via Unity Hub
+  **Unity 6000.6.3f1** (Unity 6.6); install that Editor via Unity Hub
   to open the project.
 - `.gitignore` -- Unity's own standard template
   (`Library/`, `Temp/`, `Obj/`, `Build/`, `Logs/`, `UserSettings/`, ...),
@@ -33,7 +33,7 @@ Committed:
 
 ## First-time setup
 
-1. Install Unity Hub and Editor version 6000.2.1f1 (matching
+1. Install Unity Hub and Editor version 6000.6.3f1 (matching
    `ProjectSettings/ProjectVersion.txt` above).
 2. In Unity Hub, **Open** (not "New Project") and point it at this
    `unity-client/` folder directly. Unity will recognize the existing
@@ -94,8 +94,9 @@ before it touches `PlayerPrefs`:
 
 - **Windows:** DPAPI (current-user key), via P/Invoke.
 - **Android:** Keystore AES-GCM, in `Assets/Plugins/Android/SecureStore.java`.
-  Verified on an Android 16 (API 36) x86_64 emulator -- see "Android" below;
-  not yet run on a physical device.
+  Verified on an Android 16 (API 36) x86_64 emulator under Unity 6000.2.1f1 --
+  see "Android" below. Not yet re-run since the move to 6.6 (which can't
+  target that emulator), and never run on a physical device.
 - **Anything else** (macOS/Linux/iOS): no secure storage yet, so sessions
   aren't remembered there.
 
@@ -126,21 +127,22 @@ graphics for the screenshots, so omit `-nographics` there.
 
 ## Android
 
-The Android module needs an editor install that includes it (the
-`6000.2.1f1-x86_64` Hub folder, not plain `6000.2.1f1`). It bundles its own
-JDK/NDK/SDK.
+Install the Android Build Support module for the project's editor in Unity
+Hub. It bundles its own JDK/NDK/SDK.
 
 - **Build an APK:** **MoodSwings > Build Android APK**, or headless:
   `Unity.exe -batchmode -quit -buildTarget Android -executeMethod
   MoodSwings.Editor.AndroidBuild.Build` -> `Build/Android/MoodSwings.apk`.
-  It forces IL2CPP and ARM64+x86_64 (the x86_64 is only so it runs on the
-  standard emulator). A first build takes ~40 minutes; later ones reuse the
-  IL2CPP cache. Running it saves those settings into `ProjectSettings`.
+  It forces IL2CPP and ARM64 only -- Unity 6.6 dropped x86/x86_64 Android,
+  so the standard x86_64 emulator can no longer run these builds; test on a
+  physical ARM64 device. A first build takes a long time; later ones reuse
+  the IL2CPP cache. Running it saves those settings into `ProjectSettings`.
 - **Run the Keystore tests on a device:** `ANDROID_SERIAL=<device> Unity.exe
   -batchmode -projectPath . -buildTarget Android -runTests -testPlatform
   Android -testFilter MoodSwings.Tests.AndroidKeystoreTests -testResults
   r.xml`. Unity builds a test player, installs it, and pulls results back.
-- **Emulator gotchas:** the default AVD has ~2 GB RAM, which a development
+- **Emulator gotchas** (from the 6.2-era x86_64 emulator runs; the same
+  limits apply to any low-memory device): the default AVD has ~2 GB RAM, which a development
   build full of card art can exhaust (the test player then freezes and Unity
   reports "No activity received from the player in 600 seconds") -- move
   `Assets/Resources/CardArt` aside for device test runs. Also turn off

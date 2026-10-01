@@ -8,10 +8,10 @@ namespace MoodSwings.Core.Storage
     /// Assets/Plugins/Android/SecureStore.java (Java rather than C# JNI
     /// calls, which can't resolve the Keystore API's overloads reliably).
     ///
-    /// UNVERIFIED ON A DEVICE: this environment has no Android build module,
-    /// so neither the Java nor this wrapper has been built or run. It fails
+    /// Covered by AndroidKeystoreTests, which passed on an API 36 x86_64
+    /// emulator (Unity 6.2); not yet run on a physical device. It fails
     /// closed -- any error means "no saved session", never a plaintext
-    /// fallback. Verify on a real device when the Android module is installed.
+    /// fallback.
     /// </summary>
     public sealed class AndroidKeystoreSecretProtector : ISecretProtector
     {
