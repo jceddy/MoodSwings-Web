@@ -72,6 +72,15 @@ use MoodSwings\SiteUrl;
  *   (startSealedIfReady(): the server never auto-starts a human-vs-human
  *   draft-family game, so whichever click lands last does it), then plays
  *   like any other 2-player game. 3-4 player sealed stays web-only.
+ * - Quick Draft (deck_type 'quick_draft', 2 players only -- same
+ *   isDraftMatchGame()): created from the Drafts menu vs a practice bot
+ *   or a friend with a pool source of the creator's choice. While the
+ *   match is 'drafting' the board is a pick screen (quickDraftPickMessage():
+ *   the pile you hold and a select of exactly 2 cards to keep, submitted
+ *   through GameService::submitQuickDraftPick()); once drafting ends it
+ *   is the very same deck-building screen as Sealed Deck (getState()'s
+ *   'quick_draft' carries the same deck_building shape), then a
+ *   best-of-three. 3-4 player Quick Draft stays web-only.
  * - A card is only offered to PLAY here (in the "Play a card" select) if
  *   every one of its own choice_fields, up to MAX_CHOICE_FIELDS total
  *   (see supportedChoiceFields()), is one of SUPPORTED_FIELD_TYPES below.
@@ -161,6 +170,14 @@ final class DiscordGameCommandService
     private const SUPPORTED_FIELD_TYPES = ['mode', 'value', 'bool', 'mood', 'player', 'hand_card', 'discard_card', 'grant_choice'];
 
     private const MAX_SELECT_OPTIONS = 25;
+
+    /** Quick Draft pool sources offered from Discord (the ones needing no extra input). */
+    private const QUICK_DRAFT_POOLS = [
+        'random_48' => 'Random 48 cards',
+        'structure' => 'Structure deck (45 cards)',
+        'jceddys_75' => "jceddy's 75",
+        'one_of_each' => 'One of each card',
+    ];
 
     /**
      * The most choice_fields any hand-playable card actually has --
@@ -363,6 +380,25 @@ final class DiscordGameCommandService
                     $this->requireSeatedIn($gameId, $userId);
 
                     return $this->sealedBuildModalResponse($gameId, $userId);
+                case 'drafts':
+                    return $this->updateMessage(...$this->draftsMenuMessage());
+                case 'qd':
+                    return $this->updateMessage(...$this->quickDraftMenuMessage());
+                case 'qdpool':
+                    return $this->updateMessage(...$this->quickDraftOpponentMessage((string) ($values[0] ?? '')));
+                case 'qdbotmenu':
+                    return $this->updateMessage(...$this->quickDraftBotMessage($userId, (string) ($parts[3] ?? '')));
+                case 'qdbot':
+                    return $this->updateMessage(...$this->createQuickDraftGameMessage($userId, (int) ($values[0] ?? 0), (string) ($parts[3] ?? '')));
+                case 'qdinvite':
+                    return $this->updateMessage(...$this->quickDraftFriendMessage($userId, (string) ($parts[3] ?? '')));
+                case 'qdwith':
+                    return $this->updateMessage(...$this->createQuickDraftGameMessage($userId, (int) ($values[0] ?? 0), (string) ($parts[3] ?? '')));
+                case 'qdpick':
+                    $this->requireSeatedIn($gameId, $userId);
+                    $cardIds = array_map(static fn ($v): int => (int) explode('_', (string) $v)[0], $values);
+                    $this->games->submitQuickDraftPick($gameId, $userId, (int) ($parts[3] ?? 0), (int) ($parts[4] ?? 0), $cardIds);
+                    break;
                 case 'sealed':
                     return $this->updateMessage(...$this->sealedDeckMenuMessage());
                 case 'sealedbotmenu':
@@ -759,19 +795,38 @@ final class DiscordGameCommandService
     {
         return $format === 'standard'
             || ($format === 'duel' && $playerCount === 2)
-            || $this->isSealedDeckGame($format, $deckType, $playerCount);
+            || $this->isDraftMatchGame($format, $deckType, $playerCount);
     }
 
     /**
-     * Sealed Deck (format 'draft', deck_type 'sealed_deck') -- 2 seats
-     * only. Once both decks are in and startGame() runs it plays exactly
-     * like any other 2-player game (getState()'s own shape matches), but
-     * while still 'waiting' it needs deck-building screens of its own (see
-     * sealedDeckBuildingMessage()) instead of a board.
+     * Sealed Deck / Quick Draft (format 'draft', deck_type 'sealed_deck' or
+     * 'quick_draft') -- 2 seats only. Once both decks are in and
+     * startGame() runs it plays exactly like any other 2-player game
+     * (getState()'s own shape matches), but while still 'waiting' it needs
+     * screens of its own (sealedDeckBuildingMessage(), and for Quick
+     * Draft's drafting phase quickDraftPickMessage()) instead of a board.
      */
-    private function isSealedDeckGame(string $format, ?string $deckType, int $playerCount): bool
+    private function isDraftMatchGame(string $format, ?string $deckType, int $playerCount): bool
     {
-        return $format === 'draft' && $deckType === 'sealed_deck' && $playerCount === 2;
+        return $format === 'draft' && in_array($deckType, ['sealed_deck', 'quick_draft'], true) && $playerCount === 2;
+    }
+
+    /**
+     * getState()'s draft-match sub-state -- 'sealed_deck' or 'quick_draft'
+     * (the other is null); both share the match standing and
+     * deck_building shape.
+     *
+     * @param array<string, mixed> $state
+     * @return array<string, mixed>|null
+     */
+    private function draftMatchState(array $state): ?array
+    {
+        return $state['sealed_deck'] ?? $state['quick_draft'] ?? null;
+    }
+
+    private function draftModeLabel(?string $deckType): string
+    {
+        return $deckType === 'quick_draft' ? 'Quick Draft' : 'Sealed Deck';
     }
 
     /**
@@ -1080,7 +1135,7 @@ final class DiscordGameCommandService
      */
     private function matchSummary(array $state): ?array
     {
-        $source = $state['game_match'] ?? $state['sealed_deck'] ?? null;
+        $source = $state['game_match'] ?? $this->draftMatchState($state);
         if ($source === null) {
             return null;
         }
@@ -1134,7 +1189,7 @@ final class DiscordGameCommandService
             return false;
         }
 
-        return $game['deck_type'] === 'sealed_deck' || ((int) ($game['match_game_number'] ?? 1)) > 1;
+        return in_array($game['deck_type'], ['sealed_deck', 'quick_draft'], true) || ((int) ($game['match_game_number'] ?? 1)) > 1;
     }
 
     /**
@@ -1154,7 +1209,14 @@ final class DiscordGameCommandService
         $webUrl = SiteUrl::root() . "/game/?id={$gameId}";
         $prefix = $notice !== null ? $notice . "\n" : '';
 
-        $deckBuilding = $state['sealed_deck']['deck_building'] ?? null;
+        $drafting = $state['quick_draft']['drafting'] ?? null;
+        if ($drafting !== null) {
+            [$content, $components] = $this->quickDraftPickMessage($gameId, $state, $match, $drafting);
+
+            return [$prefix . $content, $components];
+        }
+
+        $deckBuilding = $this->draftMatchState($state)['deck_building'] ?? null;
         if ($deckBuilding !== null) {
             [$content, $components] = $this->sealedDeckBuildingMessage($gameId, $state, $match, $deckBuilding);
 
@@ -1194,7 +1256,7 @@ final class DiscordGameCommandService
     private function sealedDeckBuildingMessage(int $gameId, array $state, ?array $match, array $deckBuilding): array
     {
         $label = $match !== null ? $this->matchHeaderLabel($match) : 'Game 1 of 3';
-        $lines = ["**Game #{$gameId}** -- Sealed Deck, {$label}"];
+        $lines = ["**Game #{$gameId}** -- " . $this->draftModeLabel($state['game']['deck_type'] ?? null) . ", {$label}"];
         if ($match !== null) {
             $lines[] = $this->matchStandingLine($match, 'waiting');
         }
@@ -1262,7 +1324,7 @@ final class DiscordGameCommandService
      */
     private function sealedDeckBuildingState(array $state): ?array
     {
-        return ($state['game']['status'] ?? null) === 'waiting' ? ($state['sealed_deck']['deck_building'] ?? null) : null;
+        return ($state['game']['status'] ?? null) === 'waiting' ? ($this->draftMatchState($state)['deck_building'] ?? null) : null;
     }
 
     /**
@@ -1277,7 +1339,7 @@ final class DiscordGameCommandService
     {
         $deckBuilding = $this->sealedDeckBuildingState($this->games->getState($gameId, $userId));
         if ($deckBuilding === null) {
-            throw new GameStateException("Game #{$gameId} isn't waiting on a sealed deck.");
+            throw new GameStateException("Game #{$gameId} isn't waiting on a deck.");
         }
 
         $cardIds = $deckBuilding['deck_card_ids']
@@ -1286,7 +1348,7 @@ final class DiscordGameCommandService
 
         return ['type' => 9, 'data' => [
             'custom_id' => "ms:sealedbuildsubmit:{$gameId}",
-            'title' => 'Build your Sealed deck',
+            'title' => 'Build your deck',
             'components' => [
                 ['type' => 1, 'components' => [[
                     'type' => 4,
@@ -1333,6 +1395,193 @@ final class DiscordGameCommandService
         }
 
         return true;
+    }
+
+    /**
+     * Quick Draft's pick screen: the pile the viewer currently holds and
+     * a select of exactly 2 cards to keep (the rest go on to the next
+     * player). custom_id `ms:qdpick:{gameId}:{round}:{stage}` pins the
+     * submission to this exact pile -- a stale click on an old screen is
+     * rejected by the engine rather than applied to a later pile. Waiting
+     * on the opponent just shows what's been kept so far and a Refresh.
+     *
+     * @param array<string, mixed> $state
+     * @param array<string, mixed>|null $match
+     * @param array<string, mixed> $drafting getState()'s quick_draft.drafting
+     * @return array{0: string, 1: array<int, array<string, mixed>>}
+     */
+    private function quickDraftPickMessage(int $gameId, array $state, ?array $match, array $drafting): array
+    {
+        $lines = ["**Game #{$gameId}** -- Quick Draft, round {$drafting['round']} of {$drafting['total_rounds']}, pick {$drafting['stage']} of {$drafting['total_stages']}"];
+
+        $kept = $drafting['kept_so_far'];
+        $lines[] = 'Kept so far (' . count($kept) . ' cards):' . ($kept === [] ? ' none yet' : '');
+        if ($kept !== []) {
+            $lines[] = $this->sealedPoolSummary($kept);
+        }
+
+        $buttons = [];
+        $components = [];
+        if ($drafting['status'] === 'picking') {
+            $pack = $drafting['pack'];
+            $keepCount = min(2, count($pack));
+            $lines[] = '';
+            $lines[] = "Choose {$keepCount} to keep -- the rest are passed on:";
+            $options = [];
+            foreach ($pack as $index => $card) {
+                $lines[] = "- **{$card['name']}** ({$card['value']}, " . ucfirst((string) $card['color']) . '): ' . (string) $card['rules_text'];
+                $options[] = [
+                    'label' => mb_substr("{$card['name']} ({$card['value']}, " . ucfirst((string) $card['color']) . ')', 0, 100),
+                    'value' => $card['card_id'] . '_' . $index,
+                ];
+            }
+            $components[] = ['type' => 1, 'components' => [[
+                'type' => 3,
+                'custom_id' => "ms:qdpick:{$gameId}:{$drafting['round']}:{$drafting['stage']}",
+                'placeholder' => "Pick {$keepCount} card(s) to keep...",
+                'min_values' => $keepCount,
+                'max_values' => $keepCount,
+                'options' => array_slice($options, 0, self::MAX_SELECT_OPTIONS),
+            ]]];
+        } else {
+            $lines[] = 'Waiting on the other player to pick.';
+        }
+        $buttons[] = ['type' => 2, 'style' => 2, 'label' => 'Refresh', 'custom_id' => "ms:view:{$gameId}"];
+        $components[] = ['type' => 1, 'components' => $buttons];
+        $components[] = $this->utilityButtonsRow();
+
+        return [mb_substr(implode("\n", $lines), 0, 2000), $components];
+    }
+
+    /**
+     * Quick Draft entry point (`ms:qd:0`): choose the card pool, then
+     * vs a practice bot or a friend. The pool source rides along as the
+     * custom_id's 4th part through the whole flow:
+     * `ms:qdpool:0` (values[0] = pool) -> `ms:qdbotmenu:0:{pool}` ->
+     * `ms:qdbot:0:{pool}` (values[0] = bot user id), or
+     * `ms:qdinvite:0:{pool}` -> `ms:qdwith:0:{pool}` (values[0] = friend).
+     *
+     * @return array{0: string, 1: array<int, array<string, mixed>>}
+     */
+    private function quickDraftMenuMessage(): array
+    {
+        $options = [];
+        foreach (self::QUICK_DRAFT_POOLS as $value => $label) {
+            $options[] = ['label' => $label, 'value' => $value];
+        }
+
+        return [
+            "Quick Draft: each round you each get a pile of cards, keep 2, and pass the rest -- then build a deck of at least 12 from what you kept and play a best-of-three match. Choose the card pool:",
+            [['type' => 1, 'components' => [[
+                'type' => 3,
+                'custom_id' => 'ms:qdpool:0',
+                'placeholder' => 'Choose a card pool...',
+                'options' => $options,
+            ]]]],
+        ];
+    }
+
+    /** @return array{0: string, 1: array<int, array<string, mixed>>} */
+    private function quickDraftOpponentMessage(string $pool): array
+    {
+        if (!isset(self::QUICK_DRAFT_POOLS[$pool])) {
+            return ['Unknown card pool.', []];
+        }
+
+        return [
+            'Quick Draft (' . self::QUICK_DRAFT_POOLS[$pool] . '). Who do you want to play?',
+            [['type' => 1, 'components' => [
+                ['type' => 2, 'style' => 1, 'label' => 'vs Practice Bot', 'custom_id' => "ms:qdbotmenu:0:{$pool}"],
+                ['type' => 2, 'style' => 2, 'label' => 'vs a Friend', 'custom_id' => "ms:qdinvite:0:{$pool}"],
+            ]]],
+        ];
+    }
+
+    /** @return array{0: string, 1: array<int, array<string, mixed>>} */
+    private function quickDraftBotMessage(int $userId, string $pool): array
+    {
+        $bots = $this->games->listPracticeBots();
+        if ($bots === []) {
+            return ['No practice bots are configured on this deployment.', []];
+        }
+        if (count($bots) === 1) {
+            return $this->createQuickDraftGameMessage($userId, $bots[0]['user_id'], $pool);
+        }
+
+        $options = array_map(
+            fn (array $bot) => ['label' => $bot['username'], 'value' => (string) $bot['user_id']],
+            array_slice($bots, 0, self::MAX_SELECT_OPTIONS),
+        );
+
+        return ['Choose a practice bot for Quick Draft:', [['type' => 1, 'components' => [[
+            'type' => 3,
+            'custom_id' => "ms:qdbot:0:{$pool}",
+            'placeholder' => 'Choose a practice bot...',
+            'options' => $options,
+        ]]]]];
+    }
+
+    /** @return array{0: string, 1: array<int, array<string, mixed>>} */
+    private function quickDraftFriendMessage(int $userId, string $pool): array
+    {
+        $friends = $this->friendships->listFriends($userId);
+        if ($friends === []) {
+            return [
+                'You don\'t have any friends added yet. Add one at ' . SiteUrl::root() . '/game/?open_friends=1, then try again.',
+                [],
+            ];
+        }
+
+        $options = array_map(
+            fn (array $friend) => ['label' => $friend['friend_username'], 'value' => (string) $friend['friend_id']],
+            array_slice($friends, 0, self::MAX_SELECT_OPTIONS),
+        );
+
+        return ['Choose a friend for Quick Draft:', [['type' => 1, 'components' => [[
+            'type' => 3,
+            'custom_id' => "ms:qdwith:0:{$pool}",
+            'placeholder' => 'Choose a friend...',
+            'options' => $options,
+        ]]]]];
+    }
+
+    /**
+     * Creates the Quick Draft match and shows its first pick screen. The
+     * advanceAutomatedTurns() call lets a practice bot make its own pick
+     * right away (a no-op against a human opponent).
+     *
+     * @return array{0: string, 1: array<int, array<string, mixed>>}
+     */
+    private function createQuickDraftGameMessage(int $userId, int $opponentUserId, string $pool): array
+    {
+        if (!isset(self::QUICK_DRAFT_POOLS[$pool])) {
+            return ['Unknown card pool.', []];
+        }
+
+        try {
+            $gameId = $this->games->createGame($userId, [$userId, $opponentUserId], format: 'draft', deckType: 'quick_draft', quickDraftPoolSource: $pool);
+            $this->games->advanceAutomatedTurns($gameId);
+        } catch (\Throwable $e) {
+            return ["Couldn't start a Quick Draft game: " . $e->getMessage(), []];
+        }
+
+        return $this->boardMessage($gameId, $userId);
+    }
+
+    /**
+     * The Drafts menu behind the utility row's "Drafts" button.
+     *
+     * @return array{0: string, 1: array<int, array<string, mixed>>}
+     */
+    private function draftsMenuMessage(): array
+    {
+        return [
+            'Which draft-style game do you want to play?',
+            [['type' => 1, 'components' => [
+                ['type' => 2, 'style' => 1, 'label' => 'Sealed Deck', 'custom_id' => 'ms:sealed:0'],
+                ['type' => 2, 'style' => 1, 'label' => 'Quick Draft', 'custom_id' => 'ms:qd:0'],
+            ]]],
+        ];
     }
 
     /**
@@ -2221,7 +2470,7 @@ final class DiscordGameCommandService
             $this->inviteFriendButton(),
             $this->myDecksButton(),
             $this->powerDuelButton(),
-            ['type' => 2, 'style' => 2, 'label' => 'Sealed Deck', 'custom_id' => 'ms:sealed:0'],
+            ['type' => 2, 'style' => 2, 'label' => 'Drafts', 'custom_id' => 'ms:drafts:0'],
         ]];
     }
 
