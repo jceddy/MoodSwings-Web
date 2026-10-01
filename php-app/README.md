@@ -11973,6 +11973,24 @@ rejected purely for the points it gives up. *Opponent's:* never a target
 tests Rationalization/Shock use. Every other opponent mood stays a normal
 Panic candidate.
 
+**Thrill and replay moods (reported live).** The same card-advantage logic
+applies to Thrill ("you may put any number of your other moods into your
+hand; if you do, you may play that many additional moods this turn"): a bot
+now bounces its own Compulsion/Suspicion/Intimidation/Paranoia
+(`PANIC_REPLAY_EFFECT_KEYS`) with it (`BotPlayerService::
+thrillReplayStealMoodIds()`, alongside the existing Nostalgia case). Each
+bounce is free -- Thrill grants exactly one unconditional extra play per mood
+returned, so the mood is replayed this same turn at its unchanged printed
+value (`EARLY_PRIORITY_EFFECT_KEYS` makes the bot lead with exactly these
+cards) while its "after playing" effect fires again. Capped at the number of
+cards the opponents are holding between them (a replay with nothing left to
+take isn't worth the churn), highest-priority mood first. Joy and Charity
+follow the same pattern (`thrillReplayExtraPlayMoodIds()`; each replay nets
+an extra play on top of the one Thrill grants): **every Joy** in play is
+bounced unconditionally (it banks a play for next turn), and Charity is
+bounced only while the bot holds at least one other card besides Thrill to
+spend the extra play on (one Charity per such card).
+
 ### Diagnostic mode
 
 An opt-in, creation-time flag (`games.diagnostic_mode`, migration `0255`)
