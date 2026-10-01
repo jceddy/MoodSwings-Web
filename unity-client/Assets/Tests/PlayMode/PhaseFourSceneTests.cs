@@ -39,7 +39,7 @@ namespace MoodSwings.Tests
             public HttpResponse Handle(HttpRequest request)
             {
                 var path = request.Url.Substring(request.Url.IndexOf("/app/", StringComparison.Ordinal) + 4);
-                Calls.Add($"{request.Method} {path}");
+                Calls.Add($"{request.Method} {path} {request.Body}");
 
                 if (path.StartsWith("/games/state") || path.StartsWith("/games/spectate/state"))
                 {
@@ -55,6 +55,11 @@ namespace MoodSwings.Tests
 
                 switch (path)
                 {
+                    case "/games/spectatable": return MainSceneTests.Reply(200, Fixture("games"));
+                    case "/games/spectate/resolve":
+                        return request.Body != null && request.Body.Contains("AB12")
+                            ? MainSceneTests.Reply(200, "{\"status\":\"ok\",\"game_id\":406}")
+                            : MainSceneTests.Reply(404, "{\"status\":\"error\",\"message\":\"No game found for that spectate code.\"}");
                     case "/me": return MainSceneTests.Reply(200, Fixture("me"));
                     case "/friends": return MainSceneTests.Reply(200, Fixture("friends"));
                     case "/friends/invites": return MainSceneTests.Reply(200, Fixture("friends_invites"));
@@ -352,6 +357,88 @@ namespace MoodSwings.Tests
             Assert.IsNull(Child("Card Superiority"), "a spectator is shown none of the seat-0 player's hand");
             Assert.IsNotNull(Child("Seat bshaftoe"));
             ScreenshotHelper.Capture("board-spectator");
+        }
+
+        // --- watching someone else's game ------------------------------------------------------------
+
+        /// <summary>A spectator's view of a captured game: no seat of their own, no hand.</summary>
+        private static string AsSpectator(int gameId) =>
+            Edited(gameId, s => s["you"] = new JObject { ["game_player_id"] = null, ["hand"] = new JArray() });
+
+        private static IEnumerator OpenWatch(BoardServer server)
+        {
+            yield return MainSceneTests.Launch(server.Handle, rememberedSession: "tok");
+            yield return MainSceneTests.WaitFor<HomeScreen>();
+            yield return PhaseTwoSceneTests.Click("Play  (3 waiting on you)");
+            yield return MainSceneTests.WaitFor<PlayScreen>();
+            yield return PhaseTwoSceneTests.Click("Watch");
+            yield return MainSceneTests.WaitFor<WatchScreen>();
+        }
+
+        [UnityTest]
+        public IEnumerator Watch_ListsFriendsGames_AndOpensOneAsASpectatorWithoutACode()
+        {
+            var server = new BoardServer { SpectatorState = AsSpectator };
+            yield return OpenWatch(server);
+
+            // A section title and one row per game.
+            Assert.AreEqual(1 + 3, MainSceneTests.Screen<WatchScreen>().RowCount);
+            ScreenshotHelper.Capture("watch");
+
+            // The topmost "Watch" is the code field's; the first row's is the next one down.
+            var rowButtons = UnityEngine.Object.FindObjectsByType<Button>(FindObjectsInactive.Exclude)
+                .Where(b => b.GetComponentInChildren<Text>()?.text == "Watch")
+                .OrderByDescending(b => b.transform.position.y).ToList();
+            rowButtons[1].onClick.Invoke();
+            yield return MainSceneTests.WaitFor<BoardScreen>();
+            yield return PhaseTwoSceneTests.Frames(8);
+
+            Assert.IsTrue(server.Calls.Any(c => c.StartsWith("GET /games/spectate/state?game_id=") && !c.Contains("code=")),
+                string.Join("\n", server.Calls));
+            Assert.IsTrue(VisibleTexts().Contains("You're watching this game."));
+        }
+
+        [UnityTest]
+        public IEnumerator Watch_ACodeOpensThatGame_AndTheBoardKeepsUsingTheCode()
+        {
+            var server = new BoardServer { SpectatorState = AsSpectator };
+            yield return OpenWatch(server);
+            MainSceneTests.Screen<WatchScreen>().GetComponentInChildren<InputField>().text = " AB12 ";
+
+            yield return PhaseTwoSceneTests.Click("Watch");
+            yield return MainSceneTests.WaitFor<BoardScreen>();
+            yield return PhaseTwoSceneTests.Frames(8);
+
+            Assert.IsTrue(server.Calls.Any(c => c.StartsWith("POST /games/spectate/resolve") && c.Contains("\"code\":\"AB12\"")));
+            Assert.IsTrue(server.Calls.Any(c => c.StartsWith("GET /games/spectate/state?game_id=406&code=AB12")),
+                string.Join("\n", server.Calls));
+            StringAssert.Contains("watching", Board().RoundText);
+        }
+
+        [UnityTest]
+        public IEnumerator Watch_AnUnknownCode_ShowsWhy_AndStaysPut()
+        {
+            var server = new BoardServer { SpectatorState = AsSpectator };
+            yield return OpenWatch(server);
+            MainSceneTests.Screen<WatchScreen>().GetComponentInChildren<InputField>().text = "NOPE";
+
+            yield return PhaseTwoSceneTests.Click("Watch");
+
+            Assert.AreEqual("No game found for that spectate code.", MainSceneTests.Screen<WatchScreen>().StatusText);
+            Assert.IsInstanceOf<WatchScreen>(UnityEngine.Object.FindAnyObjectByType<ScreenRouter>().Current);
+        }
+
+        [UnityTest]
+        public IEnumerator Watch_WithNoCodeTyped_AsksForOne_WithoutCallingTheServer()
+        {
+            var server = new BoardServer();
+            yield return OpenWatch(server);
+            var before = server.Calls.Count(c => c.StartsWith("POST /games/spectate/resolve"));
+
+            yield return PhaseTwoSceneTests.Click("Watch");
+
+            Assert.AreEqual("Enter a spectate code.", MainSceneTests.Screen<WatchScreen>().StatusText);
+            Assert.AreEqual(before, server.Calls.Count(c => c.StartsWith("POST /games/spectate/resolve")));
         }
 
         // --- polling and failures ----------------------------------------------------------------

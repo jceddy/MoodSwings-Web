@@ -9,8 +9,8 @@ namespace MoodSwings.UI
     /// <summary>
     /// Play: your games (waiting on you first, then in progress, then
     /// finished), with the doors to starting a new game and to the open
-    /// lobby. Any game can be opened to its board, and a finished one can be
-    /// rematched.
+    /// lobby, and Watch for spectating. Any game can be opened to its board, and
+    /// a finished one can be rematched.
     /// </summary>
     public sealed class PlayScreen : ListScreen
     {
@@ -46,6 +46,8 @@ namespace MoodSwings.UI
             UiFactory.Flexible(newGame.gameObject, width: 1f);
             var open = UiFactory.Button(actions.transform, "Open games", theme, () => Router.Show<OpenGamesScreen>(), primary: false);
             UiFactory.Flexible(open.gameObject, width: 1f);
+            var watch = UiFactory.Button(actions.transform, "Watch", theme, () => Router.Show<WatchScreen>(), primary: false);
+            UiFactory.Flexible(watch.gameObject, width: 1f);
         }
 
         private async Task Refresh()

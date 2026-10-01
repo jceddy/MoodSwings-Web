@@ -413,9 +413,13 @@ namespace MoodSwings.UI
             layout.childForceExpandWidth = true;
             layout.childForceExpandHeight = false;
 
+            // One line each, always: a long title wrapping would run over the
+            // line beneath it. Better to overrun the row's spare room than overlap.
             var first = Label(rect, title, 28, theme.textPrimary, TextAnchor.MiddleLeft, FontStyle.Bold);
+            first.horizontalOverflow = HorizontalWrapMode.Overflow;
             Size(first.gameObject, height: 36f);
             var second = Label(rect, subtitle, 22, theme.textMuted, TextAnchor.MiddleLeft);
+            second.horizontalOverflow = HorizontalWrapMode.Overflow;
             Size(second.gameObject, height: 30f);
 
             Flexible(rect.gameObject, width: 1f);

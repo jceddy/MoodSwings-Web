@@ -161,6 +161,35 @@ games are waiting on you. A game's board is Phase 4, so rows don't open yet.
   polling) -- Friends and Settings predate it and build the same by hand. Lists
   have an auto-hiding scrollbar.
 
+## The game board
+
+Open any game from **Play** (the **Open** button on a row), or watch someone
+else's from **Watch**. `BoardScreen` draws it read-only: every seat with its
+moods in front of it, the deck and discard piles in the middle, and your hand
+along the bottom. Click any card for a readable close-up (the table cards are
+too small to read); **Log** shows the recent events and **Chat** the game's
+messages. Playing cards, answering a card's question, and sending chat are
+Phase 5.
+
+- **Seating matches the web client exactly** (`BoardLayout`, from
+  `inPlayZoneAssignments()` in `web-static/js/game.js`): you at the bottom, and
+  the **next seat in turn order at your left**. That's not cosmetic -- the engine
+  defines a player's "left-hand neighbor" (Confusion, Avoidance...) as the next
+  seat, so a board that seated people differently would contradict the cards.
+  2 players: opponent across; 3: top-left and top-right; 4: left, across, right.
+- **It polls every 3 seconds**, and that's functional: the server advances bot
+  turns and enforces timers as part of answering `GET /games/state`. It redraws
+  only when the game actually changed, and if a refresh fails it keeps the last
+  board up with a message instead of blanking.
+- **Cards** (`CardView`) use the converted art when present and a drawn stand-in
+  (name, value, rules text) when not, so the board never depends on the art. The
+  chip on each card shows its **current** value; the art only shows the printed
+  one, and effects change it. A switched-off ability shows "OFF".
+- **Spectating** uses the same board with no hand and no seat of your own
+  (anchored on the first seat, as the web does): a friend's in-progress game, or
+  a spectate code a player shared.
+- The Hurt Feelings token shows on the seat that holds it (3+ player games).
+
 ## Tests
 
 - **EditMode** (Window > General > Test Runner): `ApiClient`, `AuthFlow`,

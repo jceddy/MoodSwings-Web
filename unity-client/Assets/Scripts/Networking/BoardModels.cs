@@ -251,6 +251,13 @@ namespace MoodSwings.Networking
         public string CreatedAt { get; set; }
     }
 
+    /// <summary>POST /games/spectate/resolve: the game a spectate code belongs to.</summary>
+    public class SpectateResolveResponse : ApiEnvelope
+    {
+        [JsonProperty("game_id")]
+        public int GameId { get; set; }
+    }
+
     /// <summary>
     /// GET /games/state (and /games/spectate/state, which has the same shape):
     /// everything needed to draw a game. The server also sends large blocks

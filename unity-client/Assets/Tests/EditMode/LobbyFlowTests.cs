@@ -329,6 +329,71 @@ namespace MoodSwings.Tests
         }
 
         [Test]
+        public void RefreshWatchableGames_LoadsFriendsGames_MostRecentlyActiveFirst()
+        {
+            // The same summary shape as your own games.
+            var older = "{\"id\":1,\"status\":\"in_progress\",\"last_move_at\":\"2026-10-01 08:00:00\"}";
+            var newer = "{\"id\":2,\"status\":\"in_progress\",\"last_move_at\":\"2026-10-01 11:00:00\"}";
+            _transport.Enqueue(200, "{\"status\":\"ok\",\"games\":[" + older + "," + newer + "]}");
+
+            var result = _lobby.RefreshWatchableGamesAsync().GetAwaiter().GetResult();
+
+            Assert.IsTrue(result.Ok);
+            Assert.AreEqual("https://example.test/app/games/spectatable", _transport.LastRequest.Url);
+            CollectionAssert.AreEqual(new[] { 2, 1 }, _lobby.WatchableGames.Select(g => g.Id).ToArray());
+        }
+
+        [Test]
+        public void RefreshWatchableGames_WhenOffline_KeepsWhatItHad()
+        {
+            _transport.Enqueue(200, "{\"status\":\"ok\",\"games\":[{\"id\":1,\"status\":\"in_progress\"}]}");
+            _lobby.RefreshWatchableGamesAsync().GetAwaiter().GetResult();
+            _transport.EnqueueNetworkError("offline");
+
+            var result = _lobby.RefreshWatchableGamesAsync().GetAwaiter().GetResult();
+
+            Assert.IsFalse(result.Ok);
+            Assert.AreEqual(1, _lobby.WatchableGames.Count);
+        }
+
+        [Test]
+        public void ResolveSpectateCode_PostsTheTrimmedCode_AndReturnsTheGameId()
+        {
+            _transport.Enqueue(200, "{\"status\":\"ok\",\"game_id\":406}");
+
+            var result = _lobby.ResolveSpectateCodeAsync("  AB12 ").GetAwaiter().GetResult();
+
+            Assert.IsTrue(result.Ok);
+            Assert.AreEqual(406, result.GameId);
+            Assert.AreEqual("https://example.test/app/games/spectate/resolve", _transport.LastRequest.Url);
+            Assert.AreEqual("{\"code\":\"AB12\"}", _transport.LastRequest.Body);
+        }
+
+        [TestCase("")]
+        [TestCase("   ")]
+        [TestCase(null)]
+        public void ResolveSpectateCode_WithNothingTyped_MakesNoRequest(string code)
+        {
+            var result = _lobby.ResolveSpectateCodeAsync(code).GetAwaiter().GetResult();
+
+            Assert.IsFalse(result.Ok);
+            Assert.AreEqual("Enter a spectate code.", result.Message);
+            Assert.AreEqual(0, _transport.Requests.Count);
+        }
+
+        [Test]
+        public void ResolveSpectateCode_UnknownCode_ShowsTheServersReason()
+        {
+            _transport.Enqueue(404, "{\"status\":\"error\",\"message\":\"No game found for that spectate code.\"}");
+
+            var result = _lobby.ResolveSpectateCodeAsync("NOPE").GetAwaiter().GetResult();
+
+            Assert.IsFalse(result.Ok);
+            Assert.AreEqual("No game found for that spectate code.", result.Message);
+            Assert.IsNull(result.GameId);
+        }
+
+        [Test]
         public void Clear_EmptiesEverything_AndRaisesChanged()
         {
             EnqueueGamesRefresh();
