@@ -1908,6 +1908,23 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame(86, $next['card_id'], 'the bounced Compulsion outranks plain filler');
     }
 
+    /**
+     * Betrayal's mood to give away is an ordinary up-front choice now, so a
+     * bot fills in both fields when it plays it (and, like every other
+     * "give up one of your own moods" field, picks the cheapest candidate).
+     */
+    public function testChooseActionFillsInBetrayalsMoodAndRecipientUpFront(): void
+    {
+        $state = $this->boardState(hands: [1 => [56, 3], 2 => []]); // Betrayal (6), Charity (1)
+        $state->moveHandToInPlay(1, 3);
+
+        $action = $this->bot->chooseAction($state, [56], 1);
+
+        self::assertSame(56, $action['card_id']);
+        self::assertSame(3, $action['choices']['target_mood_id'], 'the cheapest of Charity and Betrayal itself');
+        self::assertContains($action['choices']['recipient_player_id'], [2, 3]);
+    }
+
     // -- Panic (reported live) -----------------------------------------------
 
     /**

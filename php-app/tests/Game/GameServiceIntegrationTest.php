@@ -8514,13 +8514,9 @@ final class GameServiceIntegrationTest extends TestCase
         $charityId = $this->insertGameCard($gameId, 3, 'in_play', $p1); // Charity -- given away
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        // Which mood to give away is a pending decision the acting player
-        // (not an opponent) answers immediately after Betrayal enters play
-        // -- see BetrayalEffect's own docblock.
-        $playResult = $this->games->playMood($gameId, $p1, $betrayalId, ['recipient_player_id' => $p2]);
-        self::assertTrue($playResult['pending_decision'] ?? false);
-
-        $this->games->respondToDecision($gameId, $p1, ['target_mood_id' => $charityId]);
+        // The mood to give away is an ordinary up-front choice -- no pause.
+        $playResult = $this->games->playMood($gameId, $p1, $betrayalId, ['target_mood_id' => $charityId, 'recipient_player_id' => $p2]);
+        self::assertFalse($playResult['pending_decision'] ?? false);
 
         $inPlay = $this->games->getState($gameId, $u1)['in_play'];
         $charity = self::findByCardId($inPlay, $charityId);
@@ -8537,13 +8533,12 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
-     * The core scenario BetrayalEffect's own RequiresOpponentDecision
-     * redesign exists for: giving Betrayal itself away used to be
-     * impossible through the ordinary GameService round trip (it wasn't
-     * in play yet at choice-submission time, so it could never appear as
-     * a candidate), even though nothing about the printed card text
-     * excludes it. Exercises the full playMood() -> pending_decision:true
-     * -> respondToDecision() round trip, not just BoardState directly.
+     * Giving Betrayal itself away is chosen up front like any other
+     * target (the schema's `includes_self` flag -- Betrayal is still in
+     * hand while the choices panel is filled out, but already in play by
+     * the time its effect resolves), with no pending decision at all.
+     * Exercises the whole GameService::playMood() round trip, not just
+     * BoardState directly.
      */
     public function testBetrayalCanGiveItselfAwayThroughTheFullRoundTrip(): void
     {
@@ -8562,15 +8557,9 @@ final class GameServiceIntegrationTest extends TestCase
         $betrayalId = $this->insertGameCard($gameId, 56, 'hand', $p1); // Betrayal -- p1's only mood
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $playResult = $this->games->playMood($gameId, $p1, $betrayalId, ['recipient_player_id' => $p2]);
-        self::assertTrue($playResult['pending_decision'] ?? false);
-
-        $pendingDecision = $this->games->getState($gameId, $u1)['round']['pending_decision'];
-        self::assertSame('betrayal_give_mood', $pendingDecision['decision_type']);
-        self::assertSame($p1, $pendingDecision['target_game_player_id']);
-        self::assertTrue($pendingDecision['is_you']);
-
-        $this->games->respondToDecision($gameId, $p1, ['target_mood_id' => $betrayalId]);
+        $playResult = $this->games->playMood($gameId, $p1, $betrayalId, ['target_mood_id' => $betrayalId, 'recipient_player_id' => $p2]);
+        self::assertFalse($playResult['pending_decision'] ?? false);
+        self::assertNull($this->games->getState($gameId, $u1)['round']['pending_decision'] ?? null);
 
         $inPlay = $this->games->getState($gameId, $u1)['in_play'];
         $betrayal = self::findByCardId($inPlay, $betrayalId);
@@ -8605,6 +8594,10 @@ final class GameServiceIntegrationTest extends TestCase
      */
     public function testRespondToDecisionDoesNotLogARedundantClosingMoodPlayedEvent(): void
     {
+        // Betrayal played WITHOUT a mood choice still takes its legacy
+        // deferred-decision path (kept for games caught mid-decision), which
+        // makes it a convenient self-targeted pending decision for this test.
+
         $u1 = $this->insertUser('noduplicate1');
         $u2 = $this->insertUser('noduplicate2');
 
@@ -15582,9 +15575,7 @@ final class GameServiceIntegrationTest extends TestCase
 
         $this->games->playMood($gameId, $p1, $recklessnessId, ['target_mood_id' => $boredomId]);
 
-        $playResult = $this->games->playMood($gameId, $p1, $betrayalId, ['recipient_player_id' => $p2]);
-        self::assertTrue($playResult['pending_decision'] ?? false);
-        $betrayalResponse = $this->games->respondToDecision($gameId, $p1, ['target_mood_id' => $recklessnessId]);
+        $betrayalResponse = $this->games->playMood($gameId, $p1, $betrayalId, ['target_mood_id' => $recklessnessId, 'recipient_player_id' => $p2]);
 
         // Once Betrayal gives Recklessness away, the opponent (who now
         // holds Recklessness) ends up controlling TWO of their own pending
@@ -22720,6 +22711,49 @@ final class GameServiceIntegrationTest extends TestCase
 
         self::assertSame(7, $fieldResponse['type']);
         self::assertNotSame('hand', $this->cardZone($convictionId));
+    }
+
+    /** Betrayal asks which of your moods to give away up front (itself included), then who gets it -- no deferred decision after the play. */
+    public function testDiscordComponentBetrayalOffersItselfThenTheRecipientUpFront(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-betray-1');
+        $u2 = $this->insertDiscordUser('discord-betray-2');
+        $this->linkDiscordAccount($u1, 'discord-betray-1');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $betrayalId = $this->insertGameCard($gameId, 56, 'hand', $p1);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $moodStep = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-betray-1', "ms:play:{$gameId}", [(string) $betrayalId])
+        );
+        self::assertSame('hand', $this->cardZone($betrayalId), 'not played yet -- still collecting its two choices');
+        $moodSelect = $moodStep['data']['components'][0]['components'][0];
+        self::assertStringStartsWith("ms:playfield:{$gameId}:{$betrayalId}:0:", $moodSelect['custom_id']);
+        self::assertContains((string) $betrayalId, array_column($moodSelect['options'], 'value'), 'Betrayal can give itself away');
+
+        $recipientStep = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-betray-1', $moodSelect['custom_id'], [(string) $betrayalId])
+        );
+        $recipientSelect = $recipientStep['data']['components'][0]['components'][0];
+        self::assertStringStartsWith("ms:playfield:{$gameId}:{$betrayalId}:1:", $recipientSelect['custom_id']);
+
+        $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-betray-1', $recipientSelect['custom_id'], [(string) $p2])
+        );
+
+        self::assertSame('in_play', $this->cardZone($betrayalId));
+        self::assertNull($this->games->getState($gameId, $u1)['round']['pending_decision'] ?? null);
+        $owner = $this->pdo->prepare('SELECT owner_game_player_id FROM game_cards WHERE id = :id');
+        $owner->execute(['id' => $betrayalId]);
+        self::assertSame($p2, (int) $owner->fetchColumn(), 'Betrayal gave itself to the other player');
     }
 
     public function testDiscordComponentDecisionRespondsToASingleFieldPendingDecision(): void

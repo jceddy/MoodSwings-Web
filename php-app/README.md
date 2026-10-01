@@ -612,32 +612,26 @@ submission is rejected immediately, attributed to whoever actually sent
 it, and a `required` row can never again reach `resolved_at` with a
 `null` answer.
 
-`BetrayalEffect` is an eleventh `RequiresOpponentDecision` implementer (of
-twelve, now that `PrideEffect` is a twelfth -- see below), for
-a different reason than the other ten: nothing about Betrayal's own printed
-text ("give one of your moods to another player") excludes giving Betrayal
-itself away, but that mood can't be offered as an ordinary `choice_fields`
-entry the way "one of your own moods" is for almost every other card --
-Betrayal is still sitting in the player's *hand* at the moment an ordinary
-choices panel is filled out, so a field sourced from the current board
-could never legally include it as a candidate. `pendingDecisionsFor()`
-returns exactly one `PendingDecisionRequest` with `targetPlayerId` set to
-the *acting* player themselves (not an opponent -- the same self-targeting
-`PendingDecisionRequest`'s own docblock already documents for Duplicity's
-repeat-offer, just via this general interface instead of that offer's own
-bespoke `MoodPlayService` code path), asked the instant Betrayal has
-actually entered play; by then `target_mood_id`'s own field (`type: mood,
-scope: own`, sourced from the live board the same way any other in-play
-mood choice already is) legitimately includes Betrayal, since it's already
-there. Never declined (no "may" in the printed text, unlike Arrogance's own
-optional trigger), so `pendingDecisionsFor()` never returns `[]` here --
-`recipient_player_id` stays an ordinary up-front `choice_fields` entry
-(submitted, and validated, before the pause), since which *other player*
-to target has no equivalent problem. The frontend needed no changes at all
-for this: the pending-decision response panel already renders any decision
-type other than `duplicity_repeat_offer` (Betrayal's own `betrayal_give_mood`
-included) with no candidate-exclusion placeholder, so nothing had to be
-taught that this one card's own decision is a legal answer to itself.
+`BetrayalEffect` used to be an eleventh `RequiresOpponentDecision`
+implementer, for a different reason than the other ten: nothing about
+Betrayal's own printed text ("give one of your moods to another player")
+excludes giving Betrayal itself away, but Betrayal is still in the player's
+*hand* while the choices panel is filled out, so a board-sourced field could
+not offer it, and the choice was deferred to a self-targeted pending
+decision (`betrayal_give_mood`) asked after Betrayal entered play -- the one
+card that worked that way. It now works like every other targeted card:
+`CardChoiceSchema`'s `betrayal` entry has an up-front `target_mood_id` field
+(`type: mood, scope: own, includes_self: true` -- the same flag Conviction/
+Hate/Anger use, which makes clients add the card being played as a "[self]"
+candidate; `MoodPlayService` has moved the card into play before its effect
+runs, so its own id is a valid target) alongside `recipient_player_id`, and
+`resolveDecisions()` gives the mood away immediately with no pause (the web
+panel, the Discord two-step select and the bots all fill both fields from
+the schema with no special-casing). The `RequiresOpponentDecision`
+implementation survives only for backward compatibility: a play submitted
+*without* `target_mood_id` (a game caught mid-decision when this changed, or
+a stale client) still pauses for `betrayal_give_mood` exactly as before, and
+`resolveDecisions()` honors that answer.
 
 `InstabilityEffect` reuses this exact same self-give pattern for the same
 reason, but its own two decisions have a genuine data dependency the other
