@@ -76,17 +76,17 @@ namespace MoodSwings.Tests
         /// row has its own Accept), the top-most one: Unity gives no stable
         /// order for FindObjectsByType, and "first row" is what a player means.
         /// </summary>
-        private static Button FindButton(string text) =>
+        internal static Button FindButton(string text) =>
             UnityEngine.Object.FindObjectsByType<Button>(FindObjectsInactive.Exclude)
                 .Where(b => b.GetComponentInChildren<Text>()?.text == text)
                 .OrderByDescending(b => b.transform.position.y)
                 .FirstOrDefault();
 
-        private static Toggle FindToggle(string label) =>
+        internal static Toggle FindToggle(string label) =>
             UnityEngine.Object.FindObjectsByType<Toggle>(FindObjectsInactive.Exclude)
                 .FirstOrDefault(t => t.GetComponentInChildren<Text>()?.text == label);
 
-        private static IEnumerator Frames(int count = 6)
+        internal static IEnumerator Frames(int count = 6)
         {
             for (var i = 0; i < count; i++)
             {
@@ -94,7 +94,7 @@ namespace MoodSwings.Tests
             }
         }
 
-        private static IEnumerator Click(string buttonText)
+        internal static IEnumerator Click(string buttonText)
         {
             var button = FindButton(buttonText);
             Assert.IsNotNull(button, $"No visible button '{buttonText}'");
