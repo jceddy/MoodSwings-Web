@@ -83,10 +83,11 @@ namespace MoodSwings.UI
                 UiFactory.Size(empty.gameObject, height: 60f);
             }
 
+            var yourUserId = AppServices.Auth.CurrentUser?.Id ?? 0;
             foreach (var listing in listings)
             {
                 var row = UiFactory.RowPanel(List, theme, height: 100f);
-                UiFactory.TwoLineText(row.transform, theme, GameDisplay.ListingTitle(listing), GameDisplay.ListingSettings(listing));
+                UiFactory.TwoLineText(row.transform, theme, GameDisplay.ListingTitle(listing, yourUserId), GameDisplay.ListingSettings(listing));
 
                 var captured = listing;
                 var button = UiFactory.Button(row.transform, actionLabel, theme, () => action(captured), primary: actionLabel == "Join");

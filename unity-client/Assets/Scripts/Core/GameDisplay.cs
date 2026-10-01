@@ -117,9 +117,30 @@ namespace MoodSwings.Core
         public static bool NeedsYou(GameSummary game) =>
             !game.IsCompleted && (game.IsYourTurn || game.IsAwaitingYourResponse);
 
-        /// <summary>"Alice's game  -  2 of 3 seated".</summary>
-        public static string ListingTitle(OpenGameListing listing) =>
-            $"{listing.CreatorUsername}'s game  -  {listing.JoinedCount + 1} of {listing.TargetPlayerCount} seated";
+        /// <summary>
+        /// "Alice's game  -  2 of 3 seated", or "Your game  -  ..." for one you posted.
+        /// The server leaves creator_username out of the list of listings you
+        /// posted (it joins the username only for the other two lists), so
+        /// "yours" is decided by id, and a missing name never shows as "'s game".
+        /// </summary>
+        public static string ListingTitle(OpenGameListing listing, int yourUserId)
+        {
+            string owner;
+            if (listing.CreatedByUserId == yourUserId)
+            {
+                owner = "Your";
+            }
+            else if (!string.IsNullOrWhiteSpace(listing.CreatorUsername))
+            {
+                owner = listing.CreatorUsername + "'s";
+            }
+            else
+            {
+                owner = "Someone's";
+            }
+
+            return $"{owner} game  -  {listing.JoinedCount + 1} of {listing.TargetPlayerCount} seated";
+        }
 
         public static string ListingSettings(OpenGameListing listing) =>
             Settings(listing.Settings.Format, listing.Settings.DeckType, listing.Settings.WinsNeeded);

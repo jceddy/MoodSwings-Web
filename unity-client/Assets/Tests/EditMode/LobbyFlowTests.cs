@@ -20,8 +20,10 @@ namespace MoodSwings.Tests
             _lobby = new LobbyFlow(new ApiClient(new ApiConfig("https://example.test"), _transport));
         }
 
-        private static string Listing(int id, string creator, int target, int joined, string createdAt = "2026-10-01 10:00:00", string deck = "structure") =>
-            $"{{\"id\":{id},\"created_by_user_id\":{id + 100},\"creator_username\":\"{creator}\",\"create_game_params\":" +
+        /// <summary>A listing as the server sends it. A null creator leaves creator_username out, as it does for the listings you posted.</summary>
+        private static string Listing(int id, string creator, int target, int joined, string createdAt = "2026-10-01 10:00:00", string deck = "structure", int? createdBy = null) =>
+            $"{{\"id\":{id},\"created_by_user_id\":{createdBy ?? id + 100}," +
+            (creator == null ? string.Empty : $"\"creator_username\":\"{creator}\",") + "\"create_game_params\":" +
             $"{{\"format\":\"standard\",\"wins_needed\":3,\"deck_type\":\"{deck}\",\"default_selections_mode\":false,\"decklist_text\":null}}," +
             $"\"target_player_count\":{target},\"joined_count\":{joined},\"created_at\":\"{createdAt}\"}}";
 
@@ -144,6 +146,20 @@ namespace MoodSwings.Tests
             Assert.AreEqual("Cleo", _lobby.JoinedOpenGames.Single().CreatorUsername);
             Assert.AreEqual(3, _lobby.AvailableOpenGames[1].TargetPlayerCount);
             Assert.AreEqual("structure", _lobby.AvailableOpenGames[1].Settings.DeckType);
+        }
+
+        [Test]
+        public void RefreshOpenGames_ListingsYouPosted_ComeBackWithoutACreatorName_ButWithYourId()
+        {
+            // What the real server sends for ?mine=1: no creator_username key at all.
+            EnqueueOpenRefresh(mine: Listings(Listing(3, creator: null, target: 4, joined: 1, createdBy: 2)));
+
+            _lobby.RefreshOpenGamesAsync().GetAwaiter().GetResult();
+
+            var posted = _lobby.MyOpenGames.Single();
+            Assert.IsNull(posted.CreatorUsername);
+            Assert.AreEqual(2, posted.CreatedByUserId);
+            Assert.AreEqual("Your game  -  2 of 4 seated", GameDisplay.ListingTitle(posted, yourUserId: 2));
         }
 
         [Test]

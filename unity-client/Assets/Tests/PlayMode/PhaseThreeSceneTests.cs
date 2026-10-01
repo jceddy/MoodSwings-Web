@@ -63,8 +63,10 @@ namespace MoodSwings.Tests
         private static string Fixture(string name) =>
             File.ReadAllText(Path.Combine(Application.dataPath, "Tests", "Fixtures", name + ".json"));
 
-        private static string Listing(int id, string creator, int target, int joined) =>
-            $"{{\"id\":{id},\"created_by_user_id\":{id + 100},\"creator_username\":\"{creator}\",\"create_game_params\":" +
+        /// <summary>A listing as the server sends it. A null creator leaves creator_username out, as the real server does for the listings you posted.</summary>
+        private static string Listing(int id, string creator, int target, int joined, int? createdBy = null) =>
+            $"{{\"id\":{id},\"created_by_user_id\":{createdBy ?? id + 100}," +
+            (creator == null ? string.Empty : $"\"creator_username\":\"{creator}\",") + "\"create_game_params\":" +
             "{\"format\":\"standard\",\"wins_needed\":3,\"deck_type\":\"structure\",\"default_selections_mode\":false}," +
             $"\"target_player_count\":{target},\"joined_count\":{joined},\"created_at\":\"2026-10-01 10:00:00\"}}";
 
@@ -261,15 +263,21 @@ namespace MoodSwings.Tests
         [UnityTest]
         public IEnumerator OpenGames_ListsWhatCanBeJoined_PostedAndJoined()
         {
+            // The captured account is user 2; its own listing comes back with no creator_username.
             var server = new LobbyFakeServer
             {
-                MineJson = Listings(Listing(3, "bshaftoe", 4, 1)),
+                MineJson = Listings(Listing(3, null, 4, 1, createdBy: 2)),
                 JoinedJson = Listings(Listing(4, "Cleo", 2, 1)),
             };
             yield return OpenOpenGames(server);
 
             // 3 section titles + 1 row each.
             Assert.AreEqual(6, MainSceneTests.Screen<OpenGamesScreen>().RowCount);
+            var texts = UnityEngine.Object.FindObjectsByType<Text>(FindObjectsInactive.Exclude).Select(t => t.text).ToList();
+            Assert.IsTrue(texts.Contains("Your game  -  2 of 4 seated"), string.Join(" | ", texts));
+            Assert.IsTrue(texts.Contains("Alice's game  -  2 of 3 seated"));
+            Assert.IsTrue(texts.Contains("Cleo's game  -  2 of 2 seated"));
+            Assert.IsFalse(texts.Any(t => t.StartsWith("'s game")), "a missing creator name must never render as a bare 's game");
             Assert.IsNotNull(PhaseTwoSceneTests.FindButton("Join"));
             Assert.IsNotNull(PhaseTwoSceneTests.FindButton("Take down"));
             Assert.IsNotNull(PhaseTwoSceneTests.FindButton("Leave"));
@@ -308,7 +316,7 @@ namespace MoodSwings.Tests
         {
             var server = new LobbyFakeServer
             {
-                MineJson = Listings(Listing(3, "bshaftoe", 4, 1)),
+                MineJson = Listings(Listing(3, null, 4, 1, createdBy: 2)),
                 JoinedJson = Listings(Listing(4, "Cleo", 2, 1)),
             };
             yield return OpenOpenGames(server);

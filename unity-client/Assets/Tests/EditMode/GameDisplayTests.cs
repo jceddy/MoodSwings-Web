@@ -138,19 +138,45 @@ namespace MoodSwings.Tests
             Assert.AreEqual("Custom Decklist", GameDisplay.DeckName("custom", null));
         }
 
+        private static OpenGameListing Posted(int createdBy, string creatorUsername) => new OpenGameListing
+        {
+            CreatedByUserId = createdBy,
+            CreatorUsername = creatorUsername,
+            TargetPlayerCount = 4,
+            JoinedCount = 1,
+            Settings = new OpenGameSettings { Format = "standard", DeckType = "power", WinsNeeded = 3 },
+        };
+
         [Test]
         public void Listing_ShowsWhoPostedItAndHowFullItIs()
         {
-            var listing = new OpenGameListing
-            {
-                CreatorUsername = "Alice",
-                TargetPlayerCount = 4,
-                JoinedCount = 1,
-                Settings = new OpenGameSettings { Format = "standard", DeckType = "power", WinsNeeded = 3 },
-            };
+            var listing = Posted(createdBy: 7, creatorUsername: "Alice");
 
-            Assert.AreEqual("Alice's game  -  2 of 4 seated", GameDisplay.ListingTitle(listing));
+            Assert.AreEqual("Alice's game  -  2 of 4 seated", GameDisplay.ListingTitle(listing, yourUserId: 2));
             Assert.AreEqual("Traditional  -  Power  -  First to 3", GameDisplay.ListingSettings(listing));
+        }
+
+        [Test]
+        public void Listing_YouPosted_SaysYourGame()
+        {
+            Assert.AreEqual("Your game  -  2 of 4 seated", GameDisplay.ListingTitle(Posted(2, "bshaftoe"), yourUserId: 2));
+        }
+
+        [Test]
+        public void Listing_YouPosted_WithNoCreatorName_StillSaysYourGame()
+        {
+            // The server omits creator_username from the list of listings you posted.
+            Assert.AreEqual("Your game  -  2 of 4 seated", GameDisplay.ListingTitle(Posted(2, null), yourUserId: 2));
+        }
+
+        [TestCase(null)]
+        [TestCase("")]
+        [TestCase("   ")]
+        public void Listing_OfSomeoneElseWithNoName_NeverShowsAsABareApostropheS(string name)
+        {
+            var title = GameDisplay.ListingTitle(Posted(7, name), yourUserId: 2);
+
+            Assert.AreEqual("Someone's game  -  2 of 4 seated", title);
         }
     }
 }
