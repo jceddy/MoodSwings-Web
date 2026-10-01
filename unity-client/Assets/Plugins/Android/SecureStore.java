@@ -13,8 +13,8 @@ import javax.crypto.spec.GCMParameterSpec;
 /**
  * AES-256-GCM with a non-exportable key held in the Android Keystore.
  * Blob layout: 12-byte IV, then ciphertext+tag. Called from
- * AndroidKeystoreSecretProtector.cs. Requires API 23+ (the project's
- * minSdk). Not yet built or run -- see that class's note.
+ * AndroidKeystoreSecretProtector.cs. Needs API 23+ for KeyGenParameterSpec;
+ * the project's minSdk is higher. Exercised by AndroidKeystoreTests.
  */
 public final class SecureStore {
     private static final String PROVIDER = "AndroidKeyStore";

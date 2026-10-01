@@ -24448,6 +24448,31 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertStringContainsString('Game 2 of 3', $started['data']['content']);
     }
 
+    /** With 2+ active games every board offers "All Games" back to the picker; with one it doesn't. */
+    public function testDiscordBoardOffersAllGamesButtonOnlyWithMultipleActiveGames(): void
+    {
+        $userId = $this->insertDiscordUser('discord-allgames');
+        $this->linkDiscordAccount($userId, 'discord-allgames');
+        $bot1 = $this->insertBotUser('discord-allgames-b1-' . uniqid());
+        $bot2 = $this->insertBotUser('discord-allgames-b2-' . uniqid());
+
+        $game1 = $this->games->createGame($userId, [$userId, $bot1]);
+        $this->games->startGame($game1);
+        $single = $this->discordCommandService()->handleComponent($this->discordComponentPayload('discord-allgames', "ms:view:{$game1}"));
+        self::assertStringNotContainsString('ms:games:0', json_encode($single['data']['components']));
+
+        $game2 = $this->games->createGame($userId, [$userId, $bot2]);
+        $this->games->startGame($game2);
+        $board = $this->discordCommandService()->handleComponent($this->discordComponentPayload('discord-allgames', "ms:view:{$game1}"));
+        self::assertStringContainsString('ms:games:0', json_encode($board['data']['components']));
+
+        $picker = $this->discordCommandService()->handleComponent($this->discordComponentPayload('discord-allgames', 'ms:games:0'));
+        self::assertStringContainsString('more than one active game', $picker['data']['content']);
+        $ids = array_column($picker['data']['components'][0]['components'], 'custom_id');
+        self::assertContains("ms:view:{$game1}", $ids);
+        self::assertContains("ms:view:{$game2}", $ids);
+    }
+
     /** Sealed Deck vs a practice bot: pool screen, suggested deck, then a playable board. */
     public function testDiscordSealedDeckVsBotSuggestedDeckStartsTheGame(): void
     {
@@ -24464,7 +24489,14 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertStringContainsString('Sealed Deck, Game 1 of 3', $created['data']['content']);
         self::assertStringContainsString('Your pool (45 cards)', $created['data']['content']);
         $labels = array_column($created['data']['components'][0]['components'], 'label');
-        self::assertSame(['Use suggested deck', 'Build deck', 'Refresh'], $labels);
+        self::assertSame(['Use suggested deck', 'Preview suggested deck', 'Build deck', 'Refresh'], $labels);
+
+        $preview = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-sealed-bot', 'ms:sealedpreview:' . $this->games->listGamesForUser($userId)[0]['id'])
+        );
+        self::assertStringContainsString('suggested deck (12 cards, 33 left in your pool)', $preview['data']['content']);
+        self::assertSame(['Use this deck', 'Back'], array_column($preview['data']['components'][0]['components'], 'label'));
+        self::assertSame('waiting', $this->fetchGame($this->games->listGamesForUser($userId)[0]['id'])['status'], 'previewing submits nothing');
 
         $gameId = $this->games->listGamesForUser($userId)[0]['id'];
         self::assertSame('waiting', $this->fetchGame($gameId)['status']);
@@ -24475,6 +24507,64 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
         self::assertStringContainsString('Game 1 of 3', $started['data']['content']);
         self::assertStringContainsString('round(s) won', $started['data']['content']);
+    }
+
+    /** Quick Draft vs a practice bot from the Limited menu: pick screens (2 cards each), then deck building, then a board. */
+    public function testDiscordQuickDraftVsBotDraftsThenBuildsAndStarts(): void
+    {
+        $userId = $this->insertDiscordUser('discord-qd-bot');
+        $this->linkDiscordAccount($userId, 'discord-qd-bot');
+        $botUserId = $this->insertBotUser('discord-qd-bot-opp-' . uniqid());
+
+        $drafts = $this->discordCommandService()->handleComponent($this->discordComponentPayload('discord-qd-bot', 'ms:drafts:0'));
+        self::assertSame(['ms:sealed:0', 'ms:qd:0'], array_column($drafts['data']['components'][0]['components'], 'custom_id'));
+        $pools = $this->discordCommandService()->handleComponent($this->discordComponentPayload('discord-qd-bot', 'ms:qd:0'));
+        self::assertSame('ms:qdpool:0', $pools['data']['components'][0]['components'][0]['custom_id']);
+        $opp = $this->discordCommandService()->handleComponent($this->discordComponentPayload('discord-qd-bot', 'ms:qdpool:0', ['random_48']));
+        self::assertSame(['ms:qdbotmenu:0:random_48', 'ms:qdinvite:0:random_48'], array_column($opp['data']['components'][0]['components'], 'custom_id'));
+
+        $screen = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-qd-bot', 'ms:qdbot:0:random_48', [(string) $botUserId])
+        );
+        $gameId = $this->games->listGamesForUser($userId)[0]['id'];
+        self::assertStringContainsString('Quick Draft, round 1 of 4, pick 1 of 2', $screen['data']['content']);
+
+        for ($i = 0; $i < 8; $i++) {
+            self::assertStringContainsString('Quick Draft, round', $screen['data']['content'], "pick screen #{$i}");
+            $select = $screen['data']['components'][0]['components'][0];
+            self::assertSame(2, $select['min_values']);
+            self::assertSame(2, $select['max_values']);
+            self::assertStringStartsWith("ms:qdpick:{$gameId}:", $select['custom_id']);
+            $values = [$select['options'][0]['value'], $select['options'][1]['value']];
+            $screen = $this->discordCommandService()->handleComponent(
+                $this->discordComponentPayload('discord-qd-bot', $select['custom_id'], $values)
+            );
+        }
+
+        self::assertStringContainsString('Quick Draft, Game 1 of 3', $screen['data']['content']);
+        self::assertStringContainsString('Use suggested deck', json_encode($screen['data']['components']));
+
+        $started = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-qd-bot', "ms:sealedsuggest:{$gameId}")
+        );
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
+        self::assertStringContainsString('Game 1 of 3', $started['data']['content']);
+    }
+
+    /** A stale pick screen is refused rather than applied to a later pile. */
+    public function testDiscordQuickDraftStalePickIsRefused(): void
+    {
+        $userId = $this->insertDiscordUser('discord-qd-stale');
+        $this->linkDiscordAccount($userId, 'discord-qd-stale');
+        $botUserId = $this->insertBotUser('discord-qd-stale-opp-' . uniqid());
+        $screen = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-qd-stale', 'ms:qdbot:0:structure', [(string) $botUserId])
+        );
+        $select = $screen['data']['components'][0]['components'][0];
+        $values = [$select['options'][0]['value'], $select['options'][1]['value']];
+        $this->discordCommandService()->handleComponent($this->discordComponentPayload('discord-qd-stale', $select['custom_id'], $values));
+        $again = $this->discordCommandService()->handleComponent($this->discordComponentPayload('discord-qd-stale', $select['custom_id'], $values));
+        self::assertStringContainsString("Couldn't do that", $again['data']['content']);
     }
 
     /** "Build deck" opens a modal prefilled with the pool; a trimmed list submits, an undersized one is refused with a reason. */

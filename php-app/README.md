@@ -8077,12 +8077,15 @@ the two currently supported formats"):
   `waiting` Sealed Deck game, or game 2/3 awaiting its start, counts as
   an active game for the root `/moodswings` view
   (`waitingGameNeedsAction()`).
-- **Sealed Deck** -- a fifth utility button (`ms:sealed:0`) leads to
+- **Sealed Deck** -- a fifth utility button (`ms:drafts:0`, "Limited" -- see "Quick Draft via Discord" below; its "Sealed Deck" choice is `ms:sealed:0`) leads to
   "vs Practice Bot"/"vs a Friend" (2 players only; always a best of
   three, per the engine). While `waiting`, the board is the deck-building
   screen: the pool grouped by color and `Use suggested deck`
   (`GameService::suggestDraftDeck()`, the same `chooseDraftDeck()`
-  heuristic practice bots build with), `Build deck` (a modal prefilled
+  heuristic practice bots build with), `Preview suggested deck` (`ms:sealedpreview:{gameId}` -- shows the
+  suggestion grouped by color with the number of cards left in the pool,
+  submitting nothing; its `Use this deck` is the same `ms:sealedsuggest`
+  and `Back` returns to the pool screen), `Build deck` (a modal prefilled
   with the current/previous deck, else the whole pool, as a plain
   decklist to trim to at least 12 cards -- submitted via
   `GameService::submitDraftDeckFromText()`), and for games 2/3
@@ -8093,6 +8096,36 @@ the two currently supported formats"):
   A practice bot builds and submits its own deck as soon as the game is
   created (`advanceAutomatedTurns()`). 3-4 player sealed games stay
   web-only.
+
+**Quick Draft via Discord** (2 players): the utility row's `Limited`
+button (`ms:drafts:0`) offers `Sealed Deck` and `Quick Draft`
+(`ms:qd:0`). Quick Draft first asks for the card pool (`ms:qdpool:0`:
+Random 48, Structure deck, jceddy's 75, One of each -- the sources that
+need no extra input), then `vs Practice Bot`/`vs a Friend`
+(`ms:qdbotmenu`/`ms:qdinvite` -> `ms:qdbot`/`ms:qdwith`, the pool riding
+in the custom_id's 4th part) and calls `createGame(format: 'draft',
+deckType: 'quick_draft', quickDraftPoolSource: ...)`. While the match is
+`drafting` the board is a pick screen
+(`quickDraftPickMessage()`): your kept-so-far cards, the pile you hold
+(name, value, color, rules text) and a select of exactly 2 cards
+(`ms:qdpick:{gameId}:{round}:{stage}` -> `submitQuickDraftPick()`; the
+round/stage pin means a stale screen is refused instead of applied to a
+later pile). A practice bot picks on the same click
+(`advanceAutomatedTurns()`); against a friend the screen shows "waiting
+on the other player" until `Refresh`. Once drafting ends the board is
+the same deck-building screen as Sealed Deck (suggested deck / build
+modal / keep same deck -- Quick Draft's `getState()['quick_draft']`
+shares `sealed_deck`'s `deck_building` shape), then a best-of-three.
+3-4 player Quick Draft stays web-only.
+
+**All Games via Discord** (reported live: "we need a way to get back to
+the game list from a game"): when a player has 2+ active games, every
+board/deck-building/pick screen gets an `All Games` button
+(`ms:games:0`, added by `boardMessage()` beside Refresh when that row has
+room, else on its own row) that returns to the game picker
+(`gamePickerMessage()` -- now up to 20 games in rows of 5, previously 4).
+With 0 or 1 active games the button is omitted (`ms:games:0` itself falls
+back to the no-game message / the single board).
 
 **Advance Turn via Discord** (reported live: "the discord client needs to
 show the Advance turn button when appropriate, otherwise a game will get
@@ -13596,6 +13629,35 @@ than a parallel bespoke system:
   which answers every pending decision as if it were the solver's own
   Duplicity offer) so the opponent bot answers its reveals the way the
   live routes do.
+
+- **13th puzzle, "Hostile Takeover"** (reported live: a puzzle focused on
+  Rationalization -- hit a point total that needs every card in your hand
+  and the opponent's played, in a specific order, with Rationalization
+  stealing the opponent's hand once it is your last card), hard,
+  `min_score` 13, `max_plays` 7, no new puzzle infrastructure. The solver
+  holds Rationalization, Validation, Charity and Friendliness (the
+  description names only the solver's hand; the opponent holds Kindness,
+  Benevolence and Eagerness, and the hint starts at Rationalization's
+  hand swap); 13 is the seven printed values
+  added together, so every card has to be played. Rationalization's rotate
+  mode swaps whole hands, so played as the last card in hand it steals all
+  three at no cost (played earlier it gives the rest of your hand away),
+  and it grants no extra play itself -- the plays have to be banked first,
+  each with a string attached. The one winning order: Validation, Charity,
+  Friendliness (its even-value play is saved for later), Rationalization
+  (rotate), then Benevolence (even, paid by Friendliness; its own play
+  needs a color you don't have yet), Eagerness (green; its own play needs a
+  color you do have), Kindness. Traps that each fall one card short at 11:
+  Rationalization the moment it is playable (Friendliness goes to the
+  opponent), and Eagerness before Benevolence or Kindness first after the
+  steal (the leftover grant can't pay for the last stolen card). Found by
+  an exhaustive search of every legal line against the real engine,
+  including each choice of which play grant to spend
+  (`grant_source_card_id`) -- the first pass assumed the engine picks a
+  grant for you and found far fewer alternative lines than actually exist;
+  a card order counts as one solution however its grants are chosen.
+  Duplicity and Fear were tried in the card pool and dropped (multiple
+  winning orders, or an unreadable solution).
 
 ### Duel: separate per-player decks
 

@@ -1142,6 +1142,127 @@ final class PuzzleContentTest extends TestCase
         );
     }
 
+    /**
+     * "Hostile Takeover" (a puzzle centered around Rationalization). The
+     * only winning order -- verified by exhaustive search of the real
+     * GameService flow, grant choices included -- is Validation, Charity,
+     * Friendliness, then Rationalization's hand swap as the last card in
+     * hand, then the stolen cards Benevolence, Eagerness, Kindness. See
+     * migration 0431's own docblock for why each step is forced.
+     */
+    public function testHostileTakeoverSolvedByStealingTheHandWithRationalizationAsTheLastCard(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('hostile-takeover');
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 26, 'hand')); // Validation
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 3, 'hand')); // Charity
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 13, 'hand')); // Friendliness
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 49, 'hand'), ['mode' => 'rotate', 'direction' => 'left']); // Rationalization -- the last card in hand
+
+        foreach ([17, 2, 114] as $stolenCardId) {
+            self::assertNotNull($this->ownedInstanceId($gameId, $stolenCardId, 'hand', $p), "card {$stolenCardId} should have been stolen");
+            self::assertNull($this->ownedInstanceId($gameId, $stolenCardId, 'hand', $opp));
+        }
+
+        $this->playDriven($gameId, $p, $this->ownedInstanceId($gameId, 2, 'hand', $p)); // Benevolence
+        $this->playDriven($gameId, $p, $this->ownedInstanceId($gameId, 114, 'hand', $p)); // Eagerness
+        $result = $this->playDriven($gameId, $p, $this->ownedInstanceId($gameId, 17, 'hand', $p)); // Kindness
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameSolved($gameId, $p);
+        $scores = array_column($this->games->getState($gameId, $this->userIdForGamePlayer($p))['players'], 'total_score', 'game_player_id');
+        self::assertSame(13, $scores[$p]);
+    }
+
+    /**
+     * The tempting line: Rationalization the moment the hand swap is
+     * available -- exactly what the puzzle seems to be about. But
+     * Friendliness is still in hand, so it goes to the opponent along with
+     * the swap: the rest of the chain still plays out, one card short
+     * (11 points), and Friendliness can never come back.
+     */
+    public function testHostileTakeoverPlayingRationalizationBeforeTheHandIsEmptyGivesAwayACard(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('hostile-takeover');
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 26, 'hand')); // Validation
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 3, 'hand')); // Charity
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 49, 'hand'), ['mode' => 'rotate', 'direction' => 'left']); // too early: Friendliness still in hand
+
+        self::assertNotNull($this->ownedInstanceId($gameId, 13, 'hand', $opp), 'Friendliness was swapped over to the opponent');
+        $this->playDriven($gameId, $p, $this->ownedInstanceId($gameId, 2, 'hand', $p)); // Benevolence
+        $this->playDriven($gameId, $p, $this->ownedInstanceId($gameId, 114, 'hand', $p)); // Eagerness
+        $result = $this->playDriven($gameId, $p, $this->ownedInstanceId($gameId, 17, 'hand', $p)); // Kindness
+
+        $scores = array_column($this->games->getState($gameId, $this->userIdForGamePlayer($p))['players'], 'total_score', 'game_player_id');
+        self::assertSame(11, $scores[$p]);
+        self::assertFalse($result['game_completed']);
+        $this->assertGameNotSolved($gameId);
+    }
+
+    /**
+     * Right up to the steal, then Eagerness before Benevolence: Eagerness
+     * and Kindness both still go down (Eagerness's grant needs a shared
+     * color, and Kindness is white like the solver's moods), but Kindness's
+     * own grant needs an odd value and only Benevolence (a 2) is left.
+     */
+    public function testHostileTakeoverEagernessBeforeBenevolenceStrandsBenevolence(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('hostile-takeover');
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 26, 'hand')); // Validation
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 3, 'hand')); // Charity
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 13, 'hand')); // Friendliness
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 49, 'hand'), ['mode' => 'rotate', 'direction' => 'left']); // Rationalization
+        $this->playDriven($gameId, $p, $this->ownedInstanceId($gameId, 114, 'hand', $p)); // Eagerness first
+        $result = $this->playDriven($gameId, $p, $this->ownedInstanceId($gameId, 17, 'hand', $p)); // Kindness
+
+        self::assertFalse($result['game_completed']);
+        $this->assertGameNotSolved($gameId);
+
+        $this->expectException(IllegalPlayException::class);
+        $this->playDriven($gameId, $p, $this->ownedInstanceId($gameId, 2, 'hand', $p)); // Benevolence has no play left
+    }
+
+    /** Eagerness then Benevolence instead: Benevolence's grant forbids a color the solver already has, and Kindness is white. */
+    public function testHostileTakeoverBenevolenceAfterEagernessStrandsKindness(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('hostile-takeover');
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 26, 'hand'));
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 3, 'hand'));
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 13, 'hand'));
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 49, 'hand'), ['mode' => 'rotate', 'direction' => 'left']);
+        $this->playDriven($gameId, $p, $this->ownedInstanceId($gameId, 114, 'hand', $p)); // Eagerness
+        $result = $this->playDriven($gameId, $p, $this->ownedInstanceId($gameId, 2, 'hand', $p)); // Benevolence
+
+        self::assertFalse($result['game_completed']);
+        $this->assertGameNotSolved($gameId);
+
+        $this->expectException(IllegalPlayException::class);
+        $this->playDriven($gameId, $p, $this->ownedInstanceId($gameId, 17, 'hand', $p)); // Kindness: white shares a color with the solver's moods
+    }
+
+    public function testHostileTakeoverStartsWithFourCardsAgainstThreeAndExposesItsTextViaGetState(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('hostile-takeover');
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+
+        $state = $this->games->getState($gameId, $this->userIdForGamePlayer($p));
+
+        self::assertCount(4, $state['you']['hand']);
+        $oppHandCount = array_column($state['players'], 'hand_count', 'game_player_id')[$opp];
+        self::assertSame(3, $oppHandCount);
+        self::assertSame(
+            'Score 13 points this turn. Your hand: Rationalization, Validation, Charity and Friendliness.',
+            $state['game']['puzzle_description']
+        );
+        self::assertStringStartsWith('Rationalization', $state['game']['puzzle_hint']);
+        self::assertStringContainsString('last card in your hand', $state['game']['puzzle_hint']);
+    }
+
     private function isAchievementUnlocked(int $userId, string $slug): bool
     {
         $stmt = $this->pdo->prepare(
