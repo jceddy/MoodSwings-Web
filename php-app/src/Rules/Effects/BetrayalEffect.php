@@ -15,19 +15,20 @@ use MoodSwings\Rules\RequiresOpponentDecision;
  * Betrayal: "After playing this mood, give one of your moods to another
  * player. After scoring, that mood becomes yours again if it's still in
  * play." Nothing in that text excludes Betrayal itself -- giving itself
- * away is a legal (and thematic) answer -- but "one of your moods" can't
- * be offered as an ordinary up-front choice_fields entry the way it is for
- * almost every other "target your own mood" effect: at the moment the
- * choices panel is filled out, Betrayal is still sitting in hand, not yet
- * in play, so a field sourced from the current board could never legally
- * include it. Modeled as a RequiresOpponentDecision instead -- not because
- * anyone OTHER than the acting player answers it (targetPlayerId is always
- * $playerId here), but because that's what already gets a decision
- * deferred until after the played card has actually entered play, which is
- * the one thing this choice genuinely needs. recipient_player_id has no
- * such problem (any other player is already choosable up front, regardless
- * of what happens to Betrayal itself), so it stays an ordinary submitted
- * choice, validated immediately rather than deferred.
+ * away is a legal (and thematic) answer. Both the mood and the recipient
+ * are ordinary up-front choices (`target_mood_id`, `recipient_player_id`),
+ * like every other card's targets: the mood field's `includes_self` flag
+ * makes clients offer the card being played as a "[self]" candidate even
+ * though it is still in hand while the panel is filled out, and by the time
+ * this effect runs MoodPlayService has already moved Betrayal into play, so
+ * its own id is a perfectly good in-play target.
+ *
+ * (Betrayal used to ask for the mood only AFTER entering play, as a
+ * self-targeted RequiresOpponentDecision -- the one card in the simulator
+ * that worked that way. The interface is kept purely so a game that was
+ * mid-way through that old decision when this changed can still finish it:
+ * a play submitted WITHOUT `target_mood_id` still pauses for it, and
+ * resolveDecisions() honors that answer.)
  *
  * The given-away mood is tagged with the well-known
  * 'returnsToOwnerAfterScoring' effectState key ({sourceCardId, ownerId} --
@@ -43,11 +44,6 @@ final class BetrayalEffect extends AbstractMoodEffect implements RequiresOpponen
 {
     private const KEY = 'target_mood_id';
 
-    /**
-     * Unlike every other RequiresOpponentDecision implementer, this never
-     * returns [] -- Betrayal's own printed text has no "may", so the
-     * decision is always asked, never declined.
-     */
     public function pendingDecisionsFor(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices): array
     {
         $recipientPlayerId = $choices->requireInt('recipient_player_id');
@@ -58,6 +54,11 @@ final class BetrayalEffect extends AbstractMoodEffect implements RequiresOpponen
             throw new InvalidChoiceException('Betrayal must give the mood to another player');
         }
 
+        if ($choices->has(self::KEY)) {
+            return []; // the mood was chosen up front -- resolveDecisions() gives it away right now
+        }
+
+        // Legacy path: no mood submitted, so ask for it now that Betrayal is in play.
         return [
             new PendingDecisionRequest(
                 key: self::KEY,
@@ -76,13 +77,14 @@ final class BetrayalEffect extends AbstractMoodEffect implements RequiresOpponen
 
     public function resolveDecisions(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices, array $answers): array
     {
-        $targetCardId = $answers[self::KEY]->requireInt(self::KEY);
+        $targetCardId = isset($answers[self::KEY])
+            ? $answers[self::KEY]->requireInt(self::KEY)
+            : $choices->requireInt(self::KEY);
         if (!$state->isInPlay($targetCardId) || $state->ownerOf($targetCardId) !== $playerId) {
             throw new InvalidChoiceException("Card {$targetCardId} is not one of player {$playerId}'s moods in play");
         }
 
         $recipientPlayerId = $choices->requireInt('recipient_player_id');
-
         $state->giveInPlayToPlayer($targetCardId, $recipientPlayerId);
         $state->setEffectState($targetCardId, 'returnsToOwnerAfterScoring', ['sourceCardId' => $cardId, 'ownerId' => $playerId]);
 

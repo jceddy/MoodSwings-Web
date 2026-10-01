@@ -381,16 +381,15 @@ final class CardChoiceSchema
             ['key' => 'candidate_mood_ids', 'type' => 'mood', 'scope' => 'other', 'multi' => true, 'required' => false, 'label' => "2 of one opponent's moods (they choose which one to give up)", 'count' => ['min' => 2, 'max' => 2, 'zero_ok' => true], 'constraint' => ['type' => 'same_owner']],
         ],
         'betrayal' => [
-            // No 'target_mood_id' entry here -- unlike every other "your
-            // own mood" choice, Betrayal itself is a valid answer (its
-            // own printed text doesn't exclude itself), but it isn't in
-            // play yet at the moment this panel is filled out, so a
-            // static field sourced from what's currently on the board
-            // could never legally offer it. See BetrayalEffect, which
-            // defers that choice to a pending decision the acting player
-            // answers immediately after Betrayal has actually entered
-            // play, the same mechanism used for an opponent's own answer
-            // elsewhere in this table -- just targeting the acting player.
+            // The mood to give away is an ordinary up-front choice like every
+            // other "one of your own moods" field. Betrayal itself is a legal
+            // answer (its printed text doesn't exclude it) even though it is
+            // still in hand while this panel is filled out -- that is exactly
+            // what `includes_self` is for: clients add the card being played
+            // as a "[self]" candidate (see that flag's own docblock above),
+            // and MoodPlayService has already moved it into play by the time
+            // BetrayalEffect resolves, so targeting its own id is accepted.
+            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'own', 'required' => true, 'label' => 'One of your moods to give away (Betrayal itself is a valid choice)', 'includes_self' => true],
             ['key' => 'recipient_player_id', 'type' => 'player', 'scope' => 'other', 'required' => true, 'label' => 'Player to give it to'],
         ],
         'sneakiness' => [
