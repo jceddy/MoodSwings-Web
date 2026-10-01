@@ -24477,7 +24477,7 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertStringContainsString('round(s) won', $started['data']['content']);
     }
 
-    /** Quick Draft vs a practice bot from the Drafts menu: pick screens (2 cards each), then deck building, then a board. */
+    /** Quick Draft vs a practice bot from the Limited menu: pick screens (2 cards each), then deck building, then a board. */
     public function testDiscordQuickDraftVsBotDraftsThenBuildsAndStarts(): void
     {
         $userId = $this->insertDiscordUser('discord-qd-bot');

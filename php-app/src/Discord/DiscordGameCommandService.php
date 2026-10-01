@@ -73,7 +73,7 @@ use MoodSwings\SiteUrl;
  *   draft-family game, so whichever click lands last does it), then plays
  *   like any other 2-player game. 3-4 player sealed stays web-only.
  * - Quick Draft (deck_type 'quick_draft', 2 players only -- same
- *   isDraftMatchGame()): created from the Drafts menu vs a practice bot
+ *   isDraftMatchGame()): created from the Limited menu vs a practice bot
  *   or a friend with a pool source of the creator's choice. While the
  *   match is 'drafting' the board is a pick screen (quickDraftPickMessage():
  *   the pile you hold and a select of exactly 2 cards to keep, submitted
@@ -1569,14 +1569,14 @@ final class DiscordGameCommandService
     }
 
     /**
-     * The Drafts menu behind the utility row's "Drafts" button.
+     * The Limited menu behind the utility row's "Limited" button.
      *
      * @return array{0: string, 1: array<int, array<string, mixed>>}
      */
     private function draftsMenuMessage(): array
     {
         return [
-            'Which draft-style game do you want to play?',
+            'Which Limited format do you want to play?',
             [['type' => 1, 'components' => [
                 ['type' => 2, 'style' => 1, 'label' => 'Sealed Deck', 'custom_id' => 'ms:sealed:0'],
                 ['type' => 2, 'style' => 1, 'label' => 'Quick Draft', 'custom_id' => 'ms:qd:0'],
@@ -2470,7 +2470,7 @@ final class DiscordGameCommandService
             $this->inviteFriendButton(),
             $this->myDecksButton(),
             $this->powerDuelButton(),
-            ['type' => 2, 'style' => 2, 'label' => 'Drafts', 'custom_id' => 'ms:drafts:0'],
+            ['type' => 2, 'style' => 2, 'label' => 'Limited', 'custom_id' => 'ms:drafts:0'],
         ]];
     }
 

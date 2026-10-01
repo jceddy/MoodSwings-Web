@@ -8077,7 +8077,7 @@ the two currently supported formats"):
   `waiting` Sealed Deck game, or game 2/3 awaiting its start, counts as
   an active game for the root `/moodswings` view
   (`waitingGameNeedsAction()`).
-- **Sealed Deck** -- a fifth utility button (`ms:drafts:0`, "Drafts" -- see "Quick Draft via Discord" below; its "Sealed Deck" choice is `ms:sealed:0`) leads to
+- **Sealed Deck** -- a fifth utility button (`ms:drafts:0`, "Limited" -- see "Quick Draft via Discord" below; its "Sealed Deck" choice is `ms:sealed:0`) leads to
   "vs Practice Bot"/"vs a Friend" (2 players only; always a best of
   three, per the engine). While `waiting`, the board is the deck-building
   screen: the pool grouped by color and `Use suggested deck`
@@ -8094,7 +8094,7 @@ the two currently supported formats"):
   created (`advanceAutomatedTurns()`). 3-4 player sealed games stay
   web-only.
 
-**Quick Draft via Discord** (2 players): the utility row's `Drafts`
+**Quick Draft via Discord** (2 players): the utility row's `Limited`
 button (`ms:drafts:0`) offers `Sealed Deck` and `Quick Draft`
 (`ms:qd:0`). Quick Draft first asks for the card pool (`ms:qdpool:0`:
 Random 48, Structure deck, jceddy's 75, One of each -- the sources that
