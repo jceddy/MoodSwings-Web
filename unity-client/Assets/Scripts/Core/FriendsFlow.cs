@@ -45,6 +45,15 @@ namespace MoodSwings.Core
 
         public event Action Changed;
 
+        /// <summary>Forgets everything -- on logout or an expired session, so the next account never sees the last one's friends.</summary>
+        public void Clear()
+        {
+            _friends = new List<Friend>();
+            _incoming = new List<FriendInvite>();
+            _outgoing = new List<FriendInvite>();
+            Changed?.Invoke();
+        }
+
         /// <summary>Fetches the friends and the pending requests together; state is replaced only if both succeed.</summary>
         public async Task<FriendsActionResult> RefreshAsync(CancellationToken cancellationToken = default)
         {

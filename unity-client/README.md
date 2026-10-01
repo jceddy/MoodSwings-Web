@@ -115,6 +115,26 @@ It fails closed: a corrupt blob, a failed decrypt, or an unsupported
 platform all mean "no saved session" -- never a plaintext fallback.
 Unticking "Remember me" keeps the session in memory only.
 
+## Main menu, friends and settings
+
+`HomeScreen` is the main menu: Play (a placeholder until the lobby), Friends
+(with a count of waiting requests), Settings, Log out. Escape (or Android's
+Back button) goes back a screen.
+
+- **Friends** (`FriendsScreen`, state in `FriendsFlow`): add by username or
+  email, accept/decline incoming requests, see sent requests, and see which
+  friends are online (a friend who hides their status shows no marker).
+  Removing takes two clicks. The list refreshes every 15 seconds while it's
+  open, since the server has no push channel. State is cleared on logout or an
+  expired session.
+- **Settings** (`SettingsScreen`, `PreferencesFlow`, `PreferenceCatalog`): the
+  web Settings dialog's account preferences, minus the browser-only ones (card
+  size, push notifications). Each toggle saves immediately and rolls back with
+  the server's message if the save fails. `/login` doesn't return the
+  preference flags, so opening Settings re-reads `/me`. To add a preference,
+  add one entry to `PreferenceCatalog` -- the screen builds from it, and a
+  test pins every route and JSON key to what `php-app` defines.
+
 ## Tests
 
 - **EditMode** (Window > General > Test Runner): `ApiClient`, `AuthFlow`,

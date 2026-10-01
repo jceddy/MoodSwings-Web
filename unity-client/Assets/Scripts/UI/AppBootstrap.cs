@@ -51,8 +51,18 @@ namespace MoodSwings.UI
                 return;
             }
 
+            AppServices.Friends.Clear();
             _router.ClearHistory();
             _router.Show<LoginScreen>("Your session has expired. Please log in again.", addToHistory: false);
+        }
+
+        private void Update()
+        {
+            // Escape on desktop; the system Back button on Android.
+            if (Input.GetKeyDown(KeyCode.Escape))
+            {
+                _router.Back();
+            }
         }
     }
 }

@@ -257,6 +257,101 @@ namespace MoodSwings.UI
             return toggle;
         }
 
+        /// <summary>Lets a layout child take leftover space (a text field beside a button, a list filling its screen).</summary>
+        public static LayoutElement Flexible(GameObject go, float? width = null, float? height = null)
+        {
+            var element = Size(go);
+            if (width.HasValue)
+            {
+                element.flexibleWidth = width.Value;
+            }
+
+            if (height.HasValue)
+            {
+                element.flexibleHeight = height.Value;
+            }
+
+            return element;
+        }
+
+        /// <summary>
+        /// A vertically scrolling list: add children to <paramref name="content"/>
+        /// and it grows to fit them. Wheel or drag scrolls; there's no visible
+        /// scrollbar yet.
+        /// </summary>
+        public static ScrollRect ScrollList(Transform parent, out RectTransform content, float spacing = 12f)
+        {
+            var root = Create("ScrollList", parent);
+            // Fully transparent, but present: it's what catches the drag and wheel.
+            root.gameObject.AddComponent<Image>().color = Color.clear;
+            var scroll = root.gameObject.AddComponent<ScrollRect>();
+
+            var viewport = Create("Viewport", root);
+            Stretch(viewport);
+            viewport.gameObject.AddComponent<RectMask2D>();
+
+            content = Create("Content", viewport);
+            content.anchorMin = new Vector2(0f, 1f);
+            content.anchorMax = new Vector2(1f, 1f);
+            content.pivot = new Vector2(0.5f, 1f);
+            content.sizeDelta = Vector2.zero;
+            content.anchoredPosition = Vector2.zero;
+
+            var layout = content.gameObject.AddComponent<VerticalLayoutGroup>();
+            layout.spacing = spacing;
+            layout.padding = new RectOffset(0, 0, 8, 24);
+            layout.childAlignment = TextAnchor.UpperCenter;
+            layout.childControlWidth = true;
+            layout.childControlHeight = true;
+            layout.childForceExpandWidth = true;
+            layout.childForceExpandHeight = false;
+            content.gameObject.AddComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+            scroll.viewport = viewport;
+            scroll.content = content;
+            scroll.horizontal = false;
+            scroll.vertical = true;
+            scroll.movementType = ScrollRect.MovementType.Clamped;
+            scroll.scrollSensitivity = 40f;
+            return scroll;
+        }
+
+        /// <summary>A bar across the top of a screen: a Back button on the left and a centered title.</summary>
+        public static RectTransform Header(Transform parent, UiTheme theme, string title, UnityAction onBack)
+        {
+            var bar = Create("Header", parent);
+            bar.anchorMin = new Vector2(0f, 1f);
+            bar.anchorMax = new Vector2(1f, 1f);
+            bar.pivot = new Vector2(0.5f, 1f);
+            bar.sizeDelta = new Vector2(0f, 110f);
+
+            var heading = Label(bar, title, 52, theme.accent, TextAnchor.MiddleCenter, FontStyle.Bold);
+            Stretch(heading.rectTransform);
+
+            var back = (RectTransform)Button(bar, "< Back", theme, onBack, primary: false).transform;
+            back.anchorMin = back.anchorMax = back.pivot = new Vector2(0f, 0.5f);
+            back.sizeDelta = new Vector2(180f, ControlHeight);
+            back.anchoredPosition = new Vector2(40f, 0f);
+            return bar;
+        }
+
+        public static Text SectionTitle(Transform parent, UiTheme theme, string text)
+        {
+            var label = Label(parent, text, 30, theme.accent, TextAnchor.MiddleLeft, FontStyle.Bold);
+            Size(label.gameObject, height: 48f);
+            return label;
+        }
+
+        /// <summary>A raised, padded strip for one list entry; add its contents to the returned row.</summary>
+        public static HorizontalLayoutGroup RowPanel(Transform parent, UiTheme theme, float height = 80f)
+        {
+            var row = Row(parent, "RowPanel", 16f, TextAnchor.MiddleLeft);
+            row.padding = new RectOffset(20, 16, 8, 8);
+            row.gameObject.AddComponent<Image>().color = theme.panel;
+            Size(row.gameObject, height: height);
+            return row;
+        }
+
         private static void Inset(RectTransform rect, float horizontal, float vertical)
         {
             Stretch(rect);
