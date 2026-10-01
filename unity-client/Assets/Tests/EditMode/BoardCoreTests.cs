@@ -107,6 +107,20 @@ namespace MoodSwings.Tests
         }
 
         [Test]
+        public void ACardInHandAlwaysHasItsPrintedValue()
+        {
+            // Only moods in play have their value changed by effects; the board
+            // relies on this to show no value chip on hand cards.
+            foreach (var id in new[] { 405, 406, 407 })
+            {
+                foreach (var card in BoardFixtures.Load(id).You.Hand)
+                {
+                    Assert.IsFalse(card.ValueIsModified, $"game {id}: {card.Name} is {card.Value}, printed {card.BaseValue}");
+                }
+            }
+        }
+
+        [Test]
         public void DiscardedCards_RememberWhoPlayedThem()
         {
             var discard = BoardFixtures.Load(405).DiscardPile.Single();

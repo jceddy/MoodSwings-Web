@@ -224,14 +224,40 @@ namespace MoodSwings.Tests
         }
 
         [UnityTest]
-        public IEnumerator AMoodWhoseValueWasChangedByAnEffect_ShowsTheRealValue()
+        public IEnumerator AMoodWhoseValueWasChangedByAnEffect_ShowsTheRealValue_InTheTopRightCorner()
         {
             var server = new BoardServer();
             yield return OpenBoard(server, 407);
 
             // Tranquility is printed 3 but is 6 right now.
-            var chip = Child("Card Tranquility").Find("Value").GetComponentInChildren<Text>();
-            Assert.AreEqual("6", chip.text);
+            var chip = Child("Card Tranquility").Find("Value");
+            Assert.IsNotNull(chip);
+            Assert.AreEqual("6", chip.GetComponentInChildren<Text>().text);
+
+            var rect = (RectTransform)chip;
+            Assert.AreEqual(new Vector2(1f, 1f), rect.anchorMin, "anchored to the top-right corner");
+            Assert.AreEqual(new Vector2(1f, 1f), rect.anchorMax);
+            ScreenshotHelper.Capture("board-value-chip");
+        }
+
+        [UnityTest]
+        public IEnumerator AMoodWhoseValueIsTheMainPrintedOne_GetsNoChip()
+        {
+            var server = new BoardServer();
+            yield return OpenBoard(server, 407);
+
+            // Confusion is printed 4 and is 4; Disregard is printed 6 and is 6.
+            Assert.IsNull(Child("Card Confusion").Find("Value"), "the art already says 4");
+            foreach (var disregard in UnityEngine.Object.FindObjectsByType<Transform>(FindObjectsInactive.Exclude).Where(t => t.name == "Card Disregard"))
+            {
+                Assert.IsNull(disregard.Find("Value"));
+            }
+
+            // Nor do the cards in your hand: a card in hand always has its printed value.
+            foreach (var name in new[] { "Loyalty", "Patience", "Rationalization", "Cheer" })
+            {
+                Assert.IsNull(Child("Card " + name).Find("Value"), name);
+            }
         }
 
         [UnityTest]

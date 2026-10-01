@@ -7,6 +7,28 @@ namespace MoodSwings.Tests
     public static class ScreenshotHelper
     {
         /// <summary>
+        /// The size screenshots are rendered at: 1920x1080 unless
+        /// MOODSWINGS_SCREENSHOT_SIZE says otherwise (e.g. "960x540"), which is
+        /// how to see what a smaller Editor Game view looks like.
+        /// </summary>
+        private static readonly Vector2Int Size = ParseSize();
+
+        private static Vector2Int ParseSize()
+        {
+            var text = Environment.GetEnvironmentVariable("MOODSWINGS_SCREENSHOT_SIZE");
+            if (!string.IsNullOrEmpty(text))
+            {
+                var parts = text.Split('x');
+                if (parts.Length == 2 && int.TryParse(parts[0], out var width) && int.TryParse(parts[1], out var height))
+                {
+                    return new Vector2Int(width, height);
+                }
+            }
+
+            return new Vector2Int(1920, 1080);
+        }
+
+        /// <summary>
         /// Batch-mode play mode runs in a 640x480 game view, and text is
         /// rasterized for the screen size -- so a 1920x1080 capture of it
         /// comes out soft. Ask the editor for a real Full HD game view
@@ -17,7 +39,7 @@ namespace MoodSwings.Tests
 #if UNITY_EDITOR
             try
             {
-                UnityEditor.PlayModeWindow.SetCustomRenderingResolution(1920, 1080, "MoodSwings tests");
+                UnityEditor.PlayModeWindow.SetCustomRenderingResolution((uint)Size.x, (uint)Size.y, "MoodSwings tests");
             }
             catch (Exception e)
             {
@@ -34,7 +56,7 @@ namespace MoodSwings.Tests
         public static string Capture(string name)
         {
             var camera = Camera.main;
-            var target = new RenderTexture(1920, 1080, 24);
+            var target = new RenderTexture(Size.x, Size.y, 24);
             camera.targetTexture = target;
             Canvas.ForceUpdateCanvases();
             camera.Render();

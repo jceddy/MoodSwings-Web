@@ -10,9 +10,11 @@ namespace MoodSwings.UI
     /// Draws one card. With the converted art present (tools/convert_card_art.py)
     /// it's the real card; without it -- art not generated on this machine, or a
     /// card that has none -- it's a drawn stand-in with the name, value and
-    /// rules text, so the board never depends on the art being there. A chip
-    /// shows the card's CURRENT value, since the art only shows the printed one
-    /// and effects change it.
+    /// rules text, so the board never depends on the art being there. The art
+    /// prints the card's main value in its top-right corner, so when an effect
+    /// has changed the value a chip is laid over that corner showing the
+    /// CURRENT one; an unchanged value gets no chip (the art already says it).
+    /// A drawn stand-in prints no value at all, so it always gets the chip.
     /// </summary>
     public static class CardView
     {
@@ -54,7 +56,7 @@ namespace MoodSwings.UI
                 AddSuppressedShade(rect, width);
             }
 
-            if (showValue)
+            if (showValue && (card.ValueIsModified || art == null))
             {
                 AddValueChip(rect, card, width, theme);
             }
@@ -126,13 +128,15 @@ namespace MoodSwings.UI
 
         private static void AddValueChip(RectTransform rect, BoardCard card, float width, UiTheme theme)
         {
-            var chipWidth = Mathf.Max(34f, width * 0.28f);
-            var chipHeight = chipWidth * 0.78f;
+            // Sized to cover the printed value's die in the art's top-right corner.
+            var chipWidth = Mathf.Max(30f, width * 0.22f);
+            var chipHeight = chipWidth * 0.86f;
             var chip = UiFactory.Create("Value", rect);
-            chip.anchorMin = chip.anchorMax = chip.pivot = new Vector2(0f, 0f);
+            chip.anchorMin = chip.anchorMax = chip.pivot = new Vector2(1f, 1f);
             chip.sizeDelta = new Vector2(chipWidth, chipHeight);
-            chip.anchoredPosition = new Vector2(width * 0.04f, width * 0.04f);
+            chip.anchoredPosition = new Vector2(-width * 0.035f, -width * 0.035f);
 
+            // Accent when an effect changed it; a plain dark chip on a stand-in that just prints it.
             var modified = card.ValueIsModified;
             chip.gameObject.AddComponent<Image>().color = modified ? theme.accent : new Color(0f, 0f, 0f, 0.80f);
 

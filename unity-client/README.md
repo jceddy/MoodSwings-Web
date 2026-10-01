@@ -183,8 +183,11 @@ Phase 5.
   board up with a message instead of blanking.
 - **Cards** (`CardView`) use the converted art when present and a drawn stand-in
   (name, value, rules text) when not, so the board never depends on the art. The
-  chip on each card shows its **current** value; the art only shows the printed
-  one, and effects change it. A switched-off ability shows "OFF".
+  art prints a card's main value in its top-right corner, so when an effect has
+  **changed** a mood's value, a chip is laid over that corner showing the current
+  one; an unchanged value gets no chip. (Cards in hand always have their printed
+  value, so only moods in play get one; a stand-in card, which prints no value,
+  always shows it.) A switched-off ability shows "OFF".
 - **Spectating** uses the same board with no hand and no seat of your own
   (anchored on the first seat, as the web does): a friend's in-progress game, or
   a spectate code a player shared.
@@ -252,7 +255,9 @@ Python scripts in `tools/` (`pip install pillow` for the first):
   cloning. `CardArtLibrary.ForCard(id)` loads from it. Art is sized to a
   multiple of 4 and imported without rescaling (`CardArtImporter`), which
   GPU texture compression requires -- otherwise Unity silently keeps each
-  card as uncompressed RGBA32 (~3 MB instead of under 1 MB).
+  card as uncompressed RGBA32 (~3 MB instead of under 1 MB). Mipmaps are on
+  (Kaiser filter, trilinear): cards are drawn at ~112 px from 744 px art, and
+  without them the shrunken art is harsh, speckled noise.
 - `capture_fixtures.py` -- logs in to a server with a throwaway account
   (credentials from `MOODSWINGS_USER`/`MOODSWINGS_PASSWORD`) and saves
   read-only API responses, email/phone redacted, to
