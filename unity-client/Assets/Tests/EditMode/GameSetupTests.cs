@@ -126,6 +126,7 @@ namespace MoodSwings.Tests
 
             Assert.IsNotNull(setup);
             CollectionAssert.AreEqual(new[] { 1 }, setup.OpponentUserIds);
+            Assert.AreEqual("jceddy", setup.OpponentNames[1], "so the screen can name an opponent who isn't a friend or bot");
             Assert.AreEqual("structure", setup.DeckType);
             Assert.AreEqual(3, setup.WinsNeeded);
             Assert.IsNull(setup.ValidateDirectGame());

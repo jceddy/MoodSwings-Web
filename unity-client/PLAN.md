@@ -97,6 +97,13 @@ Each phase ends with something runnable against the dev server
   can express.
 - **Done when:** you can create or join a game and see it in your games list,
   waiting on you or a bot.
+- **Status:** Play (your games, with rematch), New game (bots, friends, open
+  lobby, four decks) and Open games (join / take down / leave, 8-second
+  refresh) are built and verified against a scripted server: 144 EditMode tests
+  (against the real captured games, past games and bots) and PlayMode tests that
+  press the real buttons and check the requests sent, with screenshots reviewed.
+  **Not yet verified:** the real dev server -- creating a game against bots, and
+  the open lobby (which needs a second account to join your posted game).
 
 ### Phase 4 -- Read-only game board
 - Render `GET /games/state` for 2-4 seats: hand, board, discard, scores,

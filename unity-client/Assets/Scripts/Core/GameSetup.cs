@@ -77,6 +77,16 @@ namespace MoodSwings.Core
         /// <summary>Total players an open-lobby game needs, you included.</summary>
         public int OpenLobbyPlayerCount { get; set; } = MinPlayers;
 
+        /// <summary>Which of the two ways to start a game the New Game screen opens on.</summary>
+        public bool PostToOpenLobby { get; set; }
+
+        /// <summary>
+        /// Usernames for opponent ids a prefill brings along, so the screen can
+        /// show someone who is neither a practice bot nor a friend (a rematch
+        /// against a stranger from the open lobby, say).
+        /// </summary>
+        public Dictionary<int, string> OpponentNames { get; set; } = new Dictionary<int, string>();
+
         /// <summary>Null if these settings can be sent as a direct game, otherwise what to fix.</summary>
         public string ValidateDirectGame()
         {
@@ -153,6 +163,7 @@ namespace MoodSwings.Core
                 WinsNeeded = game.WinsNeeded > 0 ? game.WinsNeeded : DefaultWinsNeeded,
                 DefaultSelectionsMode = game.DefaultSelectionsMode,
                 OpponentUserIds = game.Players.Where(p => p.UserId != yourUserId).Select(p => p.UserId).ToList(),
+                OpponentNames = game.Players.Where(p => p.UserId != yourUserId).ToDictionary(p => p.UserId, p => p.Username),
             };
         }
 

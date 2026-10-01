@@ -1,4 +1,5 @@
 using System;
+using System.Threading.Tasks;
 using MoodSwings.Core;
 using MoodSwings.Networking;
 using UnityEngine;
@@ -8,16 +9,19 @@ namespace MoodSwings.UI
 {
     /// <summary>
     /// The main menu: who's signed in, and the way to everything else.
-    /// Play is a placeholder until the lobby (Phase 3). Friends shows how
-    /// many requests are waiting.
+    /// Play shows how many games are waiting on you; Friends how many
+    /// requests are.
     /// </summary>
     public sealed class HomeScreen : UiScreen
     {
         private Text _greeting;
+        private Text _playLabel;
         private Text _friendsLabel;
         private bool _built;
 
         public string GreetingText => _greeting != null ? _greeting.text : null;
+
+        public string PlayButtonText => _playLabel != null ? _playLabel.text : null;
 
         public string FriendsButtonText => _friendsLabel != null ? _friendsLabel.text : null;
 
@@ -27,14 +31,16 @@ namespace MoodSwings.UI
             var user = args as User ?? AppServices.Auth.CurrentUser;
             _greeting.text = user != null ? "Signed in as " + user.Username : "Signed in";
 
-            AppServices.Friends.Changed += UpdateFriendsBadge;
-            UpdateFriendsBadge();
-            RefreshFriends();
+            AppServices.Friends.Changed += UpdateBadges;
+            AppServices.Lobby.Changed += UpdateBadges;
+            UpdateBadges();
+            RefreshBadgeData();
         }
 
         public override void OnHidden()
         {
-            AppServices.Friends.Changed -= UpdateFriendsBadge;
+            AppServices.Friends.Changed -= UpdateBadges;
+            AppServices.Lobby.Changed -= UpdateBadges;
         }
 
         private void EnsureBuilt()
@@ -54,8 +60,8 @@ namespace MoodSwings.UI
             _greeting = UiFactory.Label(column, string.Empty, 32, theme.textPrimary);
             UiFactory.Size(_greeting.gameObject, height: 70f);
 
-            var play = UiFactory.Button(column, "Play  -  coming soon", theme, () => { });
-            play.interactable = false;
+            var play = UiFactory.Button(column, "Play", theme, () => Router.Show<PlayScreen>());
+            _playLabel = play.GetComponentInChildren<Text>();
 
             var friends = UiFactory.Button(column, "Friends", theme, () => Router.Show<FriendsScreen>(), primary: false);
             _friendsLabel = friends.GetComponentInChildren<Text>();
@@ -64,18 +70,21 @@ namespace MoodSwings.UI
             UiFactory.Button(column, "Log out", theme, OnLogoutClicked, primary: false);
         }
 
-        private void UpdateFriendsBadge()
+        private void UpdateBadges()
         {
-            var waiting = AppServices.Friends.IncomingCount;
-            _friendsLabel.text = waiting > 0 ? $"Friends  ({waiting} new)" : "Friends";
+            var games = AppServices.Lobby.GamesNeedingYou;
+            _playLabel.text = games > 0 ? $"Play  ({games} waiting on you)" : "Play";
+
+            var requests = AppServices.Friends.IncomingCount;
+            _friendsLabel.text = requests > 0 ? $"Friends  ({requests} new)" : "Friends";
         }
 
-        /// <summary>Quietly looks for waiting requests so the badge is current; a failure just leaves it as it was.</summary>
-        private async void RefreshFriends()
+        /// <summary>Quietly fetches what the badges count; a failure just leaves them as they were.</summary>
+        private async void RefreshBadgeData()
         {
             try
             {
-                await AppServices.Friends.RefreshAsync();
+                await Task.WhenAll(AppServices.Friends.RefreshAsync(), AppServices.Lobby.RefreshGamesAsync());
             }
             catch (Exception e)
             {
@@ -89,6 +98,7 @@ namespace MoodSwings.UI
             {
                 await AppServices.Auth.LogoutAsync();
                 AppServices.Friends.Clear();
+                AppServices.Lobby.Clear();
                 if (this == null)
                 {
                     return;

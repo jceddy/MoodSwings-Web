@@ -18,6 +18,15 @@ namespace MoodSwings.UI
         /// <summary>The router this screen is registered with; set by the router in its Awake.</summary>
         public ScreenRouter Router { get; internal set; }
 
+        /// <summary>
+        /// Lets a screen that was just left hand a note back to the one on top
+        /// again (e.g. "Game created." after New Game returns to Play). Does
+        /// nothing unless a screen overrides it.
+        /// </summary>
+        public virtual void ShowMessage(string message, bool isError = false)
+        {
+        }
+
         /// <summary>Called after the screen is activated. args is whatever the caller passed to Show().</summary>
         public virtual void OnShown(object args)
         {

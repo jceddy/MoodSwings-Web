@@ -135,6 +135,32 @@ Back button) goes back a screen.
   add one entry to `PreferenceCatalog` -- the screen builds from it, and a
   test pins every route and JSON key to what `php-app` defines.
 
+## Play, new games and the open lobby
+
+**Play** (`PlayScreen`) lists your games -- ones waiting on you first (your turn,
+or a card effect needing your choice), then the rest, then the most recent
+finished ones -- with **New game**, **Open games**, and a **Rematch** button on
+finished games it can recreate. The main menu's Play button shows how many
+games are waiting on you. A game's board is Phase 4, so rows don't open yet.
+
+- **New game** (`NewGameScreen`, `GameSetup`): either *invite friends and
+  bots* (they're seated and the game starts at once; up to 3 opponents, since a
+  game seats 4) or *post to the open lobby* for 2-4 total players. Pick a deck
+  (Structure, Power, jceddy's 75, One of Each) and optionally let a bot go first.
+  Traditional format only for now; the other formats, drafts and custom
+  decklists arrive in Phases 7-8.
+- **Open games** (`OpenGamesScreen`): join a posted game, take down one you
+  posted, or leave one you joined. A game starts when its last player joins
+  (the join response's `status` is then `started` instead of `ok`). Posting
+  needs "Discoverable for open games" in Settings; the server says so if not.
+- The state lives in `LobbyFlow`; `GameDisplay` turns games into the text shown
+  (status lines, settings, opponents), with fallbacks for formats and decks this
+  client doesn't know yet. Finished games include **abandoned** ones, which have
+  no completion time and sort last.
+- New menu screens extend `ListScreen` (header, status line, scrolling list,
+  polling) -- Friends and Settings predate it and build the same by hand. Lists
+  have an auto-hiding scrollbar.
+
 ## Tests
 
 - **EditMode** (Window > General > Test Runner): `ApiClient`, `AuthFlow`,
