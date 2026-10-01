@@ -12,6 +12,7 @@ Magic Arena -- but supporting up to four players per game.
 | JSON | Newtonsoft (`com.unity.nuget.newtonsoft-json`), replacing `JsonUtility` |
 | First target platforms | Windows desktop + Android (iOS last -- needs a Mac/Xcode) |
 | Mobile orientation | Landscape only |
+| Render pipeline | URP (Built-In is deprecated since Unity 6.5) |
 
 Still open (to be raised when the relevant phase approaches -- see "Open
 decisions"): push notifications, card art licensing, four-seat table layout.
