@@ -24448,6 +24448,31 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertStringContainsString('Game 2 of 3', $started['data']['content']);
     }
 
+    /** With 2+ active games every board offers "All Games" back to the picker; with one it doesn't. */
+    public function testDiscordBoardOffersAllGamesButtonOnlyWithMultipleActiveGames(): void
+    {
+        $userId = $this->insertDiscordUser('discord-allgames');
+        $this->linkDiscordAccount($userId, 'discord-allgames');
+        $bot1 = $this->insertBotUser('discord-allgames-b1-' . uniqid());
+        $bot2 = $this->insertBotUser('discord-allgames-b2-' . uniqid());
+
+        $game1 = $this->games->createGame($userId, [$userId, $bot1]);
+        $this->games->startGame($game1);
+        $single = $this->discordCommandService()->handleComponent($this->discordComponentPayload('discord-allgames', "ms:view:{$game1}"));
+        self::assertStringNotContainsString('ms:games:0', json_encode($single['data']['components']));
+
+        $game2 = $this->games->createGame($userId, [$userId, $bot2]);
+        $this->games->startGame($game2);
+        $board = $this->discordCommandService()->handleComponent($this->discordComponentPayload('discord-allgames', "ms:view:{$game1}"));
+        self::assertStringContainsString('ms:games:0', json_encode($board['data']['components']));
+
+        $picker = $this->discordCommandService()->handleComponent($this->discordComponentPayload('discord-allgames', 'ms:games:0'));
+        self::assertStringContainsString('more than one active game', $picker['data']['content']);
+        $ids = array_column($picker['data']['components'][0]['components'], 'custom_id');
+        self::assertContains("ms:view:{$game1}", $ids);
+        self::assertContains("ms:view:{$game2}", $ids);
+    }
+
     /** Sealed Deck vs a practice bot: pool screen, suggested deck, then a playable board. */
     public function testDiscordSealedDeckVsBotSuggestedDeckStartsTheGame(): void
     {

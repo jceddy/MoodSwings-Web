@@ -8118,6 +8118,15 @@ modal / keep same deck -- Quick Draft's `getState()['quick_draft']`
 shares `sealed_deck`'s `deck_building` shape), then a best-of-three.
 3-4 player Quick Draft stays web-only.
 
+**All Games via Discord** (reported live: "we need a way to get back to
+the game list from a game"): when a player has 2+ active games, every
+board/deck-building/pick screen gets an `All Games` button
+(`ms:games:0`, added by `boardMessage()` beside Refresh when that row has
+room, else on its own row) that returns to the game picker
+(`gamePickerMessage()` -- now up to 20 games in rows of 5, previously 4).
+With 0 or 1 active games the button is omitted (`ms:games:0` itself falls
+back to the no-game message / the single board).
+
 **Advance Turn via Discord** (reported live: "the discord client needs to
 show the Advance turn button when appropriate, otherwise a game will get
 stuck") -- a player with the "pause at the start of your turn" setting
