@@ -8077,7 +8077,7 @@ the two currently supported formats"):
   `waiting` Sealed Deck game, or game 2/3 awaiting its start, counts as
   an active game for the root `/moodswings` view
   (`waitingGameNeedsAction()`).
-- **Sealed Deck** -- a fifth utility button (`ms:sealed:0`) leads to
+- **Sealed Deck** -- a fifth utility button (`ms:drafts:0`, "Limited" -- see "Quick Draft via Discord" below; its "Sealed Deck" choice is `ms:sealed:0`) leads to
   "vs Practice Bot"/"vs a Friend" (2 players only; always a best of
   three, per the engine). While `waiting`, the board is the deck-building
   screen: the pool grouped by color and `Use suggested deck`
@@ -8093,6 +8093,27 @@ the two currently supported formats"):
   A practice bot builds and submits its own deck as soon as the game is
   created (`advanceAutomatedTurns()`). 3-4 player sealed games stay
   web-only.
+
+**Quick Draft via Discord** (2 players): the utility row's `Limited`
+button (`ms:drafts:0`) offers `Sealed Deck` and `Quick Draft`
+(`ms:qd:0`). Quick Draft first asks for the card pool (`ms:qdpool:0`:
+Random 48, Structure deck, jceddy's 75, One of each -- the sources that
+need no extra input), then `vs Practice Bot`/`vs a Friend`
+(`ms:qdbotmenu`/`ms:qdinvite` -> `ms:qdbot`/`ms:qdwith`, the pool riding
+in the custom_id's 4th part) and calls `createGame(format: 'draft',
+deckType: 'quick_draft', quickDraftPoolSource: ...)`. While the match is
+`drafting` the board is a pick screen
+(`quickDraftPickMessage()`): your kept-so-far cards, the pile you hold
+(name, value, color, rules text) and a select of exactly 2 cards
+(`ms:qdpick:{gameId}:{round}:{stage}` -> `submitQuickDraftPick()`; the
+round/stage pin means a stale screen is refused instead of applied to a
+later pile). A practice bot picks on the same click
+(`advanceAutomatedTurns()`); against a friend the screen shows "waiting
+on the other player" until `Refresh`. Once drafting ends the board is
+the same deck-building screen as Sealed Deck (suggested deck / build
+modal / keep same deck -- Quick Draft's `getState()['quick_draft']`
+shares `sealed_deck`'s `deck_building` shape), then a best-of-three.
+3-4 player Quick Draft stays web-only.
 
 **Advance Turn via Discord** (reported live: "the discord client needs to
 show the Advance turn button when appropriate, otherwise a game will get
