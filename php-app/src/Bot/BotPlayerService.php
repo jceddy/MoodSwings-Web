@@ -3627,13 +3627,17 @@ final class BotPlayerService
      * Every OTHER in-play mood is left untouched -- bouncing anything
      * else genuinely does cost that mood's own value for the rest of this
      * round unless something specific is already known to make up for
-     * it, and no other such guaranteed-free combo is confirmed yet.
+     * it, and no other such guaranteed-free combo is confirmed yet -- apart
+     * from the replay moods thrillReplayStealMoodIds() adds, which are free
+     * for the same reason.
      *
      * @return int[]
      */
     private function thrillHandMoodIds(BoardState $state, int $cardId, int $botGamePlayerId): array
     {
         $targets = [];
+
+        // (a) Nostalgia whose own pickup would find something worth taking.
         foreach ($state->moodsOwnedBy($botGamePlayerId) as $mood) {
             if ($mood->cardId === $cardId) {
                 continue;
@@ -3645,7 +3649,58 @@ final class BotPlayerService
             }
         }
 
-        return $targets;
+        // (b) Replay moods (see thrillReplayStealMoodIds()).
+        return [...$targets, ...$this->thrillReplayStealMoodIds($state, $cardId, $botGamePlayerId)];
+    }
+
+    /**
+     * The second Thrill bounce case (reported live: "when bots play Thrill,
+     * they should bounce their cards with strong 'after playing this mood'
+     * effects, so they can be replayed -- this is especially true of
+     * Compulsion, Suspicion, Intimidation, and Paranoia"): the bot's own
+     * PANIC_REPLAY_EFFECT_KEYS moods, each of which takes a card from (or
+     * makes a card come out of) an opponent's hand every time it is played.
+     * Free for the same reason the Nostalgia bounce is: Thrill grants
+     * exactly one unconditional extra play per mood returned, so each
+     * bounced mood is replayed this same turn at its own unchanged printed
+     * value (nothing lost -- EARLY_PRIORITY_EFFECT_KEYS makes the bot lead
+     * with exactly these cards) while its "after playing" effect fires
+     * AGAIN. Capped at the number of cards the opponents are holding
+     * between them: a replay with nothing left in any opposing hand
+     * accomplishes nothing, and isn't worth the churn. Highest-priority
+     * moods first (the order PANIC_REPLAY_EFFECT_KEYS lists them), cheapest
+     * first within a kind.
+     *
+     * @return int[]
+     */
+    private function thrillReplayStealMoodIds(BoardState $state, int $thrillCardId, int $botGamePlayerId): array
+    {
+        $opponentHandCards = 0;
+        foreach ($state->activePlayerOrder() as $playerId) {
+            if ($playerId !== $botGamePlayerId && !$state->isTeammate($botGamePlayerId, $playerId)) {
+                $opponentHandCards += count($state->hand($playerId));
+            }
+        }
+        if ($opponentHandCards === 0) {
+            return [];
+        }
+
+        $candidates = []; // [priority rank, live value, mood card id]
+        foreach ($state->moodsOwnedBy($botGamePlayerId) as $mood) {
+            if ($mood->cardId === $thrillCardId) {
+                continue;
+            }
+            $rank = array_search($state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'], self::PANIC_REPLAY_EFFECT_KEYS, true);
+            if ($rank !== false) {
+                $candidates[] = [$rank, $state->valueOf($mood->cardId), $mood->cardId];
+            }
+        }
+        usort($candidates, static fn (array $a, array $b): int => $a[0] <=> $b[0] ?: $a[1] <=> $b[1]);
+
+        return array_map(
+            static fn (array $candidate): int => $candidate[2],
+            array_slice($candidates, 0, $opponentHandCards),
+        );
     }
 
     /**
