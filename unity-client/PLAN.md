@@ -57,7 +57,7 @@ Each phase ends with something runnable against the dev server
 - **Noted for later:** `web-static/img/cards/MSW/{futuristic,neon,steampunk}/`
   hold themed card skins; the converter skips them for now.
 
-### Phase 1 -- Splash + login (code complete; needs a real-login check)
+### Phase 1 -- Splash + login (complete)
 - Splash, version/health check, maintenance screen, login, session restore
   (saved cookie, then `/me`), logout.
 - Register / forgot-password / verify-email open the web pages in the system
@@ -70,11 +70,11 @@ Each phase ends with something runnable against the dev server
   against the dev server). Android: the APK builds, installs and runs on an
   API 36 x86_64 emulator under Unity 6000.2.1f1 (landscape, login screen, live
   server version), and the 6 Keystore tests pass on it. Unity 6.6 dropped
-  x86_64 Android, so further Android checks need a physical ARM64 device. **Not yet verified:** a real login (run the
-  live test with a dev account, or just try the Main scene), and anything on
-  a physical Android device.
+  x86_64 Android, so further Android checks need a physical ARM64 device.
+  A real login against the dev server has since been verified by hand.
+  **Not yet verified:** anything on a physical Android device.
 
-### Phase 2 -- Main menu shell (code complete; needs a real-account check)
+### Phase 2 -- Main menu shell (complete)
 - Home screen, user info, friends list and invites, preferences
   (`/user/*-preference` routes).
 - **Done when:** friends and preferences work end to end.
@@ -82,17 +82,21 @@ Each phase ends with something runnable against the dev server
   15-second refresh) and Settings (seven toggles + board layout, saving on
   change with rollback) are built and verified against a scripted server:
   93 EditMode tests, and PlayMode tests that press the real buttons and check
-  the requests sent, with screenshots reviewed. **Not yet verified:** the real
-  dev server -- sending/accepting a request needs a second account, and
-  flipping a preference on a real account.
+  the requests sent, with screenshots reviewed. Friends and preference saving
+  have since been verified by hand against the dev server.
 - **Not included:** push-notification settings (browser-only today; part of the
   push decision) and the web's card-size slider (not meaningful yet).
 
-### Phase 3 -- Lobby
-- Decklists, open games (list/create/join/leave/cancel), create game vs bot
-  (`/games/bots`, `POST /games`), active and past games, rematch.
-- **Done when:** you can create or join a game and reach the pre-game ready
-  state.
+### Phase 3 -- Lobby (in progress)
+- Open games (list/post/join/leave/cancel), create a game against bots and
+  friends (`/games/bots`, `POST /games`), your active and past games, rematch.
+- **Scope:** Traditional format with the ready-made deck types (Structure,
+  Power, jceddy's 75, One of Each). Other formats, drafts and custom decklists
+  come with Phases 7 and 8 (the deck builder), and a game's board is Phase 4 --
+  so a game row can't be opened yet. Rematch is offered only for games this
+  can express.
+- **Done when:** you can create or join a game and see it in your games list,
+  waiting on you or a bot.
 
 ### Phase 4 -- Read-only game board
 - Render `GET /games/state` for 2-4 seats: hand, board, discard, scores,
