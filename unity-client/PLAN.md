@@ -74,10 +74,19 @@ Each phase ends with something runnable against the dev server
   live test with a dev account, or just try the Main scene), and anything on
   a physical Android device.
 
-### Phase 2 -- Main menu shell
+### Phase 2 -- Main menu shell (code complete; needs a real-account check)
 - Home screen, user info, friends list and invites, preferences
   (`/user/*-preference` routes).
 - **Done when:** friends and preferences work end to end.
+- **Status:** main menu, Friends (add, accept/decline, remove, presence,
+  15-second refresh) and Settings (seven toggles + board layout, saving on
+  change with rollback) are built and verified against a scripted server:
+  93 EditMode tests, and PlayMode tests that press the real buttons and check
+  the requests sent, with screenshots reviewed. **Not yet verified:** the real
+  dev server -- sending/accepting a request needs a second account, and
+  flipping a preference on a real account.
+- **Not included:** push-notification settings (browser-only today; part of the
+  push decision) and the web's card-size slider (not meaningful yet).
 
 ### Phase 3 -- Lobby
 - Decklists, open games (list/create/join/leave/cancel), create game vs bot

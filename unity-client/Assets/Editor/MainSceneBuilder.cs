@@ -47,6 +47,8 @@ namespace MoodSwings.Editor
                 AddScreen<SplashScreen>(canvasObject.transform),
                 AddScreen<LoginScreen>(canvasObject.transform),
                 AddScreen<HomeScreen>(canvasObject.transform),
+                AddScreen<FriendsScreen>(canvasObject.transform),
+                AddScreen<SettingsScreen>(canvasObject.transform),
                 AddScreen<MaintenanceScreen>(canvasObject.transform),
             };
 
