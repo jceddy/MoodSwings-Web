@@ -65,6 +65,9 @@ namespace MoodSwings.UI
 
             UiFactory.TitleBlock(column, theme);
 
+            var description = UiFactory.Label(column, "A simulator for the Mood Swings TCG.", 28, theme.textPrimary);
+            UiFactory.Size(description.gameObject, height: 40f);
+
             _username = UiFactory.Input(column, "Username", theme);
             _password = UiFactory.Input(column, "Password", theme, password: true);
             _remember = UiFactory.Toggle(column, "Remember me", theme, true);
@@ -119,11 +122,11 @@ namespace MoodSwings.UI
             layout.childForceExpandHeight = false;
             panel.gameObject.AddComponent<Image>().color = theme.panel;
 
-            UiFactory.Label(panel, "Enter your account's email address and we'll send a new verification link.",
-                24, theme.textMuted, TextAnchor.MiddleCenter);
+            UiFactory.Label(panel, "Enter your email and we'll send a new link.", 24, theme.textMuted, TextAnchor.MiddleCenter);
             _verifyEmail = UiFactory.Input(panel, "Email address", theme);
             _resend = UiFactory.Button(panel, "Send verification email", theme, OnResendClicked, primary: false);
             _verifyStatus = UiFactory.Label(panel, string.Empty, 24, theme.textPrimary);
+            _verifyStatus.gameObject.SetActive(false); // an empty label would still reserve its height
 
             _verifyPanel = panel.gameObject;
             _verifyPanel.SetActive(false);
@@ -166,6 +169,13 @@ namespace MoodSwings.UI
         {
             _verifyPanel.SetActive(show);
             _resendLink.SetActive(!show);
+            SetVerifyStatus(string.Empty);
+        }
+
+        private void SetVerifyStatus(string text)
+        {
+            _verifyStatus.text = text;
+            _verifyStatus.gameObject.SetActive(!string.IsNullOrEmpty(text));
         }
 
         private void SetBusy(bool busy)
@@ -236,7 +246,7 @@ namespace MoodSwings.UI
             try
             {
                 _resend.interactable = false;
-                _verifyStatus.text = "Sending...";
+                SetVerifyStatus("Sending...");
                 var result = await AppServices.Auth.ResendVerificationAsync(_verifyEmail.text);
                 if (this == null)
                 {
@@ -244,11 +254,11 @@ namespace MoodSwings.UI
                 }
 
                 _resend.interactable = true;
-                _verifyStatus.text = result.Ok
+                SetVerifyStatus(result.Ok
                     ? result.Value.Message ?? "If that account needs verification, a new email is on its way."
                     : result.Failure == ApiFailureKind.Network
                         ? "Can't reach the server. Check your connection and try again."
-                        : result.Message ?? "Couldn't send the email. Please try again.";
+                        : result.Message ?? "Couldn't send the email. Please try again.");
             }
             catch (Exception e)
             {
