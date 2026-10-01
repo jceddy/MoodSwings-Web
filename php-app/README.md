@@ -11984,7 +11984,12 @@ returned, so the mood is replayed this same turn at its unchanged printed
 value (`EARLY_PRIORITY_EFFECT_KEYS` makes the bot lead with exactly these
 cards) while its "after playing" effect fires again. Capped at the number of
 cards the opponents are holding between them (a replay with nothing left to
-take isn't worth the churn), highest-priority mood first.
+take isn't worth the churn), highest-priority mood first. Joy and Charity
+follow the same pattern (`thrillReplayExtraPlayMoodIds()`; each replay nets
+an extra play on top of the one Thrill grants): **every Joy** in play is
+bounced unconditionally (it banks a play for next turn), and Charity is
+bounced only while the bot holds at least one other card besides Thrill to
+spend the extra play on (one Charity per such card).
 
 ### Diagnostic mode
 

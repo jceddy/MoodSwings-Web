@@ -3649,8 +3649,54 @@ final class BotPlayerService
             }
         }
 
-        // (b) Replay moods (see thrillReplayStealMoodIds()).
-        return [...$targets, ...$this->thrillReplayStealMoodIds($state, $cardId, $botGamePlayerId)];
+        // (b) Extra-play moods (see thrillReplayExtraPlayMoodIds()).
+        $extraPlayMoodIds = $this->thrillReplayExtraPlayMoodIds($state, $cardId, $botGamePlayerId);
+
+        // (c) Replay moods (see thrillReplayStealMoodIds()).
+        return [...$targets, ...$this->thrillReplayStealMoodIds($state, $cardId, $botGamePlayerId), ...$extraPlayMoodIds];
+    }
+
+    /**
+     * Joy and Charity: each replay nets an EXTRA play on top of the one
+     * Thrill grants for the bounce itself. Bounce a mood, replay it with
+     * Thrill's grant, and its own "after playing" grant pays that play
+     * back and then some. (Reported live, as a follow-up to the steal-mood
+     * rule below: "the bot should also always bounce Joy, and it should
+     * bounce Charity if it has at least one other card in hand before
+     * playing Thrill.")
+     * - Joy banks an extra play for the bot's NEXT turn
+     *   (JoyEffect::afterPlaying()) -- worth having regardless of
+     *   anything on the board right now, so every Joy in play is bounced,
+     *   unconditionally.
+     * - Charity grants an extra play THIS turn, which only helps if there
+     *   is a card to spend it on: bounced only while the bot holds at
+     *   least one OTHER card besides Thrill itself (the hand it still has
+     *   before playing Thrill), and at most one Charity per such card.
+     *
+     * @return int[]
+     */
+    private function thrillReplayExtraPlayMoodIds(BoardState $state, int $thrillCardId, int $botGamePlayerId): array
+    {
+        $otherHandCards = count(array_filter(
+            $state->hand($botGamePlayerId),
+            static fn (int $handCardId): bool => $handCardId !== $thrillCardId,
+        ));
+
+        $joy = [];
+        $charity = [];
+        foreach ($state->moodsOwnedBy($botGamePlayerId) as $mood) {
+            if ($mood->cardId === $thrillCardId) {
+                continue;
+            }
+            $effectKey = $state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'];
+            if ($effectKey === 'joy') {
+                $joy[] = $mood->cardId;
+            } elseif ($effectKey === 'charity') {
+                $charity[] = $mood->cardId;
+            }
+        }
+
+        return [...$joy, ...array_slice($charity, 0, $otherHandCards)];
     }
 
     /**

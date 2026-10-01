@@ -1864,6 +1864,32 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame(['hand_mood_ids' => [86, 78]], $this->bot->chooseAction($state, [103], 1)['choices']);
     }
 
+    /** Joy banks an extra play for next turn every time it is played, so Thrill always bounces it -- even with every opposing hand empty. */
+    public function testChooseActionAlwaysBouncesJoyWithThrill(): void
+    {
+        $state = $this->boardState(hands: [1 => [103, 125]]);
+        $state->moveHandToInPlay(1, 125); // Joy
+
+        $action = $this->bot->chooseAction($state, [103], 1);
+
+        self::assertSame(103, $action['card_id']);
+        self::assertSame(['hand_mood_ids' => [125]], $action['choices']);
+    }
+
+    /** Charity's extra play is only worth anything with another card to spend it on -- at least one other card in hand besides Thrill. */
+    public function testChooseActionBouncesCharityWithThrillOnlyWithAnotherCardInHand(): void
+    {
+        $state = $this->boardState(hands: [1 => [103, 3]]);
+        $state->moveHandToInPlay(1, 3); // Charity in play; Thrill is the only card left in hand
+
+        self::assertSame([], $this->bot->chooseAction($state, [103], 1)['choices'], 'nothing else to spend the extra play on');
+
+        $state = $this->boardState(hands: [1 => [103, 3, 55]]);
+        $state->moveHandToInPlay(1, 3);
+
+        self::assertSame(['hand_mood_ids' => [3]], $this->bot->chooseAction($state, [103, 55], 1)['choices'], 'Apathy is a card to spend it on');
+    }
+
     /** End to end: after the bounce the bot really does have the extra play and leads with the bounced Compulsion. */
     public function testBotReplaysTheCompulsionItBouncedWithThrill(): void
     {
