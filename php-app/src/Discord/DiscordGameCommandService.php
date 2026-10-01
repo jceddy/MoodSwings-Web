@@ -288,18 +288,69 @@ final class DiscordGameCommandService
             return $this->ephemeralMessage(...$this->boardMessage($gameIds[0], $userId));
         }
 
-        $components = [
-            ['type' => 1, 'components' => array_map(
-                fn (int $gameId) => ['type' => 2, 'style' => 2, 'label' => "Game #{$gameId}", 'custom_id' => "ms:view:{$gameId}"],
-                array_slice($gameIds, 0, 4),
-            )],
-            // A separate row -- Discord caps a single action row at 5
-            // components total, and the game-picker row above can
-            // already hold 4 on its own.
-            $this->utilityButtonsRow(),
-        ];
+        return $this->ephemeralMessage(...$this->gamePickerMessage($gameIds));
+    }
 
-        return $this->ephemeralMessage('You have more than one active game -- pick one:', components: $components);
+    /**
+     * The "pick one of your active games" screen -- the root view with 2+
+     * games, and what every board's "All Games" button (`ms:games:0`)
+     * returns to. Up to 4 rows of 5 game buttons (20 games); the
+     * utility row takes the fifth row.
+     *
+     * @param int[] $gameIds
+     * @return array{0: string, 1: array<int, array<string, mixed>>}
+     */
+    private function gamePickerMessage(array $gameIds): array
+    {
+        $components = [];
+        foreach (array_chunk(array_slice($gameIds, 0, 20), 5) as $row) {
+            $components[] = ['type' => 1, 'components' => array_map(
+                fn (int $gameId) => ['type' => 2, 'style' => 2, 'label' => "Game #{$gameId}", 'custom_id' => "ms:view:{$gameId}"],
+                $row,
+            )];
+        }
+        $components[] = $this->utilityButtonsRow();
+
+        return ['You have more than one active game -- pick one:', $components];
+    }
+
+    /**
+     * boardMessage() plus, when the player has 2+ active games, an "All
+     * Games" button back to the picker -- beside Refresh when that row has
+     * room, else on its own row (skipped if Discord's 5-row cap is hit).
+     *
+     * @return array{0: string, 1: array<int, array<string, mixed>>}
+     */
+    private function boardMessage(int $gameId, int $userId, ?string $notice = null): array
+    {
+        $result = $this->boardMessageBody($gameId, $userId, $notice);
+        $gameIds = $this->activePlayableGameIdsFor($userId);
+        if (count($gameIds) < 2) {
+            return $result;
+        }
+
+        $button = ['type' => 2, 'style' => 2, 'label' => 'All Games', 'custom_id' => 'ms:games:0'];
+        $rows = $result[1];
+        foreach ($rows as $index => $row) {
+            $buttons = $row['components'] ?? [];
+            if (count($buttons) >= 5 || ($buttons[0]['type'] ?? null) !== 2) {
+                continue;
+            }
+            foreach ($buttons as $candidate) {
+                if (str_starts_with((string) ($candidate['custom_id'] ?? ''), 'ms:view:')) {
+                    $rows[$index]['components'][] = $button;
+                    $result[1] = $rows;
+
+                    return $result;
+                }
+            }
+        }
+        if (count($rows) < 5) {
+            $rows[] = ['type' => 1, 'components' => [$button]];
+            $result[1] = $rows;
+        }
+
+        return $result;
     }
 
     /**
@@ -384,6 +435,19 @@ final class DiscordGameCommandService
                     $this->requireSeatedIn($gameId, $userId);
 
                     return $this->sealedBuildModalResponse($gameId, $userId);
+                case 'games':
+                    $gameIds = $this->activePlayableGameIdsFor($userId);
+                    if ($gameIds === []) {
+                        return $this->updateMessage(
+                            "You don't have an active game right now. Start or join one at " . SiteUrl::root() . '/game/, or start one below.',
+                            [$this->utilityButtonsRow()],
+                        );
+                    }
+                    if (count($gameIds) === 1) {
+                        return $this->updateMessage(...$this->boardMessage($gameIds[0], $userId));
+                    }
+
+                    return $this->updateMessage(...$this->gamePickerMessage($gameIds));
                 case 'drafts':
                     return $this->updateMessage(...$this->draftsMenuMessage());
                 case 'qd':
@@ -862,7 +926,7 @@ final class DiscordGameCommandService
      *
      * @return array{0: string, 1: array<int, array<string, mixed>>, 2?: array<int, array<string, mixed>>}
      */
-    private function boardMessage(int $gameId, int $userId, ?string $notice = null): array
+    private function boardMessageBody(int $gameId, int $userId, ?string $notice = null): array
     {
         try {
             $state = $this->games->getState($gameId, $userId);
