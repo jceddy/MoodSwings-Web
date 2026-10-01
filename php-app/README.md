@@ -8082,7 +8082,10 @@ the two currently supported formats"):
   three, per the engine). While `waiting`, the board is the deck-building
   screen: the pool grouped by color and `Use suggested deck`
   (`GameService::suggestDraftDeck()`, the same `chooseDraftDeck()`
-  heuristic practice bots build with), `Build deck` (a modal prefilled
+  heuristic practice bots build with), `Preview suggested deck` (`ms:sealedpreview:{gameId}` -- shows the
+  suggestion grouped by color with the number of cards left in the pool,
+  submitting nothing; its `Use this deck` is the same `ms:sealedsuggest`
+  and `Back` returns to the pool screen), `Build deck` (a modal prefilled
   with the current/previous deck, else the whole pool, as a plain
   decklist to trim to at least 12 cards -- submitted via
   `GameService::submitDraftDeckFromText()`), and for games 2/3
