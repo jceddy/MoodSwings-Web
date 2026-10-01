@@ -11,6 +11,10 @@ namespace MoodSwings.Editor
     {
         private const string Folder = "Assets/Resources/CardArt/";
 
+        // Bump when the settings below change, so Unity reimports existing
+        // textures (git-ignored art has no committed .meta to invalidate).
+        public override uint GetVersion() => 2;
+
         private void OnPreprocessTexture()
         {
             if (!assetPath.StartsWith(Folder))
@@ -23,7 +27,11 @@ namespace MoodSwings.Editor
             importer.spriteImportMode = SpriteImportMode.Single;
             importer.mipmapEnabled = false;
             importer.alphaIsTransparency = true;
-            importer.maxTextureSize = 1024;
+            // Never rescale: tools/convert_card_art.py already sizes the art
+            // to a multiple of 4 (744x1040), which GPU compression requires.
+            // A clamp below the source size (this was 1024) rescales it to a
+            // width like 733 and silently leaves the texture uncompressed.
+            importer.maxTextureSize = 2048;
             importer.textureCompression = TextureImporterCompression.Compressed;
         }
     }

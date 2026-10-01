@@ -64,3 +64,11 @@ crashlytics-build.properties
 /[Aa]ssets/[Rr]esources/CardArt/
 /[Aa]ssets/[Rr]esources/CardArt.meta
 /[Aa]ssets/[Rr]esources.meta
+
+# Scratch output of the Android native build (CMake/Gradle), regenerated each build
+/.utmp/
+
+# Temporary scenes the Unity Test Framework creates during a run; it deletes
+# them on completion, but an interrupted/timed-out run leaves them behind
+/[Aa]ssets/InitTestScene*.unity
+/[Aa]ssets/InitTestScene*.unity.meta

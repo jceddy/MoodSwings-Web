@@ -13,7 +13,9 @@ Writes into Assets/Resources/CardArt/:
     hurt-feelings[-<skin>].png  from img/hurt-feelings[-<skin>].webp
 
 Names are id-only so CardArtLibrary can look a card up without knowing its
-slug. Unchanged files are skipped, so re-running is cheap.
+slug. Images are resized up to a multiple-of-4 size so Unity can GPU-compress
+them. Unchanged files are skipped, so re-running is cheap -- but delete
+Assets/Resources/CardArt/ first if you change the conversion itself.
 """
 import re
 import sys
@@ -28,11 +30,24 @@ OUT_DIR = UNITY_CLIENT / "Assets" / "Resources" / "CardArt"
 CARD_NAME = re.compile(r"^(\d+)-.+\.webp$")
 
 
+def round_up_to_multiple_of_4(value: int) -> int:
+    return (value + 3) // 4 * 4
+
+
 def convert(source: Path, target: Path) -> bool:
     if target.exists() and target.stat().st_mtime >= source.stat().st_mtime:
         return False
     with Image.open(source) as image:
-        image.convert("RGBA").save(target, "PNG", optimize=False, compress_level=6)
+        image = image.convert("RGBA")
+        # GPU texture compression (DXT, ETC2) needs both sides to be a
+        # multiple of 4; the card art is 744x1039, and Unity silently leaves
+        # anything else uncompressed -- 2.9 MB per card instead of ~0.7 MB,
+        # 400 MB of textures across the set. Stretching by a pixel or two is
+        # invisible.
+        size = (round_up_to_multiple_of_4(image.width), round_up_to_multiple_of_4(image.height))
+        if size != image.size:
+            image = image.resize(size, Image.LANCZOS)
+        image.save(target, "PNG", optimize=False, compress_level=6)
     return True
 
 

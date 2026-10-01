@@ -77,10 +77,40 @@ namespace MoodSwings.Networking
             _sessionStore.Clear();
         }
 
+        /// <summary>
+        /// GET a plain-text file from the site root rather than the API
+        /// (e.g. "/VERSION"). No session, no JSON envelope.
+        /// </summary>
+        public async Task<ApiResult<string>> GetSiteTextAsync(string sitePath, CancellationToken cancellationToken = default)
+        {
+            var request = new HttpRequest { Method = "GET", Url = Config.SiteRoot + sitePath };
+            request.Headers["User-Agent"] = Config.UserAgent;
+
+            var response = await _transport.SendAsync(request, cancellationToken);
+            if (response.NetworkError != null)
+            {
+                return ApiResult<string>.Fail(ApiFailureKind.Network, 0, response.NetworkError);
+            }
+
+            var status = (int)response.StatusCode;
+            if (status >= 500)
+            {
+                return ApiResult<string>.Fail(ApiFailureKind.Server, status, null);
+            }
+
+            if (status >= 400)
+            {
+                return ApiResult<string>.Fail(ApiFailureKind.Rejected, status, null);
+            }
+
+            return ApiResult<string>.Success(status, (response.Body ?? string.Empty).Trim());
+        }
+
         private async Task<ApiResult<T>> SendAsync<T>(string method, string path, object body, CancellationToken cancellationToken)
         {
             var request = new HttpRequest { Method = method, Url = Config.ApiBase + path };
             request.Headers["Accept"] = "application/json";
+            request.Headers["User-Agent"] = Config.UserAgent;
 
             if (body != null)
             {
