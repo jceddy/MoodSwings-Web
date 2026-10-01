@@ -16,6 +16,10 @@ namespace MoodSwings.Core
 
         public static AuthFlow Auth { get; private set; }
 
+        public static FriendsFlow Friends { get; private set; }
+
+        public static PreferencesFlow Preferences { get; private set; }
+
         public static UiTheme Theme { get; private set; }
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
@@ -46,6 +50,8 @@ namespace MoodSwings.Core
         {
             Api = api;
             Auth = auth ?? new AuthFlow(api, sessionStore, preferences);
+            Friends = new FriendsFlow(api);
+            Preferences = new PreferencesFlow(api, Auth);
             if (Theme == null)
             {
                 Theme = ScriptableObject.CreateInstance<UiTheme>();
