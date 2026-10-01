@@ -2,6 +2,7 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using MoodSwings.Networking;
+using Newtonsoft.Json;
 
 namespace MoodSwings.Core
 {
@@ -24,6 +25,7 @@ namespace MoodSwings.Core
     {
         private readonly ApiClient _api;
         private readonly string _spectateCode;
+        private string _lastSnapshot;
 
         private BoardSession(ApiClient api, int gameId, bool spectating, string spectateCode)
         {
@@ -47,6 +49,7 @@ namespace MoodSwings.Core
         /// <summary>Null until the first successful refresh.</summary>
         public GameState State { get; private set; }
 
+        /// <summary>Raised when a refresh brought a state different from the last one.</summary>
         public event Action Changed;
 
         public async Task<BoardRefreshResult> RefreshAsync(CancellationToken cancellationToken = default)
@@ -61,7 +64,16 @@ namespace MoodSwings.Core
             }
 
             State = result.Value;
-            Changed?.Invoke();
+
+            // The board polls every few seconds; most polls find nothing new, and
+            // redrawing identical content would only flicker.
+            var snapshot = JsonConvert.SerializeObject(State);
+            if (snapshot != _lastSnapshot)
+            {
+                _lastSnapshot = snapshot;
+                Changed?.Invoke();
+            }
+
             return new BoardRefreshResult { Ok = true };
         }
     }

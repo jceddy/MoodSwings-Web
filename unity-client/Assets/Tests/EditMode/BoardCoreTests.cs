@@ -472,18 +472,27 @@ namespace MoodSwings.Tests
         }
 
         [Test]
-        public void Refresh_RaisesChanged_OnlyOnSuccess()
+        public void Refresh_RaisesChanged_OnlyWhenTheGameActuallyChanged()
         {
             var session = BoardSession.ForPlayer(_api, 407);
             var raised = 0;
             session.Changed += () => raised++;
             _transport.Enqueue(200, TestFixtures.Read("game_407_state"));
             _transport.EnqueueNetworkError("offline");
+            _transport.Enqueue(200, TestFixtures.Read("game_407_state"));
+            _transport.Enqueue(200, TestFixtures.Read("game_406_state"));
 
-            session.RefreshAsync().GetAwaiter().GetResult();
-            session.RefreshAsync().GetAwaiter().GetResult();
-
+            session.RefreshAsync().GetAwaiter().GetResult(); // first look: a change
             Assert.AreEqual(1, raised);
+
+            session.RefreshAsync().GetAwaiter().GetResult(); // offline: nothing
+            Assert.AreEqual(1, raised);
+
+            session.RefreshAsync().GetAwaiter().GetResult(); // identical poll: nothing to redraw
+            Assert.AreEqual(1, raised);
+
+            session.RefreshAsync().GetAwaiter().GetResult(); // a different game state
+            Assert.AreEqual(2, raised);
         }
 
         [Test]

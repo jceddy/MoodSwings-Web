@@ -1,3 +1,5 @@
+using System;
+using System.Threading.Tasks;
 using UnityEngine;
 
 namespace MoodSwings.UI
@@ -25,6 +27,63 @@ namespace MoodSwings.UI
         /// </summary>
         public virtual void ShowMessage(string message, bool isError = false)
         {
+        }
+
+        private int _pollRun;
+
+        /// <summary>Runs <paramref name="refresh"/> every <paramref name="seconds"/> until the screen is hidden (or this is called again).</summary>
+        protected async void PollWhileShown(float seconds, Func<Task> refresh)
+        {
+            var run = ++_pollRun;
+            try
+            {
+                while (true)
+                {
+                    await Awaitable.WaitForSecondsAsync(seconds);
+                    if (this == null || run != _pollRun)
+                    {
+                        return;
+                    }
+
+                    await refresh();
+                    if (this == null || run != _pollRun)
+                    {
+                        return;
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e);
+            }
+        }
+
+        protected void StopPolling()
+        {
+            _pollRun++;
+        }
+
+        /// <summary>Runs an async UI action, logging (not swallowing silently) anything unexpected.</summary>
+        protected async void Run(Func<Task> action)
+        {
+            try
+            {
+                await action();
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e);
+            }
+        }
+
+        /// <summary>
+        /// Escape / the Back button, offered to the screen first. Return true if
+        /// it was used up (closing a pop-up, say), so the router doesn't also
+        /// leave the screen.
+        /// </summary>
+        public virtual bool HandleBack()
+        {
+            return false;
         }
 
         /// <summary>Called after the screen is activated. args is whatever the caller passed to Show().</summary>

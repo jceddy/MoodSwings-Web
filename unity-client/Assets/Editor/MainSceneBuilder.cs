@@ -52,6 +52,7 @@ namespace MoodSwings.Editor
                 AddScreen<PlayScreen>(canvasObject.transform),
                 AddScreen<NewGameScreen>(canvasObject.transform),
                 AddScreen<OpenGamesScreen>(canvasObject.transform),
+                AddScreen<BoardScreen>(canvasObject.transform),
                 AddScreen<MaintenanceScreen>(canvasObject.transform),
             };
 

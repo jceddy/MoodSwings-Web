@@ -9,8 +9,8 @@ namespace MoodSwings.UI
     /// <summary>
     /// Play: your games (waiting on you first, then in progress, then
     /// finished), with the doors to starting a new game and to the open
-    /// lobby. A finished game can be rematched. Opening a game's board comes
-    /// with the board itself (Phase 4), so rows aren't clickable yet.
+    /// lobby. Any game can be opened to its board, and a finished one can be
+    /// rematched.
     /// </summary>
     public sealed class PlayScreen : ListScreen
     {
@@ -46,9 +46,6 @@ namespace MoodSwings.UI
             UiFactory.Flexible(newGame.gameObject, width: 1f);
             var open = UiFactory.Button(actions.transform, "Open games", theme, () => Router.Show<OpenGamesScreen>(), primary: false);
             UiFactory.Flexible(open.gameObject, width: 1f);
-
-            var note = UiFactory.Label(column, "Opening a game's board arrives in the next update.", 22, theme.textMuted);
-            UiFactory.Size(note.gameObject, height: 32f);
         }
 
         private async Task Refresh()
@@ -111,13 +108,19 @@ namespace MoodSwings.UI
             var status = UiFactory.Label(
                 row.transform, GameDisplay.StatusLine(game, me?.Username), 26,
                 needsYou ? theme.accent : theme.textMuted, TextAnchor.MiddleRight, needsYou ? FontStyle.Bold : FontStyle.Normal);
-            UiFactory.Size(status.gameObject, width: 340f);
+            UiFactory.Size(status.gameObject, width: 300f);
+
+            var board = UiFactory.Button(
+                row.transform, "Open", theme,
+                () => Router.Show<BoardScreen>(BoardSession.ForPlayer(AppServices.Api, game.Id)),
+                primary: needsYou);
+            UiFactory.Size(board.gameObject, width: 130f);
 
             var rematch = canRematch && me != null && game.IsCompleted ? GameSetup.ForRematch(game, me.Id) : null;
             if (rematch != null)
             {
                 var button = UiFactory.Button(row.transform, "Rematch", theme, () => Router.Show<NewGameScreen>(rematch), primary: false);
-                UiFactory.Size(button.gameObject, width: 180f);
+                UiFactory.Size(button.gameObject, width: 170f);
             }
         }
     }
