@@ -1256,9 +1256,10 @@ final class PuzzleContentTest extends TestCase
         $oppHandCount = array_column($state['players'], 'hand_count', 'game_player_id')[$opp];
         self::assertSame(3, $oppHandCount);
         self::assertSame(
-            'Score 13 points this turn. Your hand: Rationalization, Validation, Charity and Friendliness. Your opponent holds Kindness, Benevolence and Eagerness.',
+            'Score 13 points this turn. Your hand: Rationalization, Validation, Charity and Friendliness.',
             $state['game']['puzzle_description']
         );
+        self::assertStringStartsWith('Rationalization', $state['game']['puzzle_hint']);
         self::assertStringContainsString('last card in your hand', $state['game']['puzzle_hint']);
     }
 

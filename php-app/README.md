@@ -13623,8 +13623,10 @@ than a parallel bespoke system:
   and the opponent's played, in a specific order, with Rationalization
   stealing the opponent's hand once it is your last card), hard,
   `min_score` 13, `max_plays` 7, no new puzzle infrastructure. The solver
-  holds Rationalization, Validation, Charity and Friendliness; the opponent
-  holds Kindness, Benevolence and Eagerness; 13 is the seven printed values
+  holds Rationalization, Validation, Charity and Friendliness (the
+  description names only the solver's hand; the opponent holds Kindness,
+  Benevolence and Eagerness, and the hint starts at Rationalization's
+  hand swap); 13 is the seven printed values
   added together, so every card has to be played. Rationalization's rotate
   mode swaps whole hands, so played as the last card in hand it steals all
   three at no cost (played earlier it gives the rest of your hand away),
