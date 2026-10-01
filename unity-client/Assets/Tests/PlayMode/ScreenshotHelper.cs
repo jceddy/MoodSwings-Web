@@ -7,6 +7,26 @@ namespace MoodSwings.Tests
     public static class ScreenshotHelper
     {
         /// <summary>
+        /// Batch-mode play mode runs in a 640x480 game view, and text is
+        /// rasterized for the screen size -- so a 1920x1080 capture of it
+        /// comes out soft. Ask the editor for a real Full HD game view
+        /// before the scene loads. Best effort: ignored outside the editor.
+        /// </summary>
+        public static void UseFullHdScreen()
+        {
+#if UNITY_EDITOR
+            try
+            {
+                UnityEditor.PlayModeWindow.SetCustomRenderingResolution(1920, 1080, "MoodSwings tests");
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("Couldn't set the game view size: " + e.Message);
+            }
+#endif
+        }
+
+        /// <summary>
         /// Renders the main camera (and the camera-space canvas under it) to
         /// a PNG for eyeballing. Goes to MOODSWINGS_SCREENSHOT_DIR if set;
         /// otherwise Temp/, which Unity wipes on exit.
@@ -38,7 +58,8 @@ namespace MoodSwings.Tests
             File.WriteAllBytes(path, texture.EncodeToPNG());
             UnityEngine.Object.Destroy(texture);
             target.Release();
-            Debug.Log("Screenshot: " + path);
+            var canvas = UnityEngine.Object.FindAnyObjectByType<Canvas>();
+            Debug.Log($"Screenshot: {path} (screen {Screen.width}x{Screen.height}, canvas scale {(canvas != null ? canvas.scaleFactor : 0f):0.###})");
             return path;
         }
     }

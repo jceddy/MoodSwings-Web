@@ -14,8 +14,9 @@ namespace MoodSwings.Editor
     /// Output: Build/Android/MoodSwings.apk (git-ignored).
     ///
     /// IL2CPP is required for 64-bit (Mono only does ARMv7, and Google Play
-    /// requires 64-bit). x86_64 is included only so the APK runs on the
-    /// standard Android Studio emulator; drop it for a store build.
+    /// requires 64-bit). ARM64 only: Unity 6.6 dropped x86/x86_64 Android, so
+    /// the standard x86_64 emulator can no longer run these builds -- test on
+    /// a physical ARM64 device.
     /// </summary>
     public static class AndroidBuild
     {
@@ -25,7 +26,7 @@ namespace MoodSwings.Editor
         public static void Build()
         {
             PlayerSettings.SetScriptingBackend(NamedBuildTarget.Android, ScriptingImplementation.IL2CPP);
-            PlayerSettings.Android.targetArchitectures = AndroidArchitecture.ARM64 | AndroidArchitecture.X86_64;
+            PlayerSettings.Android.targetArchitectures = AndroidArchitecture.ARM64;
             EditorUserBuildSettings.buildAppBundle = false;
 
             Directory.CreateDirectory(Path.GetDirectoryName(OutputPath));

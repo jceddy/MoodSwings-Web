@@ -23,7 +23,7 @@ namespace MoodSwings.Tests
             yield return null;
             yield return null;
 
-            var screen = Object.FindFirstObjectByType<CardArtSampleScreen>();
+            var screen = Object.FindAnyObjectByType<CardArtSampleScreen>();
             Assert.IsNotNull(screen, "CardArtSampleScreen not in scene");
             Assert.IsTrue(screen.gameObject.activeInHierarchy, "ScreenRouter didn't show the initial screen");
             Assert.AreEqual(11, screen.LoadedCount, "10 cards + Hurt Feelings should load");
