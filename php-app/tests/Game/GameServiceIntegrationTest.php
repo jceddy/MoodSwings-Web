@@ -24464,7 +24464,14 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertStringContainsString('Sealed Deck, Game 1 of 3', $created['data']['content']);
         self::assertStringContainsString('Your pool (45 cards)', $created['data']['content']);
         $labels = array_column($created['data']['components'][0]['components'], 'label');
-        self::assertSame(['Use suggested deck', 'Build deck', 'Refresh'], $labels);
+        self::assertSame(['Use suggested deck', 'Preview suggested deck', 'Build deck', 'Refresh'], $labels);
+
+        $preview = $this->discordCommandService()->handleComponent(
+            $this->discordComponentPayload('discord-sealed-bot', 'ms:sealedpreview:' . $this->games->listGamesForUser($userId)[0]['id'])
+        );
+        self::assertStringContainsString('suggested deck (12 cards, 33 left in your pool)', $preview['data']['content']);
+        self::assertSame(['Use this deck', 'Back'], array_column($preview['data']['components'][0]['components'], 'label'));
+        self::assertSame('waiting', $this->fetchGame($this->games->listGamesForUser($userId)[0]['id'])['status'], 'previewing submits nothing');
 
         $gameId = $this->games->listGamesForUser($userId)[0]['id'];
         self::assertSame('waiting', $this->fetchGame($gameId)['status']);

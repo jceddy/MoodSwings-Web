@@ -366,6 +366,10 @@ final class DiscordGameCommandService
                     $this->games->submitDraftDeck($gameId, $userId, $this->games->suggestDraftDeck($gameId, $userId));
                     $this->startSealedIfReady($gameId);
                     break;
+                case 'sealedpreview':
+                    $this->requireSeatedIn($gameId, $userId);
+
+                    return $this->updateMessage(...$this->suggestedDeckPreviewMessage($gameId, $userId));
                 case 'sealedkeep':
                     $this->requireSeatedIn($gameId, $userId);
                     $deckBuilding = $this->sealedDeckBuildingState($this->games->getState($gameId, $userId));
@@ -1280,6 +1284,7 @@ final class DiscordGameCommandService
         } else {
             $lines[] = "Choose a deck of {$minSize}-{$deckBuilding['max_deck_size']} cards from your pool.";
             $buttons[] = ['type' => 2, 'style' => 1, 'label' => 'Use suggested deck', 'custom_id' => "ms:sealedsuggest:{$gameId}"];
+            $buttons[] = ['type' => 2, 'style' => 2, 'label' => 'Preview suggested deck', 'custom_id' => "ms:sealedpreview:{$gameId}"];
             $buttons[] = ['type' => 2, 'style' => 2, 'label' => 'Build deck', 'custom_id' => "ms:sealedbuild:{$gameId}"];
             if ($deckBuilding['previous_deck_card_ids'] !== null) {
                 $buttons[] = ['type' => 2, 'style' => 2, 'label' => 'Keep same deck', 'custom_id' => "ms:sealedkeep:{$gameId}"];
@@ -1289,6 +1294,42 @@ final class DiscordGameCommandService
 
         return [implode("\n", $lines), [
             ['type' => 1, 'components' => $buttons],
+            $this->utilityButtonsRow(),
+        ]];
+    }
+
+    /**
+     * "Preview suggested deck": the same suggestDraftDeck() the "Use
+     * suggested deck" button submits (deterministic for a given pool), shown
+     * grouped by color with the leftover count, before anything is
+     * committed. "Use this deck" is `ms:sealedsuggest`; "Back" is the
+     * ordinary deck-building screen.
+     *
+     * @return array{0: string, 1: array<int, array<string, mixed>>}
+     */
+    private function suggestedDeckPreviewMessage(int $gameId, int $userId): array
+    {
+        $deckBuilding = $this->sealedDeckBuildingState($this->games->getState($gameId, $userId));
+        if ($deckBuilding === null) {
+            throw new GameStateException("Game #{$gameId} isn't waiting on a deck.");
+        }
+
+        $poolById = [];
+        foreach ($deckBuilding['drafted_cards'] as $card) {
+            $poolById[(int) $card['card_id']] ??= $card;
+        }
+        $suggested = $this->games->suggestDraftDeck($gameId, $userId);
+        $cards = array_map(static fn (int $cardId): array => $poolById[$cardId], $suggested);
+        $left = count($deckBuilding['drafted_cards']) - count($cards);
+
+        $content = "**Game #{$gameId}** -- suggested deck (" . count($cards) . " cards, {$left} left in your pool):\n"
+            . $this->sealedPoolSummary($cards);
+
+        return [mb_substr($content, 0, 2000), [
+            ['type' => 1, 'components' => [
+                ['type' => 2, 'style' => 1, 'label' => 'Use this deck', 'custom_id' => "ms:sealedsuggest:{$gameId}"],
+                ['type' => 2, 'style' => 2, 'label' => 'Back', 'custom_id' => "ms:view:{$gameId}"],
+            ]],
             $this->utilityButtonsRow(),
         ]];
     }
