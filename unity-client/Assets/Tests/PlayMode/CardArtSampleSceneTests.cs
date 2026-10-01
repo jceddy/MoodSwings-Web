@@ -1,11 +1,9 @@
 using System.Collections;
-using System.IO;
 using MoodSwings.UI;
 using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.TestTools;
-using UnityEngine.UI;
 
 namespace MoodSwings.Tests
 {
@@ -30,30 +28,7 @@ namespace MoodSwings.Tests
             Assert.IsTrue(screen.gameObject.activeInHierarchy, "ScreenRouter didn't show the initial screen");
             Assert.AreEqual(11, screen.LoadedCount, "10 cards + Hurt Feelings should load");
 
-            // Leave a picture behind for eyeballing. Unity wipes Temp/ on
-            // exit, so set MOODSWINGS_SCREENSHOT_PATH to keep it somewhere.
-            var camera = Camera.main;
-            var target = new RenderTexture(1920, 1080, 24);
-            camera.targetTexture = target;
-            Canvas.ForceUpdateCanvases();
-            camera.Render();
-
-            var previous = RenderTexture.active;
-            RenderTexture.active = target;
-            var texture = new Texture2D(target.width, target.height, TextureFormat.RGB24, false);
-            texture.ReadPixels(new Rect(0, 0, target.width, target.height), 0, 0);
-            texture.Apply();
-            RenderTexture.active = previous;
-            camera.targetTexture = null;
-
-            var path = System.Environment.GetEnvironmentVariable("MOODSWINGS_SCREENSHOT_PATH");
-            if (string.IsNullOrEmpty(path))
-            {
-                path = Path.GetFullPath(Path.Combine(Application.dataPath, "..", "Temp", "CardArtSample.png"));
-            }
-
-            File.WriteAllBytes(path, texture.EncodeToPNG());
-            Debug.Log("CardArtSample screenshot: " + path);
+            ScreenshotHelper.Capture("CardArtSample");
         }
     }
 }

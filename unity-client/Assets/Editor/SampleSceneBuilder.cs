@@ -73,7 +73,7 @@ namespace MoodSwings.Editor
             routerObject.ApplyModifiedPropertiesWithoutUndo();
 
             EditorSceneManager.SaveScene(scene, ScenePath);
-            EditorBuildSettings.scenes = new[] { new EditorBuildSettingsScene(ScenePath, true) };
+            SceneBuildSettings.Ensure(ScenePath);
             Debug.Log("SampleSceneBuilder: wrote " + ScenePath);
         }
 

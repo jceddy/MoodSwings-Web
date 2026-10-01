@@ -204,5 +204,64 @@ namespace MoodSwings.Tests
 
             Assert.IsFalse(api.HasSession);
         }
+
+        [Test]
+        public void EveryRequest_SendsTheConfiguredUserAgent()
+        {
+            var api = new ApiClient(new ApiConfig("https://example.test", "MoodSwings/9.9 (Test)"), _transport);
+            _transport.Enqueue(200, "{\"status\":\"ok\"}");
+            _transport.Enqueue(200, "{\"status\":\"ok\"}");
+
+            api.GetAsync<ApiEnvelope>("/health").GetAwaiter().GetResult();
+            Assert.AreEqual("MoodSwings/9.9 (Test)", _transport.LastRequest.Headers["User-Agent"]);
+
+            api.PostAsync<ApiEnvelope>("/logout").GetAwaiter().GetResult();
+            Assert.AreEqual("MoodSwings/9.9 (Test)", _transport.LastRequest.Headers["User-Agent"]);
+        }
+
+        [Test]
+        public void GetSiteText_FetchesFromTheSiteRoot_NotTheApiPrefix_AndTrims()
+        {
+            _transport.Enqueue(200, "1.58.5\n");
+
+            var result = _api.GetServerVersionAsync().GetAwaiter().GetResult();
+
+            Assert.IsTrue(result.Ok);
+            Assert.AreEqual("1.58.5", result.Value);
+            Assert.AreEqual("https://example.test/VERSION", _transport.LastRequest.Url);
+            Assert.IsFalse(_transport.LastRequest.Headers.ContainsKey("Cookie"));
+        }
+
+        [Test]
+        public void GetSiteText_NotFound_IsRejected()
+        {
+            _transport.Enqueue(404, "<html>Not Found</html>");
+
+            var result = _api.GetServerVersionAsync().GetAwaiter().GetResult();
+
+            Assert.AreEqual(ApiFailureKind.Rejected, result.Failure);
+        }
+
+        [Test]
+        public void GetSiteText_Offline_IsANetworkFailure()
+        {
+            _transport.EnqueueNetworkError("offline");
+
+            var result = _api.GetServerVersionAsync().GetAwaiter().GetResult();
+
+            Assert.AreEqual(ApiFailureKind.Network, result.Failure);
+        }
+
+        [Test]
+        public void ResendVerification_PostsTheEmail()
+        {
+            _transport.Enqueue(200, "{\"status\":\"ok\",\"message\":\"sent\"}");
+
+            var result = _api.ResendVerificationAsync("a@example.com").GetAwaiter().GetResult();
+
+            Assert.AreEqual("sent", result.Value.Message);
+            Assert.AreEqual("https://example.test/app/resend-verification", _transport.LastRequest.Url);
+            StringAssert.Contains("\"email\":\"a@example.com\"", _transport.LastRequest.Body);
+        }
     }
 }
