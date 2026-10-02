@@ -104,6 +104,17 @@ namespace MoodSwings.Core
             return new LobbyResult { Ok = true };
         }
 
+        /// <summary>Whether the server offers synchronous games right now; false until known, and when it can't be asked.</summary>
+        public bool SynchronousModeEnabled { get; private set; }
+
+        public async Task<LobbyResult> RefreshSynchronousModeFlagAsync(CancellationToken cancellationToken = default)
+        {
+            var result = await _api.GetSynchronousModeEnabledAsync(cancellationToken);
+            SynchronousModeEnabled = result.Ok && result.Value.Enabled;
+            Changed?.Invoke();
+            return result.Ok ? new LobbyResult { Ok = true } : Failed(result.UserMessage("Couldn't check for synchronous games."));
+        }
+
         public async Task<LobbyResult> RefreshBotsAsync(CancellationToken cancellationToken = default)
         {
             var result = await _api.ListBotsAsync(cancellationToken);
@@ -213,7 +224,7 @@ namespace MoodSwings.Core
             return new LobbyResult
             {
                 Ok = true,
-                Message = $"Posted. The game starts once {setup.OpenLobbyPlayerCount} players are seated.",
+                Message = $"Posted. The game starts once {setup.EffectiveOpenLobbyPlayerCount} players are seated.",
             };
         }
 

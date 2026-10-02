@@ -891,13 +891,13 @@ namespace MoodSwings.UI
             rowRect.anchorMax = Vector2.one;
             rowRect.offsetMin = rowRect.offsetMax = Vector2.zero;
 
-            BuildPile(theme, row.transform, "Deck", state.DeckCount, null);
+            BuildPile(theme, row.transform, "Deck", BoardDisplay.DeckCaption(state), null);
 
             var top = state.DiscardPile.LastOrDefault();
-            BuildPile(theme, row.transform, "Discard", state.DiscardPile.Count, top);
+            BuildPile(theme, row.transform, "Discard", $"Discard {state.DiscardPile.Count}", top);
         }
 
-        private void BuildPile(UiTheme theme, Transform parent, string title, int count, BoardCard topCard)
+        private void BuildPile(UiTheme theme, Transform parent, string title, string captionText, BoardCard topCard)
         {
             var column = UiFactory.Create(title, parent);
             var layout = column.gameObject.AddComponent<VerticalLayoutGroup>();
@@ -926,7 +926,7 @@ namespace MoodSwings.UI
             }
 
             // One line, centered on the pile even if it's wider than the card.
-            var caption = UiFactory.Label(column, $"{title} {count}", 24, theme.textMuted);
+            var caption = UiFactory.Label(column, captionText, 24, theme.textMuted);
             caption.horizontalOverflow = HorizontalWrapMode.Overflow;
             UiFactory.Size(caption.gameObject, height: 34f);
         }

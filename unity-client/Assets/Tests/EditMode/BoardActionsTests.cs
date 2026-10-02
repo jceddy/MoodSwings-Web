@@ -256,6 +256,45 @@ namespace MoodSwings.Tests
         }
 
         [Test]
+        public void ASharedDeck_IsCountedForEveryone_SpectatorsToo()
+        {
+            var state = BoardFixtures.Load(407);
+            Assert.IsFalse(BoardDisplay.HasSeparateDecks(state));
+            Assert.AreEqual("Deck 25", BoardDisplay.DeckCaption(state));
+
+            // The server zeroes the deck count for someone who isn't seated; a player's own count stands in.
+            state.You.GamePlayerId = null;
+            state.DeckCount = 0;
+            Assert.AreEqual("Deck 25", BoardDisplay.DeckCaption(state));
+        }
+
+        [Test]
+        public void ADuel_ShowsYourOwnDeck_AndSpectatorsJustSeparateDecks()
+        {
+            var state = BoardFixtures.Load(407);
+            state.Game.Format = "duel";
+            Assert.IsTrue(BoardDisplay.HasSeparateDecks(state));
+            Assert.AreEqual("Your deck 25", BoardDisplay.DeckCaption(state));
+
+            state.You.GamePlayerId = null;
+            Assert.AreEqual("Separate decks", BoardDisplay.DeckCaption(state));
+        }
+
+        [TestCase("standard", "custom_duel", true)]
+        [TestCase("standard", "quick_draft", true)]
+        [TestCase("draft", "structure", true)]
+        [TestCase("standard", "structure", false)]
+        [TestCase("team", "power", false)]
+        public void SeparateDecks_AreADuelOrDraftFormatOrADeckBuiltPerPlayer(string format, string deckType, bool expected)
+        {
+            var state = BoardFixtures.Load(406);
+            state.Game.Format = format;
+            state.Game.DeckType = deckType;
+
+            Assert.AreEqual(expected, BoardDisplay.HasSeparateDecks(state));
+        }
+
+        [Test]
         public void ARecoloredMood_SaysWhatColorItIsAndWhatDidIt()
         {
             var state = BoardFixtures.Load(406);

@@ -20,6 +20,13 @@ namespace MoodSwings.Networking
             return api.GetAsync<GamesResponse>("/games/past", cancellationToken);
         }
 
+        /// <summary>GET /config/synchronous-mode-enabled -- whether the server currently offers synchronous games at all.</summary>
+        public static Task<ApiResult<FeatureFlagResponse>> GetSynchronousModeEnabledAsync(
+            this ApiClient api, CancellationToken cancellationToken = default)
+        {
+            return api.GetAsync<FeatureFlagResponse>("/config/synchronous-mode-enabled", cancellationToken);
+        }
+
         public static Task<ApiResult<BotsResponse>> ListBotsAsync(
             this ApiClient api, CancellationToken cancellationToken = default)
         {

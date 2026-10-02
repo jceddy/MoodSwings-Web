@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Linq;
 using MoodSwings.Core;
 using MoodSwings.Networking;
@@ -9,6 +10,100 @@ namespace MoodSwings.Tests
 {
     public class GameSetupTests
     {
+        [Test]
+        public void TraditionalAndDuel_AreTheFormatsOffered_TraditionalFirst()
+        {
+            CollectionAssert.AreEqual(new[] { "standard", "duel" }, GameSetup.FormatOptions.Select(f => f.Id).ToArray());
+            Assert.AreEqual("standard", new GameSetup().Format);
+        }
+
+        [Test]
+        public void TheFormat_GoesIntoBothBodies()
+        {
+            var setup = new GameSetup { Format = GameSetup.DuelFormat, OpponentUserIds = { 18 } };
+
+            Assert.AreEqual("duel", setup.ToDirectGameBody()["format"]);
+            Assert.AreEqual("duel", setup.ToOpenGameBody()["format"]);
+        }
+
+        [Test]
+        public void ADuelFromTheLobby_SeatsExactlyTwo_WhateverWasAskedFor()
+        {
+            var setup = new GameSetup { Format = GameSetup.DuelFormat, PostToOpenLobby = true, OpenLobbyPlayerCount = 4 };
+
+            Assert.AreEqual(2, setup.EffectiveOpenLobbyPlayerCount);
+            Assert.AreEqual(2, setup.ToOpenGameBody()["target_player_count"]);
+            Assert.IsFalse(setup.OpenLobbyCountIsChoosable);
+            Assert.AreEqual(2, setup.PlayerCount);
+        }
+
+        [Test]
+        public void ATraditionalLobbyGame_KeepsTheChosenCount()
+        {
+            var setup = new GameSetup { PostToOpenLobby = true, OpenLobbyPlayerCount = 3 };
+
+            Assert.AreEqual(3, setup.ToOpenGameBody()["target_player_count"]);
+            Assert.IsTrue(setup.OpenLobbyCountIsChoosable);
+        }
+
+        [TestCase("standard", 1, true, true)]
+        [TestCase("duel", 1, true, true)]
+        [TestCase("standard", 2, true, false)]
+        [TestCase("standard", 3, true, false)]
+        [TestCase("standard", 1, false, false)]
+        public void Synchronous_NeedsTwoPlayers_ASupportedFormat_AndTheServersSaySo(string format, int opponents, bool serverAllows, bool expected)
+        {
+            var setup = new GameSetup { Format = format, OpponentUserIds = Enumerable.Range(1, opponents).ToList() };
+
+            Assert.AreEqual(expected, setup.SynchronousModeAvailable(serverAllows));
+        }
+
+        [Test]
+        public void Synchronous_IsSentOnlyWhenOn_AndSwitchedOffWhenItNoLongerApplies()
+        {
+            var setup = new GameSetup { OpponentUserIds = { 18 }, SynchronousMode = true };
+            Assert.AreEqual(true, setup.ToDirectGameBody()["synchronous_mode"]);
+
+            setup.OpponentUserIds.Add(20);
+            setup.Normalize(synchronousModeAllowedByServer: true);
+
+            Assert.IsFalse(setup.SynchronousMode);
+            Assert.IsFalse(setup.ToDirectGameBody().ContainsKey("synchronous_mode"));
+        }
+
+        [Test]
+        public void Synchronous_IsSwitchedOff_WhenTheServerTurnsTheFeatureOff()
+        {
+            var setup = new GameSetup { OpponentUserIds = { 18 }, SynchronousMode = true };
+
+            setup.Normalize(synchronousModeAllowedByServer: false);
+
+            Assert.IsFalse(setup.SynchronousMode);
+        }
+
+        [Test]
+        public void ADuelRematch_KeepsItsFormat_ButAnOtherFormatStillHasNone()
+        {
+            var duel = new GameSummary
+            {
+                Format = "duel",
+                DeckType = "power",
+                WinsNeeded = 3,
+                Players = new List<GamePlayerSummary>
+                {
+                    new GamePlayerSummary { UserId = 1, Username = "me" },
+                    new GamePlayerSummary { UserId = 18, Username = "BotSage" },
+                },
+            };
+            var team = new GameSummary { Format = "team", DeckType = "structure", Players = duel.Players };
+
+            var rematch = GameSetup.ForRematch(duel, 1);
+
+            Assert.AreEqual("duel", rematch.Format);
+            Assert.AreEqual("power", rematch.DeckType);
+            Assert.IsNull(GameSetup.ForRematch(team, 1));
+        }
+
         private static JObject Body(object body) => JObject.Parse(JsonConvert.SerializeObject(body));
 
         private static GamesResponse PastGames() =>

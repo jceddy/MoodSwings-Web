@@ -97,6 +97,13 @@ namespace MoodSwings.Networking
         public bool UsesTacticalAi { get; set; }
     }
 
+    /// <summary>A server-side feature switch (GET /config/...).</summary>
+    public class FeatureFlagResponse : ApiEnvelope
+    {
+        [JsonProperty("enabled")]
+        public bool Enabled { get; set; }
+    }
+
     public class BotsResponse : ApiEnvelope
     {
         [JsonProperty("bots")]

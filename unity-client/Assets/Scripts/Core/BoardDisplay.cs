@@ -159,6 +159,35 @@ namespace MoodSwings.Core
             return unsupported ? "This kind of game can't be played in the app yet - open it on the web to play." : null;
         }
 
+        /// <summary>Each player draws from a deck of their own (Duel and the draft formats) rather than one shared deck.</summary>
+        public static bool HasSeparateDecks(GameState state) =>
+            state.Game.Format == GameSetup.DuelFormat
+            || state.Game.Format == "draft"
+            || (state.Game.DeckType != null && DraftDeckTypes.Contains(state.Game.DeckType));
+
+        /// <summary>
+        /// The line under the deck pile: "Deck 30", or "Your deck 30" when everyone has their own
+        /// (the others' are on their seats), or just "Separate decks" for someone watching such a game.
+        /// A spectator is never told how many cards are in "the" deck by the server, so a shared deck's
+        /// count is read off a player.
+        /// </summary>
+        public static string DeckCaption(GameState state)
+        {
+            var viewer = Viewer(state);
+            if (HasSeparateDecks(state))
+            {
+                return viewer != null ? $"Your deck {state.DeckCount}" : "Separate decks";
+            }
+
+            var count = state.DeckCount;
+            if (viewer == null && count == 0 && state.Players.Count > 0)
+            {
+                count = state.Players[0].DeckCount;
+            }
+
+            return $"Deck {count}";
+        }
+
         /// <summary>It's the viewer's turn and nothing stands in the way of playing or passing.</summary>
         public static bool CanAct(GameState state)
         {

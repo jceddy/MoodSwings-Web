@@ -11,15 +11,17 @@ namespace MoodSwings.UI
     /// <summary>
     /// Set up and start a game: either invite friends and practice bots (the
     /// game starts at once), or post to the open lobby for 2-4 players. Opened
-    /// blank, or prefilled (a rematch). Traditional format with the ready-made
-    /// decks for now. On success it returns to the screen it was opened from,
-    /// which shows the outcome.
+    /// blank, or prefilled (a rematch). Traditional or Duel format with the
+    /// ready-made decks for now. On success it returns to the screen it was opened
+    /// from, which shows the outcome.
     /// </summary>
     public sealed class NewGameScreen : ListScreen
     {
         private GameSetup _setup;
         private Text _countLabel;
         private GameObject _botFirstPanel;
+        private Toggle _synchronousToggle;
+        private GameObject _synchronousPanel;
         private Button _create;
         private Text _createLabel;
         private bool _busy;
@@ -64,8 +66,10 @@ namespace MoodSwings.UI
         {
             var bots = AppServices.Lobby.RefreshBotsAsync();
             var friends = AppServices.Friends.RefreshAsync();
+            var flag = AppServices.Lobby.RefreshSynchronousModeFlagAsync(); // a failure just means the option stays hidden
             var botsResult = await bots;
             var friendsResult = await friends;
+            await flag;
             if (this == null)
             {
                 return;
@@ -102,6 +106,9 @@ namespace MoodSwings.UI
                 AddOpponentChoice(theme);
             }
 
+            UiFactory.SectionTitle(List, theme, "Format");
+            AddFormatChoice(theme);
+
             UiFactory.SectionTitle(List, theme, "Deck");
             AddDeckChoice(theme);
 
@@ -110,6 +117,14 @@ namespace MoodSwings.UI
             var defaults = UiFactory.Toggle(options.transform, "Default selections mode", theme, _setup.DefaultSelectionsMode);
             UiFactory.ToggleDescription(options.transform, theme, "Pre-fill card choices with a reasonable default. You can still change them before submitting.");
             defaults.onValueChanged.AddListener(on => _setup.DefaultSelectionsMode = on);
+
+            var synchronous = UiFactory.Panel(List, theme);
+            _synchronousPanel = synchronous.gameObject;
+            _synchronousToggle = UiFactory.Toggle(synchronous.transform, "Synchronous (live)", theme, _setup.SynchronousMode);
+            _synchronousToggle.gameObject.name = "Synchronous toggle";
+            UiFactory.ToggleDescription(synchronous.transform, theme,
+                "For two players sitting down together: a ready check before the game and a 30-second clock on each action.");
+            _synchronousToggle.onValueChanged.AddListener(on => _setup.SynchronousMode = on);
 
             RefreshSummary();
         }
@@ -138,11 +153,40 @@ namespace MoodSwings.UI
             Rebuild();
         }
 
+        private void AddFormatChoice(UiTheme theme)
+        {
+            var panel = UiFactory.Panel(List, theme);
+            var group = panel.gameObject.AddComponent<ToggleGroup>();
+            group.allowSwitchOff = false;
+            foreach (var format in GameSetup.FormatOptions)
+            {
+                var id = format.Id;
+                AddRadio(theme, panel, group, format.Label, format.Description, _setup.Format == id, () =>
+                {
+                    if (_setup.Format == id)
+                    {
+                        return;
+                    }
+
+                    _setup.Format = id;
+                    SetStatus(string.Empty);
+                    Rebuild();
+                });
+            }
+        }
+
         private void AddOpenLobbyChoice(UiTheme theme)
         {
             var panel = UiFactory.Panel(List, theme);
             var title = UiFactory.Label(panel.transform, "Total players, including you", 28, theme.textPrimary, TextAnchor.MiddleLeft, FontStyle.Bold);
             UiFactory.Size(title.gameObject, height: 40f);
+
+            if (!_setup.OpenLobbyCountIsChoosable)
+            {
+                AddNote(theme, panel, $"A {GameDisplay.FormatName(_setup.Format)} game from the lobby seats exactly {_setup.EffectiveOpenLobbyPlayerCount} players.");
+                UiFactory.ToggleDescription(panel.transform, theme, "Only players who are \"discoverable for open games\" (see Settings) will see it.");
+                return;
+            }
 
             var group = panel.gameObject.AddComponent<ToggleGroup>();
             group.allowSwitchOff = false;
@@ -279,6 +323,19 @@ namespace MoodSwings.UI
             if (_countLabel != null)
             {
                 _countLabel.text = $"Selected: {_setup.OpponentUserIds.Count} of {GameSetup.MaxPlayers - 1}";
+            }
+
+            // "Synchronous" only makes sense for two players in a format that supports it, and only
+            // while the server offers it; anything that stops applying is switched off, not just hidden.
+            _setup.Normalize(AppServices.Lobby.SynchronousModeEnabled);
+            if (_synchronousToggle != null)
+            {
+                var offered = _setup.SynchronousModeAvailable(AppServices.Lobby.SynchronousModeEnabled);
+                _synchronousPanel.SetActive(offered);
+                if (!offered)
+                {
+                    _synchronousToggle.SetIsOnWithoutNotify(false);
+                }
             }
 
             if (_botFirstPanel != null)
