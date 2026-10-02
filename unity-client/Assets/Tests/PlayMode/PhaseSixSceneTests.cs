@@ -97,6 +97,7 @@ namespace MoodSwings.Tests
         {
             GameFeedback.Sound = null;
             GameFeedback.Haptics = null;
+            ScreenSafeArea.Override = null;
         }
 
         // --- drag to play ---------------------------------------------------------------------------
@@ -507,6 +508,45 @@ namespace MoodSwings.Tests
 
             Assert.IsFalse(Board().HoverPreviewShown);
             yield return Release(card, data);
+        }
+
+        // --- phone screens: notches and rounded corners ---------------------------------------------------
+
+        [UnityTest]
+        public IEnumerator TheBoard_KeepsOutOfACutOutAtTheEdgeOfThePhone()
+        {
+            var server = YourTurn();
+            ScreenSafeArea.Override = new Rect(120f, 0f, 1680f, 1080f); // a notch on the left, rounded corners on the right
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+            yield return PhaseTwoSceneTests.Frames(3);
+
+            var rect = (RectTransform)Board().transform;
+            Assert.AreEqual(120f / 1920f, rect.anchorMin.x, 0.001f);
+            Assert.AreEqual(1800f / 1920f, rect.anchorMax.x, 0.001f);
+            Assert.AreEqual(0f, rect.anchorMin.y, 0.001f);
+            Assert.AreEqual(1f, rect.anchorMax.y, 0.001f);
+
+            // On screen, its left edge is where the notch ends.
+            var canvas = Board().GetComponentInParent<Canvas>();
+            var corners = new Vector3[4];
+            rect.GetWorldCorners(corners);
+            Assert.AreEqual(120f, RectTransformUtility.WorldToScreenPoint(canvas.worldCamera, corners[0]).x, 1f);
+            Assert.AreEqual(1800f, RectTransformUtility.WorldToScreenPoint(canvas.worldCamera, corners[2]).x, 1f);
+            ScreenshotHelper.Capture("board-safe-area");
+        }
+
+        [UnityTest]
+        public IEnumerator ChangingTheSafeArea_RefitsTheScreenWithoutReopeningIt()
+        {
+            var server = YourTurn();
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+            var rect = (RectTransform)Board().transform;
+            Assert.AreEqual(0f, rect.anchorMin.x, 0.001f, "a screen with no cut-outs fills the display");
+
+            ScreenSafeArea.Override = new Rect(200f, 0f, 1520f, 1080f);
+            yield return PhaseTwoSceneTests.Frames(3);
+
+            Assert.AreEqual(200f / 1920f, rect.anchorMin.x, 0.001f);
         }
     }
 }
