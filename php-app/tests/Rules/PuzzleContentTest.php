@@ -180,6 +180,19 @@ final class PuzzleContentTest extends TestCase
         self::assertSame('in_progress', $stmt->fetchColumn());
     }
 
+    /** A lost "win this turn" attempt: completed, but never recorded as a solve. */
+    private function assertGameFailed(int $gameId): void
+    {
+        $stmt = $this->pdo->prepare("SELECT status, puzzle_id FROM games WHERE id = :id");
+        $stmt->execute(['id' => $gameId]);
+        $row = $stmt->fetch();
+        self::assertSame('completed', $row['status']);
+
+        $solves = $this->pdo->prepare('SELECT COUNT(*) FROM puzzle_solves WHERE puzzle_id = :puzzle');
+        $solves->execute(['puzzle' => (int) $row['puzzle_id']]);
+        self::assertSame(0, (int) $solves->fetchColumn(), 'a lost attempt is never recorded as a solve');
+    }
+
     private function userIdForGamePlayer(int $gamePlayerId): int
     {
         $stmt = $this->pdo->prepare('SELECT user_id FROM game_players WHERE id = :id');
@@ -1283,52 +1296,88 @@ final class PuzzleContentTest extends TestCase
         $this->assertGameSolved($gameId, $p);
     }
 
-    /** The tempting swing: taking a Betrayal (or Avoidance) gives no second play, so Boredom only arrives on a refreshed turn -- which the play cap rejects. */
-    public function testDeadHeatTakingAnotherMoodLeavesNoSecondPlay(): void
+    /**
+     * "Win the game this turn" means one turn: when the solver's plays run
+     * out without winning, the attempt is lost -- the opponent wins and there
+     * is no second turn to keep playing. Taking a Betrayal (or Avoidance, or
+     * nothing) leaves no second play, so the turn ends right there.
+     */
+    public function testDeadHeatTakingAnotherMoodEndsTheTurnAndLosesTheAttempt(): void
     {
         foreach ([[56, 'Betrayal'], [29, 'Avoidance'], [null, 'nothing']] as [$takenCardId, $label]) {
             ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('dead-heat');
             $opp = $this->opponentGamePlayerId($gameId, $p);
 
             $choices = $takenCardId !== null ? ['target_mood_id' => $this->ownedInstanceId($gameId, $takenCardId, 'in_play', $opp)] : [];
-            $this->playDriven($gameId, $p, $this->instanceId($gameId, 100, 'hand'), $choices);
-            $this->playDriven($gameId, $p, $this->instanceId($gameId, 83, 'hand')); // Boredom, on the refreshed turn
+            $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 100, 'hand'), $choices);
 
-            $this->assertGameNotSolved($gameId);
-            self::assertNotSame('completed', $this->games->getState($gameId, $this->userIdForGamePlayer($p))['game']['status'], "taking {$label} must not solve it");
+            self::assertTrue($result['game_completed'], "taking {$label} ends the attempt");
+            $this->assertGameFailed($gameId);
+            $game = $this->games->getState($gameId, $this->userIdForGamePlayer($p))['game'];
+            self::assertSame('completed', $game['status']);
+            self::assertTrue($game['puzzle_failed']);
+            self::assertSame(['PuzzleOpponent'], $game['winner_usernames'], 'the opponent wins');
         }
     }
 
-    /** Boredom first uses the turn's only play; Recklessness (even taking Hope) then lands on a refreshed turn. */
-    public function testDeadHeatBoredomFirstIsTooSlow(): void
+    /** Boredom first uses the turn's only play: the turn ends and the attempt is lost before Recklessness can be played. */
+    public function testDeadHeatBoredomFirstLosesTheAttempt(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('dead-heat');
+
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 83, 'hand')); // Boredom
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameFailed($gameId);
+        self::assertTrue($this->games->getState($gameId, $this->userIdForGamePlayer($p))['game']['puzzle_failed']);
+
+        $this->expectException(\MoodSwings\Game\Exceptions\GameStateException::class);
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 100, 'hand')); // no second turn
+    }
+
+    /** Passing ends the turn too -- a "win this turn" puzzle can't be passed through. */
+    public function testDeadHeatPassingLosesTheAttempt(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('dead-heat');
+
+        $this->games->pass($gameId, $p);
+
+        $game = $this->games->getState($gameId, $this->userIdForGamePlayer($p))['game'];
+        self::assertSame('completed', $game['status']);
+        self::assertTrue($game['puzzle_failed']);
+    }
+
+    /** A solve is never marked failed, and puzzle_failed is false while an attempt is open. */
+    public function testDeadHeatSolveIsNotFailedAndOpenAttemptIsNotFailed(): void
     {
         ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('dead-heat');
         $opp = $this->opponentGamePlayerId($gameId, $p);
+        self::assertFalse($this->games->getState($gameId, $this->userIdForGamePlayer($p))['game']['puzzle_failed']);
 
-        $this->playDriven($gameId, $p, $this->instanceId($gameId, 83, 'hand')); // Boredom
-        $this->playDriven($gameId, $p, $this->instanceId($gameId, 100, 'hand'), [
-            'target_mood_id' => $this->ownedInstanceId($gameId, 124, 'in_play', $opp), // Hope
-        ]);
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 100, 'hand'), ['target_mood_id' => $this->ownedInstanceId($gameId, 124, 'in_play', $opp)]);
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 83, 'hand'));
 
-        $this->assertGameNotSolved($gameId);
+        $this->assertGameSolved($gameId, $p);
+        self::assertFalse($this->games->getState($gameId, $this->userIdForGamePlayer($p))['game']['puzzle_failed']);
     }
 
     /**
-     * Reported live: after Recklessness took the wrong mood and Boredom was
-     * played on the refreshed turn, the hand was empty and the engine kept
-     * auto-passing/refreshing the lone seat for the whole action budget on
-     * every call (the board "repeated 118802 times"). A puzzle with no
-     * legal play left is a dead end -- it must just sit there.
+     * Regression for the dead-end loop (reported live on Dead Heat before
+     * "win this turn" puzzles ended on failure): a puzzle of any OTHER goal
+     * type that runs out of legal plays unsolved must just sit there -- not
+     * be auto-passed and refreshed again and again.
      */
-    public function testDeadHeatOutOfLegalPlaysDoesNotAutoPassInALoop(): void
+    public function testNonWinGamePuzzleOutOfLegalPlaysDoesNotAutoPassInALoop(): void
     {
-        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('dead-heat');
-        $opp = $this->opponentGamePlayerId($gameId, $p);
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('hostile-takeover');
 
-        $this->playDriven($gameId, $p, $this->instanceId($gameId, 100, 'hand'), [
-            'target_mood_id' => $this->ownedInstanceId($gameId, 56, 'in_play', $opp), // the wrong mood: a Betrayal
-        ]);
-        $this->playDriven($gameId, $p, $this->instanceId($gameId, 83, 'hand')); // Boredom on the refreshed turn
+        // Rationalization too early, then everything else: 11 of 13, hand empty.
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 26, 'hand')); // Validation
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 3, 'hand')); // Charity
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 49, 'hand'), ['mode' => 'rotate', 'direction' => 'left']);
+        $this->playDriven($gameId, $p, $this->ownedInstanceId($gameId, 2, 'hand', $p));
+        $this->playDriven($gameId, $p, $this->ownedInstanceId($gameId, 114, 'hand', $p));
+        $this->playDriven($gameId, $p, $this->ownedInstanceId($gameId, 17, 'hand', $p));
 
         for ($i = 0; $i < 3; $i++) {
             $this->games->advanceAutomatedTurns($gameId);
@@ -1336,7 +1385,7 @@ final class PuzzleContentTest extends TestCase
 
         $count = fn (string $type): int => (int) $this->pdo->query("SELECT COUNT(*) FROM game_events WHERE game_id = {$gameId} AND event_type = '{$type}'")->fetchColumn();
         self::assertSame(0, $count('turn_passed'), 'nothing is auto-passed');
-        self::assertLessThanOrEqual(2, $count('puzzle_turn_refreshed'), 'only the refreshes the two plays caused');
+        self::assertLessThanOrEqual(6, $count('puzzle_turn_refreshed'), 'only the refreshes the plays themselves caused');
         $this->assertGameNotSolved($gameId);
         self::assertSame([], $this->games->getState($gameId, $this->userIdForGamePlayer($p))['you']['hand']);
     }

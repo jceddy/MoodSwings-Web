@@ -13723,6 +13723,23 @@ than a parallel bespoke system:
   `advanceAutomatedTurns()` now leaves a `format = 'puzzle'` seat alone: the
   attempt just stays open (hand empty, nothing playable) until "Try Again".
 
+- **A "win the game this turn" puzzle ends when its turn does** (reported
+  live: "if the player's turn ends without them winning, they should lose
+  -- they shouldn't get another turn to keep playing"). For a
+  `goal_type = 'win_game'` puzzle (Shakedown, Dead Heat), the solver's
+  plays running out -- or a Pass, or an auto-pass with nothing legal left
+  -- no longer hands the seat a fresh mini-turn: `advancePuzzleTurn()` now
+  calls `failPuzzleAttempt()`, which completes the attempt with the puzzle
+  opponent as the winner, scores the round to them, logs `puzzle_failed`
+  and records nothing in `puzzle_solves`/achievements. `getState()` exposes
+  `game.puzzle_failed`, and the board shows "Puzzle failed" instead of
+  "Puzzle solved"; "Try Again" from the Puzzles dialog starts a fresh
+  attempt. (A solve still completes the game inside `playMood()` before
+  the turn can end.) Every other goal type keeps the old refresh behavior,
+  where `max_plays` alone makes a refresh a failed route. The game log
+  also now describes the `puzzle_turn_refreshed`/`puzzle_failed` events
+  instead of falling through to a bare "played a card".
+
 ### Duel: separate per-player decks
 
 `format: 'duel'` and `format: 'draft'` (see "Draft format" below) are the

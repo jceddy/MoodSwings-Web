@@ -7463,7 +7463,10 @@ final class GameService
                 // warning (reported live on "Dead Heat": play Recklessness on
                 // the wrong mood, then Boredom, and the board "repeated
                 // 118802 times").
-                if ($this->fetchGame($gameId)['format'] === 'puzzle') {
+                // (A 'win_game' puzzle IS different: its one turn simply
+                // ends, and failPuzzleAttempt() makes that a loss -- so it
+                // falls through to the ordinary auto-pass below.)
+                if ($this->fetchGame($gameId)['format'] === 'puzzle' && $this->puzzleGoalType($gameId) !== 'win_game') {
                     break;
                 }
 
@@ -11513,6 +11516,14 @@ final class GameService
     {
         $playerId = (int) $round['current_turn_game_player_id'];
 
+        // A "win the game this turn" puzzle is exactly that: one turn. If it
+        // ends (plays used up, or a Pass) without the goal having been met
+        // -- a solve completes the game before ever getting here, see
+        // playMood() -- the solver has lost; no second turn.
+        if ($this->puzzleGoalType($gameId) === 'win_game') {
+            return $this->failPuzzleAttempt($gameId, $round, $playerId);
+        }
+
         $this->logEvent($gameId, (int) $round['id'], $playerId, 'puzzle_turn_refreshed', null, []);
 
         $freshGrants = $this->computeFreshGrants($state, $playerId, 1);
@@ -11521,6 +11532,63 @@ final class GameService
         $this->updateRoundTurnState((int) $round['id'], $playerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId(), $state);
 
         return ['round_scored' => false, 'game_completed' => false];
+    }
+
+    private function puzzleAttemptFailed(int $gameId): bool
+    {
+        $stmt = Connection::get()->prepare("SELECT 1 FROM game_events WHERE game_id = :game_id AND event_type = 'puzzle_failed' LIMIT 1");
+        $stmt->execute(['game_id' => $gameId]);
+
+        return $stmt->fetchColumn() !== false;
+    }
+
+    private function puzzleGoalType(int $gameId): ?string
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT p.goal_type FROM games g JOIN puzzles p ON p.id = g.puzzle_id WHERE g.id = :game_id'
+        );
+        $stmt->execute(['game_id' => $gameId]);
+        $goalType = $stmt->fetchColumn();
+
+        return $goalType === false ? null : (string) $goalType;
+    }
+
+    /**
+     * The solver's one turn of a goal_type 'win_game' puzzle ended without
+     * winning: the attempt is over and lost. Mirrors a solve's own
+     * bookkeeping in checkPuzzleGoal() (game 'completed', round 'scored')
+     * but names the puzzle opponent -- the other seat -- as the winner, logs
+     * 'puzzle_failed' (getState()'s puzzle_failed, the board's own "Puzzle
+     * failed" banner), and records nothing in puzzle_solves or the
+     * achievements pipeline. "Try Again" from the Puzzles dialog starts a
+     * fresh attempt.
+     *
+     * @return array{round_scored: bool, game_completed: bool, winner_game_player_id?: int}
+     */
+    private function failPuzzleAttempt(int $gameId, array $round, int $solverGamePlayerId): array
+    {
+        $pdo = Connection::get();
+
+        $opponentStmt = $pdo->prepare('SELECT id FROM game_players WHERE game_id = :game_id AND id <> :solver ORDER BY seat_order LIMIT 1');
+        $opponentStmt->execute(['game_id' => $gameId, 'solver' => $solverGamePlayerId]);
+        $opponentId = $opponentStmt->fetchColumn();
+        $winnerId = $opponentId !== false ? (int) $opponentId : null;
+
+        $this->logEvent($gameId, (int) $round['id'], $solverGamePlayerId, 'puzzle_failed', null, []);
+
+        $pdo->prepare("UPDATE games SET status = 'completed', winner_game_player_id = :winner, completed_at = NOW() WHERE id = :game_id")
+            ->execute(['winner' => $winnerId, 'game_id' => $gameId]);
+        $pdo->prepare(
+            "UPDATE game_rounds SET status = 'scored', winner_game_player_id = :winner, wins_awarded = :wins_awarded
+             WHERE game_id = :game_id AND status = 'in_progress'"
+        )->execute(['winner' => $winnerId, 'wins_awarded' => $winnerId !== null ? 1 : 0, 'game_id' => $gameId]);
+
+        $result = ['round_scored' => false, 'game_completed' => true];
+        if ($winnerId !== null) {
+            $result['winner_game_player_id'] = $winnerId;
+        }
+
+        return $result;
     }
 
     /**
@@ -18206,6 +18274,10 @@ final class GameService
                 // completed-game rendering). Null otherwise; cheap to
                 // compute even then since it's gated on format first.
                 'puzzle_plays_made' => $game['format'] === 'puzzle' ? $this->countMoodsPlayed($gameId) : null,
+                // True once a 'win_game' puzzle's single turn ended without
+                // winning -- see failPuzzleAttempt(); drives the board's
+                // "Puzzle failed" banner instead of "Puzzle solved".
+                'puzzle_failed' => $game['format'] === 'puzzle' && $game['status'] === 'completed' && $this->puzzleAttemptFailed($gameId),
                 // The puzzle's own optional hint text -- see $puzzleHint's
                 // own comment above.
                 'puzzle_hint' => $puzzleHint,
@@ -20043,6 +20115,11 @@ final class GameService
             // would otherwise fall through to the generic "{actor} played
             // {a card}" default below, which reads as nonsense here.
             $row['event_type'] === 'chaos_loop_shortcut_applied' => "{$actor} used a chaos-loop shortcut ({$details['count']}x {$details['kind']})",
+            // Puzzle bookkeeping events -- without their own arms these fell
+            // through to the generic "{actor} played a card" default below
+            // (what the endless puzzle auto-pass loop's log showed).
+            $row['event_type'] === 'puzzle_turn_refreshed' => "{$actor} was given a fresh turn",
+            $row['event_type'] === 'puzzle_failed' => "{$actor}'s turn ended without winning the game",
             $row['event_type'] === 'turn_passed' => ($details['automated'] ?? false)
                 ? "{$actor} passed automatically (no legal play)"
                 : "{$actor} passed",
