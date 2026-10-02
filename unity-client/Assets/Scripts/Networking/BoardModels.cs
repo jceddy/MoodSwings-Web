@@ -78,6 +78,10 @@ namespace MoodSwings.Networking
         [JsonProperty("is_suppressed")]
         public bool IsSuppressed { get; set; }
 
+        /// <summary>In play only: what is suppressing this mood (it can be more than one), and until when.</summary>
+        [JsonProperty("suppressions")]
+        public List<Suppression> Suppressions { get; set; } = new List<Suppression>();
+
         [JsonProperty("value_locked")]
         public bool ValueLocked { get; set; }
 
@@ -94,6 +98,20 @@ namespace MoodSwings.Networking
 
         /// <summary>True when an effect has moved the value away from the printed one.</summary>
         public bool ValueIsModified => Value != BaseValue;
+    }
+
+    /// <summary>One thing suppressing a mood: a suppressed mood's value is 0; nothing else about it changes.</summary>
+    public class Suppression
+    {
+        [JsonProperty("suppressed_by_card_id")]
+        public int? SuppressedByCardId { get; set; }
+
+        [JsonProperty("suppressed_by_name")]
+        public string SuppressedByName { get; set; }
+
+        /// <summary>When it wears off: end_of_round, or while_source_in_play.</summary>
+        [JsonProperty("expiry")]
+        public string Expiry { get; set; }
     }
 
     public class BoardPlayer

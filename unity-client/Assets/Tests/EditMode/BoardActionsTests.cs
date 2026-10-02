@@ -256,6 +256,25 @@ namespace MoodSwings.Tests
         }
 
         [Test]
+        public void ASuppressedMood_SaysWhatSuppressesIt()
+        {
+            var card = Newtonsoft.Json.JsonConvert.DeserializeObject<BoardCard>(
+                @"{""card_id"":1,""is_suppressed"":true,""suppressions"":[
+                    {""expiry"":""end_of_round"",""suppressed_by_card_id"":9,""suppressed_by_name"":""Scorn""}]}");
+
+            Assert.IsTrue(card.IsSuppressed);
+            Assert.AreEqual("Suppressed by Scorn", BoardDisplay.SuppressedByText(card));
+
+            card.Suppressions.Add(new Suppression { SuppressedByName = "Shame" });
+            card.Suppressions.Add(new Suppression { SuppressedByName = "Scorn" });
+            Assert.AreEqual("Suppressed by Scorn and Shame", BoardDisplay.SuppressedByText(card), "each source once");
+
+            card.Suppressions.Clear();
+            card.Suppressions.Add(new Suppression { SuppressedByName = null });
+            Assert.AreEqual("Suppressed", BoardDisplay.SuppressedByText(card));
+        }
+
+        [Test]
         public void OutcomeNotice_SaysWhenARoundOrTheGameEnded()
         {
             Assert.AreEqual("Game complete!", BoardDisplay.OutcomeNotice(new GameActionResponse { GameCompleted = true, RoundScored = true }));

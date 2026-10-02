@@ -151,8 +151,9 @@ namespace MoodSwings.UI
             UiFactory.Stretch(shade);
             shade.gameObject.AddComponent<Image>().color = new Color(0f, 0f, 0f, 0.55f);
 
-            var label = UiFactory.Label(shade, "OFF", Mathf.Max(12, Mathf.RoundToInt(width * 0.2f)), Color.white,
+            var label = UiFactory.Label(shade, "SUPPRESSED", Mathf.Max(11, Mathf.RoundToInt(width * 0.115f)), Color.white,
                 TextAnchor.MiddleCenter, FontStyle.Bold);
+            label.horizontalOverflow = HorizontalWrapMode.Overflow;
             UiFactory.Stretch(label.rectTransform);
         }
     }

@@ -692,6 +692,54 @@ namespace MoodSwings.Tests
             Assert.IsTrue(Board().Choices.SubmitEnabled, "declining is a valid answer");
         }
 
+        // --- suppressed moods ---------------------------------------------------------------------
+
+        private static JObject WithLazinessSuppressedByScorn() => Load(405, s =>
+        {
+            s["round"]["pending_decision"] = null;
+            var laziness = s["in_play"].Single(c => (string)c["name"] == "Laziness");
+            laziness["is_suppressed"] = true;
+            laziness["value"] = 0;
+            laziness["suppressions"] = JArray.Parse(
+                "[{\"expiry\":\"end_of_round\",\"suppressed_by_card_id\":14134,\"suppressed_by_name\":\"Scorn\"}]");
+        });
+
+        [UnityTest]
+        public IEnumerator ASuppressedMood_IsLabelledSuppressed_AndTurnedOnItsSide()
+        {
+            var server = new PlayServer { State = WithLazinessSuppressedByScorn() };
+            yield return OpenBoard(server, 405);
+
+            var card = Child("Card Laziness");
+            Assert.AreEqual(270f, card.localEulerAngles.z, 0.01f, "turned a quarter turn clockwise");
+            Assert.AreEqual(0f, Child("Card Fury").localEulerAngles.z, 0.01f, "other moods stay upright");
+            Assert.IsTrue(card.GetComponentsInChildren<Text>().Any(t => t.text == "SUPPRESSED"));
+            Assert.IsFalse(UnityEngine.Object.FindObjectsByType<Text>(FindObjectsInactive.Exclude).Any(t => t.text == "OFF"));
+
+            // On its side it is as wide as a card is tall, and its slot makes room for that.
+            var slot = (RectTransform)card.parent;
+            Assert.AreEqual("Suppressed slot", slot.name);
+            Assert.AreEqual(((RectTransform)card).sizeDelta.y, slot.GetComponent<LayoutElement>().preferredWidth, 0.01f);
+            ScreenshotHelper.Capture("board-suppressed-mood");
+        }
+
+        [UnityTest]
+        public IEnumerator TheCloseUpOfASuppressedMood_NamesWhatSuppressesIt_InBoldRed()
+        {
+            var server = new PlayServer { State = WithLazinessSuppressedByScorn() };
+            yield return OpenBoard(server, 405);
+
+            Child("Card Laziness").GetComponent<Button>().onClick.Invoke();
+            yield return PhaseTwoSceneTests.Frames();
+
+            Assert.IsTrue(Board().DetailOpen);
+            var detail = UnityEngine.Object.FindObjectsByType<Text>(FindObjectsInactive.Exclude)
+                .Select(t => t.text).First(t => t.Contains("Suppressed by"));
+            StringAssert.Contains("<b><color=#D94040>Suppressed by Scorn</color></b>", detail);
+            StringAssert.DoesNotContain("switched off", detail);
+            StringAssert.Contains("Value right now: 0", detail);
+        }
+
         // --- chat --------------------------------------------------------------------------------
 
         [UnityTest]

@@ -519,15 +519,29 @@ namespace MoodSwings.UI
                 return;
             }
 
+            // A suppressed mood is turned on its side, by convention, so it takes a card's height in width.
             var spacing = 10f;
             var availableWidth = area.width * ReferenceWidth - 16f;
-            var width = Mathf.Min(MoodWidth, (availableWidth - spacing * (moods.Count - 1)) / moods.Count);
+            var slots = moods.Sum(m => m.IsSuppressed ? CardView.HeightOverWidth : 1f);
+            var width = Mathf.Min(MoodWidth, (availableWidth - spacing * (moods.Count - 1)) / slots);
             var row = UiFactory.Row(seat, "Moods", spacing, TextAnchor.UpperCenter);
             foreach (var mood in moods)
             {
                 var card = mood;
-                CardView.Create(row.transform, card, width, theme, showValue: true,
-                    onClick: () => ShowDetail(card, "In play for " + player.Username));
+                UnityEngine.Events.UnityAction open = () => ShowDetail(card, "In play for " + player.Username);
+                if (!card.IsSuppressed)
+                {
+                    CardView.Create(row.transform, card, width, theme, showValue: true, onClick: open);
+                    continue;
+                }
+
+                var side = CardView.HeightFor(width);
+                var slot = UiFactory.Create("Suppressed slot", row.transform);
+                UiFactory.Size(slot.gameObject, side, side);
+                var tapped = CardView.Create(slot, card, width, theme, showValue: true, onClick: open);
+                tapped.anchorMin = tapped.anchorMax = tapped.pivot = new Vector2(0.5f, 0.5f);
+                tapped.anchoredPosition = Vector2.zero;
+                tapped.localRotation = Quaternion.Euler(0f, 0f, -90f);
             }
         }
 
@@ -670,7 +684,7 @@ namespace MoodSwings.UI
             if (card.IsSuppressed)
             {
                 lines.Add(string.Empty);
-                lines.Add("Its ability is switched off by another effect.");
+                lines.Add($"<b><color=#{ColorUtility.ToHtmlStringRGB(AppServices.Theme.danger)}>{BoardDisplay.SuppressedByText(card)}</color></b>");
             }
 
             lines.Add(string.Empty);

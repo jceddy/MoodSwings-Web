@@ -344,6 +344,20 @@ namespace MoodSwings.Core
             return response.RoundScored ? "Round scored - a new round has begun." : null;
         }
 
+        /// <summary>
+        /// "Suppressed by Scorn" (or "...by Scorn and Shame"; just "Suppressed" when the server
+        /// doesn't say by what). A suppressed mood's value is 0 and that is all it does.
+        /// </summary>
+        public static string SuppressedByText(BoardCard card)
+        {
+            var names = card.Suppressions
+                .Select(s => s.SuppressedByName)
+                .Where(n => !string.IsNullOrEmpty(n))
+                .Distinct()
+                .ToList();
+            return names.Count == 0 ? "Suppressed" : "Suppressed by " + string.Join(" and ", names);
+        }
+
         /// <summary>"3 pts  -  1 win", for a player's seat.</summary>
         public static string ScoreLine(BoardPlayer player) =>
             $"{player.TotalScore} {(player.TotalScore == 1 ? "pt" : "pts")}  -  {player.TotalWins} {(player.TotalWins == 1 ? "win" : "wins")}";
