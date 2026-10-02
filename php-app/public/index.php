@@ -902,6 +902,32 @@ if ($path === '/discord/board-image' && $method === 'GET') {
     exit;
 }
 
+// Grid Draft's grid picture (DiscordGameCommandService::gridDraftPickMessage()).
+// Unauthenticated like the board image, gated by gridImageUrl()'s own
+// HMAC over the game id AND the cells themselves -- the picture is a pure
+// function of the signed URL, so there's nothing to look up.
+if ($path === '/discord/grid-image' && $method === 'GET') {
+    $gameId = (int) ($_GET['game_id'] ?? 0);
+    $cells = (string) ($_GET['cells'] ?? '');
+    $signature = (string) ($_GET['sig'] ?? '');
+
+    if ($gameId <= 0 || $signature === '' || !$discordGames->verifyGridImageSignature($gameId, $cells, $signature)) {
+        http_response_code(404);
+        exit;
+    }
+
+    $image = $discordGames->renderGridImage($cells);
+    if ($image === null) {
+        http_response_code(404);
+        exit;
+    }
+
+    header('Content-Type: image/png');
+    header('Content-Length: ' . strlen($image));
+    echo $image;
+    exit;
+}
+
 // DiscordGameCommandService::boardMessage()'s own SEPARATE embed for the
 // active user's own hand (reported live: "show the active user's hand as
 // a composite image, labeled 'your hand.' I suspect that this requires a
