@@ -13659,6 +13659,23 @@ than a parallel bespoke system:
   Duplicity and Fear were tried in the card pool and dropped (multiple
   winning orders, or an unreadable solution).
 
+- **14th puzzle, "Dead Heat"** (reported live: win the game this turn
+  from a 2-2 round tie, the opponent having played first), medium,
+  `win_game`, `max_plays` 2, no new puzzle infrastructure. The solver has
+  Vanity in play and holds Recklessness and Boredom; the opponent has Hope,
+  two Betrayals and Avoidance in play and no hand. The one winning line:
+  Recklessness taking the opponent's Hope (a second play for the turn),
+  then Boredom -- Vanity counts +3 per own mood with an empty hand, so
+  12 + 4 = 16 against 15. Taking a Betrayal (a 6-point swing) or Avoidance
+  leaves no second play, and Boredom first leaves Recklessness stuck in
+  hand. The play cap is what makes it unique: a puzzle seat never really
+  ends its turn (the engine hands it a fresh mini-turn, logged as
+  `puzzle_turn_refreshed`, instead of scoring the round), so with no cap an
+  exhaustive search found 8 "solutions" that trickle the cards in across
+  refreshed turns and would never work in a real game; with `max_plays` set
+  a refresh counts as a failure. A cap of 2 or 3 gives the same single
+  solution.
+
 ### Duel: separate per-player decks
 
 `format: 'duel'` and `format: 'draft'` (see "Draft format" below) are the

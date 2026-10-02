@@ -1263,6 +1263,69 @@ final class PuzzleContentTest extends TestCase
         self::assertStringContainsString('last card in your hand', $state['game']['puzzle_hint']);
     }
 
+    /**
+     * "Dead Heat": the only winning line (exhaustive search of the real
+     * flow, max_plays 2) is Recklessness taking the opponent's Hope, then
+     * Boredom with Hope's extra play -- 16 points (Vanity 12 + Boredom 4)
+     * against the opponent's 15. See migration 0436's own docblock.
+     */
+    public function testDeadHeatSolvedByTakingHopeThenPlayingBoredom(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('dead-heat');
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 100, 'hand'), [
+            'target_mood_id' => $this->ownedInstanceId($gameId, 124, 'in_play', $opp), // Hope
+        ]);
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 83, 'hand')); // Boredom
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameSolved($gameId, $p);
+    }
+
+    /** The tempting swing: taking a Betrayal (or Avoidance) gives no second play, so Boredom only arrives on a refreshed turn -- which the play cap rejects. */
+    public function testDeadHeatTakingAnotherMoodLeavesNoSecondPlay(): void
+    {
+        foreach ([[56, 'Betrayal'], [29, 'Avoidance'], [null, 'nothing']] as [$takenCardId, $label]) {
+            ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('dead-heat');
+            $opp = $this->opponentGamePlayerId($gameId, $p);
+
+            $choices = $takenCardId !== null ? ['target_mood_id' => $this->ownedInstanceId($gameId, $takenCardId, 'in_play', $opp)] : [];
+            $this->playDriven($gameId, $p, $this->instanceId($gameId, 100, 'hand'), $choices);
+            $this->playDriven($gameId, $p, $this->instanceId($gameId, 83, 'hand')); // Boredom, on the refreshed turn
+
+            $this->assertGameNotSolved($gameId);
+            self::assertNotSame('completed', $this->games->getState($gameId, $this->userIdForGamePlayer($p))['game']['status'], "taking {$label} must not solve it");
+        }
+    }
+
+    /** Boredom first uses the turn's only play; Recklessness (even taking Hope) then lands on a refreshed turn. */
+    public function testDeadHeatBoredomFirstIsTooSlow(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('dead-heat');
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 83, 'hand')); // Boredom
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 100, 'hand'), [
+            'target_mood_id' => $this->ownedInstanceId($gameId, 124, 'in_play', $opp), // Hope
+        ]);
+
+        $this->assertGameNotSolved($gameId);
+    }
+
+    public function testDeadHeatExposesItsSetupAndTextViaGetState(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('dead-heat');
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+
+        $state = $this->games->getState($gameId, $this->userIdForGamePlayer($p));
+
+        self::assertCount(2, $state['you']['hand']);
+        self::assertSame(0, array_column($state['players'], 'hand_count', 'game_player_id')[$opp]);
+        self::assertStringContainsString('Win the game this turn.', $state['game']['puzzle_description']);
+        self::assertStringContainsString('plays run out', $state['game']['puzzle_hint']);
+    }
+
     private function isAchievementUnlocked(int $userId, string $slug): bool
     {
         $stmt = $this->pdo->prepare(
