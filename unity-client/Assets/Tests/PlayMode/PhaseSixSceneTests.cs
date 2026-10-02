@@ -548,5 +548,30 @@ namespace MoodSwings.Tests
 
             Assert.AreEqual(200f / 1920f, rect.anchorMin.x, 0.001f);
         }
+
+        // --- different screen shapes --------------------------------------------------------------------------
+
+        [UnityTest]
+        public IEnumerator EveryFourPlayerSeat_FitsOnTheScreen_AndTheHandIsBelowTheTable()
+        {
+            var server = YourTurn(PhaseFiveSceneTests.Load(407, s => s["round"]["pending_decision"] = null));
+            yield return PhaseFiveSceneTests.OpenBoard(server, 407);
+
+            var canvas = Board().GetComponentInParent<Canvas>();
+            var screen = new Rect(0f, 0f, Screen.width, Screen.height);
+            foreach (var name in new[] { "Seat bshaftoe", "Seat BotSage", "Seat BotSageQuick", "Seat BotSageDeep", "Hand", "Piles" })
+            {
+                var corners = new Vector3[4];
+                ((RectTransform)PhaseFiveSceneTests.Child(name)).GetWorldCorners(corners);
+                foreach (var corner in corners)
+                {
+                    var point = RectTransformUtility.WorldToScreenPoint(canvas.worldCamera, corner);
+                    Assert.IsTrue(screen.Contains(point) || Mathf.Approximately(point.x, screen.xMax) || Mathf.Approximately(point.y, screen.yMax),
+                        $"{name} reaches off the screen at {point} on {Screen.width}x{Screen.height}");
+                }
+            }
+
+            ScreenshotHelper.Capture("board-4-players-turn");
+        }
     }
 }

@@ -89,6 +89,27 @@ Gamma so UI colors are unchanged. **MoodSwings > Set Up URP** (or `-executeMetho
 MoodSwings.Editor.UrpSetup.Apply`) recreates/reapplies all of it. Anything
 that needs lighting or post-processing later should revisit these.
 
+## Feedback: sound, vibration, animation
+
+`BoardCues` (UI-free) works out what happened between two looks at a game -- a
+mood entered play, the turn came to you, a question for you, a round or the game
+ended, someone else spoke -- and the board reacts to each:
+
+- **Animation:** a played card slides from its player's seat (or your hand) to its
+  place on the table; round and game results are announced for a few seconds.
+- **Sound:** short placeholder tones and a thump, synthesized in code
+  (`SoundBank`) because the repo has no sound files. Replace `SoundBank.Create` with
+  real clips when there are some; nothing else needs to change.
+- **Vibration** (Android): a short buzz for your turn, questions for you and your own
+  plays, a long one for the end of a game. Needs a physical device to feel.
+- The first draw of a game is not an event, so nothing plays when you open one. The
+  two switches (**Sound effects**, and **Vibration** on a phone) are under Settings >
+  On this device and are stored on the device, not the account.
+- **Phone screens:** each screen is fitted to the system's safe area (notches, rounded
+  corners) and refitted on rotation; layouts were checked at 16:9, 20:9, 16:10 and 4:3.
+- "Pause before your turn" (Advance turn) and "auto-pass on an empty hand" are the
+  account preferences from Settings; the board honors them as the server applies them.
+
 ## Input
 
 The project uses the **Input System** package (the old Input Manager is deprecated;
@@ -235,6 +256,14 @@ game" below.
 - Every action is refused while another is in flight, and re-reads the board
   afterwards even when the server said no (a "not your turn" after a double tap
   means the board moved on without you). Round and game endings are announced.
+- **Dragging.** On your turn a card can also be dragged from your hand onto the
+  table (anywhere above the hand): a ghost follows the pointer and the table lights
+  up as the place to drop. A card that asks for nothing is played at once; one with
+  choices opens its form; one that can't be played says why; letting go over the hand
+  puts it back. Mouse and touch both work.
+- **Hover.** On desktop, resting the mouse on any card for a moment shows a larger
+  copy on the opposite side of the screen (with its current value and what is
+  suppressing it); touch has the click close-up instead.
 - **Not playable yet:** drafts, sealed, duels, team play and best-of-three matches
   (the board still shows them; the header says they can't be played in the app yet).
   Those are Phases 7 and 8.

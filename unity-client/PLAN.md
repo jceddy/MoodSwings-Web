@@ -142,11 +142,21 @@ Each phase ends with something runnable against the dev server
   whole game against the real dev server (every card's form against real play),
   and a physical Android device.
 
-### Phase 6 -- Arena feel
+### Phase 6 -- Arena feel (in progress)
 - Drag-to-play, card zoom/inspect, turn and scoring animations, audio,
   haptics, landscape layouts, four-seat table layout, "pause before own turn"
   and "auto-pass" prefs.
 - **Done when:** playtest pass on desktop and phone.
+- **Status:** built and verified headless: drag-to-play (mouse and touch; tested with
+  both pointer events and a virtual mouse through the Input System), a hover
+  preview on desktop, card-slide and round-result animation, cues for your turn /
+  questions / plays / round and game results, placeholder sounds synthesized in code
+  with device switches, Android vibration, safe-area fitting for notches, and a layout
+  check at 16:9, 20:9, 16:10 and 4:3. The click close-up, four-seat layout and the
+  "pause before your turn" / "auto-pass" preferences came earlier (Phases 2-5).
+  **Not included:** real sound files (placeholders until there are some), and
+  scoring animations beyond the announcement. **Not yet verified:** the actual feel
+  -- a playtest on desktop and a physical phone (vibration, notch, touch dragging).
 
 ### Phase 7 -- More play modes
 - Duel (separate decks), open/closed team play, best-of-three, synchronous
