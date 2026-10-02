@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using MoodSwings.Core;
 using MoodSwings.Networking;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.UI;
 
 namespace MoodSwings.UI
@@ -69,6 +70,10 @@ namespace MoodSwings.UI
         private Text _chatError;
         private ChoiceOverlay _choices;
         private ConfirmOverlay _confirm;
+        private RectTransform _dropZone;
+        private Image _dropZoneImage;
+        private RectTransform _dragGhost;
+        private CanvasGroup _draggedCardGroup;
         private Button _primaryAction;
         private Text _primaryLabel;
         private Button _resignAction;
@@ -93,6 +98,12 @@ namespace MoodSwings.UI
 
         public ConfirmOverlay Confirm => _confirm;
 
+        /// <summary>A card is being dragged from the hand.</summary>
+        public bool IsDragging => _dragGhost != null;
+
+        /// <summary>The dragged card is over the part of the table where letting go plays it.</summary>
+        public bool DragIsOverDropZone { get; private set; }
+
         /// <summary>How many seat zones, piles and hand areas are currently drawn; tests use it to see what's on the table.</summary>
         public int TableChildCount => _table != null ? _table.childCount : 0;
 
@@ -106,6 +117,7 @@ namespace MoodSwings.UI
             _playingCard = null;
             _decisionKey = null;
             _loopKey = null;
+            CancelDrag();
             _chatError.text = string.Empty;
             SetMessage(string.Empty);
             _actions.SetActive(false);
@@ -134,6 +146,7 @@ namespace MoodSwings.UI
 
         public override void OnHidden()
         {
+            CancelDrag();
             if (_session != null)
             {
                 _session.Changed -= Render;
@@ -218,6 +231,7 @@ namespace MoodSwings.UI
             _table.offsetMin = Vector2.zero;
             _table.offsetMax = new Vector2(0f, -HeaderHeight);
 
+            BuildDropZone(theme);
             BuildActions(theme);
             BuildHeader(theme);
 
@@ -278,6 +292,28 @@ namespace MoodSwings.UI
             rect.anchorMin = rect.anchorMax = rect.pivot = new Vector2(1f, 0.5f);
             rect.sizeDelta = new Vector2(180f, UiFactory.ControlHeight);
             rect.anchoredPosition = new Vector2(-fromRight, 0f);
+        }
+
+        // Where a dragged card is let go to play it: the whole table above the hand. Hidden unless a
+        // card is being dragged.
+        private void BuildDropZone(UiTheme theme)
+        {
+            _dropZone = UiFactory.Create("Drop zone", transform);
+            _dropZone.anchorMin = Vector2.zero;
+            _dropZone.anchorMax = Vector2.one;
+            _dropZone.offsetMin = new Vector2(0f, HandRect.yMax * TableHeight + 6f);
+            _dropZone.offsetMax = new Vector2(0f, -HeaderHeight);
+            _dropZoneImage = _dropZone.gameObject.AddComponent<Image>();
+            _dropZoneImage.raycastTarget = false;
+
+            // Low and to the left, where no seat's moods are.
+            var label = UiFactory.Label(_dropZone, "Drop here to play", 34, theme.accent, TextAnchor.LowerLeft, FontStyle.Bold);
+            label.raycastTarget = false;
+            UiFactory.Stretch(label.rectTransform);
+            label.rectTransform.offsetMin = new Vector2(40f, 14f);
+            label.rectTransform.offsetMax = Vector2.zero;
+
+            _dropZone.gameObject.SetActive(false);
         }
 
         // Pass / Advance turn / I'm ready, and Resign, beside the hand. Which show, and whether
@@ -464,6 +500,8 @@ namespace MoodSwings.UI
                 BuildSeat(theme, state, player, zones[player.GamePlayerId]);
             }
 
+            // The table is rebuilt, so a card being dragged out of the old hand is gone.
+            CancelDrag();
             BuildPiles(theme, state);
             BuildHand(theme, state);
             UpdateActions(state);
@@ -654,9 +692,18 @@ namespace MoodSwings.UI
                 var card = cardInHand;
                 var view = CardView.Create(row.transform, card, HandCardWidth, theme, showValue: true,
                     onClick: () => OnHandCard(card));
+                var group = view.gameObject.AddComponent<CanvasGroup>();
                 if (canAct && !card.IsPlayable)
                 {
-                    view.gameObject.AddComponent<CanvasGroup>().alpha = 0.5f;
+                    group.alpha = 0.5f;
+                }
+
+                if (canAct)
+                {
+                    var drag = view.gameObject.AddComponent<DraggableCard>();
+                    drag.Began = e => BeginDrag(card, group, e);
+                    drag.Moved = MoveDrag;
+                    drag.Ended = e => EndDrag(card, e);
                 }
             }
         }
@@ -798,6 +845,134 @@ namespace MoodSwings.UI
             else
             {
                 SetMessage(result.Message ?? "That didn't work.", isError: true);
+            }
+        }
+
+        // --- dragging a card to play it ----------------------------------------------------------
+
+        private Camera UiCamera => GetComponentInParent<Canvas>().worldCamera;
+
+        private void BeginDrag(BoardCard card, CanvasGroup original, PointerEventData eventData)
+        {
+            var state = _session?.State;
+            if (state == null || !BoardDisplay.CanAct(state) || _session.Busy)
+            {
+                return;
+            }
+
+            CancelDrag();
+            var ghost = CardView.Create(transform, card, HandCardWidth * 1.2f, AppServices.Theme, showValue: true);
+            ghost.name = "Drag ghost";
+            ghost.anchorMin = ghost.anchorMax = ghost.pivot = new Vector2(0.5f, 0.5f);
+            var ghostGroup = ghost.gameObject.AddComponent<CanvasGroup>();
+            ghostGroup.blocksRaycasts = false;
+            ghostGroup.interactable = false;
+            // Above the table and the buttons, below the pop-ups.
+            ghost.SetSiblingIndex(_detail.transform.GetSiblingIndex());
+            _dragGhost = ghost;
+
+            _draggedCardGroup = original;
+            original.alpha = 0.3f;
+
+            _dropZone.gameObject.SetActive(true);
+            MoveDrag(eventData);
+        }
+
+        private void MoveDrag(PointerEventData eventData)
+        {
+            if (_dragGhost == null)
+            {
+                return;
+            }
+
+            if (RectTransformUtility.ScreenPointToWorldPointInRectangle(
+                    (RectTransform)transform, eventData.position, UiCamera, out var world))
+            {
+                _dragGhost.position = world;
+            }
+
+            DragIsOverDropZone = RectTransformUtility.RectangleContainsScreenPoint(_dropZone, eventData.position, UiCamera);
+            var accent = AppServices.Theme.accent;
+            _dropZoneImage.color = new Color(accent.r, accent.g, accent.b, DragIsOverDropZone ? 0.22f : 0.08f);
+        }
+
+        private void EndDrag(BoardCard card, PointerEventData eventData)
+        {
+            if (_dragGhost == null)
+            {
+                return;
+            }
+
+            MoveDrag(eventData);
+            var dropped = DragIsOverDropZone;
+            CancelDrag();
+            if (dropped)
+            {
+                PlayDropped(card);
+            }
+        }
+
+        /// <summary>Puts the dragged card back: removes the ghost and the drop zone. Safe to call when nothing is being dragged.</summary>
+        private void CancelDrag()
+        {
+            if (_dragGhost != null)
+            {
+                _dragGhost.gameObject.SetActive(false);
+                Destroy(_dragGhost.gameObject);
+                _dragGhost = null;
+            }
+
+            if (_draggedCardGroup != null)
+            {
+                _draggedCardGroup.alpha = 1f;
+                _draggedCardGroup = null;
+            }
+
+            DragIsOverDropZone = false;
+            if (_dropZone != null)
+            {
+                _dropZone.gameObject.SetActive(false);
+            }
+        }
+
+        /// <summary>
+        /// A card let go over the table. One that asks for nothing is simply played -- dragging it
+        /// there was the decision; one with choices opens the same form a click would.
+        /// </summary>
+        private void PlayDropped(BoardCard card)
+        {
+            var state = _session?.State;
+            if (state == null || !BoardDisplay.CanAct(state) || _session.Busy)
+            {
+                return;
+            }
+
+            var form = ChoiceForm.ForCard(state, card);
+            if (form.Fields.Count > 0)
+            {
+                OpenPlayForm(state, card);
+            }
+            else if (form.Problem != null)
+            {
+                SetMessage(form.Problem);
+            }
+            else
+            {
+                Run(async () =>
+                {
+                    SetMessage(string.Empty);
+                    var pending = _session.PlayAsync(card, form.BuildChoices());
+                    UpdateActions(_session.State);
+                    var result = await pending;
+                    if (this == null)
+                    {
+                        return;
+                    }
+
+                    ShowResult(result);
+                    UpdateActions(_session.State);
+                    SyncOverlays(_session.State);
+                });
             }
         }
 

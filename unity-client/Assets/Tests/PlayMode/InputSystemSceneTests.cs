@@ -103,6 +103,40 @@ namespace MoodSwings.Tests
         }
 
         [UnityTest]
+        public IEnumerator DraggingACardWithTheMouse_PlaysIt()
+        {
+            var server = new PhaseFiveSceneTests.PlayServer { State = PhaseFiveSceneTests.Load(406) };
+            server.OnPost = (path, body) =>
+            {
+                server.State = PhaseFiveSceneTests.AfterPlaying(14171);
+                return null;
+            };
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+            yield return ReEnableTheUiModule();
+            var card = PhaseFiveSceneTests.Child("Card Superiority");
+            var from = ScreenPointOf(card);
+            var to = new Vector2(960f, 650f);
+
+            Set(_mouse.position, from);
+            yield return PhaseTwoSceneTests.Frames(3);
+            Press(_mouse.leftButton);
+            yield return PhaseTwoSceneTests.Frames(2);
+            for (var step = 1; step <= 8; step++)
+            {
+                Set(_mouse.position, Vector2.Lerp(from, to, step / 8f));
+                yield return null;
+            }
+
+            Assert.IsTrue(PhaseFiveSceneTests.Board().IsDragging, "the card is being carried");
+            Release(_mouse.leftButton);
+            yield return PhaseTwoSceneTests.Frames(5);
+
+            Assert.AreEqual(1, server.Posts("/games/play").Count(), "letting go over the table played it");
+            Assert.AreEqual(0, server.Posts("/games/play").Count(p => (int)p["card_id"] != 14171));
+            Assert.IsFalse(PhaseFiveSceneTests.Board().Choices.IsOpen, "and it wasn't also treated as a click");
+        }
+
+        [UnityTest]
         public IEnumerator Escape_GoesBack()
         {
             yield return SignedInAtHome();
