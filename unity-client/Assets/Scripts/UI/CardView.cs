@@ -23,15 +23,46 @@ namespace MoodSwings.UI
 
         public static float HeightFor(float width) => width * HeightOverWidth;
 
+        /// <param name="onItsSide">
+        /// The card face is turned a quarter turn clockwise (how a suppressed mood lies on the
+        /// table). Only the face turns: the returned rectangle is the space the turned card
+        /// takes -- a card's height wide and its width tall -- and the SUPPRESSED label and value
+        /// chip are laid out on that, upright, with the chip in its top-right corner.
+        /// </param>
         public static RectTransform Create(
-            Transform parent, BoardCard card, float width, UiTheme theme, bool showValue = true, UnityAction onClick = null)
+            Transform parent, BoardCard card, float width, UiTheme theme, bool showValue = true, UnityAction onClick = null,
+            bool onItsSide = false)
         {
             var height = HeightFor(width);
+            var boundsWidth = onItsSide ? height : width;
+            var boundsHeight = onItsSide ? width : height;
             var rect = UiFactory.Create("Card " + card.Name, parent);
-            rect.sizeDelta = new Vector2(width, height);
-            UiFactory.Size(rect.gameObject, width, height);
+            rect.sizeDelta = new Vector2(boundsWidth, boundsHeight);
+            UiFactory.Size(rect.gameObject, boundsWidth, boundsHeight);
 
-            var image = rect.gameObject.AddComponent<Image>();
+            // The face is the card itself; turned, it sits inside the card's space as a child.
+            var face = rect;
+            Graphic hitArea;
+            Image image;
+            if (onItsSide)
+            {
+                var clear = rect.gameObject.AddComponent<Image>();
+                clear.color = Color.clear;
+                hitArea = clear;
+
+                face = UiFactory.Create("Face", rect);
+                face.anchorMin = face.anchorMax = face.pivot = new Vector2(0.5f, 0.5f);
+                face.sizeDelta = new Vector2(width, height);
+                face.anchoredPosition = Vector2.zero;
+                face.localRotation = Quaternion.Euler(0f, 0f, -90f);
+                image = face.gameObject.AddComponent<Image>();
+            }
+            else
+            {
+                image = rect.gameObject.AddComponent<Image>();
+                hitArea = image;
+            }
+
             var art = CardArtLibrary.ForCard(card.CatalogCardId);
             if (art != null)
             {
@@ -41,19 +72,19 @@ namespace MoodSwings.UI
             else
             {
                 image.color = Tint(card.Color);
-                AddStandInText(rect, card, width);
+                AddStandInText(face, card, width);
             }
 
             if (onClick != null)
             {
                 var button = rect.gameObject.AddComponent<Button>();
-                button.targetGraphic = image;
+                button.targetGraphic = hitArea;
                 button.onClick.AddListener(onClick);
             }
 
             if (card.IsSuppressed)
             {
-                AddSuppressedShade(rect, width);
+                AddSuppressedShade(rect, boundsWidth);
             }
 
             if (showValue && (card.ValueIsModified || art == null))
@@ -134,7 +165,7 @@ namespace MoodSwings.UI
             var chip = UiFactory.Create("Value", rect);
             chip.anchorMin = chip.anchorMax = chip.pivot = new Vector2(1f, 1f);
             chip.sizeDelta = new Vector2(chipWidth, chipHeight);
-            chip.anchoredPosition = new Vector2(-width * 0.035f, -width * 0.035f);
+            chip.anchoredPosition = new Vector2(-width * 0.08f, -width * 0.04f);
 
             // Accent when an effect changed it; a plain dark chip on a stand-in that just prints it.
             var modified = card.ValueIsModified;

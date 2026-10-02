@@ -710,16 +710,34 @@ namespace MoodSwings.Tests
             var server = new PlayServer { State = WithLazinessSuppressedByScorn() };
             yield return OpenBoard(server, 405);
 
-            var card = Child("Card Laziness");
-            Assert.AreEqual(270f, card.localEulerAngles.z, 0.01f, "turned a quarter turn clockwise");
+            var card = (RectTransform)Child("Card Laziness");
+            Assert.AreEqual(270f, card.Find("Face").localEulerAngles.z, 0.01f, "the card face is turned a quarter turn clockwise");
+            Assert.AreEqual(0f, card.localEulerAngles.z, 0.01f, "but the card's own space, and what's laid on it, is not");
             Assert.AreEqual(0f, Child("Card Fury").localEulerAngles.z, 0.01f, "other moods stay upright");
-            Assert.IsTrue(card.GetComponentsInChildren<Text>().Any(t => t.text == "SUPPRESSED"));
+            Assert.IsNull(Child("Card Fury").Find("Face"));
+
+            var label = card.GetComponentsInChildren<Text>().Single(t => t.text == "SUPPRESSED");
+            Assert.AreEqual(0f, label.transform.eulerAngles.z, 0.01f, "the label reads upright across the turned card");
             Assert.IsFalse(UnityEngine.Object.FindObjectsByType<Text>(FindObjectsInactive.Exclude).Any(t => t.text == "OFF"));
+
+            // The value chip sits in the top-right of the turned card, not on the turned card's old corner.
+            var chip = (RectTransform)card.Find("Value");
+            Assert.AreEqual("0", chip.GetComponentInChildren<Text>().text);
+            Assert.AreEqual(0f, chip.eulerAngles.z, 0.01f);
+            Assert.AreEqual(new Vector2(1f, 1f), chip.anchorMin);
+            var corners = new Vector3[4];
+            card.GetWorldCorners(corners);
+            var chipCorners = new Vector3[4];
+            chip.GetWorldCorners(chipCorners);
+            Assert.Greater(chipCorners[2].x, card.position.x, "right of the middle");
+            Assert.Greater(chipCorners[2].y, card.position.y, "above the middle");
+            Assert.LessOrEqual(chipCorners[2].x, corners[2].x + 0.001f, "and not past the card's right edge");
 
             // On its side it is as wide as a card is tall, and its slot makes room for that.
             var slot = (RectTransform)card.parent;
             Assert.AreEqual("Suppressed slot", slot.name);
-            Assert.AreEqual(((RectTransform)card).sizeDelta.y, slot.GetComponent<LayoutElement>().preferredWidth, 0.01f);
+            Assert.AreEqual(card.sizeDelta.x, slot.GetComponent<LayoutElement>().preferredWidth, 0.01f);
+            Assert.Greater(card.sizeDelta.x, card.sizeDelta.y, "wider than tall");
             ScreenshotHelper.Capture("board-suppressed-mood");
         }
 

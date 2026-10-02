@@ -538,10 +538,9 @@ namespace MoodSwings.UI
                 var side = CardView.HeightFor(width);
                 var slot = UiFactory.Create("Suppressed slot", row.transform);
                 UiFactory.Size(slot.gameObject, side, side);
-                var tapped = CardView.Create(slot, card, width, theme, showValue: true, onClick: open);
+                var tapped = CardView.Create(slot, card, width, theme, showValue: true, onClick: open, onItsSide: true);
                 tapped.anchorMin = tapped.anchorMax = tapped.pivot = new Vector2(0.5f, 0.5f);
                 tapped.anchoredPosition = Vector2.zero;
-                tapped.localRotation = Quaternion.Euler(0f, 0f, -90f);
             }
         }
 
