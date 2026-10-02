@@ -111,7 +111,8 @@ use MoodSwings\SiteUrl;
  *   one at a time, skipping one that doesn't need answering right now,
  *   the same way an optional field with zero legal candidates already
  *   got skipped before this class supported a second field at all).
- *   Still excludes 3+ fields, or a `nested` sub-form (Duplicity's own
+ *   Still excludes 4+ fields (a card's own 2 plus a prepended grant_choice
+ *   is 3 -- see MAX_CHOICE_FIELDS), or a `nested` sub-form (Duplicity's own
  *   repeat offer, any chaos_draft attachment) -- a real, known scope
  *   limit (see php-app/README.md), not a bug; a player who hits it is
  *   pointed at the web app instead.
@@ -135,8 +136,8 @@ use MoodSwings\SiteUrl;
  * chosen card id), `ms:playfield:{gameId}:{cardId}:{stepIndex}:{answers}`
  * (that card's own $stepIndex'th field's value select -- $answers is
  * every earlier field's own already-submitted choice, round-tripped
- * through encodeAnswers()/decodeAnswers() since a 2-field card's second
- * select needs to remember the first one's answer across the trip),
+ * through encodeAnswers()/decodeAnswers() since a multi-field card's
+ * later selects need to remember the earlier answers across the trip),
  * `ms:decision:{gameId}` (the current pending decision's own single
  * field's value select), `ms:newgame:0`/`ms:newgamebot:0` (starting a
  * practice game -- see below; the trailing `0` is a dummy, never a real
@@ -205,23 +206,21 @@ final class DiscordGameCommandService
     ];
 
     /**
-     * The most choice_fields any hand-playable card actually has --
-     * confirmed by walking every effect_key in CardChoiceSchema and
-     * counting (Faith, Guile, Fascination, Guilt, Regret, Worry,
-     * Contempt, Condescension, Cynicism, Hostility, Hesitation,
-     * Rationalization, and Corruption all top out at exactly 2; nothing
-     * has 3+). promptOrPlay() walks fields one at a time regardless, so
-     * this is purely the "is this card even in scope" gate in
-     * supportedChoiceFields() -- a future card with a 3rd field would
-     * still just need the web app, the same as `nested`/an unsupported
-     * field type already does. A prepended `grant_choice` field (see
-     * GameService::serializeCard()) counts against this same total -- a
-     * 2-field card played while 2+ unrestricted grants are simultaneously
-     * active would need 3 total and still falls into "needs the web app";
-     * a 0- or 1-field card gains a `grant_choice` field for free within
-     * the existing cap.
+     * The most choice_fields any hand-playable card can have here --
+     * CardChoiceSchema's own cards top out at exactly 2 (Faith, Guile,
+     * Fascination, Guilt, Regret, Worry, Contempt, Condescension,
+     * Cynicism, Hostility, Hesitation, Rationalization, Corruption), plus
+     * the `grant_choice` field GameService::serializeCard() prepends
+     * whenever 2+ distinguishable play grants could pay for the card --
+     * so 3 in total. (Reported live: Regret said "Needs the web app to
+     * play" whenever such a choice of grants existed, because that
+     * prepended field was the third.) promptOrPlay() walks fields one at
+     * a time regardless, so this is purely the "is this card even in
+     * scope" gate in supportedChoiceFields() -- a future card with a 4th
+     * field would still just need the web app, the same as `nested`/an
+     * unsupported field type already does.
      */
-    private const MAX_CHOICE_FIELDS = 2;
+    private const MAX_CHOICE_FIELDS = 3;
 
     /**
      * The select-menu value for "leave this OPTIONAL field blank" --
@@ -533,8 +532,7 @@ final class DiscordGameCommandService
                     $gamePlayerId = $this->requireSeatedIn($gameId, $userId);
                     $cardId = (int) ($parts[3] ?? 0);
                     $stepIndex = (int) ($parts[4] ?? 0);
-                    $priorAnswers = isset($parts[5]) ? $this->decodeAnswers($parts[5]) : [];
-                    $result = $this->submitPlayField($gameId, $userId, $gamePlayerId, $cardId, $stepIndex, $priorAnswers, $values);
+                    $result = $this->submitPlayField($gameId, $userId, $gamePlayerId, $cardId, $stepIndex, $parts[5] ?? '', $values);
                     if ($result !== null) {
                         return $this->updateMessage(...$result);
                     }
@@ -652,7 +650,7 @@ final class DiscordGameCommandService
      * @param array<string, mixed> $priorAnswers
      * @return array{0: string, 1: array<int, array<string, mixed>>}|null
      */
-    private function submitPlayField(int $gameId, int $userId, int $gamePlayerId, int $cardId, int $stepIndex, array $priorAnswers, array $values): ?array
+    private function submitPlayField(int $gameId, int $userId, int $gamePlayerId, int $cardId, int $stepIndex, string $priorAnswersEncoded, array $values): ?array
     {
         $state = $this->games->getState($gameId, $userId);
         $card = $this->findCard([...$state['you']['hand'] ?? [], ...$state['discard_pile'] ?? []], $cardId);
@@ -665,7 +663,7 @@ final class DiscordGameCommandService
             throw new GameStateException("That card's own choice can't be answered from Discord anymore -- open the web app.");
         }
 
-        $answers = [...$priorAnswers, ...$this->choicesFor($fields[$stepIndex], $values)];
+        $answers = [...$this->decodeAnswers($priorAnswersEncoded, $fields), ...$this->choicesFor($fields[$stepIndex], $values)];
         $boardState = $this->boardStates->load($gameId);
 
         return $this->promptOrPlay($gameId, $gamePlayerId, $cardId, $card, $fields, $stepIndex + 1, $answers, $boardState, $state);
@@ -772,7 +770,7 @@ final class DiscordGameCommandService
                 continue;
             }
 
-            $customId = "ms:playfield:{$gameId}:{$cardId}:{$stepIndex}:" . $this->encodeAnswers($answers);
+            $customId = "ms:playfield:{$gameId}:{$cardId}:{$stepIndex}:" . $this->encodeAnswers($answers, $fields);
             $components = [['type' => 1, 'components' => [$this->fieldSelectComponent($customId, $field, $options)]]];
 
             return ["Playing **{$card['name']}** -- {$field['label']}:", $components];
@@ -836,28 +834,50 @@ final class DiscordGameCommandService
 
     /**
      * Round-trips a multi-field card's own earlier answer(s) through the
-     * next field's select custom_id -- bounded to at most
-     * MAX_CHOICE_FIELDS - 1 accumulated keys (never more than 1 today),
-     * each a small int/string/int[]/bool value, so this comfortably
-     * fits well under Discord's own 100-char custom_id cap alongside the
-     * `ms:playfield:{gameId}:{cardId}:{stepIndex}:` prefix. URL-safe
-     * (no `+`/`/`/`=`) so it never collides with the colon-delimited
-     * parsing handleComponent() already does on the rest of the id.
+     * next field's select custom_id -- at most MAX_CHOICE_FIELDS - 1
+     * accumulated answers, each a small int/string/int[]/bool value.
+     * Discord caps a custom_id at 100 characters, and the
+     * `ms:playfield:{gameId}:{cardId}:{stepIndex}:` prefix already takes
+     * ~27, so the answers are stored POSITIONALLY (a JSON list in $fields
+     * order, trailing blanks trimmed) rather than keyed by name: Regret's
+     * third step carries a grant source plus two mood ids, which as a
+     * keyed object overflowed the limit. URL-safe (no `+`/`/`/`=`) so it
+     * never collides with the colon-delimited parsing handleComponent()
+     * already does on the rest of the id.
      *
-     * @param array<string, mixed> $answers
+     * @param array<string, mixed> $answers keyed by field key
+     * @param array<int, array<string, mixed>> $fields the card's own fields, in order
      */
-    private function encodeAnswers(array $answers): string
+    private function encodeAnswers(array $answers, array $fields): string
     {
-        return rtrim(strtr(base64_encode(json_encode($answers)), '+/', '-_'), '=');
+        $list = array_map(static fn (array $field) => $answers[$field['key']] ?? null, $fields);
+        while ($list !== [] && end($list) === null) {
+            array_pop($list);
+        }
+
+        return rtrim(strtr(base64_encode(json_encode($list)), '+/', '-_'), '=');
     }
 
-    /** @return array<string, mixed> */
-    private function decodeAnswers(string $encoded): array
+    /**
+     * @param array<int, array<string, mixed>> $fields
+     * @return array<string, mixed> keyed by field key
+     */
+    private function decodeAnswers(string $encoded, array $fields): array
     {
         $padded = str_pad(strtr($encoded, '-_', '+/'), (int) (4 * ceil(strlen($encoded) / 4)), '=');
         $decoded = json_decode(base64_decode($padded), true);
+        if (!is_array($decoded)) {
+            return [];
+        }
 
-        return is_array($decoded) ? $decoded : [];
+        $answers = [];
+        foreach ($fields as $index => $field) {
+            if (isset($decoded[$index])) {
+                $answers[$field['key']] = $decoded[$index];
+            }
+        }
+
+        return $answers;
     }
 
     /**

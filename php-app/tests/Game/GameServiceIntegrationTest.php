@@ -22756,6 +22756,67 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame($p2, (int) $owner->fetchColumn(), 'Betrayal gave itself to the other player');
     }
 
+    /**
+     * Reported live: Regret said "Needs the web app to play" -- with Hope
+     * in play and Friendliness's own restricted extra play banked, two
+     * distinguishable grants can pay for it, so the card gains a prepended
+     * grant_choice field on top of its own two (cost moods + steal target):
+     * three steps, which used to fall outside the field cap (and whose
+     * accumulated answers overflowed the 100-character custom_id as
+     * keyed JSON).
+     */
+    public function testDiscordPlaysRegretThroughAGrantChoiceThenItsTwoFields(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-regret-1');
+        $u2 = $this->insertDiscordUser('discord-regret-2');
+        $this->linkDiscordAccount($u1, 'discord-regret-1');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $friendlinessId = $this->insertGameCard($gameId, 13, 'hand', $p1);
+        $regretId = $this->insertGameCard($gameId, 50, 'hand', $p1);
+        $this->insertGameCard($gameId, 83, 'hand', $p1);
+        $hopeId = $this->insertGameCard($gameId, 124, 'in_play', $p1);
+        $vanityId = $this->insertGameCard($gameId, 79, 'in_play', $p1);
+        $targetId = $this->insertGameCard($gameId, 56, 'in_play', $p2);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 2);
+
+        // Friendliness banks an even-values-only extra play beside Hope's.
+        $this->games->playMood($gameId, $p1, $friendlinessId, []);
+
+        $service = $this->discordCommandService();
+        $grantStep = $service->handleComponent($this->discordComponentPayload('discord-regret-1', "ms:play:{$gameId}", [(string) $regretId]));
+        self::assertStringNotContainsString('Needs the web app', json_encode($grantStep['data']), 'Regret is offered');
+        $grantSelect = $grantStep['data']['components'][0]['components'][0];
+        self::assertStringStartsWith("ms:playfield:{$gameId}:{$regretId}:0:", $grantSelect['custom_id']);
+        self::assertCount(3, $grantSelect['options'], 'Skip, Hope, or Friendliness');
+
+        $costStep = $service->handleComponent($this->discordComponentPayload('discord-regret-1', $grantSelect['custom_id'], [$grantSelect['options'][1]['value']]));
+        $costSelect = $costStep['data']['components'][0]['components'][0];
+        self::assertStringStartsWith("ms:playfield:{$gameId}:{$regretId}:1:", $costSelect['custom_id']);
+        self::assertSame(2, $costSelect['min_values']);
+        self::assertSame(2, $costSelect['max_values']);
+
+        $targetStep = $service->handleComponent($this->discordComponentPayload('discord-regret-1', $costSelect['custom_id'], [(string) $hopeId, (string) $vanityId]));
+        $targetSelect = $targetStep['data']['components'][0]['components'][0];
+        self::assertStringStartsWith("ms:playfield:{$gameId}:{$regretId}:2:", $targetSelect['custom_id']);
+        self::assertLessThanOrEqual(100, strlen($targetSelect['custom_id']), "Discord's custom_id cap");
+        self::assertSame('hand', $this->cardZone($regretId), 'still collecting choices');
+
+        $service->handleComponent($this->discordComponentPayload('discord-regret-1', $targetSelect['custom_id'], [(string) $targetId]));
+
+        self::assertSame('in_play', $this->cardZone($regretId));
+        self::assertSame('hand', $this->cardZone($hopeId), 'returned to hand as Regret\'s cost');
+        self::assertSame('hand', $this->cardZone($vanityId));
+        self::assertSame('hand', $this->cardZone($targetId), 'the opponent\'s Betrayal was stolen into the hand');
+    }
+
     public function testDiscordComponentDecisionRespondsToASingleFieldPendingDecision(): void
     {
         $u1 = $this->insertDiscordUser('discord-player-10');

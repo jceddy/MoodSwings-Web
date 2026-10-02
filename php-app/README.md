@@ -7774,15 +7774,15 @@ full reasoning):
   message with a link, never a crash.
 - A hand OR discard pile card (see "Playing from the discard pile"
   below) is only offered to play here if EVERY one of its own
-  `choice_fields`, up to `MAX_CHOICE_FIELDS` (2 -- the most any
-  hand-playable card's OWN fields actually has, though a prepended
-  `grant_choice` field -- see below -- counts against this same total)
-  total, is one of a `mode`/`value`/`bool`/`mood`/`player`/`hand_card`/
+  `choice_fields`, up to `MAX_CHOICE_FIELDS` (3 -- the most any
+  hand-playable card's OWN fields actually has is 2, plus a prepended
+  `grant_choice` field -- see below -- which counts against this same
+  total) total, is one of a `mode`/`value`/`bool`/`mood`/`player`/`hand_card`/
   `discard_card`/`grant_choice` type -- covers not just single-target
   cards (Pride's own `target_player_id`, Compulsion's `discard_card_id`,
   Conviction's self-targetable `target_mood_id`, Hate's optional "any
   mood in play," ...) but also a `multi` (checkbox-style) field and a
-  card with a SECOND field. Cards needing more than 2 fields, or a
+  card with a SECOND field. Cards needing more than 3 fields, or a
   `nested` sub-form (Duplicity's own repeat offer, any chaos_draft
   attachment), are still listed as "needs the web app" instead. An
   OPTIONAL single-value field's select menu
@@ -8189,11 +8189,15 @@ effect") since skipping it doesn't decline anything -- the play still
 happens, using `MoodPlayService::playMood()`'s own already-existing
 "whichever comes first" fallback when no `grant_source_card_id` is
 given. Counts against the same `MAX_CHOICE_FIELDS` total as a card's own
-fields (see that constant's own docblock): a 0- or 1-field card gains
-this field for free, while a card that already has 2 of its own (Faith,
-Guile, ...) still needs the web app if 2+ grants are active at the same
-time -- a rare combination, and the same conservative "needs the web
-app" fallback this class already uses for every other over-the-cap case.
+fields (see that constant's own docblock) -- 3, so even a card with 2 of
+its own (Faith, Guile, Regret, ...) stays playable when 2+ distinguishable
+grants are active at once. (Reported live: Regret said "Needs the web app
+to play" in exactly that situation, back when the cap was 2.) Because a
+3-field card's last select must remember the two earlier answers inside
+Discord's 100-character `custom_id`, `encodeAnswers()` stores them
+positionally (a JSON list in field order) rather than keyed by field
+name -- a grant source plus Regret's two mood ids as a keyed object
+overflowed the limit.
 
 **Score line, card details, and the game log** (reported live: "show ...
 number of rounds each player has won so far, number of cards each player
