@@ -89,6 +89,16 @@ namespace MoodSwings.UI
             public float Width;
         }
 
+        private const float HoverDelaySeconds = 0.35f;
+        private const float HoverCardWidth = 340f;
+
+        private RectTransform _hoverPreview;
+        private RectTransform _hoverCardHolder;
+        private Text _hoverCaption;
+        private BoardCard _hoverCard;
+        private float _hoverSince;
+        private float _hoverPointerX;
+
         private GameState _previous;
         private readonly HashSet<int> _entering = new HashSet<int>();
         private readonly List<Flight> _flights = new List<Flight>();
@@ -113,6 +123,9 @@ namespace MoodSwings.UI
 
         public ConfirmOverlay Confirm => _confirm;
 
+        /// <summary>A larger card is showing beside the pointer, because the mouse has rested on a card.</summary>
+        public bool HoverPreviewShown => _hoverPreview != null && _hoverPreview.gameObject.activeSelf;
+
         /// <summary>A card is being dragged from the hand.</summary>
         public bool IsDragging => _dragGhost != null;
 
@@ -134,6 +147,7 @@ namespace MoodSwings.UI
             _loopKey = null;
             _previous = null;
             _entering.Clear();
+            HideHover();
             foreach (Transform child in transform)
             {
                 if (child.name == "Flying card")
@@ -173,6 +187,7 @@ namespace MoodSwings.UI
         public override void OnHidden()
         {
             CancelDrag();
+            HideHover();
             if (_session != null)
             {
                 _session.Changed -= Render;
@@ -205,6 +220,12 @@ namespace MoodSwings.UI
             {
                 _messageExpires = 0f;
                 SetMessage(string.Empty);
+            }
+
+            // A mouse resting on a card for a moment brings up a larger copy of it.
+            if (_hoverCard != null && !HoverPreviewShown && Time.unscaledTime - _hoverSince >= HoverDelaySeconds && !AnyPopUpOrDrag())
+            {
+                ShowHover();
             }
 
             // The action clock ticks every second; the rest of the board waits for the next poll.
@@ -278,6 +299,7 @@ namespace MoodSwings.UI
             _loading = UiFactory.Label(transform, "Loading the game...", 36, theme.textMuted);
             UiFactory.Stretch(_loading.rectTransform);
 
+            BuildHoverPreview(theme);
             BuildDetailOverlay(theme);
             _logOverlay = BuildTextOverlay(theme, "Recent events", out _logBody, out _);
             _chatOverlay = BuildTextOverlay(theme, "Chat", out _chatBody, out var chatPanel);
@@ -378,6 +400,30 @@ namespace MoodSwings.UI
             _resignAction.gameObject.name = "Resign";
         }
 
+        // A card shown large at the side of the screen away from the pointer; it never takes clicks.
+        private void BuildHoverPreview(UiTheme theme)
+        {
+            _hoverPreview = UiFactory.Create("Hover preview", transform);
+            _hoverPreview.anchorMin = _hoverPreview.anchorMax = _hoverPreview.pivot = new Vector2(0.5f, 0.5f);
+            _hoverPreview.sizeDelta = new Vector2(HoverCardWidth + 40f, CardView.HeightFor(HoverCardWidth) + 90f);
+            var group = _hoverPreview.gameObject.AddComponent<CanvasGroup>();
+            group.blocksRaycasts = false;
+            group.interactable = false;
+            var layout = _hoverPreview.gameObject.AddComponent<VerticalLayoutGroup>();
+            layout.spacing = 8f;
+            layout.childAlignment = TextAnchor.UpperCenter;
+            layout.childControlWidth = true;
+            layout.childControlHeight = true;
+            layout.childForceExpandWidth = false;
+            layout.childForceExpandHeight = false;
+
+            _hoverCardHolder = UiFactory.Create("Card", _hoverPreview);
+            UiFactory.Size(_hoverCardHolder.gameObject, HoverCardWidth, CardView.HeightFor(HoverCardWidth));
+            _hoverCaption = UiFactory.Label(_hoverPreview, string.Empty, 26, theme.textPrimary, TextAnchor.UpperCenter);
+            _hoverCaption.supportRichText = true;
+            _hoverPreview.gameObject.SetActive(false);
+        }
+
         private void BuildDetailOverlay(UiTheme theme)
         {
             _detail = UiFactory.Create("CardDetail", transform).gameObject;
@@ -465,6 +511,72 @@ namespace MoodSwings.UI
             UiFactory.Size(send.gameObject, 180f);
         }
 
+        private bool AnyPopUpOrDrag() =>
+            IsDragging || _detail.activeSelf || _logOverlay.activeSelf || _chatOverlay.activeSelf
+            || _choices.IsOpen || _confirm.IsOpen;
+
+        /// <summary>Wires a card to bring up the preview while a mouse rests on it.</summary>
+        private void MakeHoverable(Component card, BoardCard data)
+        {
+            var target = card.gameObject.AddComponent<HoverTarget>();
+            target.Entered = e =>
+            {
+                _hoverCard = data;
+                _hoverSince = Time.unscaledTime;
+                _hoverPointerX = e.position.x;
+            };
+            target.Exited = () =>
+            {
+                if (_hoverCard == data)
+                {
+                    HideHover();
+                }
+            };
+        }
+
+        private void ShowHover()
+        {
+            var card = _hoverCard;
+            foreach (Transform child in _hoverCardHolder)
+            {
+                child.gameObject.SetActive(false);
+                Destroy(child.gameObject);
+            }
+
+            var view = CardView.Create(_hoverCardHolder, card, HoverCardWidth, AppServices.Theme, showValue: false);
+            view.name = "Preview card";
+            UiFactory.Stretch(view);
+
+            var notes = new List<string>();
+            if (card.ValueIsModified)
+            {
+                notes.Add($"Value now {card.Value} (printed {card.BaseValue})");
+            }
+
+            if (card.IsSuppressed)
+            {
+                notes.Add($"<b><color=#{ColorUtility.ToHtmlStringRGB(AppServices.Theme.danger)}>{BoardDisplay.SuppressedByText(card)}</color></b>");
+            }
+
+            _hoverCaption.text = string.Join("\n", notes);
+            _hoverCaption.gameObject.SetActive(notes.Count > 0);
+
+            // On whichever side of the screen the pointer isn't, so it never covers what you're pointing at.
+            var onLeft = _hoverPointerX < Screen.width / 2f;
+            _hoverPreview.anchorMin = _hoverPreview.anchorMax = new Vector2(onLeft ? 0.88f : 0.12f, 0.5f);
+            _hoverPreview.anchoredPosition = Vector2.zero;
+            _hoverPreview.gameObject.SetActive(true);
+        }
+
+        private void HideHover()
+        {
+            _hoverCard = null;
+            if (_hoverPreview != null)
+            {
+                _hoverPreview.gameObject.SetActive(false);
+            }
+        }
+
         private void CloseOverlays()
         {
             _detail.SetActive(false);
@@ -535,8 +647,10 @@ namespace MoodSwings.UI
                 BuildSeat(theme, state, player, zones[player.GamePlayerId]);
             }
 
-            // The table is rebuilt, so a card being dragged out of the old hand is gone.
+            // The table is rebuilt, so a card being dragged out of the old hand is gone, and so is
+            // whatever the mouse was resting on.
             CancelDrag();
+            HideHover();
             BuildPiles(theme, state);
             BuildHand(theme, state);
             UpdateActions(state);
@@ -717,7 +831,9 @@ namespace MoodSwings.UI
                 UnityEngine.Events.UnityAction open = () => ShowDetail(card, "In play for " + player.Username);
                 if (!card.IsSuppressed)
                 {
-                    NoteFlight(CardView.Create(row.transform, card, width, theme, showValue: true, onClick: open), card, player.GamePlayerId, width);
+                    var upright = CardView.Create(row.transform, card, width, theme, showValue: true, onClick: open);
+                    MakeHoverable(upright, card);
+                    NoteFlight(upright, card, player.GamePlayerId, width);
                     continue;
                 }
 
@@ -725,6 +841,7 @@ namespace MoodSwings.UI
                 var slot = UiFactory.Create("Suppressed slot", row.transform);
                 UiFactory.Size(slot.gameObject, side, side);
                 var tapped = CardView.Create(slot, card, width, theme, showValue: true, onClick: open, onItsSide: true);
+                MakeHoverable(tapped, card);
                 tapped.anchorMin = tapped.anchorMax = tapped.pivot = new Vector2(0.5f, 0.5f);
                 tapped.anchoredPosition = Vector2.zero;
                 NoteFlight(tapped, card, player.GamePlayerId, width);
@@ -789,8 +906,9 @@ namespace MoodSwings.UI
             if (topCard != null)
             {
                 var card = topCard;
-                CardView.Create(column, card, MoodWidth, theme, showValue: false,
+                var pileCard = CardView.Create(column, card, MoodWidth, theme, showValue: false,
                     onClick: () => ShowDetail(card, string.IsNullOrEmpty(card.LastOwnerName) ? "In the discard pile" : "Discarded from " + card.LastOwnerName));
+                MakeHoverable(pileCard, card);
             }
             else
             {
@@ -841,6 +959,7 @@ namespace MoodSwings.UI
                 var card = cardInHand;
                 var view = CardView.Create(row.transform, card, HandCardWidth, theme, showValue: true,
                     onClick: () => OnHandCard(card));
+                MakeHoverable(view, card);
                 var group = view.gameObject.AddComponent<CanvasGroup>();
                 if (canAct && !card.IsPlayable)
                 {
@@ -1014,6 +1133,7 @@ namespace MoodSwings.UI
             }
 
             CancelDrag();
+            HideHover();
             var ghost = CardView.Create(transform, card, HandCardWidth * 1.2f, AppServices.Theme, showValue: true);
             ghost.name = "Drag ghost";
             ghost.anchorMin = ghost.anchorMax = ghost.pivot = new Vector2(0.5f, 0.5f);

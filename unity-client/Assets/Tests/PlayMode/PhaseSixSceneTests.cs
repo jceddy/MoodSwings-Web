@@ -392,5 +392,121 @@ namespace MoodSwings.Tests
             Assert.IsFalse(AppServices.Device.SoundOn);
             Assert.IsNull(PhaseTwoSceneTests.FindToggle("Vibration"), "vibration is only offered on a phone");
         }
+
+        // --- resting the mouse on a card -------------------------------------------------------------------
+
+        private static IEnumerator HoverOver(string cardName)
+        {
+            var card = Card(cardName);
+            ExecuteEvents.Execute(card, Pointer(ScreenPointOf(card)), ExecuteEvents.pointerEnterHandler);
+            yield return null;
+        }
+
+        private static IEnumerator MoveAwayFrom(string cardName)
+        {
+            ExecuteEvents.Execute(Card(cardName), Pointer(Vector2.zero), ExecuteEvents.pointerExitHandler);
+            yield return PhaseTwoSceneTests.Frames(2);
+        }
+
+        [UnityTest]
+        public IEnumerator RestingTheMouseOnACard_ShowsALargerCopy_AfterAMoment()
+        {
+            var server = YourTurn();
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+
+            yield return HoverOver("Frustration");
+            yield return new WaitForSeconds(0.1f);
+            Assert.IsFalse(Board().HoverPreviewShown, "not at once, or sweeping the mouse across the table would flash");
+
+            yield return new WaitForSeconds(0.4f);
+            Assert.IsTrue(Board().HoverPreviewShown);
+            var preview = PhaseFiveSceneTests.Child("Hover preview");
+            var shown = preview.GetComponentsInChildren<Transform>().First(t => t.name == "Preview card");
+            Assert.Greater(((RectTransform)shown).rect.height, 400f, "much larger than the table card");
+            ScreenshotHelper.Capture("hover-preview");
+
+            yield return MoveAwayFrom("Frustration");
+            Assert.IsFalse(Board().HoverPreviewShown, "gone as soon as the mouse leaves");
+        }
+
+        [UnityTest]
+        public IEnumerator TheMouseJustPassingOver_ShowsNothing()
+        {
+            var server = YourTurn();
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+
+            yield return HoverOver("Frustration");
+            yield return new WaitForSeconds(0.1f);
+            yield return MoveAwayFrom("Frustration");
+            yield return new WaitForSeconds(0.5f);
+
+            Assert.IsFalse(Board().HoverPreviewShown);
+        }
+
+        [UnityTest]
+        public IEnumerator ThePreview_AppearsOnTheSideAwayFromThePointer()
+        {
+            var server = YourTurn();
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+
+            var frustration = Card("Frustration"); // on the right half of the table
+            ExecuteEvents.Execute(frustration, Pointer(new Vector2(1500f, 700f)), ExecuteEvents.pointerEnterHandler);
+            yield return new WaitForSeconds(0.5f);
+
+            var preview = PhaseFiveSceneTests.Child("Hover preview");
+            Assert.Less(preview.position.x, PhaseFiveSceneTests.Child("Seat bshaftoe").position.x, "pointer on the right, so the preview is on the left");
+        }
+
+        [UnityTest]
+        public IEnumerator NoPreviewWhileAPopUpIsOpen()
+        {
+            var server = YourTurn();
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+            yield return PhaseFiveSceneTests.Tap(PhaseTwoSceneTests.FindButton("Log"));
+
+            yield return HoverOver("Frustration");
+            yield return new WaitForSeconds(0.5f);
+
+            Assert.IsFalse(Board().HoverPreviewShown);
+        }
+
+        [UnityTest]
+        public IEnumerator Preview_SaysWhenAMoodsValueIsChanged_AndWhatSuppressesIt()
+        {
+            var server = YourTurn(PhaseFiveSceneTests.Load(406, s =>
+            {
+                var mood = s["in_play"].Single(c => (string)c["name"] == "Frustration");
+                mood["value"] = 0;
+                mood["base_value"] = 5;
+                mood["is_suppressed"] = true;
+                mood["suppressions"] = JArray.Parse("[{\"expiry\":\"end_of_round\",\"suppressed_by_name\":\"Scorn\"}]");
+            }));
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+
+            yield return HoverOver("Frustration");
+            yield return new WaitForSeconds(0.5f);
+
+            var text = PhaseFiveSceneTests.Child("Hover preview").GetComponentsInChildren<Text>().Select(t => t.text).ToList();
+            Assert.IsTrue(text.Any(t => t.Contains("Value now 0 (printed 5)")), string.Join(" | ", text));
+            Assert.IsTrue(text.Any(t => t.Contains("Suppressed by Scorn")));
+        }
+
+        [UnityTest]
+        public IEnumerator PickingUpACard_PutsAwayThePreview()
+        {
+            var server = YourTurn();
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+
+            yield return HoverOver("Superiority");
+            yield return new WaitForSeconds(0.5f);
+            Assert.IsTrue(Board().HoverPreviewShown);
+
+            var card = Card("Superiority");
+            var data = Pointer(ScreenPointOf(card));
+            yield return Begin(card, data);
+
+            Assert.IsFalse(Board().HoverPreviewShown);
+            yield return Release(card, data);
+        }
     }
 }
