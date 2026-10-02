@@ -129,6 +129,16 @@ namespace MoodSwings.Networking
                 "/games/chat", new { game_id = gameId, channel, message_text = text }, cancellationToken);
         }
 
+        /// <summary>
+        /// POST /games/puzzle-hint-viewed -- say you're about to read the puzzle's hint, so the solve no longer
+        /// counts for the "Puzzle Solver" achievement. Sent before the hint is shown.
+        /// </summary>
+        public static Task<ApiResult<ApiEnvelope>> MarkPuzzleHintViewedAsync(
+            this ApiClient api, int gameId, CancellationToken cancellationToken = default)
+        {
+            return api.PostAsync<ApiEnvelope>("/games/puzzle-hint-viewed", new { game_id = gameId }, cancellationToken);
+        }
+
         /// <summary>POST /games/team-decision (propose) -- names which of the team's two members should act.</summary>
         public static Task<ApiResult<GameActionResponse>> ProposeTeamDecisionAsync(
             this ApiClient api, int gameId, int proposedGamePlayerId, CancellationToken cancellationToken = default)

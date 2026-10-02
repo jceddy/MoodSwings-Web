@@ -97,7 +97,6 @@ namespace MoodSwings.Tests
             Assert.IsFalse(BoardDisplay.CanAct(state));
         }
 
-        [TestCase("puzzle")]
         [TestCase("tournament_cast")]
         public void OtherFormats_AreNotPlayableYet(string format)
         {

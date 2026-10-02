@@ -47,6 +47,23 @@ namespace MoodSwings.Networking
         }
     }
 
+    public static class PuzzlesEndpoints
+    {
+        /// <summary>GET /puzzles -- every puzzle, easiest first, with how you've done at each.</summary>
+        public static Task<ApiResult<PuzzlesResponse>> ListPuzzlesAsync(
+            this ApiClient api, CancellationToken cancellationToken = default)
+        {
+            return api.GetAsync<PuzzlesResponse>("/puzzles", cancellationToken);
+        }
+
+        /// <summary>POST /puzzles/attempt -- starts a fresh attempt (also "try again"); 201 with the new game_id.</summary>
+        public static Task<ApiResult<CreateGameResponse>> StartPuzzleAttemptAsync(
+            this ApiClient api, int puzzleId, CancellationToken cancellationToken = default)
+        {
+            return api.PostAsync<CreateGameResponse>("/puzzles/attempt", new { puzzle_id = puzzleId }, cancellationToken);
+        }
+    }
+
     public enum OpenGameScope
     {
         /// <summary>Other people's listings you could join.</summary>

@@ -84,6 +84,9 @@ namespace MoodSwings.UI
         private Button _chatToTable;
         private Button _chatToTeam;
         private GameObject _chatChannelRow;
+        private RectTransform _goalPanel;
+        private Text _goalText;
+        private Button _hintButton;
         private GameObject _firstPlayerOverlay;
         private Text _firstPlayerText;
         private Text _letOtherGoLabel;
@@ -138,6 +141,12 @@ namespace MoodSwings.UI
         public ChoiceOverlay Choices => _choices;
 
         public ConfirmOverlay Confirm => _confirm;
+
+        /// <summary>A puzzle's goal, as shown on the board; null outside puzzles.</summary>
+        public string GoalText => _goalPanel != null && _goalPanel.gameObject.activeSelf ? _goalText.text : null;
+
+        /// <summary>The Hint button is offered (a puzzle that has a hint).</summary>
+        public bool HintAvailable => _hintButton != null && _hintButton.gameObject.activeSelf;
 
         /// <summary>The box asking you to name (or agree to) who on your team acts is up.</summary>
         public bool TeamDecisionOpen => _teamPanel != null && _teamPanel.gameObject.activeSelf;
@@ -318,6 +327,7 @@ namespace MoodSwings.UI
             _table.offsetMax = new Vector2(0f, -HeaderHeight);
 
             BuildDropZone(theme);
+            BuildGoalPanel(theme);
             BuildActions(theme);
             BuildHeader(theme);
 
@@ -391,6 +401,62 @@ namespace MoodSwings.UI
             rect.anchorMin = rect.anchorMax = rect.pivot = new Vector2(1f, 0.5f);
             rect.sizeDelta = new Vector2(180f, UiFactory.ControlHeight);
             rect.anchoredPosition = new Vector2(-fromRight, 0f);
+        }
+
+        // A puzzle's goal, kept in view in the empty top-left of the table, and a button for its hint (not every
+        // puzzle has one). The hint is only shown when asked for, since it can give the game away.
+        private void BuildGoalPanel(UiTheme theme)
+        {
+            _goalPanel = UiFactory.Create("Puzzle goal", transform);
+            _goalPanel.anchorMin = _goalPanel.anchorMax = _goalPanel.pivot = new Vector2(0f, 1f);
+            _goalPanel.sizeDelta = new Vector2(520f, 0f);
+            _goalPanel.anchoredPosition = new Vector2(24f, -HeaderHeight - 14f);
+            _goalPanel.gameObject.AddComponent<Image>().color = new Color(theme.panel.r, theme.panel.g, theme.panel.b, 0.92f);
+            var layout = _goalPanel.gameObject.AddComponent<VerticalLayoutGroup>();
+            layout.padding = new RectOffset(22, 22, 16, 16);
+            layout.spacing = 10f;
+            layout.childControlWidth = true;
+            layout.childControlHeight = true;
+            layout.childForceExpandWidth = true;
+            layout.childForceExpandHeight = false;
+            _goalPanel.gameObject.AddComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+            UiFactory.Label(_goalPanel, "Goal", 26, theme.accent, TextAnchor.MiddleLeft, FontStyle.Bold);
+            _goalText = UiFactory.Label(_goalPanel, string.Empty, 26, theme.textPrimary, TextAnchor.UpperLeft);
+            _hintButton = UiFactory.Button(_goalPanel, "Hint", theme, () => Run(ShowHint), primary: false);
+            _hintButton.gameObject.name = "Hint";
+            UiFactory.Size(_hintButton.gameObject, height: 56f);
+
+            _goalPanel.gameObject.SetActive(false);
+        }
+
+        private async Task ShowHint()
+        {
+            var hint = _session?.State?.Game.PuzzleHint;
+            if (string.IsNullOrEmpty(hint))
+            {
+                return;
+            }
+
+            // Reading it costs the "Puzzle Solver" achievement for this solve, so the server hears first.
+            await _session.MarkHintViewedAsync();
+            if (this != null)
+            {
+                await _confirm.AskAsync(hint, "OK", null);
+            }
+        }
+
+        private void UpdateGoal(GameState state)
+        {
+            var puzzle = BoardDisplay.IsPuzzle(state);
+            _goalPanel.gameObject.SetActive(puzzle);
+            if (!puzzle)
+            {
+                return;
+            }
+
+            _goalText.text = string.IsNullOrEmpty(state.Game.PuzzleDescription) ? "Reach the puzzle's goal." : state.Game.PuzzleDescription;
+            _hintButton.gameObject.SetActive(!string.IsNullOrEmpty(state.Game.PuzzleHint));
         }
 
         // Where a dragged card is let go to play it: the whole table above the hand. Hidden unless a
@@ -926,6 +992,7 @@ namespace MoodSwings.UI
             HideHover();
             BuildPiles(theme, state);
             BuildHand(theme, state);
+            UpdateGoal(state);
             UpdateActions(state);
             SyncOverlays(state);
             StartFlights();
@@ -1335,7 +1402,7 @@ namespace MoodSwings.UI
                 _primaryAction.interactable = primaryEnabled && !busy;
             }
 
-            var showResign = viewerSeated && inProgress;
+            var showResign = viewerSeated && inProgress && !BoardDisplay.IsPuzzle(state);
             _resignAction.gameObject.SetActive(showResign);
             _resignAction.interactable = BoardDisplay.CanResign(state) && !busy;
 

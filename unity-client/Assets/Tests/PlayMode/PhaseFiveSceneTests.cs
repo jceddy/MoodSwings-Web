@@ -36,6 +36,15 @@ namespace MoodSwings.Tests
 
             public List<string> Calls { get; } = new List<string>();
 
+            /// <summary>GET /puzzles answers with this.</summary>
+            public string PuzzlesJson = "{\"status\":\"ok\",\"puzzles\":[]}";
+
+            /// <summary>The game POST /puzzles/attempt starts.</summary>
+            public int AttemptGameId = 900;
+
+            /// <summary>When set, POST /puzzles/attempt answers with this instead of starting a game.</summary>
+            public HttpResponse AttemptReply;
+
             /// <summary>Answers a POST under /games/ with this, given its path and body; null means a plain "ok".</summary>
             public Func<string, JObject, HttpResponse> OnPost;
 
@@ -61,6 +70,9 @@ namespace MoodSwings.Tests
 
                 switch (path)
                 {
+                    case "/puzzles": return MainSceneTests.Reply(200, PuzzlesJson);
+                    case "/puzzles/attempt":
+                        return AttemptReply ?? MainSceneTests.Reply(201, "{\"status\":\"ok\",\"game_id\":" + AttemptGameId + "}");
                     case "/me": return MainSceneTests.Reply(200, Fixture("me"));
                     case "/friends": return MainSceneTests.Reply(200, Fixture("friends"));
                     case "/friends/invites": return MainSceneTests.Reply(200, Fixture("friends_invites"));

@@ -343,6 +343,18 @@ namespace MoodSwings.Networking
         [JsonProperty("match_game_number")]
         public int? MatchGameNumber { get; set; }
 
+        /// <summary>A puzzle: what the goal is. Always shown.</summary>
+        [JsonProperty("puzzle_description")]
+        public string PuzzleDescription { get; set; }
+
+        /// <summary>A puzzle: its hint, for the puzzles that have one. Shown only when asked for.</summary>
+        [JsonProperty("puzzle_hint")]
+        public string PuzzleHint { get; set; }
+
+        /// <summary>A puzzle: how many plays the attempt has taken (reported for puzzles).</summary>
+        [JsonProperty("puzzle_plays_made")]
+        public int? PuzzlePlaysMade { get; set; }
+
         /// <summary>Synchronous games: when the player on the clock runs out of time, "yyyy-MM-dd HH:mm:ss" in UTC.</summary>
         [JsonProperty("action_deadline_at")]
         public string ActionDeadlineAt { get; set; }

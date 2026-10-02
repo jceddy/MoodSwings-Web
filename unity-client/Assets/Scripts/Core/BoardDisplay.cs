@@ -25,6 +25,13 @@ namespace MoodSwings.Core
         /// <summary>"Round 2  -  First to 3 wins".</summary>
         public static string RoundLine(GameState state)
         {
+            if (IsPuzzle(state))
+            {
+                return state.Game.PuzzlePlaysMade.HasValue
+                    ? $"Puzzle  -  {state.Game.PuzzlePlaysMade} {(state.Game.PuzzlePlaysMade == 1 ? "play" : "plays")} so far"
+                    : "Puzzle";
+            }
+
             var round = state.Round.RoundNumber > 0 ? "Round " + state.Round.RoundNumber : "Not started";
             return state.Game.WinsNeeded > 0 ? $"{round}  -  First to {state.Game.WinsNeeded} wins" : round;
         }
@@ -79,6 +86,13 @@ namespace MoodSwings.Core
         public static string TurnBanner(GameState state)
         {
             var viewer = Viewer(state);
+
+            if (state.Game.Status == "completed" && IsPuzzle(state))
+            {
+                return state.Game.PuzzlePlaysMade.HasValue
+                    ? $"Puzzle solved in {state.Game.PuzzlePlaysMade} {(state.Game.PuzzlePlaysMade == 1 ? "play" : "plays")}!"
+                    : "Puzzle solved!";
+            }
 
             if (state.Game.Status == "completed")
             {
@@ -198,8 +212,13 @@ namespace MoodSwings.Core
 
         private static readonly HashSet<string> PlayableFormats = new HashSet<string>
         {
-            GameSetup.TraditionalFormat, GameSetup.DuelFormat, GameSetup.OpenTeamFormat, GameSetup.ClosedTeamFormat,
+            GameSetup.TraditionalFormat, GameSetup.DuelFormat, GameSetup.OpenTeamFormat, GameSetup.ClosedTeamFormat, PuzzleFormat,
         };
+
+        /// <summary>A solitaire puzzle: one seat (sometimes with a fixed opponent board), a goal, no rounds to win.</summary>
+        public const string PuzzleFormat = "puzzle";
+
+        public static bool IsPuzzle(GameState state) => state.Game.Format == PuzzleFormat;
 
         /// <summary>
         /// Why this game can't be played from the app yet (null when it can): drafts,
@@ -438,6 +457,7 @@ namespace MoodSwings.Core
         {
             var viewer = Viewer(state);
             return viewer != null
+                && !IsPuzzle(state)
                 && !viewer.Resigned
                 && state.Game.Status == "in_progress"
                 && state.Round.PendingDecision == null;

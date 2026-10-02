@@ -125,6 +125,15 @@ namespace MoodSwings.Core
         public Task<BoardActionResult> MarkReadyAsync() =>
             ActAsync("Couldn't confirm you're ready.", () => _api.MarkReadyAsync(GameId));
 
+        /// <summary>Tells the server you're about to read the hint (it affects an achievement), before it's shown. Failures are ignored.</summary>
+        public async Task MarkHintViewedAsync()
+        {
+            if (!IsSpectating)
+            {
+                await _api.MarkPuzzleHintViewedAsync(GameId);
+            }
+        }
+
         /// <summary>The team's proposal for who acts (turn order or the shared draw).</summary>
         public Task<BoardActionResult> ProposeTeamDecisionAsync(int gamePlayerId) =>
             ActAsync("Couldn't send that proposal.", () => _api.ProposeTeamDecisionAsync(GameId, gamePlayerId));

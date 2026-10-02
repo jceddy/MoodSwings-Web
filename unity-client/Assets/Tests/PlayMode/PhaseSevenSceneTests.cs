@@ -386,5 +386,141 @@ namespace MoodSwings.Tests
 
             Assert.IsTrue(UnityEngine.Object.FindObjectsByType<Text>(FindObjectsInactive.Exclude).Any(t => t.text == "[team] BotSage: psst"));
         }
+
+        // --- puzzles ----------------------------------------------------------------------------------------
+
+        private const string TwoPuzzles =
+            "{\"status\":\"ok\",\"puzzles\":[" +
+            "{\"id\":1,\"slug\":\"first\",\"title\":\"First Test Puzzle\",\"description\":\"Do the first thing.\",\"difficulty\":\"easy\",\"max_plays\":null,\"solved\":true,\"best_plays\":2,\"solve_count\":3}," +
+            "{\"id\":2,\"slug\":\"second\",\"title\":\"Second Test Puzzle\",\"description\":\"Do the second thing.\",\"difficulty\":\"hard\",\"max_plays\":3,\"solved\":false,\"best_plays\":null,\"solve_count\":0}]}";
+
+        private static IEnumerator OpenPuzzles(PhaseFiveSceneTests.PlayServer server)
+        {
+            yield return MainSceneTests.Launch(server.Handle, rememberedSession: "tok");
+            yield return MainSceneTests.WaitFor<HomeScreen>();
+            yield return PhaseTwoSceneTests.Click("Puzzles");
+            yield return MainSceneTests.WaitFor<PuzzlesScreen>();
+        }
+
+        private static JObject PuzzleBoard(System.Action<JObject> edit = null) => PhaseFiveSceneTests.Load(405, s =>
+        {
+            s["round"]["pending_decision"] = null;
+            s["game"]["format"] = "puzzle";
+            s["game"]["puzzle_description"] = "Do the first thing.";
+            s["game"]["puzzle_hint"] = null;
+            edit?.Invoke(s);
+        });
+
+        [UnityTest]
+        public IEnumerator Puzzles_AreListedWithTheirGoalAndHowYouHaveDone()
+        {
+            var server = Serve(PuzzleBoard());
+            server.PuzzlesJson = TwoPuzzles;
+            yield return OpenPuzzles(server);
+
+            var texts = UnityEngine.Object.FindObjectsByType<Text>(FindObjectsInactive.Exclude).Select(t => t.text).ToList();
+            Assert.IsTrue(texts.Contains("1 of 2 solved"), string.Join(" | ", texts));
+            Assert.IsTrue(texts.Contains("✓  First Test Puzzle"));
+            Assert.IsTrue(texts.Contains("Second Test Puzzle"));
+            Assert.IsTrue(texts.Contains("Do the second thing."));
+            Assert.IsTrue(texts.Contains("Easy  -  solved (best 2 plays, solved 3 times)"));
+            Assert.IsTrue(texts.Contains("Hard  -  not solved yet"));
+            Assert.IsTrue(texts.Contains("Within 3 plays, in a single turn"));
+            Assert.AreEqual("Try again", Named("Attempt First Test Puzzle").GetComponentInChildren<Text>().text);
+            Assert.AreEqual("Attempt", Named("Attempt Second Test Puzzle").GetComponentInChildren<Text>().text);
+            ScreenshotHelper.Capture("puzzles");
+        }
+
+        [UnityTest]
+        public IEnumerator AttemptingAPuzzle_StartsItAndOpensItsBoard()
+        {
+            var server = Serve(PuzzleBoard());
+            server.PuzzlesJson = TwoPuzzles;
+            server.StateFor = id => id == 900 ? PuzzleBoard() : PhaseFiveSceneTests.Load(406);
+            yield return OpenPuzzles(server);
+
+            yield return PhaseFiveSceneTests.Tap(Named("Attempt Second Test Puzzle"));
+            yield return MainSceneTests.WaitFor<BoardScreen>();
+            yield return PhaseTwoSceneTests.Frames(6);
+
+            Assert.IsTrue(server.Calls.Any(c => c.StartsWith("POST /puzzles/attempt") && c.Contains("\"puzzle_id\":2")), string.Join("\n", server.Calls));
+            Assert.IsTrue(server.Calls.Any(c => c.StartsWith("GET /games/state?game_id=900")));
+            Assert.AreEqual("Do the first thing.", Board().GoalText);
+        }
+
+        [UnityTest]
+        public IEnumerator APuzzleThatWontStart_SaysWhy_AndStaysOnTheList()
+        {
+            var server = Serve(PuzzleBoard());
+            server.PuzzlesJson = TwoPuzzles;
+            server.AttemptReply = MainSceneTests.Reply(400, "{\"status\":\"error\",\"message\":\"That puzzle is not available.\"}");
+            yield return OpenPuzzles(server);
+
+            yield return PhaseFiveSceneTests.Tap(Named("Attempt Second Test Puzzle"));
+
+            Assert.AreEqual("That puzzle is not available.", MainSceneTests.Screen<PuzzlesScreen>().StatusText);
+            Assert.IsInstanceOf<PuzzlesScreen>(UnityEngine.Object.FindAnyObjectByType<ScreenRouter>().Current);
+        }
+
+        [UnityTest]
+        public IEnumerator APuzzleBoard_ShowsItsGoal_AndOffersNoResign()
+        {
+            var server = Serve(PuzzleBoard(s =>
+            {
+                s["you"]["is_your_turn"] = true;
+                s["round"]["current_turn_game_player_id"] = 907;
+            }));
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+
+            Assert.AreEqual("Do the first thing.", Board().GoalText);
+            Assert.IsFalse(Board().HintAvailable, "this puzzle has no hint");
+            Assert.IsNull(PhaseFiveSceneTests.Child("Resign"), "there's nothing to resign: just leave");
+            Assert.AreEqual("Puzzle", Board().RoundText);
+            ScreenshotHelper.Capture("puzzle-board");
+        }
+
+        [UnityTest]
+        public IEnumerator TheHint_IsOnlyShownWhenAskedFor_AndTheServerIsToldFirst()
+        {
+            var server = Serve(PuzzleBoard(s => s["game"]["puzzle_hint"] = "Mind the obvious play."));
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+
+            Assert.IsTrue(Board().HintAvailable);
+            Assert.IsFalse(UnityEngine.Object.FindObjectsByType<Text>(FindObjectsInactive.Exclude).Any(t => t.text.Contains("Mind the obvious play.")),
+                "the hint doesn't spoil itself");
+
+            yield return PhaseFiveSceneTests.Tap(Named("Hint"));
+
+            Assert.AreEqual(1, server.Posts("/games/puzzle-hint-viewed").Count());
+            Assert.AreEqual(405, (int)server.Posts("/games/puzzle-hint-viewed").Single()["game_id"]);
+            Assert.IsTrue(Board().Confirm.IsOpen);
+            Assert.AreEqual("Mind the obvious play.", Board().Confirm.MessageText);
+        }
+
+        [UnityTest]
+        public IEnumerator ASolvedPuzzle_SaysHowManyPlaysItTook()
+        {
+            var server = Serve(PuzzleBoard(s =>
+            {
+                s["game"]["status"] = "completed";
+                s["game"]["puzzle_plays_made"] = 3;
+                s["game"]["winner_usernames"] = new JArray("bshaftoe");
+            }));
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+
+            Assert.AreEqual("Puzzle solved in 3 plays!", Board().BannerText);
+            Assert.IsNull(PhaseFiveSceneTests.Child("Primary action"));
+        }
+
+        [UnityTest]
+        public IEnumerator Home_OffersPuzzles()
+        {
+            var server = Serve(PuzzleBoard());
+            yield return MainSceneTests.Launch(server.Handle, rememberedSession: "tok");
+            yield return MainSceneTests.WaitFor<HomeScreen>();
+
+            Assert.IsNotNull(PhaseTwoSceneTests.FindButton("Puzzles"));
+            ScreenshotHelper.Capture("home-with-puzzles");
+        }
     }
 }

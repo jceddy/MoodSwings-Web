@@ -124,6 +124,11 @@ namespace MoodSwings.Core
 
         private static BoardCue GameEndCue(GameState after, BoardPlayer viewer)
         {
+            if (BoardDisplay.IsPuzzle(after))
+            {
+                return new BoardCue { Kind = CueKind.GameWon, Text = BoardDisplay.TurnBanner(after) };
+            }
+
             var winners = after.Game.WinnerUsernames.Count == 0 ? "Nobody" : string.Join(" and ", after.Game.WinnerUsernames);
             if (viewer == null)
             {
