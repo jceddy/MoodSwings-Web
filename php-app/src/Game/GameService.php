@@ -7452,6 +7452,21 @@ final class GameService
             }
 
             if (in_array($currentTurnGamePlayerId, $autoPassGamePlayerIds, true)) {
+                // A puzzle attempt that has run out of legal plays without
+                // being solved is simply a dead end -- it stays open for
+                // "Try Again". Auto-passing it would only hand the same seat
+                // a fresh mini-turn (advancePuzzleTurn()), which has no legal
+                // play either, so the pass/refresh pair repeated for the
+                // whole action budget on EVERY call -- and the recheck chain
+                // below kept re-scheduling it -- logging hundreds of
+                // thousands of passes and tripping the repeated-board-state
+                // warning (reported live on "Dead Heat": play Recklessness on
+                // the wrong mood, then Boredom, and the board "repeated
+                // 118802 times").
+                if ($this->fetchGame($gameId)['format'] === 'puzzle') {
+                    break;
+                }
+
                 $state = $this->boardStates->load($gameId);
                 $hasLegalPlay = array_filter(
                     $this->candidatePlayCardIds($state, $currentTurnGamePlayerId),
