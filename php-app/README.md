@@ -8138,9 +8138,12 @@ screen (`gridDraftPickMessage()`): an embedded **picture of the grid**
 `/discord/grid-image` route) with a numbered right-pointing arrow along
 the left edge for each row and an up-pointing arrow along the bottom for
 each column (dimmed once its whole line is taken; taken cells show as
-crossed-out slots), and -- on your turn -- a select of the rows/columns
-still holding cards ("Row 2", "Column 1", each described by the cards it
-would take; `ms:gdpick:{gameId}` -> `submitGridDraftPick()`). What each
+crossed-out slots). Every arrow has its own number -- rows are 1..N down
+the left, columns N+1..2N along the bottom (1-3 and 4-6 on the usual 3x3
+grid) -- so a pick is a single number and "row 2" can never be mistaken
+for "column 2". On your turn a select lists the numbers of the lines
+still holding cards, each described by the cards it would take
+(`ms:gdpick:{gameId}` -> `submitGridDraftPick()`). What each
 player has drafted is on every screen as a one-line tally (count and
 colors) plus a `Drafted Cards` button (`ms:gddrafted:{gameId}`) listing
 every card each player has taken, grouped by color -- Grid Draft is open

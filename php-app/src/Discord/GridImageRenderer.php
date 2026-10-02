@@ -13,7 +13,9 @@ namespace MoodSwings\Discord;
  * filesystem probing -- the caller hands in each cell's already-resolved
  * art file and this lays them out as an N x N grid with a right-pointing
  * arrow per row down the left edge and an up-pointing arrow per column
- * along the bottom, each carrying its 1-based number. A cell already
+ * along the bottom. Every arrow has its OWN number -- rows 1..N down the
+ * left, then columns N+1..2N along the bottom -- so a player picks by one
+ * number and can't mix up "row 2" with "column 2". A cell already
  * taken this round (null) is drawn as a dark, crossed-out slot, and an
  * arrow whose whole line is already taken is dimmed -- nothing to pick
  * there.
@@ -93,7 +95,7 @@ final class GridImageRenderer
                 $live = $live || $cells[$row * $size + $column] !== null;
             }
             $centerX = $originX + $column * (self::CELL_WIDTH + self::GAP) + (int) (self::CELL_WIDTH / 2);
-            $this->drawColumnArrow($canvas, $centerX, $bottomY, $column + 1, $live ? $arrowLive : $arrowDim);
+            $this->drawColumnArrow($canvas, $centerX, $bottomY, $size + $column + 1, $live ? $arrowLive : $arrowDim);
         }
 
         ob_start();

@@ -1641,7 +1641,7 @@ final class DiscordGameCommandService
 
         $components = [];
         if ($drafting['is_your_turn']) {
-            $lines[] = 'Your pick -- choose a row (arrows on the left) or a column (arrows along the bottom) by its number.';
+            $lines[] = "Your pick -- choose an arrow by its number: 1-{$size} are the rows (left), " . ($size + 1) . '-' . (2 * $size) . ' are the columns (bottom).';
             $options = [];
             foreach (['row', 'column'] as $axis) {
                 for ($i = 0; $i < $size; $i++) {
@@ -1655,18 +1655,21 @@ final class DiscordGameCommandService
                     if ($names === []) {
                         continue;
                     }
-                    $label = ucfirst($axis) . ' ' . ($i + 1);
+                    // One number per arrow, matching the picture: rows are
+                    // 1..N, columns N+1..2N -- never "row 2" next to "column 2".
+                    $number = $axis === 'row' ? $i + 1 : $size + $i + 1;
                     $options[] = [
-                        'label' => $label,
+                        'label' => (string) $number,
                         'value' => "{$axis}:{$i}",
                         'description' => mb_substr(implode(', ', $names) . ' (' . count($names) . ' card' . (count($names) === 1 ? '' : 's') . ')', 0, 100),
                     ];
                 }
             }
+            usort($options, static fn (array $a, array $b): int => (int) $a['label'] <=> (int) $b['label']);
             $components[] = ['type' => 1, 'components' => [[
                 'type' => 3,
                 'custom_id' => "ms:gdpick:{$gameId}",
-                'placeholder' => 'Take a row or column...',
+                'placeholder' => 'Pick an arrow number...',
                 'options' => $options,
             ]]];
         } else {

@@ -24585,7 +24585,15 @@ final class GameServiceIntegrationTest extends TestCase
 
             $select = $screen['data']['components'][0]['components'][0];
             self::assertSame("ms:gdpick:{$gameId}", $select['custom_id']);
-            self::assertMatchesRegularExpression('/^(Row|Column) [1-3]$/', $select['options'][0]['label']);
+            $labels = array_column($select['options'], 'label');
+            self::assertSame($labels, array_values(array_unique($labels)), 'every arrow number is unique');
+            foreach ($select['options'] as $option) {
+                self::assertMatchesRegularExpression('/^[1-6]$/', $option['label']);
+                [$axis, $lineIndex] = explode(':', $option['value']);
+                self::assertSame((string) ($axis === 'row' ? $lineIndex + 1 : 3 + $lineIndex + 1), $option['label'], 'rows are 1-3, columns 4-6');
+            }
+            self::assertStringContainsString('1-3 are the rows', $screen['data']['content']);
+            self::assertStringContainsString('4-6 are the columns', $screen['data']['content']);
             self::assertStringContainsString('card', $select['options'][0]['description']);
 
             $screen = $service->handleComponent(
