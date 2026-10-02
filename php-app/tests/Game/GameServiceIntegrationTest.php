@@ -22756,6 +22756,67 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame($p2, (int) $owner->fetchColumn(), 'Betrayal gave itself to the other player');
     }
 
+    /**
+     * Reported live: Regret said "Needs the web app to play" -- with Hope
+     * in play and Friendliness's own restricted extra play banked, two
+     * distinguishable grants can pay for it, so the card gains a prepended
+     * grant_choice field on top of its own two (cost moods + steal target):
+     * three steps, which used to fall outside the field cap (and whose
+     * accumulated answers overflowed the 100-character custom_id as
+     * keyed JSON).
+     */
+    public function testDiscordPlaysRegretThroughAGrantChoiceThenItsTwoFields(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-regret-1');
+        $u2 = $this->insertDiscordUser('discord-regret-2');
+        $this->linkDiscordAccount($u1, 'discord-regret-1');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $friendlinessId = $this->insertGameCard($gameId, 13, 'hand', $p1);
+        $regretId = $this->insertGameCard($gameId, 50, 'hand', $p1);
+        $this->insertGameCard($gameId, 83, 'hand', $p1);
+        $hopeId = $this->insertGameCard($gameId, 124, 'in_play', $p1);
+        $vanityId = $this->insertGameCard($gameId, 79, 'in_play', $p1);
+        $targetId = $this->insertGameCard($gameId, 56, 'in_play', $p2);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 2);
+
+        // Friendliness banks an even-values-only extra play beside Hope's.
+        $this->games->playMood($gameId, $p1, $friendlinessId, []);
+
+        $service = $this->discordCommandService();
+        $grantStep = $service->handleComponent($this->discordComponentPayload('discord-regret-1', "ms:play:{$gameId}", [(string) $regretId]));
+        self::assertStringNotContainsString('Needs the web app', json_encode($grantStep['data']), 'Regret is offered');
+        $grantSelect = $grantStep['data']['components'][0]['components'][0];
+        self::assertStringStartsWith("ms:playfield:{$gameId}:{$regretId}:0:", $grantSelect['custom_id']);
+        self::assertCount(3, $grantSelect['options'], 'Skip, Hope, or Friendliness');
+
+        $costStep = $service->handleComponent($this->discordComponentPayload('discord-regret-1', $grantSelect['custom_id'], [$grantSelect['options'][1]['value']]));
+        $costSelect = $costStep['data']['components'][0]['components'][0];
+        self::assertStringStartsWith("ms:playfield:{$gameId}:{$regretId}:1:", $costSelect['custom_id']);
+        self::assertSame(2, $costSelect['min_values']);
+        self::assertSame(2, $costSelect['max_values']);
+
+        $targetStep = $service->handleComponent($this->discordComponentPayload('discord-regret-1', $costSelect['custom_id'], [(string) $hopeId, (string) $vanityId]));
+        $targetSelect = $targetStep['data']['components'][0]['components'][0];
+        self::assertStringStartsWith("ms:playfield:{$gameId}:{$regretId}:2:", $targetSelect['custom_id']);
+        self::assertLessThanOrEqual(100, strlen($targetSelect['custom_id']), "Discord's custom_id cap");
+        self::assertSame('hand', $this->cardZone($regretId), 'still collecting choices');
+
+        $service->handleComponent($this->discordComponentPayload('discord-regret-1', $targetSelect['custom_id'], [(string) $targetId]));
+
+        self::assertSame('in_play', $this->cardZone($regretId));
+        self::assertSame('hand', $this->cardZone($hopeId), 'returned to hand as Regret\'s cost');
+        self::assertSame('hand', $this->cardZone($vanityId));
+        self::assertSame('hand', $this->cardZone($targetId), 'the opponent\'s Betrayal was stolen into the hand');
+    }
+
     public function testDiscordComponentDecisionRespondsToASingleFieldPendingDecision(): void
     {
         $u1 = $this->insertDiscordUser('discord-player-10');
@@ -24517,7 +24578,7 @@ final class GameServiceIntegrationTest extends TestCase
         $botUserId = $this->insertBotUser('discord-qd-bot-opp-' . uniqid());
 
         $drafts = $this->discordCommandService()->handleComponent($this->discordComponentPayload('discord-qd-bot', 'ms:drafts:0'));
-        self::assertSame(['ms:sealed:0', 'ms:qd:0'], array_column($drafts['data']['components'][0]['components'], 'custom_id'));
+        self::assertSame(['ms:sealed:0', 'ms:qd:0', 'ms:gd:0'], array_column($drafts['data']['components'][0]['components'], 'custom_id'));
         $pools = $this->discordCommandService()->handleComponent($this->discordComponentPayload('discord-qd-bot', 'ms:qd:0'));
         self::assertSame('ms:qdpool:0', $pools['data']['components'][0]['components'][0]['custom_id']);
         $opp = $this->discordCommandService()->handleComponent($this->discordComponentPayload('discord-qd-bot', 'ms:qdpool:0', ['random_48']));
@@ -24549,6 +24610,98 @@ final class GameServiceIntegrationTest extends TestCase
         );
         self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
         self::assertStringContainsString('Game 1 of 3', $started['data']['content']);
+    }
+
+    /** Grid Draft vs a practice bot: grid picture + numbered row/column select, drafted-cards view, then deck building and a started game. */
+    public function testDiscordGridDraftVsBotPicksRowsAndColumnsThenBuildsAndStarts(): void
+    {
+        $userId = $this->insertDiscordUser('discord-gd-bot');
+        $this->linkDiscordAccount($userId, 'discord-gd-bot');
+        $botUserId = $this->insertBotUser('discord-gd-bot-opp-' . uniqid());
+        $service = $this->discordCommandService();
+
+        $pools = $service->handleComponent($this->discordComponentPayload('discord-gd-bot', 'ms:gd:0'));
+        $poolValues = array_column($pools['data']['components'][0]['components'][0]['options'], 'value');
+        self::assertNotContains('structure', $poolValues, 'the 45-card structure pool is too small for Grid Draft');
+        $opp = $service->handleComponent($this->discordComponentPayload('discord-gd-bot', 'ms:gdpool:0', ['random_48']));
+        self::assertSame(['ms:gdbotmenu:0:random_48', 'ms:gdinvite:0:random_48'], array_column($opp['data']['components'][0]['components'], 'custom_id'));
+
+        $screen = $service->handleComponent(
+            $this->discordComponentPayload('discord-gd-bot', 'ms:gdbot:0:random_48', [(string) $botUserId])
+        );
+        $gameId = $this->games->listGamesForUser($userId)[0]['id'];
+
+        for ($pick = 1; $pick <= 6; $pick++) {
+            self::assertStringContainsString('Grid Draft, round', $screen['data']['content'], "grid screen #{$pick}");
+            self::assertStringContainsString('Drafted so far -- you:', $screen['data']['content']);
+
+            $imageUrl = $screen['data']['embeds'][0]['image']['url'];
+            self::assertStringContainsString('/discord/grid-image?game_id=' . $gameId, $imageUrl);
+            parse_str((string) parse_url($imageUrl, PHP_URL_QUERY), $query);
+            self::assertTrue($service->verifyGridImageSignature($gameId, $query['cells'], $query['sig']));
+            self::assertFalse($service->verifyGridImageSignature($gameId, $query['cells'] . ',1', $query['sig']), 'the cells are covered by the signature');
+            $png = $service->renderGridImage($query['cells']);
+            self::assertNotNull($png);
+            self::assertStringStartsWith("\x89PNG", $png);
+
+            $select = $screen['data']['components'][0]['components'][0];
+            self::assertSame("ms:gdpick:{$gameId}", $select['custom_id']);
+            $labels = array_column($select['options'], 'label');
+            self::assertSame($labels, array_values(array_unique($labels)), 'every arrow number is unique');
+            foreach ($select['options'] as $option) {
+                self::assertMatchesRegularExpression('/^[1-6]$/', $option['label']);
+                [$axis, $lineIndex] = explode(':', $option['value']);
+                self::assertSame((string) ($axis === 'row' ? $lineIndex + 1 : 3 + $lineIndex + 1), $option['label'], 'rows are 1-3, columns 4-6');
+            }
+            self::assertStringContainsString('1-3 are the rows', $screen['data']['content']);
+            self::assertStringContainsString('4-6 are the columns', $screen['data']['content']);
+            self::assertStringContainsString('card', $select['options'][0]['description']);
+
+            $screen = $service->handleComponent(
+                $this->discordComponentPayload('discord-gd-bot', $select['custom_id'], [$select['options'][0]['value']])
+            );
+        }
+
+        self::assertStringContainsString('Grid Draft, Game 1 of 3', $screen['data']['content']);
+        self::assertStringContainsString('Use suggested deck', json_encode($screen['data']['components']));
+
+        $started = $service->handleComponent($this->discordComponentPayload('discord-gd-bot', "ms:sealedsuggest:{$gameId}"));
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
+        self::assertStringContainsString('Game 1 of 3', $started['data']['content']);
+    }
+
+    /** The "Drafted Cards" button lists each player's picks; a tampered grid URL is rejected. */
+    public function testDiscordGridDraftedCardsButtonAndWrongTurnPick(): void
+    {
+        $u1 = $this->insertDiscordUser('discord-gd-h1');
+        $u2 = $this->insertDiscordUser('discord-gd-h2');
+        $this->linkDiscordAccount($u1, 'discord-gd-h1');
+        $this->linkDiscordAccount($u2, 'discord-gd-h2');
+        $gameId = $this->games->createGame($u1, [$u1, $u2], format: 'draft', deckType: 'grid_draft', gridDraftPoolSource: 'random_48');
+        $service = $this->discordCommandService();
+
+        $first = $service->handleComponent($this->discordComponentPayload('discord-gd-h1', "ms:view:{$gameId}"));
+        $second = $service->handleComponent($this->discordComponentPayload('discord-gd-h2', "ms:view:{$gameId}"));
+        $firstHasSelect = ($first['data']['components'][0]['components'][0]['type'] ?? null) === 3;
+        $secondHasSelect = ($second['data']['components'][0]['components'][0]['type'] ?? null) === 3;
+        self::assertNotSame($firstHasSelect, $secondHasSelect, 'exactly one player is on the clock');
+
+        [$pickerSlug, $waitingSlug, $picker] = $firstHasSelect ? ['discord-gd-h1', 'discord-gd-h2', $first] : ['discord-gd-h2', 'discord-gd-h1', $second];
+        $waiting = $firstHasSelect ? $second : $first;
+        self::assertStringContainsString('Waiting on', $waiting['data']['content']);
+
+        $select = $picker['data']['components'][0]['components'][0];
+        $service->handleComponent($this->discordComponentPayload($pickerSlug, $select['custom_id'], ['row:0']));
+
+        $drafted = $service->handleComponent($this->discordComponentPayload($waitingSlug, "ms:gddrafted:{$gameId}"));
+        self::assertStringContainsString('drafted so far', $drafted['data']['content']);
+        self::assertStringContainsString('3 cards', $drafted['data']['content'], "the picker's row of 3 is visible to the other player");
+        self::assertStringContainsString('nothing yet', $drafted['data']['content']);
+        self::assertSame("ms:view:{$gameId}", $drafted['data']['components'][0]['components'][0]['custom_id']);
+
+        // The first player is no longer on the clock, so picking again is refused.
+        $again = $service->handleComponent($this->discordComponentPayload($pickerSlug, $select['custom_id'], ['row:1']));
+        self::assertStringContainsString("Couldn't do that", $again['data']['content']);
     }
 
     /** A stale pick screen is refused rather than applied to a later pile. */

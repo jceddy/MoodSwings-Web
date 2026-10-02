@@ -7774,15 +7774,15 @@ full reasoning):
   message with a link, never a crash.
 - A hand OR discard pile card (see "Playing from the discard pile"
   below) is only offered to play here if EVERY one of its own
-  `choice_fields`, up to `MAX_CHOICE_FIELDS` (2 -- the most any
-  hand-playable card's OWN fields actually has, though a prepended
-  `grant_choice` field -- see below -- counts against this same total)
-  total, is one of a `mode`/`value`/`bool`/`mood`/`player`/`hand_card`/
+  `choice_fields`, up to `MAX_CHOICE_FIELDS` (3 -- the most any
+  hand-playable card's OWN fields actually has is 2, plus a prepended
+  `grant_choice` field -- see below -- which counts against this same
+  total) total, is one of a `mode`/`value`/`bool`/`mood`/`player`/`hand_card`/
   `discard_card`/`grant_choice` type -- covers not just single-target
   cards (Pride's own `target_player_id`, Compulsion's `discard_card_id`,
   Conviction's self-targetable `target_mood_id`, Hate's optional "any
   mood in play," ...) but also a `multi` (checkbox-style) field and a
-  card with a SECOND field. Cards needing more than 2 fields, or a
+  card with a SECOND field. Cards needing more than 3 fields, or a
   `nested` sub-form (Duplicity's own repeat offer, any chaos_draft
   attachment), are still listed as "needs the web app" instead. An
   OPTIONAL single-value field's select menu
@@ -8127,6 +8127,36 @@ room, else on its own row) that returns to the game picker
 With 0 or 1 active games the button is omitted (`ms:games:0` itself falls
 back to the no-game message / the single board).
 
+**Grid Draft via Discord** (2 players): the `Limited` menu's `Grid Draft`
+(`ms:gd:0`) asks for a card pool (Random, jceddy's 75 or One of each --
+not Structure, whose 45 cards fall short of Grid Draft's 54-card target),
+then `vs Practice Bot`/`vs a Friend` (the same `ms:{qd|gd}pool`/`botmenu`/
+`bot`/`invite`/`with` flow Quick Draft uses, now shared through
+`DRAFT_MODES`). While the match is `drafting` the board is the pick
+screen (`gridDraftPickMessage()`): an embedded **picture of the grid**
+(`GridImageRenderer`, served by the signed, unauthenticated
+`/discord/grid-image` route) with a numbered right-pointing arrow along
+the left edge for each row and an up-pointing arrow along the bottom for
+each column (dimmed once its whole line is taken; taken cells show as
+crossed-out slots). Every arrow has its own number -- rows are 1..N down
+the left, columns N+1..2N along the bottom (1-3 and 4-6 on the usual 3x3
+grid) -- so a pick is a single number and "row 2" can never be mistaken
+for "column 2". On your turn a select lists the numbers of the lines
+still holding cards, each described by the cards it would take
+(`ms:gdpick:{gameId}` -> `submitGridDraftPick()`). What each
+player has drafted is on every screen as a one-line tally (count and
+colors) plus a `Drafted Cards` button (`ms:gddrafted:{gameId}`) listing
+every card each player has taken, grouped by color -- Grid Draft is open
+information, so the opponent's picks are shown too. The grid picture's
+URL carries the cells themselves (`cells` = catalog card ids in
+row-major order, blank for a taken cell) and the HMAC covers them, so the
+image is a pure function of the URL: nothing is looked up, an old message
+keeps the grid it was posted with, and a game can't be probed by guessing
+ids. A practice bot picks on the same click (`advanceAutomatedTurns()`);
+against a friend the screen shows "Waiting on ..." until `Refresh`. Once
+drafting ends it is the shared Sealed Deck/Quick Draft deck-building
+screen, then a best-of-three. 3-4 player Grid Draft stays web-only.
+
 **Advance Turn via Discord** (reported live: "the discord client needs to
 show the Advance turn button when appropriate, otherwise a game will get
 stuck") -- a player with the "pause at the start of your turn" setting
@@ -8159,11 +8189,15 @@ effect") since skipping it doesn't decline anything -- the play still
 happens, using `MoodPlayService::playMood()`'s own already-existing
 "whichever comes first" fallback when no `grant_source_card_id` is
 given. Counts against the same `MAX_CHOICE_FIELDS` total as a card's own
-fields (see that constant's own docblock): a 0- or 1-field card gains
-this field for free, while a card that already has 2 of its own (Faith,
-Guile, ...) still needs the web app if 2+ grants are active at the same
-time -- a rare combination, and the same conservative "needs the web
-app" fallback this class already uses for every other over-the-cap case.
+fields (see that constant's own docblock) -- 3, so even a card with 2 of
+its own (Faith, Guile, Regret, ...) stays playable when 2+ distinguishable
+grants are active at once. (Reported live: Regret said "Needs the web app
+to play" in exactly that situation, back when the cap was 2.) Because a
+3-field card's last select must remember the two earlier answers inside
+Discord's 100-character `custom_id`, `encodeAnswers()` stores them
+positionally (a JSON list in field order) rather than keyed by field
+name -- a grant source plus Regret's two mood ids as a keyed object
+overflowed the limit.
 
 **Score line, card details, and the game log** (reported live: "show ...
 number of rounds each player has won so far, number of cards each player
@@ -13658,6 +13692,23 @@ than a parallel bespoke system:
   a card order counts as one solution however its grants are chosen.
   Duplicity and Fear were tried in the card pool and dropped (multiple
   winning orders, or an unreadable solution).
+
+- **14th puzzle, "Dead Heat"** (reported live: win the game this turn
+  from a 2-2 round tie, the opponent having played first), medium,
+  `win_game`, `max_plays` 2, no new puzzle infrastructure. The solver has
+  Vanity in play and holds Recklessness and Boredom; the opponent has Hope,
+  two Betrayals and Avoidance in play and no hand. The one winning line:
+  Recklessness taking the opponent's Hope (a second play for the turn),
+  then Boredom -- Vanity counts +3 per own mood with an empty hand, so
+  12 + 4 = 16 against 15. Taking a Betrayal (a 6-point swing) or Avoidance
+  leaves no second play, and Boredom first leaves Recklessness stuck in
+  hand. The play cap is what makes it unique: a puzzle seat never really
+  ends its turn (the engine hands it a fresh mini-turn, logged as
+  `puzzle_turn_refreshed`, instead of scoring the round), so with no cap an
+  exhaustive search found 8 "solutions" that trickle the cards in across
+  refreshed turns and would never work in a real game; with `max_plays` set
+  a refresh counts as a failure. A cap of 2 or 3 gives the same single
+  solution.
 
 ### Duel: separate per-player decks
 

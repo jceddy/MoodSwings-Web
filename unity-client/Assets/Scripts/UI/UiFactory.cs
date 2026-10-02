@@ -257,6 +257,175 @@ namespace MoodSwings.UI
             return toggle;
         }
 
+        /// <summary>Lets a layout child take leftover space (a text field beside a button, a list filling its screen).</summary>
+        public static LayoutElement Flexible(GameObject go, float? width = null, float? height = null)
+        {
+            var element = Size(go);
+            if (width.HasValue)
+            {
+                element.flexibleWidth = width.Value;
+            }
+
+            if (height.HasValue)
+            {
+                element.flexibleHeight = height.Value;
+            }
+
+            return element;
+        }
+
+        /// <summary>
+        /// A vertically scrolling list: add children to <paramref name="content"/>
+        /// and it grows to fit them. Wheel or drag scrolls; there's no visible
+        /// scrollbar yet.
+        /// </summary>
+        public static ScrollRect ScrollList(Transform parent, out RectTransform content, float spacing = 12f)
+        {
+            var root = Create("ScrollList", parent);
+            // Fully transparent, but present: it's what catches the drag and wheel.
+            root.gameObject.AddComponent<Image>().color = Color.clear;
+            var scroll = root.gameObject.AddComponent<ScrollRect>();
+
+            var viewport = Create("Viewport", root);
+            Stretch(viewport);
+            viewport.gameObject.AddComponent<RectMask2D>();
+
+            content = Create("Content", viewport);
+            content.anchorMin = new Vector2(0f, 1f);
+            content.anchorMax = new Vector2(1f, 1f);
+            content.pivot = new Vector2(0.5f, 1f);
+            content.sizeDelta = Vector2.zero;
+            content.anchoredPosition = Vector2.zero;
+
+            var layout = content.gameObject.AddComponent<VerticalLayoutGroup>();
+            layout.spacing = spacing;
+            layout.padding = new RectOffset(0, 0, 8, 24);
+            layout.childAlignment = TextAnchor.UpperCenter;
+            layout.childControlWidth = true;
+            layout.childControlHeight = true;
+            layout.childForceExpandWidth = true;
+            layout.childForceExpandHeight = false;
+            content.gameObject.AddComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+            scroll.viewport = viewport;
+            scroll.content = content;
+            scroll.horizontal = false;
+            scroll.vertical = true;
+            scroll.movementType = ScrollRect.MovementType.Clamped;
+            scroll.scrollSensitivity = 40f;
+
+            // A thin bar down the right edge that only appears when there's more
+            // below, so it's clear a list scrolls.
+            var barRect = Create("Scrollbar", root);
+            barRect.anchorMin = new Vector2(1f, 0f);
+            barRect.anchorMax = new Vector2(1f, 1f);
+            barRect.pivot = new Vector2(1f, 0.5f);
+            barRect.sizeDelta = new Vector2(10f, 0f);
+            barRect.gameObject.AddComponent<Image>().color = new Color(1f, 1f, 1f, 0.06f);
+
+            var slidingArea = Create("Sliding Area", barRect);
+            Stretch(slidingArea);
+            var handleRect = Create("Handle", slidingArea);
+            Stretch(handleRect);
+            var handleImage = handleRect.gameObject.AddComponent<Image>();
+            handleImage.color = new Color(1f, 1f, 1f, 0.35f);
+
+            var scrollbar = barRect.gameObject.AddComponent<Scrollbar>();
+            scrollbar.handleRect = handleRect;
+            scrollbar.targetGraphic = handleImage;
+            scrollbar.direction = Scrollbar.Direction.BottomToTop;
+
+            scroll.verticalScrollbar = scrollbar;
+            scroll.verticalScrollbarVisibility = ScrollRect.ScrollbarVisibility.AutoHideAndExpandViewport;
+            scroll.verticalScrollbarSpacing = 6f;
+            return scroll;
+        }
+
+        /// <summary>A bar across the top of a screen: a Back button on the left and a centered title.</summary>
+        public static RectTransform Header(Transform parent, UiTheme theme, string title, UnityAction onBack)
+        {
+            var bar = Create("Header", parent);
+            bar.anchorMin = new Vector2(0f, 1f);
+            bar.anchorMax = new Vector2(1f, 1f);
+            bar.pivot = new Vector2(0.5f, 1f);
+            bar.sizeDelta = new Vector2(0f, 110f);
+
+            var heading = Label(bar, title, 52, theme.accent, TextAnchor.MiddleCenter, FontStyle.Bold);
+            Stretch(heading.rectTransform);
+
+            var back = (RectTransform)Button(bar, "< Back", theme, onBack, primary: false).transform;
+            back.anchorMin = back.anchorMax = back.pivot = new Vector2(0f, 0.5f);
+            back.sizeDelta = new Vector2(180f, ControlHeight);
+            back.anchoredPosition = new Vector2(40f, 0f);
+            return bar;
+        }
+
+        public static Text SectionTitle(Transform parent, UiTheme theme, string text)
+        {
+            var label = Label(parent, text, 30, theme.accent, TextAnchor.MiddleLeft, FontStyle.Bold);
+            Size(label.gameObject, height: 48f);
+            return label;
+        }
+
+        /// <summary>A raised, padded strip for one list entry; add its contents to the returned row.</summary>
+        public static HorizontalLayoutGroup RowPanel(Transform parent, UiTheme theme, float height = 80f)
+        {
+            var row = Row(parent, "RowPanel", 16f, TextAnchor.MiddleLeft);
+            row.padding = new RectOffset(20, 16, 8, 8);
+            row.gameObject.AddComponent<Image>().color = theme.panel;
+            Size(row.gameObject, height: height);
+            return row;
+        }
+
+        /// <summary>A raised, padded box that stacks its contents vertically (a group of related controls).</summary>
+        public static VerticalLayoutGroup Panel(Transform parent, UiTheme theme)
+        {
+            var rect = Create("Panel", parent);
+            rect.gameObject.AddComponent<Image>().color = theme.panel;
+            var layout = rect.gameObject.AddComponent<VerticalLayoutGroup>();
+            layout.padding = new RectOffset(20, 16, 14, 14);
+            layout.spacing = 6f;
+            layout.childControlWidth = true;
+            layout.childControlHeight = true;
+            layout.childForceExpandWidth = true;
+            layout.childForceExpandHeight = false;
+            return layout;
+        }
+
+        /// <summary>A small muted line of explanation, indented to sit under a toggle's label rather than its box.</summary>
+        public static void ToggleDescription(Transform parent, UiTheme theme, string text)
+        {
+            var row = Row(parent, "Description", 0f, TextAnchor.UpperLeft);
+            row.padding = new RectOffset(56, 0, 0, 0);
+            var label = Label(row.transform, text, 24, theme.textMuted, TextAnchor.UpperLeft);
+            Flexible(label.gameObject, width: 1f);
+        }
+
+        /// <summary>A bold line over a smaller muted one, for a list row. Takes the row's spare width.</summary>
+        public static RectTransform TwoLineText(Transform parent, UiTheme theme, string title, string subtitle)
+        {
+            var rect = Create("Text", parent);
+            var layout = rect.gameObject.AddComponent<VerticalLayoutGroup>();
+            layout.spacing = 2f;
+            layout.childAlignment = TextAnchor.MiddleLeft;
+            layout.childControlWidth = true;
+            layout.childControlHeight = true;
+            layout.childForceExpandWidth = true;
+            layout.childForceExpandHeight = false;
+
+            // One line each, always: a long title wrapping would run over the
+            // line beneath it. Better to overrun the row's spare room than overlap.
+            var first = Label(rect, title, 28, theme.textPrimary, TextAnchor.MiddleLeft, FontStyle.Bold);
+            first.horizontalOverflow = HorizontalWrapMode.Overflow;
+            Size(first.gameObject, height: 36f);
+            var second = Label(rect, subtitle, 22, theme.textMuted, TextAnchor.MiddleLeft);
+            second.horizontalOverflow = HorizontalWrapMode.Overflow;
+            Size(second.gameObject, height: 30f);
+
+            Flexible(rect.gameObject, width: 1f);
+            return rect;
+        }
+
         private static void Inset(RectTransform rect, float horizontal, float vertical)
         {
             Stretch(rect);

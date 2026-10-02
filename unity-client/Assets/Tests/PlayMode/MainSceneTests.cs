@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using MoodSwings.Core;
@@ -22,7 +23,7 @@ namespace MoodSwings.Tests
     {
         private const string UserJson = "{\"id\":7,\"username\":\"alice\",\"email\":\"a@example.com\",\"phone_number\":null}";
 
-        private sealed class ScriptedTransport : IHttpTransport
+        internal sealed class ScriptedTransport : IHttpTransport
         {
             private readonly Func<HttpRequest, HttpResponse> _handler;
 
@@ -32,7 +33,7 @@ namespace MoodSwings.Tests
                 Task.FromResult(_handler(request));
         }
 
-        private static HttpResponse Reply(int status, string body, string setCookie = null)
+        internal static HttpResponse Reply(int status, string body, string setCookie = null)
         {
             var response = new HttpResponse { StatusCode = status, Body = body };
             if (setCookie != null)
@@ -44,12 +45,12 @@ namespace MoodSwings.Tests
         }
 
         /// <summary>Answers /VERSION like the real site, everything else via the given handler.</summary>
-        private static Func<HttpRequest, HttpResponse> Site(Func<HttpRequest, HttpResponse> api)
+        internal static Func<HttpRequest, HttpResponse> Site(Func<HttpRequest, HttpResponse> api)
         {
             return request => request.Url.EndsWith("/VERSION") ? Reply(200, "1.58.5\n") : api(request);
         }
 
-        private static IEnumerator Launch(Func<HttpRequest, HttpResponse> handler, string rememberedSession = null)
+        internal static IEnumerator Launch(Func<HttpRequest, HttpResponse> handler, string rememberedSession = null)
         {
             ScreenshotHelper.UseFullHdScreen();
             yield return null;
@@ -68,7 +69,7 @@ namespace MoodSwings.Tests
             yield return null;
         }
 
-        private static IEnumerator WaitFor<T>(float timeoutSeconds = 6f) where T : UiScreen
+        internal static IEnumerator WaitFor<T>(float timeoutSeconds = 6f) where T : UiScreen
         {
             var router = UnityEngine.Object.FindAnyObjectByType<ScreenRouter>();
             var waited = 0f;
@@ -87,7 +88,7 @@ namespace MoodSwings.Tests
             }
         }
 
-        private static IEnumerator Await(Task task)
+        internal static IEnumerator Await(Task task)
         {
             while (!task.IsCompleted)
             {
@@ -101,9 +102,9 @@ namespace MoodSwings.Tests
             }
         }
 
-        private static T Screen<T>() where T : UiScreen => UnityEngine.Object.FindAnyObjectByType<T>(FindObjectsInactive.Include);
+        internal static T Screen<T>() where T : UiScreen => UnityEngine.Object.FindAnyObjectByType<T>(FindObjectsInactive.Include);
 
-        private static HttpResponse MeOk(HttpRequest request) =>
+        internal static HttpResponse MeOk(HttpRequest request) =>
             request.Url.EndsWith("/app/me") ? Reply(200, "{\"status\":\"ok\",\"user\":" + UserJson + "}") : Reply(404, "{}");
 
         [UnityTest]
@@ -229,7 +230,8 @@ namespace MoodSwings.Tests
             yield return Launch(request => request.Url.EndsWith("/app/logout") ? Reply(200, "{\"status\":\"ok\"}") : MeOk(request), rememberedSession: "tok");
             yield return WaitFor<HomeScreen>();
 
-            var logout = Screen<HomeScreen>().transform.GetComponentInChildren<UnityEngine.UI.Button>();
+            var logout = Screen<HomeScreen>().GetComponentsInChildren<UnityEngine.UI.Button>()
+                .Single(b => b.GetComponentInChildren<UnityEngine.UI.Text>().text == "Log out");
             logout.onClick.Invoke();
             yield return WaitFor<LoginScreen>();
 

@@ -148,6 +148,22 @@ namespace MoodSwings.Core
             return new ResumeResult { Outcome = ResumeOutcome.Unavailable, Message = result.Message };
         }
 
+        /// <summary>
+        /// Re-reads the signed-in user from /me. /login returns only the basic
+        /// fields, so anything needing the preference flags (the Settings
+        /// screen) refreshes first. CurrentUser is replaced only on success.
+        /// </summary>
+        public async Task<ApiResult<UserResponse>> RefreshUserAsync(CancellationToken cancellationToken = default)
+        {
+            var result = await _api.GetMeAsync(cancellationToken);
+            if (result.Ok)
+            {
+                CurrentUser = result.Value.User;
+            }
+
+            return result;
+        }
+
         public Task<ApiResult<ApiEnvelope>> ResendVerificationAsync(string email, CancellationToken cancellationToken = default)
         {
             return _api.ResendVerificationAsync((email ?? string.Empty).Trim(), cancellationToken);

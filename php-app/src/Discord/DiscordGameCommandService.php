@@ -111,7 +111,8 @@ use MoodSwings\SiteUrl;
  *   one at a time, skipping one that doesn't need answering right now,
  *   the same way an optional field with zero legal candidates already
  *   got skipped before this class supported a second field at all).
- *   Still excludes 3+ fields, or a `nested` sub-form (Duplicity's own
+ *   Still excludes 4+ fields (a card's own 2 plus a prepended grant_choice
+ *   is 3 -- see MAX_CHOICE_FIELDS), or a `nested` sub-form (Duplicity's own
  *   repeat offer, any chaos_draft attachment) -- a real, known scope
  *   limit (see php-app/README.md), not a bug; a player who hits it is
  *   pointed at the web app instead.
@@ -135,8 +136,8 @@ use MoodSwings\SiteUrl;
  * chosen card id), `ms:playfield:{gameId}:{cardId}:{stepIndex}:{answers}`
  * (that card's own $stepIndex'th field's value select -- $answers is
  * every earlier field's own already-submitted choice, round-tripped
- * through encodeAnswers()/decodeAnswers() since a 2-field card's second
- * select needs to remember the first one's answer across the trip),
+ * through encodeAnswers()/decodeAnswers() since a multi-field card's
+ * later selects need to remember the earlier answers across the trip),
  * `ms:decision:{gameId}` (the current pending decision's own single
  * field's value select), `ms:newgame:0`/`ms:newgamebot:0` (starting a
  * practice game -- see below; the trailing `0` is a dummy, never a real
@@ -171,32 +172,55 @@ final class DiscordGameCommandService
 
     private const MAX_SELECT_OPTIONS = 25;
 
-    /** Quick Draft pool sources offered from Discord (the ones needing no extra input). */
-    private const QUICK_DRAFT_POOLS = [
-        'random_48' => 'Random 48 cards',
-        'structure' => 'Structure deck (45 cards)',
-        'jceddys_75' => "jceddy's 75",
-        'one_of_each' => 'One of each card',
+    /**
+     * The pool-picking draft modes offered from Discord, keyed by their
+     * custom_id verb prefix: engine deck_type, createGame()'s own pool-
+     * source parameter, and the pool sources that need no extra input.
+     * Grid Draft leaves out 'structure' -- its 45 cards are short of the
+     * 54-card target and Grid Draft has no top-up mechanism.
+     */
+    private const DRAFT_MODES = [
+        'qd' => [
+            'label' => 'Quick Draft',
+            'deck_type' => 'quick_draft',
+            'pool_param' => 'quickDraftPoolSource',
+            'intro' => 'Quick Draft: each round you each get a pile of cards, keep 2, and pass the rest -- then build a deck of at least 12 from what you kept and play a best-of-three match.',
+            'pools' => [
+                'random_48' => 'Random 48 cards',
+                'structure' => 'Structure deck (45 cards)',
+                'jceddys_75' => "jceddy's 75",
+                'one_of_each' => 'One of each card',
+            ],
+        ],
+        'gd' => [
+            'label' => 'Grid Draft',
+            'deck_type' => 'grid_draft',
+            'pool_param' => 'gridDraftPoolSource',
+            'intro' => 'Grid Draft: each round a 3x3 grid of face-up cards is dealt and you alternate taking a whole row or column -- then build a deck of at least 12 from what you took and play a best-of-three match.',
+            'pools' => [
+                'random_48' => 'Random cards',
+                'jceddys_75' => "jceddy's 75",
+                'one_of_each' => 'One of each card',
+            ],
+        ],
     ];
 
     /**
-     * The most choice_fields any hand-playable card actually has --
-     * confirmed by walking every effect_key in CardChoiceSchema and
-     * counting (Faith, Guile, Fascination, Guilt, Regret, Worry,
-     * Contempt, Condescension, Cynicism, Hostility, Hesitation,
-     * Rationalization, and Corruption all top out at exactly 2; nothing
-     * has 3+). promptOrPlay() walks fields one at a time regardless, so
-     * this is purely the "is this card even in scope" gate in
-     * supportedChoiceFields() -- a future card with a 3rd field would
-     * still just need the web app, the same as `nested`/an unsupported
-     * field type already does. A prepended `grant_choice` field (see
-     * GameService::serializeCard()) counts against this same total -- a
-     * 2-field card played while 2+ unrestricted grants are simultaneously
-     * active would need 3 total and still falls into "needs the web app";
-     * a 0- or 1-field card gains a `grant_choice` field for free within
-     * the existing cap.
+     * The most choice_fields any hand-playable card can have here --
+     * CardChoiceSchema's own cards top out at exactly 2 (Faith, Guile,
+     * Fascination, Guilt, Regret, Worry, Contempt, Condescension,
+     * Cynicism, Hostility, Hesitation, Rationalization, Corruption), plus
+     * the `grant_choice` field GameService::serializeCard() prepends
+     * whenever 2+ distinguishable play grants could pay for the card --
+     * so 3 in total. (Reported live: Regret said "Needs the web app to
+     * play" whenever such a choice of grants existed, because that
+     * prepended field was the third.) promptOrPlay() walks fields one at
+     * a time regardless, so this is purely the "is this card even in
+     * scope" gate in supportedChoiceFields() -- a future card with a 4th
+     * field would still just need the web app, the same as `nested`/an
+     * unsupported field type already does.
      */
-    private const MAX_CHOICE_FIELDS = 2;
+    private const MAX_CHOICE_FIELDS = 3;
 
     /**
      * The select-menu value for "leave this OPTIONAL field blank" --
@@ -234,6 +258,7 @@ final class DiscordGameCommandService
         private readonly UserDecklistService $userDecklists,
         private readonly BotChoiceResolver $choiceResolver = new BotChoiceResolver(),
         private readonly BoardImageRenderer $boardImageRenderer = new BoardImageRenderer(),
+        private readonly GridImageRenderer $gridImageRenderer = new GridImageRenderer(),
     ) {
     }
 
@@ -451,17 +476,31 @@ final class DiscordGameCommandService
                 case 'drafts':
                     return $this->updateMessage(...$this->draftsMenuMessage());
                 case 'qd':
-                    return $this->updateMessage(...$this->quickDraftMenuMessage());
+                case 'gd':
+                    return $this->updateMessage(...$this->draftPoolMenuMessage($verb));
                 case 'qdpool':
-                    return $this->updateMessage(...$this->quickDraftOpponentMessage((string) ($values[0] ?? '')));
+                case 'gdpool':
+                    return $this->updateMessage(...$this->draftOpponentMessage(substr($verb, 0, 2), (string) ($values[0] ?? '')));
                 case 'qdbotmenu':
-                    return $this->updateMessage(...$this->quickDraftBotMessage($userId, (string) ($parts[3] ?? '')));
+                case 'gdbotmenu':
+                    return $this->updateMessage(...$this->draftBotMessage(substr($verb, 0, 2), $userId, (string) ($parts[3] ?? '')));
                 case 'qdbot':
-                    return $this->updateMessage(...$this->createQuickDraftGameMessage($userId, (int) ($values[0] ?? 0), (string) ($parts[3] ?? '')));
-                case 'qdinvite':
-                    return $this->updateMessage(...$this->quickDraftFriendMessage($userId, (string) ($parts[3] ?? '')));
+                case 'gdbot':
                 case 'qdwith':
-                    return $this->updateMessage(...$this->createQuickDraftGameMessage($userId, (int) ($values[0] ?? 0), (string) ($parts[3] ?? '')));
+                case 'gdwith':
+                    return $this->updateMessage(...$this->createPoolDraftGameMessage(substr($verb, 0, 2), $userId, (int) ($values[0] ?? 0), (string) ($parts[3] ?? '')));
+                case 'qdinvite':
+                case 'gdinvite':
+                    return $this->updateMessage(...$this->draftFriendMessage(substr($verb, 0, 2), $userId, (string) ($parts[3] ?? '')));
+                case 'gdpick':
+                    $this->requireSeatedIn($gameId, $userId);
+                    [$axis, $lineIndex] = array_pad(explode(':', (string) ($values[0] ?? '')), 2, '');
+                    $this->games->submitGridDraftPick($gameId, $userId, $axis, (int) $lineIndex);
+                    break;
+                case 'gddrafted':
+                    $this->requireSeatedIn($gameId, $userId);
+
+                    return $this->updateMessage(...$this->gridDraftedMessage($gameId, $userId));
                 case 'qdpick':
                     $this->requireSeatedIn($gameId, $userId);
                     $cardIds = array_map(static fn ($v): int => (int) explode('_', (string) $v)[0], $values);
@@ -493,8 +532,7 @@ final class DiscordGameCommandService
                     $gamePlayerId = $this->requireSeatedIn($gameId, $userId);
                     $cardId = (int) ($parts[3] ?? 0);
                     $stepIndex = (int) ($parts[4] ?? 0);
-                    $priorAnswers = isset($parts[5]) ? $this->decodeAnswers($parts[5]) : [];
-                    $result = $this->submitPlayField($gameId, $userId, $gamePlayerId, $cardId, $stepIndex, $priorAnswers, $values);
+                    $result = $this->submitPlayField($gameId, $userId, $gamePlayerId, $cardId, $stepIndex, $parts[5] ?? '', $values);
                     if ($result !== null) {
                         return $this->updateMessage(...$result);
                     }
@@ -612,7 +650,7 @@ final class DiscordGameCommandService
      * @param array<string, mixed> $priorAnswers
      * @return array{0: string, 1: array<int, array<string, mixed>>}|null
      */
-    private function submitPlayField(int $gameId, int $userId, int $gamePlayerId, int $cardId, int $stepIndex, array $priorAnswers, array $values): ?array
+    private function submitPlayField(int $gameId, int $userId, int $gamePlayerId, int $cardId, int $stepIndex, string $priorAnswersEncoded, array $values): ?array
     {
         $state = $this->games->getState($gameId, $userId);
         $card = $this->findCard([...$state['you']['hand'] ?? [], ...$state['discard_pile'] ?? []], $cardId);
@@ -625,7 +663,7 @@ final class DiscordGameCommandService
             throw new GameStateException("That card's own choice can't be answered from Discord anymore -- open the web app.");
         }
 
-        $answers = [...$priorAnswers, ...$this->choicesFor($fields[$stepIndex], $values)];
+        $answers = [...$this->decodeAnswers($priorAnswersEncoded, $fields), ...$this->choicesFor($fields[$stepIndex], $values)];
         $boardState = $this->boardStates->load($gameId);
 
         return $this->promptOrPlay($gameId, $gamePlayerId, $cardId, $card, $fields, $stepIndex + 1, $answers, $boardState, $state);
@@ -732,7 +770,7 @@ final class DiscordGameCommandService
                 continue;
             }
 
-            $customId = "ms:playfield:{$gameId}:{$cardId}:{$stepIndex}:" . $this->encodeAnswers($answers);
+            $customId = "ms:playfield:{$gameId}:{$cardId}:{$stepIndex}:" . $this->encodeAnswers($answers, $fields);
             $components = [['type' => 1, 'components' => [$this->fieldSelectComponent($customId, $field, $options)]]];
 
             return ["Playing **{$card['name']}** -- {$field['label']}:", $components];
@@ -796,28 +834,50 @@ final class DiscordGameCommandService
 
     /**
      * Round-trips a multi-field card's own earlier answer(s) through the
-     * next field's select custom_id -- bounded to at most
-     * MAX_CHOICE_FIELDS - 1 accumulated keys (never more than 1 today),
-     * each a small int/string/int[]/bool value, so this comfortably
-     * fits well under Discord's own 100-char custom_id cap alongside the
-     * `ms:playfield:{gameId}:{cardId}:{stepIndex}:` prefix. URL-safe
-     * (no `+`/`/`/`=`) so it never collides with the colon-delimited
-     * parsing handleComponent() already does on the rest of the id.
+     * next field's select custom_id -- at most MAX_CHOICE_FIELDS - 1
+     * accumulated answers, each a small int/string/int[]/bool value.
+     * Discord caps a custom_id at 100 characters, and the
+     * `ms:playfield:{gameId}:{cardId}:{stepIndex}:` prefix already takes
+     * ~27, so the answers are stored POSITIONALLY (a JSON list in $fields
+     * order, trailing blanks trimmed) rather than keyed by name: Regret's
+     * third step carries a grant source plus two mood ids, which as a
+     * keyed object overflowed the limit. URL-safe (no `+`/`/`/`=`) so it
+     * never collides with the colon-delimited parsing handleComponent()
+     * already does on the rest of the id.
      *
-     * @param array<string, mixed> $answers
+     * @param array<string, mixed> $answers keyed by field key
+     * @param array<int, array<string, mixed>> $fields the card's own fields, in order
      */
-    private function encodeAnswers(array $answers): string
+    private function encodeAnswers(array $answers, array $fields): string
     {
-        return rtrim(strtr(base64_encode(json_encode($answers)), '+/', '-_'), '=');
+        $list = array_map(static fn (array $field) => $answers[$field['key']] ?? null, $fields);
+        while ($list !== [] && end($list) === null) {
+            array_pop($list);
+        }
+
+        return rtrim(strtr(base64_encode(json_encode($list)), '+/', '-_'), '=');
     }
 
-    /** @return array<string, mixed> */
-    private function decodeAnswers(string $encoded): array
+    /**
+     * @param array<int, array<string, mixed>> $fields
+     * @return array<string, mixed> keyed by field key
+     */
+    private function decodeAnswers(string $encoded, array $fields): array
     {
         $padded = str_pad(strtr($encoded, '-_', '+/'), (int) (4 * ceil(strlen($encoded) / 4)), '=');
         $decoded = json_decode(base64_decode($padded), true);
+        if (!is_array($decoded)) {
+            return [];
+        }
 
-        return is_array($decoded) ? $decoded : [];
+        $answers = [];
+        foreach ($fields as $index => $field) {
+            if (isset($decoded[$index])) {
+                $answers[$field['key']] = $decoded[$index];
+            }
+        }
+
+        return $answers;
     }
 
     /**
@@ -876,7 +936,7 @@ final class DiscordGameCommandService
      */
     private function isDraftMatchGame(string $format, ?string $deckType, int $playerCount): bool
     {
-        return $format === 'draft' && in_array($deckType, ['sealed_deck', 'quick_draft'], true) && $playerCount === 2;
+        return $format === 'draft' && in_array($deckType, ['sealed_deck', 'quick_draft', 'grid_draft'], true) && $playerCount === 2;
     }
 
     /**
@@ -889,12 +949,16 @@ final class DiscordGameCommandService
      */
     private function draftMatchState(array $state): ?array
     {
-        return $state['sealed_deck'] ?? $state['quick_draft'] ?? null;
+        return $state['sealed_deck'] ?? $state['quick_draft'] ?? $state['grid_draft'] ?? null;
     }
 
     private function draftModeLabel(?string $deckType): string
     {
-        return $deckType === 'quick_draft' ? 'Quick Draft' : 'Sealed Deck';
+        return match ($deckType) {
+            'quick_draft' => 'Quick Draft',
+            'grid_draft' => 'Grid Draft',
+            default => 'Sealed Deck',
+        };
     }
 
     /**
@@ -1257,7 +1321,7 @@ final class DiscordGameCommandService
             return false;
         }
 
-        return in_array($game['deck_type'], ['sealed_deck', 'quick_draft'], true) || ((int) ($game['match_game_number'] ?? 1)) > 1;
+        return in_array($game['deck_type'], ['sealed_deck', 'quick_draft', 'grid_draft'], true) || ((int) ($game['match_game_number'] ?? 1)) > 1;
     }
 
     /**
@@ -1282,6 +1346,13 @@ final class DiscordGameCommandService
             [$content, $components] = $this->quickDraftPickMessage($gameId, $state, $match, $drafting);
 
             return [$prefix . $content, $components];
+        }
+
+        $gridDrafting = $state['grid_draft']['drafting'] ?? null;
+        if ($gridDrafting !== null) {
+            [$content, $components, $embeds] = $this->gridDraftPickMessage($gameId, $state, $match, $gridDrafting);
+
+            return [$prefix . $content, $components, $embeds];
         }
 
         $deckBuilding = $this->draftMatchState($state)['deck_building'] ?? null;
@@ -1559,27 +1630,221 @@ final class DiscordGameCommandService
     }
 
     /**
-     * Quick Draft entry point (`ms:qd:0`): choose the card pool, then
-     * vs a practice bot or a friend. The pool source rides along as the
-     * custom_id's 4th part through the whole flow:
-     * `ms:qdpool:0` (values[0] = pool) -> `ms:qdbotmenu:0:{pool}` ->
-     * `ms:qdbot:0:{pool}` (values[0] = bot user id), or
-     * `ms:qdinvite:0:{pool}` -> `ms:qdwith:0:{pool}` (values[0] = friend).
+     * Grid Draft's pick screen: the picture of the current grid (numbered
+     * arrows along the left for rows and the bottom for columns --
+     * gridImageUrl()), a one-line tally of what each player has taken so
+     * far, and -- on the viewer's turn -- a select of the rows/columns that
+     * still have cards, each described by what it would take. The full
+     * per-player lists are one button away (gridDraftedMessage()).
+     *
+     * @param array<string, mixed> $state
+     * @param array<string, mixed>|null $match
+     * @param array<string, mixed> $drafting getState()'s grid_draft.drafting
+     * @return array{0: string, 1: array<int, array<string, mixed>>, 2: array<int, array<string, mixed>>}
+     */
+    private function gridDraftPickMessage(int $gameId, array $state, ?array $match, array $drafting): array
+    {
+        $size = (int) $drafting['grid_size'];
+        $cells = $drafting['grid_cards'];
+
+        $lines = ["**Game #{$gameId}** -- Grid Draft, round {$drafting['current_round']} of {$drafting['total_rounds']}, pick " . ($drafting['picks_this_round'] + 1) . " of {$drafting['total_picks_per_round']}"];
+        if ($match !== null) {
+            $lines[] = $this->matchStandingLine($match, 'waiting');
+        }
+
+        $you = $drafting['drafted_so_far'];
+        $tally = 'Drafted so far -- you: ' . $this->draftedTally($you);
+        foreach ($drafting['other_players_drafted_so_far'] as $other) {
+            $tally .= '; ' . ($other['username'] ?? 'opponent') . ': ' . $this->draftedTally($other['drafted_so_far']);
+        }
+        $lines[] = $tally;
+
+        $components = [];
+        if ($drafting['is_your_turn']) {
+            $lines[] = "Your pick -- choose an arrow by its number: 1-{$size} are the rows (left), " . ($size + 1) . '-' . (2 * $size) . ' are the columns (bottom).';
+            $options = [];
+            foreach (['row', 'column'] as $axis) {
+                for ($i = 0; $i < $size; $i++) {
+                    $names = [];
+                    for ($j = 0; $j < $size; $j++) {
+                        $cell = $cells[$axis === 'row' ? $i * $size + $j : $j * $size + $i];
+                        if ($cell !== null) {
+                            $names[] = $cell['name'];
+                        }
+                    }
+                    if ($names === []) {
+                        continue;
+                    }
+                    // One number per arrow, matching the picture: rows are
+                    // 1..N, columns N+1..2N -- never "row 2" next to "column 2".
+                    $number = $axis === 'row' ? $i + 1 : $size + $i + 1;
+                    $options[] = [
+                        'label' => (string) $number,
+                        'value' => "{$axis}:{$i}",
+                        'description' => mb_substr(implode(', ', $names) . ' (' . count($names) . ' card' . (count($names) === 1 ? '' : 's') . ')', 0, 100),
+                    ];
+                }
+            }
+            usort($options, static fn (array $a, array $b): int => (int) $a['label'] <=> (int) $b['label']);
+            $components[] = ['type' => 1, 'components' => [[
+                'type' => 3,
+                'custom_id' => "ms:gdpick:{$gameId}",
+                'placeholder' => 'Pick an arrow number...',
+                'options' => $options,
+            ]]];
+        } else {
+            $lines[] = 'Waiting on ' . ($drafting['current_turn_username'] ?? 'the other player') . ' to pick.';
+        }
+
+        $components[] = ['type' => 1, 'components' => [
+            ['type' => 2, 'style' => 2, 'label' => 'Refresh', 'custom_id' => "ms:view:{$gameId}"],
+            ['type' => 2, 'style' => 2, 'label' => 'Drafted Cards', 'custom_id' => "ms:gddrafted:{$gameId}"],
+        ]];
+        $components[] = $this->utilityButtonsRow();
+
+        $cellIds = array_map(static fn (?array $cell): ?int => $cell === null ? null : (int) $cell['catalog_card_id'], $cells);
+
+        return [mb_substr(implode("\n", $lines), 0, 2000), $components, [['image' => ['url' => $this->gridImageUrl($gameId, $cellIds)]]]];
+    }
+
+    /**
+     * "N cards (Red 3, Blue 2, ...)" -- the one-line summary of a drafted
+     * pile shown on every Grid Draft screen.
+     *
+     * @param array<int, array<string, mixed>> $cards
+     */
+    private function draftedTally(array $cards): string
+    {
+        if ($cards === []) {
+            return '0 cards';
+        }
+
+        $byColor = [];
+        foreach ($cards as $card) {
+            $color = ucfirst((string) $card['color']);
+            $byColor[$color] = ($byColor[$color] ?? 0) + 1;
+        }
+        ksort($byColor);
+
+        return count($cards) . ' cards (' . implode(', ', array_map(static fn (string $c, int $n): string => "{$c} {$n}", array_keys($byColor), $byColor)) . ')';
+    }
+
+    /**
+     * The "Drafted Cards" button's screen: every card each player has
+     * taken so far, grouped by color (Grid Draft is open information --
+     * the opponent's picks were face-up on the table).
      *
      * @return array{0: string, 1: array<int, array<string, mixed>>}
      */
-    private function quickDraftMenuMessage(): array
+    private function gridDraftedMessage(int $gameId, int $userId): array
     {
+        $drafting = $this->games->getState($gameId, $userId)['grid_draft']['drafting'] ?? null;
+        if ($drafting === null) {
+            return $this->boardMessage($gameId, $userId);
+        }
+
+        $sections = ["**Game #{$gameId}** -- drafted so far", "**You** (" . $this->draftedTally($drafting['drafted_so_far']) . '):' . "\n" . ($drafting['drafted_so_far'] === [] ? 'nothing yet' : $this->sealedPoolSummary($drafting['drafted_so_far']))];
+        foreach ($drafting['other_players_drafted_so_far'] as $other) {
+            $sections[] = '**' . ($other['username'] ?? 'Opponent') . '** (' . $this->draftedTally($other['drafted_so_far']) . '):' . "\n" . ($other['drafted_so_far'] === [] ? 'nothing yet' : $this->sealedPoolSummary($other['drafted_so_far']));
+        }
+
+        return [mb_substr(implode("\n\n", $sections), 0, 2000), [
+            ['type' => 1, 'components' => [
+                ['type' => 2, 'style' => 1, 'label' => 'Back to the grid', 'custom_id' => "ms:view:{$gameId}"],
+            ]],
+            $this->utilityButtonsRow(),
+        ]];
+    }
+
+    /**
+     * The signed, UNAUTHENTICATED URL of the Grid Draft grid picture --
+     * the same shape and reasoning as boardImageUrl() (Discord's servers
+     * fetch an embed image with no session), but the cells themselves ride
+     * in the URL (`cells` = catalog card ids in row-major order, empty for
+     * a taken cell) and are covered by the signature, so the image is a
+     * pure function of the URL: an older message keeps showing the grid it
+     * was posted with, and nothing about a game can be read by guessing a
+     * game id. A grid is open information to every seated player anyway.
+     *
+     * @param array<int, int|null> $cellCardIds
+     */
+    public function gridImageUrl(int $gameId, array $cellCardIds): string
+    {
+        $cells = implode(',', array_map(static fn (?int $id): string => $id === null ? '' : (string) $id, $cellCardIds));
+
+        return rtrim((string) Config::get('APP_URL', ''), '/') . "/discord/grid-image?game_id={$gameId}&cells=" . rawurlencode($cells) . '&sig=' . $this->signGridImage($gameId, $cells);
+    }
+
+    public function verifyGridImageSignature(int $gameId, string $cells, string $signature): bool
+    {
+        return hash_equals($this->signGridImage($gameId, $cells), $signature);
+    }
+
+    private function signGridImage(int $gameId, string $cells): string
+    {
+        return hash_hmac('sha256', "grid:{$gameId}:{$cells}", (string) Config::get('DISCORD_CLIENT_SECRET', ''));
+    }
+
+    /**
+     * The PNG for a (signature-verified) `cells` value, or null for
+     * anything that isn't a 2x2-4x4 square of card ids/blanks.
+     */
+    public function renderGridImage(string $cells): ?string
+    {
+        $parts = explode(',', $cells);
+        $size = (int) round(sqrt(count($parts)));
+        if ($size < 2 || $size > 4 || $size * $size !== count($parts)) {
+            return null;
+        }
+
+        $ids = array_map(static fn (string $part): ?int => $part === '' ? null : (int) $part, $parts);
+        $present = array_values(array_unique(array_filter($ids, static fn (?int $id): bool => $id !== null && $id > 0)));
+        try {
+            $catalog = $present === [] ? [] : \MoodSwings\Game\CardCatalog::serialize($present);
+        } catch (GameStateException) {
+            return null;
+        }
+        $cardsById = [];
+        foreach ($catalog as $card) {
+            $cardsById[(int) $card['catalog_card_id']] = $card;
+        }
+
+        $gridCells = [];
+        foreach ($ids as $id) {
+            if ($id === null || !isset($cardsById[$id])) {
+                $gridCells[] = null;
+                continue;
+            }
+            $gridCells[] = ['path' => $this->cardArtFilePath($cardsById[$id]), 'name' => (string) $cardsById[$id]['name']];
+        }
+
+        return $this->gridImageRenderer->render($gridCells, $size);
+    }
+
+    /**
+     * Pool-picking draft entry points (Quick Draft `qd`, Grid Draft `gd`):
+     * choose the card pool, then vs a practice bot or a friend. The pool
+     * source rides along as the custom_id's 4th part through the whole
+     * flow: `ms:{mode}:0` (pool select) -> `ms:{mode}pool:0` (values[0] =
+     * pool) -> `ms:{mode}botmenu:0:{pool}` -> `ms:{mode}bot:0:{pool}`
+     * (values[0] = bot user id), or `ms:{mode}invite:0:{pool}` ->
+     * `ms:{mode}with:0:{pool}` (values[0] = friend). See DRAFT_MODES.
+     *
+     * @return array{0: string, 1: array<int, array<string, mixed>>}
+     */
+    private function draftPoolMenuMessage(string $mode): array
+    {
+        $config = self::DRAFT_MODES[$mode];
         $options = [];
-        foreach (self::QUICK_DRAFT_POOLS as $value => $label) {
+        foreach ($config['pools'] as $value => $label) {
             $options[] = ['label' => $label, 'value' => $value];
         }
 
         return [
-            "Quick Draft: each round you each get a pile of cards, keep 2, and pass the rest -- then build a deck of at least 12 from what you kept and play a best-of-three match. Choose the card pool:",
+            $config['intro'] . ' Choose the card pool:',
             [['type' => 1, 'components' => [[
                 'type' => 3,
-                'custom_id' => 'ms:qdpool:0',
+                'custom_id' => "ms:{$mode}pool:0",
                 'placeholder' => 'Choose a card pool...',
                 'options' => $options,
             ]]]],
@@ -1587,30 +1852,31 @@ final class DiscordGameCommandService
     }
 
     /** @return array{0: string, 1: array<int, array<string, mixed>>} */
-    private function quickDraftOpponentMessage(string $pool): array
+    private function draftOpponentMessage(string $mode, string $pool): array
     {
-        if (!isset(self::QUICK_DRAFT_POOLS[$pool])) {
+        $config = self::DRAFT_MODES[$mode];
+        if (!isset($config['pools'][$pool])) {
             return ['Unknown card pool.', []];
         }
 
         return [
-            'Quick Draft (' . self::QUICK_DRAFT_POOLS[$pool] . '). Who do you want to play?',
+            "{$config['label']} ({$config['pools'][$pool]}). Who do you want to play?",
             [['type' => 1, 'components' => [
-                ['type' => 2, 'style' => 1, 'label' => 'vs Practice Bot', 'custom_id' => "ms:qdbotmenu:0:{$pool}"],
-                ['type' => 2, 'style' => 2, 'label' => 'vs a Friend', 'custom_id' => "ms:qdinvite:0:{$pool}"],
+                ['type' => 2, 'style' => 1, 'label' => 'vs Practice Bot', 'custom_id' => "ms:{$mode}botmenu:0:{$pool}"],
+                ['type' => 2, 'style' => 2, 'label' => 'vs a Friend', 'custom_id' => "ms:{$mode}invite:0:{$pool}"],
             ]]],
         ];
     }
 
     /** @return array{0: string, 1: array<int, array<string, mixed>>} */
-    private function quickDraftBotMessage(int $userId, string $pool): array
+    private function draftBotMessage(string $mode, int $userId, string $pool): array
     {
         $bots = $this->games->listPracticeBots();
         if ($bots === []) {
             return ['No practice bots are configured on this deployment.', []];
         }
         if (count($bots) === 1) {
-            return $this->createQuickDraftGameMessage($userId, $bots[0]['user_id'], $pool);
+            return $this->createPoolDraftGameMessage($mode, $userId, $bots[0]['user_id'], $pool);
         }
 
         $options = array_map(
@@ -1618,16 +1884,16 @@ final class DiscordGameCommandService
             array_slice($bots, 0, self::MAX_SELECT_OPTIONS),
         );
 
-        return ['Choose a practice bot for Quick Draft:', [['type' => 1, 'components' => [[
+        return ['Choose a practice bot for ' . self::DRAFT_MODES[$mode]['label'] . ':', [['type' => 1, 'components' => [[
             'type' => 3,
-            'custom_id' => "ms:qdbot:0:{$pool}",
+            'custom_id' => "ms:{$mode}bot:0:{$pool}",
             'placeholder' => 'Choose a practice bot...',
             'options' => $options,
         ]]]]];
     }
 
     /** @return array{0: string, 1: array<int, array<string, mixed>>} */
-    private function quickDraftFriendMessage(int $userId, string $pool): array
+    private function draftFriendMessage(string $mode, int $userId, string $pool): array
     {
         $friends = $this->friendships->listFriends($userId);
         if ($friends === []) {
@@ -1642,32 +1908,38 @@ final class DiscordGameCommandService
             array_slice($friends, 0, self::MAX_SELECT_OPTIONS),
         );
 
-        return ['Choose a friend for Quick Draft:', [['type' => 1, 'components' => [[
+        return ['Choose a friend for ' . self::DRAFT_MODES[$mode]['label'] . ':', [['type' => 1, 'components' => [[
             'type' => 3,
-            'custom_id' => "ms:qdwith:0:{$pool}",
+            'custom_id' => "ms:{$mode}with:0:{$pool}",
             'placeholder' => 'Choose a friend...',
             'options' => $options,
         ]]]]];
     }
 
     /**
-     * Creates the Quick Draft match and shows its first pick screen. The
-     * advanceAutomatedTurns() call lets a practice bot make its own pick
-     * right away (a no-op against a human opponent).
+     * Creates the draft match and shows its first screen. The
+     * advanceAutomatedTurns() call lets a practice bot act right away (a
+     * pick, or -- for Grid Draft when the bot happens to pick first -- its
+     * row/column), a no-op against a human opponent.
      *
      * @return array{0: string, 1: array<int, array<string, mixed>>}
      */
-    private function createQuickDraftGameMessage(int $userId, int $opponentUserId, string $pool): array
+    private function createPoolDraftGameMessage(string $mode, int $userId, int $opponentUserId, string $pool): array
     {
-        if (!isset(self::QUICK_DRAFT_POOLS[$pool])) {
+        $config = self::DRAFT_MODES[$mode];
+        if (!isset($config['pools'][$pool])) {
             return ['Unknown card pool.', []];
         }
 
         try {
-            $gameId = $this->games->createGame($userId, [$userId, $opponentUserId], format: 'draft', deckType: 'quick_draft', quickDraftPoolSource: $pool);
+            $gameId = $this->games->createGame($userId, [$userId, $opponentUserId], ...[
+                'format' => 'draft',
+                'deckType' => $config['deck_type'],
+                $config['pool_param'] => $pool,
+            ]);
             $this->games->advanceAutomatedTurns($gameId);
         } catch (\Throwable $e) {
-            return ["Couldn't start a Quick Draft game: " . $e->getMessage(), []];
+            return ["Couldn't start a {$config['label']} game: " . $e->getMessage(), []];
         }
 
         return $this->boardMessage($gameId, $userId);
@@ -1685,6 +1957,7 @@ final class DiscordGameCommandService
             [['type' => 1, 'components' => [
                 ['type' => 2, 'style' => 1, 'label' => 'Sealed Deck', 'custom_id' => 'ms:sealed:0'],
                 ['type' => 2, 'style' => 1, 'label' => 'Quick Draft', 'custom_id' => 'ms:qd:0'],
+                ['type' => 2, 'style' => 1, 'label' => 'Grid Draft', 'custom_id' => 'ms:gd:0'],
             ]]],
         ];
     }
