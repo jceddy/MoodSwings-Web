@@ -573,5 +573,139 @@ namespace MoodSwings.Tests
 
             ScreenshotHelper.Capture("board-4-players-turn");
         }
+
+        // --- polish: audio listener, chip scaling, recolored moods ---------------------------------------------
+
+        [UnityTest]
+        public IEnumerator TheSoundPlayer_BringsItsOwnAudioListener_ButOnlyOne()
+        {
+            // Other tests may have left a player behind.
+            foreach (var existing in UnityEngine.Object.FindObjectsByType<SoundPlayer>(FindObjectsInactive.Include))
+            {
+                UnityEngine.Object.Destroy(existing.gameObject);
+            }
+
+            yield return null;
+            Assert.AreEqual(0, UnityEngine.Object.FindObjectsByType<AudioListener>(FindObjectsInactive.Include).Length);
+
+            var first = SoundPlayer.Create();
+            var second = SoundPlayer.Create();
+            yield return null;
+
+            Assert.AreEqual(1, UnityEngine.Object.FindObjectsByType<AudioListener>(FindObjectsInactive.Include).Length,
+                "Unity warns on screen, and plays nothing, without a listener -- and complains about two");
+            UnityEngine.Object.Destroy(first.gameObject);
+            UnityEngine.Object.Destroy(second.gameObject);
+        }
+
+        [UnityTest]
+        public IEnumerator TheValueChip_StaysOverTheDie_AtEveryCardSize()
+        {
+            // Give one seat so many changed moods that its cards are drawn smaller than the others.
+            var server = YourTurn(PhaseFiveSceneTests.Load(407, s =>
+            {
+                s["round"]["pending_decision"] = null;
+                var inPlay = (JArray)s["in_play"];
+                inPlay.Single(c => (string)c["name"] == "Confusion")["value"] = 7; // alone at its seat, so full size
+                for (var i = 0; i < 9; i++)
+                {
+                    inPlay.Add(JObject.Parse("{\"card_id\":" + (98000 + i) + ",\"catalog_card_id\":1,\"name\":\"Crowd" + i + "\",\"color\":\"red\"," +
+                        "\"base_color\":\"red\",\"value\":6,\"base_value\":3,\"owner_game_player_id\":915,\"suppressions\":[],\"choice_fields\":[]}"));
+                }
+            }));
+            yield return PhaseFiveSceneTests.OpenBoard(server, 407);
+
+            var big = (RectTransform)Card("Confusion").GetComponent<RectTransform>();
+            var small = (RectTransform)Card("Crowd0").GetComponent<RectTransform>();
+            Assert.Less(small.rect.width, big.rect.width - 5f, "the crowded seat's cards are smaller");
+            ScreenshotHelper.Capture("board-chip-scaling");
+
+            foreach (var card in new[] { big, small })
+            {
+                var chip = (RectTransform)card.Find("Value");
+                var cardCorners = new Vector3[4];
+                var chipCorners = new Vector3[4];
+                card.GetWorldCorners(cardCorners);
+                chip.GetWorldCorners(chipCorners);
+                var cardWidth = cardCorners[2].x - cardCorners[0].x;
+                var cardHeight = cardCorners[2].y - cardCorners[0].y;
+
+                Assert.AreEqual(0.22f, (chipCorners[2].x - chipCorners[0].x) / cardWidth, 0.005f, card.name + ": same share of the card's width");
+                Assert.AreEqual(0.965f, (chipCorners[2].x - cardCorners[0].x) / cardWidth, 0.005f, card.name + ": same place across");
+                Assert.AreEqual(0.975f, (chipCorners[2].y - cardCorners[0].y) / cardHeight, 0.005f, card.name + ": same place down");
+            }
+        }
+
+        private static JObject Recolored() => PhaseFiveSceneTests.Load(405, s =>
+        {
+            s["round"]["pending_decision"] = null;
+            var laziness = s["in_play"].Single(c => (string)c["name"] == "Laziness");
+            laziness["base_color"] = "green";
+            laziness["color"] = "blue";
+            ((JArray)s["round"]["board_effects"]).Add(JObject.Parse(
+                "{\"card_id\":14134,\"card_name\":\"Imagination\",\"owner_game_player_id\":908,\"description\":\"BotSage's Imagination - all moods are blue.\"}"));
+        });
+
+        [UnityTest]
+        public IEnumerator ARecoloredMood_WearsAFrameInItsCurrentColor()
+        {
+            var server = YourTurn(Recolored());
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+
+            var frame = Card("Laziness").transform.Find("Color frame");
+            Assert.IsNotNull(frame);
+            foreach (Transform edge in frame)
+            {
+                Assert.AreEqual(CardView.IndicatorColor("blue"), edge.GetComponent<Image>().color);
+            }
+
+            Assert.IsNull(Card("Fury").transform.Find("Color frame"), "moods in their printed color have none");
+            ScreenshotHelper.Capture("board-recolored-mood");
+        }
+
+        [UnityTest]
+        public IEnumerator TheCloseUpOfARecoloredMood_SaysWhatColorItIsAndWhatDidIt()
+        {
+            var server = YourTurn(Recolored());
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+
+            Card("Laziness").GetComponent<Button>().onClick.Invoke();
+            yield return PhaseTwoSceneTests.Frames();
+
+            var detail = UnityEngine.Object.FindObjectsByType<Text>(FindObjectsInactive.Exclude).Select(t => t.text).First(t => t.Contains("Color is now"));
+            StringAssert.Contains("Color is now blue (printed green) - changed by Imagination", detail);
+            StringAssert.Contains("<color=#" + ColorUtility.ToHtmlStringRGB(CardView.IndicatorColor("blue")) + ">", detail);
+        }
+
+        [UnityTest]
+        public IEnumerator TheHoverPreviewOfARecoloredMood_SaysSoToo()
+        {
+            var server = YourTurn(Recolored());
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+
+            yield return HoverOver("Laziness");
+            yield return new WaitForSeconds(0.5f);
+
+            var text = PhaseFiveSceneTests.Child("Hover preview").GetComponentsInChildren<Text>().Select(t => t.text);
+            Assert.IsTrue(text.Any(t => t.Contains("Color is now blue (printed green) - changed by Imagination")));
+        }
+
+        [UnityTest]
+        public IEnumerator ARecoloredMoodThatIsAlsoSuppressed_ShowsBothOnItsSide()
+        {
+            var state = Recolored();
+            var laziness = state["in_play"].Single(c => (string)c["name"] == "Laziness");
+            laziness["is_suppressed"] = true;
+            laziness["value"] = 0;
+            laziness["suppressions"] = JArray.Parse("[{\"expiry\":\"end_of_round\",\"suppressed_by_name\":\"Scorn\"}]");
+            var server = YourTurn(state);
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+
+            var card = Card("Laziness");
+            ScreenshotHelper.Capture("board-recolored-suppressed");
+            Assert.AreEqual(270f, card.transform.Find("Face").localEulerAngles.z, 0.01f);
+            Assert.IsNotNull(card.transform.Find("Face/Color frame"), "the frame turns with the card");
+            Assert.IsNotNull(card.transform.Find("Value"));
+        }
     }
 }

@@ -82,6 +82,12 @@ namespace MoodSwings.UI
                 button.onClick.AddListener(onClick);
             }
 
+            // An effect (Imagination) has recolored it: a frame in its current color says so.
+            if (card.IsRecolored)
+            {
+                AddColorFrame(face, card.Color, width);
+            }
+
             if (card.IsSuppressed)
             {
                 AddSuppressedShade(rect, boundsWidth);
@@ -89,7 +95,7 @@ namespace MoodSwings.UI
 
             if (showValue && (card.ValueIsModified || art == null))
             {
-                AddValueChip(rect, card, width, theme);
+                AddValueChip(rect, card, width, theme, upright: !onItsSide);
             }
 
             return rect;
@@ -119,6 +125,23 @@ namespace MoodSwings.UI
             }
 
             return rect;
+        }
+
+        /// <summary>
+        /// A color as it is drawn to mark a recolored mood: clear against both the dark table and
+        /// the card art (black is a mid grey, since true black would vanish).
+        /// </summary>
+        public static Color IndicatorColor(string color)
+        {
+            switch (color)
+            {
+                case "white": return new Color(0.96f, 0.95f, 0.88f);
+                case "blue": return new Color(0.30f, 0.58f, 1.00f);
+                case "black": return new Color(0.50f, 0.50f, 0.58f);
+                case "red": return new Color(0.92f, 0.30f, 0.28f);
+                case "green": return new Color(0.30f, 0.78f, 0.40f);
+                default: return new Color(0.70f, 0.70f, 0.74f);
+            }
         }
 
         /// <summary>Colors a stand-in card the way its color reads: white, blue, black, red, green.</summary>
@@ -157,15 +180,58 @@ namespace MoodSwings.UI
             }
         }
 
-        private static void AddValueChip(RectTransform rect, BoardCard card, float width, UiTheme theme)
+        // A frame around the card face in the color it is now, with a light edge so every color shows on the dark table.
+        private static void AddColorFrame(RectTransform face, string color, float width)
         {
-            // Sized to cover the printed value's die in the art's top-right corner.
-            var chipWidth = Mathf.Max(30f, width * 0.22f);
-            var chipHeight = chipWidth * 0.86f;
+            var thickness = Mathf.Max(2f, width * 0.05f);
+            var tint = IndicatorColor(color);
+            var frame = UiFactory.Create("Color frame", face);
+            UiFactory.Stretch(frame);
+
+            // top, bottom, left, right
+            AddEdge(frame, tint, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0f, -thickness), Vector2.zero);
+            AddEdge(frame, tint, new Vector2(0f, 0f), new Vector2(1f, 0f), Vector2.zero, new Vector2(0f, thickness));
+            AddEdge(frame, tint, new Vector2(0f, 0f), new Vector2(0f, 1f), Vector2.zero, new Vector2(thickness, 0f));
+            AddEdge(frame, tint, new Vector2(1f, 0f), new Vector2(1f, 1f), new Vector2(-thickness, 0f), Vector2.zero);
+        }
+
+        private static void AddEdge(RectTransform parent, Color tint, Vector2 anchorMin, Vector2 anchorMax, Vector2 offsetMin, Vector2 offsetMax)
+        {
+            var edge = UiFactory.Create("Edge", parent);
+            edge.anchorMin = anchorMin;
+            edge.anchorMax = anchorMax;
+            edge.offsetMin = offsetMin;
+            edge.offsetMax = offsetMax;
+            var image = edge.gameObject.AddComponent<Image>();
+            image.color = tint;
+            image.raycastTarget = false;
+            var outline = edge.gameObject.AddComponent<Outline>();
+            outline.effectColor = new Color(1f, 1f, 1f, 0.55f);
+            outline.effectDistance = new Vector2(1f, 1f);
+        }
+
+        // The chip covers the printed value's die in the art's top-right corner. On an upright card it is
+        // placed by fractions of the card, so it stays over the die however large the card is drawn; on
+        // a card turned on its side it sits in the top-right of the turned card instead.
+        private static void AddValueChip(RectTransform rect, BoardCard card, float width, UiTheme theme, bool upright)
+        {
             var chip = UiFactory.Create("Value", rect);
-            chip.anchorMin = chip.anchorMax = chip.pivot = new Vector2(1f, 1f);
-            chip.sizeDelta = new Vector2(chipWidth, chipHeight);
-            chip.anchoredPosition = new Vector2(-width * 0.08f, -width * 0.04f);
+            float chipHeight;
+            if (upright)
+            {
+                chip.anchorMin = new Vector2(0.745f, 0.84f);
+                chip.anchorMax = new Vector2(0.965f, 0.975f);
+                chip.offsetMin = chip.offsetMax = Vector2.zero;
+                chipHeight = (0.975f - 0.84f) * HeightFor(width);
+            }
+            else
+            {
+                var chipWidth = width * 0.22f;
+                chipHeight = chipWidth * 0.86f;
+                chip.anchorMin = chip.anchorMax = chip.pivot = new Vector2(1f, 1f);
+                chip.sizeDelta = new Vector2(chipWidth, chipHeight);
+                chip.anchoredPosition = new Vector2(-width * 0.035f, -width * 0.035f);
+            }
 
             // Accent when an effect changed it; a plain dark chip on a stand-in that just prints it.
             var modified = card.ValueIsModified;

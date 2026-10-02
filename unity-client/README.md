@@ -219,7 +219,13 @@ game" below.
   **changed** a mood's value, a chip is laid over that corner showing the current
   one; an unchanged value gets no chip. (Cards in hand always have their printed
   value, so only moods in play get one; a stand-in card, which prints no value,
-  always shows it.) A switched-off ability shows "OFF".
+  always shows it.) The chip is placed by fractions of the card, so it stays over
+  the printed value at every card size. A **suppressed** mood lies on its side
+  (only the face turns; the label and chip stay upright), is labelled SUPPRESSED,
+  and its close-up says "Suppressed by <card>" -- suppression only makes the value 0.
+  A mood **recolored** by an effect (Imagination) wears a frame in its current color,
+  and its close-up and hover preview say "Color is now blue (printed green) - changed
+  by Imagination" (the effect is found from the board-wide effects the server lists).
 - **Spectating** uses the same board with no hand and no seat of your own
   (anchored on the first seat, as the web does): a friend's in-progress game, or
   a spectate code a player shared.

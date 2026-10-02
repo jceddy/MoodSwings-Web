@@ -18,6 +18,14 @@ namespace MoodSwings.UI
         {
             var go = new GameObject("Sound player");
             DontDestroyOnLoad(go);
+
+            // Nothing is heard without a listener, and Unity warns about it on screen. The scene's
+            // camera has none, so supply one unless something else already has.
+            if (FindAnyObjectByType<AudioListener>() == null)
+            {
+                go.AddComponent<AudioListener>();
+            }
+
             var player = go.AddComponent<SoundPlayer>();
             player._source = go.AddComponent<AudioSource>();
             player._source.playOnAwake = false;

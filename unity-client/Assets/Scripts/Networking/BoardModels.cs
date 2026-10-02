@@ -98,6 +98,9 @@ namespace MoodSwings.Networking
 
         /// <summary>True when an effect has moved the value away from the printed one.</summary>
         public bool ValueIsModified => Value != BaseValue;
+
+        /// <summary>True when an effect (Imagination) has changed the color from the printed one.</summary>
+        public bool IsRecolored => !string.IsNullOrEmpty(BaseColor) && !string.IsNullOrEmpty(Color) && Color != BaseColor;
     }
 
     /// <summary>One thing suppressing a mood: a suppressed mood's value is 0; nothing else about it changes.</summary>
@@ -265,6 +268,13 @@ namespace MoodSwings.Networking
     /// <summary>One line describing an effect that's currently in force.</summary>
     public class EffectNote
     {
+        /// <summary>The mood whose ability this is.</summary>
+        [JsonProperty("card_id")]
+        public int? CardId { get; set; }
+
+        [JsonProperty("card_name")]
+        public string CardName { get; set; }
+
         [JsonProperty("description")]
         public string Description { get; set; }
     }

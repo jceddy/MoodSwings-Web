@@ -553,6 +553,12 @@ namespace MoodSwings.UI
                 notes.Add($"Value now {card.Value} (printed {card.BaseValue})");
             }
 
+            var colorNote = BoardDisplay.ColorNote(_session?.State, card);
+            if (colorNote != null)
+            {
+                notes.Add($"<b><color=#{ColorUtility.ToHtmlStringRGB(CardView.IndicatorColor(card.Color))}>{colorNote}</color></b>");
+            }
+
             if (card.IsSuppressed)
             {
                 notes.Add($"<b><color=#{ColorUtility.ToHtmlStringRGB(AppServices.Theme.danger)}>{BoardDisplay.SuppressedByText(card)}</color></b>");
@@ -995,6 +1001,13 @@ namespace MoodSwings.UI
                 ValueLine(card),
                 string.IsNullOrWhiteSpace(card.RulesText) ? string.Empty : card.RulesText,
             };
+            var colorNote = BoardDisplay.ColorNote(_session?.State, card);
+            if (colorNote != null)
+            {
+                lines.Add(string.Empty);
+                lines.Add($"<b><color=#{ColorUtility.ToHtmlStringRGB(CardView.IndicatorColor(card.Color))}>{colorNote}</color></b>");
+            }
+
             if (card.IsSuppressed)
             {
                 lines.Add(string.Empty);

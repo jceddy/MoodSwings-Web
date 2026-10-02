@@ -256,6 +256,32 @@ namespace MoodSwings.Tests
         }
 
         [Test]
+        public void ARecoloredMood_SaysWhatColorItIsAndWhatDidIt()
+        {
+            var state = BoardFixtures.Load(406);
+            var card = new BoardCard { CardId = 1, Color = "blue", BaseColor = "red" };
+            Assert.IsTrue(card.IsRecolored);
+
+            Assert.AreEqual("Color is now blue (printed red)", BoardDisplay.ColorNote(state, card), "no board effect names a source");
+
+            state.Round.BoardEffects.Add(new EffectNote { CardId = 9, CardName = "Imagination", Description = "Ann's Imagination - all moods are blue." });
+            Assert.AreEqual("Color is now blue (printed red) - changed by Imagination", BoardDisplay.ColorNote(state, card));
+
+            state.Round.BoardEffects[0].Description = "Ann's Imagination - all moods are green.";
+            Assert.AreEqual("Color is now blue (printed red)", BoardDisplay.ColorNote(state, card), "an effect for another color isn't the cause");
+        }
+
+        [Test]
+        public void AMoodInItsPrintedColor_HasNoColorNote()
+        {
+            var card = new BoardCard { CardId = 1, Color = "red", BaseColor = "red" };
+
+            Assert.IsFalse(card.IsRecolored);
+            Assert.IsNull(BoardDisplay.ColorNote(BoardFixtures.Load(406), card));
+            Assert.IsFalse(new BoardCard { Color = "red" }.IsRecolored, "an unknown printed color isn't a change");
+        }
+
+        [Test]
         public void ASuppressedMood_SaysWhatSuppressesIt()
         {
             var card = Newtonsoft.Json.JsonConvert.DeserializeObject<BoardCard>(
