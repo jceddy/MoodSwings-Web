@@ -71,6 +71,7 @@ namespace MoodSwings.Networking
         /// in play, by that mood's card id. Null for every other card.
         /// </summary>
         [JsonProperty("copy_simulation")]
+        [JsonConverter(typeof(PhpMapConverter<int, CopySimulation>))]
         public Dictionary<int, CopySimulation> CopySimulation { get; set; }
 
         /// <summary>In play only: another effect is switching this mood's own ability off.</summary>
@@ -254,6 +255,7 @@ namespace MoodSwings.Networking
     {
         /// <summary>Score so far by game_player_id.</summary>
         [JsonProperty("scores")]
+        [JsonConverter(typeof(PhpMapConverter<int, int>))]
         public Dictionary<int, int> Scores { get; set; } = new Dictionary<int, int>();
 
         [JsonProperty("sneakiness_swaps")]

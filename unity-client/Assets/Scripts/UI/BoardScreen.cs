@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -9,14 +10,16 @@ using UnityEngine.UI;
 namespace MoodSwings.UI
 {
     /// <summary>
-    /// A game's board, read-only: every seat with its moods in front of it,
-    /// the deck and discard in the middle, and your hand along the bottom.
-    /// Opened with a <see cref="BoardSession"/> (playing or spectating). Seats
-    /// are placed as the web client places them -- the next player in turn
-    /// order at your left -- and the board polls every few seconds, which is
-    /// also what makes the server advance bot turns. Click any card for a
-    /// readable close-up; the Log and Chat buttons open the recent events and
-    /// the game's chat. Playing cards comes in the next phase.
+    /// A game's board: every seat with its moods in front of it, the deck and
+    /// discard in the middle, and your hand along the bottom. Opened with a
+    /// <see cref="BoardSession"/> (playing or spectating). Seats are placed as
+    /// the web client places them -- the next player in turn order at your
+    /// left -- and the board polls every few seconds, which is also what makes
+    /// the server advance bot turns. Click any card for a readable close-up; on
+    /// your turn, clicking a card in your hand opens its play form. Pass,
+    /// Advance turn, I'm ready and Resign sit beside your hand; a question some
+    /// card effect has for you opens on its own and has to be answered. The Log
+    /// and Chat buttons open the recent events and the game's chat.
     /// </summary>
     public sealed class BoardScreen : UiScreen
     {
@@ -42,8 +45,9 @@ namespace MoodSwings.UI
         };
 
         private static readonly Rect PilesRect = Fraction(0.30f, 0.4592f, 0.70f, 0.7245f);
-        // Starts a little above the screen edge so the cards aren't flush against it.
-        private static readonly Rect HandRect = Fraction(0.03f, 0.012f, 0.97f, 0.2143f);
+        // Starts a little above the screen edge so the cards aren't flush against it, and
+        // stops short of the right edge, where the action buttons sit.
+        private static readonly Rect HandRect = Fraction(0.03f, 0.012f, 0.80f, 0.2143f);
 
         private BoardSession _session;
         private bool _built;
@@ -60,6 +64,21 @@ namespace MoodSwings.UI
         private Text _logBody;
         private GameObject _chatOverlay;
         private Text _chatBody;
+        private GameObject _chatEntry;
+        private InputField _chatInput;
+        private Text _chatError;
+        private ChoiceOverlay _choices;
+        private ConfirmOverlay _confirm;
+        private Button _primaryAction;
+        private Text _primaryLabel;
+        private Button _resignAction;
+        private GameObject _actions;
+
+        private BoardCard _playingCard;
+        private string _decisionKey;
+        private string _loopKey;
+        private bool _messageFromRefresh;
+        private float _nextHeaderUpdate;
 
         public string BannerText => _banner != null ? _banner.text : null;
 
@@ -69,6 +88,11 @@ namespace MoodSwings.UI
 
         public bool DetailOpen => _detail != null && _detail.activeSelf;
 
+        /// <summary>The play form or decision form, when one is open.</summary>
+        public ChoiceOverlay Choices => _choices;
+
+        public ConfirmOverlay Confirm => _confirm;
+
         /// <summary>How many seat zones, piles and hand areas are currently drawn; tests use it to see what's on the table.</summary>
         public int TableChildCount => _table != null ? _table.childCount : 0;
 
@@ -77,7 +101,14 @@ namespace MoodSwings.UI
             EnsureBuilt();
             _session = args as BoardSession;
             CloseOverlays();
+            _choices.Close();
+            _confirm.Dismiss();
+            _playingCard = null;
+            _decisionKey = null;
+            _loopKey = null;
+            _chatError.text = string.Empty;
             SetMessage(string.Empty);
+            _actions.SetActive(false);
 
             if (_session == null)
             {
@@ -113,13 +144,31 @@ namespace MoodSwings.UI
 
         public override bool HandleBack()
         {
-            if (!_detail.activeSelf && !_logOverlay.activeSelf && !_chatOverlay.activeSelf)
+            if (_confirm.Dismiss())
             {
-                return false;
+                return true;
             }
 
-            CloseOverlays();
-            return true;
+            if (_detail.activeSelf || _logOverlay.activeSelf || _chatOverlay.activeSelf)
+            {
+                CloseOverlays();
+                return true;
+            }
+
+            // A play form can be called off; a question you have to answer can't.
+            return _choices.Cancel();
+        }
+
+        private void Update()
+        {
+            // The action clock ticks every second; the rest of the board waits for the next poll.
+            if (_session?.State == null || Time.unscaledTime < _nextHeaderUpdate)
+            {
+                return;
+            }
+
+            _nextHeaderUpdate = Time.unscaledTime + 0.25f;
+            UpdateHeader(_session.State);
         }
 
         private async Task Refresh()
@@ -132,7 +181,13 @@ namespace MoodSwings.UI
 
             if (result.Ok)
             {
-                SetMessage(string.Empty);
+                if (_messageFromRefresh)
+                {
+                    SetMessage(string.Empty);
+                }
+
+                // A game that's waiting to be dealt starts once everyone's ready.
+                await _session.StartWhenReadyAsync();
             }
             else if (_session.State == null)
             {
@@ -140,7 +195,7 @@ namespace MoodSwings.UI
             }
             else
             {
-                SetMessage(result.Message);
+                SetMessage(result.Message, isError: true, fromRefresh: true);
             }
         }
 
@@ -163,6 +218,7 @@ namespace MoodSwings.UI
             _table.offsetMin = Vector2.zero;
             _table.offsetMax = new Vector2(0f, -HeaderHeight);
 
+            BuildActions(theme);
             BuildHeader(theme);
 
             _message = UiFactory.Label(transform, string.Empty, 24, theme.danger);
@@ -176,8 +232,13 @@ namespace MoodSwings.UI
             UiFactory.Stretch(_loading.rectTransform);
 
             BuildDetailOverlay(theme);
-            _logOverlay = BuildTextOverlay(theme, "Recent events", out _logBody);
-            _chatOverlay = BuildTextOverlay(theme, "Chat", out _chatBody);
+            _logOverlay = BuildTextOverlay(theme, "Recent events", out _logBody, out _);
+            _chatOverlay = BuildTextOverlay(theme, "Chat", out _chatBody, out var chatPanel);
+            BuildChatEntry(theme, chatPanel);
+
+            // Last, so they sit on top of everything else.
+            _choices = new ChoiceOverlay(transform, theme);
+            _confirm = new ConfirmOverlay(transform, theme);
         }
 
         private void BuildHeader(UiTheme theme)
@@ -199,6 +260,7 @@ namespace MoodSwings.UI
             _banner.rectTransform.offsetMin = _banner.rectTransform.offsetMax = Vector2.zero;
 
             _roundLine = UiFactory.Label(bar, string.Empty, 24, theme.textMuted);
+            _roundLine.horizontalOverflow = HorizontalWrapMode.Overflow;
             _roundLine.rectTransform.anchorMin = new Vector2(0.18f, 0f);
             _roundLine.rectTransform.anchorMax = new Vector2(0.82f, 0.42f);
             _roundLine.rectTransform.offsetMin = _roundLine.rectTransform.offsetMax = Vector2.zero;
@@ -216,6 +278,35 @@ namespace MoodSwings.UI
             rect.anchorMin = rect.anchorMax = rect.pivot = new Vector2(1f, 0.5f);
             rect.sizeDelta = new Vector2(180f, UiFactory.ControlHeight);
             rect.anchoredPosition = new Vector2(-fromRight, 0f);
+        }
+
+        // Pass / Advance turn / I'm ready, and Resign, beside the hand. Which show, and whether
+        // they can be pressed, is decided in UpdateActions.
+        private void BuildActions(UiTheme theme)
+        {
+            var area = UiFactory.Create("Actions", transform);
+            _actions = area.gameObject;
+            area.anchorMin = new Vector2(0.82f, 0f);
+            area.anchorMax = new Vector2(0.985f, 0f);
+            area.pivot = new Vector2(0.5f, 0f);
+            area.sizeDelta = new Vector2(0f, 170f);
+            area.anchoredPosition = new Vector2(0f, 24f);
+
+            var layout = area.gameObject.AddComponent<VerticalLayoutGroup>();
+            layout.spacing = 14f;
+            layout.childAlignment = TextAnchor.LowerCenter;
+            layout.childControlWidth = true;
+            layout.childControlHeight = true;
+            layout.childForceExpandWidth = true;
+            layout.childForceExpandHeight = false;
+
+            _primaryAction = UiFactory.Button(area, "Pass", theme, () => OnPrimaryAction());
+            _primaryAction.gameObject.name = "Primary action";
+            _primaryLabel = _primaryAction.GetComponentInChildren<Text>();
+            UiFactory.Size(_primaryAction.gameObject, height: 76f);
+
+            _resignAction = UiFactory.Button(area, "Resign", theme, () => Run(Resign), primary: false);
+            _resignAction.gameObject.name = "Resign";
         }
 
         private void BuildDetailOverlay(UiTheme theme)
@@ -244,13 +335,14 @@ namespace MoodSwings.UI
             _detail.SetActive(false);
         }
 
-        private GameObject BuildTextOverlay(UiTheme theme, string title, out Text body)
+        private GameObject BuildTextOverlay(UiTheme theme, string title, out Text body, out RectTransform panelRect)
         {
             var root = UiFactory.Create(title + " overlay", transform);
             UiFactory.Stretch(root);
             root.gameObject.AddComponent<Image>().color = new Color(0f, 0f, 0f, 0.72f);
 
             var panel = UiFactory.Create("Panel", root);
+            panelRect = panel;
             panel.anchorMin = panel.anchorMax = panel.pivot = new Vector2(0.5f, 0.5f);
             panel.sizeDelta = new Vector2(1000f, 800f);
             panel.gameObject.AddComponent<Image>().color = theme.panel;
@@ -276,6 +368,34 @@ namespace MoodSwings.UI
             return overlay;
         }
 
+        // A line to say something to the table, above the chat's Close button. Players only.
+        private void BuildChatEntry(UiTheme theme, RectTransform panel)
+        {
+            _chatError = UiFactory.Label(panel, string.Empty, 24, theme.danger, TextAnchor.MiddleLeft);
+            UiFactory.Size(_chatError.gameObject, height: 30f);
+            _chatError.transform.SetSiblingIndex(panel.childCount - 2);
+
+            var row = UiFactory.Row(panel, "ChatEntry", 12f, TextAnchor.MiddleCenter);
+            _chatEntry = row.gameObject;
+            row.transform.SetSiblingIndex(panel.childCount - 2);
+            UiFactory.Size(_chatEntry, height: UiFactory.ControlHeight);
+
+            _chatInput = UiFactory.Input(row.transform, "Say something to the table", theme);
+            _chatInput.characterLimit = 500;
+            UiFactory.Flexible(_chatInput.gameObject, width: 1f);
+            _chatInput.onEndEdit.AddListener(_ =>
+            {
+                if (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter))
+                {
+                    Run(SendChat);
+                }
+            });
+
+            var send = UiFactory.Button(row.transform, "Send", theme, () => Run(SendChat));
+            send.gameObject.name = "Send chat";
+            UiFactory.Size(send.gameObject, 180f);
+        }
+
         private void CloseOverlays()
         {
             _detail.SetActive(false);
@@ -283,9 +403,11 @@ namespace MoodSwings.UI
             _chatOverlay.SetActive(false);
         }
 
-        private void SetMessage(string text)
+        private void SetMessage(string text, bool isError = true, bool fromRefresh = false)
         {
             _message.text = text ?? string.Empty;
+            _message.color = isError ? AppServices.Theme.danger : AppServices.Theme.accent;
+            _messageFromRefresh = fromRefresh && !string.IsNullOrEmpty(text);
         }
 
         private void ShowLoading(string text)
@@ -306,6 +428,14 @@ namespace MoodSwings.UI
             }
         }
 
+        private void UpdateHeader(GameState state)
+        {
+            _roundLine.text = BoardDisplay.HeaderLine(state, _session.IsSpectating, DateTime.UtcNow);
+            _roundLine.color = BoardDisplay.ClockIsUrgent(state, DateTime.UtcNow)
+                ? AppServices.Theme.danger
+                : AppServices.Theme.textMuted;
+        }
+
         private void Render()
         {
             var state = _session?.State;
@@ -319,11 +449,10 @@ namespace MoodSwings.UI
 
             _banner.text = BoardDisplay.TurnBanner(state);
             _banner.color = BoardDisplay.BannerNeedsViewer(state) ? theme.accent : theme.textPrimary;
-            _roundLine.text = BoardDisplay.RoundLine(state) + (_session.IsSpectating ? "  -  watching" : string.Empty);
+            UpdateHeader(state);
             _chatButtonLabel.text = state.ChatMessages.Count > 0 ? $"Chat ({state.ChatMessages.Count})" : "Chat";
-            _logBody.text = state.RecentEvents.Count == 0
-                ? "Nothing has happened yet."
-                : string.Join("\n\n", state.RecentEvents.Select(e => e.Description));
+            _chatEntry.SetActive(!BoardDisplay.IsSpectator(state));
+            _logBody.text = LogText(state);
             _chatBody.text = state.ChatMessages.Count == 0
                 ? "No messages yet."
                 : string.Join("\n\n", state.ChatMessages.Select(m => $"{m.SenderUsername}: {m.MessageText}"));
@@ -337,6 +466,24 @@ namespace MoodSwings.UI
 
             BuildPiles(theme, state);
             BuildHand(theme, state);
+            UpdateActions(state);
+            SyncOverlays(state);
+        }
+
+        private static string LogText(GameState state)
+        {
+            var sections = new List<string>();
+
+            var effects = BoardDisplay.EffectLines(state);
+            if (effects.Count > 0)
+            {
+                sections.Add("In force right now:\n" + string.Join("\n", effects.Select(e => "- " + e)));
+            }
+
+            sections.Add(state.RecentEvents.Count == 0
+                ? "Nothing has happened yet."
+                : string.Join("\n\n", state.RecentEvents.Select(e => e.Description)));
+            return string.Join("\n\n", sections);
         }
 
         private static Rect Fraction(float minX, float minY, float maxX, float maxY) =>
@@ -486,11 +633,18 @@ namespace MoodSwings.UI
             rowRect.anchorMin = Vector2.zero;
             rowRect.anchorMax = Vector2.one;
             rowRect.offsetMin = rowRect.offsetMax = Vector2.zero;
+
+            // On your turn, the cards you can't play right now are dimmed.
+            var canAct = BoardDisplay.CanAct(state);
             foreach (var cardInHand in state.You.Hand)
             {
                 var card = cardInHand;
-                CardView.Create(row.transform, card, HandCardWidth, theme, showValue: true,
-                    onClick: () => ShowDetail(card, "In your hand"));
+                var view = CardView.Create(row.transform, card, HandCardWidth, theme, showValue: true,
+                    onClick: () => OnHandCard(card));
+                if (canAct && !card.IsPlayable)
+                {
+                    view.gameObject.AddComponent<CanvasGroup>().alpha = 0.5f;
+                }
             }
         }
 
@@ -505,15 +659,12 @@ namespace MoodSwings.UI
             var cardRect = CardView.Create(_detailCardHolder, card, DetailCardWidth, AppServices.Theme, showValue: false);
             UiFactory.Stretch(cardRect);
 
-            var valueLine = card.ValueIsModified
-                ? $"Value right now: {card.Value}  (printed {card.BaseValue})"
-                : $"Value: {card.Value}";
             var lines = new List<string>
             {
                 "<size=46><b>" + card.Name + "</b></size>",
                 "<color=#9aa0aa>" + where + "</color>",
                 string.Empty,
-                valueLine,
+                ValueLine(card),
                 string.IsNullOrWhiteSpace(card.RulesText) ? string.Empty : card.RulesText,
             };
             if (card.IsSuppressed)
@@ -528,6 +679,311 @@ namespace MoodSwings.UI
             _detailText.supportRichText = true;
             _detailText.text = string.Join("\n", lines);
             _detail.SetActive(true);
+        }
+
+        private static string ValueLine(BoardCard card) =>
+            card.ValueIsModified
+                ? $"Value right now: {card.Value}  (printed {card.BaseValue})"
+                : $"Value: {card.Value}";
+
+        // --- acting ---------------------------------------------------------------------------
+
+        /// <summary>Shows Pass / Advance turn / I'm ready and Resign for what the viewer can do right now.</summary>
+        private void UpdateActions(GameState state)
+        {
+            var viewerSeated = !BoardDisplay.IsSpectator(state);
+            var inProgress = state.Game.Status == "in_progress";
+            var busy = _session.Busy;
+
+            string primary = null;
+            var primaryEnabled = false;
+            if (BoardDisplay.NeedsAdvanceTurn(state))
+            {
+                primary = "Advance turn";
+                primaryEnabled = true;
+            }
+            else if (BoardDisplay.NeedsReady(state))
+            {
+                primary = "I'm ready";
+                primaryEnabled = true;
+            }
+            else if (viewerSeated && inProgress)
+            {
+                primary = "Pass";
+                primaryEnabled = BoardDisplay.CanAct(state);
+            }
+
+            _primaryAction.gameObject.SetActive(primary != null);
+            if (primary != null)
+            {
+                _primaryLabel.text = primary;
+                _primaryAction.interactable = primaryEnabled && !busy;
+            }
+
+            var showResign = viewerSeated && inProgress;
+            _resignAction.gameObject.SetActive(showResign);
+            _resignAction.interactable = BoardDisplay.CanResign(state) && !busy;
+
+            _actions.SetActive(primary != null || showResign);
+        }
+
+        private void OnPrimaryAction()
+        {
+            var state = _session?.State;
+            if (state == null)
+            {
+                return;
+            }
+
+            if (BoardDisplay.NeedsAdvanceTurn(state))
+            {
+                Run(() => Act(() => _session.AdvanceTurnAsync()));
+            }
+            else if (BoardDisplay.NeedsReady(state))
+            {
+                Run(() => Act(() => _session.MarkReadyAsync()));
+            }
+            else
+            {
+                Run(() => Act(() => _session.PassAsync()));
+            }
+        }
+
+        private async Task Resign()
+        {
+            if (!await _confirm.AskAsync("Resign this game? This cannot be undone.", "Resign", "Keep playing"))
+            {
+                return;
+            }
+
+            await Act(() => _session.ResignAsync());
+        }
+
+        /// <summary>Runs one action: greys the buttons while it's in flight, then shows what came of it.</summary>
+        private async Task Act(Func<Task<BoardActionResult>> action)
+        {
+            SetMessage(string.Empty);
+            var pending = action();
+            UpdateActions(_session.State);
+            var result = await pending;
+            if (this == null)
+            {
+                return;
+            }
+
+            ShowResult(result);
+            UpdateActions(_session.State);
+            SyncOverlays(_session.State);
+        }
+
+        private void ShowResult(BoardActionResult result)
+        {
+            if (result.Ok)
+            {
+                SetMessage(result.Notice, isError: false);
+            }
+            else
+            {
+                SetMessage(result.Message ?? "That didn't work.", isError: true);
+            }
+        }
+
+        private void OnHandCard(BoardCard card)
+        {
+            var state = _session?.State;
+            if (state != null && BoardDisplay.CanAct(state) && !_session.Busy)
+            {
+                OpenPlayForm(state, card);
+            }
+            else
+            {
+                ShowDetail(card, "In your hand");
+            }
+        }
+
+        private void OpenPlayForm(GameState state, BoardCard card)
+        {
+            var form = ChoiceForm.ForCard(state, card);
+            _playingCard = card;
+            _choices.Open(
+                form,
+                new ChoicePrompt
+                {
+                    Title = card.Name,
+                    Context = ValueLine(card) + (string.IsNullOrWhiteSpace(card.RulesText) ? string.Empty : "\n" + card.RulesText),
+                    Card = card,
+                    SubmitLabel = "Play card",
+                    Cancellable = true,
+                },
+                () => Run(() => SubmitPlay(card, form)),
+                () => _playingCard = null);
+        }
+
+        private async Task SubmitPlay(BoardCard card, ChoiceForm form)
+        {
+            // Legal answers that would make the card do nothing get a "did you mean that?" first.
+            foreach (var question in form.Confirmations())
+            {
+                if (!await _confirm.AskAsync(question, "Play anyway", "Cancel"))
+                {
+                    return;
+                }
+            }
+
+            _choices.SetBusy(true, "Playing...");
+            var result = await _session.PlayAsync(card, form.BuildChoices());
+            if (this == null)
+            {
+                return;
+            }
+
+            _choices.SetBusy(false);
+            if (result.Ok)
+            {
+                _choices.Close();
+                _playingCard = null;
+                ShowResult(result);
+            }
+            else if (_choices.IsOpen)
+            {
+                // Most refusals are a fixable mistake in the choices, so the form stays up for another try.
+                _choices.ShowError(result.Message ?? "Couldn't play that card.");
+            }
+            else
+            {
+                ShowResult(result);
+            }
+
+            UpdateActions(_session.State);
+            SyncOverlays(_session.State);
+        }
+
+        private async Task SubmitDecision(ChoiceForm form)
+        {
+            _choices.SetBusy(true, "Sending...");
+            var result = await _session.RespondAsync(form.BuildChoices());
+            if (this == null)
+            {
+                return;
+            }
+
+            _choices.SetBusy(false);
+
+            // Either way the next look at the board decides what's open: a refusal usually means
+            // the options moved, so the question is rebuilt fresh from the latest state.
+            _choices.Close();
+            _decisionKey = null;
+            ShowResult(result);
+            UpdateActions(_session.State);
+            SyncOverlays(_session.State);
+
+            if (!result.Ok && _choices.IsOpen)
+            {
+                _choices.ShowError(result.Message ?? "Couldn't send your response.");
+            }
+        }
+
+        private async Task SendChat()
+        {
+            var result = await _session.SendChatAsync(_chatInput.text);
+            if (this == null)
+            {
+                return;
+            }
+
+            _chatError.text = result.Ok ? string.Empty : result.Message ?? "Couldn't send that message.";
+            if (result.Ok)
+            {
+                _chatInput.text = string.Empty;
+            }
+        }
+
+        /// <summary>
+        /// Keeps the pop-ups matching the game: a play form for a card you can no longer play
+        /// closes, a question the game has for you opens (once), and a warning about a repeating
+        /// board is shown once.
+        /// </summary>
+        private void SyncOverlays(GameState state)
+        {
+            if (_playingCard != null)
+            {
+                var stillPlayable = _choices.IsOpen
+                    && BoardDisplay.CanAct(state)
+                    && state.You.Hand.Any(c => c.CardId == _playingCard.CardId);
+                if (!stillPlayable)
+                {
+                    if (_choices.IsOpen)
+                    {
+                        _choices.Close();
+                    }
+
+                    _playingCard = null;
+                }
+            }
+
+            var decision = state.Round.PendingDecision;
+            if (decision != null && decision.IsYou && decision.Field != null && !_session.IsSpectating)
+            {
+                var key = DecisionKey(state, decision);
+                if (_decisionKey != key || !_choices.IsOpen)
+                {
+                    OpenDecision(state, decision, key);
+                }
+            }
+            else if (_decisionKey != null)
+            {
+                if (_choices.IsOpen && _playingCard == null)
+                {
+                    _choices.Close();
+                }
+
+                _decisionKey = null;
+            }
+
+            var warning = BoardDisplay.LoopWarningText(state);
+            if (warning == null)
+            {
+                _loopKey = null;
+            }
+            else if (_loopKey != state.Game.LoopWarning.OccurrenceCount.ToString() && !_confirm.IsOpen)
+            {
+                _loopKey = state.Game.LoopWarning.OccurrenceCount.ToString();
+                Run(async () => await _confirm.AskAsync(warning, "OK", null));
+            }
+        }
+
+        private static string DecisionKey(GameState state, PendingDecision decision) =>
+            $"{state.Round.RoundNumber}|{decision.DecisionType}|{decision.PlayedCardId}|{decision.TargetGamePlayerId}|{decision.Field.Key}";
+
+        private void OpenDecision(GameState state, PendingDecision decision, string key)
+        {
+            var form = ChoiceForm.ForDecision(state, decision);
+            var played = decision.PlayedCardId.HasValue
+                ? state.InPlay.FirstOrDefault(c => c.CardId == decision.PlayedCardId.Value)
+                : null;
+
+            var context = new List<string>();
+            var initiator = BoardDisplay.PlayerById(state, decision.InitiatingGamePlayerId);
+            if (initiator != null && !string.IsNullOrEmpty(decision.PlayedCardName))
+            {
+                context.Add($"{initiator.Username} played {decision.PlayedCardName}.");
+            }
+
+            context.AddRange(BoardDisplay.ScoringPreviewLines(state));
+
+            _decisionKey = key;
+            _choices.Open(
+                form,
+                new ChoicePrompt
+                {
+                    Title = BoardDisplay.DecisionTitle(decision),
+                    Context = string.Join("\n", context),
+                    Card = played,
+                    SubmitLabel = "Respond",
+                    Cancellable = false,
+                },
+                () => Run(() => SubmitDecision(form)),
+                null);
         }
     }
 }

@@ -607,6 +607,43 @@ namespace MoodSwings.Tests
             Assert.AreEqual(0, form.Confirmations().Count);
         }
 
+        // --- how the server writes these ------------------------------------------------------
+
+        [Test]
+        public void MapsThePhpServerLeavesEmpty_ArriveAsArrays_AndStillParse()
+        {
+            // PHP writes an empty map as []. A Creativity card with nothing in play to copy has
+            // an empty copy_simulation; a field with no value adjustments an empty candidate_values.
+            var card = JsonConvert.DeserializeObject<BoardCard>(
+                @"{""card_id"":1,""effect_key"":""creativity"",""copy_simulation"":[],
+                    ""choice_fields"":[{""key"":""x"",""type"":""mood"",""candidate_values"":[]}]}");
+            var preview = JsonConvert.DeserializeObject<ScoringPreview>(@"{""scores"":[],""sneakiness_swaps"":[]}");
+
+            Assert.AreEqual(0, card.CopySimulation.Count);
+            Assert.AreEqual(0, card.ChoiceFields[0].CandidateValues.Count);
+            Assert.AreEqual(0, preview.Scores.Count);
+        }
+
+        [Test]
+        public void TheSameMaps_ReadNormally_WhenTheyHaveEntries()
+        {
+            var card = JsonConvert.DeserializeObject<BoardCard>(
+                @"{""card_id"":1,""copy_simulation"":{""10"":{""extra_fields"":[],""cost_payable"":false}},
+                    ""choice_fields"":[{""key"":""x"",""type"":""mood"",""candidate_values"":{""10"":3,""11"":0}}]}");
+
+            Assert.IsFalse(card.CopySimulation[10].CostPayable);
+            Assert.AreEqual(3, card.ChoiceFields[0].CandidateValues[10]);
+            Assert.AreEqual(0, card.ChoiceFields[0].CandidateValues[11]);
+        }
+
+        [Test]
+        public void ANullMap_StaysNull_SoACardWithNoSimulationIsNotCreativity()
+        {
+            var card = JsonConvert.DeserializeObject<BoardCard>(@"{""card_id"":1,""copy_simulation"":null}");
+
+            Assert.IsNull(card.CopySimulation);
+        }
+
         // --- Creativity -----------------------------------------------------------------------
 
         private static BoardCard Creativity()

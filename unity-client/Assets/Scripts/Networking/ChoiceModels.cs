@@ -101,6 +101,7 @@ namespace MoodSwings.Networking
         /// mood's value can depend on the board), for a combined-value limit.
         /// </summary>
         [JsonProperty("candidate_values")]
+        [JsonConverter(typeof(PhpMapConverter<int, int>))]
         public Dictionary<int, int> CandidateValues { get; set; }
 
         /// <summary>A starting selection the server suggests (a mode's default).</summary>
