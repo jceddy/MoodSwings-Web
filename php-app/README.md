@@ -13710,6 +13710,19 @@ than a parallel bespoke system:
   a refresh counts as a failure. A cap of 2 or 3 gives the same single
   solution.
 
+- **Puzzle dead ends no longer auto-pass in a loop** (reported live on
+  "Dead Heat": after Recklessness took the wrong mood and Boredom was
+  played on the refreshed turn, the game reported the board "repeated
+  118802 times this turn" and kept climbing). A puzzle attempt that runs out
+  of legal plays unsolved used to be auto-passed by
+  `advanceAutomatedTurns()` (every user defaults to
+  `auto_pass_on_empty_hand`), which only handed the same seat a fresh
+  mini-turn with no legal play either -- repeated for the whole action
+  budget on every call, and re-scheduled by the recheck chain, logging
+  hundreds of thousands of `turn_passed`/`puzzle_turn_refreshed` events.
+  `advanceAutomatedTurns()` now leaves a `format = 'puzzle'` seat alone: the
+  attempt just stays open (hand empty, nothing playable) until "Try Again".
+
 ### Duel: separate per-player decks
 
 `format: 'duel'` and `format: 'draft'` (see "Draft format" below) are the

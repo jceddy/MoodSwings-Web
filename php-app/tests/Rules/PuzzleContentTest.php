@@ -1313,6 +1313,34 @@ final class PuzzleContentTest extends TestCase
         $this->assertGameNotSolved($gameId);
     }
 
+    /**
+     * Reported live: after Recklessness took the wrong mood and Boredom was
+     * played on the refreshed turn, the hand was empty and the engine kept
+     * auto-passing/refreshing the lone seat for the whole action budget on
+     * every call (the board "repeated 118802 times"). A puzzle with no
+     * legal play left is a dead end -- it must just sit there.
+     */
+    public function testDeadHeatOutOfLegalPlaysDoesNotAutoPassInALoop(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('dead-heat');
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 100, 'hand'), [
+            'target_mood_id' => $this->ownedInstanceId($gameId, 56, 'in_play', $opp), // the wrong mood: a Betrayal
+        ]);
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 83, 'hand')); // Boredom on the refreshed turn
+
+        for ($i = 0; $i < 3; $i++) {
+            $this->games->advanceAutomatedTurns($gameId);
+        }
+
+        $count = fn (string $type): int => (int) $this->pdo->query("SELECT COUNT(*) FROM game_events WHERE game_id = {$gameId} AND event_type = '{$type}'")->fetchColumn();
+        self::assertSame(0, $count('turn_passed'), 'nothing is auto-passed');
+        self::assertLessThanOrEqual(2, $count('puzzle_turn_refreshed'), 'only the refreshes the two plays caused');
+        $this->assertGameNotSolved($gameId);
+        self::assertSame([], $this->games->getState($gameId, $this->userIdForGamePlayer($p))['you']['hand']);
+    }
+
     public function testDeadHeatExposesItsSetupAndTextViaGetState(): void
     {
         ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('dead-heat');
