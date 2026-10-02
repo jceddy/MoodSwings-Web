@@ -385,7 +385,7 @@ namespace MoodSwings.UI
             UiFactory.Flexible(_chatInput.gameObject, width: 1f);
             _chatInput.onEndEdit.AddListener(_ =>
             {
-                if (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter))
+                if (KeyInput.EnterPressed)
                 {
                     Run(SendChat);
                 }
