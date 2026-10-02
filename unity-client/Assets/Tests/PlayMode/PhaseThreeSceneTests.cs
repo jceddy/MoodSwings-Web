@@ -281,6 +281,33 @@ namespace MoodSwings.Tests
         }
 
         [UnityTest]
+        public IEnumerator NewGame_BestOfThree_IsOfferedForTwoPlayersOnly_AndSent()
+        {
+            var server = new LobbyFakeServer();
+            yield return OpenNewGame(server);
+            Assert.IsNull(PhaseTwoSceneTests.FindToggle("Best of three"), "no opponent yet");
+
+            PhaseTwoSceneTests.FindToggle("BotSage  (tactical)").isOn = true;
+            yield return PhaseTwoSceneTests.Frames();
+            var toggle = PhaseTwoSceneTests.FindToggle("Best of three");
+            Assert.IsNotNull(toggle);
+            toggle.isOn = true;
+
+            PhaseTwoSceneTests.FindToggle("BotSageQuick  (tactical)").isOn = true;
+            yield return PhaseTwoSceneTests.Frames();
+            Assert.IsNull(PhaseTwoSceneTests.FindToggle("Best of three"), "three players: no single opponent to win against");
+            PhaseTwoSceneTests.FindToggle("BotSageQuick  (tactical)").isOn = false;
+            yield return PhaseTwoSceneTests.Frames();
+            Assert.IsFalse(PhaseTwoSceneTests.FindToggle("Best of three").isOn, "switched off, not just hidden");
+
+            PhaseTwoSceneTests.FindToggle("Best of three").isOn = true;
+            yield return PhaseTwoSceneTests.Click("Start game");
+            yield return MainSceneTests.WaitFor<PlayScreen>();
+
+            Assert.IsTrue(AnyCall(server, "POST /games {", "\"best_of_three\":true"), string.Join("\n", server.Calls));
+        }
+
+        [UnityTest]
         public IEnumerator NewGame_Synchronous_IsHiddenUntilTheServerOffersIt()
         {
             var server = new LobbyFakeServer { SynchronousFlag = false };

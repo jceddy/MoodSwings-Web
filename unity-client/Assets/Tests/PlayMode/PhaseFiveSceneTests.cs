@@ -31,6 +31,9 @@ namespace MoodSwings.Tests
             /// <summary>What GET /games/state answers with; replaced by tests to move the game along.</summary>
             public JObject State;
 
+            /// <summary>When set, answers GET /games/state for a particular game instead of State.</summary>
+            public Func<int, JObject> StateFor;
+
             public List<string> Calls { get; } = new List<string>();
 
             /// <summary>Answers a POST under /games/ with this, given its path and body; null means a plain "ok".</summary>
@@ -46,7 +49,8 @@ namespace MoodSwings.Tests
 
                 if (path.StartsWith("/games/state") || path.StartsWith("/games/spectate/state"))
                 {
-                    return MainSceneTests.Reply(200, State.ToString());
+                    var asked = int.Parse(path.Substring(path.IndexOf("game_id=", StringComparison.Ordinal) + 8).Split('&')[0]);
+                    return MainSceneTests.Reply(200, (StateFor != null ? StateFor(asked) : State).ToString());
                 }
 
                 if (request.Method == "POST" && path.StartsWith("/games/"))

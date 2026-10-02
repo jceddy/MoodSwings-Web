@@ -17,6 +17,47 @@ namespace MoodSwings.Tests
             Assert.AreEqual("standard", new GameSetup().Format);
         }
 
+        [TestCase("standard", 1, true)]
+        [TestCase("duel", 1, true)]
+        [TestCase("standard", 2, false)]
+        [TestCase("duel", 3, false)]
+        public void BestOfThree_IsForTwoPlayers(string format, int opponents, bool expected)
+        {
+            var setup = new GameSetup { Format = format, OpponentUserIds = Enumerable.Range(1, opponents).ToList(), BestOfThree = true };
+
+            Assert.AreEqual(expected, setup.BestOfThreeAvailable);
+            Assert.AreEqual(expected, setup.ToDirectGameBody().ContainsKey("best_of_three"));
+        }
+
+        [Test]
+        public void BestOfThree_IsSwitchedOffWhenAThirdPlayerJoins()
+        {
+            var setup = new GameSetup { OpponentUserIds = { 18 }, BestOfThree = true };
+            setup.OpponentUserIds.Add(20);
+
+            setup.Normalize(false);
+
+            Assert.IsFalse(setup.BestOfThree);
+        }
+
+        [Test]
+        public void ARematchOfAMatchGame_AsksForTheMatchAgain()
+        {
+            var game = new GameSummary
+            {
+                Format = "standard",
+                DeckType = "structure",
+                GameMatch = new MatchSummary { Status = "completed" },
+                Players = new List<GamePlayerSummary>
+                {
+                    new GamePlayerSummary { UserId = 1, Username = "me" },
+                    new GamePlayerSummary { UserId = 18, Username = "BotSage" },
+                },
+            };
+
+            Assert.IsTrue(GameSetup.ForRematch(game, 1).BestOfThree);
+        }
+
         [Test]
         public void TheFormat_GoesIntoBothBodies()
         {

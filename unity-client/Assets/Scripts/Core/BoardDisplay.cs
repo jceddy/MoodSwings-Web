@@ -37,6 +37,12 @@ namespace MoodSwings.Core
         public static string HeaderLine(GameState state, bool spectating, DateTime nowUtc)
         {
             var parts = new List<string> { RoundLine(state) };
+            var matchLine = MatchLine(state);
+            if (matchLine != null)
+            {
+                parts.Add(matchLine);
+            }
+
             if (spectating)
             {
                 parts.Add("watching");
@@ -70,6 +76,15 @@ namespace MoodSwings.Core
 
             if (state.Game.Status == "completed")
             {
+                // The match is what the players care about once it is decided.
+                var match = state.GameMatch;
+                if (match != null && match.Status == "completed" && match.WinnerUsernames.Count > 0)
+                {
+                    return viewer != null && match.WinnerUsernames.Contains(viewer.Username)
+                        ? "You won the match!"
+                        : "Match over  -  " + string.Join(", ", match.WinnerUsernames) + " won";
+                }
+
                 if (state.Game.WinnerUsernames.Count == 0)
                 {
                     return "Game over";
@@ -82,6 +97,13 @@ namespace MoodSwings.Core
             if (state.Game.Status == "waiting")
             {
                 return state.Game.SynchronousMode ? "Waiting for everyone to be ready" : "Starting the game...";
+            }
+
+            if (state.FirstPlayerDecision != null)
+            {
+                return NeedsFirstPlayerChoice(state)
+                    ? "Choose who goes first"
+                    : $"Waiting for {FirstPlayerChooserNames(state)} to choose who goes first";
             }
 
             var decision = state.Round.PendingDecision;
@@ -123,6 +145,11 @@ namespace MoodSwings.Core
                 return false;
             }
 
+            if (state.FirstPlayerDecision != null)
+            {
+                return NeedsFirstPlayerChoice(state);
+            }
+
             var decision = state.Round.PendingDecision;
             if (decision != null)
             {
@@ -153,7 +180,6 @@ namespace MoodSwings.Core
             var game = state.Game;
             var unsupported = (!string.IsNullOrEmpty(game.Format) && game.Format != GameSetup.TraditionalFormat)
                 || (game.DeckType != null && DraftDeckTypes.Contains(game.DeckType))
-                || Present(state.FirstPlayerDecision)
                 || Present(state.TeamDecision)
                 || Present(state.InitialCardPass);
             return unsupported ? "This kind of game can't be played in the app yet - open it on the web to play." : null;
@@ -187,6 +213,46 @@ namespace MoodSwings.Core
 
             return $"Deck {count}";
         }
+
+        /// <summary>The viewer lost the previous game of the match and has to say who goes first in this one.</summary>
+        public static bool NeedsFirstPlayerChoice(GameState state) =>
+            state.FirstPlayerDecision != null
+            && state.FirstPlayerDecision.YouArePreviousLoser
+            && Viewer(state) != null
+            && state.Game.Status == "in_progress";
+
+        /// <summary>Who has the first-player choice: everyone but the previous game's winner (who goes first by default).</summary>
+        public static string FirstPlayerChooserNames(GameState state)
+        {
+            var defaultUser = state.FirstPlayerDecision?.DefaultUserId;
+            var names = state.Players.Where(p => p.UserId != defaultUser).Select(p => p.Username).ToList();
+            return names.Count == 0 ? "the previous loser" : string.Join(" and ", names);
+        }
+
+        /// <summary>The name of whoever goes first unless the loser takes it: the previous game's winner.</summary>
+        public static string DefaultFirstPlayerName(GameState state) =>
+            state.Players.FirstOrDefault(p => p.UserId == state.FirstPlayerDecision?.DefaultUserId)?.Username ?? "the other player";
+
+        /// <summary>
+        /// "Game 2  -  Match: you 1 - 0 BotSage" for a game in a best-of-three, else null. The sides are
+        /// players, or teams of them; the server names every seat in the match.
+        /// </summary>
+        public static string MatchLine(GameState state)
+        {
+            var match = state.GameMatch;
+            if (match == null)
+            {
+                return null;
+            }
+
+            var others = string.Join(" and ", match.Players.Where(p => !p.IsYou).Select(p => p.Username));
+            var game = state.Game.MatchGameNumber.HasValue ? $"Game {state.Game.MatchGameNumber}  -  " : string.Empty;
+            return $"{game}Match: you {match.YourWins} - {match.OpponentWins} {others}".TrimEnd();
+        }
+
+        /// <summary>The game to go on to once this one is over and the match goes on; null otherwise.</summary>
+        public static int? NextGameId(GameState state) =>
+            state.Game.Status == "completed" ? state.GameMatch?.NextGameId : null;
 
         /// <summary>It's the viewer's turn and nothing stands in the way of playing or passing.</summary>
         public static bool CanAct(GameState state)

@@ -22,6 +22,8 @@ namespace MoodSwings.UI
         private GameObject _botFirstPanel;
         private Toggle _synchronousToggle;
         private GameObject _synchronousPanel;
+        private Toggle _bestOfThreeToggle;
+        private GameObject _bestOfThreePanel;
         private Button _create;
         private Text _createLabel;
         private bool _busy;
@@ -117,6 +119,14 @@ namespace MoodSwings.UI
             var defaults = UiFactory.Toggle(options.transform, "Default selections mode", theme, _setup.DefaultSelectionsMode);
             UiFactory.ToggleDescription(options.transform, theme, "Pre-fill card choices with a reasonable default. You can still change them before submitting.");
             defaults.onValueChanged.AddListener(on => _setup.DefaultSelectionsMode = on);
+
+            var bestOfThree = UiFactory.Panel(List, theme);
+            _bestOfThreePanel = bestOfThree.gameObject;
+            _bestOfThreeToggle = UiFactory.Toggle(bestOfThree.transform, "Best of three", theme, _setup.BestOfThree);
+            _bestOfThreeToggle.gameObject.name = "Best of three toggle";
+            UiFactory.ToggleDescription(bestOfThree.transform, theme,
+                "First to win two games. The next game is created for you after each one, and the loser chooses who goes first.");
+            _bestOfThreeToggle.onValueChanged.AddListener(on => _setup.BestOfThree = on);
 
             var synchronous = UiFactory.Panel(List, theme);
             _synchronousPanel = synchronous.gameObject;
@@ -328,6 +338,15 @@ namespace MoodSwings.UI
             // "Synchronous" only makes sense for two players in a format that supports it, and only
             // while the server offers it; anything that stops applying is switched off, not just hidden.
             _setup.Normalize(AppServices.Lobby.SynchronousModeEnabled);
+            if (_bestOfThreeToggle != null)
+            {
+                _bestOfThreePanel.SetActive(_setup.BestOfThreeAvailable);
+                if (!_setup.BestOfThreeAvailable)
+                {
+                    _bestOfThreeToggle.SetIsOnWithoutNotify(false);
+                }
+            }
+
             if (_synchronousToggle != null)
             {
                 var offered = _setup.SynchronousModeAvailable(AppServices.Lobby.SynchronousModeEnabled);

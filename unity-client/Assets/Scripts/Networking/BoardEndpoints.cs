@@ -105,6 +105,17 @@ namespace MoodSwings.Networking
                 "/games/respond", new { game_id = gameId, choices = choices ?? new JObject() }, cancellationToken);
         }
 
+        /// <summary>
+        /// POST /games/draft/first-player-choice (the path predates matches outside drafts) -- the previous
+        /// game's loser, in game 2 or 3 of a match, says whether they go first (true) or let the winner (false).
+        /// </summary>
+        public static Task<ApiResult<GameActionResponse>> ChoosePlayFirstAsync(
+            this ApiClient api, int gameId, bool playFirst, CancellationToken cancellationToken = default)
+        {
+            return api.PostAsync<GameActionResponse>(
+                "/games/draft/first-player-choice", new { game_id = gameId, play_first = playFirst }, cancellationToken);
+        }
+
         /// <summary>POST /games/chat -- says something to the table. Chat comes back through the board's polling.</summary>
         public static Task<ApiResult<ApiEnvelope>> SendChatAsync(
             this ApiClient api, int gameId, string text, CancellationToken cancellationToken = default)

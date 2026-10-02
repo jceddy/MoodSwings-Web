@@ -335,6 +335,10 @@ namespace MoodSwings.Networking
         [JsonProperty("synchronous_mode")]
         public bool SynchronousMode { get; set; }
 
+        /// <summary>Which game of its best-of-three match this is; null when it isn't part of one.</summary>
+        [JsonProperty("match_game_number")]
+        public int? MatchGameNumber { get; set; }
+
         /// <summary>Synchronous games: when the player on the clock runs out of time, "yyyy-MM-dd HH:mm:ss" in UTC.</summary>
         [JsonProperty("action_deadline_at")]
         public string ActionDeadlineAt { get; set; }
@@ -419,9 +423,13 @@ namespace MoodSwings.Networking
         // The three below are present (non-null) only for formats and moments this client
         // can't play yet; BoardDisplay.UnsupportedReason() reads them.
 
-        /// <summary>Game 2 or 3 of a match: who goes first is still being decided.</summary>
+        /// <summary>Game 2 or 3 of a match: who goes first is still being decided. Null otherwise.</summary>
         [JsonProperty("first_player_decision")]
-        public JToken FirstPlayerDecision { get; set; }
+        public FirstPlayerDecision FirstPlayerDecision { get; set; }
+
+        /// <summary>The best-of-three match this game is part of; null for a one-off game (or when watching).</summary>
+        [JsonProperty("game_match")]
+        public MatchSummary GameMatch { get; set; }
 
         /// <summary>Team play: the partners are choosing who acts.</summary>
         [JsonProperty("team_decision")]
@@ -430,6 +438,21 @@ namespace MoodSwings.Networking
         /// <summary>Team play: the opening card pass between partners.</summary>
         [JsonProperty("initial_card_pass")]
         public JToken InitialCardPass { get; set; }
+    }
+
+    /// <summary>
+    /// After the first game of a match, whoever lost the last game may choose who goes first, once they
+    /// can see their opening hand; nobody plays until they do.
+    /// </summary>
+    public class FirstPlayerDecision
+    {
+        /// <summary>Only the previous game's loser is asked.</summary>
+        [JsonProperty("you_are_previous_loser")]
+        public bool YouArePreviousLoser { get; set; }
+
+        /// <summary>Who goes first if the loser lets them: the previous game's winner.</summary>
+        [JsonProperty("default_user_id")]
+        public int? DefaultUserId { get; set; }
     }
 
     /// <summary>

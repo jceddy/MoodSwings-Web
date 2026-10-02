@@ -71,6 +71,9 @@ namespace MoodSwings.UI
         private Text _chatError;
         private ChoiceOverlay _choices;
         private ConfirmOverlay _confirm;
+        private GameObject _firstPlayerOverlay;
+        private Text _firstPlayerText;
+        private Text _letOtherGoLabel;
         private RectTransform _dropZone;
         private Image _dropZoneImage;
         private RectTransform _dragGhost;
@@ -123,6 +126,9 @@ namespace MoodSwings.UI
 
         public ConfirmOverlay Confirm => _confirm;
 
+        /// <summary>The box asking you, as the previous game's loser, who goes first is up.</summary>
+        public bool FirstPlayerChoiceOpen => _firstPlayerOverlay != null && _firstPlayerOverlay.activeSelf;
+
         /// <summary>A larger card is showing beside the pointer, because the mouse has rested on a card.</summary>
         public bool HoverPreviewShown => _hoverPreview != null && _hoverPreview.gameObject.activeSelf;
 
@@ -145,6 +151,7 @@ namespace MoodSwings.UI
             _playingCard = null;
             _decisionKey = null;
             _loopKey = null;
+            _firstPlayerOverlay.SetActive(false);
             _previous = null;
             _entering.Clear();
             HideHover();
@@ -305,6 +312,8 @@ namespace MoodSwings.UI
             _chatOverlay = BuildTextOverlay(theme, "Chat", out _chatBody, out var chatPanel);
             BuildChatEntry(theme, chatPanel);
 
+            BuildFirstPlayerOverlay(theme);
+
             // Last, so they sit on top of everything else.
             _choices = new ChoiceOverlay(transform, theme);
             _confirm = new ConfirmOverlay(transform, theme);
@@ -422,6 +431,48 @@ namespace MoodSwings.UI
             _hoverCaption = UiFactory.Label(_hoverPreview, string.Empty, 26, theme.textPrimary, TextAnchor.UpperCenter);
             _hoverCaption.supportRichText = true;
             _hoverPreview.gameObject.SetActive(false);
+        }
+
+        // Game 2 or 3 of a match: the previous loser, who can see their opening hand behind this, says who
+        // goes first. There's no way to dismiss it without answering, since nobody can play until then.
+        private void BuildFirstPlayerOverlay(UiTheme theme)
+        {
+            var root = UiFactory.Create("First player overlay", transform);
+            _firstPlayerOverlay = root.gameObject;
+            UiFactory.Stretch(root);
+            root.gameObject.AddComponent<Image>().color = new Color(0f, 0f, 0f, 0.55f);
+
+            var panel = UiFactory.Create("Panel", root);
+            panel.anchorMin = panel.anchorMax = panel.pivot = new Vector2(0.5f, 0.62f);
+            panel.sizeDelta = new Vector2(1100f, 0f);
+            panel.gameObject.AddComponent<Image>().color = theme.panel;
+            var layout = panel.gameObject.AddComponent<VerticalLayoutGroup>();
+            layout.padding = new RectOffset(40, 40, 32, 32);
+            layout.spacing = 26f;
+            layout.childControlWidth = true;
+            layout.childControlHeight = true;
+            layout.childForceExpandWidth = true;
+            layout.childForceExpandHeight = false;
+            panel.gameObject.AddComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+            UiFactory.Label(panel, "Who goes first?", 44, theme.accent, TextAnchor.MiddleCenter, FontStyle.Bold);
+            _firstPlayerText = UiFactory.Label(panel, string.Empty, 30, theme.textPrimary, TextAnchor.MiddleCenter);
+
+            var buttons = UiFactory.Row(panel, "Buttons", 24f, TextAnchor.MiddleCenter);
+            var me = UiFactory.Button(buttons.transform, "I'll go first", theme, () => Run(() => ChoosePlayFirst(true)));
+            me.gameObject.name = "Go first";
+            UiFactory.Size(me.gameObject, 420f);
+            var other = UiFactory.Button(buttons.transform, "Let them go first", theme, () => Run(() => ChoosePlayFirst(false)), primary: false);
+            other.gameObject.name = "Let them go first";
+            _letOtherGoLabel = other.GetComponentInChildren<Text>();
+            UiFactory.Size(other.gameObject, 520f);
+
+            _firstPlayerOverlay.SetActive(false);
+        }
+
+        private async Task ChoosePlayFirst(bool playFirst)
+        {
+            await Act(() => _session.ChoosePlayFirstAsync(playFirst));
         }
 
         private void BuildDetailOverlay(UiTheme theme)
@@ -1038,7 +1089,12 @@ namespace MoodSwings.UI
 
             string primary = null;
             var primaryEnabled = false;
-            if (BoardDisplay.NeedsAdvanceTurn(state))
+            if (viewerSeated && BoardDisplay.NextGameId(state) != null)
+            {
+                primary = "Next game";
+                primaryEnabled = true;
+            }
+            else if (BoardDisplay.NeedsAdvanceTurn(state))
             {
                 primary = "Advance turn";
                 primaryEnabled = true;
@@ -1076,7 +1132,13 @@ namespace MoodSwings.UI
                 return;
             }
 
-            if (BoardDisplay.NeedsAdvanceTurn(state))
+            var nextGame = BoardDisplay.NextGameId(state);
+            if (nextGame != null)
+            {
+                // The next game of the match replaces this board, so Back still returns to the list.
+                Router.Show<BoardScreen>(BoardSession.ForPlayer(AppServices.Api, nextGame.Value), addToHistory: false);
+            }
+            else if (BoardDisplay.NeedsAdvanceTurn(state))
             {
                 Run(() => Act(() => _session.AdvanceTurnAsync()));
             }
@@ -1412,6 +1474,20 @@ namespace MoodSwings.UI
                 }
 
                 _decisionKey = null;
+            }
+
+            var choosing = BoardDisplay.NeedsFirstPlayerChoice(state) && !_session.IsSpectating;
+            if (choosing && !_firstPlayerOverlay.activeSelf)
+            {
+                var winner = BoardDisplay.DefaultFirstPlayerName(state);
+                _firstPlayerText.text = $"You lost the last game, so you decide: now that you've seen your opening hand, "
+                    + $"do you go first, or does {winner}?";
+                _letOtherGoLabel.text = $"Let {winner} go first";
+            }
+
+            if (_firstPlayerOverlay.activeSelf != choosing)
+            {
+                _firstPlayerOverlay.SetActive(choosing);
             }
 
             var warning = BoardDisplay.LoopWarningText(state);

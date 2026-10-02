@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using MoodSwings.Core;
 using MoodSwings.Networking;
@@ -109,10 +110,10 @@ namespace MoodSwings.Tests
         }
 
         [Test]
-        public void ADecisionAboutWhoGoesFirst_MakesTheGameUnsupportedForNow()
+        public void ATeamDecision_MakesTheGameUnsupportedForNow()
         {
             var state = BoardFixtures.Load(406);
-            state.FirstPlayerDecision = JObject.Parse(@"{""you_are_previous_loser"":true}");
+            state.TeamDecision = JObject.Parse(@"{""decision_type"":""turn_order""}");
 
             Assert.IsNotNull(BoardDisplay.UnsupportedReason(state));
         }
@@ -292,6 +293,150 @@ namespace MoodSwings.Tests
             state.Game.DeckType = deckType;
 
             Assert.AreEqual(expected, BoardDisplay.HasSeparateDecks(state));
+        }
+
+        // --- best-of-three matches -------------------------------------------------------------------
+
+        private static GameState InMatch(int yourWins, int theirWins, int gameNumber = 2, Action<GameState> edit = null)
+        {
+            var state = BoardFixtures.Load(405);
+            state.Round.PendingDecision = null;
+            state.Game.MatchGameNumber = gameNumber;
+            state.GameMatch = new MatchSummary
+            {
+                Status = "in_progress",
+                YourWins = yourWins,
+                OpponentWins = theirWins,
+                GamesToWin = 2,
+                Players =
+                {
+                    new MatchPlayer { UserId = 2, Username = "bshaftoe", Wins = yourWins, IsYou = true },
+                    new MatchPlayer { UserId = 18, Username = "BotSage", Wins = theirWins },
+                },
+            };
+            edit?.Invoke(state);
+            return state;
+        }
+
+        [Test]
+        public void AMatchGame_ShowsWhichGameItIsAndTheScore()
+        {
+            var state = InMatch(1, 0);
+
+            Assert.AreEqual("Game 2  -  Match: you 1 - 0 BotSage", BoardDisplay.MatchLine(state));
+            StringAssert.Contains("Game 2  -  Match: you 1 - 0 BotSage", BoardDisplay.HeaderLine(state, false, DateTime.UtcNow));
+            Assert.IsNull(BoardDisplay.MatchLine(BoardFixtures.Load(405)), "a one-off game has none");
+        }
+
+        [Test]
+        public void TheRealServersMatchShape_Parses()
+        {
+            var game = Newtonsoft.Json.JsonConvert.DeserializeObject<GameSummary>(
+                @"{""id"":1,""match_game_number"":2,""game_match"":{""status"":""in_progress"",""your_wins"":1,""opponent_wins"":0,
+                    ""games_to_win"":2,""winner_usernames"":[],""allow_sideboarding"":false,
+                    ""players"":[{""user_id"":2,""username"":""me"",""wins"":1,""is_you"":true},{""user_id"":18,""username"":""BotSage"",""wins"":0,""is_you"":false}]}}");
+
+            Assert.AreEqual(2, game.MatchGameNumber);
+            Assert.AreEqual(1, game.GameMatch.YourWins);
+            Assert.AreEqual("BotSage", game.GameMatch.Players[1].Username);
+            Assert.AreEqual("Traditional  -  Structure  -  First to 3  -  Game 2 of the match (you 1 - 0)", GameDisplay.Settings(Fill(game)));
+        }
+
+        private static GameSummary Fill(GameSummary game)
+        {
+            game.Format = "standard";
+            game.DeckType = "structure";
+            game.WinsNeeded = 3;
+            return game;
+        }
+
+        [Test]
+        public void AFinishedMatch_ReadsAsOverInTheList()
+        {
+            var game = Fill(new GameSummary { MatchGameNumber = 3, GameMatch = new MatchSummary { Status = "completed", YourWins = 2, OpponentWins = 1 } });
+
+            StringAssert.EndsWith("Game 3 of the match (2 - 1, over)", GameDisplay.Settings(game));
+        }
+
+        [Test]
+        public void TheLoserOfTheLastGame_IsAskedWhoGoesFirst_EveryoneElseWaits()
+        {
+            var asked = InMatch(1, 0, edit: s => s.FirstPlayerDecision = new FirstPlayerDecision { YouArePreviousLoser = true, DefaultUserId = 18 });
+            var waiting = InMatch(0, 1, edit: s => s.FirstPlayerDecision = new FirstPlayerDecision { YouArePreviousLoser = false, DefaultUserId = 2 });
+
+            Assert.IsTrue(BoardDisplay.NeedsFirstPlayerChoice(asked));
+            Assert.AreEqual("Choose who goes first", BoardDisplay.TurnBanner(asked));
+            Assert.IsTrue(BoardDisplay.BannerNeedsViewer(asked));
+            Assert.AreEqual("BotSage", BoardDisplay.DefaultFirstPlayerName(asked));
+
+            Assert.IsFalse(BoardDisplay.NeedsFirstPlayerChoice(waiting));
+            Assert.AreEqual("Waiting for BotSage to choose who goes first", BoardDisplay.TurnBanner(waiting));
+            Assert.IsFalse(BoardDisplay.BannerNeedsViewer(waiting));
+        }
+
+        [Test]
+        public void TheFirstPlayerChoice_DoesNotMakeAGameUnplayable()
+        {
+            var state = InMatch(1, 0, edit: s => s.FirstPlayerDecision = new FirstPlayerDecision { YouArePreviousLoser = true, DefaultUserId = 18 });
+
+            Assert.IsNull(BoardDisplay.UnsupportedReason(state), "a best-of-three is now playable");
+        }
+
+        [Test]
+        public void ADecidedMatch_IsAnnouncedOverTheGame()
+        {
+            var won = InMatch(2, 0, 2, s =>
+            {
+                s.Game.Status = "completed";
+                s.Game.WinnerUsernames = new List<string> { "bshaftoe" };
+                s.GameMatch.Status = "completed";
+                s.GameMatch.WinnerUsernames = new List<string> { "bshaftoe" };
+            });
+            var lost = InMatch(0, 2, 2, s =>
+            {
+                s.Game.Status = "completed";
+                s.Game.WinnerUsernames = new List<string> { "BotSage" };
+                s.GameMatch.Status = "completed";
+                s.GameMatch.WinnerUsernames = new List<string> { "BotSage" };
+            });
+
+            Assert.AreEqual("You won the match!", BoardDisplay.TurnBanner(won));
+            Assert.AreEqual("Match over  -  BotSage won", BoardDisplay.TurnBanner(lost));
+        }
+
+        [Test]
+        public void AGameThatEndedWithTheMatchOn_PointsToTheNextOne()
+        {
+            var state = InMatch(1, 1, 2, s =>
+            {
+                s.Game.Status = "completed";
+                s.Game.WinnerUsernames = new List<string> { "bshaftoe" };
+                s.GameMatch.NextGameId = 777;
+            });
+
+            Assert.AreEqual(777, BoardDisplay.NextGameId(state));
+            Assert.AreEqual("You won!", BoardDisplay.TurnBanner(state), "the match isn't decided, so the game's own result stands");
+
+            state.Game.Status = "in_progress";
+            Assert.IsNull(BoardDisplay.NextGameId(state), "only once this game is over");
+        }
+
+        [Test]
+        public void ChoosingWhoGoesFirst_SendsThePlayFirstFlag()
+        {
+            var transport = new FakeHttpTransport();
+            var api = new ApiClient(new ApiConfig("https://example.test"), transport);
+            var session = BoardSession.ForPlayer(api, 406);
+            transport.Enqueue(200, @"{""status"":""ok""}");
+            transport.Enqueue(200, TestFixtures.Read("game_406_state"));
+
+            var result = session.ChoosePlayFirstAsync(true).GetAwaiter().GetResult();
+
+            Assert.IsTrue(result.Ok);
+            Assert.AreEqual("https://example.test/app/games/draft/first-player-choice", transport.Requests[0].Url);
+            var body = JObject.Parse(transport.Requests[0].Body);
+            Assert.AreEqual(406, (int)body["game_id"]);
+            Assert.IsTrue((bool)body["play_first"]);
         }
 
         [Test]

@@ -97,6 +97,14 @@ namespace MoodSwings.Core
         /// </summary>
         public bool SynchronousMode { get; set; }
 
+        /// <summary>
+        /// First to win two games, with each next game created for you. Two players only, because with more
+        /// "the opponent" isn't one person.
+        /// </summary>
+        public bool BestOfThree { get; set; }
+
+        public bool BestOfThreeAvailable => (Format == TraditionalFormat || Format == DuelFormat) && PlayerCount == 2;
+
         /// <summary>Friends and bots to seat directly. Ignored when posting to the open lobby.</summary>
         public List<int> OpponentUserIds { get; set; } = new List<int>();
 
@@ -144,6 +152,11 @@ namespace MoodSwings.Core
             if (!SynchronousModeAvailable(synchronousModeAllowedByServer))
             {
                 SynchronousMode = false;
+            }
+
+            if (!BestOfThreeAvailable)
+            {
+                BestOfThree = false;
             }
 
             if (!SupportsDeck(DeckType))
@@ -225,6 +238,7 @@ namespace MoodSwings.Core
             return new GameSetup
             {
                 Format = game.Format,
+                BestOfThree = game.GameMatch != null,
                 DeckType = game.DeckType,
                 WinsNeeded = game.WinsNeeded > 0 ? game.WinsNeeded : DefaultWinsNeeded,
                 DefaultSelectionsMode = game.DefaultSelectionsMode,
@@ -247,6 +261,11 @@ namespace MoodSwings.Core
             if (SynchronousMode)
             {
                 body["synchronous_mode"] = true;
+            }
+
+            if (BestOfThree && BestOfThreeAvailable)
+            {
+                body["best_of_three"] = true;
             }
 
             return body;

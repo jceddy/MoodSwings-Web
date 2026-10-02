@@ -116,6 +116,10 @@ namespace MoodSwings.Core
         public Task<BoardActionResult> RespondAsync(JObject choices) =>
             ActAsync("Couldn't send your response.", () => _api.RespondToDecisionAsync(GameId, choices));
 
+        /// <summary>Game 2 or 3 of a match: the previous loser says whether they go first.</summary>
+        public Task<BoardActionResult> ChoosePlayFirstAsync(bool playFirst) =>
+            ActAsync("Couldn't record that choice.", () => _api.ChoosePlayFirstAsync(GameId, playFirst));
+
         /// <summary>Confirms you're ready, in a synchronous game's ready check.</summary>
         public Task<BoardActionResult> MarkReadyAsync() =>
             ActAsync("Couldn't confirm you're ready.", () => _api.MarkReadyAsync(GameId));
