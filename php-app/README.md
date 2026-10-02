@@ -8127,6 +8127,36 @@ room, else on its own row) that returns to the game picker
 With 0 or 1 active games the button is omitted (`ms:games:0` itself falls
 back to the no-game message / the single board).
 
+**Grid Draft via Discord** (2 players): the `Limited` menu's `Grid Draft`
+(`ms:gd:0`) asks for a card pool (Random, jceddy's 75 or One of each --
+not Structure, whose 45 cards fall short of Grid Draft's 54-card target),
+then `vs Practice Bot`/`vs a Friend` (the same `ms:{qd|gd}pool`/`botmenu`/
+`bot`/`invite`/`with` flow Quick Draft uses, now shared through
+`DRAFT_MODES`). While the match is `drafting` the board is the pick
+screen (`gridDraftPickMessage()`): an embedded **picture of the grid**
+(`GridImageRenderer`, served by the signed, unauthenticated
+`/discord/grid-image` route) with a numbered right-pointing arrow along
+the left edge for each row and an up-pointing arrow along the bottom for
+each column (dimmed once its whole line is taken; taken cells show as
+crossed-out slots). Every arrow has its own number -- rows are 1..N down
+the left, columns N+1..2N along the bottom (1-3 and 4-6 on the usual 3x3
+grid) -- so a pick is a single number and "row 2" can never be mistaken
+for "column 2". On your turn a select lists the numbers of the lines
+still holding cards, each described by the cards it would take
+(`ms:gdpick:{gameId}` -> `submitGridDraftPick()`). What each
+player has drafted is on every screen as a one-line tally (count and
+colors) plus a `Drafted Cards` button (`ms:gddrafted:{gameId}`) listing
+every card each player has taken, grouped by color -- Grid Draft is open
+information, so the opponent's picks are shown too. The grid picture's
+URL carries the cells themselves (`cells` = catalog card ids in
+row-major order, blank for a taken cell) and the HMAC covers them, so the
+image is a pure function of the URL: nothing is looked up, an old message
+keeps the grid it was posted with, and a game can't be probed by guessing
+ids. A practice bot picks on the same click (`advanceAutomatedTurns()`);
+against a friend the screen shows "Waiting on ..." until `Refresh`. Once
+drafting ends it is the shared Sealed Deck/Quick Draft deck-building
+screen, then a best-of-three. 3-4 player Grid Draft stays web-only.
+
 **Advance Turn via Discord** (reported live: "the discord client needs to
 show the Advance turn button when appropriate, otherwise a game will get
 stuck") -- a player with the "pause at the start of your turn" setting
