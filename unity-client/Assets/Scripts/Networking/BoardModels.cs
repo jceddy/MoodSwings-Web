@@ -7,9 +7,9 @@ namespace MoodSwings.Networking
     /// <summary>
     /// A card as it appears in a hand, in play, or in the discard pile. One
     /// shape serves all three; fields that don't apply to a zone are null.
-    /// Only what the board draws is modeled: the server sends more (choice
-    /// fields, copy simulation, chaos effects...) that later phases will need
-    /// for playing cards.
+    /// Modeled: what the board draws, plus what playing the card asks for (its
+    /// choice fields). The server also sends chaos-draft effects and more that
+    /// later phases will need.
     /// </summary>
     public class BoardCard
     {
@@ -49,6 +49,29 @@ namespace MoodSwings.Networking
 
         [JsonProperty("is_playable")]
         public bool IsPlayable { get; set; }
+
+        /// <summary>In play only: this mood still has a play grant (Hope, Grace) that is lost if it leaves play.</summary>
+        [JsonProperty("has_unused_play_grant")]
+        public bool HasUnusedPlayGrant { get; set; }
+
+        /// <summary>In play only: Creativity, playing as a copy of another mood.</summary>
+        [JsonProperty("is_creativity_copy")]
+        public bool IsCreativityCopy { get; set; }
+
+        /// <summary>The printed value has an alternate (dice) value; some effects can apply it to this card.</summary>
+        [JsonProperty("has_dice_value")]
+        public bool HasDiceValue { get; set; }
+
+        /// <summary>A hand card only: what playing it asks the player to choose. Empty when it asks nothing.</summary>
+        [JsonProperty("choice_fields")]
+        public List<ChoiceField> ChoiceFields { get; set; } = new List<ChoiceField>();
+
+        /// <summary>
+        /// Creativity only, in hand: what it would ask for if it copied each mood
+        /// in play, by that mood's card id. Null for every other card.
+        /// </summary>
+        [JsonProperty("copy_simulation")]
+        public Dictionary<int, CopySimulation> CopySimulation { get; set; }
 
         /// <summary>In play only: another effect is switching this mood's own ability off.</summary>
         [JsonProperty("is_suppressed")]
@@ -117,6 +140,13 @@ namespace MoodSwings.Networking
 
         [JsonProperty("team_id")]
         public int? TeamId { get; set; }
+
+        /// <summary>
+        /// Synchronous games: how many timeouts this player can still absorb
+        /// before the clock really counts against them.
+        /// </summary>
+        [JsonProperty("timeout_extensions_banked")]
+        public int TimeoutExtensionsBanked { get; set; }
     }
 
     /// <summary>The viewer. A spectator has no seat, so the id and hand may be absent.</summary>
@@ -133,6 +163,10 @@ namespace MoodSwings.Networking
 
         [JsonProperty("is_your_turn")]
         public bool IsYourTurn { get; set; }
+
+        /// <summary>Open Team Play only: the viewer's partner.</summary>
+        [JsonProperty("teammate_game_player_id")]
+        public int? TeammateGamePlayerId { get; set; }
 
         /// <summary>The "Advance Turn" pause: the new turn is waiting for you to acknowledge it.</summary>
         [JsonProperty("turn_pending_acknowledgment")]
@@ -160,9 +194,9 @@ namespace MoodSwings.Networking
         [JsonProperty("played_card_name")]
         public string PlayedCardName { get; set; }
 
-        /// <summary>What to ask the player for (key, label, type, required). Kept raw until choices are answerable.</summary>
+        /// <summary>What to ask the player for. Only present for the player being asked.</summary>
         [JsonProperty("field")]
-        public JObject Field { get; set; }
+        public ChoiceField Field { get; set; }
     }
 
     public class BoardRound
@@ -186,15 +220,63 @@ namespace MoodSwings.Networking
         [JsonProperty("plays_remaining")]
         public int PlaysRemaining { get; set; }
 
+        /// <summary>Visible to everyone: the current turn holder is waiting to acknowledge the start of their turn.</summary>
+        [JsonProperty("turn_pending_acknowledgment")]
+        public bool TurnPendingAcknowledgment { get; set; }
+
+        /// <summary>Moods in play whose abilities change how this round will be scored.</summary>
+        [JsonProperty("scoring_effects")]
+        public List<EffectNote> ScoringEffects { get; set; } = new List<EffectNote>();
+
+        /// <summary>Moods in play changing the board as a whole (a declared color, a color ban).</summary>
+        [JsonProperty("board_effects")]
+        public List<EffectNote> BoardEffects { get; set; } = new List<EffectNote>();
+
         [JsonProperty("banned_colors")]
         public List<string> BannedColors { get; set; } = new List<string>();
 
         [JsonProperty("pending_decision")]
         public PendingDecision PendingDecision { get; set; }
 
-        /// <summary>What each player would score if the round ended now, when the server computes one. Kept raw; not drawn yet.</summary>
+        /// <summary>What each player would score if the round ended now; only while a scoring-time decision is outstanding.</summary>
         [JsonProperty("scoring_preview")]
-        public JToken ScoringPreview { get; set; }
+        public ScoringPreview ScoringPreview { get; set; }
+    }
+
+    /// <summary>One line describing an effect that's currently in force.</summary>
+    public class EffectNote
+    {
+        [JsonProperty("description")]
+        public string Description { get; set; }
+    }
+
+    public class ScoringPreview
+    {
+        /// <summary>Score so far by game_player_id.</summary>
+        [JsonProperty("scores")]
+        public Dictionary<int, int> Scores { get; set; } = new Dictionary<int, int>();
+
+        [JsonProperty("sneakiness_swaps")]
+        public List<ScoreSwap> SneakinessSwaps { get; set; } = new List<ScoreSwap>();
+    }
+
+    public class ScoreSwap
+    {
+        [JsonProperty("game_player_id")]
+        public int GamePlayerId { get; set; }
+
+        [JsonProperty("swaps_with_game_player_id")]
+        public int SwapsWithGamePlayerId { get; set; }
+    }
+
+    /// <summary>A repeated board state this turn; repeating it again ends the turn.</summary>
+    public class LoopWarning
+    {
+        [JsonProperty("game_player_id")]
+        public int GamePlayerId { get; set; }
+
+        [JsonProperty("occurrence_count")]
+        public int OccurrenceCount { get; set; }
     }
 
     public class BoardGameInfo
@@ -222,6 +304,17 @@ namespace MoodSwings.Networking
 
         [JsonProperty("synchronous_mode")]
         public bool SynchronousMode { get; set; }
+
+        /// <summary>Synchronous games: when the player on the clock runs out of time, "yyyy-MM-dd HH:mm:ss" in UTC.</summary>
+        [JsonProperty("action_deadline_at")]
+        public string ActionDeadlineAt { get; set; }
+
+        [JsonProperty("action_deadline_game_player_id")]
+        public int? ActionDeadlineGamePlayerId { get; set; }
+
+        /// <summary>Set only for the player it's about, once the same board state has repeated this turn.</summary>
+        [JsonProperty("loop_warning")]
+        public LoopWarning LoopWarning { get; set; }
     }
 
     public class BoardEvent
@@ -292,5 +385,40 @@ namespace MoodSwings.Networking
 
         [JsonProperty("chat_messages")]
         public List<BoardChatMessage> ChatMessages { get; set; } = new List<BoardChatMessage>();
+
+        // The three below are present (non-null) only for formats and moments this client
+        // can't play yet; BoardDisplay.UnsupportedReason() reads them.
+
+        /// <summary>Game 2 or 3 of a match: who goes first is still being decided.</summary>
+        [JsonProperty("first_player_decision")]
+        public JToken FirstPlayerDecision { get; set; }
+
+        /// <summary>Team play: the partners are choosing who acts.</summary>
+        [JsonProperty("team_decision")]
+        public JToken TeamDecision { get; set; }
+
+        /// <summary>Team play: the opening card pass between partners.</summary>
+        [JsonProperty("initial_card_pass")]
+        public JToken InitialCardPass { get; set; }
+    }
+
+    /// <summary>
+    /// What a successful play, pass, response, resignation or turn change
+    /// reports. The board itself is read afresh from GET /games/state.
+    /// </summary>
+    public class GameActionResponse : ApiEnvelope
+    {
+        [JsonProperty("round_scored")]
+        public bool RoundScored { get; set; }
+
+        [JsonProperty("game_completed")]
+        public bool GameCompleted { get; set; }
+
+        [JsonProperty("winner_game_player_id")]
+        public int? WinnerGamePlayerId { get; set; }
+
+        /// <summary>The action stopped on a question for some player.</summary>
+        [JsonProperty("pending_decision")]
+        public bool PendingDecision { get; set; }
     }
 }
