@@ -22,6 +22,9 @@ namespace MoodSwings.Core
 
         public static LobbyFlow Lobby { get; private set; }
 
+        /// <summary>Sound and vibration switches for this device.</summary>
+        public static DeviceSettings Device { get; private set; }
+
         public static UiTheme Theme { get; private set; }
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
@@ -55,6 +58,7 @@ namespace MoodSwings.Core
             Friends = new FriendsFlow(api);
             Preferences = new PreferencesFlow(api, Auth);
             Lobby = new LobbyFlow(api);
+            Device = new DeviceSettings(preferences ?? new InMemoryKeyValueStore());
             if (Theme == null)
             {
                 Theme = ScriptableObject.CreateInstance<UiTheme>();

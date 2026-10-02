@@ -1,5 +1,7 @@
 using System.Collections;
+using System.Collections.Generic;
 using System.Linq;
+using MoodSwings.Core;
 using MoodSwings.UI;
 using Newtonsoft.Json.Linq;
 using NUnit.Framework;
@@ -63,6 +65,39 @@ namespace MoodSwings.Tests
         }
 
         private static BoardScreen Board() => PhaseFiveSceneTests.Board();
+
+        private sealed class RecordingSound : ISoundPlayer
+        {
+            public List<SoundId> Played { get; } = new List<SoundId>();
+
+            public void Play(SoundId sound) => Played.Add(sound);
+        }
+
+        private sealed class RecordingHaptics : IHaptics
+        {
+            public List<HapticKind> Pulses { get; } = new List<HapticKind>();
+
+            public void Pulse(HapticKind kind) => Pulses.Add(kind);
+        }
+
+        private RecordingSound _sound;
+        private RecordingHaptics _haptics;
+
+        [SetUp]
+        public void ListenForFeedback()
+        {
+            _sound = new RecordingSound();
+            _haptics = new RecordingHaptics();
+            GameFeedback.Sound = _sound;
+            GameFeedback.Haptics = _haptics;
+        }
+
+        [TearDown]
+        public void StopListening()
+        {
+            GameFeedback.Sound = null;
+            GameFeedback.Haptics = null;
+        }
 
         // --- drag to play ---------------------------------------------------------------------------
 
@@ -207,6 +242,155 @@ namespace MoodSwings.Tests
 
             Assert.IsNull(Card("Ambition").GetComponent<DraggableCard>(), "a mood in play");
             Assert.IsNull(Card("Frustration").GetComponent<DraggableCard>(), "an opponent's mood");
+        }
+
+        // --- cues: sounds, buzzes, cards sliding in, results ----------------------------------------------
+
+        [UnityTest]
+        public IEnumerator TheFirstDrawOfAGame_MakesNoSoundAndMovesNothing()
+        {
+            var server = YourTurn();
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+
+            Assert.AreEqual(0, _sound.Played.Count);
+            Assert.AreEqual(0, _haptics.Pulses.Count);
+            Assert.IsNull(PhaseFiveSceneTests.Child("Flying card"));
+        }
+
+        [UnityTest]
+        public IEnumerator ACardPlayedByAnOpponent_SlidesInAndThumps()
+        {
+            var server = YourTurn();
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+
+            server.State = PhaseFiveSceneTests.Load(406, s => ((JArray)s["in_play"]).Add(JObject.Parse(
+                "{\"card_id\":99001,\"catalog_card_id\":1,\"name\":\"Newcomer\",\"color\":\"red\",\"base_color\":\"red\"," +
+                "\"value\":3,\"base_value\":3,\"owner_game_player_id\":910,\"suppressions\":[],\"choice_fields\":[]}")));
+            // Look the moment the card appears: the slide only lasts a moment.
+            var waited = 0f;
+            while (PhaseFiveSceneTests.Child("Card Newcomer") == null && waited < 6f)
+            {
+                waited += Time.unscaledDeltaTime;
+                yield return null;
+            }
+
+            CollectionAssert.AreEqual(new[] { SoundId.CardPlay }, _sound.Played);
+            Assert.AreEqual(0, _haptics.Pulses.Count, "an opponent's play doesn't buzz you");
+            var card = Card("Newcomer");
+            Assert.AreEqual(0f, card.GetComponent<CanvasGroup>().alpha, "hidden while its stand-in is on the way");
+
+            // Mid-flight the stand-in is somewhere between its player's seat and the card's place.
+            yield return new WaitForSeconds(0.15f);
+            var flying = PhaseFiveSceneTests.Child("Flying card");
+            Assert.IsNotNull(flying, "a copy of the card is travelling");
+            Assert.AreNotEqual(card.transform.position, flying.position);
+            Assert.AreNotEqual(PhaseFiveSceneTests.Child("Seat BotSage").position, flying.position);
+
+            yield return new WaitForSeconds(0.6f);
+            Assert.IsNull(PhaseFiveSceneTests.Child("Flying card"), "it has landed");
+            Assert.AreEqual(1f, card.GetComponent<CanvasGroup>().alpha, "and the real card shows");
+        }
+
+        [UnityTest]
+        public IEnumerator TheTurnComingToYou_ChimesAndBuzzes()
+        {
+            var server = YourTurn(PhaseFiveSceneTests.Load(406, s =>
+            {
+                s["you"]["is_your_turn"] = false;
+                s["round"]["current_turn_game_player_id"] = 910;
+            }));
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+            Assert.AreEqual(0, _sound.Played.Count);
+
+            server.State = PhaseFiveSceneTests.Load(406);
+            yield return PhaseFiveSceneTests.Poll();
+
+            CollectionAssert.AreEqual(new[] { SoundId.YourTurn }, _sound.Played);
+            CollectionAssert.AreEqual(new[] { HapticKind.Medium }, _haptics.Pulses);
+        }
+
+        [UnityTest]
+        public IEnumerator WithSoundSwitchedOff_NothingPlays_ButItStillBuzzes()
+        {
+            var server = YourTurn(PhaseFiveSceneTests.Load(406, s =>
+            {
+                s["you"]["is_your_turn"] = false;
+                s["round"]["current_turn_game_player_id"] = 910;
+            }));
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+            AppServices.Device.SoundOn = false;
+
+            server.State = PhaseFiveSceneTests.Load(406);
+            yield return PhaseFiveSceneTests.Poll();
+
+            Assert.AreEqual(0, _sound.Played.Count);
+            Assert.AreEqual(1, _haptics.Pulses.Count);
+        }
+
+        [UnityTest]
+        public IEnumerator AQuestionForYou_GetsYourAttention()
+        {
+            var server = YourTurn(PhaseFiveSceneTests.Load(407, s => s["round"]["pending_decision"] = null));
+            yield return PhaseFiveSceneTests.OpenBoard(server, 407);
+
+            server.State = PhaseFiveSceneTests.Load(407);
+            yield return PhaseFiveSceneTests.Poll();
+
+            CollectionAssert.Contains(_sound.Played, SoundId.Attention);
+            CollectionAssert.Contains(_haptics.Pulses, HapticKind.Medium);
+        }
+
+        [UnityTest]
+        public IEnumerator AWonRound_IsAnnouncedForAMoment_WithAFanfare()
+        {
+            var server = YourTurn();
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+
+            server.State = PhaseFiveSceneTests.Load(406, s =>
+            {
+                s["round"]["round_number"] = 2;
+                s["players"][0]["total_wins"] = 1;
+            });
+            yield return PhaseFiveSceneTests.Poll();
+
+            Assert.AreEqual("You won the round!", Board().MessageText);
+            CollectionAssert.Contains(_sound.Played, SoundId.RoundWon);
+
+            yield return new WaitForSeconds(7.4f);
+            Assert.AreEqual(string.Empty, Board().MessageText, "and it fades on its own");
+        }
+
+        [UnityTest]
+        public IEnumerator AMessageFromAnotherPlayer_Blips()
+        {
+            var server = YourTurn();
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+
+            server.State = PhaseFiveSceneTests.Load(406, s => s["chat_messages"] = JArray.Parse(
+                "[{\"id\":1,\"sender_username\":\"BotSage\",\"message_text\":\"hi\",\"created_at\":\"2026-01-01 00:00:00\"}]"));
+            yield return PhaseFiveSceneTests.Poll();
+
+            CollectionAssert.AreEqual(new[] { SoundId.Chat }, _sound.Played);
+        }
+
+        [UnityTest]
+        public IEnumerator Settings_OffersTheSoundSwitch_AndRemembersIt()
+        {
+            var server = YourTurn();
+            yield return MainSceneTests.Launch(server.Handle, rememberedSession: "tok");
+            yield return MainSceneTests.WaitFor<HomeScreen>();
+            UnityEngine.Object.FindAnyObjectByType<ScreenRouter>().Show<SettingsScreen>();
+            yield return MainSceneTests.WaitFor<SettingsScreen>();
+
+            var toggle = PhaseTwoSceneTests.FindToggle("Sound effects");
+            Assert.IsNotNull(toggle);
+            Assert.IsTrue(toggle.isOn);
+
+            toggle.isOn = false;
+            yield return PhaseTwoSceneTests.Frames();
+
+            Assert.IsFalse(AppServices.Device.SoundOn);
+            Assert.IsNull(PhaseTwoSceneTests.FindToggle("Vibration"), "vibration is only offered on a phone");
         }
     }
 }

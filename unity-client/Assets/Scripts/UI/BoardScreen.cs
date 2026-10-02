@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -79,6 +80,20 @@ namespace MoodSwings.UI
         private Button _resignAction;
         private GameObject _actions;
 
+        private sealed class Flight
+        {
+            public RectTransform Card;
+            public CanvasGroup Group;
+            public BoardCard Mood;
+            public int OwnerId;
+            public float Width;
+        }
+
+        private GameState _previous;
+        private readonly HashSet<int> _entering = new HashSet<int>();
+        private readonly List<Flight> _flights = new List<Flight>();
+        private float _messageExpires;
+
         private BoardCard _playingCard;
         private string _decisionKey;
         private string _loopKey;
@@ -117,6 +132,17 @@ namespace MoodSwings.UI
             _playingCard = null;
             _decisionKey = null;
             _loopKey = null;
+            _previous = null;
+            _entering.Clear();
+            foreach (Transform child in transform)
+            {
+                if (child.name == "Flying card")
+                {
+                    child.gameObject.SetActive(false);
+                    Destroy(child.gameObject);
+                }
+            }
+
             CancelDrag();
             _chatError.text = string.Empty;
             SetMessage(string.Empty);
@@ -174,6 +200,13 @@ namespace MoodSwings.UI
 
         private void Update()
         {
+            // A result worth a few seconds of attention (a round won) fades on its own.
+            if (_messageExpires > 0f && Time.unscaledTime > _messageExpires)
+            {
+                _messageExpires = 0f;
+                SetMessage(string.Empty);
+            }
+
             // The action clock ticks every second; the rest of the board waits for the next poll.
             if (_session?.State == null || Time.unscaledTime < _nextHeaderUpdate)
             {
@@ -439,8 +472,9 @@ namespace MoodSwings.UI
             _chatOverlay.SetActive(false);
         }
 
-        private void SetMessage(string text, bool isError = true, bool fromRefresh = false)
+        private void SetMessage(string text, bool isError = true, bool fromRefresh = false, float forSeconds = 0f)
         {
+            _messageExpires = forSeconds > 0f ? Time.unscaledTime + forSeconds : 0f;
             _message.text = text ?? string.Empty;
             _message.color = isError ? AppServices.Theme.danger : AppServices.Theme.accent;
             _messageFromRefresh = fromRefresh && !string.IsNullOrEmpty(text);
@@ -482,6 +516,7 @@ namespace MoodSwings.UI
 
             var theme = AppServices.Theme;
             _loading.gameObject.SetActive(false);
+            React(state);
 
             _banner.text = BoardDisplay.TurnBanner(state);
             _banner.color = BoardDisplay.BannerNeedsViewer(state) ? theme.accent : theme.textPrimary;
@@ -506,6 +541,119 @@ namespace MoodSwings.UI
             BuildHand(theme, state);
             UpdateActions(state);
             SyncOverlays(state);
+            StartFlights();
+        }
+
+        // --- reacting to what just happened ----------------------------------------------------------
+
+        /// <summary>Works out what changed since the last look: sounds and buzzes, a moment's message, cards to slide in.</summary>
+        private void React(GameState state)
+        {
+            var cues = BoardCues.Between(_previous, state);
+            _previous = state;
+            foreach (var cue in cues)
+            {
+                if (cue.Kind == CueKind.CardPlayed)
+                {
+                    _entering.Add(cue.CardId);
+                }
+
+                if (!string.IsNullOrEmpty(cue.Text))
+                {
+                    SetMessage(cue.Text, isError: false, forSeconds: 7f);
+                }
+
+                GameFeedback.Play(cue, state.You.GamePlayerId, AppServices.Device);
+            }
+        }
+
+        private void NoteFlight(RectTransform card, BoardCard mood, int ownerId, float width)
+        {
+            if (!_entering.Contains(mood.CardId))
+            {
+                return;
+            }
+
+            // Hidden until its stand-in has flown to where it belongs.
+            var group = card.gameObject.AddComponent<CanvasGroup>();
+            group.alpha = 0f;
+            _flights.Add(new Flight { Card = card, Group = group, Mood = mood, OwnerId = ownerId, Width = width });
+        }
+
+        private void StartFlights()
+        {
+            if (_flights.Count > 0)
+            {
+                StartCoroutine(FlyCards(_flights.ToList()));
+            }
+
+            _flights.Clear();
+            _entering.Clear();
+        }
+
+        private IEnumerator FlyCards(List<Flight> flights)
+        {
+            yield return null; // the layout settles before positions mean anything
+            foreach (var flight in flights)
+            {
+                if (flight.Card != null)
+                {
+                    StartCoroutine(FlyOne(flight));
+                }
+            }
+        }
+
+        // A copy of the card slides from whoever played it to its place on the table, growing smaller as it lands.
+        private IEnumerator FlyOne(Flight flight)
+        {
+            const float seconds = 0.4f;
+            var target = flight.Card.position;
+            var source = SourceOf(flight.OwnerId) ?? target;
+
+            var ghost = CardView.Create(transform, flight.Mood, flight.Width, AppServices.Theme, showValue: true);
+            ghost.name = "Flying card";
+            ghost.anchorMin = ghost.anchorMax = ghost.pivot = new Vector2(0.5f, 0.5f);
+            var group = ghost.gameObject.AddComponent<CanvasGroup>();
+            group.blocksRaycasts = false;
+            group.interactable = false;
+            ghost.SetSiblingIndex(_detail.transform.GetSiblingIndex());
+
+            var start = Time.unscaledTime;
+            while (ghost != null && Time.unscaledTime - start < seconds)
+            {
+                var t = (Time.unscaledTime - start) / seconds;
+                var eased = 1f - (1f - t) * (1f - t) * (1f - t);
+                ghost.position = Vector3.Lerp(source, target, eased);
+                ghost.localScale = Vector3.one * Mathf.Lerp(1.4f, 1f, eased);
+                yield return null;
+            }
+
+            if (ghost != null)
+            {
+                ghost.gameObject.SetActive(false);
+                Destroy(ghost.gameObject);
+            }
+
+            if (flight.Group != null)
+            {
+                flight.Group.alpha = 1f;
+            }
+        }
+
+        /// <summary>Where a card played by this player comes from: your hand, or their seat.</summary>
+        private Vector3? SourceOf(int ownerId)
+        {
+            var state = _session?.State;
+            if (state == null)
+            {
+                return null;
+            }
+
+            var owner = BoardDisplay.PlayerById(state, ownerId);
+            var place = ownerId == state.You.GamePlayerId
+                ? _table.Find("Hand")
+                : owner != null ? _table.Find("Seat " + owner.Username) : null;
+            return place != null ? place.position : (Vector3?)null;
         }
 
         private static string LogText(GameState state)
@@ -569,7 +717,7 @@ namespace MoodSwings.UI
                 UnityEngine.Events.UnityAction open = () => ShowDetail(card, "In play for " + player.Username);
                 if (!card.IsSuppressed)
                 {
-                    CardView.Create(row.transform, card, width, theme, showValue: true, onClick: open);
+                    NoteFlight(CardView.Create(row.transform, card, width, theme, showValue: true, onClick: open), card, player.GamePlayerId, width);
                     continue;
                 }
 
@@ -579,6 +727,7 @@ namespace MoodSwings.UI
                 var tapped = CardView.Create(slot, card, width, theme, showValue: true, onClick: open, onItsSide: true);
                 tapped.anchorMin = tapped.anchorMax = tapped.pivot = new Vector2(0.5f, 0.5f);
                 tapped.anchoredPosition = Vector2.zero;
+                NoteFlight(tapped, card, player.GamePlayerId, width);
             }
         }
 
@@ -840,7 +989,11 @@ namespace MoodSwings.UI
         {
             if (result.Ok)
             {
-                SetMessage(result.Notice, isError: false);
+                // A round or game result the board already announced from the new state stays.
+                if (!string.IsNullOrEmpty(result.Notice) && _messageExpires == 0f)
+                {
+                    SetMessage(result.Notice, isError: false);
+                }
             }
             else
             {

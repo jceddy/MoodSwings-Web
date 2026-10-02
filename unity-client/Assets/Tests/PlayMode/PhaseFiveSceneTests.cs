@@ -295,7 +295,7 @@ namespace MoodSwings.Tests
 
             yield return Tap(ButtonNamed("Primary action"));
 
-            Assert.AreEqual("Game complete!", Board().MessageText);
+            Assert.AreEqual("You won the game!", Board().MessageText);
             Assert.AreEqual("You won!", Board().BannerText);
         }
 
