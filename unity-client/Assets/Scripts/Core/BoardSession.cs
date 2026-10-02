@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using MoodSwings.Networking;
@@ -124,7 +125,20 @@ namespace MoodSwings.Core
         public Task<BoardActionResult> MarkReadyAsync() =>
             ActAsync("Couldn't confirm you're ready.", () => _api.MarkReadyAsync(GameId));
 
-        public async Task<BoardActionResult> SendChatAsync(string text)
+        /// <summary>The team's proposal for who acts (turn order or the shared draw).</summary>
+        public Task<BoardActionResult> ProposeTeamDecisionAsync(int gamePlayerId) =>
+            ActAsync("Couldn't send that proposal.", () => _api.ProposeTeamDecisionAsync(GameId, gamePlayerId));
+
+        /// <summary>Agree (true) or disagree (false) with your partner's proposal.</summary>
+        public Task<BoardActionResult> ConfirmTeamDecisionAsync(bool approve) =>
+            ActAsync(approve ? "Couldn't confirm that." : "Couldn't send that back.", () => _api.ConfirmTeamDecisionAsync(GameId, approve));
+
+        /// <summary>Closed Team Play: the two hand cards passed to your partner.</summary>
+        public Task<BoardActionResult> SubmitInitialPassAsync(IEnumerable<int> cardIds) =>
+            ActAsync("Couldn't pass those cards.", () => _api.SubmitInitialPassAsync(GameId, cardIds));
+
+        /// <param name="channel">"table", or "team" to reach only your partner (Open Team Play).</param>
+        public async Task<BoardActionResult> SendChatAsync(string text, string channel = "table")
         {
             if (IsSpectating)
             {
@@ -136,7 +150,7 @@ namespace MoodSwings.Core
                 return new BoardActionResult { Message = "Type a message first." };
             }
 
-            var result = await _api.SendChatAsync(GameId, text.Trim());
+            var result = await _api.SendChatAsync(GameId, text.Trim(), channel);
             if (!result.Ok)
             {
                 return new BoardActionResult { Message = result.UserMessage("Couldn't send that message.") };

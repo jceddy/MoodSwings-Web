@@ -71,6 +71,19 @@ namespace MoodSwings.UI
         private Text _chatError;
         private ChoiceOverlay _choices;
         private ConfirmOverlay _confirm;
+        private RectTransform _teamPanel;
+        private Text _teamTitle;
+        private Text _teamStatus;
+        private RectTransform _teamButtons;
+        private string _teamKey;
+        private GameObject _teammateOverlay;
+        private Text _teammateTitle;
+        private RectTransform _teammateCards;
+        private GameObject _teammateButton;
+        private string _chatChannel = "table";
+        private Button _chatToTable;
+        private Button _chatToTeam;
+        private GameObject _chatChannelRow;
         private GameObject _firstPlayerOverlay;
         private Text _firstPlayerText;
         private Text _letOtherGoLabel;
@@ -126,6 +139,15 @@ namespace MoodSwings.UI
 
         public ConfirmOverlay Confirm => _confirm;
 
+        /// <summary>The box asking you to name (or agree to) who on your team acts is up.</summary>
+        public bool TeamDecisionOpen => _teamPanel != null && _teamPanel.gameObject.activeSelf;
+
+        /// <summary>Your partner's hand (Open Team Play) is showing.</summary>
+        public bool TeammateHandOpen => _teammateOverlay != null && _teammateOverlay.activeSelf;
+
+        /// <summary>Which channel the chat box sends to: "table", or "team" in Open Team Play.</summary>
+        public string ChatChannel => _chatChannel;
+
         /// <summary>The box asking you, as the previous game's loser, who goes first is up.</summary>
         public bool FirstPlayerChoiceOpen => _firstPlayerOverlay != null && _firstPlayerOverlay.activeSelf;
 
@@ -152,6 +174,9 @@ namespace MoodSwings.UI
             _decisionKey = null;
             _loopKey = null;
             _firstPlayerOverlay.SetActive(false);
+            _teamPanel.gameObject.SetActive(false);
+            _teamKey = null;
+            _chatChannel = "table";
             _previous = null;
             _entering.Clear();
             HideHover();
@@ -210,7 +235,7 @@ namespace MoodSwings.UI
                 return true;
             }
 
-            if (_detail.activeSelf || _logOverlay.activeSelf || _chatOverlay.activeSelf)
+            if (_detail.activeSelf || _logOverlay.activeSelf || _chatOverlay.activeSelf || _teammateOverlay.activeSelf)
             {
                 CloseOverlays();
                 return true;
@@ -307,12 +332,14 @@ namespace MoodSwings.UI
             UiFactory.Stretch(_loading.rectTransform);
 
             BuildHoverPreview(theme);
+            BuildTeammateOverlay(theme);
             BuildDetailOverlay(theme);
             _logOverlay = BuildTextOverlay(theme, "Recent events", out _logBody, out _);
             _chatOverlay = BuildTextOverlay(theme, "Chat", out _chatBody, out var chatPanel);
             BuildChatEntry(theme, chatPanel);
 
             BuildFirstPlayerOverlay(theme);
+            BuildTeamPanel(theme);
 
             // Last, so they sit on top of everything else.
             _choices = new ChoiceOverlay(transform, theme);
@@ -349,6 +376,14 @@ namespace MoodSwings.UI
 
             var log = UiFactory.Button(bar, "Log", theme, () => _logOverlay.SetActive(true), primary: false);
             PlaceHeaderButton((RectTransform)log.transform, 240f);
+
+            // Open Team Play: your partner's hand, which you're allowed to see.
+            var partner = UiFactory.Button(bar, "Partner's hand", theme, () => OpenTeammateHand(), primary: false);
+            partner.gameObject.name = "Partner hand button";
+            PlaceHeaderButton((RectTransform)partner.transform, 440f);
+            ((RectTransform)partner.transform).sizeDelta = new Vector2(260f, UiFactory.ControlHeight);
+            _teammateButton = partner.gameObject;
+            _teammateButton.SetActive(false);
         }
 
         private static void PlaceHeaderButton(RectTransform rect, float fromRight)
@@ -431,6 +466,144 @@ namespace MoodSwings.UI
             _hoverCaption = UiFactory.Label(_hoverPreview, string.Empty, 26, theme.textPrimary, TextAnchor.UpperCenter);
             _hoverCaption.supportRichText = true;
             _hoverPreview.gameObject.SetActive(false);
+        }
+
+        // Open Team Play: the partner's hand, laid out where it can be read; the board behind it is dimmed.
+        private void BuildTeammateOverlay(UiTheme theme)
+        {
+            var root = UiFactory.Create("Partner hand overlay", transform);
+            _teammateOverlay = root.gameObject;
+            UiFactory.Stretch(root);
+            root.gameObject.AddComponent<Image>().color = new Color(0f, 0f, 0f, 0.82f);
+            var close = root.gameObject.AddComponent<Button>();
+            close.targetGraphic = root.GetComponent<Image>();
+            close.transition = Selectable.Transition.None;
+            close.onClick.AddListener(() => _teammateOverlay.SetActive(false));
+
+            var panel = UiFactory.Create("Panel", root);
+            panel.anchorMin = panel.anchorMax = panel.pivot = new Vector2(0.5f, 0.5f);
+            panel.sizeDelta = new Vector2(1780f, 760f);
+            var layout = panel.gameObject.AddComponent<VerticalLayoutGroup>();
+            layout.spacing = 20f;
+            layout.padding = new RectOffset(20, 20, 10, 10);
+            layout.childControlWidth = true;
+            layout.childControlHeight = true;
+            layout.childForceExpandWidth = true;
+            layout.childForceExpandHeight = false;
+
+            _teammateTitle = UiFactory.Label(panel, string.Empty, 44, theme.accent, TextAnchor.MiddleCenter, FontStyle.Bold);
+            UiFactory.Size(_teammateTitle.gameObject, height: 64f);
+
+            _teammateCards = UiFactory.Create("Cards", panel);
+            var grid = _teammateCards.gameObject.AddComponent<GridLayoutGroup>();
+            grid.cellSize = new Vector2(200f, CardView.HeightFor(200f));
+            grid.spacing = new Vector2(16f, 16f);
+            grid.childAlignment = TextAnchor.UpperCenter;
+            grid.constraint = GridLayoutGroup.Constraint.FixedColumnCount;
+            grid.constraintCount = 8;
+
+            var hint = UiFactory.Label(panel, "Click a card to read it. Click anywhere else to close.", 24, theme.textMuted);
+            UiFactory.Size(hint.gameObject, height: 36f);
+
+            _teammateOverlay.SetActive(false);
+        }
+
+        private void OpenTeammateHand()
+        {
+            RefreshTeammateHand();
+            _teammateOverlay.SetActive(true);
+        }
+
+        private void RefreshTeammateHand()
+        {
+            var state = _session?.State;
+            foreach (Transform child in _teammateCards)
+            {
+                child.gameObject.SetActive(false);
+                Destroy(child.gameObject);
+            }
+
+            if (state?.You.TeammateHand == null)
+            {
+                return;
+            }
+
+            var name = BoardDisplay.PlayerById(state, state.You.TeammateGamePlayerId)?.Username ?? "Your partner";
+            _teammateTitle.text = $"{name}'s hand";
+            foreach (var cardInHand in state.You.TeammateHand)
+            {
+                var card = cardInHand;
+                CardView.Create(_teammateCards, card, 200f, AppServices.Theme, showValue: false,
+                    onClick: () => ShowDetail(card, $"In {name}'s hand"));
+            }
+        }
+
+        // Where a team says who on it acts: either partner names one, the other agrees or sends it back. Only the
+        // box itself takes clicks, so the board stays usable around it.
+        private void BuildTeamPanel(UiTheme theme)
+        {
+            _teamPanel = UiFactory.Create("Team decision", transform);
+            _teamPanel.anchorMin = _teamPanel.anchorMax = _teamPanel.pivot = new Vector2(0.5f, 0.6f);
+            _teamPanel.sizeDelta = new Vector2(1100f, 0f);
+            _teamPanel.gameObject.AddComponent<Image>().color = theme.panel;
+            var layout = _teamPanel.gameObject.AddComponent<VerticalLayoutGroup>();
+            layout.padding = new RectOffset(40, 40, 28, 28);
+            layout.spacing = 22f;
+            layout.childControlWidth = true;
+            layout.childControlHeight = true;
+            layout.childForceExpandWidth = true;
+            layout.childForceExpandHeight = false;
+            _teamPanel.gameObject.AddComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+            _teamTitle = UiFactory.Label(_teamPanel, string.Empty, 40, theme.accent, TextAnchor.MiddleCenter, FontStyle.Bold);
+            _teamStatus = UiFactory.Label(_teamPanel, string.Empty, 30, theme.textPrimary, TextAnchor.MiddleCenter);
+            _teamButtons = UiFactory.Row(_teamPanel, "Buttons", 24f, TextAnchor.MiddleCenter).GetComponent<RectTransform>();
+
+            _teamPanel.gameObject.SetActive(false);
+        }
+
+        private void ShowTeamDecision(GameState state)
+        {
+            var decision = state.TeamDecision;
+            var key = $"{state.Round.RoundNumber}|{decision.DecisionType}|{decision.Phase}|{decision.ProposedGamePlayerId}|{decision.TeamId}";
+            if (_teamKey == key && _teamPanel.gameObject.activeSelf)
+            {
+                return;
+            }
+
+            _teamKey = key;
+            _teamTitle.text = BoardDisplay.TeamDecisionTitle(state);
+            _teamStatus.text = BoardDisplay.TeamDecisionStatus(state);
+            foreach (Transform child in _teamButtons)
+            {
+                child.gameObject.SetActive(false);
+                Destroy(child.gameObject);
+            }
+
+            var theme = AppServices.Theme;
+            if (BoardDisplay.NeedsTeamProposal(state))
+            {
+                foreach (var id in decision.CandidateGamePlayerIds)
+                {
+                    var player = BoardDisplay.PlayerById(state, id);
+                    var seat = id;
+                    var label = player != null && player.GamePlayerId == state.You.GamePlayerId ? "Me" : player?.Username ?? "?";
+                    var button = UiFactory.Button(_teamButtons, label, theme, () => Run(() => Act(() => _session.ProposeTeamDecisionAsync(seat))));
+                    button.gameObject.name = "Propose " + label;
+                    UiFactory.Size(button.gameObject, 360f);
+                }
+            }
+            else
+            {
+                var agree = UiFactory.Button(_teamButtons, "Agree", theme, () => Run(() => Act(() => _session.ConfirmTeamDecisionAsync(true))));
+                agree.gameObject.name = "Agree";
+                UiFactory.Size(agree.gameObject, 320f);
+                var disagree = UiFactory.Button(_teamButtons, "Disagree", theme, () => Run(() => Act(() => _session.ConfirmTeamDecisionAsync(false))), primary: false);
+                disagree.gameObject.name = "Disagree";
+                UiFactory.Size(disagree.gameObject, 320f);
+            }
+
+            _teamPanel.gameObject.SetActive(true);
         }
 
         // Game 2 or 3 of a match: the previous loser, who can see their opening hand behind this, says who
@@ -541,6 +714,19 @@ namespace MoodSwings.UI
             UiFactory.Size(_chatError.gameObject, height: 30f);
             _chatError.transform.SetSiblingIndex(panel.childCount - 2);
 
+            // Open Team Play can also talk to just your partner.
+            var channels = UiFactory.Row(panel, "ChatChannels", 12f, TextAnchor.MiddleLeft);
+            _chatChannelRow = channels.gameObject;
+            channels.transform.SetSiblingIndex(panel.childCount - 2);
+            UiFactory.Size(_chatChannelRow, height: 56f);
+            _chatToTable = UiFactory.Button(channels.transform, "To the table", theme, () => SetChatChannel("table"), primary: false);
+            _chatToTable.gameObject.name = "Chat to table";
+            UiFactory.Size(_chatToTable.gameObject, 280f, 56f);
+            _chatToTeam = UiFactory.Button(channels.transform, "To my partner", theme, () => SetChatChannel("team"), primary: false);
+            _chatToTeam.gameObject.name = "Chat to partner";
+            UiFactory.Size(_chatToTeam.gameObject, 280f, 56f);
+            _chatChannelRow.SetActive(false);
+
             var row = UiFactory.Row(panel, "ChatEntry", 12f, TextAnchor.MiddleCenter);
             _chatEntry = row.gameObject;
             row.transform.SetSiblingIndex(panel.childCount - 2);
@@ -563,7 +749,7 @@ namespace MoodSwings.UI
         }
 
         private bool AnyPopUpOrDrag() =>
-            IsDragging || _detail.activeSelf || _logOverlay.activeSelf || _chatOverlay.activeSelf
+            IsDragging || _detail.activeSelf || _logOverlay.activeSelf || _chatOverlay.activeSelf || _teammateOverlay.activeSelf
             || _choices.IsOpen || _confirm.IsOpen;
 
         /// <summary>Wires a card to bring up the preview while a mouse rests on it.</summary>
@@ -634,8 +820,26 @@ namespace MoodSwings.UI
             }
         }
 
+        private void SetChatChannel(string channel)
+        {
+            _chatChannel = channel;
+            RefreshChatChannelButtons();
+        }
+
+        private void RefreshChatChannelButtons()
+        {
+            var theme = AppServices.Theme;
+            foreach (var (button, channel) in new[] { (_chatToTable, "table"), (_chatToTeam, "team") })
+            {
+                var chosen = _chatChannel == channel;
+                button.GetComponent<Image>().color = chosen ? theme.accent : Color.Lerp(theme.panel, Color.white, 0.10f);
+                button.GetComponentInChildren<Text>().color = chosen ? theme.background : theme.textPrimary;
+            }
+        }
+
         private void CloseOverlays()
         {
+            _teammateOverlay.SetActive(false);
             _detail.SetActive(false);
             _logOverlay.SetActive(false);
             _chatOverlay.SetActive(false);
@@ -695,7 +899,19 @@ namespace MoodSwings.UI
             _logBody.text = LogText(state);
             _chatBody.text = state.ChatMessages.Count == 0
                 ? "No messages yet."
-                : string.Join("\n\n", state.ChatMessages.Select(m => $"{m.SenderUsername}: {m.MessageText}"));
+                : string.Join("\n\n", state.ChatMessages.Select(m => (m.Channel == "team" ? "[team] " : string.Empty) + $"{m.SenderUsername}: {m.MessageText}"));
+            _chatChannelRow.SetActive(state.Game.Format == GameSetup.OpenTeamFormat && !BoardDisplay.IsSpectator(state));
+            if (!_chatChannelRow.activeSelf)
+            {
+                _chatChannel = "table";
+            }
+
+            RefreshChatChannelButtons();
+            _teammateButton.SetActive(state.You.TeammateHand != null);
+            if (_teammateOverlay.activeSelf)
+            {
+                RefreshTeammateHand();
+            }
 
             ClearTable();
             var zones = BoardLayout.Assign(state.Players, state.You.GamePlayerId);
@@ -918,9 +1134,11 @@ namespace MoodSwings.UI
             marker.gameObject.AddComponent<Image>().color = isTurn ? theme.accent : new Color(1f, 1f, 1f, 0.12f);
             UiFactory.Size(marker.gameObject, 16f, 16f);
 
+            var teamTag = BoardDisplay.TeamTag(state, player);
             var name = player.Username
                 + (player.IsBot ? "  (bot)" : string.Empty)
                 + (player.GamePlayerId == state.You.GamePlayerId ? "  (you)" : string.Empty)
+                + (teamTag != null ? $"  ({teamTag})" : string.Empty)
                 + (player.Resigned ? "  (resigned)" : string.Empty);
             var stats = $"Hand {player.HandCount}  -  Deck {player.DeckCount}  -  {BoardDisplay.ScoreLine(player)}";
             UiFactory.TwoLineText(plate.transform, theme, name, stats);
@@ -1394,10 +1612,42 @@ namespace MoodSwings.UI
             SyncOverlays(_session.State);
         }
 
-        private async Task SubmitDecision(ChoiceForm form)
+        // Closed Team Play opens with two cards passed, face down, to your partner. Asked through the same
+        // form as any other choice: pick exactly two from your hand.
+        private void OpenCardPass(GameState state, string key)
+        {
+            var field = new ChoiceField
+            {
+                Key = "card_ids",
+                Type = "hand_card",
+                Multi = true,
+                Required = true,
+                Label = "Cards to pass to your partner (face down)",
+                Count = new ChoiceCount { Min = 2, Max = 2 },
+            };
+            var form = ChoiceForm.ForDecision(state, new PendingDecision { DecisionType = "initial_card_pass", IsYou = true, Field = field });
+
+            _decisionKey = key;
+            _choices.Open(
+                form,
+                new ChoicePrompt
+                {
+                    Title = "Pass 2 cards to your partner",
+                    Context = "You won't see what they pass you until you've passed yours.",
+                    SubmitLabel = "Pass these cards",
+                    Cancellable = false,
+                },
+                () => Run(() => SubmitDecision(
+                    form, () => _session.SubmitInitialPassAsync(form.Selected("card_ids").Select(int.Parse)))),
+                null);
+        }
+
+        private Task SubmitDecision(ChoiceForm form) => SubmitDecision(form, () => _session.RespondAsync(form.BuildChoices()));
+
+        private async Task SubmitDecision(ChoiceForm form, System.Func<Task<BoardActionResult>> send)
         {
             _choices.SetBusy(true, "Sending...");
-            var result = await _session.RespondAsync(form.BuildChoices());
+            var result = await send();
             if (this == null)
             {
                 return;
@@ -1421,7 +1671,7 @@ namespace MoodSwings.UI
 
         private async Task SendChat()
         {
-            var result = await _session.SendChatAsync(_chatInput.text);
+            var result = await _session.SendChatAsync(_chatInput.text, _chatChannel);
             if (this == null)
             {
                 return;
@@ -1458,12 +1708,24 @@ namespace MoodSwings.UI
             }
 
             var decision = state.Round.PendingDecision;
+            string wantedKey = null;
+            System.Action open = null;
             if (decision != null && decision.IsYou && decision.Field != null && !_session.IsSpectating)
             {
-                var key = DecisionKey(state, decision);
-                if (_decisionKey != key || !_choices.IsOpen)
+                wantedKey = DecisionKey(state, decision);
+                open = () => OpenDecision(state, decision, wantedKey);
+            }
+            else if (BoardDisplay.NeedsCardPass(state) && !_session.IsSpectating)
+            {
+                wantedKey = "pass|" + state.Game.Id;
+                open = () => OpenCardPass(state, wantedKey);
+            }
+
+            if (wantedKey != null)
+            {
+                if (_decisionKey != wantedKey || !_choices.IsOpen)
                 {
-                    OpenDecision(state, decision, key);
+                    open();
                 }
             }
             else if (_decisionKey != null)
@@ -1474,6 +1736,16 @@ namespace MoodSwings.UI
                 }
 
                 _decisionKey = null;
+            }
+
+            if ((BoardDisplay.NeedsTeamProposal(state) || BoardDisplay.NeedsTeamConfirmation(state)) && !_session.IsSpectating)
+            {
+                ShowTeamDecision(state);
+            }
+            else if (_teamPanel.gameObject.activeSelf)
+            {
+                _teamPanel.gameObject.SetActive(false);
+                _teamKey = null;
             }
 
             var choosing = BoardDisplay.NeedsFirstPlayerChoice(state) && !_session.IsSpectating;

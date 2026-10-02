@@ -43,6 +43,12 @@ namespace MoodSwings.Core
                 parts.Add(matchLine);
             }
 
+            var teams = TeamScoreLine(state);
+            if (teams != null)
+            {
+                parts.Add(teams);
+            }
+
             if (spectating)
             {
                 parts.Add("watching");
@@ -106,6 +112,18 @@ namespace MoodSwings.Core
                     : $"Waiting for {FirstPlayerChooserNames(state)} to choose who goes first";
             }
 
+            if (state.InitialCardPass != null)
+            {
+                return NeedsCardPass(state)
+                    ? "Choose 2 cards to pass to your partner"
+                    : $"Waiting for {Names(state, state.Players.Where(p => !state.InitialCardPass.SubmittedGamePlayerIds.Contains(p.GamePlayerId)))} to pass their cards";
+            }
+
+            if (state.TeamDecision != null)
+            {
+                return TeamDecisionBanner(state);
+            }
+
             var decision = state.Round.PendingDecision;
             if (decision != null)
             {
@@ -150,6 +168,16 @@ namespace MoodSwings.Core
                 return NeedsFirstPlayerChoice(state);
             }
 
+            if (state.InitialCardPass != null)
+            {
+                return NeedsCardPass(state);
+            }
+
+            if (state.TeamDecision != null)
+            {
+                return NeedsTeamProposal(state) || NeedsTeamConfirmation(state);
+            }
+
             var decision = state.Round.PendingDecision;
             if (decision != null)
             {
@@ -168,7 +196,10 @@ namespace MoodSwings.Core
             "rotisserie_draft", "tiered_rotisserie_draft", "sealed_deck", "sealed_pool_of_the_day", "weekly_sealed_pool",
         };
 
-        private static bool Present(JToken token) => token != null && token.Type != JTokenType.Null;
+        private static readonly HashSet<string> PlayableFormats = new HashSet<string>
+        {
+            GameSetup.TraditionalFormat, GameSetup.DuelFormat, GameSetup.OpenTeamFormat, GameSetup.ClosedTeamFormat,
+        };
 
         /// <summary>
         /// Why this game can't be played from the app yet (null when it can): drafts,
@@ -178,10 +209,8 @@ namespace MoodSwings.Core
         public static string UnsupportedReason(GameState state)
         {
             var game = state.Game;
-            var unsupported = (!string.IsNullOrEmpty(game.Format) && game.Format != GameSetup.TraditionalFormat)
-                || (game.DeckType != null && DraftDeckTypes.Contains(game.DeckType))
-                || Present(state.TeamDecision)
-                || Present(state.InitialCardPass);
+            var unsupported = (!string.IsNullOrEmpty(game.Format) && !PlayableFormats.Contains(game.Format))
+                || (game.DeckType != null && DraftDeckTypes.Contains(game.DeckType));
             return unsupported ? "This kind of game can't be played in the app yet - open it on the web to play." : null;
         }
 
@@ -213,6 +242,130 @@ namespace MoodSwings.Core
 
             return $"Deck {count}";
         }
+
+        // --- team play ---------------------------------------------------------------------------
+
+        public static bool IsTeamGame(GameState state) =>
+            state.Game.Format == GameSetup.OpenTeamFormat || state.Game.Format == GameSetup.ClosedTeamFormat;
+
+        public static TeamInfo TeamOf(GameState state, int? gamePlayerId) =>
+            gamePlayerId.HasValue ? state.Teams?.FirstOrDefault(t => t.GamePlayerIds.Contains(gamePlayerId.Value)) : null;
+
+        /// <summary>The viewer's own team; null for a spectator or outside team play.</summary>
+        public static TeamInfo ViewerTeam(GameState state) => TeamOf(state, state.You.GamePlayerId);
+
+        private static string Names(GameState state, IEnumerable<BoardPlayer> players) =>
+            string.Join(" and ", players.Select(p => p.Username));
+
+        /// <summary>"Team 1 (Ann and Bo)".</summary>
+        public static string TeamLabel(GameState state, TeamInfo team) =>
+            $"Team {team.TeamId + 1} ({Names(state, team.GamePlayerIds.Select(id => PlayerById(state, id)).Where(p => p != null))})";
+
+        /// <summary>
+        /// What a plate adds in team play: "your teammate" or "opponent"; null for yourself and outside team play.
+        /// </summary>
+        public static string TeamTag(GameState state, BoardPlayer player)
+        {
+            var mine = ViewerTeam(state);
+            if (mine == null || player.GamePlayerId == state.You.GamePlayerId)
+            {
+                return null;
+            }
+
+            return mine.GamePlayerIds.Contains(player.GamePlayerId) ? "your teammate" : "opponent";
+        }
+
+        /// <summary>
+        /// "Your team 3 pts, 1 win  -  Opposing team 2 pts, 0 wins" (a spectator gets both teams by name).
+        /// Teams score together: both partners' points are added, and the higher total wins the round.
+        /// </summary>
+        public static string TeamScoreLine(GameState state)
+        {
+            if (state.Teams == null || state.Teams.Count == 0)
+            {
+                return null;
+            }
+
+            var mine = ViewerTeam(state);
+            return string.Join("  -  ", state.Teams.Select(team =>
+            {
+                var label = mine == null ? $"Team {team.TeamId + 1}" : team == mine ? "Your team" : "Opposing team";
+                return $"{label} {team.TotalScore} {(team.TotalScore == 1 ? "pt" : "pts")}, {team.TotalWins} {(team.TotalWins == 1 ? "win" : "wins")}";
+            }));
+        }
+
+        /// <summary>You are on the team being asked and may name who acts.</summary>
+        public static bool NeedsTeamProposal(GameState state) =>
+            state.TeamDecision != null && state.TeamDecision.CanPropose && Viewer(state) != null;
+
+        /// <summary>Your partner named someone and you have to agree or disagree.</summary>
+        public static bool NeedsTeamConfirmation(GameState state) =>
+            state.TeamDecision != null && state.TeamDecision.CanConfirm && Viewer(state) != null;
+
+        /// <summary>What the decision is about: "go next" or "draw the shared card".</summary>
+        public static string TeamDecisionAction(TeamDecision decision) =>
+            decision.DecisionType == "draw_recipient" ? "draw the shared card" : "go next";
+
+        private static bool OnDecidingTeam(GameState state) =>
+            ViewerTeam(state)?.TeamId == state.TeamDecision?.TeamId;
+
+        /// <summary>The short line for the banner while a team decides.</summary>
+        public static string TeamDecisionBanner(GameState state)
+        {
+            var decision = state.TeamDecision;
+            var action = TeamDecisionAction(decision);
+            if (NeedsTeamProposal(state))
+            {
+                return $"Choose who should {action}";
+            }
+
+            if (NeedsTeamConfirmation(state))
+            {
+                return "Your partner made a proposal - do you agree?";
+            }
+
+            return OnDecidingTeam(state)
+                ? $"Your team is deciding who should {action}"
+                : $"The other team is deciding who should {action}";
+        }
+
+        /// <summary>The sentence under the decision box: what is being asked, or who is being waited on.</summary>
+        public static string TeamDecisionStatus(GameState state)
+        {
+            var decision = state.TeamDecision;
+            var action = TeamDecisionAction(decision);
+            string Name(int? id) => PlayerById(state, id)?.Username ?? "a player";
+
+            if (decision.Phase == "propose")
+            {
+                return decision.CanPropose
+                    ? $"Choose who should {action}:"
+                    : $"Waiting for {string.Join(" or ", decision.CandidateGamePlayerIds.Select(id => Name(id)))} to choose who should {action}.";
+            }
+
+            var proposed = Name(decision.ProposedGamePlayerId);
+            if (decision.CanConfirm)
+            {
+                return $"{Name(decision.ProposerGamePlayerId)} proposed {proposed} to {action}. Do you agree?";
+            }
+
+            return OnDecidingTeam(state)
+                ? $"Waiting for your partner to confirm that {proposed} should {action}."
+                : $"Waiting for {Name(decision.ProposerGamePlayerId)}'s team to confirm that {proposed} should {action}.";
+        }
+
+        /// <summary>"Your team's turn" and so on: the heading over the decision box.</summary>
+        public static string TeamDecisionTitle(GameState state)
+        {
+            var own = OnDecidingTeam(state);
+            return state.TeamDecision.DecisionType == "draw_recipient"
+                ? (own ? "Your team's shared draw" : "Opposing team's shared draw")
+                : (own ? "Your team's turn" : "Opposing team's turn");
+        }
+
+        /// <summary>Closed Team Play: you haven't yet passed your two cards.</summary>
+        public static bool NeedsCardPass(GameState state) =>
+            state.InitialCardPass != null && !state.InitialCardPass.YouSubmitted && Viewer(state) != null;
 
         /// <summary>The viewer lost the previous game of the match and has to say who goes first in this one.</summary>
         public static bool NeedsFirstPlayerChoice(GameState state) =>

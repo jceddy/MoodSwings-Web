@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
@@ -116,12 +118,41 @@ namespace MoodSwings.Networking
                 "/games/draft/first-player-choice", new { game_id = gameId, play_first = playFirst }, cancellationToken);
         }
 
-        /// <summary>POST /games/chat -- says something to the table. Chat comes back through the board's polling.</summary>
+        /// <summary>
+        /// POST /games/chat -- says something to the table, or (channel "team", Open Team Play only) to your
+        /// partner. Chat comes back through the board's polling.
+        /// </summary>
         public static Task<ApiResult<ApiEnvelope>> SendChatAsync(
-            this ApiClient api, int gameId, string text, CancellationToken cancellationToken = default)
+            this ApiClient api, int gameId, string text, string channel = "table", CancellationToken cancellationToken = default)
         {
             return api.PostAsync<ApiEnvelope>(
-                "/games/chat", new { game_id = gameId, channel = "table", message_text = text }, cancellationToken);
+                "/games/chat", new { game_id = gameId, channel, message_text = text }, cancellationToken);
+        }
+
+        /// <summary>POST /games/team-decision (propose) -- names which of the team's two members should act.</summary>
+        public static Task<ApiResult<GameActionResponse>> ProposeTeamDecisionAsync(
+            this ApiClient api, int gameId, int proposedGamePlayerId, CancellationToken cancellationToken = default)
+        {
+            return api.PostAsync<GameActionResponse>(
+                "/games/team-decision",
+                new { game_id = gameId, action = "propose", proposed_game_player_id = proposedGamePlayerId },
+                cancellationToken);
+        }
+
+        /// <summary>POST /games/team-decision (confirm) -- the other partner agrees (true) or sends it back (false).</summary>
+        public static Task<ApiResult<GameActionResponse>> ConfirmTeamDecisionAsync(
+            this ApiClient api, int gameId, bool approve, CancellationToken cancellationToken = default)
+        {
+            return api.PostAsync<GameActionResponse>(
+                "/games/team-decision", new { game_id = gameId, action = "confirm", approve }, cancellationToken);
+        }
+
+        /// <summary>POST /games/initial-pass -- Closed Team Play: the two cards you pass to your partner, face down.</summary>
+        public static Task<ApiResult<GameActionResponse>> SubmitInitialPassAsync(
+            this ApiClient api, int gameId, IEnumerable<int> cardIds, CancellationToken cancellationToken = default)
+        {
+            return api.PostAsync<GameActionResponse>(
+                "/games/initial-pass", new { game_id = gameId, card_ids = cardIds.ToArray() }, cancellationToken);
         }
     }
 }

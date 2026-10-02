@@ -97,9 +97,8 @@ namespace MoodSwings.Tests
             Assert.IsFalse(BoardDisplay.CanAct(state));
         }
 
-        [TestCase("team")]
-        [TestCase("closed_team")]
-        [TestCase("duel")]
+        [TestCase("puzzle")]
+        [TestCase("tournament_cast")]
         public void OtherFormats_AreNotPlayableYet(string format)
         {
             var state = BoardFixtures.Load(406);
@@ -110,10 +109,10 @@ namespace MoodSwings.Tests
         }
 
         [Test]
-        public void ATeamDecision_MakesTheGameUnsupportedForNow()
+        public void AFormatThisClientDoesNotKnow_IsNotPlayable()
         {
             var state = BoardFixtures.Load(406);
-            state.TeamDecision = JObject.Parse(@"{""decision_type"":""turn_order""}");
+            state.Game.Format = "something_new";
 
             Assert.IsNotNull(BoardDisplay.UnsupportedReason(state));
         }

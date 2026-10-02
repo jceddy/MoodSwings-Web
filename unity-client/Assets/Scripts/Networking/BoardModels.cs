@@ -186,9 +186,13 @@ namespace MoodSwings.Networking
         [JsonProperty("is_your_turn")]
         public bool IsYourTurn { get; set; }
 
-        /// <summary>Open Team Play only: the viewer's partner.</summary>
+        /// <summary>Team play only: the viewer's partner.</summary>
         [JsonProperty("teammate_game_player_id")]
         public int? TeammateGamePlayerId { get; set; }
+
+        /// <summary>Open Team Play only: the partner's hand, which the viewer may see. Null in every other format (Closed Team keeps hands private).</summary>
+        [JsonProperty("teammate_hand")]
+        public List<BoardCard> TeammateHand { get; set; }
 
         /// <summary>The "Advance Turn" pause: the new turn is waiting for you to acknowledge it.</summary>
         [JsonProperty("turn_pending_acknowledgment")]
@@ -365,6 +369,10 @@ namespace MoodSwings.Networking
 
     public class BoardChatMessage
     {
+        /// <summary>"table" for everyone, or "team" for the sender's partner only (Open Team Play).</summary>
+        [JsonProperty("channel")]
+        public string Channel { get; set; }
+
         [JsonProperty("id")]
         public int Id { get; set; }
 
@@ -431,13 +439,81 @@ namespace MoodSwings.Networking
         [JsonProperty("game_match")]
         public MatchSummary GameMatch { get; set; }
 
-        /// <summary>Team play: the partners are choosing who acts.</summary>
+        /// <summary>Team play: the partners are choosing who acts. Null when nothing is being decided.</summary>
         [JsonProperty("team_decision")]
-        public JToken TeamDecision { get; set; }
+        public TeamDecision TeamDecision { get; set; }
 
-        /// <summary>Team play: the opening card pass between partners.</summary>
+        /// <summary>Closed Team Play: the opening card pass between partners, until all four have passed. Null otherwise.</summary>
         [JsonProperty("initial_card_pass")]
-        public JToken InitialCardPass { get; set; }
+        public InitialCardPass InitialCardPass { get; set; }
+
+        /// <summary>Team play: each team's members and totals; null in every other format.</summary>
+        [JsonProperty("teams")]
+        public List<TeamInfo> Teams { get; set; }
+    }
+
+    public class TeamInfo
+    {
+        /// <summary>0 or 1.</summary>
+        [JsonProperty("team_id")]
+        public int TeamId { get; set; }
+
+        [JsonProperty("game_player_ids")]
+        public List<int> GamePlayerIds { get; set; } = new List<int>();
+
+        /// <summary>Both members' points this game so far, added.</summary>
+        [JsonProperty("total_score")]
+        public int TotalScore { get; set; }
+
+        /// <summary>Rounds the team has won.</summary>
+        [JsonProperty("total_wins")]
+        public int TotalWins { get; set; }
+    }
+
+    /// <summary>
+    /// Something a team decides together: who takes the next turn, or who gets the shared draw. One partner
+    /// proposes, the other agrees or sends it back.
+    /// </summary>
+    public class TeamDecision
+    {
+        /// <summary>"turn_order" or "draw_recipient".</summary>
+        [JsonProperty("decision_type")]
+        public string DecisionType { get; set; }
+
+        /// <summary>Which team is deciding.</summary>
+        [JsonProperty("team_id")]
+        public int TeamId { get; set; }
+
+        /// <summary>"propose" while someone must name a candidate, "confirm" while the other partner must answer.</summary>
+        [JsonProperty("phase")]
+        public string Phase { get; set; }
+
+        [JsonProperty("candidate_game_player_ids")]
+        public List<int> CandidateGamePlayerIds { get; set; } = new List<int>();
+
+        [JsonProperty("proposer_game_player_id")]
+        public int? ProposerGamePlayerId { get; set; }
+
+        [JsonProperty("proposed_game_player_id")]
+        public int? ProposedGamePlayerId { get; set; }
+
+        /// <summary>The viewer may name a candidate now.</summary>
+        [JsonProperty("can_propose")]
+        public bool CanPropose { get; set; }
+
+        /// <summary>The viewer is the partner who has to agree or disagree.</summary>
+        [JsonProperty("can_confirm")]
+        public bool CanConfirm { get; set; }
+    }
+
+    /// <summary>Closed Team Play opens with each player passing two cards, face down, to their partner.</summary>
+    public class InitialCardPass
+    {
+        [JsonProperty("you_submitted")]
+        public bool YouSubmitted { get; set; }
+
+        [JsonProperty("submitted_game_player_ids")]
+        public List<int> SubmittedGamePlayerIds { get; set; } = new List<int>();
     }
 
     /// <summary>
