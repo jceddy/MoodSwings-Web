@@ -387,6 +387,40 @@ namespace MoodSwings.Tests
             Assert.IsTrue(UnityEngine.Object.FindObjectsByType<Text>(FindObjectsInactive.Exclude).Any(t => t.text == "[team] BotSage: psst"));
         }
 
+        // --- polish: lists and buttons -------------------------------------------------------------------------
+
+        [UnityTest]
+        public IEnumerator ACardList_GroupsEachPlayersCardsTogether_YoursFirst()
+        {
+            // The opponent's mood entered play first, so it comes first in the server's list.
+            var server = Serve(PhaseFiveSceneTests.Load(406, s =>
+            {
+                var inPlay = (JArray)s["in_play"];
+                var first = inPlay[0];
+                inPlay.RemoveAt(0);
+                inPlay.Add(first); // Frustration (BotSageQuick's), then Ambition (yours)
+                inPlay.Insert(0, JObject.Parse("{\"card_id\":97001,\"catalog_card_id\":1,\"name\":\"Extra\",\"color\":\"red\",\"base_color\":\"red\"," +
+                    "\"value\":2,\"base_value\":2,\"owner_game_player_id\":911,\"suppressions\":[],\"choice_fields\":[]}"));
+                s["you"]["hand"][0]["choice_fields"] = JArray.Parse(
+                    "[{\"key\":\"target_mood_id\",\"type\":\"mood\",\"scope\":\"any\",\"required\":false,\"label\":\"A mood\"}]");
+            }));
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.Child("Card Superiority").GetComponent<Button>());
+
+            float Y(string startsWith) =>
+                UnityEngine.Object.FindObjectsByType<Button>(FindObjectsInactive.Exclude).Single(b => b.name.StartsWith("Option " + startsWith)).transform.position.y;
+            var ambition = Y("Ambition");
+            var extra = Y("Extra");
+            var frustration = Y("Frustration");
+            Assert.Greater(ambition, extra, "your own mood is listed before the opponent's");
+            Assert.Greater(extra, frustration, "and an opponent's two moods sit together, in the order they entered play");
+
+            var headers = UnityEngine.Object.FindObjectsByType<Text>(FindObjectsInactive.Exclude)
+                .Where(t => t.text == "bshaftoe" || t.text == "BotSageQuick").ToList();
+            Assert.AreEqual(2, headers.Count, "each player is named once");
+        }
+
         // --- puzzles ----------------------------------------------------------------------------------------
 
         private const string TwoPuzzles =
@@ -429,6 +463,26 @@ namespace MoodSwings.Tests
             Assert.AreEqual("Try again", Named("Attempt First Test Puzzle").GetComponentInChildren<Text>().text);
             Assert.AreEqual("Attempt", Named("Attempt Second Test Puzzle").GetComponentInChildren<Text>().text);
             ScreenshotHelper.Capture("puzzles");
+        }
+
+        [UnityTest]
+        public IEnumerator ALongPuzzleDescription_WrapsWithoutSqueezingTheButton()
+        {
+            var server = Serve(PuzzleBoard());
+            var longText = string.Join(" ", Enumerable.Repeat("This goal is long and keeps going and going", 8));
+            server.PuzzlesJson =
+                "{\"status\":\"ok\",\"puzzles\":[" +
+                "{\"id\":1,\"slug\":\"a\",\"title\":\"Short\",\"description\":\"Short.\",\"difficulty\":\"easy\",\"max_plays\":null,\"solved\":true,\"best_plays\":2,\"solve_count\":1}," +
+                "{\"id\":2,\"slug\":\"b\",\"title\":\"Long\",\"description\":\"" + longText + "\",\"difficulty\":\"hard\",\"max_plays\":null,\"solved\":true,\"best_plays\":2,\"solve_count\":1}]}";
+            yield return OpenPuzzles(server);
+
+            var short1 = (RectTransform)Named("Attempt Short").transform;
+            var long1 = (RectTransform)Named("Attempt Long").transform;
+
+            Assert.AreEqual(220f, short1.rect.width, 0.5f);
+            Assert.AreEqual(220f, long1.rect.width, 0.5f, "the button keeps its size however long the description is");
+            Assert.AreEqual("Try again", long1.GetComponentInChildren<Text>().text);
+            ScreenshotHelper.Capture("puzzles-long-description");
         }
 
         [UnityTest]

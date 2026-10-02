@@ -266,13 +266,68 @@ namespace MoodSwings.Tests
         }
 
         [Test]
-        public void DiscardPileOptions_NameWhoseCardItWas()
+        public void DiscardPileOptions_AreListedUnderWhoseCardItWas()
         {
             var state = Table();
-            state.DiscardPile.Add(new BoardCard { CardId = 50, Name = "Gone", Color = "blue", Value = 1, LastOwnerName = "Ann" });
+            state.DiscardPile.Add(new BoardCard { CardId = 50, Name = "Gone", Color = "blue", Value = 1, LastOwnerName = "Ann", LastOwnerGamePlayerId = Ann });
             var field = Field(@"{""key"":""d"",""type"":""discard_card"",""label"":""x""}");
 
-            Assert.AreEqual("Gone (blue, 1) - Ann", FormFor(state, field).OptionsFor(field).Single().Label);
+            var option = FormFor(state, field).OptionsFor(field).Single();
+
+            Assert.AreEqual("Gone (blue, 1)", option.Label);
+            Assert.AreEqual("Ann", option.Group);
+        }
+
+        [Test]
+        public void DiscardPileOptions_AreGroupedByPlayer_YoursFirst()
+        {
+            var state = Table();
+            state.DiscardPile.Add(new BoardCard { CardId = 50, Name = "A1", Color = "red", Value = 1, LastOwnerName = "Ann", LastOwnerGamePlayerId = Ann });
+            state.DiscardPile.Add(new BoardCard { CardId = 51, Name = "M1", Color = "red", Value = 1, LastOwnerName = "Me", LastOwnerGamePlayerId = Me });
+            state.DiscardPile.Add(new BoardCard { CardId = 52, Name = "B1", Color = "red", Value = 1, LastOwnerName = "Bo", LastOwnerGamePlayerId = Bo });
+            state.DiscardPile.Add(new BoardCard { CardId = 53, Name = "A2", Color = "red", Value = 1, LastOwnerName = "Ann", LastOwnerGamePlayerId = Ann });
+            state.DiscardPile.Add(new BoardCard { CardId = 54, Name = "M2", Color = "red", Value = 1, LastOwnerName = "Me", LastOwnerGamePlayerId = Me });
+            var field = Field(@"{""key"":""d"",""type"":""discard_card"",""label"":""x""}");
+
+            var options = FormFor(state, field).OptionsFor(field);
+
+            CollectionAssert.AreEqual(new[] { "51", "54", "50", "53", "52" }, options.Select(o => o.Id).ToArray());
+            CollectionAssert.AreEqual(new[] { "Me", "Me", "Ann", "Ann", "Bo" }, options.Select(o => o.Group).ToArray());
+        }
+
+        [Test]
+        public void MoodOptions_AreGroupedByPlayer_YoursFirst_NoMatterWhenTheyEnteredPlay()
+        {
+            // Entered play in this order: Ann's, mine, Bo's, Ann's again, mine again.
+            var state = Table();
+            state.InPlay = new List<BoardCard>
+            {
+                Mood(20, "red", 4, Ann),
+                Mood(10, "red", 2, Me),
+                Mood(30, "blue", 3, Bo),
+                Mood(21, "green", 7, Ann),
+                Mood(11, "blue", 5, Me),
+            };
+            var field = Field(@"{""key"":""m"",""type"":""mood"",""scope"":""any"",""label"":""x""}");
+
+            var options = FormFor(state, field).OptionsFor(field);
+
+            CollectionAssert.AreEqual(new[] { "10", "11", "20", "21", "30" }, options.Select(o => o.Id).ToArray(),
+                "mine, then Ann's, then Bo's; each in the order they came into play");
+            CollectionAssert.AreEqual(new[] { "Me", "Me", "Ann", "Ann", "Bo" }, options.Select(o => o.Group).ToArray());
+        }
+
+        [Test]
+        public void ACardThatMayNameItself_ListsItWithYourOwnMoods()
+        {
+            var state = Table();
+            state.InPlay = new List<BoardCard> { Mood(20, "red", 4, Ann), Mood(10, "red", 2, Me) };
+            var field = Field(@"{""key"":""m"",""type"":""mood"",""scope"":""any"",""label"":""x"",""includes_self"":true}");
+
+            var options = FormFor(state, field).OptionsFor(field);
+
+            CollectionAssert.AreEqual(new[] { "999", "10", "20" }, options.Select(o => o.Id).ToArray());
+            CollectionAssert.AreEqual(new[] { "Me", "Me", "Ann" }, options.Select(o => o.Group).ToArray());
         }
 
         [Test]

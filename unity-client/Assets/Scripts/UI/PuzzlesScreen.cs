@@ -100,7 +100,13 @@ namespace MoodSwings.UI
 
             var button = UiFactory.Button(row, puzzle.Solved ? "Try again" : "Attempt", theme, () => Run(() => Attempt(puzzle)), primary: !puzzle.Solved);
             button.gameObject.name = "Attempt " + puzzle.Title;
-            UiFactory.Size(button.gameObject, 220f);
+
+            // A fixed size: a long description wraps in its own column, but it must never squeeze the button.
+            // (A layout group shrinks children from their preferred toward their minimum size, which is
+            // nothing unless it's set.)
+            var size = UiFactory.Size(button.gameObject, 220f);
+            size.minWidth = 220f;
+            size.flexibleWidth = 0f;
         }
 
         private async Task Attempt(PuzzleInfo puzzle)
