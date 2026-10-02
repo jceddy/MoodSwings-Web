@@ -345,6 +345,23 @@ namespace MoodSwings.Core
         }
 
         /// <summary>
+        /// "Color is now blue (printed red) - changed by Imagination" for a mood an effect has recolored, else null.
+        /// The server doesn't say which effect did it; the board-wide effect that says "all moods are blue" does.
+        /// </summary>
+        public static string ColorNote(GameState state, BoardCard card)
+        {
+            if (!card.IsRecolored)
+            {
+                return null;
+            }
+
+            var source = state?.Round.BoardEffects.FirstOrDefault(e =>
+                e.Description != null && e.Description.Contains($"all moods are {card.Color}"));
+            var text = $"Color is now {card.Color} (printed {card.BaseColor})";
+            return string.IsNullOrEmpty(source?.CardName) ? text : text + " - changed by " + source.CardName;
+        }
+
+        /// <summary>
         /// "Suppressed by Scorn" (or "...by Scorn and Shame"; just "Suppressed" when the server
         /// doesn't say by what). A suppressed mood's value is 0 and that is all it does.
         /// </summary>

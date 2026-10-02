@@ -26,7 +26,7 @@ namespace MoodSwings.Tests
     /// </summary>
     public class PhaseFiveSceneTests
     {
-        private sealed class PlayServer
+        internal sealed class PlayServer
         {
             /// <summary>What GET /games/state answers with; replaced by tests to move the game along.</summary>
             public JObject State;
@@ -72,7 +72,7 @@ namespace MoodSwings.Tests
         private static string Fixture(string name) =>
             File.ReadAllText(Path.Combine(Application.dataPath, "Tests", "Fixtures", name + ".json"));
 
-        private static JObject Load(int gameId, Action<JObject> edit = null)
+        internal static JObject Load(int gameId, Action<JObject> edit = null)
         {
             var state = JObject.Parse(Fixture($"game_{gameId}_state"));
             edit?.Invoke(state);
@@ -83,7 +83,7 @@ namespace MoodSwings.Tests
             MainSceneTests.Reply(status, "{\"status\":\"error\",\"message\":\"" + message + "\"}");
 
         /// <summary>Game 406 after you've played a card: it's gone from your hand and the turn is BotSage's.</summary>
-        private static JObject AfterPlaying(int cardId) => Load(406, s =>
+        internal static JObject AfterPlaying(int cardId) => Load(406, s =>
         {
             var hand = (JArray)s["you"]["hand"];
             hand.Remove(hand.Single(c => (int)c["card_id"] == cardId));
@@ -92,7 +92,7 @@ namespace MoodSwings.Tests
             s["round"]["plays_remaining"] = 0;
         });
 
-        private static IEnumerator OpenBoard(PlayServer server, int gameId, bool spectate = false)
+        internal static IEnumerator OpenBoard(PlayServer server, int gameId, bool spectate = false)
         {
             yield return MainSceneTests.Launch(server.Handle, rememberedSession: "tok");
             yield return MainSceneTests.WaitFor<HomeScreen>();
@@ -105,12 +105,12 @@ namespace MoodSwings.Tests
             yield return PhaseTwoSceneTests.Frames(8);
         }
 
-        private static BoardScreen Board() => MainSceneTests.Screen<BoardScreen>();
+        internal static BoardScreen Board() => MainSceneTests.Screen<BoardScreen>();
 
-        private static Transform Child(string name) =>
+        internal static Transform Child(string name) =>
             UnityEngine.Object.FindObjectsByType<Transform>(FindObjectsInactive.Exclude).FirstOrDefault(t => t.name == name);
 
-        private static Button ButtonNamed(string name)
+        internal static Button ButtonNamed(string name)
         {
             var found = Child(name);
             return found != null ? found.GetComponent<Button>() : null;
@@ -121,7 +121,7 @@ namespace MoodSwings.Tests
             UnityEngine.Object.FindObjectsByType<Button>(FindObjectsInactive.Exclude)
                 .FirstOrDefault(b => b.name.StartsWith("Option " + labelStart));
 
-        private static IEnumerator Tap(Button button)
+        internal static IEnumerator Tap(Button button)
         {
             Assert.IsNotNull(button, "No such button on screen");
             Assert.IsTrue(button.interactable, "The button is greyed out: " + button.name);
@@ -139,7 +139,7 @@ namespace MoodSwings.Tests
             yield return Tap(ButtonNamed("Submit"));
         }
 
-        private static IEnumerator Poll()
+        internal static IEnumerator Poll()
         {
             yield return new WaitForSeconds(3.6f);
             yield return PhaseTwoSceneTests.Frames();
@@ -295,7 +295,7 @@ namespace MoodSwings.Tests
 
             yield return Tap(ButtonNamed("Primary action"));
 
-            Assert.AreEqual("Game complete!", Board().MessageText);
+            Assert.AreEqual("You won the game!", Board().MessageText);
             Assert.AreEqual("You won!", Board().BannerText);
         }
 
@@ -404,8 +404,8 @@ namespace MoodSwings.Tests
             var server = new PlayServer { State = Load(406, s => s["you"]["hand"][1]["is_playable"] = false) };
             yield return OpenBoard(server, 406);
 
-            Assert.IsNotNull(Child("Card Eagerness").GetComponent<CanvasGroup>(), "it's dimmed in the hand");
-            Assert.IsNull(Child("Card Superiority").GetComponent<CanvasGroup>());
+            Assert.AreEqual(0.5f, Child("Card Eagerness").GetComponent<CanvasGroup>().alpha, "it's dimmed in the hand");
+            Assert.AreEqual(1f, Child("Card Superiority").GetComponent<CanvasGroup>().alpha);
 
             yield return TapHandCard("Eagerness");
 

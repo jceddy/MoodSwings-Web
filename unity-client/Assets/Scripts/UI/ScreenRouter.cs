@@ -21,6 +21,9 @@ namespace MoodSwings.UI
         private readonly Dictionary<string, UiScreen> _byId = new Dictionary<string, UiScreen>();
         private readonly Stack<(UiScreen screen, object args)> _history = new Stack<(UiScreen, object)>();
 
+        private Rect _appliedSafeArea;
+        private Vector2Int _appliedScreenSize;
+
         public UiScreen Current { get; private set; }
 
         /// <summary>Raised after a screen change: (previous, new).</summary>
@@ -69,9 +72,27 @@ namespace MoodSwings.UI
             }
 
             Current = next;
+            FitToSafeArea(next);
             next.gameObject.SetActive(true);
             next.OnShown(args);
             ScreenChanged?.Invoke(previous, next);
+        }
+
+        private void Update()
+        {
+            // A phone turned around, or a window resized, moves the safe area.
+            var size = new Vector2Int(Screen.width, Screen.height);
+            if (Current != null && (ScreenSafeArea.Current != _appliedSafeArea || size != _appliedScreenSize))
+            {
+                FitToSafeArea(Current);
+            }
+        }
+
+        private void FitToSafeArea(UiScreen screen)
+        {
+            ScreenSafeArea.Apply((RectTransform)screen.transform);
+            _appliedSafeArea = ScreenSafeArea.Current;
+            _appliedScreenSize = new Vector2Int(Screen.width, Screen.height);
         }
 
         public void Show<T>(object args = null, bool addToHistory = true) where T : UiScreen

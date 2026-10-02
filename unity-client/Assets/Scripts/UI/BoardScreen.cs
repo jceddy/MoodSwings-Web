@@ -1,10 +1,12 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using MoodSwings.Core;
 using MoodSwings.Networking;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.UI;
 
 namespace MoodSwings.UI
@@ -69,10 +71,38 @@ namespace MoodSwings.UI
         private Text _chatError;
         private ChoiceOverlay _choices;
         private ConfirmOverlay _confirm;
+        private RectTransform _dropZone;
+        private Image _dropZoneImage;
+        private RectTransform _dragGhost;
+        private CanvasGroup _draggedCardGroup;
         private Button _primaryAction;
         private Text _primaryLabel;
         private Button _resignAction;
         private GameObject _actions;
+
+        private sealed class Flight
+        {
+            public RectTransform Card;
+            public CanvasGroup Group;
+            public BoardCard Mood;
+            public int OwnerId;
+            public float Width;
+        }
+
+        private const float HoverDelaySeconds = 0.35f;
+        private const float HoverCardWidth = 340f;
+
+        private RectTransform _hoverPreview;
+        private RectTransform _hoverCardHolder;
+        private Text _hoverCaption;
+        private BoardCard _hoverCard;
+        private float _hoverSince;
+        private float _hoverPointerX;
+
+        private GameState _previous;
+        private readonly HashSet<int> _entering = new HashSet<int>();
+        private readonly List<Flight> _flights = new List<Flight>();
+        private float _messageExpires;
 
         private BoardCard _playingCard;
         private string _decisionKey;
@@ -93,6 +123,15 @@ namespace MoodSwings.UI
 
         public ConfirmOverlay Confirm => _confirm;
 
+        /// <summary>A larger card is showing beside the pointer, because the mouse has rested on a card.</summary>
+        public bool HoverPreviewShown => _hoverPreview != null && _hoverPreview.gameObject.activeSelf;
+
+        /// <summary>A card is being dragged from the hand.</summary>
+        public bool IsDragging => _dragGhost != null;
+
+        /// <summary>The dragged card is over the part of the table where letting go plays it.</summary>
+        public bool DragIsOverDropZone { get; private set; }
+
         /// <summary>How many seat zones, piles and hand areas are currently drawn; tests use it to see what's on the table.</summary>
         public int TableChildCount => _table != null ? _table.childCount : 0;
 
@@ -106,6 +145,19 @@ namespace MoodSwings.UI
             _playingCard = null;
             _decisionKey = null;
             _loopKey = null;
+            _previous = null;
+            _entering.Clear();
+            HideHover();
+            foreach (Transform child in transform)
+            {
+                if (child.name == "Flying card")
+                {
+                    child.gameObject.SetActive(false);
+                    Destroy(child.gameObject);
+                }
+            }
+
+            CancelDrag();
             _chatError.text = string.Empty;
             SetMessage(string.Empty);
             _actions.SetActive(false);
@@ -134,6 +186,8 @@ namespace MoodSwings.UI
 
         public override void OnHidden()
         {
+            CancelDrag();
+            HideHover();
             if (_session != null)
             {
                 _session.Changed -= Render;
@@ -161,6 +215,19 @@ namespace MoodSwings.UI
 
         private void Update()
         {
+            // A result worth a few seconds of attention (a round won) fades on its own.
+            if (_messageExpires > 0f && Time.unscaledTime > _messageExpires)
+            {
+                _messageExpires = 0f;
+                SetMessage(string.Empty);
+            }
+
+            // A mouse resting on a card for a moment brings up a larger copy of it.
+            if (_hoverCard != null && !HoverPreviewShown && Time.unscaledTime - _hoverSince >= HoverDelaySeconds && !AnyPopUpOrDrag())
+            {
+                ShowHover();
+            }
+
             // The action clock ticks every second; the rest of the board waits for the next poll.
             if (_session?.State == null || Time.unscaledTime < _nextHeaderUpdate)
             {
@@ -218,6 +285,7 @@ namespace MoodSwings.UI
             _table.offsetMin = Vector2.zero;
             _table.offsetMax = new Vector2(0f, -HeaderHeight);
 
+            BuildDropZone(theme);
             BuildActions(theme);
             BuildHeader(theme);
 
@@ -231,6 +299,7 @@ namespace MoodSwings.UI
             _loading = UiFactory.Label(transform, "Loading the game...", 36, theme.textMuted);
             UiFactory.Stretch(_loading.rectTransform);
 
+            BuildHoverPreview(theme);
             BuildDetailOverlay(theme);
             _logOverlay = BuildTextOverlay(theme, "Recent events", out _logBody, out _);
             _chatOverlay = BuildTextOverlay(theme, "Chat", out _chatBody, out var chatPanel);
@@ -280,6 +349,28 @@ namespace MoodSwings.UI
             rect.anchoredPosition = new Vector2(-fromRight, 0f);
         }
 
+        // Where a dragged card is let go to play it: the whole table above the hand. Hidden unless a
+        // card is being dragged.
+        private void BuildDropZone(UiTheme theme)
+        {
+            _dropZone = UiFactory.Create("Drop zone", transform);
+            _dropZone.anchorMin = Vector2.zero;
+            _dropZone.anchorMax = Vector2.one;
+            _dropZone.offsetMin = new Vector2(0f, HandRect.yMax * TableHeight + 6f);
+            _dropZone.offsetMax = new Vector2(0f, -HeaderHeight);
+            _dropZoneImage = _dropZone.gameObject.AddComponent<Image>();
+            _dropZoneImage.raycastTarget = false;
+
+            // Low and to the left, where no seat's moods are.
+            var label = UiFactory.Label(_dropZone, "Drop here to play", 34, theme.accent, TextAnchor.LowerLeft, FontStyle.Bold);
+            label.raycastTarget = false;
+            UiFactory.Stretch(label.rectTransform);
+            label.rectTransform.offsetMin = new Vector2(40f, 14f);
+            label.rectTransform.offsetMax = Vector2.zero;
+
+            _dropZone.gameObject.SetActive(false);
+        }
+
         // Pass / Advance turn / I'm ready, and Resign, beside the hand. Which show, and whether
         // they can be pressed, is decided in UpdateActions.
         private void BuildActions(UiTheme theme)
@@ -307,6 +398,30 @@ namespace MoodSwings.UI
 
             _resignAction = UiFactory.Button(area, "Resign", theme, () => Run(Resign), primary: false);
             _resignAction.gameObject.name = "Resign";
+        }
+
+        // A card shown large at the side of the screen away from the pointer; it never takes clicks.
+        private void BuildHoverPreview(UiTheme theme)
+        {
+            _hoverPreview = UiFactory.Create("Hover preview", transform);
+            _hoverPreview.anchorMin = _hoverPreview.anchorMax = _hoverPreview.pivot = new Vector2(0.5f, 0.5f);
+            _hoverPreview.sizeDelta = new Vector2(HoverCardWidth + 40f, CardView.HeightFor(HoverCardWidth) + 90f);
+            var group = _hoverPreview.gameObject.AddComponent<CanvasGroup>();
+            group.blocksRaycasts = false;
+            group.interactable = false;
+            var layout = _hoverPreview.gameObject.AddComponent<VerticalLayoutGroup>();
+            layout.spacing = 8f;
+            layout.childAlignment = TextAnchor.UpperCenter;
+            layout.childControlWidth = true;
+            layout.childControlHeight = true;
+            layout.childForceExpandWidth = false;
+            layout.childForceExpandHeight = false;
+
+            _hoverCardHolder = UiFactory.Create("Card", _hoverPreview);
+            UiFactory.Size(_hoverCardHolder.gameObject, HoverCardWidth, CardView.HeightFor(HoverCardWidth));
+            _hoverCaption = UiFactory.Label(_hoverPreview, string.Empty, 26, theme.textPrimary, TextAnchor.UpperCenter);
+            _hoverCaption.supportRichText = true;
+            _hoverPreview.gameObject.SetActive(false);
         }
 
         private void BuildDetailOverlay(UiTheme theme)
@@ -396,6 +511,78 @@ namespace MoodSwings.UI
             UiFactory.Size(send.gameObject, 180f);
         }
 
+        private bool AnyPopUpOrDrag() =>
+            IsDragging || _detail.activeSelf || _logOverlay.activeSelf || _chatOverlay.activeSelf
+            || _choices.IsOpen || _confirm.IsOpen;
+
+        /// <summary>Wires a card to bring up the preview while a mouse rests on it.</summary>
+        private void MakeHoverable(Component card, BoardCard data)
+        {
+            var target = card.gameObject.AddComponent<HoverTarget>();
+            target.Entered = e =>
+            {
+                _hoverCard = data;
+                _hoverSince = Time.unscaledTime;
+                _hoverPointerX = e.position.x;
+            };
+            target.Exited = () =>
+            {
+                if (_hoverCard == data)
+                {
+                    HideHover();
+                }
+            };
+        }
+
+        private void ShowHover()
+        {
+            var card = _hoverCard;
+            foreach (Transform child in _hoverCardHolder)
+            {
+                child.gameObject.SetActive(false);
+                Destroy(child.gameObject);
+            }
+
+            var view = CardView.Create(_hoverCardHolder, card, HoverCardWidth, AppServices.Theme, showValue: false);
+            view.name = "Preview card";
+            UiFactory.Stretch(view);
+
+            var notes = new List<string>();
+            if (card.ValueIsModified)
+            {
+                notes.Add($"Value now {card.Value} (printed {card.BaseValue})");
+            }
+
+            var colorNote = BoardDisplay.ColorNote(_session?.State, card);
+            if (colorNote != null)
+            {
+                notes.Add($"<b><color=#{ColorUtility.ToHtmlStringRGB(CardView.IndicatorColor(card.Color))}>{colorNote}</color></b>");
+            }
+
+            if (card.IsSuppressed)
+            {
+                notes.Add($"<b><color=#{ColorUtility.ToHtmlStringRGB(AppServices.Theme.danger)}>{BoardDisplay.SuppressedByText(card)}</color></b>");
+            }
+
+            _hoverCaption.text = string.Join("\n", notes);
+            _hoverCaption.gameObject.SetActive(notes.Count > 0);
+
+            // On whichever side of the screen the pointer isn't, so it never covers what you're pointing at.
+            var onLeft = _hoverPointerX < Screen.width / 2f;
+            _hoverPreview.anchorMin = _hoverPreview.anchorMax = new Vector2(onLeft ? 0.88f : 0.12f, 0.5f);
+            _hoverPreview.anchoredPosition = Vector2.zero;
+            _hoverPreview.gameObject.SetActive(true);
+        }
+
+        private void HideHover()
+        {
+            _hoverCard = null;
+            if (_hoverPreview != null)
+            {
+                _hoverPreview.gameObject.SetActive(false);
+            }
+        }
+
         private void CloseOverlays()
         {
             _detail.SetActive(false);
@@ -403,8 +590,9 @@ namespace MoodSwings.UI
             _chatOverlay.SetActive(false);
         }
 
-        private void SetMessage(string text, bool isError = true, bool fromRefresh = false)
+        private void SetMessage(string text, bool isError = true, bool fromRefresh = false, float forSeconds = 0f)
         {
+            _messageExpires = forSeconds > 0f ? Time.unscaledTime + forSeconds : 0f;
             _message.text = text ?? string.Empty;
             _message.color = isError ? AppServices.Theme.danger : AppServices.Theme.accent;
             _messageFromRefresh = fromRefresh && !string.IsNullOrEmpty(text);
@@ -446,6 +634,7 @@ namespace MoodSwings.UI
 
             var theme = AppServices.Theme;
             _loading.gameObject.SetActive(false);
+            React(state);
 
             _banner.text = BoardDisplay.TurnBanner(state);
             _banner.color = BoardDisplay.BannerNeedsViewer(state) ? theme.accent : theme.textPrimary;
@@ -464,10 +653,127 @@ namespace MoodSwings.UI
                 BuildSeat(theme, state, player, zones[player.GamePlayerId]);
             }
 
+            // The table is rebuilt, so a card being dragged out of the old hand is gone, and so is
+            // whatever the mouse was resting on.
+            CancelDrag();
+            HideHover();
             BuildPiles(theme, state);
             BuildHand(theme, state);
             UpdateActions(state);
             SyncOverlays(state);
+            StartFlights();
+        }
+
+        // --- reacting to what just happened ----------------------------------------------------------
+
+        /// <summary>Works out what changed since the last look: sounds and buzzes, a moment's message, cards to slide in.</summary>
+        private void React(GameState state)
+        {
+            var cues = BoardCues.Between(_previous, state);
+            _previous = state;
+            foreach (var cue in cues)
+            {
+                if (cue.Kind == CueKind.CardPlayed)
+                {
+                    _entering.Add(cue.CardId);
+                }
+
+                if (!string.IsNullOrEmpty(cue.Text))
+                {
+                    SetMessage(cue.Text, isError: false, forSeconds: 7f);
+                }
+
+                GameFeedback.Play(cue, state.You.GamePlayerId, AppServices.Device);
+            }
+        }
+
+        private void NoteFlight(RectTransform card, BoardCard mood, int ownerId, float width)
+        {
+            if (!_entering.Contains(mood.CardId))
+            {
+                return;
+            }
+
+            // Hidden until its stand-in has flown to where it belongs.
+            var group = card.gameObject.AddComponent<CanvasGroup>();
+            group.alpha = 0f;
+            _flights.Add(new Flight { Card = card, Group = group, Mood = mood, OwnerId = ownerId, Width = width });
+        }
+
+        private void StartFlights()
+        {
+            if (_flights.Count > 0)
+            {
+                StartCoroutine(FlyCards(_flights.ToList()));
+            }
+
+            _flights.Clear();
+            _entering.Clear();
+        }
+
+        private IEnumerator FlyCards(List<Flight> flights)
+        {
+            yield return null; // the layout settles before positions mean anything
+            foreach (var flight in flights)
+            {
+                if (flight.Card != null)
+                {
+                    StartCoroutine(FlyOne(flight));
+                }
+            }
+        }
+
+        // A copy of the card slides from whoever played it to its place on the table, growing smaller as it lands.
+        private IEnumerator FlyOne(Flight flight)
+        {
+            const float seconds = 0.4f;
+            var target = flight.Card.position;
+            var source = SourceOf(flight.OwnerId) ?? target;
+
+            var ghost = CardView.Create(transform, flight.Mood, flight.Width, AppServices.Theme, showValue: true);
+            ghost.name = "Flying card";
+            ghost.anchorMin = ghost.anchorMax = ghost.pivot = new Vector2(0.5f, 0.5f);
+            var group = ghost.gameObject.AddComponent<CanvasGroup>();
+            group.blocksRaycasts = false;
+            group.interactable = false;
+            ghost.SetSiblingIndex(_detail.transform.GetSiblingIndex());
+
+            var start = Time.unscaledTime;
+            while (ghost != null && Time.unscaledTime - start < seconds)
+            {
+                var t = (Time.unscaledTime - start) / seconds;
+                var eased = 1f - (1f - t) * (1f - t) * (1f - t);
+                ghost.position = Vector3.Lerp(source, target, eased);
+                ghost.localScale = Vector3.one * Mathf.Lerp(1.4f, 1f, eased);
+                yield return null;
+            }
+
+            if (ghost != null)
+            {
+                ghost.gameObject.SetActive(false);
+                Destroy(ghost.gameObject);
+            }
+
+            if (flight.Group != null)
+            {
+                flight.Group.alpha = 1f;
+            }
+        }
+
+        /// <summary>Where a card played by this player comes from: your hand, or their seat.</summary>
+        private Vector3? SourceOf(int ownerId)
+        {
+            var state = _session?.State;
+            if (state == null)
+            {
+                return null;
+            }
+
+            var owner = BoardDisplay.PlayerById(state, ownerId);
+            var place = ownerId == state.You.GamePlayerId
+                ? _table.Find("Hand")
+                : owner != null ? _table.Find("Seat " + owner.Username) : null;
+            return place != null ? place.position : (Vector3?)null;
         }
 
         private static string LogText(GameState state)
@@ -531,7 +837,9 @@ namespace MoodSwings.UI
                 UnityEngine.Events.UnityAction open = () => ShowDetail(card, "In play for " + player.Username);
                 if (!card.IsSuppressed)
                 {
-                    CardView.Create(row.transform, card, width, theme, showValue: true, onClick: open);
+                    var upright = CardView.Create(row.transform, card, width, theme, showValue: true, onClick: open);
+                    MakeHoverable(upright, card);
+                    NoteFlight(upright, card, player.GamePlayerId, width);
                     continue;
                 }
 
@@ -539,8 +847,10 @@ namespace MoodSwings.UI
                 var slot = UiFactory.Create("Suppressed slot", row.transform);
                 UiFactory.Size(slot.gameObject, side, side);
                 var tapped = CardView.Create(slot, card, width, theme, showValue: true, onClick: open, onItsSide: true);
+                MakeHoverable(tapped, card);
                 tapped.anchorMin = tapped.anchorMax = tapped.pivot = new Vector2(0.5f, 0.5f);
                 tapped.anchoredPosition = Vector2.zero;
+                NoteFlight(tapped, card, player.GamePlayerId, width);
             }
         }
 
@@ -602,8 +912,9 @@ namespace MoodSwings.UI
             if (topCard != null)
             {
                 var card = topCard;
-                CardView.Create(column, card, MoodWidth, theme, showValue: false,
+                var pileCard = CardView.Create(column, card, MoodWidth, theme, showValue: false,
                     onClick: () => ShowDetail(card, string.IsNullOrEmpty(card.LastOwnerName) ? "In the discard pile" : "Discarded from " + card.LastOwnerName));
+                MakeHoverable(pileCard, card);
             }
             else
             {
@@ -654,9 +965,19 @@ namespace MoodSwings.UI
                 var card = cardInHand;
                 var view = CardView.Create(row.transform, card, HandCardWidth, theme, showValue: true,
                     onClick: () => OnHandCard(card));
+                MakeHoverable(view, card);
+                var group = view.gameObject.AddComponent<CanvasGroup>();
                 if (canAct && !card.IsPlayable)
                 {
-                    view.gameObject.AddComponent<CanvasGroup>().alpha = 0.5f;
+                    group.alpha = 0.5f;
+                }
+
+                if (canAct)
+                {
+                    var drag = view.gameObject.AddComponent<DraggableCard>();
+                    drag.Began = e => BeginDrag(card, group, e);
+                    drag.Moved = MoveDrag;
+                    drag.Ended = e => EndDrag(card, e);
                 }
             }
         }
@@ -680,6 +1001,13 @@ namespace MoodSwings.UI
                 ValueLine(card),
                 string.IsNullOrWhiteSpace(card.RulesText) ? string.Empty : card.RulesText,
             };
+            var colorNote = BoardDisplay.ColorNote(_session?.State, card);
+            if (colorNote != null)
+            {
+                lines.Add(string.Empty);
+                lines.Add($"<b><color=#{ColorUtility.ToHtmlStringRGB(CardView.IndicatorColor(card.Color))}>{colorNote}</color></b>");
+            }
+
             if (card.IsSuppressed)
             {
                 lines.Add(string.Empty);
@@ -793,11 +1121,144 @@ namespace MoodSwings.UI
         {
             if (result.Ok)
             {
-                SetMessage(result.Notice, isError: false);
+                // A round or game result the board already announced from the new state stays.
+                if (!string.IsNullOrEmpty(result.Notice) && _messageExpires == 0f)
+                {
+                    SetMessage(result.Notice, isError: false);
+                }
             }
             else
             {
                 SetMessage(result.Message ?? "That didn't work.", isError: true);
+            }
+        }
+
+        // --- dragging a card to play it ----------------------------------------------------------
+
+        private Camera UiCamera => GetComponentInParent<Canvas>().worldCamera;
+
+        private void BeginDrag(BoardCard card, CanvasGroup original, PointerEventData eventData)
+        {
+            var state = _session?.State;
+            if (state == null || !BoardDisplay.CanAct(state) || _session.Busy)
+            {
+                return;
+            }
+
+            CancelDrag();
+            HideHover();
+            var ghost = CardView.Create(transform, card, HandCardWidth * 1.2f, AppServices.Theme, showValue: true);
+            ghost.name = "Drag ghost";
+            ghost.anchorMin = ghost.anchorMax = ghost.pivot = new Vector2(0.5f, 0.5f);
+            var ghostGroup = ghost.gameObject.AddComponent<CanvasGroup>();
+            ghostGroup.blocksRaycasts = false;
+            ghostGroup.interactable = false;
+            // Above the table and the buttons, below the pop-ups.
+            ghost.SetSiblingIndex(_detail.transform.GetSiblingIndex());
+            _dragGhost = ghost;
+
+            _draggedCardGroup = original;
+            original.alpha = 0.3f;
+
+            _dropZone.gameObject.SetActive(true);
+            MoveDrag(eventData);
+        }
+
+        private void MoveDrag(PointerEventData eventData)
+        {
+            if (_dragGhost == null)
+            {
+                return;
+            }
+
+            if (RectTransformUtility.ScreenPointToWorldPointInRectangle(
+                    (RectTransform)transform, eventData.position, UiCamera, out var world))
+            {
+                _dragGhost.position = world;
+            }
+
+            DragIsOverDropZone = RectTransformUtility.RectangleContainsScreenPoint(_dropZone, eventData.position, UiCamera);
+            var accent = AppServices.Theme.accent;
+            _dropZoneImage.color = new Color(accent.r, accent.g, accent.b, DragIsOverDropZone ? 0.22f : 0.08f);
+        }
+
+        private void EndDrag(BoardCard card, PointerEventData eventData)
+        {
+            if (_dragGhost == null)
+            {
+                return;
+            }
+
+            MoveDrag(eventData);
+            var dropped = DragIsOverDropZone;
+            CancelDrag();
+            if (dropped)
+            {
+                PlayDropped(card);
+            }
+        }
+
+        /// <summary>Puts the dragged card back: removes the ghost and the drop zone. Safe to call when nothing is being dragged.</summary>
+        private void CancelDrag()
+        {
+            if (_dragGhost != null)
+            {
+                _dragGhost.gameObject.SetActive(false);
+                Destroy(_dragGhost.gameObject);
+                _dragGhost = null;
+            }
+
+            if (_draggedCardGroup != null)
+            {
+                _draggedCardGroup.alpha = 1f;
+                _draggedCardGroup = null;
+            }
+
+            DragIsOverDropZone = false;
+            if (_dropZone != null)
+            {
+                _dropZone.gameObject.SetActive(false);
+            }
+        }
+
+        /// <summary>
+        /// A card let go over the table. One that asks for nothing is simply played -- dragging it
+        /// there was the decision; one with choices opens the same form a click would.
+        /// </summary>
+        private void PlayDropped(BoardCard card)
+        {
+            var state = _session?.State;
+            if (state == null || !BoardDisplay.CanAct(state) || _session.Busy)
+            {
+                return;
+            }
+
+            var form = ChoiceForm.ForCard(state, card);
+            if (form.Fields.Count > 0)
+            {
+                OpenPlayForm(state, card);
+            }
+            else if (form.Problem != null)
+            {
+                SetMessage(form.Problem);
+            }
+            else
+            {
+                Run(async () =>
+                {
+                    SetMessage(string.Empty);
+                    var pending = _session.PlayAsync(card, form.BuildChoices());
+                    UpdateActions(_session.State);
+                    var result = await pending;
+                    if (this == null)
+                    {
+                        return;
+                    }
+
+                    ShowResult(result);
+                    UpdateActions(_session.State);
+                    SyncOverlays(_session.State);
+                });
             }
         }
 
