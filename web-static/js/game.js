@@ -8548,7 +8548,12 @@
             // Issue #524: no real "winner" to name for a solitaire puzzle
             // -- its own distinct banner instead, naming the efficiency
             // metric (puzzle_plays_made) rather than who beat whom.
-            if (state.game.format === 'puzzle') {
+            if (state.game.format === 'puzzle' && state.game.puzzle_failed) {
+                // A "win the game this turn" puzzle whose turn ended without
+                // winning (see GameService::failPuzzleAttempt()).
+                document.getElementById('board-round-status').textContent =
+                    'Puzzle failed — your turn ended before you won the game. Try again from the Puzzles menu.';
+            } else if (state.game.format === 'puzzle') {
                 document.getElementById('board-round-status').textContent =
                     'Puzzle solved in ' + state.game.puzzle_plays_made + ' play'
                     + (state.game.puzzle_plays_made === 1 ? '' : 's') + '!';

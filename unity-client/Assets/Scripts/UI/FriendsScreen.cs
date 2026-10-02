@@ -79,7 +79,7 @@ namespace MoodSwings.UI
             UiFactory.Flexible(_addField.gameObject, width: 1f);
             _addField.onEndEdit.AddListener(_ =>
             {
-                if (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter))
+                if (KeyInput.EnterPressed)
                 {
                     OnSendClicked();
                 }

@@ -3,6 +3,7 @@ using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.EventSystems;
+using UnityEngine.InputSystem.UI;
 using UnityEngine.UI;
 
 namespace MoodSwings.Editor
@@ -38,7 +39,7 @@ namespace MoodSwings.Editor
             canvas.planeDistance = 10f;
             CanvasSetup.Configure(canvasObject.GetComponent<CanvasScaler>());
 
-            new GameObject("EventSystem", typeof(EventSystem), typeof(StandaloneInputModule));
+            new GameObject("EventSystem", typeof(EventSystem), typeof(InputSystemUIInputModule));
 
             var screenObject = NewUi("CardArtSampleScreen", canvasObject.transform, typeof(CardArtSampleScreen));
             Stretch(screenObject);

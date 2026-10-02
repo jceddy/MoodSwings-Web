@@ -122,6 +122,15 @@ namespace MoodSwings.UI
             {
                 AddPreferenceRow(theme, preference);
             }
+
+            UiFactory.SectionTitle(_list, theme, "On this device");
+            AddDeviceRow(theme, "Sound effects", "Chimes for your turn, cards played, and the end of a round.",
+                AppServices.Device.SoundOn, on => AppServices.Device.SoundOn = on);
+            if (Application.isMobilePlatform)
+            {
+                AddDeviceRow(theme, "Vibration", "A short buzz for your turn and for questions that need an answer.",
+                    AppServices.Device.VibrationOn, on => AppServices.Device.VibrationOn = on);
+            }
         }
 
         private VerticalLayoutGroup NewPanel(UiTheme theme)
@@ -145,6 +154,15 @@ namespace MoodSwings.UI
             row.padding = new RectOffset(56, 0, 0, 0);
             var label = UiFactory.Label(row.transform, text, 24, theme.textMuted, TextAnchor.UpperLeft);
             UiFactory.Flexible(label.gameObject, width: 1f);
+        }
+
+        // These switches live on the device, not the account, so there is nothing to send.
+        private void AddDeviceRow(UiTheme theme, string label, string description, bool isOn, System.Action<bool> save)
+        {
+            var panel = NewPanel(theme);
+            var toggle = UiFactory.Toggle(panel.transform, label, theme, isOn);
+            AddDescription(theme, panel.transform, description);
+            toggle.onValueChanged.AddListener(value => save(value));
         }
 
         private void AddPreferenceRow(UiTheme theme, BoolPreference preference)

@@ -105,7 +105,7 @@ Each phase ends with something runnable against the dev server
   **Not yet verified:** the real dev server -- creating a game against bots, and
   the open lobby (which needs a second account to join your posted game).
 
-### Phase 4 -- Read-only game board (in progress)
+### Phase 4 -- Read-only game board (done)
 - Render `GET /games/state` for 2-4 seats: hand, board, discard, scores,
   round/turn, log, chat.
 - Build against spectate/replay first -- no input needed.
@@ -123,17 +123,40 @@ Each phase ends with something runnable against the dev server
   playable board. **Not yet verified:** the real dev server, and a real
   spectated game.
 
-### Phase 5 -- Playable core
+### Phase 5 -- Playable core (in progress)
 - Ready/start, play, pass, advance-turn, resign, generic `pending_decision`
   UI, turn/decision timers.
 - Traditional format vs bots first, then vs humans.
 - **Done when:** a full 2-4 player traditional game is playable.
+- **Status:** built and verified against a scripted server and the real captured
+  states: a play form for every card (driven by the server's `choice_fields`, with
+  Creativity's changing fields, nested fields and reordering), the pending-decision
+  form, Pass / Advance turn / I'm ready / Resign, chat, auto-start, the synchronous
+  action clock, the repeated-board warning, and round/game-end notices. EditMode
+  covers the choice rules (options, counts, constraints, what's sent, the "did you
+  mean that?" questions); PlayMode presses the real buttons and checks the requests
+  sent and what's on screen afterwards, with screenshots reviewed.
+  **Not included:** drafts, duels, team play and best-of-three (Phases 7-8; the
+  board says so and turns the actions off), the chaos-draft loop shortcut (Phase 8),
+  and a display of the asynchronous turn-timeout warning. **Not yet verified:** a
+  whole game against the real dev server (every card's form against real play),
+  and a physical Android device.
 
-### Phase 6 -- Arena feel
+### Phase 6 -- Arena feel (in progress)
 - Drag-to-play, card zoom/inspect, turn and scoring animations, audio,
   haptics, landscape layouts, four-seat table layout, "pause before own turn"
   and "auto-pass" prefs.
 - **Done when:** playtest pass on desktop and phone.
+- **Status:** built and verified headless: drag-to-play (mouse and touch; tested with
+  both pointer events and a virtual mouse through the Input System), a hover
+  preview on desktop, card-slide and round-result animation, cues for your turn /
+  questions / plays / round and game results, placeholder sounds synthesized in code
+  with device switches, Android vibration, safe-area fitting for notches, and a layout
+  check at 16:9, 20:9, 16:10 and 4:3. The click close-up, four-seat layout and the
+  "pause before your turn" / "auto-pass" preferences came earlier (Phases 2-5).
+  **Not included:** real sound files (placeholders until there are some), and
+  scoring animations beyond the announcement. **Not yet verified:** the actual feel
+  -- a playtest on desktop and a physical phone (vibration, notch, touch dragging).
 
 ### Phase 7 -- More play modes
 - Duel (separate decks), open/closed team play, best-of-three, synchronous

@@ -60,7 +60,7 @@ namespace MoodSwings.UI
         private void Update()
         {
             // Escape on desktop; the system Back button on Android.
-            if (Input.GetKeyDown(KeyCode.Escape))
+            if (KeyInput.EscapePressed)
             {
                 var current = _router.Current;
                 if (current == null || !current.HandleBack())

@@ -235,8 +235,17 @@ namespace MoodSwings.Tests
             Assert.AreEqual("6", chip.GetComponentInChildren<Text>().text);
 
             var rect = (RectTransform)chip;
-            Assert.AreEqual(new Vector2(1f, 1f), rect.anchorMin, "anchored to the top-right corner");
-            Assert.AreEqual(new Vector2(1f, 1f), rect.anchorMax);
+            Assert.AreEqual(0.745f, rect.anchorMin.x, 0.001f, "placed by fractions of the card, over the printed value in the top-right");
+            Assert.AreEqual(0.965f, rect.anchorMax.x, 0.001f);
+            Assert.Greater(rect.anchorMin.y, 0.8f);
+
+            // ...and wholly inside the card's edge, with a margin, so it doesn't hang over the side.
+            var cardCorners = new Vector3[4];
+            ((RectTransform)Child("Card Tranquility")).GetWorldCorners(cardCorners);
+            var chipCorners = new Vector3[4];
+            rect.GetWorldCorners(chipCorners);
+            var margin = cardCorners[2].x - chipCorners[2].x;
+            Assert.Greater(margin, 0.02f * (cardCorners[2].x - cardCorners[0].x), "clear of the card's right edge");
             ScreenshotHelper.Capture("board-value-chip");
         }
 
