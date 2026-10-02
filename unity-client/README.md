@@ -223,7 +223,7 @@ game" below.
   the printed value at every card size. A **suppressed** mood lies on its side
   (only the face turns; the label and chip stay upright), is labelled SUPPRESSED,
   and its close-up says "Suppressed by <card>" -- suppression only makes the value 0.
-  A mood **recolored** by an effect (Imagination) wears a frame in its current color,
+  A mood **recolored** by an effect (Imagination) wears a pill in its current color naming it (BLUE),
   and its close-up and hover preview say "Color is now blue (printed green) - changed
   by Imagination" (the effect is found from the board-wide effects the server lists).
 - **Spectating** uses the same board with no hand and no seat of your own

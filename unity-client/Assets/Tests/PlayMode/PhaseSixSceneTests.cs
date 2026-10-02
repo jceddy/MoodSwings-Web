@@ -647,20 +647,63 @@ namespace MoodSwings.Tests
         });
 
         [UnityTest]
-        public IEnumerator ARecoloredMood_WearsAFrameInItsCurrentColor()
+        public IEnumerator ARecoloredMood_WearsAPillInItsCurrentColor_NamingIt()
         {
             var server = YourTurn(Recolored());
             yield return PhaseFiveSceneTests.OpenBoard(server, 405);
 
-            var frame = Card("Laziness").transform.Find("Color frame");
-            Assert.IsNotNull(frame);
-            foreach (Transform edge in frame)
+            var card = (RectTransform)Card("Laziness").transform;
+            var badge = (RectTransform)card.Find("Color badge");
+            Assert.IsNotNull(badge);
+            Assert.AreEqual(CardView.IndicatorColor("blue"), badge.GetComponent<Image>().color);
+            Assert.AreEqual("BLUE", badge.GetComponentInChildren<Text>().text);
+
+            // Centered along the bottom edge, wholly inside the card.
+            var cardCorners = new Vector3[4];
+            var badgeCorners = new Vector3[4];
+            card.GetWorldCorners(cardCorners);
+            badge.GetWorldCorners(badgeCorners);
+            Assert.AreEqual((cardCorners[0].x + cardCorners[2].x) / 2f, (badgeCorners[0].x + badgeCorners[2].x) / 2f, 0.01f);
+            Assert.Greater(badgeCorners[0].x, cardCorners[0].x);
+            Assert.Less(badgeCorners[2].x, cardCorners[2].x);
+            Assert.Greater(badgeCorners[0].y, cardCorners[0].y);
+            Assert.Less(badgeCorners[2].y, cardCorners[2].y);
+
+            Assert.IsNull(Card("Fury").transform.Find("Color badge"), "moods in their printed color have none");
+            ScreenshotHelper.Capture("board-recolored-mood");
+        }
+
+        [UnityTest]
+        public IEnumerator TheColorPill_IsTheSameShareOfTheCardAtEverySize_AndOnASmallCardIsJustTheColor()
+        {
+            var server = YourTurn(PhaseFiveSceneTests.Load(407, s =>
             {
-                Assert.AreEqual(CardView.IndicatorColor("blue"), edge.GetComponent<Image>().color);
+                s["round"]["pending_decision"] = null;
+                var inPlay = (JArray)s["in_play"];
+                var confusion = inPlay.Single(c => (string)c["name"] == "Confusion");
+                confusion["base_color"] = "red"; // alone at its seat, so full size
+                for (var i = 0; i < 9; i++)
+                {
+                    inPlay.Add(JObject.Parse("{\"card_id\":" + (97000 + i) + ",\"catalog_card_id\":1,\"name\":\"Crowd" + i + "\",\"color\":\"blue\"," +
+                        "\"base_color\":\"green\",\"value\":3,\"base_value\":3,\"owner_game_player_id\":915,\"suppressions\":[],\"choice_fields\":[]}"));
+                }
+            }));
+            yield return PhaseFiveSceneTests.OpenBoard(server, 407);
+
+            var big = (RectTransform)Card("Confusion").transform;
+            var small = (RectTransform)Card("Crowd0").transform;
+            Assert.Less(small.rect.width, big.rect.width - 5f);
+            ScreenshotHelper.Capture("board-color-pill-scaling");
+
+            foreach (var card in new[] { big, small })
+            {
+                var badge = (RectTransform)card.Find("Color badge");
+                Assert.AreEqual(0.72f, badge.rect.width / card.rect.width, 0.005f, card.name);
+                Assert.AreEqual(0.16f, badge.rect.height / card.rect.width, 0.005f, card.name);
             }
 
-            Assert.IsNull(Card("Fury").transform.Find("Color frame"), "moods in their printed color have none");
-            ScreenshotHelper.Capture("board-recolored-mood");
+            Assert.IsNotNull(big.Find("Color badge").GetComponentInChildren<Text>(), "big enough to read its name");
+            Assert.IsNull(small.Find("Color badge").GetComponentInChildren<Text>(), "too small for text; the color alone says it");
         }
 
         [UnityTest]
@@ -704,7 +747,9 @@ namespace MoodSwings.Tests
             var card = Card("Laziness");
             ScreenshotHelper.Capture("board-recolored-suppressed");
             Assert.AreEqual(270f, card.transform.Find("Face").localEulerAngles.z, 0.01f);
-            Assert.IsNotNull(card.transform.Find("Face/Color frame"), "the frame turns with the card");
+            var badge = card.transform.Find("Color badge");
+            Assert.IsNotNull(badge, "the color pill is on the turned card's bounds, upright");
+            Assert.AreEqual(0f, badge.eulerAngles.z, 0.01f);
             Assert.IsNotNull(card.transform.Find("Value"));
         }
     }

@@ -82,15 +82,15 @@ namespace MoodSwings.UI
                 button.onClick.AddListener(onClick);
             }
 
-            // An effect (Imagination) has recolored it: a frame in its current color says so.
-            if (card.IsRecolored)
-            {
-                AddColorFrame(face, card.Color, width);
-            }
-
             if (card.IsSuppressed)
             {
                 AddSuppressedShade(rect, boundsWidth);
+            }
+
+            // An effect (Imagination) has recolored it: a pill in its current color names it.
+            if (card.IsRecolored)
+            {
+                AddColorBadge(rect, card.Color, width, upright: !onItsSide);
             }
 
             if (showValue && (card.ValueIsModified || art == null))
@@ -180,34 +180,64 @@ namespace MoodSwings.UI
             }
         }
 
-        // A frame around the card face in the color it is now, with a light edge so every color shows on the dark table.
-        private static void AddColorFrame(RectTransform face, string color, float width)
-        {
-            var thickness = Mathf.Max(2f, width * 0.05f);
-            var tint = IndicatorColor(color);
-            var frame = UiFactory.Create("Color frame", face);
-            UiFactory.Stretch(frame);
+        private static Sprite _pill;
 
-            // top, bottom, left, right
-            AddEdge(frame, tint, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0f, -thickness), Vector2.zero);
-            AddEdge(frame, tint, new Vector2(0f, 0f), new Vector2(1f, 0f), Vector2.zero, new Vector2(0f, thickness));
-            AddEdge(frame, tint, new Vector2(0f, 0f), new Vector2(0f, 1f), Vector2.zero, new Vector2(thickness, 0f));
-            AddEdge(frame, tint, new Vector2(1f, 0f), new Vector2(1f, 1f), new Vector2(-thickness, 0f), Vector2.zero);
+        // A rounded rectangle that stretches to any size without squashing its ends.
+        private static Sprite PillSprite()
+        {
+            if (_pill == null)
+            {
+                const int height = 32;
+                const int width = 64;
+                var texture = new Texture2D(width, height, TextureFormat.RGBA32, false) { filterMode = FilterMode.Bilinear };
+                var radius = height / 2f;
+                for (var y = 0; y < height; y++)
+                {
+                    for (var x = 0; x < width; x++)
+                    {
+                        // Distance outside the capsule's centre line, so the ends are half circles.
+                        var cx = Mathf.Clamp(x + 0.5f, radius, width - radius);
+                        var distance = Vector2.Distance(new Vector2(x + 0.5f, y + 0.5f), new Vector2(cx, radius));
+                        texture.SetPixel(x, y, new Color(1f, 1f, 1f, Mathf.Clamp01(radius - distance + 0.5f)));
+                    }
+                }
+
+                texture.Apply();
+                _pill = Sprite.Create(texture, new Rect(0, 0, width, height), new Vector2(0.5f, 0.5f), 100f, 0,
+                    SpriteMeshType.FullRect, new Vector4(radius, radius, radius, radius));
+            }
+
+            return _pill;
         }
 
-        private static void AddEdge(RectTransform parent, Color tint, Vector2 anchorMin, Vector2 anchorMax, Vector2 offsetMin, Vector2 offsetMax)
+        // A pill at the bottom of the card, in the color the card is now, naming it. Sized from the card's
+        // width, so it is the same share of the card at every size; on a small card it is just the color.
+        private static void AddColorBadge(RectTransform rect, string color, float width, bool upright)
         {
-            var edge = UiFactory.Create("Edge", parent);
-            edge.anchorMin = anchorMin;
-            edge.anchorMax = anchorMax;
-            edge.offsetMin = offsetMin;
-            edge.offsetMax = offsetMax;
-            var image = edge.gameObject.AddComponent<Image>();
+            var tint = IndicatorColor(color);
+            var pillWidth = width * 0.72f;
+            var pillHeight = width * 0.16f;
+            var badge = UiFactory.Create("Color badge", rect);
+            badge.anchorMin = badge.anchorMax = badge.pivot = new Vector2(0.5f, 0f);
+            badge.sizeDelta = new Vector2(pillWidth, pillHeight);
+            badge.anchoredPosition = new Vector2(0f, (upright ? HeightFor(width) : width) * 0.04f);
+
+            var image = badge.gameObject.AddComponent<Image>();
+            image.sprite = PillSprite();
+            image.type = Image.Type.Sliced;
             image.color = tint;
             image.raycastTarget = false;
-            var outline = edge.gameObject.AddComponent<Outline>();
-            outline.effectColor = new Color(1f, 1f, 1f, 0.55f);
-            outline.effectDistance = new Vector2(1f, 1f);
+
+            var fontSize = Mathf.RoundToInt(pillHeight * 0.62f);
+            if (fontSize >= 10)
+            {
+                var dark = 0.299f * tint.r + 0.587f * tint.g + 0.114f * tint.b > 0.58f;
+                var label = UiFactory.Label(badge, color.ToUpperInvariant(), fontSize,
+                    dark ? new Color(0.08f, 0.08f, 0.10f) : Color.white, TextAnchor.MiddleCenter, FontStyle.Bold);
+                label.horizontalOverflow = HorizontalWrapMode.Overflow;
+                label.raycastTarget = false;
+                UiFactory.Stretch(label.rectTransform);
+            }
         }
 
         // The chip covers the printed value's die in the art's top-right corner. On an upright card it is
