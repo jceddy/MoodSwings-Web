@@ -2,6 +2,7 @@
     "name": "MoodSwings",
     "rootNamespace": "MoodSwings",
     "references": [
+        "Unity.InputSystem",
         "Unity.Nuget.Newtonsoft-Json",
         "UnityEngine.UI"
     ],

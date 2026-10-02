@@ -3,6 +3,8 @@
     "rootNamespace": "MoodSwings.Tests",
     "references": [
         "MoodSwings",
+        "Unity.InputSystem",
+        "Unity.InputSystem.TestFramework",
         "Unity.Nuget.Newtonsoft-Json",
         "UnityEngine.UI",
         "UnityEngine.TestRunner",

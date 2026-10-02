@@ -134,7 +134,7 @@ namespace MoodSwings.UI
 
         private void Update()
         {
-            if (!Input.GetKeyDown(KeyCode.Tab) || EventSystem.current == null)
+            if (!KeyInput.TabPressed || EventSystem.current == null)
             {
                 return;
             }
@@ -150,7 +150,7 @@ namespace MoodSwings.UI
                 }
             }
 
-            var step = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift) ? -1 : 1;
+            var step = KeyInput.ShiftHeld ? -1 : 1;
             var next = order[((index + step) % order.Length + order.Length) % order.Length];
             next.Select();
             if (next is InputField field)
@@ -161,7 +161,7 @@ namespace MoodSwings.UI
 
         private static bool EnterPressed()
         {
-            return Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter);
+            return KeyInput.EnterPressed;
         }
 
         /// <summary>Shows the resend form; its link then hides, so the column stays clear of the footer.</summary>
