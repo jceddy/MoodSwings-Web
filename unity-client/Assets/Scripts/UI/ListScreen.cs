@@ -1,5 +1,3 @@
-using System;
-using System.Threading.Tasks;
 using MoodSwings.Core;
 using UnityEngine;
 using UnityEngine.UI;
@@ -19,7 +17,6 @@ namespace MoodSwings.UI
 
         private Text _status;
         private bool _built;
-        private int _pollRun;
 
         protected abstract string Title { get; }
 
@@ -119,49 +116,5 @@ namespace MoodSwings.UI
             }
         }
 
-        /// <summary>Runs <paramref name="refresh"/> every <paramref name="seconds"/> until the screen is hidden (or this is called again).</summary>
-        protected async void PollWhileShown(float seconds, Func<Task> refresh)
-        {
-            var run = ++_pollRun;
-            try
-            {
-                while (true)
-                {
-                    await Awaitable.WaitForSecondsAsync(seconds);
-                    if (this == null || run != _pollRun)
-                    {
-                        return;
-                    }
-
-                    await refresh();
-                    if (this == null || run != _pollRun)
-                    {
-                        return;
-                    }
-                }
-            }
-            catch (Exception e)
-            {
-                Debug.LogException(e);
-            }
-        }
-
-        protected void StopPolling()
-        {
-            _pollRun++;
-        }
-
-        /// <summary>Runs an async UI action, logging (not swallowing silently) anything unexpected.</summary>
-        protected async void Run(Func<Task> action)
-        {
-            try
-            {
-                await action();
-            }
-            catch (Exception e)
-            {
-                Debug.LogException(e);
-            }
-        }
     }
 }

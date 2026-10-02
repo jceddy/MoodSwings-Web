@@ -34,6 +34,7 @@ namespace MoodSwings.Core
         private List<OpenGameListing> _available = new List<OpenGameListing>();
         private List<OpenGameListing> _mine = new List<OpenGameListing>();
         private List<OpenGameListing> _joined = new List<OpenGameListing>();
+        private List<GameSummary> _watchable = new List<GameSummary>();
 
         public LobbyFlow(ApiClient api)
         {
@@ -54,6 +55,9 @@ namespace MoodSwings.Core
 
         public IReadOnlyList<OpenGameListing> JoinedOpenGames => _joined;
 
+        /// <summary>In-progress games your friends are in, which you can watch.</summary>
+        public IReadOnlyList<GameSummary> WatchableGames => _watchable;
+
         /// <summary>How many active games are waiting on you (your turn, or a decision only you can make).</summary>
         public int GamesNeedingYou => _active.Count(GameDisplay.NeedsYou);
 
@@ -67,6 +71,7 @@ namespace MoodSwings.Core
             _available = new List<OpenGameListing>();
             _mine = new List<OpenGameListing>();
             _joined = new List<OpenGameListing>();
+            _watchable = new List<GameSummary>();
             Changed?.Invoke();
         }
 
@@ -135,6 +140,39 @@ namespace MoodSwings.Core
             _joined = Newest(joined.Value.Listings);
             Changed?.Invoke();
             return new LobbyResult { Ok = true };
+        }
+
+        public async Task<LobbyResult> RefreshWatchableGamesAsync(CancellationToken cancellationToken = default)
+        {
+            var result = await _api.ListWatchableGamesAsync(cancellationToken);
+            if (!result.Ok)
+            {
+                return Failed(result.UserMessage("Couldn't load your friends' games."));
+            }
+
+            _watchable = result.Value.Games
+                .OrderByDescending(g => g.LastMoveAt ?? string.Empty, StringComparer.Ordinal)
+                .ToList();
+            Changed?.Invoke();
+            return new LobbyResult { Ok = true };
+        }
+
+        /// <summary>Looks up the game a spectate code belongs to; the id is in the result.</summary>
+        public async Task<LobbyResult> ResolveSpectateCodeAsync(string code, CancellationToken cancellationToken = default)
+        {
+            code = (code ?? string.Empty).Trim();
+            if (code.Length == 0)
+            {
+                return Failed("Enter a spectate code.");
+            }
+
+            var result = await _api.ResolveSpectateCodeAsync(code, cancellationToken);
+            if (!result.Ok)
+            {
+                return Failed(result.UserMessage("Couldn't find a game for that code."));
+            }
+
+            return new LobbyResult { Ok = true, GameId = result.Value.GameId };
         }
 
         /// <summary>Creates a game with the chosen opponents (bots and friends) seated straight away.</summary>

@@ -161,6 +161,38 @@ games are waiting on you. A game's board is Phase 4, so rows don't open yet.
   polling) -- Friends and Settings predate it and build the same by hand. Lists
   have an auto-hiding scrollbar.
 
+## The game board
+
+Open any game from **Play** (the **Open** button on a row), or watch someone
+else's from **Watch**. `BoardScreen` draws it read-only: every seat with its
+moods in front of it, the deck and discard piles in the middle, and your hand
+along the bottom. Click any card for a readable close-up (the table cards are
+too small to read); **Log** shows the recent events and **Chat** the game's
+messages. Playing cards, answering a card's question, and sending chat are
+Phase 5.
+
+- **Seating matches the web client exactly** (`BoardLayout`, from
+  `inPlayZoneAssignments()` in `web-static/js/game.js`): you at the bottom, and
+  the **next seat in turn order at your left**. That's not cosmetic -- the engine
+  defines a player's "left-hand neighbor" (Confusion, Avoidance...) as the next
+  seat, so a board that seated people differently would contradict the cards.
+  2 players: opponent across; 3: top-left and top-right; 4: left, across, right.
+- **It polls every 3 seconds**, and that's functional: the server advances bot
+  turns and enforces timers as part of answering `GET /games/state`. It redraws
+  only when the game actually changed, and if a refresh fails it keeps the last
+  board up with a message instead of blanking.
+- **Cards** (`CardView`) use the converted art when present and a drawn stand-in
+  (name, value, rules text) when not, so the board never depends on the art. The
+  art prints a card's main value in its top-right corner, so when an effect has
+  **changed** a mood's value, a chip is laid over that corner showing the current
+  one; an unchanged value gets no chip. (Cards in hand always have their printed
+  value, so only moods in play get one; a stand-in card, which prints no value,
+  always shows it.) A switched-off ability shows "OFF".
+- **Spectating** uses the same board with no hand and no seat of your own
+  (anchored on the first seat, as the web does): a friend's in-progress game, or
+  a spectate code a player shared.
+- The Hurt Feelings token shows on the seat that holds it (3+ player games).
+
 ## Tests
 
 - **EditMode** (Window > General > Test Runner): `ApiClient`, `AuthFlow`,
@@ -223,7 +255,9 @@ Python scripts in `tools/` (`pip install pillow` for the first):
   cloning. `CardArtLibrary.ForCard(id)` loads from it. Art is sized to a
   multiple of 4 and imported without rescaling (`CardArtImporter`), which
   GPU texture compression requires -- otherwise Unity silently keeps each
-  card as uncompressed RGBA32 (~3 MB instead of under 1 MB).
+  card as uncompressed RGBA32 (~3 MB instead of under 1 MB). Mipmaps are on
+  (Kaiser filter, trilinear): cards are drawn at ~112 px from 744 px art, and
+  without them the shrunken art is harsh, speckled noise.
 - `capture_fixtures.py` -- logs in to a server with a throwaway account
   (credentials from `MOODSWINGS_USER`/`MOODSWINGS_PASSWORD`) and saves
   read-only API responses, email/phone redacted, to

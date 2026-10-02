@@ -105,12 +105,23 @@ Each phase ends with something runnable against the dev server
   **Not yet verified:** the real dev server -- creating a game against bots, and
   the open lobby (which needs a second account to join your posted game).
 
-### Phase 4 -- Read-only game board
+### Phase 4 -- Read-only game board (in progress)
 - Render `GET /games/state` for 2-4 seats: hand, board, discard, scores,
   round/turn, log, chat.
 - Build against spectate/replay first -- no input needed.
 - **Done when:** a spectated 4-player game renders correctly (incl. Hurt
   Feelings).
+- **Status:** the board (seats, moods, piles, hand, close-up, log, chat),
+  opening your own games, and spectating (friends' games or a code) are built and
+  verified against the real captured 2-, 3- and 4-player states: 209 EditMode
+  tests, and PlayMode tests that check actual on-screen positions (which seat is
+  left of which, Hurt Feelings on exactly one seat, polling, a dropped
+  connection), with screenshots reviewed. Hurt Feelings is checked against an
+  edited capture, since none of the captures has a holder. **Not included:**
+  replay (stepping through a finished game's recorded moves), which the plan
+  mentioned alongside spectating; it needs its own controls and can follow the
+  playable board. **Not yet verified:** the real dev server, and a real
+  spectated game.
 
 ### Phase 5 -- Playable core
 - Ready/start, play, pass, advance-turn, resign, generic `pending_decision`

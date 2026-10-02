@@ -13,7 +13,7 @@ namespace MoodSwings.Editor
 
         // Bump when the settings below change, so Unity reimports existing
         // textures (git-ignored art has no committed .meta to invalidate).
-        public override uint GetVersion() => 2;
+        public override uint GetVersion() => 3;
 
         private void OnPreprocessTexture()
         {
@@ -25,7 +25,14 @@ namespace MoodSwings.Editor
             var importer = (TextureImporter)assetImporter;
             importer.textureType = TextureImporterType.Sprite;
             importer.spriteImportMode = SpriteImportMode.Single;
-            importer.mipmapEnabled = false;
+            // Cards are drawn at a fraction of their 744 px width (about 112 px on
+            // the table). Without mipmaps the GPU samples scattered texels of the
+            // full-size art when shrinking it, which looks harsh and noisy; mipmaps
+            // hold pre-averaged smaller copies (Kaiser filtering, blended smoothly
+            // by trilinear sampling). Costs about a third more memory per card.
+            importer.mipmapEnabled = true;
+            importer.mipmapFilter = TextureImporterMipFilter.KaiserFilter;
+            importer.filterMode = UnityEngine.FilterMode.Trilinear;
             importer.alphaIsTransparency = true;
             // Never rescale: tools/convert_card_art.py already sizes the art
             // to a multiple of 4 (744x1040), which GPU compression requires.
