@@ -158,9 +158,22 @@ Each phase ends with something runnable against the dev server
   scoring animations beyond the announcement. **Not yet verified:** the actual feel
   -- a playtest on desktop and a physical phone (vibration, notch, touch dragging).
 
-### Phase 7 -- More play modes
+### Phase 7 -- More play modes (in progress)
 - Duel (separate decks), open/closed team play, best-of-three, synchronous
   mode (ready check + clocks), puzzles.
+- **Status:** built and verified headless, in four steps: (a) New Game offers Duel, and a
+  synchronous option (hidden while the server's feature switch is off, as on the dev server);
+  the deck pile is right for separate decks and for spectators; (b) best-of-three matches:
+  the option, the match score, the previous loser's first-player choice, Next game, and the
+  match result; (c) Open and Closed Team Play: creation with partner choice, team scores and
+  tags, the team propose/confirm decisions, the partner's hand, team chat, and Closed Team's
+  card pass; (d) the puzzle collection and a puzzle's board (goal, hint, solved banner).
+  **Not included:** drafts, sealed and custom-decklist duels (Phase 8), power-duel
+  sideboarding, tournaments, and the asynchronous turn-timeout options. **Not yet verified:**
+  any of it against the real dev server -- no team, match or puzzle game was captured (the
+  team and match states are the four-player and two-player captures edited, the puzzle list
+  is written from the server's documented shape), and synchronous play can't be tried while
+  the server has it off.
 
 ### Phase 8 -- Draft, sealed, deck builder
 - Quick, Winston, Grid, Rotisserie, Tiered Rotisserie, Chaos drafts; sealed

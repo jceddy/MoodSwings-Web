@@ -22,6 +22,8 @@ namespace MoodSwings.Core
 
         public static LobbyFlow Lobby { get; private set; }
 
+        public static PuzzleFlow Puzzles { get; private set; }
+
         /// <summary>Sound and vibration switches for this device.</summary>
         public static DeviceSettings Device { get; private set; }
 
@@ -58,6 +60,7 @@ namespace MoodSwings.Core
             Friends = new FriendsFlow(api);
             Preferences = new PreferencesFlow(api, Auth);
             Lobby = new LobbyFlow(api);
+            Puzzles = new PuzzleFlow(api);
             Device = new DeviceSettings(preferences ?? new InMemoryKeyValueStore());
             if (Theme == null)
             {

@@ -270,9 +270,35 @@ game" below.
 - **Hover.** On desktop, resting the mouse on any card for a moment shows a larger
   copy on the opposite side of the screen (with its current value and what is
   suppressing it); touch has the click close-up instead.
-- **Not playable yet:** drafts, sealed, duels, team play and best-of-three matches
-  (the board still shows them; the header says they can't be played in the app yet).
-  Those are Phases 7 and 8.
+- **Not playable yet:** drafts, sealed pools and custom-decklist duels (the board still
+  shows them; the header says they can't be played in the app yet). Those are Phase 8.
+
+### Other ways to play
+
+- **Duel** gives each player a deck of their own (so the deck pile reads "Your deck 25", and
+  the others' counts are on their seats). **Synchronous** games are two players sitting down
+  together: a ready check and a 30-second action clock (shown in the header). The server has a
+  feature switch for it, which is off on the dev server, so the New Game option stays hidden
+  until it's on.
+- **Best of three** (two players in Traditional or Duel, or any team game): first to win two
+  games, the next created for you. The header says "Game 2 - Match: you 1 - 0 BotSage"; game 2
+  or 3 opens with a question for the previous game's loser (who can see their opening hand
+  behind it) -- do they go first, or let the winner -- that can't be dismissed; a game that ends
+  with the match still on offers **Next game**; a decided match is announced.
+- **Team play** (Open: partners side by side, who see each other's hands; Closed: across the
+  table, with private hands and two cards passed at the start). Teams score together, shown in
+  the header. When it's your team's decision (who goes next, or who gets the shared draw), you
+  name someone and your partner agrees or sends it back; otherwise the banner says who is
+  deciding. Open Team Play has a **Partner's hand** button and chat that can go to just your
+  partner. New Game needs exactly three opponents and a partner picked from them (or left to
+  chance); a lobby team game seats four and draws teams once they've joined; the 15-card Power
+  deck isn't offered. No team game has been captured, so team play is checked against the
+  four-player capture turned into team games, with the fields as the server documents them.
+- **Puzzles** (Home > Puzzles): standalone solitaire puzzles, easiest first, each with its
+  goal and how you've done. Attempt (or Try again) starts a fresh game on the ordinary board,
+  with the goal kept in view, a Hint button for the puzzles that have one (the server is told
+  first, since reading it costs an achievement), no Resign (just leave), and "Puzzle solved in N
+  plays!" at the end.
 
 ## Tests
 

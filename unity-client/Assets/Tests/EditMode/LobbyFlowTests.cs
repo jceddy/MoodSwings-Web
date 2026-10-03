@@ -20,6 +20,34 @@ namespace MoodSwings.Tests
             _lobby = new LobbyFlow(new ApiClient(new ApiConfig("https://example.test"), _transport));
         }
 
+        [Test]
+        public void TheSynchronousFeatureFlag_IsReadFromTheServer()
+        {
+            Assert.IsFalse(_lobby.SynchronousModeEnabled, "off until known");
+
+            _transport.Enqueue(200, TestFixtures.Read("synchronous_mode_enabled"));
+            Assert.IsTrue(_lobby.RefreshSynchronousModeFlagAsync().GetAwaiter().GetResult().Ok);
+            Assert.IsFalse(_lobby.SynchronousModeEnabled, "the real dev server has it switched off");
+            StringAssert.EndsWith("/config/synchronous-mode-enabled", _transport.LastRequest.Url);
+
+            _transport.Enqueue(200, "{\"status\":\"ok\",\"enabled\":true}");
+            _lobby.RefreshSynchronousModeFlagAsync().GetAwaiter().GetResult();
+            Assert.IsTrue(_lobby.SynchronousModeEnabled);
+        }
+
+        [Test]
+        public void IfTheFlagCantBeRead_SynchronousStaysOff()
+        {
+            _transport.Enqueue(200, "{\"status\":\"ok\",\"enabled\":true}");
+            _lobby.RefreshSynchronousModeFlagAsync().GetAwaiter().GetResult();
+
+            _transport.EnqueueNetworkError("down");
+            var result = _lobby.RefreshSynchronousModeFlagAsync().GetAwaiter().GetResult();
+
+            Assert.IsFalse(result.Ok);
+            Assert.IsFalse(_lobby.SynchronousModeEnabled, "when in doubt, don't offer it");
+        }
+
         /// <summary>A listing as the server sends it. A null creator leaves creator_username out, as it does for the listings you posted.</summary>
         private static string Listing(int id, string creator, int target, int joined, string createdAt = "2026-10-01 10:00:00", string deck = "structure", int? createdBy = null) =>
             $"{{\"id\":{id},\"created_by_user_id\":{createdBy ?? id + 100}," +

@@ -29,6 +29,7 @@ namespace MoodSwings.Tests
             public string AvailableJson = Listings(Listing(1, "Alice", 3, 1));
             public string MineJson = NoListings;
             public string JoinedJson = NoListings;
+            public bool SynchronousFlag;
             public HttpResponse JoinResponse = MainSceneTests.Reply(201, "{\"status\":\"waiting\",\"joined_count\":1,\"target_player_count\":3}");
 
             public HttpResponse Handle(HttpRequest request)
@@ -46,6 +47,8 @@ namespace MoodSwings.Tests
                         : MainSceneTests.Reply(200, Fixture("games"));
                     case "/games/past": return MainSceneTests.Reply(200, Fixture("games_past"));
                     case "/games/bots": return MainSceneTests.Reply(200, Fixture("games_bots"));
+                    case "/config/synchronous-mode-enabled":
+                        return MainSceneTests.Reply(200, "{\"status\":\"ok\",\"enabled\":" + (SynchronousFlag ? "true" : "false") + "}");
                     case "/open-games": return request.Method == "POST"
                         ? MainSceneTests.Reply(201, "{\"status\":\"ok\",\"listing_id\":7}")
                         : MainSceneTests.Reply(200, AvailableJson);
@@ -236,6 +239,204 @@ namespace MoodSwings.Tests
             StringAssert.Contains("at most 3 opponents", MainSceneTests.Screen<NewGameScreen>().StatusText);
             StringAssert.Contains("Selected: 3 of 3", UnityEngine.Object.FindObjectsByType<Text>(FindObjectsInactive.Exclude).Select(t => t.text).First(t => t.StartsWith("Selected:")));
             ScreenshotHelper.Capture("new-game-full");
+        }
+
+        [UnityTest]
+        public IEnumerator NewGame_OffersTraditionalAndDuel_AndSendsTheFormatChosen()
+        {
+            var server = new LobbyFakeServer();
+            yield return OpenNewGame(server);
+
+            Assert.IsTrue(PhaseTwoSceneTests.FindToggle("Traditional").isOn, "Traditional is the default");
+            Assert.IsNotNull(PhaseTwoSceneTests.FindToggle("Duel"));
+            ScreenshotHelper.Capture("new-game-formats");
+
+            PhaseTwoSceneTests.FindToggle("Duel").isOn = true;
+            yield return PhaseTwoSceneTests.Frames();
+            PhaseTwoSceneTests.FindToggle("BotSage  (tactical)").isOn = true;
+            yield return PhaseTwoSceneTests.Frames();
+            yield return PhaseTwoSceneTests.Click("Start game");
+            yield return MainSceneTests.WaitFor<PlayScreen>();
+
+            Assert.IsTrue(AnyCall(server, "POST /games {", "\"format\":\"duel\"", "\"deck_type\":\"structure\""), string.Join("\n", server.Calls));
+        }
+
+        [UnityTest]
+        public IEnumerator NewGame_ADuelPostedToTheLobby_SeatsExactlyTwo()
+        {
+            var server = new LobbyFakeServer();
+            yield return OpenNewGame(server);
+            PhaseTwoSceneTests.FindToggle("Duel").isOn = true;
+            PhaseTwoSceneTests.FindToggle("Post to the open lobby").isOn = true;
+            yield return PhaseTwoSceneTests.Frames();
+
+            Assert.IsNull(PhaseTwoSceneTests.FindToggle("3 players"), "the count isn't the creator's to choose");
+            Assert.IsTrue(UnityEngine.Object.FindObjectsByType<Text>(FindObjectsInactive.Exclude)
+                .Any(t => t.text.Contains("seats exactly 2 players")));
+
+            yield return PhaseTwoSceneTests.Click("Post to open lobby");
+            yield return MainSceneTests.WaitFor<PlayScreen>();
+
+            Assert.IsTrue(AnyCall(server, "POST /open-games {", "\"format\":\"duel\"", "\"target_player_count\":2"), string.Join("\n", server.Calls));
+        }
+
+        [UnityTest]
+        public IEnumerator NewGame_BestOfThree_IsOfferedForTwoPlayersOnly_AndSent()
+        {
+            var server = new LobbyFakeServer();
+            yield return OpenNewGame(server);
+            Assert.IsNull(PhaseTwoSceneTests.FindToggle("Best of three"), "no opponent yet");
+
+            PhaseTwoSceneTests.FindToggle("BotSage  (tactical)").isOn = true;
+            yield return PhaseTwoSceneTests.Frames();
+            var toggle = PhaseTwoSceneTests.FindToggle("Best of three");
+            Assert.IsNotNull(toggle);
+            toggle.isOn = true;
+
+            PhaseTwoSceneTests.FindToggle("BotSageQuick  (tactical)").isOn = true;
+            yield return PhaseTwoSceneTests.Frames();
+            Assert.IsNull(PhaseTwoSceneTests.FindToggle("Best of three"), "three players: no single opponent to win against");
+            PhaseTwoSceneTests.FindToggle("BotSageQuick  (tactical)").isOn = false;
+            yield return PhaseTwoSceneTests.Frames();
+            Assert.IsFalse(PhaseTwoSceneTests.FindToggle("Best of three").isOn, "switched off, not just hidden");
+
+            PhaseTwoSceneTests.FindToggle("Best of three").isOn = true;
+            yield return PhaseTwoSceneTests.Click("Start game");
+            yield return MainSceneTests.WaitFor<PlayScreen>();
+
+            Assert.IsTrue(AnyCall(server, "POST /games {", "\"best_of_three\":true"), string.Join("\n", server.Calls));
+        }
+
+        [UnityTest]
+        public IEnumerator NewGame_TeamPlay_NeedsThreeOpponentsAndAPartner_AndSendsThem()
+        {
+            var server = new LobbyFakeServer();
+            yield return OpenNewGame(server);
+
+            Assert.IsNotNull(PhaseTwoSceneTests.FindToggle("Open Team Play"));
+            Assert.IsNotNull(PhaseTwoSceneTests.FindToggle("Closed Team Play"));
+            PhaseTwoSceneTests.FindToggle("Closed Team Play").isOn = true;
+            yield return PhaseTwoSceneTests.Frames();
+
+            Assert.IsNull(PhaseTwoSceneTests.FindToggle("Power"), "too small a deck for a team");
+            Assert.IsNotNull(PhaseTwoSceneTests.FindToggle("Assign my partner at random"));
+            Assert.IsFalse(StartButton().interactable);
+
+            PhaseTwoSceneTests.FindToggle("BotSage  (tactical)").isOn = true;
+            PhaseTwoSceneTests.FindToggle("BotSageQuick  (tactical)").isOn = true;
+            yield return PhaseTwoSceneTests.Frames();
+            Assert.IsFalse(StartButton().interactable, "two opponents isn't a team game");
+
+            PhaseTwoSceneTests.FindToggle("BotSageDeep  (tactical)").isOn = true;
+            yield return PhaseTwoSceneTests.Frames();
+            Assert.IsTrue(StartButton().interactable);
+            ScreenshotHelper.Capture("new-game-team");
+
+            // The partner list is the three picked; choose the middle one.
+            var partners = UnityEngine.Object.FindObjectsByType<Toggle>(FindObjectsInactive.Exclude)
+                .Where(t => t.group != null && t.GetComponentInChildren<Text>() != null && t.GetComponentInChildren<Text>().text.StartsWith("BotSage"))
+                .ToList();
+            Assert.IsNotNull(PhaseTwoSceneTests.FindToggle("BotSageQuick"), string.Join(",", partners.Select(p => p.GetComponentInChildren<Text>().text)));
+            PhaseTwoSceneTests.FindToggle("BotSageQuick").isOn = true;
+            yield return PhaseTwoSceneTests.Frames();
+
+            yield return PhaseTwoSceneTests.Click("Start game");
+            yield return MainSceneTests.WaitFor<PlayScreen>();
+
+            Assert.IsTrue(AnyCall(server, "POST /games {", "\"format\":\"closed_team\"", "\"opponent_user_ids\":[18,20,21]", "\"partner_user_id\":20"),
+                string.Join("\n", server.Calls));
+        }
+
+        [UnityTest]
+        public IEnumerator NewGame_TeamPlay_CanLeaveThePartnerToChance()
+        {
+            var server = new LobbyFakeServer();
+            yield return OpenNewGame(server);
+            PhaseTwoSceneTests.FindToggle("Open Team Play").isOn = true;
+            yield return PhaseTwoSceneTests.Frames();
+            foreach (var bot in new[] { "BotAlice", "BotBen", "BotCleo" })
+            {
+                PhaseTwoSceneTests.FindToggle(bot).isOn = true;
+            }
+
+            yield return PhaseTwoSceneTests.Frames();
+            PhaseTwoSceneTests.FindToggle("Assign my partner at random").isOn = true;
+            yield return PhaseTwoSceneTests.Frames();
+            yield return PhaseTwoSceneTests.Click("Start game");
+            yield return MainSceneTests.WaitFor<PlayScreen>();
+
+            Assert.IsTrue(AnyCall(server, "POST /games {", "\"format\":\"team\"", "\"random_teams\":true"), string.Join("\n", server.Calls));
+            Assert.IsFalse(AnyCall(server, "POST /games {", "partner_user_id"));
+        }
+
+        [UnityTest]
+        public IEnumerator NewGame_TeamPlayFromTheLobby_SeatsFourAndDrawsTeamsLater()
+        {
+            var server = new LobbyFakeServer();
+            yield return OpenNewGame(server);
+            PhaseTwoSceneTests.FindToggle("Open Team Play").isOn = true;
+            PhaseTwoSceneTests.FindToggle("Post to the open lobby").isOn = true;
+            yield return PhaseTwoSceneTests.Frames();
+
+            Assert.IsNull(PhaseTwoSceneTests.FindToggle("Assign my partner at random"), "partners are drawn once everyone has joined");
+            Assert.IsTrue(UnityEngine.Object.FindObjectsByType<Text>(FindObjectsInactive.Exclude).Any(t => t.text.Contains("seats exactly 4 players")));
+
+            yield return PhaseTwoSceneTests.Click("Post to open lobby");
+            yield return MainSceneTests.WaitFor<PlayScreen>();
+
+            Assert.IsTrue(AnyCall(server, "POST /open-games {", "\"format\":\"team\"", "\"target_player_count\":4"), string.Join("\n", server.Calls));
+        }
+
+        [UnityTest]
+        public IEnumerator NewGame_BestOfThree_IsOfferedInTeamPlayAtAnyPointOfPickingOpponents()
+        {
+            var server = new LobbyFakeServer();
+            yield return OpenNewGame(server);
+            PhaseTwoSceneTests.FindToggle("Open Team Play").isOn = true;
+            yield return PhaseTwoSceneTests.Frames();
+
+            Assert.IsNotNull(PhaseTwoSceneTests.FindToggle("Best of three"));
+            Assert.IsNull(PhaseTwoSceneTests.FindToggle("Synchronous (live)"));
+        }
+
+        [UnityTest]
+        public IEnumerator NewGame_Synchronous_IsHiddenUntilTheServerOffersIt()
+        {
+            var server = new LobbyFakeServer { SynchronousFlag = false };
+            yield return OpenNewGame(server);
+            PhaseTwoSceneTests.FindToggle("BotSage  (tactical)").isOn = true;
+            yield return PhaseTwoSceneTests.Frames();
+
+            Assert.IsNull(PhaseTwoSceneTests.FindToggle("Synchronous (live)"));
+        }
+
+        [UnityTest]
+        public IEnumerator NewGame_Synchronous_AppearsForExactlyTwoPlayers_AndIsSent()
+        {
+            var server = new LobbyFakeServer { SynchronousFlag = true };
+            yield return OpenNewGame(server);
+            Assert.IsNull(PhaseTwoSceneTests.FindToggle("Synchronous (live)"), "no opponent yet, so not two players");
+
+            PhaseTwoSceneTests.FindToggle("jceddy  (online)").isOn = true;
+            yield return PhaseTwoSceneTests.Frames();
+            var toggle = PhaseTwoSceneTests.FindToggle("Synchronous (live)");
+            Assert.IsNotNull(toggle);
+            ScreenshotHelper.Capture("new-game-synchronous");
+            toggle.isOn = true;
+
+            // A third player makes it meaningless, so it goes away and is not sent.
+            PhaseTwoSceneTests.FindToggle("BotSage  (tactical)").isOn = true;
+            yield return PhaseTwoSceneTests.Frames();
+            Assert.IsNull(PhaseTwoSceneTests.FindToggle("Synchronous (live)"));
+            PhaseTwoSceneTests.FindToggle("BotSage  (tactical)").isOn = false;
+            yield return PhaseTwoSceneTests.Frames();
+            Assert.IsFalse(PhaseTwoSceneTests.FindToggle("Synchronous (live)").isOn, "it was switched off, not just hidden");
+
+            PhaseTwoSceneTests.FindToggle("Synchronous (live)").isOn = true;
+            yield return PhaseTwoSceneTests.Click("Start game");
+            yield return MainSceneTests.WaitFor<PlayScreen>();
+
+            Assert.IsTrue(AnyCall(server, "POST /games {", "\"synchronous_mode\":true"), string.Join("\n", server.Calls));
         }
 
         [UnityTest]

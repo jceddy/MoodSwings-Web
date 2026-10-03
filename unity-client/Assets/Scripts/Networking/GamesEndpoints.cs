@@ -20,6 +20,13 @@ namespace MoodSwings.Networking
             return api.GetAsync<GamesResponse>("/games/past", cancellationToken);
         }
 
+        /// <summary>GET /config/synchronous-mode-enabled -- whether the server currently offers synchronous games at all.</summary>
+        public static Task<ApiResult<FeatureFlagResponse>> GetSynchronousModeEnabledAsync(
+            this ApiClient api, CancellationToken cancellationToken = default)
+        {
+            return api.GetAsync<FeatureFlagResponse>("/config/synchronous-mode-enabled", cancellationToken);
+        }
+
         public static Task<ApiResult<BotsResponse>> ListBotsAsync(
             this ApiClient api, CancellationToken cancellationToken = default)
         {
@@ -37,6 +44,23 @@ namespace MoodSwings.Networking
             this ApiClient api, IDictionary<string, object> body, CancellationToken cancellationToken = default)
         {
             return api.PostAsync<CreateGameResponse>("/games", body, cancellationToken);
+        }
+    }
+
+    public static class PuzzlesEndpoints
+    {
+        /// <summary>GET /puzzles -- every puzzle, easiest first, with how you've done at each.</summary>
+        public static Task<ApiResult<PuzzlesResponse>> ListPuzzlesAsync(
+            this ApiClient api, CancellationToken cancellationToken = default)
+        {
+            return api.GetAsync<PuzzlesResponse>("/puzzles", cancellationToken);
+        }
+
+        /// <summary>POST /puzzles/attempt -- starts a fresh attempt (also "try again"); 201 with the new game_id.</summary>
+        public static Task<ApiResult<CreateGameResponse>> StartPuzzleAttemptAsync(
+            this ApiClient api, int puzzleId, CancellationToken cancellationToken = default)
+        {
+            return api.PostAsync<CreateGameResponse>("/puzzles/attempt", new { puzzle_id = puzzleId }, cancellationToken);
         }
     }
 
