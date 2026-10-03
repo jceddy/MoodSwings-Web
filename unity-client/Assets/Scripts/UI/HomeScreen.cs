@@ -64,6 +64,7 @@ namespace MoodSwings.UI
             _playLabel = play.GetComponentInChildren<Text>();
 
             UiFactory.Button(column, "Puzzles", theme, () => Router.Show<PuzzlesScreen>(), primary: false);
+            UiFactory.Button(column, "Decklists", theme, () => Router.Show<DecklistsScreen>(), primary: false);
 
             var friends = UiFactory.Button(column, "Friends", theme, () => Router.Show<FriendsScreen>(), primary: false);
             _friendsLabel = friends.GetComponentInChildren<Text>();
@@ -102,6 +103,7 @@ namespace MoodSwings.UI
                 AppServices.Friends.Clear();
                 AppServices.Lobby.Clear();
                 AppServices.Puzzles.Clear();
+                AppServices.Decklists.Clear();
                 if (this == null)
                 {
                     return;

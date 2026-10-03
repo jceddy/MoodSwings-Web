@@ -30,6 +30,10 @@ namespace MoodSwings.Tests
             public string MineJson = NoListings;
             public string JoinedJson = NoListings;
             public bool SynchronousFlag;
+            public string DecklistsJson =
+                "{\"status\":\"ok\",\"friends\":[],\"own\":[" +
+                "{\"id\":30,\"name\":\"Mine\",\"visibility\":\"private\",\"card_count\":20,\"sideboard_card_count\":0}," +
+                "{\"id\":31,\"name\":\"Tiny\",\"visibility\":\"private\",\"card_count\":10,\"sideboard_card_count\":0}]}";
             public HttpResponse JoinResponse = MainSceneTests.Reply(201, "{\"status\":\"waiting\",\"joined_count\":1,\"target_player_count\":3}");
 
             public HttpResponse Handle(HttpRequest request)
@@ -47,6 +51,7 @@ namespace MoodSwings.Tests
                         : MainSceneTests.Reply(200, Fixture("games"));
                     case "/games/past": return MainSceneTests.Reply(200, Fixture("games_past"));
                     case "/games/bots": return MainSceneTests.Reply(200, Fixture("games_bots"));
+                    case "/decklists": return MainSceneTests.Reply(200, DecklistsJson);
                     case "/config/synchronous-mode-enabled":
                         return MainSceneTests.Reply(200, "{\"status\":\"ok\",\"enabled\":" + (SynchronousFlag ? "true" : "false") + "}");
                     case "/open-games": return request.Method == "POST"
@@ -557,5 +562,164 @@ namespace MoodSwings.Tests
             Assert.AreEqual(0, AppServices.Lobby.ActiveGames.Count);
             Assert.AreEqual(0, AppServices.Lobby.PastGames.Count);
         }
+
+        [UnityTest]
+        public IEnumerator NewGame_ADraft_IsSentWithItsFormatDeckTypeAndPool()
+        {
+            var server = new LobbyFakeServer();
+            yield return OpenNewGame(server);
+            PhaseTwoSceneTests.FindToggle("BotAlice").isOn = true;
+            PhaseTwoSceneTests.FindToggle("Draft").isOn = true;
+            yield return PhaseTwoSceneTests.Frames(2);
+
+            Assert.IsTrue(PhaseTwoSceneTests.FindToggle("Quick Draft").isOn, "the first of the draft types");
+            Assert.IsNull(PhaseTwoSceneTests.FindToggle("Best of three"), "a draft is always a match");
+            Assert.IsNull(PhaseTwoSceneTests.FindToggle("Power"), "no ready-made decks here");
+
+            PhaseTwoSceneTests.FindToggle("Grid Draft").isOn = true;
+            yield return PhaseTwoSceneTests.Frames(2);
+            PhaseTwoSceneTests.FindToggle("One of Each Card").isOn = true;
+            yield return PhaseTwoSceneTests.Frames(2);
+            ScreenshotHelper.Capture("new-game-draft");
+
+            yield return PhaseTwoSceneTests.Click("Start game");
+            yield return MainSceneTests.WaitFor<PlayScreen>();
+
+            Assert.IsTrue(AnyCall(server, "POST /games {", "\"format\":\"draft\"", "\"deck_type\":\"grid_draft\"", "\"grid_draft_pool_source\":\"one_of_each\""),
+                string.Join("\n", server.Calls));
+        }
+
+        [UnityTest]
+        public IEnumerator NewGame_ARotisserieDraft_LetsYouChooseHowManyCardsEachPlayerPicks()
+        {
+            var server = new LobbyFakeServer();
+            yield return OpenNewGame(server);
+            PhaseTwoSceneTests.FindToggle("BotAlice").isOn = true;
+            PhaseTwoSceneTests.FindToggle("Draft").isOn = true;
+            yield return PhaseTwoSceneTests.Frames(2);
+            PhaseTwoSceneTests.FindToggle("Rotisserie Draft").isOn = true;
+            yield return PhaseTwoSceneTests.Frames(2);
+
+            Assert.AreEqual("14 cards each", PhaseFiveSceneTests.Child("Cutoff label").GetComponent<Text>().text);
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.ButtonNamed("More picks"));
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.ButtonNamed("More picks"));
+            Assert.AreEqual("16 cards each", PhaseFiveSceneTests.Child("Cutoff label").GetComponent<Text>().text);
+
+            yield return PhaseTwoSceneTests.Click("Start game");
+            yield return MainSceneTests.WaitFor<PlayScreen>();
+
+            Assert.IsTrue(AnyCall(server, "POST /games {", "\"deck_type\":\"rotisserie_draft\"", "\"rotisserie_draft_pool_source\":\"random_48\"", "\"rotisserie_draft_cutoff_count\":16"),
+                string.Join("\n", server.Calls));
+        }
+
+        [UnityTest]
+        public IEnumerator NewGame_ThePoolOfTheDay_HoldsOneOpponent_AndSendsItsDeckType()
+        {
+            var server = new LobbyFakeServer();
+            yield return OpenNewGame(server);
+            PhaseTwoSceneTests.FindToggle("Draft").isOn = true;
+            yield return PhaseTwoSceneTests.Frames(2);
+            PhaseTwoSceneTests.FindToggle("Sealed Pool of the Day").isOn = true;
+            yield return PhaseTwoSceneTests.Frames(2);
+            Assert.IsNull(PhaseTwoSceneTests.FindToggle("Random 48"), "no pool to choose");
+
+            PhaseTwoSceneTests.FindToggle("BotAlice").isOn = true;
+            PhaseTwoSceneTests.FindToggle("BotBen").isOn = true;
+            yield return PhaseTwoSceneTests.Frames();
+            StringAssert.Contains("exactly two players", MainSceneTests.Screen<NewGameScreen>().StatusText);
+            Assert.IsFalse(PhaseTwoSceneTests.FindToggle("BotBen").isOn);
+
+            yield return PhaseTwoSceneTests.Click("Start game");
+            yield return MainSceneTests.WaitFor<PlayScreen>();
+
+            Assert.IsTrue(AnyCall(server, "POST /games {", "\"format\":\"draft\"", "\"deck_type\":\"sealed_pool_of_the_day\""), string.Join("\n", server.Calls));
+        }
+
+        [UnityTest]
+        public IEnumerator NewGame_ACustomDeck_NeedsASavedDeckBigEnough_AndSendsIt()
+        {
+            var server = new LobbyFakeServer();
+            yield return OpenNewGame(server);
+            PhaseTwoSceneTests.FindToggle("BotAlice").isOn = true;
+            PhaseTwoSceneTests.FindToggle("Custom Deck").isOn = true;
+            yield return PhaseTwoSceneTests.Frames(3);
+
+            Assert.IsNotNull(PhaseTwoSceneTests.FindToggle("Mine  (20 cards)"), "your saved decks are offered");
+            Assert.IsFalse(StartButton().interactable, "no deck chosen yet");
+
+            PhaseTwoSceneTests.FindToggle("Tiny  (10 cards)").isOn = true;
+            yield return PhaseTwoSceneTests.Frames(2);
+            Assert.IsFalse(StartButton().interactable, "two players need 15 cards");
+
+            PhaseTwoSceneTests.FindToggle("Mine  (20 cards)").isOn = true;
+            yield return PhaseTwoSceneTests.Frames(2);
+            Assert.IsTrue(StartButton().interactable);
+            ScreenshotHelper.Capture("new-game-custom-deck");
+
+            yield return PhaseTwoSceneTests.Click("Start game");
+            yield return MainSceneTests.WaitFor<PlayScreen>();
+
+            Assert.IsTrue(AnyCall(server, "POST /games {", "\"deck_type\":\"custom\"", "\"saved_decklist_id\":30"), string.Join("\n", server.Calls));
+        }
+
+        [UnityTest]
+        public IEnumerator NewGame_ACustomDuel_ChoosesTheRules_AndADeckForEachBot()
+        {
+            var server = new LobbyFakeServer();
+            yield return OpenNewGame(server);
+            PhaseTwoSceneTests.FindToggle("BotAlice").isOn = true;
+            PhaseTwoSceneTests.FindToggle("Duel").isOn = true;
+            yield return PhaseTwoSceneTests.Frames(2);
+            PhaseTwoSceneTests.FindToggle("Custom Decklists (Duel)").isOn = true;
+            yield return PhaseTwoSceneTests.Frames(3);
+            PhaseTwoSceneTests.FindToggle("Power Duel").isOn = true;
+            yield return PhaseTwoSceneTests.Frames(2);
+
+            Assert.IsFalse(StartButton().interactable, "the bot has no deck yet");
+            var botDeck = PhaseFiveSceneTests.Child("Deck Mine");
+            Assert.IsNotNull(botDeck, "a deck to give BotAlice");
+            Assert.IsTrue(Texts().Contains("Deck for BotAlice"), string.Join(" | ", Texts()));
+            botDeck.GetComponent<Toggle>().isOn = true;
+            yield return PhaseTwoSceneTests.Frames(3);
+            Assert.IsTrue(StartButton().interactable);
+
+            PhaseTwoSceneTests.FindToggle("Best of three").isOn = true;
+            yield return PhaseTwoSceneTests.Frames(2);
+            var sideboarding = PhaseTwoSceneTests.FindToggle("Allow sideboarding");
+            Assert.IsNotNull(sideboarding, "Power rules in a match can be sideboarded");
+            sideboarding.isOn = true;
+            ScreenshotHelper.Capture("new-game-custom-duel");
+
+            yield return PhaseTwoSceneTests.Click("Start game");
+            yield return MainSceneTests.WaitFor<PlayScreen>();
+
+            Assert.IsTrue(AnyCall(server, "POST /games {", "\"deck_type\":\"custom_duel\"", "\"preset\":\"power\"", "\"allow_sideboarding\":true",
+                "\"bot_decklists\":{\"9\":{\"saved_decklist_id\":30}}", "\"best_of_three\":true"), string.Join("\n", server.Calls));
+        }
+
+        [UnityTest]
+        public IEnumerator NewGame_ADraftCanDealFromASavedDeck()
+        {
+            var server = new LobbyFakeServer();
+            yield return OpenNewGame(server);
+            PhaseTwoSceneTests.FindToggle("BotAlice").isOn = true;
+            PhaseTwoSceneTests.FindToggle("Draft").isOn = true;
+            yield return PhaseTwoSceneTests.Frames(2);
+            Assert.IsNull(PhaseFiveSceneTests.Child("Deck Mine"), "no deck list until a saved deck is the pool");
+
+            PhaseTwoSceneTests.FindToggle("A saved deck").isOn = true;
+            yield return PhaseTwoSceneTests.Frames(3);
+            Assert.IsFalse(StartButton().interactable);
+            PhaseFiveSceneTests.Child("Deck Mine").GetComponent<Toggle>().isOn = true;
+            yield return PhaseTwoSceneTests.Frames(2);
+
+            yield return PhaseTwoSceneTests.Click("Start game");
+            yield return MainSceneTests.WaitFor<PlayScreen>();
+
+            Assert.IsTrue(AnyCall(server, "POST /games {", "\"quick_draft_pool_source\":\"saved_deck\"", "\"saved_decklist_id\":30"), string.Join("\n", server.Calls));
+        }
+
+        private static string[] Texts() =>
+            UnityEngine.Object.FindObjectsByType<Text>(FindObjectsInactive.Exclude).Select(t => t.text).ToArray();
     }
 }

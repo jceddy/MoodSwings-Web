@@ -178,6 +178,27 @@ Each phase ends with something runnable against the dev server
 ### Phase 8 -- Draft, sealed, deck builder
 - Quick, Winston, Grid, Rotisserie, Tiered Rotisserie, Chaos drafts; sealed
   deck and daily/weekly sealed pool; custom deck builder.
+- **Plan, in steps:** (a) the draft framework and Quick Draft -- a draft game stays "waiting"
+  while its cards are chosen and its deck built, drawn by `DraftView` in place of the table;
+  (b) Winston, Grid, Rotisserie and Tiered Rotisserie; (c) sealed deck and the daily/weekly
+  sealed pools (with rarity caps); (d) Chaos Draft; (e) saved decklists and the custom deck
+  builder, with the custom / saved-deck pool sources.
+- **Status:** built and verified headless, in five steps. (a, b) New Game's Draft format (and the
+  draft types next to team formats' decks) with the pool sources and Rotisserie's pick count; the
+  pack pick, Winston's piles, the Grid, the Rotisserie pool (plain and tiered); the shared
+  deck-building stage (size limits, rarity caps, last game's deck), submitting, waiting for the
+  others, and starting the game once every deck is in. (c) Sealed Deck, the Pool of the Day (its
+  rarity caps, one opponent) and the Weekly Sealed Pool. (d) Chaos Draft: the Settings opt-in, the
+  round-start effect choice and attach (with the partner's confirm in Open Team Play), play held until
+  everyone has chosen, effect pills and text on cards, and the loop shortcut. (e) Saved decklists and the
+  deck builder (catalog filters, copy counts, save/update/delete, copy a friend's deck); saved decks as a
+  game's custom deck and as a draft's pool; custom duels with the Structure, Power and jceddy's 75
+  rules, a deck per practice bot, the board's waiting-room deck choice and Power Duel sideboarding.
+  **Not included:** custom tiers for Tiered Rotisserie (only the fixed rarity scheme), duel rules of
+  your own making, and pasting or uploading decklist text -- all web-only for now. **Not yet
+  verified:** any draft, sealed, chaos or custom-duel game against the real dev server (no such
+  game state was captured beyond the finished games' summaries; the states in the tests are built from
+  the server's code and the web client's reading of it).
 
 ### Phase 9 -- Meta features
 - Tournaments and pod drafts, stats, achievements, card stats, notifications.

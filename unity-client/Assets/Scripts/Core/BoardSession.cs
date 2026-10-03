@@ -84,10 +84,11 @@ namespace MoodSwings.Core
             }
 
             State = result.Value;
+            await AttachChaosOfferAsync(cancellationToken);
 
             // The board polls every few seconds; most polls find nothing new, and
             // redrawing identical content would only flicker.
-            var snapshot = JsonConvert.SerializeObject(State);
+            var snapshot = JsonConvert.SerializeObject(State) + "|" + JsonConvert.SerializeObject(State.ChaosOffer);
             if (snapshot != _lastSnapshot)
             {
                 _lastSnapshot = snapshot;
@@ -95,6 +96,33 @@ namespace MoodSwings.Core
             }
 
             return new BoardRefreshResult { Ok = true };
+        }
+
+        private ChaosOfferInfo _chaosOffer;
+
+        // A Chaos Draft round opens with an effect to choose, which the server offers through its own endpoint
+        // (and creates on the first ask). Asking is part of every refresh, so the board always knows whether play is held up.
+        // A failed ask keeps the last answer rather than unblocking or blocking on a guess.
+        private async Task AttachChaosOfferAsync(CancellationToken cancellationToken)
+        {
+            var eligible = !IsSpectating
+                && State.Game.DeckType == "chaos_draft"
+                && State.Game.Status == "in_progress"
+                && BoardDisplay.Viewer(State) != null;
+            if (!eligible)
+            {
+                _chaosOffer = null;
+            }
+            else
+            {
+                var offer = await _api.GetChaosOfferAsync(GameId, cancellationToken);
+                if (offer.Ok)
+                {
+                    _chaosOffer = offer.Value;
+                }
+            }
+
+            State.ChaosOffer = _chaosOffer;
         }
 
         // --- acting ------------------------------------------------------------------------------
@@ -124,6 +152,42 @@ namespace MoodSwings.Core
         /// <summary>Confirms you're ready, in a synchronous game's ready check.</summary>
         public Task<BoardActionResult> MarkReadyAsync() =>
             ActAsync("Couldn't confirm you're ready.", () => _api.MarkReadyAsync(GameId));
+
+        /// <summary>Custom duel: play this saved deck, or the deck written out as <paramref name="decklistText"/> (sideboarding).</summary>
+        public Task<BoardActionResult> SubmitDuelDeckAsync(int? savedDecklistId, string decklistText = null) =>
+            ActAsync("Couldn't submit that deck.", () => _api.SubmitDuelDeckAsync(GameId, savedDecklistId, decklistText));
+
+        /// <summary>Chaos Draft: attach the chosen effect to this card (a team proposes it for its partner to confirm).</summary>
+        public Task<BoardActionResult> ChooseChaosEffectAsync(int effectId, int cardId, bool team) =>
+            ActAsync("Couldn't attach that effect.", () => _api.ChooseChaosEffectAsync(GameId, effectId, cardId, team));
+
+        /// <summary>Chaos Draft, Open Team Play: agree with your partner's proposal (true) or turn it down.</summary>
+        public Task<BoardActionResult> ConfirmChaosEffectAsync(bool approve) =>
+            ActAsync(approve ? "Couldn't confirm that." : "Couldn't send that back.", () => _api.ConfirmChaosEffectAsync(GameId, approve));
+
+        /// <summary>Chaos Draft: apply a repeating effect's loop this many times at once.</summary>
+        public Task<BoardActionResult> ApplyChaosLoopShortcutAsync(int count) =>
+            ActAsync("Couldn't apply that.", () => _api.ApplyChaosLoopShortcutAsync(GameId, count));
+
+        /// <summary>Quick Draft: keep these cards from the pack in front of you.</summary>
+        public Task<BoardActionResult> PickQuickDraftAsync(int round, int stage, IEnumerable<int> cardIds) =>
+            ActAsync("Couldn't submit that pick.", () => _api.PickQuickDraftAsync(GameId, round, stage, cardIds));
+
+        /// <summary>Winston Draft: take the pile you're looking at (true), or pass it on (false).</summary>
+        public Task<BoardActionResult> PickWinstonDraftAsync(bool take) =>
+            ActAsync("Couldn't submit that pick.", () => _api.PickWinstonDraftAsync(GameId, take ? "take" : "pass"));
+
+        /// <summary>Grid Draft: take a whole "row" or "column".</summary>
+        public Task<BoardActionResult> PickGridDraftAsync(string axis, int index) =>
+            ActAsync("Couldn't submit that pick.", () => _api.PickGridDraftAsync(GameId, axis, index));
+
+        /// <summary>Rotisserie Draft (plain or tiered): take this card from the shared pool.</summary>
+        public Task<BoardActionResult> PickRotisserieDraftAsync(int cardId, bool tiered) =>
+            ActAsync("Couldn't submit that pick.", () => _api.PickRotisserieDraftAsync(GameId, cardId, tiered));
+
+        /// <summary>Submit the deck you've chosen from your drafted or sealed pool.</summary>
+        public Task<BoardActionResult> SubmitDraftDeckAsync(IEnumerable<int> cardIds) =>
+            ActAsync("Couldn't submit that deck.", () => _api.SubmitDraftDeckAsync(GameId, cardIds));
 
         /// <summary>Tells the server you're about to read the hint (it affects an achievement), before it's shown. Failures are ignored.</summary>
         public async Task MarkHintViewedAsync()

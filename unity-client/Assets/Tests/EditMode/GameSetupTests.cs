@@ -11,9 +11,9 @@ namespace MoodSwings.Tests
     public class GameSetupTests
     {
         [Test]
-        public void TraditionalDuelAndTheTeamFormats_AreOffered_TraditionalFirst()
+        public void TraditionalDuelTeamAndDraftFormats_AreOffered_TraditionalFirst()
         {
-            CollectionAssert.AreEqual(new[] { "standard", "duel", "team", "closed_team" }, GameSetup.FormatOptions.Select(f => f.Id).ToArray());
+            CollectionAssert.AreEqual(new[] { "standard", "duel", "team", "closed_team", "draft" }, GameSetup.FormatOptions.Select(f => f.Id).ToArray());
             Assert.AreEqual("standard", new GameSetup().Format);
         }
 

@@ -90,7 +90,13 @@ namespace MoodSwings.UI
             // An effect (Imagination) has recolored it: a pill in its current color names it.
             if (card.IsRecolored)
             {
-                AddColorBadge(rect, card.Color, width, upright: !onItsSide);
+                AddPill(rect, "Color badge", card.Color.ToUpperInvariant(), IndicatorColor(card.Color), width, upright: !onItsSide, level: 0);
+            }
+
+            // Chaos Draft: an attached effect rides on the card, a pill (above the color one, if both) in the effect's rarity color.
+            if (card.ChaosEffect != null)
+            {
+                AddPill(rect, "Chaos badge", "CHAOS", ChaosColor(card.ChaosEffect.Rarity), width, upright: !onItsSide, level: card.IsRecolored ? 1 : 0);
             }
 
             if (showValue && (card.ValueIsModified || art == null))
@@ -210,17 +216,29 @@ namespace MoodSwings.UI
             return _pill;
         }
 
-        // A pill at the bottom of the card, in the color the card is now, naming it. Sized from the card's
-        // width, so it is the same share of the card at every size; on a small card it is just the color.
-        private static void AddColorBadge(RectTransform rect, string color, float width, bool upright)
+        /// <summary>The color a Chaos effect's pill is drawn in, by how rare the effect is.</summary>
+        public static Color ChaosColor(string rarity)
         {
-            var tint = IndicatorColor(color);
+            switch (rarity)
+            {
+                case "uncommon": return new Color(0.45f, 0.72f, 0.88f);
+                case "rare": return new Color(0.96f, 0.76f, 0.26f);
+                case "mythic": return new Color(0.96f, 0.46f, 0.30f);
+                default: return new Color(0.68f, 0.56f, 0.88f);
+            }
+        }
+
+        // A pill at the bottom of the card, naming a color or marking an attached effect. Sized from the card's
+        // width, so it is the same share of the card at every size; on a small card it is just the color.
+        // Level 1 sits a pill's height above level 0, for a card that has two.
+        private static void AddPill(RectTransform rect, string name, string text, Color tint, float width, bool upright, int level)
+        {
             var pillWidth = width * 0.72f;
             var pillHeight = width * 0.16f;
-            var badge = UiFactory.Create("Color badge", rect);
+            var badge = UiFactory.Create(name, rect);
             badge.anchorMin = badge.anchorMax = badge.pivot = new Vector2(0.5f, 0f);
             badge.sizeDelta = new Vector2(pillWidth, pillHeight);
-            badge.anchoredPosition = new Vector2(0f, (upright ? HeightFor(width) : width) * 0.04f);
+            badge.anchoredPosition = new Vector2(0f, (upright ? HeightFor(width) : width) * 0.04f + level * pillHeight * 1.15f);
 
             var image = badge.gameObject.AddComponent<Image>();
             image.sprite = PillSprite();
@@ -232,7 +250,7 @@ namespace MoodSwings.UI
             if (fontSize >= 10)
             {
                 var dark = 0.299f * tint.r + 0.587f * tint.g + 0.114f * tint.b > 0.58f;
-                var label = UiFactory.Label(badge, color.ToUpperInvariant(), fontSize,
+                var label = UiFactory.Label(badge, text, fontSize,
                     dark ? new Color(0.08f, 0.08f, 0.10f) : Color.white, TextAnchor.MiddleCenter, FontStyle.Bold);
                 label.horizontalOverflow = HorizontalWrapMode.Overflow;
                 label.raycastTarget = false;

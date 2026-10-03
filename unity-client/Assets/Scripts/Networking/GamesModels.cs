@@ -74,6 +74,10 @@ namespace MoodSwings.Networking
         [JsonProperty("game_match")]
         public MatchSummary GameMatch { get; set; }
 
+        /// <summary>The same for a draft's match, which every draft game belongs to.</summary>
+        [JsonProperty("draft_match")]
+        public MatchSummary DraftMatch { get; set; }
+
         [JsonProperty("id")]
         public int Id { get; set; }
 

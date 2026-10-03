@@ -94,6 +94,11 @@ namespace MoodSwings.UI
         private Image _dropZoneImage;
         private RectTransform _dragGhost;
         private CanvasGroup _draggedCardGroup;
+        private DraftView _draft;
+        private ChaosOfferOverlay _chaosOverlay;
+        private LoopShortcutOverlay _shortcutOverlay;
+        private string _shortcutKey;
+        private bool _decksRequested;
         private Button _primaryAction;
         private Text _primaryLabel;
         private Button _resignAction;
@@ -172,6 +177,14 @@ namespace MoodSwings.UI
         /// <summary>How many seat zones, piles and hand areas are currently drawn; tests use it to see what's on the table.</summary>
         public int TableChildCount => _table != null ? _table.childCount : 0;
 
+        /// <summary>Chaos Draft's start-of-round choice, and the loop shortcut; tests read what they show.</summary>
+        public ChaosOfferOverlay ChaosOverlay => _chaosOverlay;
+
+        public LoopShortcutOverlay LoopShortcut => _shortcutOverlay;
+
+        /// <summary>The draft and deck-building stage; tests read what it shows.</summary>
+        public DraftView Draft => _draft;
+
         public override void OnShown(object args)
         {
             EnsureBuilt();
@@ -182,6 +195,10 @@ namespace MoodSwings.UI
             _playingCard = null;
             _decisionKey = null;
             _loopKey = null;
+            _shortcutKey = null;
+            _decksRequested = false;
+            _chaosOverlay.Hide();
+            _shortcutOverlay.Close();
             _firstPlayerOverlay.SetActive(false);
             _teamPanel.gameObject.SetActive(false);
             _teamKey = null;
@@ -205,6 +222,7 @@ namespace MoodSwings.UI
 
             if (_session == null)
             {
+                _draft.Hide();
                 ClearTable();
                 ShowLoading("No game to show.");
                 return;
@@ -239,7 +257,7 @@ namespace MoodSwings.UI
 
         public override bool HandleBack()
         {
-            if (_confirm.Dismiss())
+            if (_confirm.Dismiss() || _shortcutOverlay.Dismiss() || _chaosOverlay.Back())
             {
                 return true;
             }
@@ -326,6 +344,21 @@ namespace MoodSwings.UI
             _table.offsetMin = Vector2.zero;
             _table.offsetMax = new Vector2(0f, -HeaderHeight);
 
+            _draft = new DraftView(
+                transform, theme,
+                new DraftActions
+                {
+                    Inspect = ShowDetail,
+                    PickQuickDraft = (round, stage, ids) => Act(() => _session.PickQuickDraftAsync(round, stage, ids)),
+                    PickWinston = take => Act(() => _session.PickWinstonDraftAsync(take)),
+                    PickGrid = (axis, index) => Act(() => _session.PickGridDraftAsync(axis, index)),
+                    PickRotisserie = (cardId, tiered) => Act(() => _session.PickRotisserieDraftAsync(cardId, tiered)),
+                    Confirm = (message, yes, no) => _confirm.AskAsync(message, yes, no),
+                    SubmitDeck = ids => Act(() => _session.SubmitDraftDeckAsync(ids)),
+                    SubmitDuelDeck = (savedId, text) => Act(() => _session.SubmitDuelDeckAsync(savedId, text)),
+                },
+                HeaderHeight + 12f);
+
             BuildDropZone(theme);
             BuildGoalPanel(theme);
             BuildActions(theme);
@@ -350,6 +383,26 @@ namespace MoodSwings.UI
 
             BuildFirstPlayerOverlay(theme);
             BuildTeamPanel(theme);
+
+            _chaosOverlay = new ChaosOfferOverlay(transform, theme)
+            {
+                Attach = (effectId, cardId, partner) => Run(async () =>
+                {
+                    if (partner != null
+                        && !await _confirm.AskAsync($"Attach this effect to {partner}'s card? They'll need to confirm before it's final.", "Attach", "Cancel"))
+                    {
+                        return;
+                    }
+
+                    var team = _session.State?.ChaosOffer?.Offer?.IsTeamOffer == true;
+                    await Act(() => _session.ChooseChaosEffectAsync(effectId, cardId, team));
+                }),
+                Confirm = approve => Run(() => Act(() => _session.ConfirmChaosEffectAsync(approve))),
+            };
+            _shortcutOverlay = new LoopShortcutOverlay(transform, theme)
+            {
+                Apply = count => Run(() => Act(() => _session.ApplyChaosLoopShortcutAsync(count))),
+            };
 
             // Last, so they sit on top of everything else.
             _choices = new ChoiceOverlay(transform, theme);
@@ -856,6 +909,17 @@ namespace MoodSwings.UI
                 notes.Add($"Value now {card.Value} (printed {card.BaseValue})");
             }
 
+            if (card.ChaosEffect != null)
+            {
+                notes.Add($"<b><color=#{ColorUtility.ToHtmlStringRGB(CardView.ChaosColor(card.ChaosEffect.Rarity))}>{ChaosDisplay.EffectOnCard(card.ChaosEffect)}</color></b>");
+            }
+
+            var chaosValue = ChaosDisplay.ValueNote(card);
+            if (chaosValue != null)
+            {
+                notes.Add(chaosValue);
+            }
+
             var colorNote = BoardDisplay.ColorNote(_session?.State, card);
             if (colorNote != null)
             {
@@ -979,6 +1043,33 @@ namespace MoodSwings.UI
                 RefreshTeammateHand();
             }
 
+            // Drafting and deck building take the place of the table.
+            if (DuelDeckDisplay.InStage(state) && !AppServices.Decklists.Loaded && !_decksRequested)
+            {
+                // The decks to choose from: asked for once, and the stage redraws when they arrive.
+                _decksRequested = true;
+                Run(async () =>
+                {
+                    await AppServices.Decklists.RefreshAsync();
+                    if (this != null && _session?.State != null)
+                    {
+                        Render();
+                    }
+                });
+            }
+
+            if (DraftDisplay.InDraftStage(state) || DuelDeckDisplay.InStage(state))
+            {
+                ClearTable();
+                CancelDrag();
+                HideHover();
+                _draft.Render(state);
+                UpdateActions(state);
+                SyncOverlays(state);
+                return;
+            }
+
+            _draft.Hide();
             ClearTable();
             var zones = BoardLayout.Assign(state.Players, state.You.GamePlayerId);
             foreach (var player in state.Players)
@@ -1337,6 +1428,18 @@ namespace MoodSwings.UI
                 ValueLine(card),
                 string.IsNullOrWhiteSpace(card.RulesText) ? string.Empty : card.RulesText,
             };
+            if (card.ChaosEffect != null)
+            {
+                lines.Add(string.Empty);
+                lines.Add($"<b><color=#{ColorUtility.ToHtmlStringRGB(CardView.ChaosColor(card.ChaosEffect.Rarity))}>{ChaosDisplay.EffectOnCard(card.ChaosEffect)}</color></b>");
+            }
+
+            var chaosValue = ChaosDisplay.ValueNote(card);
+            if (chaosValue != null)
+            {
+                lines.Add(chaosValue);
+            }
+
             var colorNote = BoardDisplay.ColorNote(_session?.State, card);
             if (colorNote != null)
             {
@@ -1827,6 +1930,30 @@ namespace MoodSwings.UI
             if (_firstPlayerOverlay.activeSelf != choosing)
             {
                 _firstPlayerOverlay.SetActive(choosing);
+            }
+
+            if (BoardDisplay.NeedsChaosChoice(state) && !_session.IsSpectating)
+            {
+                _chaosOverlay.Show(state);
+            }
+            else if (_chaosOverlay.IsOpen)
+            {
+                _chaosOverlay.Hide();
+            }
+
+            var shortcut = state.Game.ChaosLoopShortcut;
+            if (shortcut == null)
+            {
+                _shortcutKey = null;
+            }
+            else if (shortcut.GamePlayerId == state.You.GamePlayerId && !_session.IsSpectating)
+            {
+                var key = $"{shortcut.GamePlayerId}:{shortcut.Kind}:{shortcut.Cap}";
+                if (key != _shortcutKey && !_shortcutOverlay.IsOpen)
+                {
+                    _shortcutKey = key;
+                    _shortcutOverlay.Open(shortcut);
+                }
             }
 
             var warning = BoardDisplay.LoopWarningText(state);
