@@ -394,6 +394,25 @@ Headless (Unity closed): `Unity.exe -batchmode -nographics -projectPath .
 -runTests -testPlatform EditMode -testResults results.xml`. PlayMode needs
 graphics for the screenshots, so omit `-nographics` there.
 
+## Windows (for testers)
+
+- **Build the player:** **MoodSwings > Build Windows Player**, or headless: `Unity.exe -batchmode
+  -quit -buildTarget StandaloneWindows64 -executeMethod MoodSwings.Editor.WindowsBuild.Build`
+  -> `Build/Windows/MoodSwings/MoodSwings.exe` (Mono, not a development build; about 650 MB with
+  the card art, 190 MB zipped).
+- **Package it:** `powershell -File tools/package_windows.ps1` makes
+  `Build/Windows/MoodSwings-<version>-win64.zip` (testers unzip and run `MoodSwings.exe`), and, if
+  [Inno Setup 6](https://jrsoftware.org/isinfo.php) is installed, `MoodSwings-Setup-<version>.exe`: an
+  installer for the current user only (no administrator prompt) with a Start menu entry, an optional
+  desktop shortcut and an uninstaller. The `*_BackUpThisFolder_*` symbols folder is left out.
+- The version is `bundleVersion` in Player Settings. The app is named MoodSwings (it was the project
+  folder's name), so its saved login lives under a new key: sign in once after updating.
+- Neither build is signed, so Windows SmartScreen shows "Windows protected your PC" on first run
+  (More info > Run anyway). Signing needs a code-signing certificate.
+- **Card art:** the builds include whatever is in `Assets/Resources/CardArt` on the machine that
+  builds them -- see the art-licensing decision in `PLAN.md` before sending a build beyond people
+  you trust with it.
+
 ## Android
 
 Install the Android Build Support module for the project's editor in Unity
