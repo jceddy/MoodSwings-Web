@@ -6,17 +6,17 @@
 
 [Setup]
 AppId={{6D0F6E43-3B1C-4C57-9E7D-5C0A5D8C2B11}
-AppName=MoodSwings
+AppName=MOOD
 AppVersion={#AppVersion}
 AppPublisher=MoodSwings
 ; Installs for the current user only: no administrator prompt, and the uninstaller lives alongside it.
 PrivilegesRequired=lowest
-DefaultDirName={autopf}\MoodSwings
-DefaultGroupName=MoodSwings
+DefaultDirName={autopf}\MOOD
+DefaultGroupName=MOOD
 DisableProgramGroupPage=yes
-UninstallDisplayIcon={app}\MoodSwings.exe
+UninstallDisplayIcon={app}\MOOD.exe
 OutputDir=..\Build\Windows
-OutputBaseFilename=MoodSwings-Setup-{#AppVersion}
+OutputBaseFilename=MOOD-Setup-{#AppVersion}
 Compression=lzma2
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible
@@ -24,14 +24,14 @@ ArchitecturesInstallIn64BitMode=x64compatible
 WizardStyle=modern
 
 [Files]
-Source: "..\Build\Windows\MoodSwings\*"; DestDir: "{app}"; Excludes: "*_BackUpThisFolder_*"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "..\Build\Windows\MOOD\*"; DestDir: "{app}"; Excludes: "*_BackUpThisFolder_*"; Flags: recursesubdirs createallsubdirs ignoreversion
 
 [Icons]
-Name: "{group}\MoodSwings"; Filename: "{app}\MoodSwings.exe"
-Name: "{autodesktop}\MoodSwings"; Filename: "{app}\MoodSwings.exe"; Tasks: desktopicon
+Name: "{group}\MOOD"; Filename: "{app}\MOOD.exe"
+Name: "{autodesktop}\MOOD"; Filename: "{app}\MOOD.exe"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 
 [Run]
-Filename: "{app}\MoodSwings.exe"; Description: "Start MoodSwings"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\MOOD.exe"; Description: "Start MOOD"; Flags: nowait postinstall skipifsilent
