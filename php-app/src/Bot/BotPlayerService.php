@@ -950,6 +950,46 @@ final class BotPlayerService
         return $bestColor;
     }
 
+    /**
+     * Wonder's color pick (reported: "when a bot plays Wonder it should
+     * actually choose the most common color among cards in play and in the
+     * discard pile") -- WonderEffect::computeValue() adds 2 for every mood
+     * in play AND every discarded card of a chosen color, so the best
+     * single pick is simply the color with the most of both combined.
+     * Wonder itself counts toward its own color the moment it is in play,
+     * so while it's still in hand its own color is counted too (a repeat
+     * from Duplicity, with Wonder already in play, must not count it
+     * twice). A color Wonder already chose (a Duplicity repeat
+     * accumulates colors, so re-picking one adds nothing) is skipped
+     * unless every color is taken. Ties go to the first color in
+     * CardChoiceSchema's own order, keeping the pick deterministic.
+     */
+    private function wonderBestColor(BoardState $state, int $cardId): string
+    {
+        $counts = array_fill_keys(self::DISILLUSIONMENT_COLORS, 0);
+        foreach ($state->moodsInPlay() as $mood) {
+            $counts[$state->colorOf($mood->cardId)]++;
+        }
+        foreach ($state->discardPile() as $discardedCardId) {
+            $counts[$state->colorOf($discardedCardId)]++;
+        }
+        if (!$state->isInPlay($cardId)) {
+            $counts[$state->colorOf($cardId)]++;
+        }
+
+        $alreadyChosen = $state->effectState($cardId, 'colors') ?? [];
+        $candidates = array_diff(self::DISILLUSIONMENT_COLORS, $alreadyChosen) ?: self::DISILLUSIONMENT_COLORS;
+
+        $best = null;
+        foreach ($candidates as $color) {
+            if ($best === null || $counts[$color] > $counts[$best]) {
+                $best = $color;
+            }
+        }
+
+        return $best;
+    }
+
     /** @see disillusionmentBestColor()'s own docblock for the swing computation itself. */
     private function disillusionmentColorSwing(BoardState $state, int $botGamePlayerId, string $color, ?int $sourceCardId): int
     {
@@ -1875,6 +1915,7 @@ final class BotPlayerService
         'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
         'nostalgia', 'contempt', 'sneakiness', 'shock', 'exhilaration',
         'rejection', 'guilt', 'scorn', 'recklessness', 'thrill', 'panic',
+        'wonder',
     ];
 
     /**
@@ -1946,6 +1987,10 @@ final class BotPlayerService
 
         if ($effectKey === 'avoidance') {
             return ['direction' => $this->avoidanceBestDirection($state, $botGamePlayerId)];
+        }
+
+        if ($effectKey === 'wonder') {
+            return ['color' => $this->wonderBestColor($state, $cardId)];
         }
 
         if ($effectKey === 'cynicism') {

@@ -9705,6 +9705,21 @@ since it already holds that dependency):
   cased below) -- whichever direction routes back the more valuable
   mood, `'left'` winning any tie to match that same generic default.
 
+  **Wonder's color** (reported: "when a bot plays Wonder it should
+  actually choose the most common color among cards in play and in the
+  discard pile") -- previously the generic `'mode'` default, always the
+  schema's first color (white). `choicesForEffectKey()` now answers
+  `'wonder'` bespoke via `wonderBestColor()`: `WonderEffect::computeValue()`
+  adds 2 per mood in play AND per discarded card of a chosen color, so the
+  best single pick is the color with the most of both combined (Wonder's
+  own color counted too while it is still in hand -- once in play it is
+  already among the moods; a Creativity copy reuses this through the same
+  recursion). A color Wonder already chose (a Duplicity repeat
+  accumulates colors, so re-picking one adds nothing) is skipped unless
+  all five are taken, and ties go to the first color in
+  `CardChoiceSchema::FIVE_COLORS` order so the pick stays deterministic.
+  `'wonder'` is therefore in `BESPOKE_CHOICE_EFFECT_KEYS`.
+
   Everything not on either card's own list above defaults to "always
   worth playing," the unconditional "yes" every effect already got
   before this method existed.

@@ -4736,4 +4736,47 @@ final class BotPlayerServiceTest extends TestCase
 
         self::assertSame('generic_resolver', $this->bot->choicePolicyPathFor($state, 33));
     }
+
+    /**
+     * Wonder (id 133, green) adds 2 per mood in play and per discarded card
+     * of its chosen color, so a bot picks the color with the most of both
+     * combined: here blue has one mood in play plus two discarded cards (3)
+     * against white's single mood in play.
+     */
+    public function testChooseActionPicksWonderColorWithTheMostCardsAcrossPlayAndDiscard(): void
+    {
+        $state = $this->boardState(hands: [1 => [133], 2 => [3, 28, 36]]);
+        $state->moveHandToInPlay(2, 3);   // white, in play
+        $state->moveHandToInPlay(2, 28);  // blue, in play
+        $state->moveHandToDiscard(2, 36); // blue, discarded (hand held [3, 28, 36]; the last card goes to the pile)
+
+        $action = $this->bot->chooseAction($state, [133], 1);
+
+        self::assertSame(133, $action['card_id']);
+        self::assertSame(['color' => 'blue'], $action['choices']);
+    }
+
+    /** Wonder counts toward its own color once it is in play, so a tie-breaking green mood in play plus Wonder itself beats a lone white mood. */
+    public function testChooseActionCountsWondersOwnColorWhenPickingItsColor(): void
+    {
+        $state = $this->boardState(hands: [1 => [133], 2 => [3, 107]]);
+        $state->moveHandToInPlay(2, 3);   // white
+        $state->moveHandToInPlay(2, 107); // green
+
+        $action = $this->bot->chooseAction($state, [133], 1);
+
+        self::assertSame(['color' => 'green'], $action['choices']);
+    }
+
+    /** With every color tied the pick is deterministic: the first color in the schema's order. */
+    public function testChooseActionPicksTheFirstColorOnAWonderTie(): void
+    {
+        $state = $this->boardState(hands: [1 => [133], 2 => [3, 28]]);
+        $state->moveHandToInPlay(2, 3);  // white 1
+        $state->moveHandToInPlay(2, 28); // blue 1 (green 1 from Wonder itself)
+
+        $action = $this->bot->chooseAction($state, [133], 1);
+
+        self::assertSame(['color' => 'white'], $action['choices']);
+    }
 }
