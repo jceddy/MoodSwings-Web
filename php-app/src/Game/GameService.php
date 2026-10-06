@@ -3744,6 +3744,8 @@ final class GameService
         $opponentHandCardIds = json_decode((string) $puzzle['opponent_hand_card_ids'], true);
         $opponentInPlayCardIds = json_decode((string) $puzzle['opponent_in_play_card_ids'], true);
         $hasOpponent = $opponentHandCardIds !== [] || $opponentInPlayCardIds !== [];
+        $solverGoesFirst = (bool) $puzzle['solver_goes_first'];
+        $preludeLog = json_decode((string) ($puzzle['prelude_log'] ?? '[]'), true) ?: [];
         $extraPlaySourceCatalogCardId = $puzzle['extra_play_source_card_id'] !== null ? (int) $puzzle['extra_play_source_card_id'] : null;
 
         $pdo = Connection::get();
@@ -3817,7 +3819,10 @@ final class GameService
             }
             $playGrants = $extraPlayGrant !== null ? [null, $extraPlayGrant] : [null];
 
-            $firstPlayerId = $opponentGamePlayerId ?? $gamePlayerId;
+            // puzzles.solver_goes_first: "you played first this round" (an
+            // Honor on the opponent's side already chose the solver) --
+            // so a tied score goes to the solver, not the opponent.
+            $firstPlayerId = $solverGoesFirst ? $gamePlayerId : ($opponentGamePlayerId ?? $gamePlayerId);
 
             // puzzles.solver_round_wins/opponent_round_wins: round wins
             // aren't a stored counter anywhere -- they're always derived
@@ -3863,6 +3868,11 @@ final class GameService
                 'plays_remaining' => count($playGrants),
                 'pending_play_grants' => json_encode($playGrants),
             ]);
+            $currentRoundId = (int) $pdo->lastInsertId();
+
+            if ($preludeLog !== []) {
+                $this->seedPuzzlePreludeLog($gameId, $currentRoundId, $gamePlayerId, $opponentGamePlayerId, $preludeLog);
+            }
 
             $pdo->commit();
         } catch (Throwable $e) {
@@ -3871,6 +3881,77 @@ final class GameService
         }
 
         return $gameId;
+    }
+
+    /**
+     * puzzles.prelude_log: the game log's "what just happened" lead-in for a
+     * puzzle that opens mid-match ("the opponent played Compulsion... the
+     * opponent won the round... you drew Paranoia"). Each entry is written
+     * as the same game_events row a real game would have logged, so it
+     * renders through describeEvent() like any other line. 'actor' and
+     * every player reference is 'solver' or 'opponent'; a card reference is
+     * {catalog, owner, zone} -- the already-dealt instance with that
+     * catalog id, owner and zone. The previous (last seeded) round holds
+     * everything up to and including its scoring; a 'card_drawn' entry
+     * opens the live round.
+     *
+     * @param array<int, array<string, mixed>> $entries
+     */
+    private function seedPuzzlePreludeLog(int $gameId, int $currentRoundId, int $solverId, ?int $opponentId, array $entries): void
+    {
+        $pdo = Connection::get();
+        $seat = static fn (string $who): ?int => $who === 'solver' ? $solverId : $opponentId;
+
+        $previousRoundStmt = $pdo->prepare(
+            "SELECT id FROM game_rounds WHERE game_id = :game_id AND status = 'scored' ORDER BY round_number DESC LIMIT 1"
+        );
+        $previousRoundStmt->execute(['game_id' => $gameId]);
+        $previousRoundId = $previousRoundStmt->fetchColumn();
+        $previousRoundId = $previousRoundId !== false ? (int) $previousRoundId : $currentRoundId;
+
+        $instance = function (array $ref) use ($pdo, $gameId, $seat): int {
+            $stmt = $pdo->prepare(
+                'SELECT id FROM game_cards WHERE game_id = :game_id AND card_id = :card_id AND zone = :zone AND owner_game_player_id = :owner LIMIT 1'
+            );
+            $stmt->execute(['game_id' => $gameId, 'card_id' => (int) $ref['catalog'], 'zone' => $ref['zone'], 'owner' => $seat((string) $ref['owner'])]);
+            $id = $stmt->fetchColumn();
+            if ($id === false) {
+                throw new GameStateException("Puzzle prelude log names a card {$ref['catalog']} that isn't in {$ref['owner']}'s {$ref['zone']}");
+            }
+
+            return (int) $id;
+        };
+
+        foreach ($entries as $entry) {
+            switch ($entry['type']) {
+                case 'mood_played':
+                    $details = [];
+                    foreach ($entry['moves'] ?? [] as $move) {
+                        $details['card_moves'][] = [
+                            'card_id' => $instance($move['card']),
+                            'from_zone' => $move['from_zone'],
+                            'from_player_id' => isset($move['from_owner']) ? $seat($move['from_owner']) : null,
+                            'to_zone' => $move['to_zone'],
+                            'to_player_id' => isset($move['to_owner']) ? $seat($move['to_owner']) : null,
+                        ];
+                    }
+                    $this->logEvent($gameId, $previousRoundId, $seat($entry['actor']), 'mood_played', $instance($entry['card']), $details);
+                    break;
+                case 'round_scored':
+                    $details = [
+                        'scores' => [$solverId => (int) $entry['scores']['solver'], $opponentId => (int) $entry['scores']['opponent']],
+                        'winner_game_player_id' => $seat($entry['winner']),
+                    ];
+                    if (isset($entry['first_player_override'])) {
+                        $details['first_player_override_game_player_id'] = $seat($entry['first_player_override']);
+                    }
+                    $this->logEvent($gameId, $previousRoundId, null, 'round_scored', null, $details);
+                    break;
+                case 'card_drawn':
+                    $this->logEvent($gameId, $currentRoundId, $seat($entry['actor']), 'puzzle_card_drawn', $instance($entry['card']), []);
+                    break;
+            }
+        }
     }
 
     /**
@@ -11769,7 +11850,14 @@ final class GameService
         $opponentId = (int) $opponentId;
         $scores = $this->scorer->score($state);
 
-        return $this->scorer->winner($scores, [$opponentId, $gamePlayerId]) === $gamePlayerId;
+        // Turn order is whoever the live round says went first -- the
+        // opponent for most puzzles, the solver when puzzles.solver_goes_first
+        // is set -- so a tied score goes to that seat.
+        $firstStmt = Connection::get()->prepare("SELECT first_game_player_id FROM game_rounds WHERE game_id = :game_id AND status = 'in_progress' LIMIT 1");
+        $firstStmt->execute(['game_id' => $gameId]);
+        $solverFirst = (int) $firstStmt->fetchColumn() === $gamePlayerId;
+
+        return $this->scorer->winner($scores, $solverFirst ? [$gamePlayerId, $opponentId] : [$opponentId, $gamePlayerId]) === $gamePlayerId;
     }
 
     /**
@@ -20119,6 +20207,7 @@ final class GameService
             // through to the generic "{actor} played a card" default below
             // (what the endless puzzle auto-pass loop's log showed).
             $row['event_type'] === 'puzzle_turn_refreshed' => "{$actor} was given a fresh turn",
+            $row['event_type'] === 'puzzle_card_drawn' => "{$actor} drew {$cardName}",
             $row['event_type'] === 'puzzle_failed' => "{$actor}'s turn ended without winning the game",
             $row['event_type'] === 'turn_passed' => ($details['automated'] ?? false)
                 ? "{$actor} passed automatically (no legal play)"
