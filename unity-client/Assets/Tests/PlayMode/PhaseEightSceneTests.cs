@@ -944,5 +944,104 @@ namespace MoodSwings.Tests
             Assert.AreEqual("At most 2 copies of Calm (3 chosen).", Board().Draft.ProblemText);
             Assert.IsFalse(Named("Submit deck").interactable);
         }
+
+        // --- playing from the discard pile (Harmony, Grief, Angst, Melancholy) -------------------------
+
+        private static JObject HarmonyGame(bool discardPlayable = true) => PhaseFiveSceneTests.Load(406, s =>
+        {
+            foreach (var card in (JArray)s["you"]["hand"])
+            {
+                card["is_playable"] = false;
+            }
+
+            ((JObject)s["discard_pile"][0])["is_playable"] = discardPlayable;
+        });
+
+        [UnityTest]
+        public IEnumerator Discard_WhenAnEffectMakesACardPlayable_ThePileSaysSo()
+        {
+            var server = Serve(HarmonyGame());
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+
+            Assert.IsTrue(Texts().Contains("play from it"), string.Join(" | ", Texts()));
+            Assert.IsFalse(Board().DiscardOverlay.IsOpen);
+            ScreenshotHelper.Capture("discard-playable");
+        }
+
+        [UnityTest]
+        public IEnumerator Discard_ANormalPile_JustSaysHowManyCards()
+        {
+            var server = Serve(HarmonyGame(discardPlayable: false));
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+
+            Assert.IsTrue(Texts().Contains("Discard 1"));
+            Assert.IsFalse(Texts().Any(t => t.Contains("play from it")));
+        }
+
+        [UnityTest]
+        public IEnumerator Discard_TappingThePile_ShowsEveryCard_AndAPlayableOneStartsAPlay()
+        {
+            var server = Serve(HarmonyGame());
+            server.OnPost = (path, body) =>
+            {
+                server.State = PhaseFiveSceneTests.Load(406, s => ((JArray)s["discard_pile"]).Clear());
+                return null;
+            };
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.Child("Discard").GetComponentInChildren<Button>());
+            Assert.IsTrue(Board().DiscardOverlay.IsOpen);
+            StringAssert.Contains("tap a framed card", Board().DiscardOverlay.NoteText);
+
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.ButtonNamed("Discarded Confusion"));
+            Assert.IsFalse(Board().DiscardOverlay.IsOpen, "the pile gives way to the play form");
+            Assert.IsTrue(Board().Choices.IsOpen);
+            Assert.AreEqual("Confusion", Board().Choices.TitleText);
+
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.ButtonNamed("Submit"));
+
+            var play = server.Posts("/games/play").Single();
+            Assert.AreEqual(14174, (int)play["card_id"]);
+            Assert.AreEqual("left", (string)play["choices"]["direction"]);
+        }
+
+        [UnityTest]
+        public IEnumerator Discard_APlayFormFromThePile_SurvivesARefresh()
+        {
+            var server = Serve(HarmonyGame());
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.Child("Discard").GetComponentInChildren<Button>());
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.ButtonNamed("Discarded Confusion"));
+
+            yield return PhaseFiveSceneTests.Poll();
+
+            Assert.IsTrue(Board().Choices.IsOpen, "the card is still playable, so the form stays");
+        }
+
+        [UnityTest]
+        public IEnumerator Discard_ACardThatCantBePlayed_JustOpensItsDetail()
+        {
+            var server = Serve(HarmonyGame(discardPlayable: false));
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.Child("Discard").GetComponentInChildren<Button>());
+            StringAssert.Contains("Newest first", Board().DiscardOverlay.NoteText);
+
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.ButtonNamed("Discarded Confusion"));
+
+            Assert.IsFalse(Board().Choices.IsOpen);
+            Assert.IsTrue(Board().DetailOpen);
+        }
+
+        [UnityTest]
+        public IEnumerator Discard_TheOverlayClosesWithBack()
+        {
+            var server = Serve(HarmonyGame());
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.Child("Discard").GetComponentInChildren<Button>());
+
+            Assert.IsTrue(Board().HandleBack());
+
+            Assert.IsFalse(Board().DiscardOverlay.IsOpen);
+        }
     }
 }
