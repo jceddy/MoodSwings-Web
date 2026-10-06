@@ -19,8 +19,61 @@ namespace MoodSwings.Networking
     }
 
     /// <summary>One entry of GET /games (active) or GET /games/past, as the lobby shows it. Not the full board -- that's GET /games/state.</summary>
+    /// <summary>One side of a best-of-three match, with its game wins so far.</summary>
+    public class MatchPlayer
+    {
+        [JsonProperty("user_id")]
+        public int UserId { get; set; }
+
+        [JsonProperty("username")]
+        public string Username { get; set; }
+
+        [JsonProperty("wins")]
+        public int Wins { get; set; }
+
+        [JsonProperty("is_you")]
+        public bool IsYou { get; set; }
+    }
+
+    /// <summary>
+    /// A best-of-three match the game belongs to: first to win two games. Sent with a game in the
+    /// lists and in a game's state (where it also says which game to go to next).
+    /// </summary>
+    public class MatchSummary
+    {
+        /// <summary>"in_progress" or "completed".</summary>
+        [JsonProperty("status")]
+        public string Status { get; set; }
+
+        [JsonProperty("your_wins")]
+        public int YourWins { get; set; }
+
+        [JsonProperty("opponent_wins")]
+        public int OpponentWins { get; set; }
+
+        [JsonProperty("games_to_win")]
+        public int GamesToWin { get; set; }
+
+        [JsonProperty("winner_usernames")]
+        public List<string> WinnerUsernames { get; set; } = new List<string>();
+
+        [JsonProperty("players")]
+        public List<MatchPlayer> Players { get; set; } = new List<MatchPlayer>();
+
+        /// <summary>Only in a game's state: once this game is over and the match goes on, the game that follows it.</summary>
+        [JsonProperty("next_game_id")]
+        public int? NextGameId { get; set; }
+    }
+
     public class GameSummary
     {
+        /// <summary>Which game of its match this is (1 to 3); null when it isn't part of one.</summary>
+        [JsonProperty("match_game_number")]
+        public int? MatchGameNumber { get; set; }
+
+        [JsonProperty("game_match")]
+        public MatchSummary GameMatch { get; set; }
+
         [JsonProperty("id")]
         public int Id { get; set; }
 
@@ -95,6 +148,13 @@ namespace MoodSwings.Networking
         /// <summary>The stronger tactical bots, as opposed to the simple ones.</summary>
         [JsonProperty("uses_tactical_ai")]
         public bool UsesTacticalAi { get; set; }
+    }
+
+    /// <summary>A server-side feature switch (GET /config/...).</summary>
+    public class FeatureFlagResponse : ApiEnvelope
+    {
+        [JsonProperty("enabled")]
+        public bool Enabled { get; set; }
     }
 
     public class BotsResponse : ApiEnvelope

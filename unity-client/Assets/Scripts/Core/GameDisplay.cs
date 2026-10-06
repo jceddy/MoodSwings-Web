@@ -59,8 +59,26 @@ namespace MoodSwings.Core
             return string.Join("  -  ", parts);
         }
 
-        public static string Settings(GameSummary game) =>
-            Settings(game.Format, game.DeckType, game.WinsNeeded, game.CustomDeckName);
+        public static string Settings(GameSummary game)
+        {
+            var settings = Settings(game.Format, game.DeckType, game.WinsNeeded, game.CustomDeckName);
+            var match = MatchNote(game);
+            return match == null ? settings : settings + "  -  " + match;
+        }
+
+        /// <summary>"Game 2 of the match (you 1 - 0)" for a game in a best-of-three; null for a one-off game.</summary>
+        public static string MatchNote(GameSummary game)
+        {
+            if (game.GameMatch == null)
+            {
+                return null;
+            }
+
+            var number = game.MatchGameNumber.HasValue ? $"Game {game.MatchGameNumber} of the match" : "Best of three";
+            return game.GameMatch.Status == "completed"
+                ? $"{number} ({game.GameMatch.YourWins} - {game.GameMatch.OpponentWins}, over)"
+                : $"{number} (you {game.GameMatch.YourWins} - {game.GameMatch.OpponentWins})";
+        }
 
         /// <summary>The other players, in seat order, e.g. "BotSage, BotSageQuick".</summary>
         public static string Opponents(GameSummary game, string yourUsername)

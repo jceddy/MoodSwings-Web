@@ -100,13 +100,16 @@ namespace MoodSwings.Core
                         .Select(c => new ChoiceOption { Id = c.CardId.ToString(), Label = CardLabel(c) })
                         .ToList();
                 case "discard_card":
+                    // Grouped under whoever last owned each card, you first, so one player's cards aren't scattered.
                     return _state.DiscardPile
                         .Where(c => _card == null || c.CardId != _card.CardId)
                         .Where(c => MatchesCardFilter(c, field.Filter))
+                        .OrderBy(c => OwnerRank(c.LastOwnerGamePlayerId))
                         .Select(c => new ChoiceOption
                         {
                             Id = c.CardId.ToString(),
-                            Label = CardLabel(c) + (string.IsNullOrEmpty(c.LastOwnerName) ? string.Empty : " - " + c.LastOwnerName),
+                            Label = CardLabel(c),
+                            Group = string.IsNullOrEmpty(c.LastOwnerName) ? PlayerName(c.LastOwnerGamePlayerId) : c.LastOwnerName,
                         })
                         .ToList();
                 case "grant_choice":
@@ -188,13 +191,27 @@ namespace MoodSwings.Core
                     .Where(c => MatchesCardFilter(c, field.Filter));
             }
 
-            options.AddRange(moods.Select(c => new ChoiceOption
+            // One player's moods together -- yours first, then everyone else in seat order -- rather than in
+            // the order they happened to enter play, which interleaves players. Within a player, play order.
+            options.AddRange(moods.OrderBy(c => OwnerRank(c.OwnerGamePlayerId)).Select(c => new ChoiceOption
             {
                 Id = c.CardId.ToString(),
                 Label = CardLabel(c),
                 Group = PlayerName(c.OwnerGamePlayerId),
             }));
             return options;
+        }
+
+        /// <summary>Where a player's cards come in a list: you first, then the others by seat. Nobody known goes last.</summary>
+        private int OwnerRank(int? gamePlayerId)
+        {
+            if (gamePlayerId == _state.You.GamePlayerId)
+            {
+                return -1;
+            }
+
+            var player = BoardDisplay.PlayerById(_state, gamePlayerId);
+            return player != null ? player.SeatOrder : int.MaxValue;
         }
 
         private static bool MatchesCardFilter(BoardCard card, ChoiceFilter filter)

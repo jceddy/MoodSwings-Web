@@ -31,7 +31,19 @@ namespace MoodSwings.Tests
             /// <summary>What GET /games/state answers with; replaced by tests to move the game along.</summary>
             public JObject State;
 
+            /// <summary>When set, answers GET /games/state for a particular game instead of State.</summary>
+            public Func<int, JObject> StateFor;
+
             public List<string> Calls { get; } = new List<string>();
+
+            /// <summary>GET /puzzles answers with this.</summary>
+            public string PuzzlesJson = "{\"status\":\"ok\",\"puzzles\":[]}";
+
+            /// <summary>The game POST /puzzles/attempt starts.</summary>
+            public int AttemptGameId = 900;
+
+            /// <summary>When set, POST /puzzles/attempt answers with this instead of starting a game.</summary>
+            public HttpResponse AttemptReply;
 
             /// <summary>Answers a POST under /games/ with this, given its path and body; null means a plain "ok".</summary>
             public Func<string, JObject, HttpResponse> OnPost;
@@ -46,7 +58,8 @@ namespace MoodSwings.Tests
 
                 if (path.StartsWith("/games/state") || path.StartsWith("/games/spectate/state"))
                 {
-                    return MainSceneTests.Reply(200, State.ToString());
+                    var asked = int.Parse(path.Substring(path.IndexOf("game_id=", StringComparison.Ordinal) + 8).Split('&')[0]);
+                    return MainSceneTests.Reply(200, (StateFor != null ? StateFor(asked) : State).ToString());
                 }
 
                 if (request.Method == "POST" && path.StartsWith("/games/"))
@@ -57,6 +70,9 @@ namespace MoodSwings.Tests
 
                 switch (path)
                 {
+                    case "/puzzles": return MainSceneTests.Reply(200, PuzzlesJson);
+                    case "/puzzles/attempt":
+                        return AttemptReply ?? MainSceneTests.Reply(201, "{\"status\":\"ok\",\"game_id\":" + AttemptGameId + "}");
                     case "/me": return MainSceneTests.Reply(200, Fixture("me"));
                     case "/friends": return MainSceneTests.Reply(200, Fixture("friends"));
                     case "/friends/invites": return MainSceneTests.Reply(200, Fixture("friends_invites"));

@@ -53,6 +53,7 @@ namespace MoodSwings.UI
 
             AppServices.Friends.Clear();
             AppServices.Lobby.Clear();
+            AppServices.Puzzles.Clear();
             _router.ClearHistory();
             _router.Show<LoginScreen>("Your session has expired. Please log in again.", addToHistory: false);
         }

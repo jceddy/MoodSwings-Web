@@ -124,6 +124,11 @@ namespace MoodSwings.Core
 
         private static BoardCue GameEndCue(GameState after, BoardPlayer viewer)
         {
+            if (BoardDisplay.IsPuzzle(after))
+            {
+                return new BoardCue { Kind = CueKind.GameWon, Text = BoardDisplay.TurnBanner(after) };
+            }
+
             var winners = after.Game.WinnerUsernames.Count == 0 ? "Nobody" : string.Join(" and ", after.Game.WinnerUsernames);
             if (viewer == null)
             {
@@ -137,6 +142,11 @@ namespace MoodSwings.Core
 
         private static BoardCue RoundEndCue(GameState before, GameState after, BoardPlayer viewer)
         {
+            if (after.Teams != null && before.Teams != null)
+            {
+                return TeamRoundEndCue(before, after, viewer);
+            }
+
             // Whoever's tally of rounds won went up won it (a tie leaves everyone's where it was).
             var winners = after.Players
                 .Where(p => p.TotalWins > (BoardDisplay.PlayerById(before, p.GamePlayerId)?.TotalWins ?? 0))
@@ -156,6 +166,28 @@ namespace MoodSwings.Core
             return viewerWon
                 ? new BoardCue { Kind = CueKind.RoundWon, Text = "You won the round!" }
                 : new BoardCue { Kind = CueKind.RoundLost, Text = $"{Names(winners)} won the round." };
+        }
+
+        // In team play the teams win rounds, not the players.
+        private static BoardCue TeamRoundEndCue(GameState before, GameState after, BoardPlayer viewer)
+        {
+            var winningTeams = after.Teams
+                .Where(t => t.TotalWins > (before.Teams.FirstOrDefault(b => b.TeamId == t.TeamId)?.TotalWins ?? 0))
+                .ToList();
+            if (winningTeams.Count == 0)
+            {
+                return new BoardCue { Kind = CueKind.RoundOver, Text = "The round ended with no winner." };
+            }
+
+            var winner = winningTeams[0];
+            if (viewer == null)
+            {
+                return new BoardCue { Kind = CueKind.RoundOver, Text = $"{BoardDisplay.TeamLabel(after, winner)} won the round." };
+            }
+
+            return winner.GamePlayerIds.Contains(viewer.GamePlayerId)
+                ? new BoardCue { Kind = CueKind.RoundWon, Text = "Your team won the round!" }
+                : new BoardCue { Kind = CueKind.RoundLost, Text = $"{BoardDisplay.TeamLabel(after, winner)} won the round." };
         }
 
         private static string Names(List<BoardPlayer> players) => string.Join(" and ", players.Select(p => p.Username));

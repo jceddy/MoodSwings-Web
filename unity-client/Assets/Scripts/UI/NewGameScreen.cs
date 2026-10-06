@@ -11,15 +11,20 @@ namespace MoodSwings.UI
     /// <summary>
     /// Set up and start a game: either invite friends and practice bots (the
     /// game starts at once), or post to the open lobby for 2-4 players. Opened
-    /// blank, or prefilled (a rematch). Traditional format with the ready-made
-    /// decks for now. On success it returns to the screen it was opened from,
-    /// which shows the outcome.
+    /// blank, or prefilled (a rematch). Traditional or Duel format with the
+    /// ready-made decks for now. On success it returns to the screen it was opened
+    /// from, which shows the outcome.
     /// </summary>
     public sealed class NewGameScreen : ListScreen
     {
         private GameSetup _setup;
         private Text _countLabel;
         private GameObject _botFirstPanel;
+        private Toggle _synchronousToggle;
+        private GameObject _synchronousPanel;
+        private Toggle _bestOfThreeToggle;
+        private GameObject _bestOfThreePanel;
+        private RectTransform _partnerPanel;
         private Button _create;
         private Text _createLabel;
         private bool _busy;
@@ -64,8 +69,10 @@ namespace MoodSwings.UI
         {
             var bots = AppServices.Lobby.RefreshBotsAsync();
             var friends = AppServices.Friends.RefreshAsync();
+            var flag = AppServices.Lobby.RefreshSynchronousModeFlagAsync(); // a failure just means the option stays hidden
             var botsResult = await bots;
             var friendsResult = await friends;
+            await flag;
             if (this == null)
             {
                 return;
@@ -102,6 +109,19 @@ namespace MoodSwings.UI
                 AddOpponentChoice(theme);
             }
 
+            UiFactory.SectionTitle(List, theme, "Format");
+            AddFormatChoice(theme);
+
+            // Team play: which opponent is your partner. Filled in by RefreshSummary as opponents are picked.
+            if (_setup.IsTeamFormat && !_setup.PostToOpenLobby)
+            {
+                _partnerPanel = UiFactory.Panel(List, theme).GetComponent<RectTransform>();
+            }
+            else
+            {
+                _partnerPanel = null;
+            }
+
             UiFactory.SectionTitle(List, theme, "Deck");
             AddDeckChoice(theme);
 
@@ -110,6 +130,22 @@ namespace MoodSwings.UI
             var defaults = UiFactory.Toggle(options.transform, "Default selections mode", theme, _setup.DefaultSelectionsMode);
             UiFactory.ToggleDescription(options.transform, theme, "Pre-fill card choices with a reasonable default. You can still change them before submitting.");
             defaults.onValueChanged.AddListener(on => _setup.DefaultSelectionsMode = on);
+
+            var bestOfThree = UiFactory.Panel(List, theme);
+            _bestOfThreePanel = bestOfThree.gameObject;
+            _bestOfThreeToggle = UiFactory.Toggle(bestOfThree.transform, "Best of three", theme, _setup.BestOfThree);
+            _bestOfThreeToggle.gameObject.name = "Best of three toggle";
+            UiFactory.ToggleDescription(bestOfThree.transform, theme,
+                "First to win two games. The next game is created for you after each one, and the loser chooses who goes first.");
+            _bestOfThreeToggle.onValueChanged.AddListener(on => _setup.BestOfThree = on);
+
+            var synchronous = UiFactory.Panel(List, theme);
+            _synchronousPanel = synchronous.gameObject;
+            _synchronousToggle = UiFactory.Toggle(synchronous.transform, "Synchronous (live)", theme, _setup.SynchronousMode);
+            _synchronousToggle.gameObject.name = "Synchronous toggle";
+            UiFactory.ToggleDescription(synchronous.transform, theme,
+                "For two players sitting down together: a ready check before the game and a 30-second clock on each action.");
+            _synchronousToggle.onValueChanged.AddListener(on => _setup.SynchronousMode = on);
 
             RefreshSummary();
         }
@@ -138,11 +174,45 @@ namespace MoodSwings.UI
             Rebuild();
         }
 
+        private void AddFormatChoice(UiTheme theme)
+        {
+            var panel = UiFactory.Panel(List, theme);
+            var group = panel.gameObject.AddComponent<ToggleGroup>();
+            group.allowSwitchOff = false;
+            foreach (var format in GameSetup.FormatOptions)
+            {
+                var id = format.Id;
+                AddRadio(theme, panel, group, format.Label, format.Description, _setup.Format == id, () =>
+                {
+                    if (_setup.Format == id)
+                    {
+                        return;
+                    }
+
+                    _setup.Format = id;
+                    SetStatus(string.Empty);
+                    Rebuild();
+                });
+            }
+        }
+
         private void AddOpenLobbyChoice(UiTheme theme)
         {
             var panel = UiFactory.Panel(List, theme);
             var title = UiFactory.Label(panel.transform, "Total players, including you", 28, theme.textPrimary, TextAnchor.MiddleLeft, FontStyle.Bold);
             UiFactory.Size(title.gameObject, height: 40f);
+
+            if (!_setup.OpenLobbyCountIsChoosable)
+            {
+                AddNote(theme, panel, $"A {GameDisplay.FormatName(_setup.Format)} game from the lobby seats exactly {_setup.EffectiveOpenLobbyPlayerCount} players.");
+                if (_setup.IsTeamFormat)
+                {
+                    AddNote(theme, panel, "Teams are assigned at random once everyone has joined.");
+                }
+
+                UiFactory.ToggleDescription(panel.transform, theme, "Only players who are \"discoverable for open games\" (see Settings) will see it.");
+                return;
+            }
 
             var group = panel.gameObject.AddComponent<ToggleGroup>();
             group.allowSwitchOff = false;
@@ -234,7 +304,7 @@ namespace MoodSwings.UI
             var panel = UiFactory.Panel(List, theme);
             var group = panel.gameObject.AddComponent<ToggleGroup>();
             group.allowSwitchOff = false;
-            foreach (var deck in GameSetup.DeckOptions)
+            foreach (var deck in _setup.DecksForFormat)
             {
                 var id = deck.Id;
                 AddRadio(theme, panel, group, deck.Label, deck.Description, _setup.DeckType == id, () => _setup.DeckType = id);
@@ -281,11 +351,34 @@ namespace MoodSwings.UI
                 _countLabel.text = $"Selected: {_setup.OpponentUserIds.Count} of {GameSetup.MaxPlayers - 1}";
             }
 
+            // "Synchronous" only makes sense for two players in a format that supports it, and only
+            // while the server offers it; anything that stops applying is switched off, not just hidden.
+            _setup.Normalize(AppServices.Lobby.SynchronousModeEnabled);
+            RebuildPartnerChoices();
+            if (_bestOfThreeToggle != null)
+            {
+                _bestOfThreePanel.SetActive(_setup.BestOfThreeAvailable);
+                if (!_setup.BestOfThreeAvailable)
+                {
+                    _bestOfThreeToggle.SetIsOnWithoutNotify(false);
+                }
+            }
+
+            if (_synchronousToggle != null)
+            {
+                var offered = _setup.SynchronousModeAvailable(AppServices.Lobby.SynchronousModeEnabled);
+                _synchronousPanel.SetActive(offered);
+                if (!offered)
+                {
+                    _synchronousToggle.SetIsOnWithoutNotify(false);
+                }
+            }
+
             if (_botFirstPanel != null)
             {
                 var botIds = new HashSet<int>(AppServices.Lobby.Bots.Select(b => b.UserId));
                 var anyBot = _setup.OpponentUserIds.Any(botIds.Contains);
-                _botFirstPanel.SetActive(anyBot);
+                _botFirstPanel.SetActive(anyBot && !_setup.IsTeamFormat);
                 if (!anyBot)
                 {
                     _setup.BotGoesFirst = false;
@@ -294,6 +387,77 @@ namespace MoodSwings.UI
 
             _createLabel.text = _setup.PostToOpenLobby ? "Post to open lobby" : "Start game";
             _create.interactable = !_busy && (_setup.PostToOpenLobby ? _setup.ValidateOpenGame() : _setup.ValidateDirectGame()) == null;
+        }
+
+        private string NameOf(int userId)
+        {
+            var bot = AppServices.Lobby.Bots.FirstOrDefault(b => b.UserId == userId);
+            if (bot != null)
+            {
+                return bot.Username;
+            }
+
+            var friend = AppServices.Friends.Friends.FirstOrDefault(f => f.UserId == userId);
+            if (friend != null)
+            {
+                return friend.Username;
+            }
+
+            return _setup.OpponentNames.TryGetValue(userId, out var known) ? known : "Player " + userId;
+        }
+
+        // Your partner is one of your opponents: a radio per opponent picked so far, or "at random".
+        private void RebuildPartnerChoices()
+        {
+            if (_partnerPanel == null)
+            {
+                return;
+            }
+
+            foreach (Transform child in _partnerPanel)
+            {
+                child.gameObject.SetActive(false);
+                Destroy(child.gameObject);
+            }
+
+            var theme = AppServices.Theme;
+            var panel = _partnerPanel.GetComponent<VerticalLayoutGroup>();
+            AddGroupLabel(theme, panel, "Your partner");
+
+            var random = UiFactory.Toggle(_partnerPanel, "Assign my partner at random", theme, _setup.RandomTeams);
+            random.gameObject.name = "Random partner toggle";
+            random.onValueChanged.AddListener(on =>
+            {
+                _setup.RandomTeams = on;
+                RefreshSummary();
+            });
+
+            if (_setup.RandomTeams)
+            {
+                return;
+            }
+
+            if (_setup.OpponentUserIds.Count == 0)
+            {
+                AddNote(theme, panel, "Pick your opponents above, then choose which one is on your team.");
+                return;
+            }
+
+            var group = _partnerPanel.gameObject.GetComponent<ToggleGroup>() ?? _partnerPanel.gameObject.AddComponent<ToggleGroup>();
+            group.allowSwitchOff = false;
+            foreach (var id in _setup.OpponentUserIds)
+            {
+                var partnerId = id;
+                var toggle = UiFactory.Toggle(_partnerPanel, NameOf(partnerId), theme, _setup.PartnerUserId == partnerId);
+                toggle.group = group;
+                toggle.onValueChanged.AddListener(on =>
+                {
+                    if (on)
+                    {
+                        _setup.PartnerUserId = partnerId;
+                    }
+                });
+            }
         }
 
         private async Task CreateAsync()
