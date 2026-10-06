@@ -1876,6 +1876,68 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame(['hand_mood_ids' => [125]], $action['choices']);
     }
 
+    /**
+     * Reported: "more cards that bots should always bounce with Thrill to
+     * replay, as long as there are targets for them -- Anger, Hate, Shock."
+     * Each replay fires its removal again; Thrill's extra play per bounced
+     * mood pays for it.
+     */
+    public function testChooseActionBouncesItsRemovalMoodsWithThrillWhenThereAreTargets(): void
+    {
+        foreach ([[80, 'Anger'], [66, 'Hate'], [101, 'Shock']] as [$removalCardId, $label]) {
+            $state = $this->boardState(hands: [1 => [103, $removalCardId], 2 => [8]]); // Thrill; opponent holds Dignity (3)
+            $state->moveHandToInPlay(1, $removalCardId);
+            $state->moveHandToInPlay(2, 8);
+
+            $action = $this->bot->chooseAction($state, [103], 1);
+
+            self::assertSame(103, $action['card_id'], $label);
+            self::assertSame(['hand_mood_ids' => [$removalCardId]], $action['choices'], "{$label} is bounced to replay");
+        }
+    }
+
+    /** No opposing mood in play means nothing for a replayed Anger/Hate/Shock to hit, so none is bounced. */
+    public function testChooseActionDoesNotBounceRemovalMoodsWithThrillWithoutTargets(): void
+    {
+        foreach ([80, 66, 101] as $removalCardId) {
+            $state = $this->boardState(hands: [1 => [103, $removalCardId]]);
+            $state->moveHandToInPlay(1, $removalCardId);
+
+            self::assertSame([], $this->bot->chooseAction($state, [103], 1)['choices'], "card {$removalCardId}");
+        }
+    }
+
+    /** Shock can only hit a mood worth 3 or less: an opponent's lone Discipline (6) is no target. */
+    public function testChooseActionDoesNotBounceShockWithThrillWhenNoOpposingMoodQualifies(): void
+    {
+        $state = $this->boardState(hands: [1 => [103, 101], 2 => [9]]);
+        $state->moveHandToInPlay(1, 101);
+        $state->moveHandToInPlay(2, 9); // Discipline, value 6
+
+        self::assertSame([], $this->bot->chooseAction($state, [103], 1)['choices']);
+    }
+
+    /** Each replay removes at least one mood, so bounces are capped at the number of opposing moods (Anger first, then Shock, then Hate). */
+    public function testChooseActionCapsRemovalBouncesAtTheNumberOfOpposingMoods(): void
+    {
+        $state = $this->boardState(hands: [1 => [103, 80, 101, 66], 2 => [8]]);
+        foreach ([80, 101, 66] as $id) {
+            $state->moveHandToInPlay(1, $id);
+        }
+        $state->moveHandToInPlay(2, 8);
+
+        self::assertSame(['hand_mood_ids' => [80]], $this->bot->chooseAction($state, [103], 1)['choices']);
+
+        $state = $this->boardState(hands: [1 => [103, 80, 101, 66], 2 => [8, 5]]);
+        foreach ([80, 101, 66] as $id) {
+            $state->moveHandToInPlay(1, $id);
+        }
+        $state->moveHandToInPlay(2, 8);
+        $state->moveHandToInPlay(2, 5);
+
+        self::assertSame(['hand_mood_ids' => [80, 101]], $this->bot->chooseAction($state, [103], 1)['choices']);
+    }
+
     /** Charity's extra play is only worth anything with another card to spend it on -- at least one other card in hand besides Thrill. */
     public function testChooseActionBouncesCharityWithThrillOnlyWithAnotherCardInHand(): void
     {
@@ -4735,5 +4797,129 @@ final class BotPlayerServiceTest extends TestCase
         $state = $this->boardState([1 => [33]]);
 
         self::assertSame('generic_resolver', $this->bot->choicePolicyPathFor($state, 33));
+    }
+
+    /**
+     * Wonder (id 133, green) adds 2 per mood in play and per discarded card
+     * of its chosen color, so a bot picks the color with the most of both
+     * combined: here blue has one mood in play plus two discarded cards (3)
+     * against white's single mood in play.
+     */
+    public function testChooseActionPicksWonderColorWithTheMostCardsAcrossPlayAndDiscard(): void
+    {
+        $state = $this->boardState(hands: [1 => [133], 2 => [3, 28, 36]]);
+        $state->moveHandToInPlay(2, 3);   // white, in play
+        $state->moveHandToInPlay(2, 28);  // blue, in play
+        $state->moveHandToDiscard(2, 36); // blue, discarded (hand held [3, 28, 36]; the last card goes to the pile)
+
+        $action = $this->bot->chooseAction($state, [133], 1);
+
+        self::assertSame(133, $action['card_id']);
+        self::assertSame(['color' => 'blue'], $action['choices']);
+    }
+
+    /** Wonder counts toward its own color once it is in play, so a tie-breaking green mood in play plus Wonder itself beats a lone white mood. */
+    public function testChooseActionCountsWondersOwnColorWhenPickingItsColor(): void
+    {
+        $state = $this->boardState(hands: [1 => [133], 2 => [3, 107]]);
+        $state->moveHandToInPlay(2, 3);   // white
+        $state->moveHandToInPlay(2, 107); // green
+
+        $action = $this->bot->chooseAction($state, [133], 1);
+
+        self::assertSame(['color' => 'green'], $action['choices']);
+    }
+
+    /** With every color tied the pick is deterministic: the first color in the schema's order. */
+    public function testChooseActionPicksTheFirstColorOnAWonderTie(): void
+    {
+        $state = $this->boardState(hands: [1 => [133], 2 => [3, 28]]);
+        $state->moveHandToInPlay(2, 3);  // white 1
+        $state->moveHandToInPlay(2, 28); // blue 1 (green 1 from Wonder itself)
+
+        $action = $this->bot->chooseAction($state, [133], 1);
+
+        self::assertSame(['color' => 'white'], $action['choices']);
+    }
+
+    // -- Removal (Hate/Anger/Shock) goes after an opponent's Validation first ---
+
+    /**
+     * Reported: "bots should target an opponent's Validation with removal
+     * (Hate, Anger, Shock) before cards with higher point values unless it
+     * will lose them the game." Hate normally takes the opponent's
+     * highest-value mood (Complacency, 4); with a Validation (1) beside it,
+     * the Validation goes first.
+     */
+    public function testChooseActionTargetsAnOpponentsValidationBeforeAHigherValueMoodWithHate(): void
+    {
+        $state = $this->boardState(hands: [1 => [66], 2 => [5, 26]]); // Hate; Complacency (4), Validation (1)
+        $state->moveHandToInPlay(2, 5);
+        $state->moveHandToInPlay(2, 26);
+
+        $action = $this->bot->chooseAction($state, [66], 1);
+
+        self::assertSame(['target_mood_id' => 26], $action['choices']);
+    }
+
+    /**
+     * ...unless it loses the game: the opponent is one round win from the
+     * game and the bot (Dignity, 3) only stays ahead if Complacency, not the
+     * Validation, is what goes (5 vs 3 now; 4 vs 3 without the Validation
+     * still loses, 1 vs 3 without Complacency wins).
+     */
+    public function testChooseActionTargetsTheHigherValueMoodInsteadOfValidationWhenThatIsWhatKeepsTheGame(): void
+    {
+        $state = $this->boardState(hands: [1 => [66, 8], 2 => [5, 26]]);
+        $state->moveHandToInPlay(1, 8);
+        $state->moveHandToInPlay(2, 5);
+        $state->moveHandToInPlay(2, 26);
+
+        $action = $this->bot->chooseAction($state, [66], 1, 3, [2 => 1]);
+
+        self::assertSame(['target_mood_id' => 5], $action['choices']);
+
+        // With round-win counts unknown there is nothing to deviate for.
+        $unknown = $this->bot->chooseAction($state, [66], 1);
+        self::assertSame(['target_mood_id' => 26], $unknown['choices']);
+    }
+
+    /** Anger (5 points of combined value): a 5-value mood alone would use the whole budget; the Validation goes first and the rest of the budget goes to whatever still fits. */
+    public function testChooseActionPutsAnOpponentsValidationFirstInAngersBudget(): void
+    {
+        $state = $this->boardState(hands: [1 => [80], 2 => [21, 26]]); // Anger; Patience (5), Validation (1)
+        $state->moveHandToInPlay(2, 21);
+        $state->moveHandToInPlay(2, 26);
+
+        $action = $this->bot->chooseAction($state, [80], 1);
+
+        self::assertSame(80, $action['card_id']);
+        self::assertContains(26, $action['choices']['target_mood_ids']);
+        self::assertNotContains(21, $action['choices']['target_mood_ids'], 'Patience no longer fits beside the Validation');
+    }
+
+    /** Shock: an opponent's Validation is picked over their higher-value qualifying mood. */
+    public function testChooseActionTargetsAnOpponentsValidationBeforeAHigherValueMoodWithShock(): void
+    {
+        $state = $this->boardState(hands: [1 => [101], 2 => [8, 26]]); // Shock; Dignity (3), Validation (1)
+        $state->moveHandToInPlay(2, 8);
+        $state->moveHandToInPlay(2, 26);
+
+        $action = $this->bot->chooseAction($state, [101], 1);
+
+        self::assertSame(['target_mood_ids' => [26]], $action['choices']);
+    }
+
+    /** Shock keeps one pick per opponent: with two opponents the Validation owner is seated first and the other opponent still gets their best qualifying mood. */
+    public function testChooseActionShockStillTargetsEachOpponentAndPutsValidationFirst(): void
+    {
+        $state = $this->boardState(hands: [1 => [101], 2 => [8, 26], 3 => [76]]);
+        $state->moveHandToInPlay(2, 8);
+        $state->moveHandToInPlay(2, 26);
+        $state->moveHandToInPlay(3, 76); // Spite (1)
+
+        $action = $this->bot->chooseAction($state, [101], 1);
+
+        self::assertSame([26, 76], $action['choices']['target_mood_ids']);
     }
 }

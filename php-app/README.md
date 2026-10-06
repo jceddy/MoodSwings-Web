@@ -9705,6 +9705,43 @@ since it already holds that dependency):
   cased below) -- whichever direction routes back the more valuable
   mood, `'left'` winning any tie to match that same generic default.
 
+  **Removal goes after an opponent's Validation first** (reported: "bots
+  should target an opponent's Validation with removal (Hate, Anger, Shock)
+  before cards with higher point values unless it will lose them the game
+  -- leaving a Validation in an opponent's control over an extra round can
+  easily result in a game loss"). `hateTargetMoodId()`,
+  `angerTargetMoodIds()` and `shockTargetMoodIds()` now take a
+  non-teammate opponent's Validation ahead of the higher-valued moods they
+  used to prefer: Hate targets it (ahead of the Euphoria carve-out too,
+  which is about whether a target is worth its point cost); Anger forces it
+  into the 5-point combined-value budget first and fills what's left by the
+  usual swing-maximizing knapsack (`angerValidationFirstTargets()`); Shock
+  swaps it in for that opponent's highest qualifying mood and seats
+  Validation owners first among its two slots. The exception,
+  `validationRemovalLosesTheGame()`: when some rival group one round win
+  from the game would take THIS round with the Validation-first removal but
+  not with the value-based one (projected with the same
+  `panicProjectedTotals()` Panic uses), the old value-based pick is kept.
+  `buildChoicesForCard()` therefore now takes the same optional
+  `$roundWinsNeededToWinGame`/`$roundWinsNeededToWinGameByPlayerId` as
+  `chooseAction()` (threaded from it and from `LegalChoiceEnumerator`);
+  unknown counts never create an exception.
+
+  **Wonder's color** (reported: "when a bot plays Wonder it should
+  actually choose the most common color among cards in play and in the
+  discard pile") -- previously the generic `'mode'` default, always the
+  schema's first color (white). `choicesForEffectKey()` now answers
+  `'wonder'` bespoke via `wonderBestColor()`: `WonderEffect::computeValue()`
+  adds 2 per mood in play AND per discarded card of a chosen color, so the
+  best single pick is the color with the most of both combined (Wonder's
+  own color counted too while it is still in hand -- once in play it is
+  already among the moods; a Creativity copy reuses this through the same
+  recursion). A color Wonder already chose (a Duplicity repeat
+  accumulates colors, so re-picking one adds nothing) is skipped unless
+  all five are taken, and ties go to the first color in
+  `CardChoiceSchema::FIVE_COLORS` order so the pick stays deterministic.
+  `'wonder'` is therefore in `BESPOKE_CHOICE_EFFECT_KEYS`.
+
   Everything not on either card's own list above defaults to "always
   worth playing," the unconditional "yes" every effect already got
   before this method existed.
@@ -12051,6 +12088,18 @@ an extra play on top of the one Thrill grants): **every Joy** in play is
 bounced unconditionally (it banks a play for next turn), and Charity is
 bounced only while the bot holds at least one other card besides Thrill to
 spend the extra play on (one Charity per such card).
+
+The bot's own **removal moods** are a third family (reported: "more cards
+that bots should always bounce with Thrill to replay, as long as there are
+targets for them -- Anger, Hate, Shock", plus Joy, which was already
+covered above): `thrillReplayRemovalMoodIds()` bounces an Anger, Shock or
+Hate in play whenever its own existing target policy would find something
+to hit -- `angerSwingMaximizingTargets()` non-empty for Anger,
+`shockTargetMoodIds()` non-empty for Shock (a mood worth 3 or less), any
+opposing mood for Hate (which also draws a card every replay). Free for the
+same reason as the rest: the replay returns at its own unchanged printed
+value (0/2/0). Capped at the number of opposing moods in play (each replay
+removes at least one), Anger first, then Shock, then Hate.
 
 ### Diagnostic mode
 
