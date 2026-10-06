@@ -151,7 +151,7 @@ namespace MoodSwings.Tests
 
             yield return PhaseTwoSceneTests.Click("Show all 69");
 
-            Assert.AreEqual(1 + 3 + 1 + 69, MainSceneTests.Screen<PlayScreen>().RowCount);
+            Assert.AreEqual(1 + 3 + 1 + GameDisplay.Group(AppServices.Lobby.PastGames).Count, MainSceneTests.Screen<PlayScreen>().RowCount, "a match is one block");
             Assert.IsNull(PhaseTwoSceneTests.FindButton("Show all 69"));
         }
 
@@ -721,5 +721,48 @@ namespace MoodSwings.Tests
 
         private static string[] Texts() =>
             UnityEngine.Object.FindObjectsByType<Text>(FindObjectsInactive.Exclude).Select(t => t.text).ToArray();
+
+        [UnityTest]
+        public IEnumerator Play_AMatchsGamesAreOneBlock_WithItsScoreAndEachGameBeneath()
+        {
+            var server = new LobbyFakeServer();
+            yield return OpenPlay(server);
+            yield return PhaseTwoSceneTests.Click("Show all 69");
+            yield return PhaseTwoSceneTests.Frames(3);
+
+            var block = PhaseFiveSceneTests.Child("Match draft:132");
+            Assert.IsNotNull(block, "games 349-351 are one match");
+            var texts = block.GetComponentsInChildren<Text>().Select(t => t.text).ToList();
+            Assert.IsTrue(texts.Contains("Match score: you 1, opponent 2 (first to 2 wins)"), string.Join(" | ", texts));
+            Assert.IsTrue(texts.Contains("jceddy won the match"));
+            Assert.IsTrue(texts.Contains("Game 3") && texts.Contains("Game 2") && texts.Contains("Game 1"));
+            Assert.IsTrue(texts.IndexOf("Game 3") < texts.IndexOf("Game 1"), "latest game first");
+            Assert.IsNotNull(block.Find("Match games/Game 3"));
+            Assert.AreEqual(3, block.Find("Match games").GetComponentsInChildren<Button>().Count(b => b.GetComponentInChildren<Text>().text == "Open"));
+
+            // Scroll the match to the top of the list for the picture.
+            var scroll = MainSceneTests.Screen<PlayScreen>().GetComponentInChildren<ScrollRect>();
+            Canvas.ForceUpdateCanvases();
+            var rect = (RectTransform)block;
+            scroll.content.anchoredPosition = new Vector2(0f, -rect.anchoredPosition.y - rect.rect.height / 2f - 10f);
+            yield return PhaseTwoSceneTests.Frames(2);
+            ScreenshotHelper.Capture("play-match-group");
+        }
+
+        [UnityTest]
+        public IEnumerator Play_AGameInAMatchOpensItsOwnBoard()
+        {
+            var server = new LobbyFakeServer();
+            yield return OpenPlay(server);
+            yield return PhaseTwoSceneTests.Click("Show all 69");
+            yield return PhaseTwoSceneTests.Frames(3);
+
+            var openGame2 = PhaseFiveSceneTests.Child("Match draft:132").Find("Match games/Game 2").GetComponentsInChildren<Button>()
+                .First(b => b.GetComponentInChildren<Text>().text == "Open");
+            openGame2.onClick.Invoke();
+            yield return MainSceneTests.WaitFor<BoardScreen>();
+
+            Assert.IsTrue(server.Calls.Any(c => c.StartsWith("GET /games/state?game_id=350")), string.Join("\n", server.Calls));
+        }
     }
 }

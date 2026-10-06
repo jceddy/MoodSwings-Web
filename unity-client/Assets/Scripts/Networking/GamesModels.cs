@@ -57,6 +57,10 @@ namespace MoodSwings.Networking
         [JsonProperty("winner_usernames")]
         public List<string> WinnerUsernames { get; set; } = new List<string>();
 
+        /// <summary>A draft's match names its one winner like this instead of winner_usernames.</summary>
+        [JsonProperty("winner_username")]
+        public string WinnerUsername { get; set; }
+
         [JsonProperty("players")]
         public List<MatchPlayer> Players { get; set; } = new List<MatchPlayer>();
 
@@ -70,6 +74,14 @@ namespace MoodSwings.Networking
         /// <summary>Which game of its match this is (1 to 3); null when it isn't part of one.</summary>
         [JsonProperty("match_game_number")]
         public int? MatchGameNumber { get; set; }
+
+        /// <summary>The draft's match this game belongs to; every game of one shares it.</summary>
+        [JsonProperty("draft_match_id")]
+        public int? DraftMatchId { get; set; }
+
+        /// <summary>The best-of-three match (Traditional, Duel or team play) this game belongs to.</summary>
+        [JsonProperty("game_match_id")]
+        public int? GameMatchId { get; set; }
 
         [JsonProperty("game_match")]
         public MatchSummary GameMatch { get; set; }

@@ -81,6 +81,84 @@ namespace MoodSwings.Core
                 : $"{number} (you {match.YourWins} - {match.OpponentWins})";
         }
 
+        /// <summary>Which match a game belongs to ("draft:132" or "game:11"), the same for all its games; null for a one-off game.</summary>
+        public static string MatchKey(GameSummary game) =>
+            game.DraftMatchId.HasValue ? "draft:" + game.DraftMatchId.Value
+            : game.GameMatchId.HasValue ? "game:" + game.GameMatchId.Value
+            : null;
+
+        /// <summary>One row of a games list: a game on its own, or every game of one match together.</summary>
+        public sealed class GameEntry
+        {
+            /// <summary>The game itself, or for a match its latest one (the one that matters: the live game, or the last played).</summary>
+            public GameSummary Game { get; set; }
+
+            /// <summary>The games of the match, latest first; empty for a one-off game.</summary>
+            public List<GameSummary> MatchGames { get; set; } = new List<GameSummary>();
+
+            public MatchSummary Match => Game.GameMatch ?? Game.DraftMatch;
+
+            public bool IsMatch => MatchGames.Count > 0;
+        }
+
+        /// <summary>
+        /// Groups the games of each match into one entry, which keeps the place of the first of them in the list (so
+        /// a match with a game waiting on you is as high as that game would be). A match's games read latest first.
+        /// </summary>
+        public static List<GameEntry> Group(IEnumerable<GameSummary> games)
+        {
+            var list = games.ToList();
+            var byMatch = list.Where(g => MatchKey(g) != null).GroupBy(MatchKey).ToDictionary(g => g.Key, g => g.ToList());
+            var entries = new List<GameEntry>();
+            var seen = new HashSet<string>();
+            foreach (var game in list)
+            {
+                var key = MatchKey(game);
+                if (key == null)
+                {
+                    entries.Add(new GameEntry { Game = game });
+                }
+                else if (seen.Add(key))
+                {
+                    var ordered = byMatch[key].OrderByDescending(g => g.MatchGameNumber ?? 0).ThenByDescending(g => g.Id).ToList();
+                    entries.Add(new GameEntry { Game = ordered[0], MatchGames = ordered });
+                }
+            }
+
+            return entries;
+        }
+
+        /// <summary>"Finished 2026-09-01" or "Started 2026-09-01": when, for telling a match's games apart.</summary>
+        public static string WhenLine(GameSummary game)
+        {
+            if (game.Status == "waiting")
+            {
+                return "Waiting to start";
+            }
+
+            var when = game.IsCompleted ? game.CompletedAt : game.StartedAt ?? game.CreatedAt;
+            var day = string.IsNullOrEmpty(when) ? string.Empty : " " + (when.Length >= 10 ? when.Substring(0, 10) : when);
+            return (game.IsCompleted ? "Finished" : "Started") + day;
+        }
+
+        /// <summary>"Match score: you 1, opponent 0 (first to 2 wins)".</summary>
+        public static string MatchScore(MatchSummary match) =>
+            $"Match score: you {match.YourWins}, opponent {match.OpponentWins} (first to {match.GamesToWin} wins)";
+
+        /// <summary>"jceddy won the match" once the match is decided; null before.</summary>
+        public static string MatchResult(MatchSummary match)
+        {
+            if (match.Status != "completed")
+            {
+                return null;
+            }
+
+            var winners = match.WinnerUsernames.Count > 0
+                ? match.WinnerUsernames
+                : string.IsNullOrEmpty(match.WinnerUsername) ? new List<string>() : new List<string> { match.WinnerUsername };
+            return winners.Count > 0 ? string.Join(" & ", winners) + " won the match" : "Match over";
+        }
+
         /// <summary>The other players, in seat order, e.g. "BotSage, BotSageQuick".</summary>
         public static string Opponents(GameSummary game, string yourUsername)
         {
