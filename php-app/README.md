@@ -9705,6 +9705,28 @@ since it already holds that dependency):
   cased below) -- whichever direction routes back the more valuable
   mood, `'left'` winning any tie to match that same generic default.
 
+  **Removal goes after an opponent's Validation first** (reported: "bots
+  should target an opponent's Validation with removal (Hate, Anger, Shock)
+  before cards with higher point values unless it will lose them the game
+  -- leaving a Validation in an opponent's control over an extra round can
+  easily result in a game loss"). `hateTargetMoodId()`,
+  `angerTargetMoodIds()` and `shockTargetMoodIds()` now take a
+  non-teammate opponent's Validation ahead of the higher-valued moods they
+  used to prefer: Hate targets it (ahead of the Euphoria carve-out too,
+  which is about whether a target is worth its point cost); Anger forces it
+  into the 5-point combined-value budget first and fills what's left by the
+  usual swing-maximizing knapsack (`angerValidationFirstTargets()`); Shock
+  swaps it in for that opponent's highest qualifying mood and seats
+  Validation owners first among its two slots. The exception,
+  `validationRemovalLosesTheGame()`: when some rival group one round win
+  from the game would take THIS round with the Validation-first removal but
+  not with the value-based one (projected with the same
+  `panicProjectedTotals()` Panic uses), the old value-based pick is kept.
+  `buildChoicesForCard()` therefore now takes the same optional
+  `$roundWinsNeededToWinGame`/`$roundWinsNeededToWinGameByPlayerId` as
+  `chooseAction()` (threaded from it and from `LegalChoiceEnumerator`);
+  unknown counts never create an exception.
+
   **Wonder's color** (reported: "when a bot plays Wonder it should
   actually choose the most common color among cards in play and in the
   discard pile") -- previously the generic `'mode'` default, always the

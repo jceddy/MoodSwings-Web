@@ -502,7 +502,7 @@ final class BotPlayerService
                 continue;
             }
 
-            $choices = $this->buildChoicesForCard($state, $cardId, $botGamePlayerId);
+            $choices = $this->buildChoicesForCard($state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
             if ($choices !== null) {
                 return ['card_id' => $cardId, 'choices' => $choices];
             }
@@ -1877,9 +1877,9 @@ final class BotPlayerService
      *
      * @return ?array<string, mixed>
      */
-    public function buildChoicesForCard(BoardState $state, int $cardId, int $botGamePlayerId): ?array
+    public function buildChoicesForCard(BoardState $state, int $cardId, int $botGamePlayerId, ?int $roundWinsNeededToWinGame = null, array $roundWinsNeededToWinGameByPlayerId = []): ?array
     {
-        $choices = $this->buildBaseChoicesForCard($state, $cardId, $botGamePlayerId);
+        $choices = $this->buildBaseChoicesForCard($state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
         if ($choices === null) {
             return null;
         }
@@ -1959,11 +1959,11 @@ final class BotPlayerService
     }
 
     /** @return ?array<string, mixed> */
-    private function buildBaseChoicesForCard(BoardState $state, int $cardId, int $botGamePlayerId): ?array
+    private function buildBaseChoicesForCard(BoardState $state, int $cardId, int $botGamePlayerId, ?int $roundWinsNeededToWinGame = null, array $roundWinsNeededToWinGameByPlayerId = []): ?array
     {
         $effectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
 
-        return $this->choicesForEffectKey($effectKey, $state, $cardId, $botGamePlayerId);
+        return $this->choicesForEffectKey($effectKey, $state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
     }
 
     /**
@@ -1979,7 +1979,7 @@ final class BotPlayerService
      *
      * @return ?array<string, mixed>
      */
-    private function choicesForEffectKey(string $effectKey, BoardState $state, int $cardId, int $botGamePlayerId): ?array
+    private function choicesForEffectKey(string $effectKey, BoardState $state, int $cardId, int $botGamePlayerId, ?int $roundWinsNeededToWinGame = null, array $roundWinsNeededToWinGameByPlayerId = []): ?array
     {
         if ($effectKey === 'rationalization') {
             return $this->rationalizationChoices($state, $cardId, $botGamePlayerId);
@@ -2028,7 +2028,7 @@ final class BotPlayerService
         }
 
         if ($effectKey === 'shock') {
-            $targetMoodIds = $this->shockTargetMoodIds($state, $botGamePlayerId);
+            $targetMoodIds = $this->shockTargetMoodIds($state, $botGamePlayerId, $cardId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
 
             return $targetMoodIds !== [] ? ['target_mood_ids' => $targetMoodIds] : [];
         }
@@ -2066,7 +2066,7 @@ final class BotPlayerService
             // Creativity anyway, so this is the one effect key
             // deliberately left unmerged.
             $copiedChoices = $copiedEffectKey !== 'creativity'
-                ? $this->choicesForEffectKey($copiedEffectKey, $state, $cardId, $botGamePlayerId)
+                ? $this->choicesForEffectKey($copiedEffectKey, $state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId)
                 : [];
             if ($copiedChoices === null) {
                 // The copied mood's own required choice had no legal
@@ -2080,7 +2080,7 @@ final class BotPlayerService
         }
 
         if ($effectKey === 'anger') {
-            return ['target_mood_ids' => $this->angerTargetMoodIds($state, $cardId, $botGamePlayerId)];
+            return ['target_mood_ids' => $this->angerTargetMoodIds($state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId)];
         }
 
         if ($effectKey === 'denial') {
@@ -2090,7 +2090,7 @@ final class BotPlayerService
         }
 
         if ($effectKey === 'hate') {
-            $targetMoodId = $this->hateTargetMoodId($state, $cardId, $botGamePlayerId);
+            $targetMoodId = $this->hateTargetMoodId($state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
 
             return $targetMoodId !== null ? ['target_mood_id' => $targetMoodId] : [];
         }
@@ -3266,6 +3266,78 @@ final class BotPlayerService
      */
     private const HATE_MIN_OPPONENT_VALUE_WORTH_EUPHORIAS_COST = 2;
 
+    private function isValidationMood(BoardState $state, int $moodCardId): bool
+    {
+        return $state->catalogRow($state->effectiveCardId($moodCardId))['effectKey'] === 'validation';
+    }
+
+    /** The highest-value Validation owned by a non-teammate opponent, or null if none is in play. */
+    private function highestValueOpponentValidationId(BoardState $state, int $botGamePlayerId): ?int
+    {
+        $best = null;
+        foreach ($this->nonTeammateOpponentMoodIds($state, $botGamePlayerId) as $moodId) {
+            if ($this->isValidationMood($state, $moodId) && ($best === null || $state->valueOf($moodId) > $state->valueOf($best))) {
+                $best = $moodId;
+            }
+        }
+
+        return $best;
+    }
+
+    /**
+     * The removal-targeting rule shared by Hate, Anger and Shock (reported:
+     * "bots should target an opponent's Validation with removal (Hate,
+     * Anger, Shock) before cards with higher point values unless it will
+     * lose them the game -- leaving a Validation in an opponent's control
+     * over an extra round can easily result in a game loss"): an opponent's
+     * Validation is taken out ahead of any higher-valued mood, because its
+     * extra plays snowball over the next round far beyond its own printed
+     * point. The exception is whether going for it LOSES THE GAME: true when
+     * some rival group that is one round win from the game would take this
+     * round with the Validation-first removal but not with the usual
+     * value-based removal ($valueBasedTargetIds), i.e. the points the usual
+     * pick would have removed are what keeps the bot alive. If both lose (or
+     * neither does) the Validation still goes first; unknown round-win
+     * counts ($roundWinsNeededToWinGameByPlayerId empty) never create an
+     * exception. Totals come from panicProjectedTotals(), which just removes
+     * the given moods from play and adds the removal card's own printed
+     * value -- the same projection Panic uses for its own game-deciding
+     * exception.
+     *
+     * @param int[] $validationFirstTargetIds
+     * @param int[] $valueBasedTargetIds
+     * @param array<int, int> $roundWinsNeededToWinGameByPlayerId
+     */
+    private function validationRemovalLosesTheGame(BoardState $state, int $removalCardId, int $botGamePlayerId, array $validationFirstTargetIds, array $valueBasedTargetIds, ?int $roundWinsNeededToWinGame, array $roundWinsNeededToWinGameByPlayerId): bool
+    {
+        if ($roundWinsNeededToWinGameByPlayerId === []) {
+            return false;
+        }
+
+        $predictedRoundWinsAwarded = 1;
+        foreach ($state->moodsInPlay() as $mood) {
+            if ($state->effectState($mood->cardId, 'awardsExtraWin')) {
+                $predictedRoundWinsAwarded = 2;
+                break;
+            }
+        }
+
+        [$myValidation, , $rivalTotalsValidation] = $this->panicProjectedTotals($state, $removalCardId, $botGamePlayerId, $validationFirstTargetIds);
+        [$myValueBased, , $rivalTotalsValueBased] = $this->panicProjectedTotals($state, $removalCardId, $botGamePlayerId, $valueBasedTargetIds);
+
+        foreach ($rivalTotalsValidation as $groupKey => $groupTotalValidation) {
+            $groupWinsNeeded = $roundWinsNeededToWinGameByPlayerId[$groupKey] ?? null;
+            if ($groupWinsNeeded === null || $groupWinsNeeded > $predictedRoundWinsAwarded) {
+                continue;
+            }
+            if ($myValidation < $groupTotalValidation && $myValueBased >= ($rivalTotalsValueBased[$groupKey] ?? 0)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /**
      * Hate's own "what to target" policy (confirmed by the maintainer):
      * "After playing this mood, you may put any mood on the bottom of
@@ -3299,7 +3371,7 @@ final class BotPlayerService
      * fallback, which would ALSO cost that same point for nothing but a
      * card draw) otherwise.
      */
-    private function hateTargetMoodId(BoardState $state, int $cardId, int $botGamePlayerId): ?int
+    private function hateTargetMoodId(BoardState $state, int $cardId, int $botGamePlayerId, ?int $roundWinsNeededToWinGame = null, array $roundWinsNeededToWinGameByPlayerId = []): ?int
     {
         $bestOpponentMoodId = null;
         foreach ($state->activePlayerOrder() as $playerId) {
@@ -3311,6 +3383,17 @@ final class BotPlayerService
                     $bestOpponentMoodId = $mood->cardId;
                 }
             }
+        }
+
+        // An opponent's Validation outranks whatever of theirs is worth more
+        // (see validationRemovalPick()'s own docblock) -- including the
+        // Euphoria carve-out just below, which is about whether a target is
+        // worth its own point cost, not about leaving a Validation alone.
+        $validationMoodId = $this->highestValueOpponentValidationId($state, $botGamePlayerId);
+        if ($validationMoodId !== null
+            && !$this->validationRemovalLosesTheGame($state, $cardId, $botGamePlayerId, [$validationMoodId], $bestOpponentMoodId !== null ? [$bestOpponentMoodId] : [], $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId)
+        ) {
+            return $validationMoodId;
         }
 
         foreach (self::MOOD_COUNT_VALUE_BOOST_EFFECT_KEYS as $effectKey) {
@@ -4132,15 +4215,17 @@ final class BotPlayerService
      *
      * @return int[]
      */
-    private function shockTargetMoodIds(BoardState $state, int $botGamePlayerId): array
+    private function shockTargetMoodIds(BoardState $state, int $botGamePlayerId, ?int $shockCardId = null, ?int $roundWinsNeededToWinGame = null, array $roundWinsNeededToWinGameByPlayerId = []): array
     {
         $bestMoodIdByOpponent = [];
+        $validationMoodIdByOpponent = [];
         foreach ($state->activePlayerOrder() as $playerId) {
             if ($playerId === $botGamePlayerId || $state->isTeammate($botGamePlayerId, $playerId)) {
                 continue;
             }
 
             $bestMoodId = null;
+            $validationMoodId = null;
             foreach ($state->moodsOwnedBy($playerId) as $mood) {
                 if ($state->valueOf($mood->cardId) > self::SHOCK_MAX_TARGET_VALUE) {
                     continue;
@@ -4148,16 +4233,45 @@ final class BotPlayerService
                 if ($bestMoodId === null || $state->valueOf($mood->cardId) > $state->valueOf($bestMoodId)) {
                     $bestMoodId = $mood->cardId;
                 }
+                if ($this->isValidationMood($state, $mood->cardId)
+                    && ($validationMoodId === null || $state->valueOf($mood->cardId) > $state->valueOf($validationMoodId))
+                ) {
+                    $validationMoodId = $mood->cardId;
+                }
             }
 
             if ($bestMoodId !== null) {
-                $bestMoodIdByOpponent[] = $bestMoodId;
+                $bestMoodIdByOpponent[$playerId] = $bestMoodId;
+            }
+            if ($validationMoodId !== null) {
+                $validationMoodIdByOpponent[$playerId] = $validationMoodId;
             }
         }
 
-        usort($bestMoodIdByOpponent, fn (int $a, int $b) => $state->valueOf($b) <=> $state->valueOf($a));
+        $byValue = static function (array $ids) use ($state): array {
+            usort($ids, fn (int $a, int $b) => $state->valueOf($b) <=> $state->valueOf($a));
 
-        return array_slice($bestMoodIdByOpponent, 0, 2);
+            return $ids;
+        };
+        $valuePicks = array_slice($byValue(array_values($bestMoodIdByOpponent)), 0, 2);
+        if ($validationMoodIdByOpponent === []) {
+            return $valuePicks;
+        }
+
+        // An opponent's Validation is the better Shock target than whatever
+        // of theirs is worth more (see validationRemovalPick()'s own
+        // docblock): swap it in for that opponent, and when there are more
+        // opponents than the 2 slots, seat the Validation owners first.
+        $substituted = $validationMoodIdByOpponent + $bestMoodIdByOpponent;
+        $validationFirst = array_merge(
+            $byValue(array_values($validationMoodIdByOpponent)),
+            $byValue(array_values(array_diff_key($substituted, $validationMoodIdByOpponent))),
+        );
+        $validationPicks = array_slice($validationFirst, 0, 2);
+
+        return $shockCardId !== null && $this->validationRemovalLosesTheGame($state, $shockCardId, $botGamePlayerId, $validationPicks, $valuePicks, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId)
+            ? $valuePicks
+            : $validationPicks;
     }
 
     /**
@@ -5074,15 +5188,60 @@ final class BotPlayerService
      *
      * @return int[]
      */
-    private function angerTargetMoodIds(BoardState $state, int $cardId, int $botGamePlayerId): array
+    private function angerTargetMoodIds(BoardState $state, int $cardId, int $botGamePlayerId, ?int $roundWinsNeededToWinGame = null, array $roundWinsNeededToWinGameByPlayerId = []): array
     {
         $targets = $this->angerSwingMaximizingTargets($state, $cardId, $botGamePlayerId);
+
+        // Opponent Validation(s) first, ahead of whatever higher-valued
+        // moods the 5-point budget would otherwise have gone to -- see
+        // validationRemovalPick()'s own docblock.
+        $validationFirst = $this->angerValidationFirstTargets($state, $cardId, $botGamePlayerId);
+        if ($validationFirst !== null
+            && !$this->validationRemovalLosesTheGame($state, $cardId, $botGamePlayerId, $validationFirst, $targets, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId)
+        ) {
+            $targets = $validationFirst;
+        }
 
         if ($this->angerShouldAlsoTargetItself($state, $botGamePlayerId)) {
             $targets[] = $cardId;
         }
 
         return $targets;
+    }
+
+    /**
+     * Anger's targets with every non-teammate opponent Validation forced
+     * in first and the rest of the 5-point budget (what's left after the
+     * Validation(s)' own values) filled by the usual swing-maximizing
+     * choice among the other opponent moods; null when no opponent owns a
+     * Validation (or one's value alone exceeds the budget). Zero-value
+     * moods stay free extras, as in angerSwingMaximizingTargets().
+     *
+     * @return int[]|null
+     */
+    private function angerValidationFirstTargets(BoardState $state, int $cardId, int $botGamePlayerId): ?array
+    {
+        $forced = [];
+        $freeTargets = [];
+        $paidOpponentMoodValues = [];
+        $budget = self::ANGER_DISCARD_BUDGET;
+        foreach ($this->nonTeammateOpponentMoodIds($state, $botGamePlayerId) as $moodId) {
+            $value = $state->valueOfAsIfAlsoInPlay($moodId, $cardId, $botGamePlayerId);
+            if ($this->isValidationMood($state, $moodId) && $value >= 0 && $value <= $budget) {
+                $forced[] = $moodId;
+                $budget -= $value;
+            } elseif ($value === 0) {
+                $freeTargets[] = $moodId;
+            } elseif ($value > 0) {
+                $paidOpponentMoodValues[$moodId] = $value;
+            }
+        }
+
+        if ($forced === []) {
+            return null;
+        }
+
+        return [...$forced, ...$freeTargets, ...$this->maxValueSubsetWithinBudget($paidOpponentMoodValues, $budget)];
     }
 
     /**

@@ -93,7 +93,7 @@ final class LegalChoiceEnumerator
         $actions = [];
 
         foreach ($playableCardIds as $cardId) {
-            $defaultChoices = $this->heuristic->buildChoicesForCard($state, $cardId, $actingPlayerId);
+            $defaultChoices = $this->heuristic->buildChoicesForCard($state, $cardId, $actingPlayerId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
             if ($defaultChoices === null) {
                 continue;
             }
