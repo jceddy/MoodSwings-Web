@@ -71,6 +71,13 @@ namespace MoodSwings.UI
 
             UiFactory.Button(column, "Settings", theme, () => Router.Show<SettingsScreen>(), primary: false);
             UiFactory.Button(column, "Log out", theme, OnLogoutClicked, primary: false);
+
+            // A full-screen desktop window has no close button of its own.
+            if (AppExit.IsAvailable)
+            {
+                var quit = UiFactory.Button(column, "Quit", theme, () => AppExit.Quit(), primary: false);
+                quit.gameObject.name = "Quit";
+            }
         }
 
         private void UpdateBadges()

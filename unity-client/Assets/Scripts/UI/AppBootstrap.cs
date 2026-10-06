@@ -60,6 +60,11 @@ namespace MoodSwings.UI
 
         private void Update()
         {
+            if (AppExit.IsAvailable && KeyInput.FullscreenTogglePressed)
+            {
+                AppExit.ToggleFullscreen();
+            }
+
             // Escape on desktop; the system Back button on Android.
             if (KeyInput.EscapePressed)
             {

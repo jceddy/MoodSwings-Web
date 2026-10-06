@@ -407,6 +407,9 @@ graphics for the screenshots, so omit `-nographics` there.
   desktop shortcut and an uninstaller. The `*_BackUpThisFolder_*` symbols folder is left out.
 - The version is `bundleVersion` in Player Settings. The app is named MOOD (it was the project
   folder's name), so its saved login lives under a new key: sign in once after updating.
+- **Leaving the app:** a full-screen window has no close button, so Home and the login screen have a
+  **Quit** button (desktop builds only), and **F11** or **Alt+Enter** switches between full screen and a
+  window.
 - Neither build is signed, so Windows SmartScreen shows "Windows protected your PC" on first run
   (More info > Run anyway). Signing needs a code-signing certificate.
 - **Card art:** the builds include whatever is in `Assets/Resources/CardArt` on the machine that
