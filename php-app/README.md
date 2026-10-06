@@ -13789,6 +13789,31 @@ than a parallel bespoke system:
   also now describes the `puzzle_turn_refreshed`/`puzzle_failed` events
   instead of falling through to a bare "played a card".
 
+- **15th puzzle, "Honor Among Thieves"** (reported live: win the game
+  this round after the opponent's Compulsion took the solver's Indifference
+  last round), hard, `win_game`, no play cap needed. The opponent has
+  Compulsion, Benevolence and Honor in play (8 points) and Indifference in
+  hand; the solver has Hope and Charity in play (1 point), holds Dignity and
+  Paranoia, has Courage on top of a randomly assembled 41-card
+  structure-style deck, and two plays (the turn's own plus Hope's, seeded
+  through `extra_play_source_card_id`). The one winning line (exhaustive
+  search): Paranoia on the opponent (Indifference to the bottom of the
+  deck, Courage drawn), then Dignity discarding Courage -- 1 + 2 + 5 = 8,
+  tying the opponent's 8, and the solver played first, so the tie is theirs.
+  Two new `puzzles` columns support it, both defaulting to the old behavior:
+  `solver_goes_first` seats the solver as the round's first player (so ties
+  in `outscore_opponent`/`win_game` go to the solver --
+  `puzzleSolverOutscoresOpponent()` now reads the live round's
+  `first_game_player_id` instead of always favoring the opponent), and
+  `prelude_log` (JSON) seeds the game log's lead-in as real `game_events`
+  rows -- `mood_played` (with card moves), `round_scored` (scores, winner,
+  Honor's first-player override) and a new `puzzle_card_drawn` event
+  ("X drew Paranoia") -- written by `seedPuzzlePreludeLog()`. This puzzle's
+  log reads: "PuzzleOpponent played Compulsion; Indifference moved from
+  <solver>'s hand to PuzzleOpponent's hand", "Round scored (<solver>: 1,
+  PuzzleOpponent: 8) -- PuzzleOpponent won; <solver> goes first next round
+  instead of the round's winner", "<solver> drew Paranoia".
+
 ### Duel: separate per-player decks
 
 `format: 'duel'` and `format: 'draft'` (see "Draft format" below) are the
@@ -14302,6 +14327,13 @@ distinct-set-of-15 tracking), `user_format_play_counts` (Format Purist's
 count toward the same total), and `user_daily_game_counts`/
 `user_opponent_game_counts` (Marathon Session's per-calendar-day count
 and Rematch!'s per-opponent count, both day/pair-scoped the same way).
+Format Purist's bar reads `user_achievements.progress` like every other
+achievement, so after bumping the per-format count `checkFormatPurist()`
+reports the best single format's count through `setProgressLevel()` (a
+max, not a sum, keeps it a "single format" bar) -- it originally only
+unlocked at 100 and never reported progress, so the bar stayed empty
+(reported live). Migration 0445 backfills `progress` from
+`user_format_play_counts` for existing players.
 
 `AchievementService` (`src/Achievements/AchievementService.php`) is the
 whole system. Three generic primitives cover nearly every row: `unlock()`
