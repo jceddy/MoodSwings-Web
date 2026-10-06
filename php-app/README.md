@@ -12089,6 +12089,18 @@ bounced unconditionally (it banks a play for next turn), and Charity is
 bounced only while the bot holds at least one other card besides Thrill to
 spend the extra play on (one Charity per such card).
 
+The bot's own **removal moods** are a third family (reported: "more cards
+that bots should always bounce with Thrill to replay, as long as there are
+targets for them -- Anger, Hate, Shock", plus Joy, which was already
+covered above): `thrillReplayRemovalMoodIds()` bounces an Anger, Shock or
+Hate in play whenever its own existing target policy would find something
+to hit -- `angerSwingMaximizingTargets()` non-empty for Anger,
+`shockTargetMoodIds()` non-empty for Shock (a mood worth 3 or less), any
+opposing mood for Hate (which also draws a card every replay). Free for the
+same reason as the rest: the replay returns at its own unchanged printed
+value (0/2/0). Capped at the number of opposing moods in play (each replay
+removes at least one), Anger first, then Shock, then Hate.
+
 ### Diagnostic mode
 
 An opt-in, creation-time flag (`games.diagnostic_mode`, migration `0255`)
