@@ -11,7 +11,7 @@ namespace MoodSwings.UI
     /// <summary>
     /// The deck builder: every card on the left, filtered by color, rarity and a word; the deck on the right with its
     /// name, who may see it, and a line per card with a copy count. Tap a card to add a copy, the minus beside a line
-    /// to take one out, the small "i" on a card to read it. Saving makes a new deck or updates the one opened.
+    /// to take one out, the eye on a card to read it. Saving makes a new deck or updates the one opened.
     /// </summary>
     public sealed class DeckBuilderScreen : UiScreen
     {
@@ -310,23 +310,8 @@ namespace MoodSwings.UI
             view.anchorMin = view.anchorMax = view.pivot = new Vector2(0.5f, 0.5f);
             view.anchoredPosition = Vector2.zero;
 
-            // An eye, under the value die in the card's top-right corner. The die takes the top 16% of the art and the
-            // card sits 6 px inside its cell, so the eye goes just below that, level with the die's right edge.
-            var info = UiFactory.Button(cell, string.Empty, theme, () => _detail.Show(card), primary: false);
-            info.gameObject.name = "Inspect " + card.Name;
-            var infoRect = (RectTransform)info.transform;
-            infoRect.anchorMin = infoRect.anchorMax = infoRect.pivot = new Vector2(1f, 1f);
-            var eyeSize = CardWidth * 0.24f;
-            infoRect.sizeDelta = new Vector2(eyeSize, eyeSize);
-            infoRect.anchoredPosition = new Vector2(-(6f + CardWidth * 0.035f), -(6f + CardView.HeightFor(CardWidth) * 0.16f + 4f));
-            info.GetComponent<LayoutElement>().ignoreLayout = true;
-            var eye = UiFactory.Create("Eye", info.transform);
-            UiFactory.Stretch(eye);
-            eye.offsetMin = new Vector2(5f, 5f);
-            eye.offsetMax = new Vector2(-5f, -5f);
-            var eyeImage = eye.gameObject.AddComponent<Image>();
-            eyeImage.sprite = UiIcons.Eye();
-            eyeImage.raycastTarget = false;
+            // The card sits 6 px inside its cell.
+            CardView.AddEyeButton(cell, CardWidth, 6f, "Inspect " + card.Name, theme, () => _detail.Show(card));
 
             // The number of copies in the deck, in a box in the card's corner (hidden when there are none).
             var box = UiFactory.Create("Count " + card.Name, cell);

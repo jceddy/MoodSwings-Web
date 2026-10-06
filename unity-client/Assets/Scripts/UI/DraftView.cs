@@ -734,25 +734,14 @@ namespace MoodSwings.UI
             }
         }
 
-        // A card centred in its cell, with the small "i" that shows it large without choosing it.
+        // A card centred in its cell, with the eye that shows it large without choosing it.
         private RectTransform PlaceCard(RectTransform cell, BoardCard card, float width, bool selectable, string where, UnityEngine.Events.UnityAction onClick = null)
         {
             var view = CardView.Create(cell, card, width, _theme, showValue: false, onClick: selectable ? onClick : null);
             view.anchorMin = view.anchorMax = view.pivot = new Vector2(0.5f, 0.5f);
             view.anchoredPosition = Vector2.zero;
 
-            var info = UiFactory.Button(cell, "i", _theme, () => _actions.Inspect(card, where), primary: false);
-            info.gameObject.name = "Inspect " + card.Name;
-            var rect = (RectTransform)info.transform;
-            rect.anchorMin = rect.anchorMax = rect.pivot = new Vector2(0f, 1f);
-            rect.sizeDelta = new Vector2(46f, 46f);
-            rect.anchoredPosition = new Vector2(Pad + 4f, -Pad - 4f);
-            var layoutElement = info.GetComponent<LayoutElement>();
-            if (layoutElement != null)
-            {
-                layoutElement.ignoreLayout = true;
-            }
-
+            CardView.AddEyeButton(cell, width, Pad, "Inspect " + card.Name, _theme, () => _actions.Inspect(card, where));
             return view;
         }
 

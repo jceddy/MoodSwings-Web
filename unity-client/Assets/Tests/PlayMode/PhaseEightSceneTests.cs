@@ -1161,5 +1161,62 @@ namespace MoodSwings.Tests
 
             Assert.AreEqual(0.35f, back.GetComponent<CanvasGroup>().alpha, 0.001f);
         }
+
+        // --- the eye, on every card you can inspect --------------------------------------------------
+
+        // The eye is in the card's top-right corner, under the value die, and leaves the name along the top clear.
+        private static void AssertEyeUnderTheDie(string cardName)
+        {
+            var button = Named("Inspect " + cardName);
+            var card = PhaseFiveSceneTests.Child("Card " + cardName);
+            Assert.IsNotNull(button, "an eye for " + cardName);
+            Assert.AreSame(UiIcons.Eye(), button.transform.Find("Eye").GetComponent<Image>().sprite);
+            Assert.IsNull(button.GetComponentsInChildren<Text>().FirstOrDefault(t => t.text == "i"));
+
+            var cardCorners = new Vector3[4];
+            ((RectTransform)card).GetWorldCorners(cardCorners);
+            var eyeCorners = new Vector3[4];
+            ((RectTransform)button.transform).GetWorldCorners(eyeCorners);
+            var cardWidth = cardCorners[2].x - cardCorners[0].x;
+            var cardHeight = cardCorners[1].y - cardCorners[0].y;
+
+            Assert.Less(eyeCorners[2].x, cardCorners[2].x, cardName + ": inside the card");
+            Assert.Greater(eyeCorners[2].x, cardCorners[2].x - cardWidth * 0.12f, cardName + ": against the right edge");
+            Assert.Less(eyeCorners[1].y, cardCorners[1].y - cardHeight * 0.14f, cardName + ": below the die");
+            Assert.Greater(eyeCorners[0].y, cardCorners[1].y - cardHeight * 0.40f, cardName + ": still up in the corner");
+            Assert.Greater(eyeCorners[0].x, cardCorners[0].x + cardWidth * 0.5f, cardName + ": on the right half, off the name");
+        }
+
+        [UnityTest]
+        public IEnumerator Eye_OnTheSealedDeckBuildingScreen_SitsUnderTheDie()
+        {
+            var server = Serve(DraftBoard(DeckBuilding(poolSize: 14), null, "sealed_deck"));
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+
+            AssertEyeUnderTheDie("Card300");
+            AssertEyeUnderTheDie("Card313");
+            ScreenshotHelper.Capture("sealed-deck-building-eye");
+        }
+
+        [UnityTest]
+        public IEnumerator Eye_OnAPack_SitsUnderTheDie()
+        {
+            var server = Serve(DraftBoard(Drafting()));
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+
+            AssertEyeUnderTheDie("Card100");
+            yield return PhaseFiveSceneTests.Tap(Named("Inspect Card100"));
+            Assert.AreEqual(0, Board().Draft.SelectedCount, "reading isn't choosing");
+        }
+
+        [UnityTest]
+        public IEnumerator Eye_OnTheSmallerCardsOfAGrid_ScalesWithThem()
+        {
+            var server = Serve(Grid());
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+
+            AssertEyeUnderTheDie("Grid0");
+            AssertEyeUnderTheDie("Grid8");
+        }
     }
 }

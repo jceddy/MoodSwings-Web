@@ -107,6 +107,36 @@ namespace MoodSwings.UI
             return rect;
         }
 
+        /// <summary>
+        /// The eye button that shows a card large without choosing it, for a card centred in a cell that is its size plus
+        /// <paramref name="inset"/> on every side. It goes in the card's top-right corner, just under the value die (which
+        /// fills the top 16% of the art), clear of the name along the top and the rules text below.
+        /// </summary>
+        public static Button AddEyeButton(RectTransform cell, float cardWidth, float inset, string name, UiTheme theme, UnityAction onClick)
+        {
+            var button = UiFactory.Button(cell, string.Empty, theme, onClick, primary: false);
+            button.gameObject.name = name;
+            var rect = (RectTransform)button.transform;
+            rect.anchorMin = rect.anchorMax = rect.pivot = new Vector2(1f, 1f);
+            var size = Mathf.Max(30f, cardWidth * 0.24f);
+            rect.sizeDelta = new Vector2(size, size);
+            rect.anchoredPosition = new Vector2(-(inset + cardWidth * 0.035f), -(inset + HeightFor(cardWidth) * 0.16f + 4f));
+            var layoutElement = button.GetComponent<LayoutElement>();
+            if (layoutElement != null)
+            {
+                layoutElement.ignoreLayout = true;
+            }
+
+            var eye = UiFactory.Create("Eye", button.transform);
+            UiFactory.Stretch(eye);
+            eye.offsetMin = new Vector2(5f, 5f);
+            eye.offsetMax = new Vector2(-5f, -5f);
+            var image = eye.gameObject.AddComponent<Image>();
+            image.sprite = UiIcons.Eye();
+            image.raycastTarget = false;
+            return button;
+        }
+
         /// <summary>The back of a card (a deck, or a face-down card), at the same size and shape as a card face.</summary>
         public static RectTransform CreateCardBack(Transform parent, float width, UiTheme theme)
         {

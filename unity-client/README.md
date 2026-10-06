@@ -303,7 +303,7 @@ game" below.
 ### Drafting
 
 - **Quick Draft** (New Game > Draft): the board shows the draft where the table would be. Each
-  stage is a pile of cards: tap two to keep (a small **i** on a card shows it large without
+  stage is a pile of cards: tap two to keep (the eye on a card shows it large without
   choosing it), then **Keep these cards**; the rest are passed on, and the cards you've kept so
   far stay in view below. Your choice survives the board's refreshing every few seconds.
 - **Winston Draft:** three piles that grow. On your turn the pile you're looking at is face up
@@ -353,7 +353,7 @@ game" below.
   asked) and the decks friends have shared (a friend's can't be changed, so it opens as a copy).
 - The **deck builder** shows every card on the left -- filter by color and rarity, or search names
   and rules text -- with the deck on the right: a name, **Share with friends**, and a line per card
-  with its copies and a minus/plus. Tap a card to add a copy; its small "i" shows it large. **Save
+  with its copies and a minus/plus. Tap a card to add a copy; its eye shows it large. **Save
   deck** makes a new deck or updates the one opened; leaving with unsaved changes asks first. A deck
   of fewer than 15 cards gets a reminder, since a game's custom deck needs at least that many.
 
