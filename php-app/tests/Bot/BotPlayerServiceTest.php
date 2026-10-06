@@ -1876,6 +1876,68 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame(['hand_mood_ids' => [125]], $action['choices']);
     }
 
+    /**
+     * Reported: "more cards that bots should always bounce with Thrill to
+     * replay, as long as there are targets for them -- Anger, Hate, Shock."
+     * Each replay fires its removal again; Thrill's extra play per bounced
+     * mood pays for it.
+     */
+    public function testChooseActionBouncesItsRemovalMoodsWithThrillWhenThereAreTargets(): void
+    {
+        foreach ([[80, 'Anger'], [66, 'Hate'], [101, 'Shock']] as [$removalCardId, $label]) {
+            $state = $this->boardState(hands: [1 => [103, $removalCardId], 2 => [8]]); // Thrill; opponent holds Dignity (3)
+            $state->moveHandToInPlay(1, $removalCardId);
+            $state->moveHandToInPlay(2, 8);
+
+            $action = $this->bot->chooseAction($state, [103], 1);
+
+            self::assertSame(103, $action['card_id'], $label);
+            self::assertSame(['hand_mood_ids' => [$removalCardId]], $action['choices'], "{$label} is bounced to replay");
+        }
+    }
+
+    /** No opposing mood in play means nothing for a replayed Anger/Hate/Shock to hit, so none is bounced. */
+    public function testChooseActionDoesNotBounceRemovalMoodsWithThrillWithoutTargets(): void
+    {
+        foreach ([80, 66, 101] as $removalCardId) {
+            $state = $this->boardState(hands: [1 => [103, $removalCardId]]);
+            $state->moveHandToInPlay(1, $removalCardId);
+
+            self::assertSame([], $this->bot->chooseAction($state, [103], 1)['choices'], "card {$removalCardId}");
+        }
+    }
+
+    /** Shock can only hit a mood worth 3 or less: an opponent's lone Discipline (6) is no target. */
+    public function testChooseActionDoesNotBounceShockWithThrillWhenNoOpposingMoodQualifies(): void
+    {
+        $state = $this->boardState(hands: [1 => [103, 101], 2 => [9]]);
+        $state->moveHandToInPlay(1, 101);
+        $state->moveHandToInPlay(2, 9); // Discipline, value 6
+
+        self::assertSame([], $this->bot->chooseAction($state, [103], 1)['choices']);
+    }
+
+    /** Each replay removes at least one mood, so bounces are capped at the number of opposing moods (Anger first, then Shock, then Hate). */
+    public function testChooseActionCapsRemovalBouncesAtTheNumberOfOpposingMoods(): void
+    {
+        $state = $this->boardState(hands: [1 => [103, 80, 101, 66], 2 => [8]]);
+        foreach ([80, 101, 66] as $id) {
+            $state->moveHandToInPlay(1, $id);
+        }
+        $state->moveHandToInPlay(2, 8);
+
+        self::assertSame(['hand_mood_ids' => [80]], $this->bot->chooseAction($state, [103], 1)['choices']);
+
+        $state = $this->boardState(hands: [1 => [103, 80, 101, 66], 2 => [8, 5]]);
+        foreach ([80, 101, 66] as $id) {
+            $state->moveHandToInPlay(1, $id);
+        }
+        $state->moveHandToInPlay(2, 8);
+        $state->moveHandToInPlay(2, 5);
+
+        self::assertSame(['hand_mood_ids' => [80, 101]], $this->bot->chooseAction($state, [103], 1)['choices']);
+    }
+
     /** Charity's extra play is only worth anything with another card to spend it on -- at least one other card in hand besides Thrill. */
     public function testChooseActionBouncesCharityWithThrillOnlyWithAnotherCardInHand(): void
     {

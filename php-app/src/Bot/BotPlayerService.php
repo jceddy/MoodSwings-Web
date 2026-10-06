@@ -3780,8 +3780,14 @@ final class BotPlayerService
         // (b) Extra-play moods (see thrillReplayExtraPlayMoodIds()).
         $extraPlayMoodIds = $this->thrillReplayExtraPlayMoodIds($state, $cardId, $botGamePlayerId);
 
-        // (c) Replay moods (see thrillReplayStealMoodIds()).
-        return [...$targets, ...$this->thrillReplayStealMoodIds($state, $cardId, $botGamePlayerId), ...$extraPlayMoodIds];
+        // (c) Replay moods (see thrillReplayStealMoodIds()), then (d) removal
+        // moods with targets (see thrillReplayRemovalMoodIds()).
+        return [
+            ...$targets,
+            ...$this->thrillReplayStealMoodIds($state, $cardId, $botGamePlayerId),
+            ...$this->thrillReplayRemovalMoodIds($state, $cardId, $botGamePlayerId),
+            ...$extraPlayMoodIds,
+        ];
     }
 
     /**
@@ -3875,6 +3881,54 @@ final class BotPlayerService
             static fn (array $candidate): int => $candidate[2],
             array_slice($candidates, 0, $opponentHandCards),
         );
+    }
+
+    /**
+     * The third Thrill replay family (reported: "more cards that bots
+     * should always bounce with Thrill to replay, as long as there are
+     * targets for them -- Anger, Hate, Shock"): the bot's own removal moods.
+     * Each replay fires its "after playing" removal AGAIN against the
+     * opponents' board, and the bounce is free the same way the steal moods'
+     * is -- Thrill grants one extra play per returned mood, the replayed
+     * copy comes straight back at its own unchanged printed value (Anger and
+     * Hate print 0, Shock 2), nothing is given up. Hate also draws a card
+     * every time. (Joy, the other card named in that report, was already
+     * bounced unconditionally by thrillReplayExtraPlayMoodIds().) Only
+     * bounced while the board gives the replay something to hit, judged
+     * with each mood's own existing target policy -- Anger needs
+     * angerSwingMaximizingTargets() to find something, Shock
+     * shockTargetMoodIds(), Hate an opponent mood to bottom -- and capped at
+     * the number of opposing moods in play, since each replay removes at
+     * least one. Most powerful first: Anger (up to 5 points of moods),
+     * Shock (up to two), then Hate (one, plus the card).
+     *
+     * @return int[]
+     */
+    private function thrillReplayRemovalMoodIds(BoardState $state, int $thrillCardId, int $botGamePlayerId): array
+    {
+        $opposingMoodCount = count($this->nonTeammateOpponentMoodIds($state, $botGamePlayerId));
+        if ($opposingMoodCount === 0) {
+            return [];
+        }
+
+        $byKind = ['anger' => [], 'shock' => [], 'hate' => []];
+        foreach ($state->moodsOwnedBy($botGamePlayerId) as $mood) {
+            if ($mood->cardId === $thrillCardId) {
+                continue;
+            }
+            $effectKey = $state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'];
+            $hasTargets = match ($effectKey) {
+                'anger' => $this->angerSwingMaximizingTargets($state, $mood->cardId, $botGamePlayerId) !== [],
+                'shock' => $this->shockTargetMoodIds($state, $botGamePlayerId) !== [],
+                'hate' => true, // $opposingMoodCount > 0 above: there is an opponent mood to bottom
+                default => false,
+            };
+            if ($hasTargets) {
+                $byKind[$effectKey][] = $mood->cardId;
+            }
+        }
+
+        return array_slice([...$byKind['anger'], ...$byKind['shock'], ...$byKind['hate']], 0, $opposingMoodCount);
     }
 
     /**
