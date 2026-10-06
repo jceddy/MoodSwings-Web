@@ -14327,6 +14327,13 @@ distinct-set-of-15 tracking), `user_format_play_counts` (Format Purist's
 count toward the same total), and `user_daily_game_counts`/
 `user_opponent_game_counts` (Marathon Session's per-calendar-day count
 and Rematch!'s per-opponent count, both day/pair-scoped the same way).
+Format Purist's bar reads `user_achievements.progress` like every other
+achievement, so after bumping the per-format count `checkFormatPurist()`
+reports the best single format's count through `setProgressLevel()` (a
+max, not a sum, keeps it a "single format" bar) -- it originally only
+unlocked at 100 and never reported progress, so the bar stayed empty
+(reported live). Migration 0445 backfills `progress` from
+`user_format_play_counts` for existing players.
 
 `AchievementService` (`src/Achievements/AchievementService.php`) is the
 whole system. Three generic primitives cover nearly every row: `unlock()`
