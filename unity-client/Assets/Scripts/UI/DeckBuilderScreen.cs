@@ -310,13 +310,23 @@ namespace MoodSwings.UI
             view.anchorMin = view.anchorMax = view.pivot = new Vector2(0.5f, 0.5f);
             view.anchoredPosition = Vector2.zero;
 
-            var info = UiFactory.Button(cell, "i", theme, () => _detail.Show(card), primary: false);
+            // An eye, under the value die in the card's top-right corner. The die takes the top 16% of the art and the
+            // card sits 6 px inside its cell, so the eye goes just below that, level with the die's right edge.
+            var info = UiFactory.Button(cell, string.Empty, theme, () => _detail.Show(card), primary: false);
             info.gameObject.name = "Inspect " + card.Name;
             var infoRect = (RectTransform)info.transform;
-            infoRect.anchorMin = infoRect.anchorMax = infoRect.pivot = new Vector2(0f, 1f);
-            infoRect.sizeDelta = new Vector2(40f, 40f);
-            infoRect.anchoredPosition = new Vector2(8f, -8f);
+            infoRect.anchorMin = infoRect.anchorMax = infoRect.pivot = new Vector2(1f, 1f);
+            var eyeSize = CardWidth * 0.24f;
+            infoRect.sizeDelta = new Vector2(eyeSize, eyeSize);
+            infoRect.anchoredPosition = new Vector2(-(6f + CardWidth * 0.035f), -(6f + CardView.HeightFor(CardWidth) * 0.16f + 4f));
             info.GetComponent<LayoutElement>().ignoreLayout = true;
+            var eye = UiFactory.Create("Eye", info.transform);
+            UiFactory.Stretch(eye);
+            eye.offsetMin = new Vector2(5f, 5f);
+            eye.offsetMax = new Vector2(-5f, -5f);
+            var eyeImage = eye.gameObject.AddComponent<Image>();
+            eyeImage.sprite = UiIcons.Eye();
+            eyeImage.raycastTarget = false;
 
             // The number of copies in the deck, in a box in the card's corner (hidden when there are none).
             var box = UiFactory.Create("Count " + card.Name, cell);

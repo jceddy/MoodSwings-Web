@@ -246,5 +246,35 @@ namespace MoodSwings.Tests
             Assert.IsTrue(Texts().Any(t => t.StartsWith("This deck has changes you haven't saved")));
             Assert.IsNotNull(router);
         }
+
+        [UnityTest]
+        public IEnumerator TheInspectButton_IsAnEye_UnderTheValueDieInTheCardsTopRightCorner()
+        {
+            var server = Serve();
+            yield return OpenBuilder(server);
+
+            var button = Named("Inspect Altruism");
+            var card = PhaseFiveSceneTests.Child("Card Altruism");
+            Assert.IsNotNull(button);
+            Assert.IsNull(button.GetComponentsInChildren<Text>().FirstOrDefault(t => t.text == "i"), "no letter any more");
+            var eye = button.transform.Find("Eye").GetComponent<Image>();
+            Assert.AreSame(UiIcons.Eye(), eye.sprite);
+
+            // The corners of the card and the eye, in screen space.
+            var cardCorners = new Vector3[4];
+            ((RectTransform)card).GetWorldCorners(cardCorners);
+            var eyeCorners = new Vector3[4];
+            ((RectTransform)button.transform).GetWorldCorners(eyeCorners);
+            var cardTop = cardCorners[1].y;
+            var cardRight = cardCorners[2].x;
+            var cardHeight = cardCorners[1].y - cardCorners[0].y;
+
+            Assert.Greater(((RectTransform)button.transform).rect.width, 0f);
+            Assert.Less(eyeCorners[2].x, cardRight, "inside the card");
+            Assert.Greater(eyeCorners[2].x, cardRight - (cardCorners[2].x - cardCorners[0].x) * 0.12f, "against the right edge");
+            Assert.Less(eyeCorners[1].y, cardTop - cardHeight * 0.14f, "below the die, which fills the top of the card");
+            Assert.Greater(eyeCorners[0].y, cardTop - cardHeight * 0.40f, "but still up in the corner");
+            ScreenshotHelper.Capture("deck-builder-eye");
+        }
     }
 }
