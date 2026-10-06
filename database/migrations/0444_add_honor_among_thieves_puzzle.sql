@@ -9,7 +9,8 @@
 --     first player instead of the opponent, so a tied score goes to the
 --     SOLVER ("ties go to whoever played first") -- goal_type
 --     'outscore_opponent'/'win_game' used to hard-code ties to the opponent.
---   * puzzles.prelude_log: the game log's lead-in (what happened at the end
+--   * puzzles.prelude_log (JSON, NULL = no lead-in; a JSON column can't take
+--     a DEFAULT on older MySQL): the game log's lead-in (what happened at the end
 --     of the previous round / start of this one), seeded as the same
 --     game_events rows a real game logs -- see
 --     GameService::seedPuzzlePreludeLog() for the entry shapes.
@@ -31,7 +32,7 @@
 -- (nothing in play is worth 5 or more until Dignity is already at 5).
 ALTER TABLE puzzles
     ADD COLUMN solver_goes_first TINYINT(1) NOT NULL DEFAULT 0 AFTER opponent_round_wins,
-    ADD COLUMN prelude_log JSON NOT NULL DEFAULT ('[]') AFTER solver_goes_first;
+    ADD COLUMN prelude_log JSON NULL AFTER solver_goes_first;
 
 INSERT INTO puzzles (
     slug, title, description, hint, difficulty,
