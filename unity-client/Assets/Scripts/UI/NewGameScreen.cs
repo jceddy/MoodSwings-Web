@@ -130,8 +130,13 @@ namespace MoodSwings.UI
                 _partnerPanel = null;
             }
 
-            UiFactory.SectionTitle(List, theme, _setup.IsDraftFormat ? "Draft" : "Deck");
-            AddDeckChoice(theme);
+            // A sealed format is its own deck: nothing more to choose.
+            if (!_setup.IsSealedFormat)
+            {
+                UiFactory.SectionTitle(List, theme, _setup.IsDraftFormat ? "Draft" : "Deck");
+                AddDeckChoice(theme);
+            }
+
             if (_setup.UsesPoolSource)
             {
                 UiFactory.SectionTitle(List, theme, "Cards to draft");
@@ -235,14 +240,14 @@ namespace MoodSwings.UI
             foreach (var format in GameSetup.FormatOptions)
             {
                 var id = format.Id;
-                AddRadio(theme, panel, group, format.Label, format.Description, _setup.Format == id, () =>
+                AddRadio(theme, panel, group, format.Label, format.Description, _setup.FormatChoice == id, () =>
                 {
-                    if (_setup.Format == id)
+                    if (_setup.FormatChoice == id)
                     {
                         return;
                     }
 
-                    _setup.Format = id;
+                    _setup.FormatChoice = id;
                     _setup.Normalize(AppServices.Lobby.SynchronousModeEnabled);
                     SetStatus(string.Empty);
                     Rebuild();
@@ -258,7 +263,7 @@ namespace MoodSwings.UI
 
             if (!_setup.OpenLobbyCountIsChoosable)
             {
-                AddNote(theme, panel, $"A {GameDisplay.FormatName(_setup.Format)} game from the lobby seats exactly {_setup.EffectiveOpenLobbyPlayerCount} players.");
+                AddNote(theme, panel, $"A {GameDisplay.FormatName(_setup.FormatChoice)} game from the lobby seats exactly {_setup.EffectiveOpenLobbyPlayerCount} players.");
                 if (_setup.IsTeamFormat)
                 {
                     AddNote(theme, panel, "Teams are assigned at random once everyone has joined.");

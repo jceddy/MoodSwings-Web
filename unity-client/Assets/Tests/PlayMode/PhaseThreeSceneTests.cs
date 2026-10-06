@@ -617,11 +617,10 @@ namespace MoodSwings.Tests
         {
             var server = new LobbyFakeServer();
             yield return OpenNewGame(server);
-            PhaseTwoSceneTests.FindToggle("Draft").isOn = true;
-            yield return PhaseTwoSceneTests.Frames(2);
             PhaseTwoSceneTests.FindToggle("Sealed Pool of the Day").isOn = true;
             yield return PhaseTwoSceneTests.Frames(2);
             Assert.IsNull(PhaseTwoSceneTests.FindToggle("Random 48"), "no pool to choose");
+            Assert.IsNull(PhaseTwoSceneTests.FindToggle("Quick Draft"), "no draft to choose either");
 
             PhaseTwoSceneTests.FindToggle("BotAlice").isOn = true;
             PhaseTwoSceneTests.FindToggle("BotBen").isOn = true;
@@ -763,6 +762,41 @@ namespace MoodSwings.Tests
             yield return MainSceneTests.WaitFor<BoardScreen>();
 
             Assert.IsTrue(server.Calls.Any(c => c.StartsWith("GET /games/state?game_id=350")), string.Join("\n", server.Calls));
+        }
+
+        [UnityTest]
+        public IEnumerator NewGame_TheSealedGamesAreFormats_AndDraftNoLongerOffersThem()
+        {
+            var server = new LobbyFakeServer();
+            yield return OpenNewGame(server);
+            Assert.IsNotNull(PhaseTwoSceneTests.FindToggle("Sealed Deck"), "its own format");
+            Assert.IsNotNull(PhaseTwoSceneTests.FindToggle("Sealed Pool of the Day"));
+
+            PhaseTwoSceneTests.FindToggle("Draft").isOn = true;
+            yield return PhaseTwoSceneTests.Frames(3);
+            Assert.IsNotNull(PhaseTwoSceneTests.FindToggle("Quick Draft"));
+            Assert.AreEqual(1, UnityEngine.Object.FindObjectsByType<Toggle>(FindObjectsInactive.Exclude)
+                .Count(t => t.GetComponentInChildren<Text>()?.text == "Sealed Deck"), "only the format, not a deck under Draft");
+            ScreenshotHelper.Capture("new-game-formats");
+        }
+
+        [UnityTest]
+        public IEnumerator NewGame_ASealedDeck_SendsItsDeckType_WithNoDeckToChoose()
+        {
+            var server = new LobbyFakeServer();
+            yield return OpenNewGame(server);
+            PhaseTwoSceneTests.FindToggle("BotAlice").isOn = true;
+            PhaseTwoSceneTests.FindToggle("Sealed Deck").isOn = true;
+            yield return PhaseTwoSceneTests.Frames(3);
+
+            Assert.IsNull(PhaseTwoSceneTests.FindToggle("Structure"), "no deck list");
+            Assert.IsNull(PhaseTwoSceneTests.FindToggle("Quick Draft"));
+            Assert.IsNull(PhaseTwoSceneTests.FindToggle("Best of three"), "a sealed match is always a match");
+
+            yield return PhaseTwoSceneTests.Click("Start game");
+            yield return MainSceneTests.WaitFor<PlayScreen>();
+
+            Assert.IsTrue(AnyCall(server, "POST /games {", "\"format\":\"draft\"", "\"deck_type\":\"sealed_deck\""), string.Join("\n", server.Calls));
         }
     }
 }

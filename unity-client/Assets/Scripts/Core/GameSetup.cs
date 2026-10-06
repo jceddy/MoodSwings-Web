@@ -69,6 +69,18 @@ namespace MoodSwings.Core
                 Label = "Draft",
                 Description = "Everyone drafts a pool of cards and builds a deck from it. Best of three. 2 to 4 players.",
             },
+            new DeckOption
+            {
+                Id = "sealed_deck",
+                Label = "Sealed Deck",
+                Description = "No drafting: each player is dealt a random 45-card pool and builds a deck of 12 or more from it. 2 to 4 players.",
+            },
+            new DeckOption
+            {
+                Id = "sealed_pool_of_the_day",
+                Label = "Sealed Pool of the Day",
+                Description = "Two players, both dealt the same 50-card pool (the day's, shared by every such game). A deck of 12 or more with at most 4 Rares and 2 Mythics.",
+            },
         };
 
         /// <summary>The draft types the app can play, with what each is.</summary>
@@ -221,6 +233,36 @@ namespace MoodSwings.Core
 
         public string Format { get; set; } = TraditionalFormat;
 
+        /// <summary>
+        /// The format as the New Game screen lists it. The two sealed games have no format of their own on the server
+        /// (they are Draft games with a sealed deck type) but are offered as their own, so for them this is the deck type.
+        /// Setting it sets the real format, and for a sealed one the deck type as well.
+        /// </summary>
+        public string FormatChoice
+        {
+            get => IsSealedFormat ? DeckType : Format;
+            set
+            {
+                if (value == SealedDeck || value == SealedPoolOfTheDay)
+                {
+                    Format = DraftFormat;
+                    DeckType = value;
+                    return;
+                }
+
+                // Leaving a sealed format for another keeps nothing of it; Normalize picks the new format's first deck.
+                if (IsSealedFormat)
+                {
+                    DeckType = value == DraftFormat ? "quick_draft" : DeckType;
+                }
+
+                Format = value;
+            }
+        }
+
+        /// <summary>A Sealed Deck or Sealed Pool of the Day game: no draft, and no deck to choose beyond the format itself.</summary>
+        public bool IsSealedFormat => Format == DraftFormat && (DeckType == SealedDeck || DeckType == SealedPoolOfTheDay);
+
         public string DeckType { get; set; } = "structure";
 
         /// <summary>Which pool a draft deals from.</summary>
@@ -319,7 +361,7 @@ namespace MoodSwings.Core
         /// small for a team game (each team of two needs enough cards to last).
         /// </summary>
         public IReadOnlyList<DeckOption> DecksForFormat =>
-            (IsDraftFormat ? DraftDeckOptions
+            (IsDraftFormat ? DraftDeckOptions.Where(d => IsSealedFormat ? d.Id == DeckType : d.Id != SealedDeck && d.Id != SealedPoolOfTheDay)
             : IsTeamFormat ? DeckOptions.Where(d => d.Id != "power").Append(CustomDeckOption).Concat(DraftDeckOptions.Where(d => d.Id != SealedPoolOfTheDay)).ToList()
             : Format == DuelFormat ? DeckOptions.Append(CustomDuelOption).ToList()
             : DeckOptions.Append(CustomDeckOption).ToList()).Where(d => AllowCustomContent || d.Id != ChaosDraft).ToList();

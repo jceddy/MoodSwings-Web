@@ -13,7 +13,7 @@ namespace MoodSwings.Tests
         [Test]
         public void TraditionalDuelTeamAndDraftFormats_AreOffered_TraditionalFirst()
         {
-            CollectionAssert.AreEqual(new[] { "standard", "duel", "team", "closed_team", "draft" }, GameSetup.FormatOptions.Select(f => f.Id).ToArray());
+            CollectionAssert.AreEqual(new[] { "standard", "duel", "team", "closed_team", "draft", "sealed_deck", "sealed_pool_of_the_day" }, GameSetup.FormatOptions.Select(f => f.Id).ToArray());
             Assert.AreEqual("standard", new GameSetup().Format);
         }
 

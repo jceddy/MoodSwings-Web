@@ -496,5 +496,79 @@ namespace MoodSwings.Tests
             Assert.IsNull(BoardDisplay.UnsupportedReason(state));
             Assert.AreEqual(2, state.SealedDeck.DeckBuilding.RarityCaps["mythic"]);
         }
+
+        // --- the sealed games as formats of their own ----------------------------------------------
+
+        [Test]
+        public void TheSealedFormats_AreChosenAsFormats_ButAreDraftGamesToTheServer()
+        {
+            var setup = new GameSetup { OpponentUserIds = { 18 } };
+
+            setup.FormatChoice = "sealed_deck";
+
+            Assert.AreEqual("draft", setup.Format);
+            Assert.AreEqual("sealed_deck", setup.DeckType);
+            Assert.AreEqual("sealed_deck", setup.FormatChoice);
+            Assert.IsTrue(setup.IsSealedFormat);
+            var body = setup.ToDirectGameBody();
+            Assert.AreEqual("draft", body["format"]);
+            Assert.AreEqual("sealed_deck", body["deck_type"]);
+
+            setup.FormatChoice = "sealed_pool_of_the_day";
+            Assert.AreEqual("sealed_pool_of_the_day", setup.ToDirectGameBody()["deck_type"]);
+            Assert.AreEqual(1, setup.MaxOpponents);
+        }
+
+        [Test]
+        public void ADraftFormat_NoLongerListsTheSealedGamesAmongItsDecks()
+        {
+            var setup = new GameSetup { FormatChoice = "draft" };
+
+            var decks = setup.DecksForFormat.Select(d => d.Id).ToList();
+
+            CollectionAssert.DoesNotContain(decks, "sealed_deck");
+            CollectionAssert.DoesNotContain(decks, "sealed_pool_of_the_day");
+            CollectionAssert.Contains(decks, "quick_draft");
+        }
+
+        [Test]
+        public void ASealedFormat_HasNothingToChooseBeyondItself()
+        {
+            var setup = new GameSetup { FormatChoice = "sealed_deck", OpponentUserIds = { 18 } };
+            setup.Normalize(false);
+
+            CollectionAssert.AreEqual(new[] { "sealed_deck" }, setup.DecksForFormat.Select(d => d.Id).ToArray());
+            Assert.IsFalse(setup.UsesPoolSource);
+            Assert.IsNull(setup.ValidateDirectGame());
+        }
+
+        [Test]
+        public void LeavingASealedFormat_PutsAnOrdinaryDeckBack()
+        {
+            var setup = new GameSetup { FormatChoice = "sealed_pool_of_the_day", OpponentUserIds = { 18 } };
+
+            setup.FormatChoice = "draft";
+            setup.Normalize(false);
+            Assert.AreEqual("draft", setup.FormatChoice);
+            Assert.AreEqual("quick_draft", setup.DeckType);
+
+            setup.FormatChoice = "sealed_deck";
+            setup.FormatChoice = "duel";
+            setup.Normalize(false);
+            Assert.AreEqual("duel", setup.Format);
+            Assert.AreEqual("structure", setup.DeckType);
+            Assert.IsFalse(setup.IsSealedFormat);
+        }
+
+        [Test]
+        public void SealedDeck_IsStillADeckOfTheTeamFormats()
+        {
+            var setup = new GameSetup { FormatChoice = "team", DeckType = "sealed_deck" };
+            setup.Normalize(false);
+
+            Assert.AreEqual("sealed_deck", setup.DeckType);
+            Assert.IsFalse(setup.IsSealedFormat, "a team game, not the sealed format");
+            Assert.AreEqual("team", setup.FormatChoice);
+        }
     }
 }
