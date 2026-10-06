@@ -1347,6 +1347,88 @@ final class PuzzleContentTest extends TestCase
         self::assertTrue($game['puzzle_failed']);
     }
 
+    /**
+     * "Honor Among Thieves": the only winning line (exhaustive search of the
+     * real flow) is Paranoia on the opponent -- Indifference goes to the
+     * bottom of the deck and Courage is drawn -- then Dignity discarding
+     * Courage: 1 + 2 + 5 = 8, tying the opponent's 8, and the solver played
+     * first so the tie is theirs. See migration 0444's own docblock.
+     */
+    public function testHonorAmongThievesSolvedByParanoiaOnTheOpponentThenDignityDiscardingCourage(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('honor-among-thieves');
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 71, 'hand'), ['target_player_id' => $opp]);
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 8, 'hand'), [
+            'discard_card_id' => $this->instanceId($gameId, 7, 'hand'),
+        ]);
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameSolved($gameId, $p);
+    }
+
+    /** Every other line of play ends at 6 or less (or loses the attempt outright). */
+    public function testHonorAmongThievesWrongLinesLose(): void
+    {
+        $lines = [
+            'Dignity first, no discard' => [[8, []], [71, ['opp']]],
+            'Paranoia on the opponent, Dignity without discarding' => [[71, ['opp']], [8, []]],
+            'Paranoia on yourself' => [[71, ['me']], [7, []]],
+            'Paranoia on nobody' => [[71, []], [8, []]],
+        ];
+        foreach ($lines as $label => $plays) {
+            ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('honor-among-thieves');
+            $opp = $this->opponentGamePlayerId($gameId, $p);
+
+            foreach ($plays as [$cardId, $targets]) {
+                $choices = $targets === ['opp'] ? ['target_player_id' => $opp] : ($targets === ['me'] ? ['target_player_id' => $p] : []);
+                try {
+                    $this->playDriven($gameId, $p, $this->instanceId($gameId, $cardId, 'hand'), $choices);
+                } catch (\MoodSwings\Game\Exceptions\GameStateException) {
+                    break;
+                }
+            }
+
+            $stmt = $this->pdo->prepare('SELECT winner_game_player_id FROM games WHERE id = :id');
+            $stmt->execute(['id' => $gameId]);
+            self::assertNotSame($p, (int) $stmt->fetchColumn(), "{$label} must not solve the puzzle");
+        }
+    }
+
+    /** Dignity at 5 with no one in hand to discard to Paranoia first falls a point short: 1 + 5 = 6, a loss. */
+    public function testHonorAmongThievesDignityDiscardingParanoiaFallsShort(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('honor-among-thieves');
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 8, 'hand'), [
+            'discard_card_id' => $this->instanceId($gameId, 71, 'hand'),
+        ]);
+        $this->games->pass($gameId, $p);
+
+        $game = $this->games->getState($gameId, $this->userIdForGamePlayer($p))['game'];
+        self::assertTrue($game['puzzle_failed']);
+    }
+
+    /** The log opens with the end of the previous round and the draw that started this one. */
+    public function testHonorAmongThievesLogShowsThePreviousRoundAndTheDraw(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('honor-among-thieves');
+
+        $descriptions = array_column($this->games->fullEventLog($gameId), 'description');
+        $nameStmt = $this->pdo->prepare('SELECT username FROM users WHERE id = :id');
+        $nameStmt->execute(['id' => $this->userIdForGamePlayer($p)]);
+        $solverName = (string) $nameStmt->fetchColumn();
+
+        self::assertCount(3, $descriptions);
+        self::assertStringStartsWith('PuzzleOpponent played Compulsion', $descriptions[0]);
+        self::assertStringContainsString("Indifference moved from {$solverName}'s hand to PuzzleOpponent's hand", $descriptions[0]);
+        self::assertStringContainsString("PuzzleOpponent: 8", $descriptions[1]);
+        self::assertStringContainsString("{$solverName}: 1", $descriptions[1]);
+        self::assertStringContainsString('PuzzleOpponent won', $descriptions[1]);
+        self::assertSame("{$solverName} drew Paranoia", $descriptions[2]);
+    }
+
     /** A solve is never marked failed, and puzzle_failed is false while an attempt is open. */
     public function testDeadHeatSolveIsNotFailedAndOpenAttemptIsNotFailed(): void
     {

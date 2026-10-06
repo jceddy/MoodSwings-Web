@@ -748,6 +748,55 @@ final class AchievementServiceIntegrationTest extends TestCase
     }
 
     /**
+     * Reported live: Format Purist's bar never filled. checkFormatPurist()
+     * kept the per-format counts in user_format_play_counts but never
+     * reported them to user_achievements.progress, which is what the bar
+     * reads. The bar shows the best SINGLE format's count -- playing a
+     * different format must not add to it.
+     */
+    public function testFormatPuristProgressTracksTheBestSingleFormat(): void
+    {
+        $userId = $this->insertUser('achpurist');
+        $achievements = new AchievementService();
+
+        $play = function (string $format) use ($userId, $achievements): void {
+            $loserUserId = $this->insertUser('achpuristl' . bin2hex(random_bytes(3)));
+            $completedAt = gmdate('Y-m-d H:i:s');
+            ['gameId' => $gameId] = $this->insertMinimalCompletedGame($userId, $loserUserId, $completedAt);
+            $achievements->onGameCompleted($gameId, ['format' => $format] + $this->minimalGameArray($completedAt), [$userId], [$loserUserId], false);
+        };
+
+        $play('standard');
+        $play('standard');
+        $play('standard');
+        self::assertSame(3, $this->progress($userId, 'format-purist'));
+
+        $play('duel');
+        self::assertSame(3, $this->progress($userId, 'format-purist'), 'a different format does not add to the single-format bar');
+
+        $play('duel');
+        $play('duel');
+        $play('duel');
+        self::assertSame(4, $this->progress($userId, 'format-purist'), 'the bar follows whichever format is highest');
+        self::assertFalse($this->isUnlocked($userId, 'format-purist'));
+    }
+
+    public function testFormatPuristUnlocksOnTheHundredthGameInOneFormat(): void
+    {
+        $userId = $this->insertUser('achpurist100');
+        $this->pdo->prepare("INSERT INTO user_format_play_counts (user_id, format, games_played) VALUES (:u, 'standard', 99)")
+            ->execute(['u' => $userId]);
+
+        $loserUserId = $this->insertUser('achpurist100l');
+        $completedAt = gmdate('Y-m-d H:i:s');
+        ['gameId' => $gameId] = $this->insertMinimalCompletedGame($userId, $loserUserId, $completedAt);
+        (new AchievementService())->onGameCompleted($gameId, $this->minimalGameArray($completedAt), [$userId], [$loserUserId], false);
+
+        self::assertSame(100, $this->progress($userId, 'format-purist'));
+        self::assertTrue($this->isUnlocked($userId, 'format-purist'));
+    }
+
+    /**
      * bin/backfill_win_count_achievements.php's own per-user work (reported
      * live: "would it be possible to base [win-count achievements] off your
      * statistics page for people who have been playing before the

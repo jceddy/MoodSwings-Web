@@ -434,11 +434,15 @@ final class AchievementService
              ON DUPLICATE KEY UPDATE games_played = games_played + 1'
         )->execute(['u' => $userId, 'f' => $format]);
 
+        // The bar reads user_achievements.progress, which the per-format
+        // table above never touches -- so report the best single format's
+        // count as the progress level (reported live: "the bar for the
+        // Format Purist achievement is not filling up at all"). MAX, not a
+        // sum, keeps it a "single format" bar; setProgressLevel() only ever
+        // raises it and unlocks once it reaches the achievement's target.
         $stmt = $pdo->prepare('SELECT MAX(games_played) FROM user_format_play_counts WHERE user_id = :u');
         $stmt->execute(['u' => $userId]);
-        if ((int) $stmt->fetchColumn() >= 100) {
-            $this->unlock($userId, 'format-purist');
-        }
+        $this->setProgressLevel($userId, 'format-purist', (int) $stmt->fetchColumn());
     }
 
     /**
