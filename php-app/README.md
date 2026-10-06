@@ -13794,7 +13794,7 @@ than a parallel bespoke system:
   last round), hard, `win_game`, no play cap needed. The opponent has
   Compulsion, Benevolence and Honor in play (8 points) and Indifference in
   hand; the solver has Hope and Charity in play (1 point), holds Dignity and
-  Paranoia, has Courage on top of a randomly assembled 41-card
+  Paranoia, has Courage on top of a randomly assembled 45-card
   structure-style deck, and two plays (the turn's own plus Hope's, seeded
   through `extra_play_source_card_id`). The one winning line (exhaustive
   search): Paranoia on the opponent (Indifference to the bottom of the
