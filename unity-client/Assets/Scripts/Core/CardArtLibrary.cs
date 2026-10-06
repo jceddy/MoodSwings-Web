@@ -30,15 +30,22 @@ namespace MoodSwings.Core
             return Load(string.IsNullOrEmpty(skin) ? "hurt-feelings" : "hurt-feelings-" + skin);
         }
 
-        private static Sprite Load(string name)
+        /// <summary>
+        /// The back of a Mood Swings card (Assets/Resources/UI/card-back, committed, unlike the card faces): what a deck
+        /// looks like. Null only if the file is missing.
+        /// </summary>
+        public static Sprite CardBack() => Load("UI/card-back", folder: string.Empty);
+
+        private static Sprite Load(string name, string folder = Folder)
         {
-            if (Cache.TryGetValue(name, out var cached))
+            var path = folder + name;
+            if (Cache.TryGetValue(path, out var cached))
             {
                 return cached;
             }
 
-            var sprite = Resources.Load<Sprite>(Folder + name);
-            Cache[name] = sprite;
+            var sprite = Resources.Load<Sprite>(path);
+            Cache[path] = sprite;
             return sprite;
         }
     }

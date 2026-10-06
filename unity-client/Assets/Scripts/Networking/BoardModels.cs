@@ -328,6 +328,13 @@ namespace MoodSwings.Networking
     }
 
     /// <summary>A repeated board state this turn; repeating it again ends the turn.</summary>
+    /// <summary>GET /games/deck: every card the table's shared deck started with, wherever those cards are now.</summary>
+    public class SharedDeckResponse : ApiEnvelope
+    {
+        [JsonProperty("cards")]
+        public List<BoardCard> Cards { get; set; } = new List<BoardCard>();
+    }
+
     /// <summary>The deck-building rules of a custom duel. A rarity missing from a limit map has no limit.</summary>
     public class DuelDeckRules
     {

@@ -264,6 +264,10 @@ namespace MoodSwings.Core
             || state.Game.DeckType == GameSetup.CustomDuel
             || (state.Game.DeckType != null && DraftDeckTypes.Contains(state.Game.DeckType));
 
+        /// <summary>The table plays from one shared deck whose whole list can be looked at (once it has been dealt).</summary>
+        public static bool HasSharedDeck(GameState state) =>
+            !HasSeparateDecks(state) && state.Game.Status != "waiting";
+
         /// <summary>
         /// The line under the deck pile: "Deck 30", or "Your deck 30" when everyone has their own
         /// (the others' are on their seats), or just "Separate decks" for someone watching such a game.

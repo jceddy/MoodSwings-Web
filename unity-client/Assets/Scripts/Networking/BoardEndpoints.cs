@@ -138,6 +138,19 @@ namespace MoodSwings.Networking
                 : api.PostAsync<GameActionResponse>("/games/decklist", new { game_id = gameId, decklist_text = decklistText }, cancellationToken);
         }
 
+        /// <summary>GET /games/deck -- the whole shared deck of a game that has one (not custom duels or drafts); a spectator may need the share code.</summary>
+        public static Task<ApiResult<SharedDeckResponse>> GetSharedDeckAsync(
+            this ApiClient api, int gameId, string spectateCode = null, CancellationToken cancellationToken = default)
+        {
+            var path = $"/games/deck?game_id={gameId}";
+            if (!string.IsNullOrEmpty(spectateCode))
+            {
+                path += "&code=" + Uri.EscapeDataString(spectateCode);
+            }
+
+            return api.GetAsync<SharedDeckResponse>(path, cancellationToken);
+        }
+
         // --- Chaos Draft -------------------------------------------------------------------------
 
         /// <summary>GET /games/chaos-draft-offer -- the effect choice you face this round (created on the first ask), and whether the round is clear to play.</summary>

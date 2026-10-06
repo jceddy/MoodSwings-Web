@@ -36,6 +36,11 @@ namespace MoodSwings.Tests
 
             public List<string> Calls { get; } = new List<string>();
 
+            /// <summary>GET /games/deck answers with this, under DeckStatus.</summary>
+            public string DeckJson = "{\"status\":\"ok\",\"cards\":[]}";
+
+            public int DeckStatus = 200;
+
             /// <summary>GET /games/chaos-draft-offer answers with this.</summary>
             public string ChaosOfferJson = "{\"status\":\"ok\",\"offer\":null,\"round_ready\":true}";
 
@@ -69,6 +74,11 @@ namespace MoodSwings.Tests
                 {
                     var asked = int.Parse(path.Substring(path.IndexOf("game_id=", StringComparison.Ordinal) + 8).Split('&')[0]);
                     return MainSceneTests.Reply(200, (StateFor != null ? StateFor(asked) : State).ToString());
+                }
+
+                if (path.StartsWith("/games/deck?"))
+                {
+                    return MainSceneTests.Reply(DeckStatus, DeckJson);
                 }
 
                 if (path.StartsWith("/games/chaos-draft-offer"))

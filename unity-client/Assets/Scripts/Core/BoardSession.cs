@@ -15,6 +15,16 @@ namespace MoodSwings.Core
         public string Message { get; set; }
     }
 
+    /// <summary>A game's whole deck list, or why it couldn't be had.</summary>
+    public sealed class DeckListResult
+    {
+        public bool Ok { get; set; }
+
+        public string Message { get; set; }
+
+        public List<BoardCard> Cards { get; set; } = new List<BoardCard>();
+    }
+
     /// <summary>What came of an action: whether it worked, the server's reason if not, and a note worth showing if it ended a round or the game.</summary>
     public sealed class BoardActionResult
     {
@@ -123,6 +133,15 @@ namespace MoodSwings.Core
             }
 
             State.ChaosOffer = _chaosOffer;
+        }
+
+        /// <summary>Every card the shared deck started with, in the order a pool reads (color, rarity, name).</summary>
+        public async Task<DeckListResult> GetDeckListAsync(CancellationToken cancellationToken = default)
+        {
+            var result = await _api.GetSharedDeckAsync(GameId, IsSpectating ? _spectateCode : null, cancellationToken);
+            return result.Ok
+                ? new DeckListResult { Ok = true, Cards = DraftDisplay.SortPool(result.Value.Cards) }
+                : new DeckListResult { Message = result.UserMessage("Couldn't load the deck list.") };
         }
 
         // --- acting ------------------------------------------------------------------------------

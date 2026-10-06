@@ -1043,5 +1043,123 @@ namespace MoodSwings.Tests
 
             Assert.IsFalse(Board().DiscardOverlay.IsOpen);
         }
+
+        // --- the deck list ------------------------------------------------------------------------
+
+        private static string DeckListJson() => new JObject
+        {
+            ["status"] = "ok",
+            // Deliberately out of order: the list is sorted on the device.
+            ["cards"] = new JArray(
+                DraftCard(1, "Zeal", "green", "common"),
+                DraftCard(2, "Bliss", "white", "rare"),
+                DraftCard(3, "Calm", "white", "common"),
+                DraftCard(4, "Awe", "white", "common"),
+                DraftCard(5, "Fury", "red", "mythic"),
+                DraftCard(6, "Envy", "black", "uncommon"),
+                DraftCard(7, "Calm", "white", "common"),
+                DraftCard(8, "Glee", "blue", "common")),
+        }.ToString();
+
+        [UnityTest]
+        public IEnumerator DeckList_TappingTheDeck_ShowsEveryCardItStartedWith_ByColorRarityAndName()
+        {
+            var server = Serve(PhaseFiveSceneTests.Load(406));
+            server.DeckJson = DeckListJson();
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+            Assert.IsTrue(Texts().Contains("see the list"));
+
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.Child("Deck").GetComponentInChildren<Button>());
+            yield return PhaseTwoSceneTests.Frames(3);
+
+            Assert.IsTrue(Board().DeckList.IsOpen);
+            Assert.IsTrue(server.Calls.Any(c => c.StartsWith("GET /games/deck?game_id=406")), string.Join("\n", server.Calls));
+            Assert.AreEqual("Deck list (8 cards)", Board().DeckList.TitleText);
+            CollectionAssert.AreEqual(
+                new[] { "Awe", "Calm", "Calm", "Bliss", "Glee", "Envy", "Fury", "Zeal" },
+                Board().DeckList.CardNames.ToArray(),
+                "white commons by name, then the white rare, blue, black, red, green");
+            ScreenshotHelper.Capture("deck-list");
+        }
+
+        [UnityTest]
+        public IEnumerator DeckList_ACardInItCanBeRead_AndBackClosesTheList_AndItIsFetchedOnce()
+        {
+            var server = Serve(PhaseFiveSceneTests.Load(406));
+            server.DeckJson = DeckListJson();
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.Child("Deck").GetComponentInChildren<Button>());
+            yield return PhaseTwoSceneTests.Frames(3);
+
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.ButtonNamed("Listed Awe"));
+            Assert.IsTrue(Board().DetailOpen);
+            Assert.IsTrue(Texts().Any(t => t.Contains("In the deck")));
+
+            Board().HandleBack(); // closes the detail
+            Assert.IsTrue(Board().HandleBack());
+            Assert.IsFalse(Board().DeckList.IsOpen);
+
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.Child("Deck").GetComponentInChildren<Button>());
+            yield return PhaseTwoSceneTests.Frames(2);
+
+            Assert.IsTrue(Board().DeckList.IsOpen);
+            Assert.AreEqual(1, server.Calls.Count(c => c.StartsWith("GET /games/deck")), "the list never changes, so it is read once");
+        }
+
+        [UnityTest]
+        public IEnumerator DeckList_WhenEachPlayerHasTheirOwnDeck_SaysThereIsNoSingleList()
+        {
+            var server = Serve(PhaseFiveSceneTests.Load(406, s => s["game"]["format"] = "duel"));
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+            Assert.IsFalse(Texts().Contains("see the list"));
+
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.Child("Deck").GetComponentInChildren<Button>());
+
+            Assert.IsFalse(Board().DeckList.IsOpen);
+            StringAssert.Contains("their own deck", Board().MessageText);
+            Assert.IsFalse(server.Calls.Any(c => c.StartsWith("GET /games/deck")), "nothing to ask the server");
+        }
+
+        [UnityTest]
+        public IEnumerator DeckList_WhenTheServerRefuses_SaysWhy()
+        {
+            var server = Serve(PhaseFiveSceneTests.Load(406));
+            server.DeckStatus = 409;
+            server.DeckJson = "{\"status\":\"error\",\"message\":\"That game has no single shared deck.\"}";
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.Child("Deck").GetComponentInChildren<Button>());
+            yield return PhaseTwoSceneTests.Frames(3);
+
+            Assert.IsFalse(Board().DeckList.IsOpen);
+            Assert.AreEqual("That game has no single shared deck.", Board().MessageText);
+        }
+
+        // --- the card back --------------------------------------------------------------------------
+
+        [UnityTest]
+        public IEnumerator Deck_IsDrawnAsTheBackOfACard()
+        {
+            var server = Serve(PhaseFiveSceneTests.Load(406));
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+
+            var back = PhaseFiveSceneTests.Child("Deck").Find("Card back");
+
+            Assert.IsNotNull(back, "the pile is a card back, not a grey box");
+            Assert.AreSame(MoodSwings.Core.CardArtLibrary.CardBack(), back.GetComponent<Image>().sprite);
+            Assert.IsNull(back.GetComponent<CanvasGroup>(), "not faded while there are cards in it");
+            ScreenshotHelper.Capture("deck-card-back");
+        }
+
+        [UnityTest]
+        public IEnumerator Deck_FadesOnceItHasRunOut()
+        {
+            var server = Serve(PhaseFiveSceneTests.Load(406, s => s["deck_count"] = 0));
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+
+            var back = PhaseFiveSceneTests.Child("Deck").Find("Card back");
+
+            Assert.AreEqual(0.35f, back.GetComponent<CanvasGroup>().alpha, 0.001f);
+        }
     }
 }

@@ -346,5 +346,51 @@ namespace MoodSwings.Tests
             Assert.AreEqual("winston_draft", DraftDisplay.Kind("winston_draft"));
             Assert.IsTrue(DraftDisplay.Implemented.Contains("chaos_draft"));
         }
+
+        // --- the shared deck list ----------------------------------------------------------------
+
+        [Test]
+        public void TheDeckListIsAskedFor_ByGame_WithAShareCodeOnlyForASpectator()
+        {
+            _transport.Enqueue(200, "{\"status\":\"ok\",\"cards\":[{\"card_id\":2,\"name\":\"Bliss\",\"color\":\"white\",\"rarity\":\"rare\"},{\"card_id\":1,\"name\":\"Zeal\",\"color\":\"green\",\"rarity\":\"common\"},{\"card_id\":3,\"name\":\"Awe\",\"color\":\"white\",\"rarity\":\"common\"}]}");
+            _transport.Enqueue(200, "{\"status\":\"ok\",\"cards\":[]}");
+
+            var mine = BoardSession.ForPlayer(_api, 405).GetDeckListAsync().GetAwaiter().GetResult();
+            var watched = BoardSession.ForSpectator(_api, 405, "AB 12").GetDeckListAsync().GetAwaiter().GetResult();
+
+            Assert.AreEqual("https://example.test/app/games/deck?game_id=405", _transport.Requests[0].Url);
+            Assert.AreEqual("https://example.test/app/games/deck?game_id=405&code=AB%2012", _transport.Requests[1].Url);
+            CollectionAssert.AreEqual(new[] { "Awe", "Bliss", "Zeal" }, mine.Cards.Select(c => c.Name).ToArray(), "color, rarity, then name");
+            Assert.IsTrue(watched.Ok);
+        }
+
+        [Test]
+        public void ADeckListThatCantBeHad_SaysWhy()
+        {
+            _transport.Enqueue(409, "{\"status\":\"error\",\"message\":\"No single deck.\"}");
+
+            var result = BoardSession.ForPlayer(_api, 405).GetDeckListAsync().GetAwaiter().GetResult();
+
+            Assert.IsFalse(result.Ok);
+            Assert.AreEqual("No single deck.", result.Message);
+        }
+
+        [Test]
+        public void OnlyAStartedGameWithOneSharedDeck_HasADeckList()
+        {
+            var state = BoardFixtures.Load(405);
+            Assert.IsTrue(BoardDisplay.HasSharedDeck(state));
+
+            state.Game.Format = "duel";
+            Assert.IsFalse(BoardDisplay.HasSharedDeck(state), "everyone has their own");
+
+            state.Game.Format = "standard";
+            state.Game.Status = "waiting";
+            Assert.IsFalse(BoardDisplay.HasSharedDeck(state), "nothing dealt yet");
+
+            state.Game.Status = "in_progress";
+            state.Game.DeckType = "custom_duel";
+            Assert.IsFalse(BoardDisplay.HasSharedDeck(state));
+        }
     }
 }

@@ -107,6 +107,31 @@ namespace MoodSwings.UI
             return rect;
         }
 
+        /// <summary>The back of a card (a deck, or a face-down card), at the same size and shape as a card face.</summary>
+        public static RectTransform CreateCardBack(Transform parent, float width, UiTheme theme)
+        {
+            var height = HeightFor(width);
+            var rect = UiFactory.Create("Card back", parent);
+            rect.sizeDelta = new Vector2(width, height);
+            UiFactory.Size(rect.gameObject, width, height);
+
+            var image = rect.gameObject.AddComponent<Image>();
+            var art = CardArtLibrary.CardBack();
+            if (art != null)
+            {
+                image.sprite = art;
+                image.preserveAspect = true;
+            }
+            else
+            {
+                image.color = new Color(0.17f, 0.20f, 0.27f);
+                var label = UiFactory.Label(rect, "DECK", 22, theme.textMuted, TextAnchor.MiddleCenter, FontStyle.Bold);
+                UiFactory.Stretch(label.rectTransform);
+            }
+
+            return rect;
+        }
+
         /// <summary>The Hurt Feelings card -- its art if present, otherwise a plain dark stand-in.</summary>
         public static RectTransform CreateHurtFeelings(Transform parent, float width, UiTheme theme)
         {
