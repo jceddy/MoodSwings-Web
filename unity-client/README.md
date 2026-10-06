@@ -408,7 +408,7 @@ graphics for the screenshots, so omit `-nographics` there.
 - The version is `bundleVersion` in Player Settings. The app is named MOOD (it was the project
   folder's name), so its saved login lives under a new key: sign in once after updating.
 - **Leaving the app:** a full-screen window has no close button, so Home and the login screen have a
-  **Quit** button (desktop builds only), and **F11** or **Alt+Enter** switches between full screen and a
+  **Quit** button (desktop and Android builds), and, on desktop, **F11** or **Alt+Enter** switches between full screen and a
   window.
 - Neither build is signed, so Windows SmartScreen shows "Windows protected your PC" on first run
   (More info > Run anyway). Signing needs a code-signing certificate.

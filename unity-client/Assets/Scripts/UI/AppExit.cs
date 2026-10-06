@@ -4,17 +4,20 @@ using UnityEngine;
 namespace MoodSwings.UI
 {
     /// <summary>
-    /// Leaving the app and switching between full screen and a window, for the desktop builds: a full-screen window
-    /// has no close button, so the menus offer Quit and F11 (or Alt+Enter) toggles the window. Phones leave the app
-    /// with the system's own gestures, so none of this is offered there.
+    /// Leaving the app, and switching between full screen and a window. The menus offer Quit on desktops (where a
+    /// full-screen window has no close button) and on Android, as a convenience; F11 (or Alt+Enter) toggles the window
+    /// on desktops only. iOS has no Quit: Apple's guidelines ask apps not to close themselves.
     /// </summary>
     public static class AppExit
     {
         /// <summary>What Quit does; tests swap it, since quitting would end the test run.</summary>
         public static Action Quit = QuitApplication;
 
-        /// <summary>Whether this platform has a Quit (a desktop; also the Editor, where it stops play mode).</summary>
+        /// <summary>Whether this platform has a Quit (a desktop or Android; in the Editor, where it stops play mode).</summary>
         public static bool IsAvailable => IsAvailableOn(Application.platform);
+
+        /// <summary>Whether the window can be switched between full screen and windowed (desktops).</summary>
+        public static bool CanToggleFullscreen => IsAvailable && Application.platform != RuntimePlatform.Android;
 
         public static bool IsAvailableOn(RuntimePlatform platform)
         {
@@ -26,6 +29,7 @@ namespace MoodSwings.UI
                 case RuntimePlatform.OSXEditor:
                 case RuntimePlatform.LinuxPlayer:
                 case RuntimePlatform.LinuxEditor:
+                case RuntimePlatform.Android:
                     return true;
                 default:
                     return false;

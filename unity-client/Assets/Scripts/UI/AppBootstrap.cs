@@ -60,7 +60,7 @@ namespace MoodSwings.UI
 
         private void Update()
         {
-            if (AppExit.IsAvailable && KeyInput.FullscreenTogglePressed)
+            if (AppExit.CanToggleFullscreen && KeyInput.FullscreenTogglePressed)
             {
                 AppExit.ToggleFullscreen();
             }

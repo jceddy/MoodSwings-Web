@@ -53,13 +53,13 @@ namespace MoodSwings.Tests
         }
 
         [Test]
-        public void OnlyDesktopsOfferQuit()
+        public void DesktopsAndAndroidOfferQuit_ButNotIos()
         {
             Assert.IsTrue(AppExit.IsAvailableOn(RuntimePlatform.WindowsPlayer));
             Assert.IsTrue(AppExit.IsAvailableOn(RuntimePlatform.OSXPlayer));
             Assert.IsTrue(AppExit.IsAvailableOn(RuntimePlatform.LinuxPlayer));
-            Assert.IsFalse(AppExit.IsAvailableOn(RuntimePlatform.Android));
-            Assert.IsFalse(AppExit.IsAvailableOn(RuntimePlatform.IPhonePlayer));
+            Assert.IsTrue(AppExit.IsAvailableOn(RuntimePlatform.Android));
+            Assert.IsFalse(AppExit.IsAvailableOn(RuntimePlatform.IPhonePlayer), "Apple asks apps not to close themselves");
         }
     }
 }
