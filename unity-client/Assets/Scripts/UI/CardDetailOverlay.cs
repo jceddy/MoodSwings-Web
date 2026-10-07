@@ -9,7 +9,8 @@ namespace MoodSwings.UI
     /// <summary>A card shown large with its rules over a screen; a tap anywhere (or Back) closes it.</summary>
     public sealed class CardDetailOverlay
     {
-        private const float CardWidth = 440f;
+        // As large as the screen allows (a 1080-high canvas less the padding): the card keeps this size, and the text wraps.
+        private const float CardWidth = 600f;
 
         private readonly UiTheme _theme;
         private readonly GameObject _root;
@@ -31,11 +32,18 @@ namespace MoodSwings.UI
             row.padding = new RectOffset(120, 120, 80, 80);
 
             _cardHolder = UiFactory.Create("Card", row.transform);
-            UiFactory.Size(_cardHolder.gameObject, CardWidth, CardView.HeightFor(CardWidth));
+            var cardSize = UiFactory.Size(_cardHolder.gameObject, CardWidth, CardView.HeightFor(CardWidth));
+            // A layout group squeezes a child toward its minimum when a neighbor wants more room, and a minimum of
+            // nothing lets long rules text shrink the card; pinning the minimum makes the text wrap instead.
+            cardSize.minWidth = CardWidth;
+            cardSize.minHeight = CardView.HeightFor(CardWidth);
+            cardSize.flexibleWidth = 0f;
+            cardSize.flexibleHeight = 0f;
 
             _text = UiFactory.Label(row.transform, string.Empty, 32, theme.textPrimary, TextAnchor.MiddleLeft);
             _text.supportRichText = true;
             UiFactory.Flexible(_text.gameObject, width: 1f);
+            _text.GetComponent<LayoutElement>().preferredWidth = 0f; // take the leftover width and wrap within it
 
             _root.SetActive(false);
         }

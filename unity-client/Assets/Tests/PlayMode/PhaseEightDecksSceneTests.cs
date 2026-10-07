@@ -375,5 +375,33 @@ namespace MoodSwings.Tests
 
             Assert.IsTrue(Builder().Deck.HasUnsavedChanges, "taking a card out of the sideboard is a change");
         }
+
+        [UnityTest]
+        public IEnumerator TheInfoButton_KeepsTheCardLarge_AndWrapsLongRulesTextBesideIt()
+        {
+            var server = Serve();
+            yield return OpenBuilder(server);
+            yield return PhaseFiveSceneTests.Tap(Named("Inspect Altruism"));
+            yield return PhaseTwoSceneTests.Frames(4);
+
+            var holder = (RectTransform)PhaseFiveSceneTests.Child("Card Altruism").parent;
+            var short1 = holder.rect.size;
+            Assert.AreEqual(600f, short1.x, 0.5f, "the card isn't shrunk to make room for text");
+
+            // A far longer text must wrap in the space left, not take the card's.
+            var detail = Builder().Detail;
+            var card = JsonConvert.DeserializeObject<CatalogResponse>(Fixture("cards_catalog")).Cards[0];
+            card.RulesText = string.Join(" ", Enumerable.Repeat("After playing this mood you may do a very long and winding thing with several clauses.", 12));
+            detail.Show(card);
+            yield return PhaseTwoSceneTests.Frames(4);
+
+            var long1 = ((RectTransform)PhaseFiveSceneTests.Child("Card " + card.Name).parent).rect.size;
+            Assert.AreEqual(short1.x, long1.x, 0.5f);
+            Assert.AreEqual(short1.y, long1.y, 0.5f);
+            var text = Object.FindObjectsByType<Text>(FindObjectsInactive.Exclude).First(t => t.text.Contains("winding thing"));
+            Assert.Greater(text.rectTransform.rect.width, 300f, "the text has room beside the card");
+            Assert.Less(text.rectTransform.rect.width, 1920f - 600f, "and wraps inside it");
+            ScreenshotHelper.Capture("card-detail-long");
+        }
     }
 }
