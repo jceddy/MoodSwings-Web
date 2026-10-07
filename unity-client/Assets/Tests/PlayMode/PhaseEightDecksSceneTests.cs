@@ -276,5 +276,104 @@ namespace MoodSwings.Tests
             Assert.Greater(eyeCorners[0].y, cardTop - cardHeight * 0.40f, "but still up in the corner");
             ScreenshotHelper.Capture("deck-builder-eye");
         }
+
+        // --- the sideboard -------------------------------------------------------------------------
+
+        [UnityTest]
+        public IEnumerator Sideboard_ATabSendsTappedCardsThere_AndShowsBothCounts()
+        {
+            var server = Serve();
+            yield return OpenBuilder(server);
+            var card = FirstOfColor("white");
+            var other = FirstOfColor("blue");
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.Child("Card " + card.Name).GetComponent<Button>());
+            Assert.IsFalse(Builder().EditingSideboard);
+            Assert.IsTrue(Texts().Contains("Deck (1)") && Texts().Contains("Sideboard (0)"), string.Join(" | ", Texts()));
+
+            yield return PhaseFiveSceneTests.Tap(Named("Sideboard tab"));
+            Assert.IsTrue(Builder().EditingSideboard);
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.Child("Card " + other.Name).GetComponent<Button>());
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.Child("Card " + card.Name).GetComponent<Button>());
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.Child("Card " + card.Name).GetComponent<Button>());
+
+            Assert.AreEqual(1, Builder().Deck.CountOf(card.CardId), "the deck is as it was");
+            Assert.AreEqual(2, Builder().Deck.CountOf(card.CardId, sideboard: true));
+            Assert.AreEqual(1, Builder().Deck.CountOf(other.CardId, sideboard: true));
+            Assert.IsTrue(Texts().Contains("Deck (1)") && Texts().Contains("Sideboard (3)"), string.Join(" | ", Texts()));
+            Assert.IsTrue(Texts().Contains("Sideboard: 3 cards"));
+            Assert.IsTrue(Texts().Contains("SB x2"), "the sideboard copies show on the card, beside the deck's");
+            Assert.IsTrue(Texts().Contains("x1"));
+            ScreenshotHelper.Capture("deck-builder-sideboard");
+        }
+
+        [UnityTest]
+        public IEnumerator Sideboard_ItsOwnLinesAddAndRemoveCopies_AndTheTabsKeepTheirLists()
+        {
+            var server = Serve();
+            yield return OpenBuilder(server);
+            var card = FirstOfColor("red");
+            yield return PhaseFiveSceneTests.Tap(Named("Sideboard tab"));
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.Child("Card " + card.Name).GetComponent<Button>());
+
+            yield return PhaseFiveSceneTests.Tap(Named("More " + card.Name));
+            Assert.AreEqual(2, Builder().Deck.CountOf(card.CardId, sideboard: true));
+            yield return PhaseFiveSceneTests.Tap(Named("Less " + card.Name));
+            Assert.AreEqual(1, Builder().Deck.CountOf(card.CardId, sideboard: true));
+
+            yield return PhaseFiveSceneTests.Tap(Named("Deck tab"));
+            Assert.IsNull(Named("Less " + card.Name), "the deck's list is empty");
+            Assert.AreEqual(0, Builder().Deck.Count);
+
+            yield return PhaseFiveSceneTests.Tap(Named("Sideboard tab"));
+            yield return PhaseFiveSceneTests.Tap(Named("Less " + card.Name));
+            Assert.AreEqual(0, Builder().Deck.SideboardCount);
+        }
+
+        [UnityTest]
+        public IEnumerator Sideboard_IsSavedWithTheDeck()
+        {
+            var server = Serve();
+            yield return OpenBuilder(server);
+            var main = FirstOfColor("green");
+            var side = FirstOfColor("black");
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.Child("Card " + main.Name).GetComponent<Button>());
+            yield return PhaseFiveSceneTests.Tap(Named("Sideboard tab"));
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.Child("Card " + side.Name).GetComponent<Button>());
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.Child("Card " + side.Name).GetComponent<Button>());
+            Field("Deck name").text = "With a sideboard";
+            yield return PhaseTwoSceneTests.Frames(2);
+
+            yield return PhaseFiveSceneTests.Tap(Named("Save deck"));
+            yield return PhaseTwoSceneTests.Frames(4);
+
+            var post = server.Posts("/decklists").Single();
+            CollectionAssert.AreEqual(new[] { main.CardId }, post["card_ids"].Select(t => (int)t).ToArray());
+            CollectionAssert.AreEqual(new[] { side.CardId, side.CardId }, post["sideboard_card_ids"].Select(t => (int)t).ToArray());
+        }
+
+        [UnityTest]
+        public IEnumerator Sideboard_ASavedDecksSideboardIsThereToChange()
+        {
+            var server = Serve();
+            var catalog = JsonConvert.DeserializeObject<CatalogResponse>(Fixture("cards_catalog")).Cards;
+            server.DecklistsJson = OwnDecks("Mine");
+            server.DecklistViewJson = JsonConvert.SerializeObject(new
+            {
+                status = "ok",
+                decklist = new { id = 20, name = "Mine", visibility = "private", owner_user_id = 2, cards = catalog.Take(3), sideboard_cards = catalog.Skip(3).Take(2) },
+            });
+            yield return OpenDecklists(server);
+
+            yield return PhaseFiveSceneTests.Tap(Named("Edit Mine"));
+            yield return MainSceneTests.WaitFor<DeckBuilderScreen>();
+            yield return PhaseTwoSceneTests.Frames(8);
+
+            Assert.IsTrue(Texts().Contains("Deck (3)") && Texts().Contains("Sideboard (2)"), string.Join(" | ", Texts()));
+            yield return PhaseFiveSceneTests.Tap(Named("Sideboard tab"));
+            Assert.IsNotNull(Named("Less " + catalog[3].Name), "its sideboard is listed");
+            yield return PhaseFiveSceneTests.Tap(Named("Less " + catalog[3].Name));
+
+            Assert.IsTrue(Builder().Deck.HasUnsavedChanges, "taking a card out of the sideboard is a change");
+        }
     }
 }

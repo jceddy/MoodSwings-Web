@@ -166,7 +166,7 @@ namespace MoodSwings.Tests
         }
 
         [Test]
-        public void ACopyOfADeck_IsANewPrivateOneWithoutItsSideboard()
+        public void ACopyOfADeck_IsANewPrivateOne_ThatKeepsItsSideboard()
         {
             var deck = Editor();
             deck.Load(Detail(deck), asCopy: true);
@@ -175,7 +175,7 @@ namespace MoodSwings.Tests
             Assert.IsNull(deck.DecklistId);
             Assert.AreEqual(DeckEditor.Private, deck.Visibility);
             Assert.AreEqual(3, deck.Count);
-            Assert.AreEqual(0, deck.SideboardCount);
+            Assert.AreEqual(1, deck.SideboardCount, "a copy is the whole deck, sideboard too");
         }
 
         [Test]
@@ -621,5 +621,78 @@ namespace MoodSwings.Tests
         }
 
         private static string ChaosStateJsonFor405() => TestFixtures.Read("game_405_state");
+
+        // --- the sideboard -------------------------------------------------------------------------
+
+        [Test]
+        public void TheSideboard_IsBuiltLikeTheDeck_ButKeptApart()
+        {
+            var deck = Editor();
+            var a = deck.Catalog[0].CardId;
+            var b = deck.Catalog[1].CardId;
+
+            deck.Add(a);
+            deck.Add(a, sideboard: true);
+            deck.Add(a, sideboard: true);
+            deck.Add(b, sideboard: true);
+
+            Assert.AreEqual(1, deck.Count);
+            Assert.AreEqual(3, deck.SideboardCount);
+            Assert.AreEqual(1, deck.CountOf(a));
+            Assert.AreEqual(2, deck.CountOf(a, sideboard: true));
+            CollectionAssert.AreEqual(new[] { a }, deck.ToCardIds(), "the deck's own cards");
+            CollectionAssert.AreEquivalent(new[] { a, a, b }, deck.SideboardCardIds());
+
+            deck.Remove(a, sideboard: true);
+            Assert.AreEqual(1, deck.CountOf(a, sideboard: true));
+            deck.Remove(a, sideboard: true);
+            Assert.AreEqual(0, deck.CountOf(a, sideboard: true));
+            Assert.AreEqual(1, deck.CountOf(a), "taking it out of the sideboard leaves the deck's copy");
+        }
+
+        [Test]
+        public void TheSideboardsLines_ReadInTheSameOrder()
+        {
+            var deck = Editor();
+            var red = deck.Catalog.First(c => c.Color == "red");
+            var white = deck.Catalog.First(c => c.Color == "white");
+            deck.Add(red.CardId, sideboard: true);
+            deck.Add(white.CardId, sideboard: true);
+
+            var lines = deck.Entries(sideboard: true);
+
+            CollectionAssert.AreEqual(new[] { "white", "red" }, lines.Select(l => l.Card.Color).ToArray());
+            Assert.AreEqual(0, deck.Entries().Count);
+        }
+
+        [Test]
+        public void ChangingTheSideboard_IsAChangeToSave()
+        {
+            var deck = Editor();
+            deck.Name = "Mine";
+            deck.MarkSaved();
+
+            deck.Add(deck.Catalog[2].CardId, sideboard: true);
+            Assert.IsTrue(deck.HasUnsavedChanges);
+
+            deck.Remove(deck.Catalog[2].CardId, sideboard: true);
+            Assert.IsFalse(deck.HasUnsavedChanges);
+        }
+
+        [Test]
+        public void ADecksSideboard_IsSentWhenItIsSaved()
+        {
+            _transport.Enqueue(201, "{\"status\":\"ok\",\"decklist_id\":42}");
+            _transport.Enqueue(200, TestFixtures.Read("decklists"));
+            var deck = ReadyDeck();
+            deck.Add(deck.Catalog[5].CardId, sideboard: true);
+            deck.Add(deck.Catalog[5].CardId, sideboard: true);
+
+            _flow.SaveAsync(deck).GetAwaiter().GetResult();
+
+            var body = JObject.Parse(_transport.Requests[0].Body);
+            CollectionAssert.AreEqual(new[] { deck.Catalog[5].CardId, deck.Catalog[5].CardId }, body["sideboard_card_ids"].Select(t => (int)t).ToArray());
+            Assert.AreEqual(3, body["card_ids"].Count());
+        }
     }
 }

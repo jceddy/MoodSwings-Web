@@ -44,6 +44,10 @@ namespace MoodSwings.UI
         private const float CardWidth = 190f;
         private const float Pad = 6f;
         private const float SmallCardWidth = 112f;
+
+        // Winston's piles sit three across, five cards to a row.
+        private const float PileCardWidth = 98f;
+        private const int PileColumns = 5;
         private const int Columns = 8;
         private const float LineButtonWidth = 112f;
 
@@ -252,32 +256,47 @@ namespace MoodSwings.UI
                 var current = winston.IsYourTurn && number == winston.CurrentPileNumber;
                 var panel = UiFactory.Panel(piles.transform, _theme);
                 panel.gameObject.name = "Pile " + number;
-                UiFactory.Flexible(panel.gameObject, width: 1f);
+                // Equal widths whatever each holds, so five cards fit a row in every pile.
+                var panelSize = UiFactory.Flexible(panel.gameObject, width: 1f);
+                panelSize.preferredWidth = 0f;
+                panelSize.minWidth = 0f;
                 panel.GetComponent<Image>().color = current ? Color.Lerp(_theme.panel, _theme.accent, 0.25f) : _theme.panel;
                 var heading = UiFactory.Label(panel.transform, $"Pile {number} ({DraftDisplay.CardCount(winston.PileSizes[i])})", 28,
                     current ? _theme.accent : _theme.textPrimary, TextAnchor.MiddleLeft, FontStyle.Bold);
                 UiFactory.Size(heading.gameObject, height: 40f);
 
-                if (!current)
+                if (winston.PileSizes[i] == 0)
                 {
                     continue;
                 }
 
                 var cards = UiFactory.Create("Cards", panel.transform);
                 var grid = cards.gameObject.AddComponent<GridLayoutGroup>();
-                grid.cellSize = new Vector2(SmallCardWidth + 8f, CardView.HeightFor(SmallCardWidth) + 8f);
+                grid.cellSize = new Vector2(PileCardWidth + 8f, CardView.HeightFor(PileCardWidth) + 8f);
                 grid.spacing = new Vector2(8f, 8f);
                 grid.childAlignment = TextAnchor.UpperLeft;
                 grid.constraint = GridLayoutGroup.Constraint.FixedColumnCount;
-                grid.constraintCount = 3;
-                foreach (var card in winston.CurrentPileCards)
+                grid.constraintCount = PileColumns;
+
+                // The pile you're looking at is face up; the others are face down, one card back for each card in them.
+                var faceUp = current ? winston.CurrentPileCards : null;
+                var count = faceUp != null ? faceUp.Count : winston.PileSizes[i];
+                for (var c = 0; c < count; c++)
                 {
-                    var shown = card;
-                    var cell = UiFactory.Create("Cell", cards);
-                    CardView.Create(cell, shown, SmallCardWidth, _theme, showValue: false, onClick: () => _actions.Inspect(shown, $"In pile {number}"));
+                    var cell = UiFactory.Create(faceUp != null ? "Cell" : "Face-down cell", cards);
+                    if (faceUp != null)
+                    {
+                        var shown = faceUp[c];
+                        CardView.Create(cell, shown, PileCardWidth, _theme, showValue: false, onClick: () => _actions.Inspect(shown, $"In pile {number}"));
+                    }
+                    else
+                    {
+                        var back = CardView.CreateCardBack(cell, PileCardWidth, _theme);
+                        back.name = "Face-down card";
+                    }
                 }
 
-                var rows = Mathf.Max(1, Mathf.CeilToInt(winston.CurrentPileCards.Count / 3f));
+                var rows = Mathf.Max(1, Mathf.CeilToInt(count / (float)PileColumns));
                 UiFactory.Size(cards.gameObject, height: rows * (grid.cellSize.y + 8f));
             }
 

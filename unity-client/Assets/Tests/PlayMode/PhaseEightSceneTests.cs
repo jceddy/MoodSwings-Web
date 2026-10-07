@@ -1282,5 +1282,59 @@ namespace MoodSwings.Tests
             Assert.IsFalse(Board().DetailOpen);
             Assert.IsTrue(Board().Choices.IsOpen, "an answer that is owed can't be dismissed");
         }
+
+        // --- Winston's piles: five to a row, and face-down piles show card backs -------------------------
+
+        private static float TopOf(Transform t) => ((RectTransform)t).position.y;
+
+        private static float LeftOf(Transform t) => ((RectTransform)t).position.x;
+
+        [UnityTest]
+        public IEnumerator Winston_AFaceUpPile_FitsFiveCardsToARow_ThenWraps()
+        {
+            var server = Serve(Winston(pile: 2, edit: d =>
+            {
+                d["pile_sizes"] = new JArray(3, 6, 1);
+                d["current_pile_cards"] = Cards(6, 100);
+            }));
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+
+            var cells = PhaseFiveSceneTests.Child("Pile 2").Find("Cards").Cast<Transform>().Where(t => t.gameObject.activeSelf).ToList();
+            Assert.AreEqual(6, cells.Count);
+            var firstRow = cells.Where(c => Mathf.Abs(TopOf(c) - TopOf(cells[0])) < 1f).ToList();
+            Assert.AreEqual(5, firstRow.Count, "five on the first line");
+            Assert.Less(TopOf(cells[5]), TopOf(cells[0]), "the sixth wraps to the next line");
+            Assert.Greater(Mathf.Abs(TopOf(cells[5]) - TopOf(cells[0])), ((RectTransform)cells[0]).rect.height * ((RectTransform)cells[0]).lossyScale.y * 0.9f, "a whole row below");
+            var panelCorners = new Vector3[4];
+            ((RectTransform)PhaseFiveSceneTests.Child("Pile 2")).GetWorldCorners(panelCorners);
+            var lastCorners = new Vector3[4];
+            ((RectTransform)firstRow.OrderBy(LeftOf).Last()).GetWorldCorners(lastCorners);
+            Assert.LessOrEqual(lastCorners[2].x, panelCorners[2].x + 0.01f, "and they stay inside the pile");
+            ScreenshotHelper.Capture("winston-piles");
+        }
+
+        [UnityTest]
+        public IEnumerator Winston_ThePilesYouCantSee_AreCardBacks_OneForEachCardInThem()
+        {
+            var server = Serve(Winston(pile: 2, edit: d => d["pile_sizes"] = new JArray(7, 2, 3)));
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+
+            Assert.AreEqual(7, PhaseFiveSceneTests.Child("Pile 1").GetComponentsInChildren<Transform>().Count(t => t.name == "Face-down card"));
+            Assert.AreEqual(3, PhaseFiveSceneTests.Child("Pile 3").GetComponentsInChildren<Transform>().Count(t => t.name == "Face-down card"));
+            Assert.AreEqual(0, PhaseFiveSceneTests.Child("Pile 2").GetComponentsInChildren<Transform>().Count(t => t.name == "Face-down card"), "the one you're looking at is face up");
+            var back = PhaseFiveSceneTests.Child("Pile 1").GetComponentsInChildren<Image>().First(i => i.transform.name == "Face-down card");
+            Assert.AreSame(MoodSwings.Core.CardArtLibrary.CardBack(), back.sprite);
+        }
+
+        [UnityTest]
+        public IEnumerator Winston_WhenItIsNotYourTurn_EveryPileIsFaceDown()
+        {
+            var server = Serve(Winston(yourTurn: false));
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+
+            Assert.AreEqual(2, PhaseFiveSceneTests.Child("Pile 1").GetComponentsInChildren<Transform>().Count(t => t.name == "Face-down card"), "the piles hold 2, 1 and 1");
+            Assert.AreEqual(4, Object.FindObjectsByType<Transform>(FindObjectsInactive.Exclude).Count(t => t.name == "Face-down card"));
+            Assert.IsNull(PhaseFiveSceneTests.Child("Card Card100"));
+        }
     }
 }

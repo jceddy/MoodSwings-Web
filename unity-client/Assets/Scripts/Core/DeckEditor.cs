@@ -14,7 +14,7 @@ namespace MoodSwings.Core
 
     /// <summary>
     /// A deck being built: a name, who may see it, and cards with copy counts, drawn from the catalog. UI-free.
-    /// A saved deck can also carry a sideboard, which the builder keeps as it was and sends back unchanged.
+    /// A deck has a sideboard too (cards kept aside, which a Power Duel can swap in between games), built the same way.
     /// </summary>
     public sealed class DeckEditor
     {
@@ -27,7 +27,7 @@ namespace MoodSwings.Core
 
         private readonly Dictionary<int, BoardCard> _catalog;
         private readonly Dictionary<int, int> _counts = new Dictionary<int, int>();
-        private List<int> _sideboard = new List<int>();
+        private readonly Dictionary<int, int> _sideboard = new Dictionary<int, int>();
         private string _savedFingerprint = string.Empty;
 
         public DeckEditor(IEnumerable<BoardCard> catalog)
@@ -48,59 +48,68 @@ namespace MoodSwings.Core
 
         public int Count => _counts.Values.Sum();
 
-        public int SideboardCount => _sideboard.Count;
+        public int SideboardCount => _sideboard.Values.Sum();
 
-        public int CountOf(int cardId) => _counts.TryGetValue(cardId, out var count) ? count : 0;
+        private Dictionary<int, int> Zone(bool sideboard) => sideboard ? _sideboard : _counts;
 
-        public void Add(int cardId)
+        /// <summary>Copies of a card in the deck (or, with <paramref name="sideboard"/>, in its sideboard).</summary>
+        public int CountOf(int cardId, bool sideboard = false) => Zone(sideboard).TryGetValue(cardId, out var count) ? count : 0;
+
+        public void Add(int cardId, bool sideboard = false)
         {
             if (_catalog.ContainsKey(cardId))
             {
-                _counts[cardId] = CountOf(cardId) + 1;
+                Zone(sideboard)[cardId] = CountOf(cardId, sideboard) + 1;
             }
         }
 
-        public void Remove(int cardId)
+        public void Remove(int cardId, bool sideboard = false)
         {
-            var count = CountOf(cardId);
+            var zone = Zone(sideboard);
+            var count = CountOf(cardId, sideboard);
             if (count <= 1)
             {
-                _counts.Remove(cardId);
+                zone.Remove(cardId);
             }
             else
             {
-                _counts[cardId] = count - 1;
+                zone[cardId] = count - 1;
             }
         }
 
         public void Clear() => _counts.Clear();
 
-        /// <summary>The deck's lines in the order a player reads them: by color, then rarity, then name.</summary>
-        public List<DeckEntry> Entries() =>
-            DraftDisplay.SortPool(_counts.Keys.Select(id => _catalog[id]))
-                .Select(card => new DeckEntry { Card = card, Count = _counts[card.CardId] })
+        /// <summary>The deck's (or sideboard's) lines in the order a player reads them: by color, then rarity, then name.</summary>
+        public List<DeckEntry> Entries(bool sideboard = false)
+        {
+            var zone = Zone(sideboard);
+            return DraftDisplay.SortPool(zone.Keys.Select(id => _catalog[id]))
+                .Select(card => new DeckEntry { Card = card, Count = zone[card.CardId] })
                 .ToList();
+        }
 
         /// <summary>Every copy's card id, as the server wants it.</summary>
         public List<int> ToCardIds() =>
             Entries().SelectMany(e => Enumerable.Repeat(e.Card.CardId, e.Count)).ToList();
 
-        public List<int> SideboardCardIds() => new List<int>(_sideboard);
+        public List<int> SideboardCardIds() =>
+            Entries(sideboard: true).SelectMany(e => Enumerable.Repeat(e.Card.CardId, e.Count)).ToList();
 
         /// <summary>Starts from a saved deck (or a copy of one: pass <paramref name="asCopy"/> to make a new deck of it).</summary>
         public void Load(DecklistDetail deck, bool asCopy = false)
         {
             _counts.Clear();
+            _sideboard.Clear();
             foreach (var card in deck.Cards)
             {
-                var id = card.CardId;
-                if (_catalog.ContainsKey(id))
-                {
-                    _counts[id] = CountOf(id) + 1;
-                }
+                Add(card.CardId);
             }
 
-            _sideboard = asCopy ? new List<int>() : deck.SideboardCards.Select(c => c.CardId).ToList();
+            foreach (var card in deck.SideboardCards)
+            {
+                Add(card.CardId, sideboard: true);
+            }
+
             Name = asCopy ? deck.Name + " (copy)" : deck.Name;
             Visibility = asCopy ? Private : deck.Visibility ?? Private;
             DecklistId = asCopy ? (int?)null : deck.Id;
@@ -128,7 +137,8 @@ namespace MoodSwings.Core
         public void MarkSaved() => _savedFingerprint = Fingerprint();
 
         private string Fingerprint() =>
-            Name + "|" + Visibility + "|" + string.Join(",", _counts.OrderBy(p => p.Key).Select(p => p.Key + "x" + p.Value));
+            Name + "|" + Visibility + "|" + string.Join(",", _counts.OrderBy(p => p.Key).Select(p => p.Key + "x" + p.Value))
+            + "|" + string.Join(",", _sideboard.OrderBy(p => p.Key).Select(p => p.Key + "x" + p.Value));
     }
 
     /// <summary>Picking cards from the catalog: by color, rarity and a bit of text.</summary>

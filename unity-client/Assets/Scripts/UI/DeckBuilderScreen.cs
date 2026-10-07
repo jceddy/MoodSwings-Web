@@ -37,6 +37,10 @@ namespace MoodSwings.UI
         private readonly HashSet<string> _colors = new HashSet<string>();
         private readonly HashSet<string> _rarities = new HashSet<string>();
         private readonly Dictionary<int, Text> _badges = new Dictionary<int, Text>();
+        private readonly Dictionary<int, Text> _sideBadges = new Dictionary<int, Text>();
+        private Button _deckTab;
+        private Button _sideboardTab;
+        private bool _sideboardMode;
         private readonly Dictionary<string, Image> _filterButtons = new Dictionary<string, Image>();
 
         /// <summary>The deck being built; tests read it.</summary>
@@ -47,6 +51,9 @@ namespace MoodSwings.UI
         public string CountText => _count != null ? _count.text : null;
 
         public CardDetailOverlay Detail => _detail;
+
+        /// <summary>Cards tapped in the catalog go to the sideboard rather than the deck.</summary>
+        public bool EditingSideboard => _sideboardMode;
 
         public override void OnShown(object args)
         {
@@ -60,6 +67,7 @@ namespace MoodSwings.UI
             _loading.text = "Loading the cards...";
             _colors.Clear();
             _rarities.Clear();
+            _sideboardMode = false;
             _search.SetTextWithoutNotify(string.Empty);
             SetStatus(string.Empty);
             Run(() => Load(args as DeckBuilderArgs ?? new DeckBuilderArgs()));
@@ -253,6 +261,16 @@ namespace MoodSwings.UI
                 }
             });
 
+            // Which of the two lists the catalog adds to and the list below shows.
+            var tabs = UiFactory.Row(panel, "Tabs", 8f, TextAnchor.MiddleLeft);
+            UiFactory.Size(tabs.gameObject, height: 56f);
+            _deckTab = UiFactory.Button(tabs.transform, "Deck", theme, () => ShowSideboard(false), primary: false);
+            _deckTab.gameObject.name = "Deck tab";
+            UiFactory.Flexible(_deckTab.gameObject, width: 1f);
+            _sideboardTab = UiFactory.Button(tabs.transform, "Sideboard", theme, () => ShowSideboard(true), primary: false);
+            _sideboardTab.gameObject.name = "Sideboard tab";
+            UiFactory.Flexible(_sideboardTab.gameObject, width: 1f);
+
             _count = UiFactory.Label(panel, string.Empty, 30, theme.accent, TextAnchor.MiddleLeft, FontStyle.Bold);
             UiFactory.Size(_count.gameObject, height: 40f);
             _hint = UiFactory.Label(panel, string.Empty, 22, theme.textMuted, TextAnchor.MiddleLeft);
@@ -279,6 +297,7 @@ namespace MoodSwings.UI
             ShowFilters(AppServices.Theme);
             Clear(_catalogContent);
             _badges.Clear();
+            _sideBadges.Clear();
 
             var cards = CatalogFilter.Apply(_deck.Catalog, _colors, _rarities, _search.text);
             var grid = UiFactory.Create("Cards", _catalogContent);
@@ -325,6 +344,19 @@ namespace MoodSwings.UI
             badge.raycastTarget = false;
             UiFactory.Stretch(badge.rectTransform);
             _badges[card.CardId] = badge;
+
+            // Copies in the sideboard, in a bluer box at the other corner.
+            var sideBox = UiFactory.Create("Sideboard count " + card.Name, cell);
+            sideBox.anchorMin = sideBox.anchorMax = sideBox.pivot = new Vector2(0f, 0f);
+            sideBox.sizeDelta = new Vector2(96f, 44f);
+            sideBox.anchoredPosition = new Vector2(8f, 8f);
+            var sideImage = sideBox.gameObject.AddComponent<Image>();
+            sideImage.color = new Color(0.30f, 0.58f, 1.00f);
+            sideImage.raycastTarget = false;
+            var sideBadge = UiFactory.Label(sideBox, string.Empty, 26, theme.background, TextAnchor.MiddleCenter, FontStyle.Bold);
+            sideBadge.raycastTarget = false;
+            UiFactory.Stretch(sideBadge.rectTransform);
+            _sideBadges[card.CardId] = sideBadge;
             ShowBadge(card.CardId);
         }
 
@@ -338,6 +370,19 @@ namespace MoodSwings.UI
             var count = _deck.CountOf(cardId);
             badge.text = count > 0 ? "x" + count : string.Empty;
             badge.transform.parent.gameObject.SetActive(count > 0);
+
+            if (_sideBadges.TryGetValue(cardId, out var side))
+            {
+                var inSideboard = _deck.CountOf(cardId, sideboard: true);
+                side.text = inSideboard > 0 ? "SB x" + inSideboard : string.Empty;
+                side.transform.parent.gameObject.SetActive(inSideboard > 0);
+            }
+        }
+
+        private void ShowSideboard(bool sideboard)
+        {
+            _sideboardMode = sideboard;
+            RebuildDeck();
         }
 
         // --- the deck ------------------------------------------------------------------------
@@ -346,14 +391,14 @@ namespace MoodSwings.UI
 
         private void AddCopy(int cardId)
         {
-            _deck.Add(cardId);
+            _deck.Add(cardId, _sideboardMode);
             ShowBadge(cardId);
             RebuildDeck();
         }
 
         private void RemoveCard(int cardId)
         {
-            _deck.Remove(cardId);
+            _deck.Remove(cardId, _sideboardMode);
             ShowBadge(cardId);
             RebuildDeck();
         }
@@ -367,7 +412,7 @@ namespace MoodSwings.UI
 
             Clear(_deckContent);
             var theme = AppServices.Theme;
-            foreach (var entry in _deck.Entries())
+            foreach (var entry in _deck.Entries(_sideboardMode))
             {
                 var id = entry.Card.CardId;
                 var row = UiFactory.Row(_deckContent, "Line " + entry.Card.Name, 10f, TextAnchor.MiddleLeft);
@@ -390,9 +435,24 @@ namespace MoodSwings.UI
 
         private void RefreshSummary()
         {
-            _count.text = _deck.Count == 1 ? "1 card" : _deck.Count + " cards";
-            _hint.text = _deck.SizeHint() ?? string.Empty;
+            var theme = AppServices.Theme;
+            ShowTab(_deckTab, "Deck (" + _deck.Count + ")", !_sideboardMode, theme);
+            ShowTab(_sideboardTab, "Sideboard (" + _deck.SideboardCount + ")", _sideboardMode, theme);
+            var shown = _sideboardMode ? _deck.SideboardCount : _deck.Count;
+            _count.text = (_sideboardMode ? "Sideboard: " : string.Empty) + (shown == 1 ? "1 card" : shown + " cards");
+            _hint.text = _sideboardMode
+                ? "Cards kept aside, to swap in between games of a Power Duel match."
+                : _deck.SizeHint() ?? string.Empty;
             _save.interactable = !_busy && _deck.Problem() == null;
+        }
+
+        private static void ShowTab(Button tab, string label, bool active, UiTheme theme)
+        {
+            var text = tab.GetComponentInChildren<Text>();
+            text.text = label;
+            text.fontSize = 26;
+            text.color = active ? theme.background : theme.textPrimary;
+            tab.GetComponent<Image>().color = active ? theme.accent : Color.Lerp(theme.panel, Color.white, 0.12f);
         }
 
         // --- saving and leaving --------------------------------------------------------------
