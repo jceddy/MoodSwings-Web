@@ -41,6 +41,11 @@ namespace MoodSwings.Tests
                 var path = request.Url.Substring(request.Url.IndexOf("/app/", StringComparison.Ordinal) + 4);
                 Calls.Add($"{request.Method} {path} {request.Body}");
 
+                if (path.StartsWith("/games/state"))
+                {
+                    return MainSceneTests.Reply(200, Fixture("game_406_state"));
+                }
+
                 switch (path)
                 {
                     case "/me": return MainSceneTests.Reply(200, Fixture("me"));
@@ -190,7 +195,7 @@ namespace MoodSwings.Tests
         }
 
         [UnityTest]
-        public IEnumerator NewGame_StartingAGameVsBots_PostsItAndReturnsToPlay()
+        public IEnumerator NewGame_StartingAGameVsBots_PostsItAndOpensItsBoard()
         {
             var server = new LobbyFakeServer();
             yield return OpenNewGame(server);
@@ -200,11 +205,16 @@ namespace MoodSwings.Tests
             yield return PhaseTwoSceneTests.Frames();
 
             yield return PhaseTwoSceneTests.Click("Start game");
-            yield return MainSceneTests.WaitFor<PlayScreen>();
+            yield return MainSceneTests.WaitFor<BoardScreen>();
 
             Assert.IsTrue(AnyCall(server, "POST /games {", "\"opponent_user_ids\":[18,20]", "\"deck_type\":\"power\"", "\"format\":\"standard\""),
                 string.Join("\n", server.Calls));
-            Assert.AreEqual("Game created.", MainSceneTests.Screen<PlayScreen>().StatusText);
+            yield return PhaseTwoSceneTests.Frames(4);
+            Assert.IsTrue(server.Calls.Any(c => c.StartsWith("GET /games/state?game_id=408")), "the new game's board is open");
+
+            // Back from the board is the lobby it was started from.
+            UnityEngine.Object.FindAnyObjectByType<ScreenRouter>().Back();
+            yield return MainSceneTests.WaitFor<PlayScreen>();
         }
 
         [UnityTest]
@@ -220,7 +230,7 @@ namespace MoodSwings.Tests
             Assert.IsNotNull(first);
             first.isOn = true;
             yield return PhaseTwoSceneTests.Click("Start game");
-            yield return MainSceneTests.WaitFor<PlayScreen>();
+            yield return MainSceneTests.WaitFor<BoardScreen>();
 
             Assert.IsTrue(AnyCall(server, "POST /games {", "\"bot_goes_first\":true"));
         }
@@ -261,7 +271,7 @@ namespace MoodSwings.Tests
             PhaseTwoSceneTests.FindToggle("BotSage  (tactical)").isOn = true;
             yield return PhaseTwoSceneTests.Frames();
             yield return PhaseTwoSceneTests.Click("Start game");
-            yield return MainSceneTests.WaitFor<PlayScreen>();
+            yield return MainSceneTests.WaitFor<BoardScreen>();
 
             Assert.IsTrue(AnyCall(server, "POST /games {", "\"format\":\"duel\"", "\"deck_type\":\"structure\""), string.Join("\n", server.Calls));
         }
@@ -307,7 +317,7 @@ namespace MoodSwings.Tests
 
             PhaseTwoSceneTests.FindToggle("Best of three").isOn = true;
             yield return PhaseTwoSceneTests.Click("Start game");
-            yield return MainSceneTests.WaitFor<PlayScreen>();
+            yield return MainSceneTests.WaitFor<BoardScreen>();
 
             Assert.IsTrue(AnyCall(server, "POST /games {", "\"best_of_three\":true"), string.Join("\n", server.Calls));
         }
@@ -346,7 +356,7 @@ namespace MoodSwings.Tests
             yield return PhaseTwoSceneTests.Frames();
 
             yield return PhaseTwoSceneTests.Click("Start game");
-            yield return MainSceneTests.WaitFor<PlayScreen>();
+            yield return MainSceneTests.WaitFor<BoardScreen>();
 
             Assert.IsTrue(AnyCall(server, "POST /games {", "\"format\":\"closed_team\"", "\"opponent_user_ids\":[18,20,21]", "\"partner_user_id\":20"),
                 string.Join("\n", server.Calls));
@@ -368,7 +378,7 @@ namespace MoodSwings.Tests
             PhaseTwoSceneTests.FindToggle("Assign my partner at random").isOn = true;
             yield return PhaseTwoSceneTests.Frames();
             yield return PhaseTwoSceneTests.Click("Start game");
-            yield return MainSceneTests.WaitFor<PlayScreen>();
+            yield return MainSceneTests.WaitFor<BoardScreen>();
 
             Assert.IsTrue(AnyCall(server, "POST /games {", "\"format\":\"team\"", "\"random_teams\":true"), string.Join("\n", server.Calls));
             Assert.IsFalse(AnyCall(server, "POST /games {", "partner_user_id"));
@@ -439,7 +449,7 @@ namespace MoodSwings.Tests
 
             PhaseTwoSceneTests.FindToggle("Synchronous (live)").isOn = true;
             yield return PhaseTwoSceneTests.Click("Start game");
-            yield return MainSceneTests.WaitFor<PlayScreen>();
+            yield return MainSceneTests.WaitFor<BoardScreen>();
 
             Assert.IsTrue(AnyCall(server, "POST /games {", "\"synchronous_mode\":true"), string.Join("\n", server.Calls));
         }
@@ -583,7 +593,7 @@ namespace MoodSwings.Tests
             ScreenshotHelper.Capture("new-game-draft");
 
             yield return PhaseTwoSceneTests.Click("Start game");
-            yield return MainSceneTests.WaitFor<PlayScreen>();
+            yield return MainSceneTests.WaitFor<BoardScreen>();
 
             Assert.IsTrue(AnyCall(server, "POST /games {", "\"format\":\"draft\"", "\"deck_type\":\"grid_draft\"", "\"grid_draft_pool_source\":\"one_of_each\""),
                 string.Join("\n", server.Calls));
@@ -606,7 +616,7 @@ namespace MoodSwings.Tests
             Assert.AreEqual("16 cards each", PhaseFiveSceneTests.Child("Cutoff label").GetComponent<Text>().text);
 
             yield return PhaseTwoSceneTests.Click("Start game");
-            yield return MainSceneTests.WaitFor<PlayScreen>();
+            yield return MainSceneTests.WaitFor<BoardScreen>();
 
             Assert.IsTrue(AnyCall(server, "POST /games {", "\"deck_type\":\"rotisserie_draft\"", "\"rotisserie_draft_pool_source\":\"random_48\"", "\"rotisserie_draft_cutoff_count\":16"),
                 string.Join("\n", server.Calls));
@@ -629,7 +639,7 @@ namespace MoodSwings.Tests
             Assert.IsFalse(PhaseTwoSceneTests.FindToggle("BotBen").isOn);
 
             yield return PhaseTwoSceneTests.Click("Start game");
-            yield return MainSceneTests.WaitFor<PlayScreen>();
+            yield return MainSceneTests.WaitFor<BoardScreen>();
 
             Assert.IsTrue(AnyCall(server, "POST /games {", "\"format\":\"draft\"", "\"deck_type\":\"sealed_pool_of_the_day\""), string.Join("\n", server.Calls));
         }
@@ -656,7 +666,7 @@ namespace MoodSwings.Tests
             ScreenshotHelper.Capture("new-game-custom-deck");
 
             yield return PhaseTwoSceneTests.Click("Start game");
-            yield return MainSceneTests.WaitFor<PlayScreen>();
+            yield return MainSceneTests.WaitFor<BoardScreen>();
 
             Assert.IsTrue(AnyCall(server, "POST /games {", "\"deck_type\":\"custom\"", "\"saved_decklist_id\":30"), string.Join("\n", server.Calls));
         }
@@ -690,7 +700,7 @@ namespace MoodSwings.Tests
             ScreenshotHelper.Capture("new-game-custom-duel");
 
             yield return PhaseTwoSceneTests.Click("Start game");
-            yield return MainSceneTests.WaitFor<PlayScreen>();
+            yield return MainSceneTests.WaitFor<BoardScreen>();
 
             Assert.IsTrue(AnyCall(server, "POST /games {", "\"deck_type\":\"custom_duel\"", "\"preset\":\"power\"", "\"allow_sideboarding\":true",
                 "\"bot_decklists\":{\"9\":{\"saved_decklist_id\":30}}", "\"best_of_three\":true"), string.Join("\n", server.Calls));
@@ -713,7 +723,7 @@ namespace MoodSwings.Tests
             yield return PhaseTwoSceneTests.Frames(2);
 
             yield return PhaseTwoSceneTests.Click("Start game");
-            yield return MainSceneTests.WaitFor<PlayScreen>();
+            yield return MainSceneTests.WaitFor<BoardScreen>();
 
             Assert.IsTrue(AnyCall(server, "POST /games {", "\"quick_draft_pool_source\":\"saved_deck\"", "\"saved_decklist_id\":30"), string.Join("\n", server.Calls));
         }
@@ -794,7 +804,7 @@ namespace MoodSwings.Tests
             Assert.IsNull(PhaseTwoSceneTests.FindToggle("Best of three"), "a sealed match is always a match");
 
             yield return PhaseTwoSceneTests.Click("Start game");
-            yield return MainSceneTests.WaitFor<PlayScreen>();
+            yield return MainSceneTests.WaitFor<BoardScreen>();
 
             Assert.IsTrue(AnyCall(server, "POST /games {", "\"format\":\"draft\"", "\"deck_type\":\"sealed_deck\""), string.Join("\n", server.Calls));
         }

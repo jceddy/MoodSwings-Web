@@ -706,7 +706,14 @@ namespace MoodSwings.UI
                 return;
             }
 
-            // Back to wherever this was opened from, which shows what happened.
+            // A game that starts right away opens on its board (and Back from there is the lobby, as before).
+            // A posted one has no game yet, so the screen this was opened from tells what happened.
+            if (!_setup.PostToOpenLobby && result.GameId.HasValue)
+            {
+                Router.Show<BoardScreen>(BoardSession.ForPlayer(AppServices.Api, result.GameId.Value), addToHistory: false);
+                return;
+            }
+
             var message = result.Message;
             Router.Back();
             Router.Current?.ShowMessage(message);

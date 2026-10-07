@@ -1218,5 +1218,69 @@ namespace MoodSwings.Tests
             AssertEyeUnderTheDie("Grid0");
             AssertEyeUnderTheDie("Grid8");
         }
+
+        // --- looking at the cards you are choosing between ---------------------------------------------
+
+        private static Button InspectOption(string labelStart) =>
+            Object.FindObjectsByType<Button>(FindObjectsInactive.Exclude).FirstOrDefault(b => b.name.StartsWith("Inspect " + labelStart));
+
+        [UnityTest]
+        public IEnumerator Choosing_ACardFromYourHand_EachCardHasAnEyeToReadItFirst()
+        {
+            var server = Serve(PhaseFiveSceneTests.Load(407));
+            yield return PhaseFiveSceneTests.OpenBoard(server, 407);
+            Assert.IsTrue(Board().Choices.IsOpen, "Confusion asks which card to give");
+
+            var eye = InspectOption("Loyalty");
+            Assert.IsNotNull(eye, "an eye on the option for Loyalty");
+            Assert.AreSame(UiIcons.Eye(), eye.transform.Find("Eye").GetComponent<Image>().sprite);
+            yield return PhaseFiveSceneTests.Tap(eye);
+
+            Assert.IsTrue(Board().DetailOpen);
+            Assert.IsTrue(Board().DetailIsOnTop, "over the choice form, not under it");
+            Assert.IsTrue(Texts().Any(t => t.Contains("In your hand")), string.Join(" | ", Texts()));
+            Assert.IsFalse(Board().Choices.SubmitEnabled, "looking isn't choosing");
+            ScreenshotHelper.Capture("choice-eye-detail");
+        }
+
+        [UnityTest]
+        public IEnumerator Choosing_AMood_EachMoodHasAnEye_AndTheDetailSaysWhoseItIs()
+        {
+            var server = Serve(PhaseFiveSceneTests.Load(405));
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+
+            var eye = InspectOption(string.Empty);
+            Assert.IsNotNull(eye, "the moods you can choose between each have an eye");
+            yield return PhaseFiveSceneTests.Tap(eye);
+
+            Assert.IsTrue(Board().DetailOpen);
+            Assert.IsTrue(Texts().Any(t => t.Contains("In play for")), string.Join(" | ", Texts()));
+        }
+
+        [UnityTest]
+        public IEnumerator Choosing_TheEyeAndTheOptionAreSeparate_TappingTheRowStillChooses()
+        {
+            var server = Serve(PhaseFiveSceneTests.Load(407));
+            yield return PhaseFiveSceneTests.OpenBoard(server, 407);
+
+            var option = Object.FindObjectsByType<Button>(FindObjectsInactive.Exclude).First(b => b.name.StartsWith("Option Loyalty"));
+            yield return PhaseFiveSceneTests.Tap(option);
+
+            Assert.IsTrue(Board().Choices.SubmitEnabled);
+            Assert.IsFalse(Board().DetailOpen);
+        }
+
+        [UnityTest]
+        public IEnumerator Choosing_BackClosesTheDetailBeforeAnything_ElseAndTheFormStays()
+        {
+            var server = Serve(PhaseFiveSceneTests.Load(407));
+            yield return PhaseFiveSceneTests.OpenBoard(server, 407);
+            yield return PhaseFiveSceneTests.Tap(InspectOption("Loyalty"));
+
+            Assert.IsTrue(Board().HandleBack());
+
+            Assert.IsFalse(Board().DetailOpen);
+            Assert.IsTrue(Board().Choices.IsOpen, "an answer that is owed can't be dismissed");
+        }
     }
 }

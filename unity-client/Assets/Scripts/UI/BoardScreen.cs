@@ -419,7 +419,7 @@ namespace MoodSwings.UI
             };
 
             // Last, so they sit on top of everything else.
-            _choices = new ChoiceOverlay(transform, theme);
+            _choices = new ChoiceOverlay(transform, theme) { Inspect = (card, where) => ShowDetail(card, where) };
             _confirm = new ConfirmOverlay(transform, theme);
         }
 
@@ -786,7 +786,7 @@ namespace MoodSwings.UI
             _detail = UiFactory.Create("CardDetail", transform).gameObject;
             var root = (RectTransform)_detail.transform;
             UiFactory.Stretch(root);
-            root.gameObject.AddComponent<Image>().color = new Color(0f, 0f, 0f, 0.82f);
+            root.gameObject.AddComponent<Image>().color = new Color(0f, 0f, 0f, 0.94f);
             // Anywhere on the dimmed backdrop closes it.
             var close = root.gameObject.AddComponent<Button>();
             close.targetGraphic = root.GetComponent<Image>();
@@ -1535,8 +1535,12 @@ namespace MoodSwings.UI
             }
         }
 
+        /// <summary>The card's detail is drawn over whatever else is open (a choice form, say), not under it.</summary>
+        public bool DetailIsOnTop => _detail.activeSelf && _detail.transform.GetSiblingIndex() == transform.childCount - 1;
+
         private void ShowDetail(BoardCard card, string where)
         {
+            _detail.transform.SetAsLastSibling();
             foreach (Transform child in _detailCardHolder)
             {
                 child.gameObject.SetActive(false);
