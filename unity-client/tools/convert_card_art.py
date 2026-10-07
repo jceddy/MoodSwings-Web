@@ -7,13 +7,14 @@ than committing a second set of (much larger) PNGs. Output is git-ignored.
 
     pip install pillow
     python tools/convert_card_art.py
-    python tools/convert_card_art.py --overrides "C:/path/to/MOOD cards"
+    python tools/convert_card_art.py --overrides "C:/path/to/more cards"
 
 Writes into Assets/Resources/CardArt/:
     <catalog_id>.png            from img/cards/MSW/<catalog_id>-<slug>.webp
     hurt-feelings[-<skin>].png  from img/hurt-feelings[-<skin>].webp
 
---overrides DIR (repeatable) takes replacement card images -- finished card faces named
+unity-client/art-overrides/ holds the replacement card faces (our own art, replacing the web-static
+set one card at a time) and is always used. --overrides DIR (repeatable) adds more folders takes replacement card images -- finished card faces named
 <number>-<slug>.png (or .webp/.jpg), like "01-altruism.png" -- and uses them instead of the
 web-static art for those card numbers. They are always re-converted.
 
@@ -32,6 +33,7 @@ from PIL import Image
 UNITY_CLIENT = Path(__file__).resolve().parent.parent
 IMG_ROOT = UNITY_CLIENT.parent / "web-static" / "img"
 OUT_DIR = UNITY_CLIENT / "Assets" / "Resources" / "CardArt"
+OVERRIDES_DIR = UNITY_CLIENT / "art-overrides"
 
 CARD_NAME = re.compile(r"^(\d+)-.+\.webp$")
 
@@ -81,7 +83,9 @@ def main() -> int:
 
     # A replacement card face wins over the web-static one for the same card number.
     overridden = {}
-    for folder in args.overrides:
+    for folder in [OVERRIDES_DIR, *args.overrides]:
+        if not Path(folder).is_dir():
+            continue
         for source in sorted(Path(folder).iterdir()):
             match = OVERRIDE_NAME.match(source.name)
             if match:

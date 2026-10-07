@@ -502,7 +502,11 @@ Python scripts in `tools/` (`pip install pillow` for the first):
 - `convert_card_art.py` -- converts `web-static/img` card art from WebP
   (which Unity can't import) to PNGs in `Assets/Resources/CardArt/`,
   named by catalog id. That folder is git-ignored; run the script after
-  cloning. `CardArtLibrary.ForCard(id)` loads from it. Art is sized to a
+  cloning. Our own replacement card faces live in `art-overrides/`
+  (`<number>-<name>.webp`, e.g. `01-altruism.webp`); for those card numbers
+  the script uses them instead of the web-static art, so replacing a card
+  is just adding its file there and re-running. `--overrides DIR` adds
+  another folder (PNG/WebP/JPG). `CardArtLibrary.ForCard(id)` loads from it. Art is sized to a
   multiple of 4 and imported without rescaling (`CardArtImporter`), which
   GPU texture compression requires -- otherwise Unity silently keeps each
   card as uncompressed RGBA32 (~3 MB instead of under 1 MB). Mipmaps are on
