@@ -202,6 +202,13 @@ Each phase ends with something runnable against the dev server
 
 ### Phase 9 -- Meta features
 - Tournaments and pod drafts, stats, achievements, card stats, notifications.
+- **Plan, in steps:** (a) lifetime stats, achievements and the Home menu's two-column grid;
+  (b) card stats; (c) tournaments and pod drafts (and the Weekly Sealed Pool queue and standings);
+  (d) notification preferences and in-app unlock/turn notes (native push is the open decision below).
+- **Status:** (a) and (b) built and verified headless: the Stats screen (records and past Weekly Sealed
+  Pool weeks), Achievements (categories in the web page's order, tier badges, progress, hide-locked, "new"
+  badge on Home) and the searchable, sortable, paged Card stats table. **Not yet verified:** against the real
+  dev server -- the responses are written from the documented shapes.
 
 ### Phase 10 -- Ship
 - Android and Windows builds first; iOS and macOS after.

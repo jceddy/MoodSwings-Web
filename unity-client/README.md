@@ -373,6 +373,21 @@ game" below.
   checks the size, rarity and copy limits as you tap cards in and out. (Rules of your own making,
   and pasting a deck from text, are web-only for now.)
 
+## Stats, achievements and card stats
+
+- **Home > Stats** shows your lifetime games and matches as `wins-losses (NN%)` (the percentage only once
+  there is something to measure) and your finished Weekly Sealed Pool weeks with where each placed you.
+  Its **Card stats** button opens the server-wide table: for every card, how many decks it made and
+  how those games went, how often it was played and how those went, and how early it gets taken in each
+  draft format. Search by name, filter by set, order by any column (the **Order by** button steps through
+  them, the arrow flips the direction; cards with no data for a column stay at the end), 40 to a
+  page; tap a card to see it.
+- **Home > Achievements** lists every achievement by category with its tier, a progress bar for the
+  counting ones and a check once unlocked; hidden ones read "???" until unlocked. **Hide locked
+  achievements** is remembered on the device. Unlocks you haven't looked at yet show on the Home button
+  as "(N new)" -- the first look on a device counts what is already unlocked as seen.
+- Home's secondary buttons sit two to a row so the menu keeps fitting a landscape screen.
+
 ## Tests
 
 - **EditMode** (Window > General > Test Runner): `ApiClient`, `AuthFlow`,

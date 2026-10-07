@@ -209,5 +209,152 @@ namespace MoodSwings.Tests
             Assert.IsFalse(AppServices.Stats.AchievementsLoaded);
             Assert.IsNull(AppServices.Stats.Stats);
         }
+
+        // --- card stats ----------------------------------------------------------------------------------
+
+        private static string Fixture(string name) =>
+            System.IO.File.ReadAllText(System.IO.Path.Combine(Application.dataPath, "Tests", "Fixtures", name + ".json"));
+
+        /// <summary>A stats row for every card in the captured catalog: more in decks the later it comes, one drafted card.</summary>
+        private static string CardStatsFor(out System.Collections.Generic.List<MoodSwings.Networking.BoardCard> catalog)
+        {
+            catalog = Newtonsoft.Json.JsonConvert.DeserializeObject<MoodSwings.Networking.CatalogResponse>(Fixture("cards_catalog")).Cards;
+            var rows = new Newtonsoft.Json.Linq.JArray();
+            for (var i = 0; i < catalog.Count; i++)
+            {
+                var card = catalog[i];
+                var drafted = i == 0;
+                rows.Add(new Newtonsoft.Json.Linq.JObject
+                {
+                    ["catalog_card_id"] = card.CardId,
+                    ["name"] = card.Name,
+                    ["set_code"] = i % 2 == 0 ? "BASE" : "PROMO",
+                    ["collector_number"] = i + 1,
+                    ["rarity"] = card.Rarity,
+                    ["color"] = card.Color,
+                    ["times_in_deck"] = i,
+                    ["deck_win_rate"] = i == 0 ? null : (Newtonsoft.Json.Linq.JToken)0.5,
+                    ["times_played"] = i * 2,
+                    ["play_win_rate"] = i == 0 ? null : (Newtonsoft.Json.Linq.JToken)0.25,
+                    ["quick_draft"] = new Newtonsoft.Json.Linq.JObject { ["average"] = drafted ? 3.5 : null, ["count"] = drafted ? 4 : 0 },
+                    ["winston_draft"] = new Newtonsoft.Json.Linq.JObject { ["average"] = null, ["count"] = 0 },
+                    ["grid_draft"] = new Newtonsoft.Json.Linq.JObject { ["average"] = null, ["count"] = 0 },
+                    ["rotisserie_draft"] = new Newtonsoft.Json.Linq.JObject { ["average"] = null, ["count"] = 0 },
+                });
+            }
+
+            return new Newtonsoft.Json.Linq.JObject { ["status"] = "ok", ["cards"] = rows }.ToString();
+        }
+
+        private static IEnumerator OpenCardStats(PhaseFiveSceneTests.PlayServer server)
+        {
+            yield return Open<StatsScreen>(server, "Stats");
+            yield return PhaseTwoSceneTests.Click("Card stats");
+            yield return MainSceneTests.WaitFor<CardStatsScreen>();
+            yield return PhaseTwoSceneTests.Frames(10);
+        }
+
+        private static System.Collections.Generic.List<string> CardRows() =>
+            MainSceneTests.Screen<CardStatsScreen>().GetComponentsInChildren<RectTransform>()
+                .Where(t => t.name.StartsWith("Card ") && t.GetComponent<Button>() != null).Select(t => t.name.Substring(5)).ToList();
+
+        [UnityTest]
+        public IEnumerator CardStats_ListACardsFiguresAPageAtATime()
+        {
+            var server = Serve();
+            server.CardStatsJson = CardStatsFor(out var catalog);
+            yield return OpenCardStats(server);
+
+            var expectedPages = (catalog.Count + MoodSwings.Core.CardStatsQuery.PageSize - 1) / MoodSwings.Core.CardStatsQuery.PageSize;
+            Assert.AreEqual($"Page 1 of {expectedPages} ({catalog.Count} cards)", MainSceneTests.Screen<CardStatsScreen>().PageText);
+            Assert.AreEqual(MoodSwings.Core.CardStatsQuery.PageSize, CardRows().Count);
+            var first = CardRows()[0];
+            Assert.AreEqual(catalog.Select(c => c.Name).OrderBy(n => n, System.StringComparer.OrdinalIgnoreCase).First(), first, "by name to begin with");
+            var texts = Texts();
+            Assert.IsTrue(texts.Any(t => t.StartsWith("In ") && t.Contains(" decks  ·  won ")), string.Join(" | ", texts.Take(20)));
+            Assert.IsTrue(texts.Any(t => t.StartsWith("Played ") && t.Contains("×  ·  won 25%")));
+            Assert.IsFalse(PhaseTwoSceneTests.FindButton("< Previous").interactable);
+            Assert.IsTrue(PhaseTwoSceneTests.FindButton("Next >").interactable);
+            ScreenshotHelper.Capture("card-stats");
+
+            yield return PhaseTwoSceneTests.Click("Next >");
+            Assert.AreEqual($"Page 2 of {expectedPages} ({catalog.Count} cards)", MainSceneTests.Screen<CardStatsScreen>().PageText);
+            Assert.AreNotEqual(first, CardRows()[0]);
+            Assert.IsTrue(PhaseTwoSceneTests.FindButton("< Previous").interactable);
+        }
+
+        [UnityTest]
+        public IEnumerator CardStats_OrderByAnyColumn_AndFlipTheDirection()
+        {
+            var server = Serve();
+            server.CardStatsJson = CardStatsFor(out var catalog);
+            yield return OpenCardStats(server);
+
+            // "Order by" steps through the columns: name, set, rarity, color, in decks.
+            for (var i = 0; i < 4; i++)
+            {
+                yield return PhaseTwoSceneTests.Click(MainSceneTests.Screen<CardStatsScreen>().Query.Sort.Label);
+            }
+
+            Assert.AreEqual("In decks", MainSceneTests.Screen<CardStatsScreen>().Query.Sort.Label);
+            Assert.AreEqual(catalog[0].Name, CardRows()[0], "the least-played card first");
+
+            yield return PhaseTwoSceneTests.Click("▲ Low to high");
+            Assert.AreEqual(catalog[catalog.Count - 1].Name, CardRows()[0], "and flipped, the most");
+            Assert.IsNotNull(PhaseTwoSceneTests.FindButton("▼ High to low"));
+        }
+
+        [UnityTest]
+        public IEnumerator CardStats_SearchAndSetFilter_NarrowTheList()
+        {
+            var server = Serve();
+            server.CardStatsJson = CardStatsFor(out var catalog);
+            yield return OpenCardStats(server);
+
+            yield return PhaseTwoSceneTests.Click("All sets");
+            Assert.AreEqual("BASE", MainSceneTests.Screen<CardStatsScreen>().Query.SetCode);
+            var inBase = (catalog.Count + 1) / 2;
+            var basePages = (inBase + MoodSwings.Core.CardStatsQuery.PageSize - 1) / MoodSwings.Core.CardStatsQuery.PageSize;
+            Assert.AreEqual($"Page 1 of {basePages} ({inBase} cards)", MainSceneTests.Screen<CardStatsScreen>().PageText);
+
+            var field = PhaseFiveSceneTests.Child("Search").GetComponent<InputField>();
+            field.text = catalog[0].Name;
+            yield return PhaseTwoSceneTests.Frames(6);
+            Assert.IsTrue(CardRows().Contains(catalog[0].Name));
+            Assert.IsTrue(CardRows().Count <= 3, "only the cards with that in their name");
+
+            field.text = "zzzz no such card";
+            yield return PhaseTwoSceneTests.Frames(6);
+            Assert.IsTrue(Texts().Contains("No cards match."));
+            Assert.AreEqual("Page 1 of 1 (0 cards)", MainSceneTests.Screen<CardStatsScreen>().PageText);
+        }
+
+        [UnityTest]
+        public IEnumerator CardStats_ATappedCard_ShowsItsText()
+        {
+            var server = Serve();
+            server.CardStatsJson = CardStatsFor(out var catalog);
+            yield return OpenCardStats(server);
+
+            var name = CardRows()[0];
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.Child("Card " + name).GetComponent<Button>());
+            yield return PhaseTwoSceneTests.Frames(4);
+
+            var card = catalog.First(c => c.Name == name);
+            Assert.IsTrue(Texts().Contains(card.Name));
+            Assert.IsTrue(MainSceneTests.Screen<CardStatsScreen>().HandleBack(), "Back closes the card first");
+            Assert.IsFalse(MainSceneTests.Screen<CardStatsScreen>().HandleBack());
+        }
+
+        [UnityTest]
+        public IEnumerator CardStats_WhenTheyCantBeLoaded_SaySo()
+        {
+            var server = Serve();
+            server.CardStatsJson = "{\"status\":\"error\",\"message\":\"Not available\"}";
+            yield return OpenCardStats(server);
+
+            Assert.IsTrue(Texts().Contains("Loading the card stats..."));
+            Assert.IsFalse(string.IsNullOrEmpty(MainSceneTests.Screen<CardStatsScreen>().StatusText));
+        }
     }
 }

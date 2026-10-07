@@ -10,6 +10,12 @@ namespace MoodSwings.UI
     {
         protected override string Title => "Your stats";
 
+        protected override void BuildBelow(RectTransform column, UiTheme theme)
+        {
+            var cards = UiFactory.Button(column, "Card stats", theme, () => Router.Show<CardStatsScreen>(), primary: false);
+            cards.gameObject.name = "Card stats";
+        }
+
         public override void OnShown(object args)
         {
             EnsureBuilt();

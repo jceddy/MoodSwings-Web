@@ -60,6 +60,7 @@ namespace MoodSwings.Editor
                 AddScreen<DeckBuilderScreen>(canvasObject.transform),
                 AddScreen<AchievementsScreen>(canvasObject.transform),
                 AddScreen<StatsScreen>(canvasObject.transform),
+                AddScreen<CardStatsScreen>(canvasObject.transform),
                 AddScreen<MaintenanceScreen>(canvasObject.transform),
             };
 

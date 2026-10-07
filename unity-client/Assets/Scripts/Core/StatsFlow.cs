@@ -33,6 +33,11 @@ namespace MoodSwings.Core
 
         public bool AchievementsLoaded { get; private set; }
 
+        /// <summary>Server-wide figures for every catalog card; empty until the first fetch.</summary>
+        public IReadOnlyList<CardStat> CardStats { get; private set; } = new List<CardStat>();
+
+        public bool CardStatsLoaded { get; private set; }
+
         public event Action Changed;
 
         public async Task<LobbyResult> RefreshStatsAsync(CancellationToken cancellationToken = default)
@@ -69,6 +74,20 @@ namespace MoodSwings.Core
             return new LobbyResult { Ok = true };
         }
 
+        public async Task<LobbyResult> RefreshCardStatsAsync(CancellationToken cancellationToken = default)
+        {
+            var result = await _api.GetCardStatsAsync(cancellationToken);
+            if (!result.Ok)
+            {
+                return new LobbyResult { Message = result.UserMessage("Couldn't load the card stats.") };
+            }
+
+            CardStats = result.Value.Cards ?? new List<CardStat>();
+            CardStatsLoaded = true;
+            Changed?.Invoke();
+            return new LobbyResult { Ok = true };
+        }
+
         /// <summary>Every achievement unlocked after the last time the Achievements screen was opened.</summary>
         public List<Achievement> Unseen() => AchievementsDisplay.UnlockedAfter(Achievements, _device.AchievementsSeenAt);
 
@@ -89,6 +108,8 @@ namespace MoodSwings.Core
             PriorWeeklySealedEvents = new List<WeeklySealedEvent>();
             Achievements = new Dictionary<string, List<Achievement>>();
             AchievementsLoaded = false;
+            CardStats = new List<CardStat>();
+            CardStatsLoaded = false;
             Changed?.Invoke();
         }
     }
