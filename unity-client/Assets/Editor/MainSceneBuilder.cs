@@ -61,6 +61,10 @@ namespace MoodSwings.Editor
                 AddScreen<AchievementsScreen>(canvasObject.transform),
                 AddScreen<StatsScreen>(canvasObject.transform),
                 AddScreen<CardStatsScreen>(canvasObject.transform),
+                AddScreen<TournamentsScreen>(canvasObject.transform),
+                AddScreen<TournamentScreen>(canvasObject.transform),
+                AddScreen<NewTournamentScreen>(canvasObject.transform),
+                AddScreen<PodDraftScreen>(canvasObject.transform),
                 AddScreen<MaintenanceScreen>(canvasObject.transform),
             };
 

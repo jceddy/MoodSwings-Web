@@ -56,6 +56,21 @@ namespace MoodSwings.Tests
             /// <summary>GET /user/stats answers with this.</summary>
             public string StatsJson = "{\"status\":\"ok\",\"username\":\"bshaftoe\",\"stats\":{\"game_wins\":0,\"game_losses\":0,\"game_win_percentage\":null,\"match_wins\":0,\"match_losses\":0,\"match_win_percentage\":null},\"prior_weekly_sealed_pool_events\":[]}";
 
+            /// <summary>GET /tournaments?mine=1 answers with this.</summary>
+            public string TournamentsMineJson = "{\"status\":\"ok\",\"tournaments\":[]}";
+
+            /// <summary>GET /tournaments (the open ones) answers with this.</summary>
+            public string TournamentsOpenJson = "{\"status\":\"ok\",\"tournaments\":[]}";
+
+            /// <summary>GET /tournaments/state answers with this.</summary>
+            public string TournamentStateJson = "{\"status\":\"error\",\"message\":\"No such tournament\"}";
+
+            /// <summary>GET /tournaments/pod-draft/state answers with this.</summary>
+            public string PodDraftJson = "{\"status\":\"error\",\"message\":\"No such draft\"}";
+
+            /// <summary>Answers a POST under /tournaments with this, given its path and body; null means a plain "ok" (201 with an id for a new one).</summary>
+            public Func<string, JObject, HttpResponse> OnTournamentPost;
+
             /// <summary>GET /stats/cards answers with this.</summary>
             public string CardStatsJson = "{\"status\":\"ok\",\"cards\":[]}";
 
@@ -99,6 +114,30 @@ namespace MoodSwings.Tests
                 {
                     var body = string.IsNullOrEmpty(request.Body) ? new JObject() : JObject.Parse(request.Body);
                     return OnPost?.Invoke(path, body) ?? MainSceneTests.Reply(200, "{\"status\":\"ok\"}");
+                }
+
+                if (path.StartsWith("/tournaments"))
+                {
+                    if (request.Method == "POST")
+                    {
+                        var tournamentBody = string.IsNullOrEmpty(request.Body) ? new JObject() : JObject.Parse(request.Body);
+                        return OnTournamentPost?.Invoke(path, tournamentBody)
+                            ?? (path == "/tournaments"
+                                ? MainSceneTests.Reply(201, "{\"status\":\"ok\",\"tournament_id\":77}")
+                                : MainSceneTests.Reply(200, "{\"status\":\"ok\"}"));
+                    }
+
+                    if (path.StartsWith("/tournaments/pod-draft/state"))
+                    {
+                        return MainSceneTests.Reply(PodDraftJson.Contains("\"error\"") ? 400 : 200, PodDraftJson);
+                    }
+
+                    if (path.StartsWith("/tournaments/state"))
+                    {
+                        return MainSceneTests.Reply(TournamentStateJson.Contains("\"error\"") ? 404 : 200, TournamentStateJson);
+                    }
+
+                    return MainSceneTests.Reply(200, path.Contains("mine=1") ? TournamentsMineJson : TournamentsOpenJson);
                 }
 
                 if (path.StartsWith("/decklists/view"))

@@ -209,6 +209,11 @@ Each phase ends with something runnable against the dev server
   Pool weeks), Achievements (categories in the web page's order, tier badges, progress, hide-locked, "new"
   badge on Home) and the searchable, sortable, paged Card stats table. **Not yet verified:** against the real
   dev server -- the responses are written from the documented shapes.
+  (c) Tournaments: the list (invitations, yours, open, cancelled), join/accept/decline/withdraw with the Power
+  Duel deck choice, the tournament view (bracket, Swiss standings, pods, your pool, start/cancel, a way into your
+  game), New Tournament, and the Booster Draft pod draft. **Not included:** casting and cast grants, inviting after
+  creation, pasted decklist text, timeout/synchronous options. **Not yet verified:** any tournament against the real
+  dev server (states are written from the documented shapes and the web client's reading of them).
 
 ### Phase 10 -- Ship
 - Android and Windows builds first; iOS and macOS after.

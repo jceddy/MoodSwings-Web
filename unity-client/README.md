@@ -388,6 +388,26 @@ game" below.
   as "(N new)" -- the first look on a device counts what is already unlocked as seen.
 - Home's secondary buttons sit two to a row so the menu keeps fitting a landscape screen.
 
+## Tournaments
+
+- **Home > Tournaments** lists invitations to answer (Accept / Decline), the tournaments you're in or run
+  (View, plus Edit deck and Withdraw while registration is open), the open ones you can **Join**, and
+  cancelled ones. A Power Duel tournament asks for one of your saved decks (or a friend's shared one)
+  when you join or accept, and lets you change it until the tournament starts; the other formats join at once.
+- **New tournament**: a name, the format (Power Duel, Traditional, Grid Draft -- fresh each match, pod draft or pods
+  with playoffs -- Sealed Deck, Booster Draft), the bracket (single or double elimination, Swiss; pods with playoffs
+  are always single), 4 to 16 players, open or invite-only (pick friends; it needs enough invitations to fill it).
+  Every match is a best of three, as on the web page.
+- **View** shows the bracket (or Swiss standings), each match with **Go to game** / **View game**, the players while
+  registration is open, and the draft pods of a pod tournament. **Go to your game** opens the match you're in.
+  Its maker gets **Start tournament** (once enough have joined) and **Cancel tournament** (asked first).
+  Your drafted pool and last deck can be looked through. The view refreshes every few seconds.
+- **Booster Draft** pods: **Continue drafting** opens a screen with your two boosters -- tap a card (the eye reads
+  it) and **Take card**, once from each booster per round, thirty cards in all. A **Grid Draft** pod drafts on the
+  ordinary board (its game is the pod's).
+- **Not in the app yet** (web only): casting a tournament's matches, giving casters access, inviting more friends after
+  creating one, pasting or uploading decklist text, the turn-timeout and synchronous options on a new tournament.
+
 ## Tests
 
 - **EditMode** (Window > General > Test Runner): `ApiClient`, `AuthFlow`,

@@ -76,9 +76,10 @@ namespace MoodSwings.UI
             _friendsLabel = GridButton(column, "Friends", theme, () => Router.Show<FriendsScreen>());
             _achievementsLabel = GridButton(column, "Achievements", theme, () => Router.Show<AchievementsScreen>());
 
+            GridButton(column, "Tournaments", theme, () => Router.Show<TournamentsScreen>());
             GridButton(column, "Stats", theme, () => Router.Show<StatsScreen>());
-            GridButton(column, "Settings", theme, () => Router.Show<SettingsScreen>());
 
+            GridButton(column, "Settings", theme, () => Router.Show<SettingsScreen>());
             GridButton(column, "Log out", theme, OnLogoutClicked);
 
             // A full-screen desktop window has no close button of its own.
@@ -140,6 +141,7 @@ namespace MoodSwings.UI
                 AppServices.Puzzles.Clear();
                 AppServices.Decklists.Clear();
                 AppServices.Stats.Clear();
+                AppServices.Tournaments.Clear();
                 if (this == null)
                 {
                     return;

@@ -28,6 +28,8 @@ namespace MoodSwings.Core
 
         public static StatsFlow Stats { get; private set; }
 
+        public static TournamentFlow Tournaments { get; private set; }
+
         /// <summary>Sound and vibration switches for this device.</summary>
         public static DeviceSettings Device { get; private set; }
 
@@ -68,6 +70,7 @@ namespace MoodSwings.Core
             Decklists = new DecklistFlow(api);
             Device = new DeviceSettings(preferences ?? new InMemoryKeyValueStore());
             Stats = new StatsFlow(api, Device);
+            Tournaments = new TournamentFlow(api);
             if (Theme == null)
             {
                 Theme = ScriptableObject.CreateInstance<UiTheme>();
