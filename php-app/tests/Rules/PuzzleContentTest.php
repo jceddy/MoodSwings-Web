@@ -1429,6 +1429,55 @@ final class PuzzleContentTest extends TestCase
         self::assertSame("{$solverName} drew Paranoia", $descriptions[2]);
     }
 
+    /**
+     * "Bittersweet": the only winning line (exhaustive search of the real
+     * flow, one play) is Bliss discarding Boredom. The red card joins Rage in
+     * the discard pile, so Misery switches on (8) and nothing red is in play
+     * to triple: Misery 8 + Complacency 4 + Bliss 2 = 14 against the
+     * opponent's 12. See migration 0447's own docblock.
+     */
+    public function testBittersweetSolvedByDiscardingTheRedCardToSwitchOnMisery(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('bittersweet');
+
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 108, 'hand'), [
+            'discard_card_id' => $this->instanceId($gameId, 83, 'hand'), // Boredom
+        ]);
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameSolved($gameId, $p);
+    }
+
+    /**
+     * The obvious Bliss play -- discard Apathy, which matches Misery --
+     * triples Misery but leaves it off: 6 + 4 + 2 = 12, a tie with the
+     * opponent's 12, and a tie goes to the opponent who played first.
+     */
+    public function testBittersweetDiscardingApathyOnlyTiesAndLoses(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('bittersweet');
+
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 108, 'hand'), [
+            'discard_card_id' => $this->instanceId($gameId, 55, 'hand'), // Apathy
+        ]);
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameFailed($gameId);
+    }
+
+    /** Playing Boredom or Apathy instead of Bliss leaves Misery off: 2 + 4 + 4 = 10, a loss. */
+    public function testBittersweetPlayingAVanillaInsteadOfBlissLoses(): void
+    {
+        foreach ([83, 55] as $catalogCardId) {
+            ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('bittersweet');
+
+            $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, $catalogCardId, 'hand'));
+
+            self::assertTrue($result['game_completed'], "card {$catalogCardId}");
+            $this->assertGameFailed($gameId);
+        }
+    }
+
     /** A solve is never marked failed, and puzzle_failed is false while an attempt is open. */
     public function testDeadHeatSolveIsNotFailedAndOpenAttemptIsNotFailed(): void
     {
