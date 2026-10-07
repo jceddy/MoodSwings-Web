@@ -13818,18 +13818,17 @@ than a parallel bespoke system:
   card to discard, with Misery turning one choice into a win by a point),
   medium, `win_game`, no new puzzle infrastructure. Both sides have two
   round wins and the opponent went first (a tie is theirs). The opponent has
-  Complacency, Laziness, Boredom and Apathy in play (16); the solver has
-  Hope, Misery and Avoidance in play, a Rage in the discard pile, and holds
-  Bliss, Stubbornness and Indifference with two plays (Hope's, seeded through
-  `extra_play_source_card_id`). Discarding Indifference -- the obvious Bliss
-  play, matching Avoidance -- triples Avoidance but leaves Misery off: 16, a
-  tie, and a loss. Discarding Stubbornness puts a second red card in the
-  discard pile, so Misery is 8: Hope 0 + Misery 8 + Avoidance 3 + Bliss 2 +
-  Indifference 4 = 17, a win by one. An exhaustive search found only that
-  discard winning; playing Indifference before Bliss reaches the same board,
-  so the two play orders count as one line. (Everything Bliss and Misery
-  change moves a total by an even amount, so a tie against a win by exactly
-  one needs the second play and two hand cards of different values.)
+  Indifference, Laziness, Joy and Charity in play (12); the solver has
+  Misery and Complacency in play, a Rage in the discard pile, holds Bliss,
+  Boredom and Apathy, and has one play. Discarding Apathy -- the obvious
+  Bliss play, matching Misery -- triples Misery but leaves it off (red +
+  black in the discard pile share no color): 6 + 4 + 2 = 12, a tie, and a
+  loss. Discarding Boredom puts a second red card in the discard pile, so
+  Misery is 8 and nothing red is in play to triple: 8 + 4 + 2 = 14, a win by
+  two. Playing a vanilla card instead of Bliss only reaches 10. An exhaustive
+  search of the four possible plays found only the Boredom discard winning.
+  (Everything Bliss and Misery change moves a total by an even amount, so
+  with one play the two discards differ by a multiple of two.)
 
 ### Duel: separate per-player decks
 

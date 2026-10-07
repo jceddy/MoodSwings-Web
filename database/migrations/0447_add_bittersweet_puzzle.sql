@@ -1,36 +1,33 @@
 -- 16th puzzle, "Bittersweet" ("Each player has two round wins, and your
--- opponent played first this round. Your opponent has Complacency, Laziness,
--- Boredom and Apathy in play. You have Hope, Misery and Avoidance in play and
--- a Rage in your discard pile. You hold Bliss, Stubbornness and
--- Indifference, with two plays. Win the game this round."). No new puzzle
--- infrastructure: goal_type 'win_game', the Hope extra play seeded through
--- extra_play_source_card_id, the discard pile through starting_discard_card_ids.
+-- opponent played first this round. Your opponent has Indifference, Laziness,
+-- Joy and Charity in play. You have Misery and Complacency in play, and there
+-- is a Rage in the discard pile. You hold Bliss, Boredom and Apathy, and you
+-- have one play. Win the game this round."). No new puzzle infrastructure:
+-- goal_type 'win_game' with the discard pile seeded through
+-- starting_discard_card_ids.
 --
 -- Setup: both sides have two round wins (games.wins_needed is 3), so winning
 -- this round wins the game; the opponent went first, so a tie goes to them.
--- Opponent: Complacency + Laziness + Boredom + Apathy = 16. Solver: Hope (0),
+-- Opponent: Indifference 4 + Laziness 4 + Joy 3 + Charity 1 = 12. Solver:
 -- Misery (2, or 8 while two or more cards in the discard pile share a color)
--- and Avoidance (3, blue) in play; the discard pile holds one red card (Rage).
+-- and Complacency (4) in play; the discard pile holds one red card (Rage).
+-- One play: Bliss, paid for by discarding Boredom (red 4) or Apathy (black 4).
+-- Bliss scores each of your moods that shares a color with the discarded card
+-- two extra times.
+--   * Discard Apathy (the obvious Bliss play -- it matches Misery): red +
+--     black in the discard pile share no color, so Misery stays 2, tripled to
+--     6. 6 + Complacency 4 + Bliss 2 = 12 -- a tie with the opponent's 12, and
+--     the opponent played first.
+--   * Discard Boredom (the red card matching Rage in the discard pile): two
+--     red cards there switch Misery on, 8, and nothing red is in play to
+--     triple. 8 + 4 + 2 = 14 -- a win by two.
+-- Playing Boredom or Apathy instead of Bliss leaves Misery at 2: 2 + 4 + 4 = 10.
+-- Exhaustive search through the real GameService flow (every card, every
+-- discard): only discarding Boredom wins.
 --
--- Bliss scores each of your moods that shares a color with the card you
--- discard to play it two extra times. The only choice that matters is which
--- of Stubbornness (red 3) and Indifference (blue 4) to discard; the other is
--- played with the turn's second play:
---   * Discard Indifference (the obvious Bliss play -- it matches the blue
---     Avoidance): Avoidance scores 3x = 9, Misery stays 2 (red + blue in the
---     discard pile share no color), Bliss 2, then Stubbornness 3: 16 -- a tie
---     with the opponent's 16, and the opponent played first.
---   * Discard Stubbornness (the red card matching Rage in the discard pile):
---     two red cards there switch Misery on, 8; Avoidance stays 3, Bliss 2, then
---     Indifference 4: 17 -- a win by one.
--- Lines tried (exhaustive search through the real GameService flow, every
--- play order and discard): only discarding Stubbornness wins. Playing the
--- other card before Bliss reaches the same board either way, so the two play
--- orders count as one line.
---
--- Everything Bliss and Misery change moves a total by an even amount, so a
--- tie against a win by exactly one needs two hand cards of different values
--- played after the discard -- hence the second play.
+-- Everything Bliss and Misery change moves a total by an even amount, so with
+-- a single play the margin between the two discards is a multiple of two --
+-- a tie against a win by two.
 INSERT INTO puzzles (
     slug, title, description, hint, difficulty,
     starting_hand_card_ids, starting_in_play_card_ids, deck_card_ids, starting_discard_card_ids,
@@ -40,13 +37,13 @@ INSERT INTO puzzles (
 ) VALUES (
     'bittersweet',
     'Bittersweet',
-    'Each player has two round wins, and your opponent played first this round. Your opponent has Complacency, Laziness, Boredom and Apathy in play. You have Hope, Misery and Avoidance in play, and there is a Rage in the discard pile. You hold Bliss, Stubbornness and Indifference, and you have two plays. Win the game this round.',
+    'Each player has two round wins, and your opponent played first this round. Your opponent has Indifference, Laziness, Joy and Charity in play. You have Misery and Complacency in play, and there is a Rage in the discard pile. You hold Bliss, Boredom and Apathy, and you have one play. Win the game this round.',
     'Bliss changes more than your moods when you pay for it -- look at everything that shifts once the card you choose lands in the discard pile.',
     'medium',
-    '[108, 102, 44]', '[124, 70, 29]', '[]', '[98]',
-    '[]', '[5, 126, 83, 55]',
+    '[108, 83, 55]', '[70, 5]', '[]', '[98]',
+    '[]', '[44, 126, 125, 3]',
     2, 2, 0, NULL,
-    'win_game', '{}', NULL, 124, 1
+    'win_game', '{}', NULL, NULL, 1
 );
 
 UPDATE schema_version SET version = '1.61.10' WHERE id = 1;
