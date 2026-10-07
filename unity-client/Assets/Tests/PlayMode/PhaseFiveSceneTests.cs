@@ -53,6 +53,12 @@ namespace MoodSwings.Tests
             /// <summary>GET /puzzles answers with this.</summary>
             public string PuzzlesJson = "{\"status\":\"ok\",\"puzzles\":[]}";
 
+            /// <summary>GET /user/stats answers with this.</summary>
+            public string StatsJson = "{\"status\":\"ok\",\"username\":\"bshaftoe\",\"stats\":{\"game_wins\":0,\"game_losses\":0,\"game_win_percentage\":null,\"match_wins\":0,\"match_losses\":0,\"match_win_percentage\":null},\"prior_weekly_sealed_pool_events\":[]}";
+
+            /// <summary>GET /user/achievements answers with this.</summary>
+            public string AchievementsJson = "{\"status\":\"ok\",\"achievements\":[]}";
+
             /// <summary>The game POST /puzzles/attempt starts.</summary>
             public int AttemptGameId = 900;
 
@@ -106,6 +112,8 @@ namespace MoodSwings.Tests
                 {
                     case "/decklists": return MainSceneTests.Reply(200, DecklistsJson ?? Fixture("decklists"));
                     case "/cards/catalog": return MainSceneTests.Reply(200, Fixture("cards_catalog"));
+                    case "/user/stats": return MainSceneTests.Reply(200, StatsJson);
+                    case "/user/achievements": return MainSceneTests.Reply(200, AchievementsJson);
                     case "/puzzles": return MainSceneTests.Reply(200, PuzzlesJson);
                     case "/puzzles/attempt":
                         return AttemptReply ?? MainSceneTests.Reply(201, "{\"status\":\"ok\",\"game_id\":" + AttemptGameId + "}");

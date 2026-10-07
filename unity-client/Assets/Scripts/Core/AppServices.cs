@@ -26,6 +26,8 @@ namespace MoodSwings.Core
 
         public static DecklistFlow Decklists { get; private set; }
 
+        public static StatsFlow Stats { get; private set; }
+
         /// <summary>Sound and vibration switches for this device.</summary>
         public static DeviceSettings Device { get; private set; }
 
@@ -65,6 +67,7 @@ namespace MoodSwings.Core
             Puzzles = new PuzzleFlow(api);
             Decklists = new DecklistFlow(api);
             Device = new DeviceSettings(preferences ?? new InMemoryKeyValueStore());
+            Stats = new StatsFlow(api, Device);
             if (Theme == null)
             {
                 Theme = ScriptableObject.CreateInstance<UiTheme>();
