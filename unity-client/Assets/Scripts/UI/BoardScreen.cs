@@ -94,6 +94,14 @@ namespace MoodSwings.UI
         private Image _dropZoneImage;
         private RectTransform _dragGhost;
         private CanvasGroup _draggedCardGroup;
+        private DraftView _draft;
+        private DiscardPileOverlay _discardOverlay;
+        private CardListOverlay _deckList;
+        private List<BoardCard> _deckCards;
+        private ChaosOfferOverlay _chaosOverlay;
+        private LoopShortcutOverlay _shortcutOverlay;
+        private string _shortcutKey;
+        private bool _decksRequested;
         private Button _primaryAction;
         private Text _primaryLabel;
         private Button _resignAction;
@@ -172,6 +180,20 @@ namespace MoodSwings.UI
         /// <summary>How many seat zones, piles and hand areas are currently drawn; tests use it to see what's on the table.</summary>
         public int TableChildCount => _table != null ? _table.childCount : 0;
 
+        /// <summary>The whole list of the shared deck; tests read it.</summary>
+        public CardListOverlay DeckList => _deckList;
+
+        /// <summary>The whole discard pile, where an effect can make a card playable; tests read it.</summary>
+        public DiscardPileOverlay DiscardOverlay => _discardOverlay;
+
+        /// <summary>Chaos Draft's start-of-round choice, and the loop shortcut; tests read what they show.</summary>
+        public ChaosOfferOverlay ChaosOverlay => _chaosOverlay;
+
+        public LoopShortcutOverlay LoopShortcut => _shortcutOverlay;
+
+        /// <summary>The draft and deck-building stage; tests read what it shows.</summary>
+        public DraftView Draft => _draft;
+
         public override void OnShown(object args)
         {
             EnsureBuilt();
@@ -182,6 +204,13 @@ namespace MoodSwings.UI
             _playingCard = null;
             _decisionKey = null;
             _loopKey = null;
+            _shortcutKey = null;
+            _decksRequested = false;
+            _discardOverlay.Close();
+            _deckList.Close();
+            _deckCards = null;
+            _chaosOverlay.Hide();
+            _shortcutOverlay.Close();
             _firstPlayerOverlay.SetActive(false);
             _teamPanel.gameObject.SetActive(false);
             _teamKey = null;
@@ -205,6 +234,7 @@ namespace MoodSwings.UI
 
             if (_session == null)
             {
+                _draft.Hide();
                 ClearTable();
                 ShowLoading("No game to show.");
                 return;
@@ -239,7 +269,7 @@ namespace MoodSwings.UI
 
         public override bool HandleBack()
         {
-            if (_confirm.Dismiss())
+            if (_confirm.Dismiss() || _shortcutOverlay.Dismiss() || _chaosOverlay.Back() || _discardOverlay.Dismiss() || _deckList.Dismiss())
             {
                 return true;
             }
@@ -326,6 +356,21 @@ namespace MoodSwings.UI
             _table.offsetMin = Vector2.zero;
             _table.offsetMax = new Vector2(0f, -HeaderHeight);
 
+            _draft = new DraftView(
+                transform, theme,
+                new DraftActions
+                {
+                    Inspect = ShowDetail,
+                    PickQuickDraft = (round, stage, ids) => Act(() => _session.PickQuickDraftAsync(round, stage, ids)),
+                    PickWinston = take => Act(() => _session.PickWinstonDraftAsync(take)),
+                    PickGrid = (axis, index) => Act(() => _session.PickGridDraftAsync(axis, index)),
+                    PickRotisserie = (cardId, tiered) => Act(() => _session.PickRotisserieDraftAsync(cardId, tiered)),
+                    Confirm = (message, yes, no) => _confirm.AskAsync(message, yes, no),
+                    SubmitDeck = ids => Act(() => _session.SubmitDraftDeckAsync(ids)),
+                    SubmitDuelDeck = (savedId, text) => Act(() => _session.SubmitDuelDeckAsync(savedId, text)),
+                },
+                HeaderHeight + 12f);
+
             BuildDropZone(theme);
             BuildGoalPanel(theme);
             BuildActions(theme);
@@ -341,6 +386,8 @@ namespace MoodSwings.UI
             _loading = UiFactory.Label(transform, "Loading the game...", 36, theme.textMuted);
             UiFactory.Stretch(_loading.rectTransform);
 
+            _discardOverlay = new DiscardPileOverlay(transform, theme) { Chosen = OnDiscardCard };
+            _deckList = new CardListOverlay(transform, theme) { Chosen = card => ShowDetail(card, "In the deck") };
             BuildHoverPreview(theme);
             BuildTeammateOverlay(theme);
             BuildDetailOverlay(theme);
@@ -351,8 +398,28 @@ namespace MoodSwings.UI
             BuildFirstPlayerOverlay(theme);
             BuildTeamPanel(theme);
 
+            _chaosOverlay = new ChaosOfferOverlay(transform, theme)
+            {
+                Attach = (effectId, cardId, partner) => Run(async () =>
+                {
+                    if (partner != null
+                        && !await _confirm.AskAsync($"Attach this effect to {partner}'s card? They'll need to confirm before it's final.", "Attach", "Cancel"))
+                    {
+                        return;
+                    }
+
+                    var team = _session.State?.ChaosOffer?.Offer?.IsTeamOffer == true;
+                    await Act(() => _session.ChooseChaosEffectAsync(effectId, cardId, team));
+                }),
+                Confirm = approve => Run(() => Act(() => _session.ConfirmChaosEffectAsync(approve))),
+            };
+            _shortcutOverlay = new LoopShortcutOverlay(transform, theme)
+            {
+                Apply = count => Run(() => Act(() => _session.ApplyChaosLoopShortcutAsync(count))),
+            };
+
             // Last, so they sit on top of everything else.
-            _choices = new ChoiceOverlay(transform, theme);
+            _choices = new ChoiceOverlay(transform, theme) { Inspect = (card, where) => ShowDetail(card, where) };
             _confirm = new ConfirmOverlay(transform, theme);
         }
 
@@ -719,7 +786,7 @@ namespace MoodSwings.UI
             _detail = UiFactory.Create("CardDetail", transform).gameObject;
             var root = (RectTransform)_detail.transform;
             UiFactory.Stretch(root);
-            root.gameObject.AddComponent<Image>().color = new Color(0f, 0f, 0f, 0.82f);
+            root.gameObject.AddComponent<Image>().color = new Color(0f, 0f, 0f, 0.94f);
             // Anywhere on the dimmed backdrop closes it.
             var close = root.gameObject.AddComponent<Button>();
             close.targetGraphic = root.GetComponent<Image>();
@@ -815,7 +882,7 @@ namespace MoodSwings.UI
         }
 
         private bool AnyPopUpOrDrag() =>
-            IsDragging || _detail.activeSelf || _logOverlay.activeSelf || _chatOverlay.activeSelf || _teammateOverlay.activeSelf
+            IsDragging || _detail.activeSelf || _discardOverlay.IsOpen || _deckList.IsOpen || _logOverlay.activeSelf || _chatOverlay.activeSelf || _teammateOverlay.activeSelf
             || _choices.IsOpen || _confirm.IsOpen;
 
         /// <summary>Wires a card to bring up the preview while a mouse rests on it.</summary>
@@ -854,6 +921,17 @@ namespace MoodSwings.UI
             if (card.ValueIsModified)
             {
                 notes.Add($"Value now {card.Value} (printed {card.BaseValue})");
+            }
+
+            if (card.ChaosEffect != null)
+            {
+                notes.Add($"<b><color=#{ColorUtility.ToHtmlStringRGB(CardView.ChaosColor(card.ChaosEffect.Rarity))}>{ChaosDisplay.EffectOnCard(card.ChaosEffect)}</color></b>");
+            }
+
+            var chaosValue = ChaosDisplay.ValueNote(card);
+            if (chaosValue != null)
+            {
+                notes.Add(chaosValue);
             }
 
             var colorNote = BoardDisplay.ColorNote(_session?.State, card);
@@ -979,6 +1057,33 @@ namespace MoodSwings.UI
                 RefreshTeammateHand();
             }
 
+            // Drafting and deck building take the place of the table.
+            if (DuelDeckDisplay.InStage(state) && !AppServices.Decklists.Loaded && !_decksRequested)
+            {
+                // The decks to choose from: asked for once, and the stage redraws when they arrive.
+                _decksRequested = true;
+                Run(async () =>
+                {
+                    await AppServices.Decklists.RefreshAsync();
+                    if (this != null && _session?.State != null)
+                    {
+                        Render();
+                    }
+                });
+            }
+
+            if (DraftDisplay.InDraftStage(state) || DuelDeckDisplay.InStage(state))
+            {
+                ClearTable();
+                CancelDrag();
+                HideHover();
+                _draft.Render(state);
+                UpdateActions(state);
+                SyncOverlays(state);
+                return;
+            }
+
+            _draft.Hide();
             ClearTable();
             var zones = BoardLayout.Assign(state.Players, state.You.GamePlayerId);
             foreach (var player in state.Players)
@@ -1227,13 +1332,90 @@ namespace MoodSwings.UI
             rowRect.anchorMax = Vector2.one;
             rowRect.offsetMin = rowRect.offsetMax = Vector2.zero;
 
-            BuildPile(theme, row.transform, "Deck", BoardDisplay.DeckCaption(state), null);
+            // Tapping the deck lists every card it started with, if the table shares one deck.
+            BuildPile(theme, row.transform, "Deck", BoardDisplay.DeckCaption(state), null, onClick: OpenDeckList,
+                hint: BoardDisplay.HasSharedDeck(state) ? "see the list" : null, dim: state.DeckCount == 0);
 
+            // An effect (Harmony, Grief...) can make a card in the pile playable: say so, since the pile shows only its top card.
             var top = state.DiscardPile.LastOrDefault();
-            BuildPile(theme, row.transform, "Discard", $"Discard {state.DiscardPile.Count}", top);
+            var playable = BoardDisplay.CanAct(state) && state.DiscardPile.Any(c => c.IsPlayable);
+            BuildPile(theme, row.transform, "Discard",
+                $"Discard {state.DiscardPile.Count}", top,
+                onClick: OpenDiscardPile, highlight: playable, hint: playable ? "play from it" : null);
         }
 
-        private void BuildPile(UiTheme theme, Transform parent, string title, string captionText, BoardCard topCard)
+        private void OpenDeckList()
+        {
+            var state = _session?.State;
+            if (state == null)
+            {
+                return;
+            }
+
+            if (!BoardDisplay.HasSharedDeck(state))
+            {
+                SetMessage(
+                    state.Game.Status == "waiting"
+                        ? "The deck hasn't been dealt yet."
+                        : "Each player has their own deck in this game, so there's no single deck list to show.",
+                    isError: false, forSeconds: 6f);
+                return;
+            }
+
+            Run(async () =>
+            {
+                if (_deckCards == null)
+                {
+                    SetMessage("Loading the deck list...", isError: false);
+                    var result = await _session.GetDeckListAsync();
+                    if (this == null)
+                    {
+                        return;
+                    }
+
+                    if (!result.Ok)
+                    {
+                        SetMessage(result.Message);
+                        return;
+                    }
+
+                    SetMessage(string.Empty);
+                    _deckCards = result.Cards;
+                }
+
+                _deckList.Show(
+                    $"Deck list ({_deckCards.Count} cards)",
+                    "Every card the deck started with, by color, rarity and name -- not just what's left in it.",
+                    _deckCards);
+            });
+        }
+
+        private void OpenDiscardPile()
+        {
+            var state = _session?.State;
+            if (state != null)
+            {
+                _discardOverlay.Show(state.DiscardPile, BoardDisplay.CanAct(state));
+            }
+        }
+
+        private void OnDiscardCard(BoardCard card, bool canPlay)
+        {
+            var state = _session?.State;
+            if (state != null && canPlay && !_session.Busy)
+            {
+                _discardOverlay.Close();
+                OpenPlayForm(state, card);
+            }
+            else
+            {
+                ShowDetail(card, string.IsNullOrEmpty(card.LastOwnerName) ? "In the discard pile" : "Discarded from " + card.LastOwnerName);
+            }
+        }
+
+        private void BuildPile(
+            UiTheme theme, Transform parent, string title, string captionText, BoardCard topCard,
+            UnityEngine.Events.UnityAction onClick = null, bool highlight = false, string hint = null, bool dim = false)
         {
             var column = UiFactory.Create(title, parent);
             var layout = column.gameObject.AddComponent<VerticalLayoutGroup>();
@@ -1249,22 +1431,57 @@ namespace MoodSwings.UI
             {
                 var card = topCard;
                 var pileCard = CardView.Create(column, card, MoodWidth, theme, showValue: false,
-                    onClick: () => ShowDetail(card, string.IsNullOrEmpty(card.LastOwnerName) ? "In the discard pile" : "Discarded from " + card.LastOwnerName));
+                    onClick: onClick ?? (() => ShowDetail(card, string.IsNullOrEmpty(card.LastOwnerName) ? "In the discard pile" : "Discarded from " + card.LastOwnerName)));
                 MakeHoverable(pileCard, card);
+                if (highlight)
+                {
+                    // A frame in the accent color around the card, so it reads as "something here is playable".
+                    var outline = pileCard.gameObject.AddComponent<Outline>();
+                    outline.effectColor = theme.accent;
+                    outline.effectDistance = new Vector2(5f, -5f);
+                }
+            }
+            else if (title == "Deck")
+            {
+                // The deck is the back of a card; faded once it has run out.
+                var back = CardView.CreateCardBack(column, MoodWidth, theme);
+                if (dim)
+                {
+                    back.gameObject.AddComponent<CanvasGroup>().alpha = 0.35f;
+                }
+
+                if (onClick != null)
+                {
+                    back.gameObject.AddComponent<Button>().onClick.AddListener(onClick);
+                }
             }
             else
             {
                 var empty = UiFactory.Create("Pile", column);
-                empty.gameObject.AddComponent<Image>().color = title == "Deck" ? new Color(0.17f, 0.20f, 0.27f) : new Color(1f, 1f, 1f, 0.07f);
+                var emptyImage = empty.gameObject.AddComponent<Image>();
+                emptyImage.color = title == "Deck" ? new Color(0.17f, 0.20f, 0.27f) : new Color(1f, 1f, 1f, 0.07f);
+                if (onClick != null)
+                {
+                    empty.gameObject.AddComponent<Button>().onClick.AddListener(onClick);
+                }
+
                 UiFactory.Size(empty.gameObject, MoodWidth, CardView.HeightFor(MoodWidth));
                 var label = UiFactory.Label(empty, title == "Deck" ? "DECK" : "EMPTY", 22, theme.textMuted, TextAnchor.MiddleCenter, FontStyle.Bold);
                 UiFactory.Stretch(label.rectTransform);
             }
 
             // One line, centered on the pile even if it's wider than the card.
-            var caption = UiFactory.Label(column, captionText, 24, theme.textMuted);
+            var caption = UiFactory.Label(column, captionText, 24, highlight ? theme.accent : theme.textMuted);
             caption.horizontalOverflow = HorizontalWrapMode.Overflow;
             UiFactory.Size(caption.gameObject, height: 34f);
+
+            // The pile shows only its top card, so say when there's something to play in it.
+            if (hint != null)
+            {
+                var hintLabel = UiFactory.Label(column, hint, 22, highlight ? theme.accent : theme.textMuted, TextAnchor.MiddleCenter, highlight ? FontStyle.Bold : FontStyle.Normal);
+                hintLabel.horizontalOverflow = HorizontalWrapMode.Overflow;
+                UiFactory.Size(hintLabel.gameObject, height: 30f);
+            }
         }
 
         private void BuildHand(UiTheme theme, GameState state)
@@ -1318,8 +1535,12 @@ namespace MoodSwings.UI
             }
         }
 
+        /// <summary>The card's detail is drawn over whatever else is open (a choice form, say), not under it.</summary>
+        public bool DetailIsOnTop => _detail.activeSelf && _detail.transform.GetSiblingIndex() == transform.childCount - 1;
+
         private void ShowDetail(BoardCard card, string where)
         {
+            _detail.transform.SetAsLastSibling();
             foreach (Transform child in _detailCardHolder)
             {
                 child.gameObject.SetActive(false);
@@ -1337,6 +1558,18 @@ namespace MoodSwings.UI
                 ValueLine(card),
                 string.IsNullOrWhiteSpace(card.RulesText) ? string.Empty : card.RulesText,
             };
+            if (card.ChaosEffect != null)
+            {
+                lines.Add(string.Empty);
+                lines.Add($"<b><color=#{ColorUtility.ToHtmlStringRGB(CardView.ChaosColor(card.ChaosEffect.Rarity))}>{ChaosDisplay.EffectOnCard(card.ChaosEffect)}</color></b>");
+            }
+
+            var chaosValue = ChaosDisplay.ValueNote(card);
+            if (chaosValue != null)
+            {
+                lines.Add(chaosValue);
+            }
+
             var colorNote = BoardDisplay.ColorNote(_session?.State, card);
             if (colorNote != null)
             {
@@ -1758,11 +1991,17 @@ namespace MoodSwings.UI
         /// </summary>
         private void SyncOverlays(GameState state)
         {
+            if (_discardOverlay.IsOpen)
+            {
+                _discardOverlay.Show(state.DiscardPile, BoardDisplay.CanAct(state));
+            }
+
             if (_playingCard != null)
             {
                 var stillPlayable = _choices.IsOpen
                     && BoardDisplay.CanAct(state)
-                    && state.You.Hand.Any(c => c.CardId == _playingCard.CardId);
+                    && (state.You.Hand.Any(c => c.CardId == _playingCard.CardId)
+                        || state.DiscardPile.Any(c => c.CardId == _playingCard.CardId && c.IsPlayable));
                 if (!stillPlayable)
                 {
                     if (_choices.IsOpen)
@@ -1827,6 +2066,30 @@ namespace MoodSwings.UI
             if (_firstPlayerOverlay.activeSelf != choosing)
             {
                 _firstPlayerOverlay.SetActive(choosing);
+            }
+
+            if (BoardDisplay.NeedsChaosChoice(state) && !_session.IsSpectating)
+            {
+                _chaosOverlay.Show(state);
+            }
+            else if (_chaosOverlay.IsOpen)
+            {
+                _chaosOverlay.Hide();
+            }
+
+            var shortcut = state.Game.ChaosLoopShortcut;
+            if (shortcut == null)
+            {
+                _shortcutKey = null;
+            }
+            else if (shortcut.GamePlayerId == state.You.GamePlayerId && !_session.IsSpectating)
+            {
+                var key = $"{shortcut.GamePlayerId}:{shortcut.Kind}:{shortcut.Cap}";
+                if (key != _shortcutKey && !_shortcutOverlay.IsOpen)
+                {
+                    _shortcutKey = key;
+                    _shortcutOverlay.Open(shortcut);
+                }
             }
 
             var warning = BoardDisplay.LoopWarningText(state);

@@ -27,6 +27,10 @@ namespace MoodSwings.Networking
         [JsonProperty("color")]
         public string Color { get; set; }
 
+        /// <summary>"common", "uncommon", "rare" or "mythic". Sent with cards in a draft pool or deck.</summary>
+        [JsonProperty("rarity")]
+        public string Rarity { get; set; }
+
         [JsonProperty("base_color")]
         public string BaseColor { get; set; }
 
@@ -96,6 +100,18 @@ namespace MoodSwings.Networking
         [JsonProperty("last_owner_name")]
         public string LastOwnerName { get; set; }
 
+        /// <summary>Chaos Draft: the effect attached to this card, which stays with it for the game.</summary>
+        [JsonProperty("chaos_effect")]
+        public ChaosEffect ChaosEffect { get; set; }
+
+        /// <summary>Chaos Draft: how much an attached effect has permanently raised (or lowered) the value.</summary>
+        [JsonProperty("chaos_value_delta")]
+        public int ChaosValueDelta { get; set; }
+
+        /// <summary>Chaos Draft: the value an attached effect has fixed this card at, if it has.</summary>
+        [JsonProperty("chaos_value_override")]
+        public int? ChaosValueOverride { get; set; }
+
         /// <summary>True when an effect has moved the value away from the printed one.</summary>
         public bool ValueIsModified => Value != BaseValue;
 
@@ -155,6 +171,14 @@ namespace MoodSwings.Networking
 
         [JsonProperty("ready")]
         public bool Ready { get; set; }
+
+        /// <summary>Custom duel: this player has chosen their deck (the cards themselves are never sent).</summary>
+        [JsonProperty("deck_submitted")]
+        public bool DeckSubmitted { get; set; }
+
+        /// <summary>The name of the deck this player chose, in a custom duel.</summary>
+        [JsonProperty("custom_deck_name")]
+        public string CustomDeckName { get; set; }
 
         /// <summary>"online", "offline" or "hidden".</summary>
         [JsonProperty("presence")]
@@ -304,6 +328,33 @@ namespace MoodSwings.Networking
     }
 
     /// <summary>A repeated board state this turn; repeating it again ends the turn.</summary>
+    /// <summary>GET /games/deck: every card the table's shared deck started with, wherever those cards are now.</summary>
+    public class SharedDeckResponse : ApiEnvelope
+    {
+        [JsonProperty("cards")]
+        public List<BoardCard> Cards { get; set; } = new List<BoardCard>();
+    }
+
+    /// <summary>The deck-building rules of a custom duel. A rarity missing from a limit map has no limit.</summary>
+    public class DuelDeckRules
+    {
+        [JsonProperty("min_cards")]
+        public int MinCards { get; set; }
+
+        [JsonProperty("rarity_limits")]
+        [JsonConverter(typeof(PhpMapConverter<string, int>))]
+        public Dictionary<string, int> RarityLimits { get; set; } = new Dictionary<string, int>();
+
+        /// <summary>The most copies of any one card of a rarity.</summary>
+        [JsonProperty("duplicate_limits")]
+        [JsonConverter(typeof(PhpMapConverter<string, int>))]
+        public Dictionary<string, int> DuplicateLimits { get; set; } = new Dictionary<string, int>();
+
+        /// <summary>Rarities whose cards must be split evenly across all five colors.</summary>
+        [JsonProperty("even_color_distribution_rarities")]
+        public List<string> EvenColorDistributionRarities { get; set; } = new List<string>();
+    }
+
     public class LoopWarning
     {
         [JsonProperty("game_player_id")]
@@ -365,6 +416,14 @@ namespace MoodSwings.Networking
         /// <summary>Set only for the player it's about, once the same board state has repeated this turn.</summary>
         [JsonProperty("loop_warning")]
         public LoopWarning LoopWarning { get; set; }
+
+        /// <summary>Custom duel: what a deck has to be (size, rarity and copy limits).</summary>
+        [JsonProperty("duel_deck_rules")]
+        public DuelDeckRules DuelDeckRules { get; set; }
+
+        /// <summary>Chaos Draft: a loop a repeating effect has set up, which its player can apply many times at once.</summary>
+        [JsonProperty("chaos_loop_shortcut")]
+        public ChaosLoopShortcut ChaosLoopShortcut { get; set; }
     }
 
     public class BoardEvent
@@ -412,6 +471,13 @@ namespace MoodSwings.Networking
     /// </summary>
     public class GameState : ApiEnvelope
     {
+        /// <summary>
+        /// Chaos Draft only: the round's effect offer, fetched separately from the state (it isn't part of it) and
+        /// attached by the session each time the board is read. Null for any other game.
+        /// </summary>
+        [JsonIgnore]
+        public ChaosOfferInfo ChaosOffer { get; set; }
+
         [JsonProperty("game")]
         public BoardGameInfo Game { get; set; } = new BoardGameInfo();
 
@@ -443,9 +509,40 @@ namespace MoodSwings.Networking
         // The three below are present (non-null) only for formats and moments this client
         // can't play yet; BoardDisplay.UnsupportedReason() reads them.
 
+        /// <summary>
+        /// A custom Power Duel played as a match with sideboarding, games 2 and 3: the cards you may build the next deck
+        /// from (your last deck and sideboard together). Null otherwise.
+        /// </summary>
+        [JsonProperty("power_duel_sideboard_pool")]
+        public List<BoardCard> PowerDuelSideboardPool { get; set; }
+
+        /// <summary>The deck you played last game, to start from when sideboarding.</summary>
+        [JsonProperty("power_duel_previous_deck_card_ids")]
+        public List<int> PowerDuelPreviousDeckCardIds { get; set; }
+
         /// <summary>Game 2 or 3 of a match: who goes first is still being decided. Null otherwise.</summary>
         [JsonProperty("first_player_decision")]
         public FirstPlayerDecision FirstPlayerDecision { get; set; }
+
+        // One per draft type; the one that matches the game's deck_type is the one that's filled in.
+        [JsonProperty("quick_draft")]
+        public DraftMatchState QuickDraft { get; set; }
+
+        [JsonProperty("winston_draft")]
+        public DraftMatchState WinstonDraft { get; set; }
+
+        [JsonProperty("grid_draft")]
+        public DraftMatchState GridDraft { get; set; }
+
+        [JsonProperty("rotisserie_draft")]
+        public DraftMatchState RotisserieDraft { get; set; }
+
+        [JsonProperty("tiered_rotisserie_draft")]
+        public DraftMatchState TieredRotisserieDraft { get; set; }
+
+        /// <summary>Sealed Deck, Sealed Pool of the Day and Weekly Sealed Pool: just the deck-building stage.</summary>
+        [JsonProperty("sealed_deck")]
+        public DraftMatchState SealedDeck { get; set; }
 
         /// <summary>The best-of-three match this game is part of; null for a one-off game (or when watching).</summary>
         [JsonProperty("game_match")]

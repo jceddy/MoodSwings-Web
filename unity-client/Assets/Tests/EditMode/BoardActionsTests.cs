@@ -85,18 +85,6 @@ namespace MoodSwings.Tests
             Assert.IsFalse(BoardDisplay.CanResign(state));
         }
 
-        [TestCase("custom_duel")]
-        [TestCase("quick_draft")]
-        [TestCase("sealed_deck")]
-        public void DraftsAndDuels_AreNotPlayableYet(string deckType)
-        {
-            var state = BoardFixtures.Load(406);
-            state.Game.DeckType = deckType;
-
-            StringAssert.Contains("can't be played in the app yet", BoardDisplay.UnsupportedReason(state));
-            Assert.IsFalse(BoardDisplay.CanAct(state));
-        }
-
         [TestCase("tournament_cast")]
         public void OtherFormats_AreNotPlayableYet(string format)
         {

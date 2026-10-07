@@ -32,6 +32,14 @@ namespace MoodSwings.Core
                     : "Puzzle";
             }
 
+            var draft = state.Game.Status == "waiting" && DraftDisplay.IsUnderway(state)
+                ? DuelDeckDisplay.Line(state) ?? DraftDisplay.Line(state)
+                : null;
+            if (draft != null)
+            {
+                return draft;
+            }
+
             var round = state.Round.RoundNumber > 0 ? "Round " + state.Round.RoundNumber : "Not started";
             return state.Game.WinsNeeded > 0 ? $"{round}  -  First to {state.Game.WinsNeeded} wins" : round;
         }
@@ -97,7 +105,7 @@ namespace MoodSwings.Core
             if (state.Game.Status == "completed")
             {
                 // The match is what the players care about once it is decided.
-                var match = state.GameMatch;
+                var match = CurrentMatch(state);
                 if (match != null && match.Status == "completed" && match.WinnerUsernames.Count > 0)
                 {
                     return viewer != null && match.WinnerUsernames.Contains(viewer.Username)
@@ -116,7 +124,12 @@ namespace MoodSwings.Core
 
             if (state.Game.Status == "waiting")
             {
-                return state.Game.SynchronousMode ? "Waiting for everyone to be ready" : "Starting the game...";
+                if (state.Game.SynchronousMode && state.Players.Any(p => !p.Ready))
+                {
+                    return "Waiting for everyone to be ready";
+                }
+
+                return DuelDeckDisplay.Banner(state) ?? DraftDisplay.Banner(state) ?? "Starting the game...";
             }
 
             if (state.FirstPlayerDecision != null)
@@ -136,6 +149,12 @@ namespace MoodSwings.Core
             if (state.TeamDecision != null)
             {
                 return TeamDecisionBanner(state);
+            }
+
+            var chaos = ChaosBanner(state);
+            if (chaos != null && state.Round.PendingDecision == null)
+            {
+                return chaos;
             }
 
             var decision = state.Round.PendingDecision;
@@ -177,6 +196,11 @@ namespace MoodSwings.Core
                 return false;
             }
 
+            if (DraftDisplay.NeedsAction(state) || NeedsChaosChoice(state) || DuelDeckDisplay.NeedsAction(state))
+            {
+                return true;
+            }
+
             if (state.FirstPlayerDecision != null)
             {
                 return NeedsFirstPlayerChoice(state);
@@ -206,13 +230,14 @@ namespace MoodSwings.Core
 
         private static readonly HashSet<string> DraftDeckTypes = new HashSet<string>
         {
-            "custom_duel", "quick_draft", "chaos_draft", "winston_draft", "grid_draft",
+            "quick_draft", "chaos_draft", "winston_draft", "grid_draft",
             "rotisserie_draft", "tiered_rotisserie_draft", "sealed_deck", "sealed_pool_of_the_day", "weekly_sealed_pool",
         };
 
         private static readonly HashSet<string> PlayableFormats = new HashSet<string>
         {
             GameSetup.TraditionalFormat, GameSetup.DuelFormat, GameSetup.OpenTeamFormat, GameSetup.ClosedTeamFormat, PuzzleFormat,
+            GameSetup.DraftFormat,
         };
 
         /// <summary>A solitaire puzzle: one seat (sometimes with a fixed opponent board), a goal, no rounds to win.</summary>
@@ -228,8 +253,7 @@ namespace MoodSwings.Core
         public static string UnsupportedReason(GameState state)
         {
             var game = state.Game;
-            var unsupported = (!string.IsNullOrEmpty(game.Format) && !PlayableFormats.Contains(game.Format))
-                || (game.DeckType != null && DraftDeckTypes.Contains(game.DeckType));
+            var unsupported = !string.IsNullOrEmpty(game.Format) && !PlayableFormats.Contains(game.Format);
             return unsupported ? "This kind of game can't be played in the app yet - open it on the web to play." : null;
         }
 
@@ -237,7 +261,12 @@ namespace MoodSwings.Core
         public static bool HasSeparateDecks(GameState state) =>
             state.Game.Format == GameSetup.DuelFormat
             || state.Game.Format == "draft"
+            || state.Game.DeckType == GameSetup.CustomDuel
             || (state.Game.DeckType != null && DraftDeckTypes.Contains(state.Game.DeckType));
+
+        /// <summary>The table plays from one shared deck whose whole list can be looked at (once it has been dealt).</summary>
+        public static bool HasSharedDeck(GameState state) =>
+            !HasSeparateDecks(state) && state.Game.Status != "waiting";
 
         /// <summary>
         /// The line under the deck pile: "Deck 30", or "Your deck 30" when everyone has their own
@@ -411,7 +440,7 @@ namespace MoodSwings.Core
         /// </summary>
         public static string MatchLine(GameState state)
         {
-            var match = state.GameMatch;
+            var match = CurrentMatch(state);
             if (match == null)
             {
                 return null;
@@ -424,7 +453,11 @@ namespace MoodSwings.Core
 
         /// <summary>The game to go on to once this one is over and the match goes on; null otherwise.</summary>
         public static int? NextGameId(GameState state) =>
-            state.Game.Status == "completed" ? state.GameMatch?.NextGameId : null;
+            state.Game.Status == "completed" ? CurrentMatch(state)?.NextGameId : null;
+
+        /// <summary>The best-of-three match this game belongs to: an ordinary match, or a draft's; null for a one-off game.</summary>
+        public static MatchSummary CurrentMatch(GameState state) =>
+            state.GameMatch ?? DraftDisplay.AsMatch(DraftDisplay.BlockOf(state));
 
         /// <summary>It's the viewer's turn and nothing stands in the way of playing or passing.</summary>
         public static bool CanAct(GameState state)
@@ -436,7 +469,43 @@ namespace MoodSwings.Core
                 && state.You.IsYourTurn
                 && !state.You.TurnPendingAcknowledgment
                 && state.Round.PendingDecision == null
+                && !ChaosHoldsPlay(state)
                 && UnsupportedReason(state) == null;
+        }
+
+        /// <summary>Chaos Draft: nobody can play or pass until every player (or team) has attached their effect for the round.</summary>
+        public static bool ChaosHoldsPlay(GameState state) =>
+            state.ChaosOffer != null && (state.ChaosOffer.Offer != null || !state.ChaosOffer.RoundReady);
+
+        /// <summary>Chaos Draft: the viewer has an effect to choose or confirm.</summary>
+        public static bool NeedsChaosChoice(GameState state) =>
+            state.ChaosOffer?.Offer != null && !WaitingOnPartnersChaos(state);
+
+        private static bool WaitingOnPartnersChaos(GameState state)
+        {
+            var offer = state.ChaosOffer?.Offer;
+            return offer != null && offer.IsAwaitingConfirmation && offer.ProposerGamePlayerId == state.You.GamePlayerId;
+        }
+
+        private static string ChaosBanner(GameState state)
+        {
+            var info = state.ChaosOffer;
+            if (info == null || (info.Offer == null && info.RoundReady))
+            {
+                return null;
+            }
+
+            if (info.Offer == null)
+            {
+                return "Waiting for everyone to choose their Chaos effect";
+            }
+
+            if (WaitingOnPartnersChaos(state))
+            {
+                return "Waiting for your partner to confirm your Chaos effect";
+            }
+
+            return info.Offer.IsAwaitingConfirmation ? "Your partner proposed a Chaos effect" : "Choose a Chaos effect";
         }
 
         /// <summary>The turn is the viewer's but waits for them to acknowledge it ("pause before your turn").</summary>
@@ -479,7 +548,9 @@ namespace MoodSwings.Core
             state.Game.Status == "waiting"
             && Viewer(state) != null
             && UnsupportedReason(state) == null
-            && (!state.Game.SynchronousMode || state.Players.All(p => p.Ready));
+            && (!state.Game.SynchronousMode || state.Players.All(p => p.Ready))
+            && (!DraftDisplay.IsDraftGame(state) || DraftDisplay.AllDecksIn(state))
+            && (state.Game.DeckType != GameSetup.CustomDuel || DuelDeckDisplay.AllSubmitted(state));
 
         /// <summary>"Ready: Ann, Bob  -  Not yet: Cy", for the ready check.</summary>
         public static string ReadyCheckLine(GameState state)

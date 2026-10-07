@@ -96,15 +96,6 @@ namespace MoodSwings.Tests
         }
 
         [Test]
-        public void ADraftTeamGame_IsStillNotPlayable()
-        {
-            var state = TeamGame();
-            state.Game.DeckType = "quick_draft";
-
-            Assert.IsNotNull(BoardDisplay.UnsupportedReason(state));
-        }
-
-        [Test]
         public void OnlyOpenTeamPlay_ShowsYourPartnersHand()
         {
             var open = JsonConvert<GameState>(

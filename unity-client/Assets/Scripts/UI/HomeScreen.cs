@@ -64,12 +64,20 @@ namespace MoodSwings.UI
             _playLabel = play.GetComponentInChildren<Text>();
 
             UiFactory.Button(column, "Puzzles", theme, () => Router.Show<PuzzlesScreen>(), primary: false);
+            UiFactory.Button(column, "Decklists", theme, () => Router.Show<DecklistsScreen>(), primary: false);
 
             var friends = UiFactory.Button(column, "Friends", theme, () => Router.Show<FriendsScreen>(), primary: false);
             _friendsLabel = friends.GetComponentInChildren<Text>();
 
             UiFactory.Button(column, "Settings", theme, () => Router.Show<SettingsScreen>(), primary: false);
             UiFactory.Button(column, "Log out", theme, OnLogoutClicked, primary: false);
+
+            // A full-screen desktop window has no close button of its own.
+            if (AppExit.IsAvailable)
+            {
+                var quit = UiFactory.Button(column, "Quit", theme, () => AppExit.Quit(), primary: false);
+                quit.gameObject.name = "Quit";
+            }
         }
 
         private void UpdateBadges()
@@ -102,6 +110,7 @@ namespace MoodSwings.UI
                 AppServices.Friends.Clear();
                 AppServices.Lobby.Clear();
                 AppServices.Puzzles.Clear();
+                AppServices.Decklists.Clear();
                 if (this == null)
                 {
                     return;

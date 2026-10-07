@@ -78,19 +78,21 @@ namespace MoodSwings.UI
                 UiFactory.Size(empty.gameObject, height: 60f);
             }
 
-            foreach (var game in lobby.ActiveGames)
+            foreach (var entry in GameDisplay.Group(lobby.ActiveGames))
             {
-                AddGameRow(theme, game, me, canRematch: false);
+                AddEntry(theme, entry, me, canRematch: false);
             }
 
+            // A match's games are one entry, so the first few are the most recent games and matches, not a count of games.
             UiFactory.SectionTitle(List, theme, $"Finished ({lobby.PastGames.Count})");
-            var shown = _showAllFinished ? lobby.PastGames.Count : System.Math.Min(FinishedShownByDefault, lobby.PastGames.Count);
+            var finished = GameDisplay.Group(lobby.PastGames);
+            var shown = _showAllFinished ? finished.Count : System.Math.Min(FinishedShownByDefault, finished.Count);
             for (var i = 0; i < shown; i++)
             {
-                AddGameRow(theme, lobby.PastGames[i], me, canRematch: true);
+                AddEntry(theme, finished[i], me, canRematch: true);
             }
 
-            if (shown < lobby.PastGames.Count)
+            if (shown < finished.Count)
             {
                 var more = UiFactory.Button(List, $"Show all {lobby.PastGames.Count}", theme, () =>
                 {
@@ -101,10 +103,101 @@ namespace MoodSwings.UI
             }
         }
 
-        private void AddGameRow(UiTheme theme, GameSummary game, User me, bool canRematch)
+        private void AddEntry(UiTheme theme, GameDisplay.GameEntry entry, User me, bool canRematch)
         {
-            var row = UiFactory.RowPanel(List, theme, height: 100f);
-            UiFactory.TwoLineText(row.transform, theme, "vs " + GameDisplay.Opponents(game, me?.Username), GameDisplay.Settings(game));
+            if (entry.IsMatch)
+            {
+                AddMatchGroup(theme, entry, me, canRematch);
+            }
+            else
+            {
+                AddGameRow(theme, entry.Game, me, canRematch);
+            }
+        }
+
+        // A best-of-three match as one block: who and what and the score on top, then each game, latest first, indented
+        // beside a bar in the accent color.
+        private void AddMatchGroup(UiTheme theme, GameDisplay.GameEntry entry, User me, bool canRematch)
+        {
+            var latest = entry.Game;
+            var match = entry.Match;
+            var block = UiFactory.Create("Match " + GameDisplay.MatchKey(latest), List);
+            var blockLayout = block.gameObject.AddComponent<VerticalLayoutGroup>();
+            blockLayout.spacing = 6f;
+            blockLayout.childControlWidth = true;
+            blockLayout.childControlHeight = true;
+            blockLayout.childForceExpandWidth = true;
+            blockLayout.childForceExpandHeight = false;
+
+            var header = UiFactory.RowPanel(block, theme, height: 134f);
+            header.gameObject.name = "Match header";
+            var text = UiFactory.Create("Text", header.transform);
+            UiFactory.Flexible(text.gameObject, width: 1f);
+            var column = text.gameObject.AddComponent<VerticalLayoutGroup>();
+            column.spacing = 2f;
+            column.childControlWidth = true;
+            column.childControlHeight = true;
+            column.childForceExpandWidth = true;
+            column.childForceExpandHeight = false;
+            UiFactory.Label(text, "vs " + GameDisplay.Opponents(latest, me?.Username), 30, theme.textPrimary, TextAnchor.MiddleLeft, FontStyle.Bold);
+            UiFactory.Label(text, GameDisplay.Settings(latest.Format, latest.DeckType, 0, latest.CustomDeckName) + "  -  Best of three", 24, theme.textMuted, TextAnchor.MiddleLeft);
+            UiFactory.Label(text, GameDisplay.MatchScore(match), 24, theme.textPrimary, TextAnchor.MiddleLeft);
+            var result = GameDisplay.MatchResult(match);
+            if (result != null)
+            {
+                UiFactory.Label(text, result, 24, theme.accent, TextAnchor.MiddleLeft, FontStyle.Bold);
+            }
+
+            AddRematch(theme, header.transform, latest, me, canRematch && match.Status == "completed");
+
+            var games = UiFactory.Create("Match games", block);
+            var gamesLayout = games.gameObject.AddComponent<VerticalLayoutGroup>();
+            gamesLayout.padding = new RectOffset(34, 0, 0, 0);
+            gamesLayout.spacing = 6f;
+            gamesLayout.childControlWidth = true;
+            gamesLayout.childControlHeight = true;
+            gamesLayout.childForceExpandWidth = true;
+            gamesLayout.childForceExpandHeight = false;
+            foreach (var game in entry.MatchGames)
+            {
+                AddGameRow(theme, game, me, canRematch: false, parent: games);
+            }
+
+            // The bar down the left of the games, tying them to the header above.
+            var bar = UiFactory.Create("Match bar", games);
+            bar.gameObject.AddComponent<Image>().color = theme.accent;
+            bar.gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
+            bar.anchorMin = new Vector2(0f, 0f);
+            bar.anchorMax = new Vector2(0f, 1f);
+            bar.pivot = new Vector2(0f, 0.5f);
+            bar.sizeDelta = new Vector2(8f, 0f);
+            bar.anchoredPosition = new Vector2(12f, 0f);
+        }
+
+        private void AddRematch(UiTheme theme, Transform row, GameSummary game, User me, bool canRematch)
+        {
+            var rematch = canRematch && me != null && game.IsCompleted ? GameSetup.ForRematch(game, me.Id) : null;
+            if (rematch != null)
+            {
+                var button = UiFactory.Button(row, "Rematch", theme, () => Router.Show<NewGameScreen>(rematch), primary: false);
+                UiFactory.Size(button.gameObject, width: 170f);
+            }
+        }
+
+        // A game's row. Inside a match group (parent given) it is headed by its number in the match, not its opponents.
+        private void AddGameRow(UiTheme theme, GameSummary game, User me, bool canRematch, Transform parent = null)
+        {
+            var inMatch = parent != null;
+            var row = UiFactory.RowPanel(parent ?? List, theme, height: inMatch ? 84f : 100f);
+            if (inMatch)
+            {
+                row.gameObject.name = "Game " + game.MatchGameNumber;
+                UiFactory.TwoLineText(row.transform, theme, "Game " + (game.MatchGameNumber ?? 1), GameDisplay.WhenLine(game));
+            }
+            else
+            {
+                UiFactory.TwoLineText(row.transform, theme, "vs " + GameDisplay.Opponents(game, me?.Username), GameDisplay.Settings(game));
+            }
 
             var needsYou = GameDisplay.NeedsYou(game);
             var status = UiFactory.Label(
@@ -118,12 +211,7 @@ namespace MoodSwings.UI
                 primary: needsYou);
             UiFactory.Size(board.gameObject, width: 130f);
 
-            var rematch = canRematch && me != null && game.IsCompleted ? GameSetup.ForRematch(game, me.Id) : null;
-            if (rematch != null)
-            {
-                var button = UiFactory.Button(row.transform, "Rematch", theme, () => Router.Show<NewGameScreen>(rematch), primary: false);
-                UiFactory.Size(button.gameObject, width: 170f);
-            }
+            AddRematch(theme, row.transform, game, me, canRematch);
         }
     }
 }

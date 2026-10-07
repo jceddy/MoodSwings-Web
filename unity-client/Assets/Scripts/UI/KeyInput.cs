@@ -16,6 +16,13 @@ namespace MoodSwings.UI
             Keyboard.current != null
             && (Keyboard.current.enterKey.wasPressedThisFrame || Keyboard.current.numpadEnterKey.wasPressedThisFrame);
 
+        /// <summary>F11, or Alt+Enter: switch between full screen and a window.</summary>
+        public static bool FullscreenTogglePressed =>
+            Keyboard.current != null
+            && (Keyboard.current.f11Key.wasPressedThisFrame
+                || (Keyboard.current.altKey.isPressed
+                    && (Keyboard.current.enterKey.wasPressedThisFrame || Keyboard.current.numpadEnterKey.wasPressedThisFrame)));
+
         public static bool TabPressed => Keyboard.current != null && Keyboard.current.tabKey.wasPressedThisFrame;
 
         public static bool ShiftHeld => Keyboard.current != null && Keyboard.current.shiftKey.isPressed;
