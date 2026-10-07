@@ -214,6 +214,9 @@ Each phase ends with something runnable against the dev server
   game), New Tournament, and the Booster Draft pod draft. **Not included:** casting and cast grants, inviting after
   creation, pasted decklist text, timeout/synchronous options. **Not yet verified:** any tournament against the real
   dev server (states are written from the documented shapes and the web client's reading of them).
+  (d) The Weekly Sealed Pool queue and standings (Play > Weekly pool), and the notification switches in Settings
+  with the Discord link status. **Not included:** native push notifications (the open decision below) and linking
+  Discord from the app (its OAuth callback needs the browser to hold your session).
 
 ### Phase 10 -- Ship
 - Android and Windows builds first; iOS and macOS after.

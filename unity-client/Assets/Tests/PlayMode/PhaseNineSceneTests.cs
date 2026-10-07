@@ -968,5 +968,203 @@ namespace MoodSwings.Tests
             StringAssert.StartsWith("Invite at least", NewTournament().StatusText, "a full field needs more invitations than that");
             Assert.AreEqual(0, server.Posts("/tournaments").Count());
         }
+
+        // --- the Weekly Sealed Pool ----------------------------------------------------------------------
+
+        private const string WeeklyStandings =
+            "{\"status\":\"ok\",\"standings\":[" +
+            "{\"user_id\":3,\"username\":\"Alder\",\"wins\":3,\"losses\":0,\"rank\":1,\"percentile\":10}," +
+            "{\"user_id\":2,\"username\":\"bshaftoe\",\"wins\":2,\"losses\":1,\"rank\":2,\"percentile\":20}]}";
+
+        private static IEnumerator OpenWeekly(PhaseFiveSceneTests.PlayServer server)
+        {
+            yield return Home(server);
+            yield return PhaseTwoSceneTests.Click("Play  (3 waiting on you)");
+            yield return MainSceneTests.WaitFor<PlayScreen>();
+            yield return PhaseTwoSceneTests.Frames(6);
+            yield return PhaseTwoSceneTests.Click("Weekly pool");
+            yield return MainSceneTests.WaitFor<WeeklySealedPoolScreen>();
+            yield return PhaseTwoSceneTests.Frames(10);
+        }
+
+        private static WeeklySealedPoolScreen Weekly() => MainSceneTests.Screen<WeeklySealedPoolScreen>();
+
+        [UnityTest]
+        public IEnumerator WeeklySealedPool_ShowsTheQueueAndTheStandings_WithYouMarked()
+        {
+            var server = Serve();
+            server.WeeklyStandingsJson = WeeklyStandings;
+            server.WeeklyQueueJson = "{\"status\":\"ok\",\"queued\":false,\"in_progress_count\":1,\"concurrent_match_cap\":2}";
+            yield return OpenWeekly(server);
+
+            Assert.AreEqual("1/2 matches in progress this week.", Weekly().QueueText);
+            Assert.IsTrue(Weekly().JoinEnabled);
+            Assert.IsFalse(Weekly().LeaveShown);
+            Assert.IsTrue(Texts().Contains("#1 Alder  -  3-0 (top 10%)"), string.Join(" | ", Texts()));
+            Assert.IsTrue(Texts().Contains("#2 bshaftoe (you)  -  2-1 (top 20%)"));
+            ScreenshotHelper.Capture("weekly-sealed-pool");
+        }
+
+        [UnityTest]
+        public IEnumerator WeeklySealedPool_AtTheMatchCap_JoiningIsOff()
+        {
+            var server = Serve();
+            server.WeeklyQueueJson = "{\"status\":\"ok\",\"queued\":false,\"in_progress_count\":2,\"concurrent_match_cap\":2}";
+            yield return OpenWeekly(server);
+
+            Assert.IsFalse(Weekly().JoinEnabled);
+            Assert.IsTrue(Texts().Contains("No standings yet -- be the first to finish a match this week!"));
+        }
+
+        [UnityTest]
+        public IEnumerator WeeklySealedPool_JoiningWithNobodyWaiting_QueuesYou_AndLeavingTakesYouOut()
+        {
+            var server = Serve();
+            yield return OpenWeekly(server);
+
+            server.WeeklyQueueJson = "{\"status\":\"ok\",\"queued\":true,\"in_progress_count\":0,\"concurrent_match_cap\":2}";
+            yield return PhaseFiveSceneTests.Tap(Named("Join queue"));
+            yield return PhaseTwoSceneTests.Frames(8);
+
+            Assert.AreEqual(1, server.Posts("/weekly-sealed-pool/queue").Count());
+            Assert.IsTrue(Weekly().QueueText.StartsWith("You're in the queue, waiting for an opponent."));
+            Assert.IsTrue(Weekly().LeaveShown);
+            Assert.IsFalse(Weekly().JoinEnabled);
+
+            server.WeeklyQueueJson = "{\"status\":\"ok\",\"queued\":false,\"in_progress_count\":0,\"concurrent_match_cap\":2}";
+            yield return PhaseFiveSceneTests.Tap(Named("Leave queue"));
+            yield return PhaseTwoSceneTests.Frames(8);
+
+            Assert.AreEqual(1, server.Posts("/weekly-sealed-pool/queue/leave").Count());
+            Assert.IsFalse(Weekly().LeaveShown);
+            Assert.IsTrue(Weekly().JoinEnabled);
+        }
+
+        [UnityTest]
+        public IEnumerator WeeklySealedPool_JoiningWhenSomeoneIsWaiting_OpensTheNewGame()
+        {
+            var server = Serve();
+            server.WeeklyJoinJson = "{\"status\":\"paired\",\"game_id\":812,\"opponent_username\":\"Alder\"}";
+            server.StateFor = id => PhaseFiveSceneTests.Load(405);
+            yield return OpenWeekly(server);
+
+            yield return PhaseFiveSceneTests.Tap(Named("Join queue"));
+            yield return MainSceneTests.WaitFor<BoardScreen>();
+            yield return PhaseTwoSceneTests.Frames(6);
+
+            Assert.IsTrue(server.Calls.Any(c => c.StartsWith("GET /games/state?game_id=812")));
+        }
+
+        [UnityTest]
+        public IEnumerator WeeklySealedPool_LastWeek_CanBeLookedAt_OrNotExist()
+        {
+            var server = Serve();
+            server.WeeklyStandingsJson = WeeklyStandings;
+            yield return OpenWeekly(server);
+
+            yield return PhaseFiveSceneTests.Tap(Named("Last week"));
+            yield return PhaseTwoSceneTests.Frames(8);
+            Assert.IsTrue(Texts().Contains("There was no Weekly Sealed Pool event last week."), string.Join(" | ", Texts()));
+            Assert.IsFalse(Texts().Contains("#1 Alder  -  3-0 (top 10%)"));
+
+            yield return PhaseFiveSceneTests.Tap(Named("This week"));
+            yield return PhaseTwoSceneTests.Frames(8);
+            Assert.IsTrue(Texts().Contains("#1 Alder  -  3-0 (top 10%)"));
+        }
+
+        [UnityTest]
+        public IEnumerator WeeklySealedPool_ARefusedJoin_ShowsTheServersMessage()
+        {
+            var server = Serve();
+            server.WeeklyJoinJson = "{\"status\":\"error\",\"message\":\"You are already in the Weekly Sealed Pool queue.\"}";
+            yield return OpenWeekly(server);
+
+            yield return PhaseFiveSceneTests.Tap(Named("Join queue"));
+            yield return PhaseTwoSceneTests.Frames(8);
+
+            Assert.AreEqual("You are already in the Weekly Sealed Pool queue.", Weekly().StatusText);
+        }
+
+        // --- notification settings -----------------------------------------------------------------------
+
+        private static IEnumerator OpenSettingsScreen(PhaseFiveSceneTests.PlayServer server)
+        {
+            yield return Open<SettingsScreen>(server, "Settings");
+        }
+
+        private static Toggle NotifyToggle(string label) =>
+            Object.FindObjectsByType<Toggle>(FindObjectsInactive.Exclude).First(t => t.name == "Notify " + label);
+
+        [UnityTest]
+        public IEnumerator Settings_ListWhatYouCanBeNotifiedAbout_WithTheSavedValues()
+        {
+            var server = Serve();
+            yield return OpenSettingsScreen(server);
+
+            Assert.IsTrue(Texts().Contains("Notify me when..."));
+            Assert.IsTrue(NotifyToggle("It's my turn").isOn);
+            Assert.IsFalse(NotifyToggle("One of my games finishes").isOn, "this one is saved off");
+            Assert.IsFalse(NotifyToggle("Send every notification immediately").isOn);
+            Assert.IsTrue(NotifyToggle("I unlock an achievement").isOn);
+            var note = Texts().First(t => t.StartsWith("Discord: not linked."));
+            StringAssert.Contains("can't receive push notifications yet", note);
+        }
+
+        [UnityTest]
+        public IEnumerator Settings_ALinkedDiscord_IsNamed()
+        {
+            var server = Serve();
+            server.DiscordStatusJson = "{\"status\":\"ok\",\"linked\":true,\"discord_username\":\"jed#1\"}";
+            yield return OpenSettingsScreen(server);
+
+            Assert.IsTrue(Texts().Any(t => t.StartsWith("Discord: linked as jed#1.")), string.Join(" | ", Texts()));
+        }
+
+        [UnityTest]
+        public IEnumerator Settings_FlippingANotificationSwitch_SavesTheWholeSet()
+        {
+            var server = Serve();
+            yield return OpenSettingsScreen(server);
+
+            NotifyToggle("One of my games finishes").isOn = true;
+            yield return PhaseTwoSceneTests.Frames(8);
+
+            var body = server.Posts("/notifications/preferences").Single();
+            Assert.IsTrue((bool)body["notify_game_finished"]);
+            Assert.IsTrue((bool)body["notify_your_turn"], "the rest go along, or the server would reset them");
+            Assert.IsTrue((bool)body["notify_friend_request"]);
+            Assert.IsTrue((bool)body["notify_chat_message"]);
+            Assert.IsTrue((bool)body["notify_timeout_warning"]);
+            Assert.IsTrue((bool)body["notify_achievement_unlocked"]);
+            Assert.IsFalse((bool)body["disable_cooldown"]);
+            Assert.AreEqual("Saved.", MainSceneTests.Screen<SettingsScreen>().StatusText);
+            Assert.IsTrue(NotifyToggle("One of my games finishes").isOn);
+            ScreenshotHelper.Capture("settings-notifications");
+        }
+
+        [UnityTest]
+        public IEnumerator Settings_AFailedNotificationSave_FlipsItBack()
+        {
+            var server = Serve();
+            server.FailNotificationSave = true;
+            yield return OpenSettingsScreen(server);
+
+            NotifyToggle("It's my turn").isOn = false;
+            yield return PhaseTwoSceneTests.Frames(8);
+
+            Assert.IsTrue(NotifyToggle("It's my turn").isOn, "rolled back");
+            Assert.AreEqual("The server hiccuped.", MainSceneTests.Screen<SettingsScreen>().StatusText);
+        }
+
+        [UnityTest]
+        public IEnumerator Settings_WhenTheNotificationSettingsCantBeLoaded_SaySo()
+        {
+            var server = Serve();
+            server.NotificationPreferencesJson = "{\"status\":\"error\",\"message\":\"Not available\"}";
+            yield return OpenSettingsScreen(server);
+
+            Assert.IsTrue(Texts().Contains("Not available"), string.Join(" | ", Texts()));
+            Assert.IsNull(Object.FindObjectsByType<Toggle>(FindObjectsInactive.Exclude).FirstOrDefault(t => t.name.StartsWith("Notify ")));
+        }
     }
 }

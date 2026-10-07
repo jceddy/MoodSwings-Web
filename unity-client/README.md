@@ -408,6 +408,19 @@ game" below.
 - **Not in the app yet** (web only): casting a tournament's matches, giving casters access, inviting more friends after
   creating one, pasting or uploading decklist text, the turn-timeout and synchronous options on a new tournament.
 
+## Weekly Sealed Pool and notification settings
+
+- **Play > Weekly pool** is the Weekly Sealed Pool: **Join queue** pairs you with the next player waiting (a game
+  appears at once if someone already is; otherwise you wait, and **Leave queue** takes you out), at most two
+  matches going at a time. **This week** / **Last week** show the standings -- rank, record and "top N%", with
+  you marked; ties share a rank, and a week with no event says so.
+- **Settings > Notify me when...** are the account's notification switches (your turn, a friend request, a game
+  finishing, a chat message, a timeout 15 minutes away, an achievement, and "send every notification immediately").
+  Each saves at once -- the whole set goes with it, since the server reads a missing field as its default -- and flips
+  back if the save fails. They govern the website's push notifications and Discord messages; the section also says
+  whether Discord is linked. **This app does not receive push notifications yet** (that needs a native push service
+  on the backend -- see the open decisions in `PLAN.md`), and Discord is linked from the website.
+
 ## Tests
 
 - **EditMode** (Window > General > Test Runner): `ApiClient`, `AuthFlow`,

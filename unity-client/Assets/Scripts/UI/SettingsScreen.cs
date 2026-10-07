@@ -21,6 +21,7 @@ namespace MoodSwings.UI
         private RectTransform _list;
         private bool _built;
         private int _loadRun;
+        private string _notificationsError;
 
         public string StatusText => _status != null ? _status.text : null;
 
@@ -86,7 +87,10 @@ namespace MoodSwings.UI
             var run = ++_loadRun;
             try
             {
+                var notifications = AppServices.Notifications.LoadAsync(); // a failure just leaves that section saying so
                 var result = await AppServices.Auth.RefreshUserAsync();
+                var notificationsResult = await notifications;
+                _notificationsError = notificationsResult.Ok ? null : notificationsResult.Message;
                 if (this == null || run != _loadRun)
                 {
                     return;
@@ -123,6 +127,8 @@ namespace MoodSwings.UI
                 AddPreferenceRow(theme, preference);
             }
 
+            AddNotificationRows(theme);
+
             UiFactory.SectionTitle(_list, theme, "On this device");
             AddDeviceRow(theme, "Sound effects", "Chimes for your turn, cards played, and the end of a round.",
                 AppServices.Device.SoundOn, on => AppServices.Device.SoundOn = on);
@@ -130,6 +136,70 @@ namespace MoodSwings.UI
             {
                 AddDeviceRow(theme, "Vibration", "A short buzz for your turn and for questions that need an answer.",
                     AppServices.Device.VibrationOn, on => AppServices.Device.VibrationOn = on);
+            }
+        }
+
+        // The switches for what you're told about. They govern push on the website and Discord messages; this app can't
+        // receive push itself yet, so the section says so rather than promising a buzz.
+        private void AddNotificationRows(UiTheme theme)
+        {
+            UiFactory.SectionTitle(_list, theme, "Notify me when...");
+            var notifications = AppServices.Notifications;
+            if (notifications.Preferences == null)
+            {
+                var failed = UiFactory.Label(_list, _notificationsError ?? "Couldn't load the notification settings.", 24, theme.textMuted, TextAnchor.MiddleLeft);
+                UiFactory.Size(failed.gameObject, height: 60f);
+                return;
+            }
+
+            foreach (var toggle in NotificationsFlow.Switches)
+            {
+                var panel = NewPanel(theme);
+                var box = UiFactory.Toggle(panel.transform, toggle.Label, theme, notifications.IsOn(toggle));
+                box.gameObject.name = "Notify " + toggle.Label;
+                if (!string.IsNullOrEmpty(toggle.Description))
+                {
+                    AddDescription(theme, panel.transform, toggle.Description);
+                }
+
+                var captured = toggle;
+                box.onValueChanged.AddListener(value => OnNotificationToggled(captured, box, value));
+            }
+
+            var note = NewPanel(theme);
+            var discord = notifications.DiscordLine();
+            var line = UiFactory.Label(note.transform,
+                (discord != null ? discord + ". " : string.Empty)
+                + "These are sent as push notifications on the website and as Discord messages (link Discord there). This app can't receive push notifications yet.",
+                24, theme.textMuted, TextAnchor.UpperLeft);
+            line.gameObject.name = "Notifications note";
+        }
+
+        private async void OnNotificationToggled(NotificationSwitch toggle, Toggle box, bool value)
+        {
+            try
+            {
+                box.interactable = false;
+                var result = await AppServices.Notifications.SetAsync(toggle, value);
+                if (this == null)
+                {
+                    return;
+                }
+
+                box.interactable = true;
+                if (result.Ok)
+                {
+                    SetStatus("Saved.", isError: false);
+                }
+                else
+                {
+                    box.SetIsOnWithoutNotify(!value);
+                    SetStatus(result.Message, isError: true);
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e);
             }
         }
 

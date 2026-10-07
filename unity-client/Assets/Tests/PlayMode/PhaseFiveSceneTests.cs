@@ -71,6 +71,27 @@ namespace MoodSwings.Tests
             /// <summary>Answers a POST under /tournaments with this, given its path and body; null means a plain "ok" (201 with an id for a new one).</summary>
             public Func<string, JObject, HttpResponse> OnTournamentPost;
 
+            /// <summary>GET /weekly-sealed-pool/queue answers with this.</summary>
+            public string WeeklyQueueJson = "{\"status\":\"ok\",\"queued\":false,\"in_progress_count\":0,\"concurrent_match_cap\":2}";
+
+            /// <summary>GET /weekly-sealed-pool/standings answers with this for this week...</summary>
+            public string WeeklyStandingsJson = "{\"status\":\"ok\",\"standings\":[]}";
+
+            /// <summary>... and with this for last week (?week=prior).</summary>
+            public string WeeklyPriorStandingsJson = "{\"status\":\"ok\",\"standings\":null}";
+
+            /// <summary>POST /weekly-sealed-pool/queue answers with this.</summary>
+            public string WeeklyJoinJson = "{\"status\":\"waiting\"}";
+
+            /// <summary>GET /notifications/preferences answers with this; a POST there is echoed back as the saved set.</summary>
+            public string NotificationPreferencesJson = "{\"status\":\"ok\",\"preferences\":{\"notify_your_turn\":true,\"notify_friend_request\":true,\"notify_game_finished\":false,\"notify_chat_message\":true,\"notify_timeout_warning\":true,\"notify_achievement_unlocked\":true,\"disable_cooldown\":false}}";
+
+            /// <summary>Makes POST /notifications/preferences fail.</summary>
+            public bool FailNotificationSave;
+
+            /// <summary>GET /discord/status answers with this.</summary>
+            public string DiscordStatusJson = "{\"status\":\"ok\",\"linked\":false,\"discord_username\":null}";
+
             /// <summary>GET /stats/cards answers with this.</summary>
             public string CardStatsJson = "{\"status\":\"ok\",\"cards\":[]}";
 
@@ -114,6 +135,38 @@ namespace MoodSwings.Tests
                 {
                     var body = string.IsNullOrEmpty(request.Body) ? new JObject() : JObject.Parse(request.Body);
                     return OnPost?.Invoke(path, body) ?? MainSceneTests.Reply(200, "{\"status\":\"ok\"}");
+                }
+
+                if (path == "/notifications/preferences")
+                {
+                    if (request.Method == "POST")
+                    {
+                        return FailNotificationSave
+                            ? MainSceneTests.Reply(500, "{\"status\":\"error\",\"message\":\"The server hiccuped.\"}")
+                            : MainSceneTests.Reply(200, "{\"status\":\"ok\",\"preferences\":" + request.Body + "}");
+                    }
+
+                    return MainSceneTests.Reply(200, NotificationPreferencesJson);
+                }
+
+                if (path == "/discord/status")
+                {
+                    return MainSceneTests.Reply(200, DiscordStatusJson);
+                }
+
+                if (path.StartsWith("/weekly-sealed-pool"))
+                {
+                    if (request.Method == "POST")
+                    {
+                        return MainSceneTests.Reply(200, path.EndsWith("/leave") ? "{\"status\":\"ok\"}" : WeeklyJoinJson);
+                    }
+
+                    if (path.StartsWith("/weekly-sealed-pool/standings"))
+                    {
+                        return MainSceneTests.Reply(200, path.Contains("week=prior") ? WeeklyPriorStandingsJson : WeeklyStandingsJson);
+                    }
+
+                    return MainSceneTests.Reply(200, WeeklyQueueJson);
                 }
 
                 if (path.StartsWith("/tournaments"))

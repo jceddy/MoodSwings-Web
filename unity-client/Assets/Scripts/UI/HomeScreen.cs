@@ -142,6 +142,8 @@ namespace MoodSwings.UI
                 AppServices.Decklists.Clear();
                 AppServices.Stats.Clear();
                 AppServices.Tournaments.Clear();
+                AppServices.WeeklySealed.Clear();
+                AppServices.Notifications.Clear();
                 if (this == null)
                 {
                     return;
