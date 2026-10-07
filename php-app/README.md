@@ -13814,6 +13814,22 @@ than a parallel bespoke system:
   PuzzleOpponent: 8) -- PuzzleOpponent won; <solver> goes first next round
   instead of the round's winner", "<solver> drew Paranoia".
 
+- **16th puzzle, "Bittersweet"** (reported live: a Bliss puzzle about which
+  card to discard, with Misery turning one choice into a win by a point),
+  medium, `win_game`, no new puzzle infrastructure. Both sides have two
+  round wins and the opponent went first (a tie is theirs). The opponent has
+  Indifference, Laziness, Joy and Charity in play (12); the solver has
+  Misery and Complacency in play, a Rage in the discard pile, holds Bliss,
+  Boredom and Apathy, and has one play. Discarding Apathy -- the obvious
+  Bliss play, matching Misery -- triples Misery but leaves it off (red +
+  black in the discard pile share no color): 6 + 4 + 2 = 12, a tie, and a
+  loss. Discarding Boredom puts a second red card in the discard pile, so
+  Misery is 8 and nothing red is in play to triple: 8 + 4 + 2 = 14, a win by
+  two. Playing a vanilla card instead of Bliss only reaches 10. An exhaustive
+  search of the four possible plays found only the Boredom discard winning.
+  (Everything Bliss and Misery change moves a total by an even amount, so
+  with one play the two discards differ by a multiple of two.)
+
 ### Duel: separate per-player decks
 
 `format: 'duel'` and `format: 'draft'` (see "Draft format" below) are the
