@@ -1429,6 +1429,70 @@ final class PuzzleContentTest extends TestCase
         self::assertSame("{$solverName} drew Paranoia", $descriptions[2]);
     }
 
+    /**
+     * "Bittersweet": the only winning discard (exhaustive search of the real
+     * flow) is Stubbornness. The red card joins Rage in the discard pile, so
+     * Misery switches on (8), then Indifference is played: Hope 0 + Misery 8
+     * + Avoidance 3 + Bliss 2 + Indifference 4 = 17 against the opponent's
+     * 16. See migration 0447's own docblock.
+     */
+    public function testBittersweetSolvedByDiscardingTheRedCardToSwitchOnMisery(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('bittersweet');
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 108, 'hand'), [
+            'discard_card_id' => $this->instanceId($gameId, 102, 'hand'), // Stubbornness
+        ]);
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 44, 'hand')); // Indifference
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameSolved($gameId, $p);
+    }
+
+    /** Indifference first reaches the very same board, so it is the same line. */
+    public function testBittersweetPlayingIndifferenceBeforeBlissIsTheSameLine(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('bittersweet');
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 44, 'hand')); // Indifference
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 108, 'hand'), [
+            'discard_card_id' => $this->instanceId($gameId, 102, 'hand'),
+        ]);
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameSolved($gameId, $p);
+    }
+
+    /**
+     * The obvious Bliss play -- discard Indifference, which matches Avoidance
+     * -- triples Avoidance but leaves Misery off: 16, a tie with the
+     * opponent's 16, and a tie goes to the opponent who played first.
+     */
+    public function testBittersweetDiscardingIndifferenceOnlyTiesAndLoses(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('bittersweet');
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 108, 'hand'), [
+            'discard_card_id' => $this->instanceId($gameId, 44, 'hand'), // Indifference
+        ]);
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 102, 'hand')); // Stubbornness
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameFailed($gameId);
+    }
+
+    /** Skipping Bliss leaves Misery off and Avoidance single: 12, a loss. */
+    public function testBittersweetWithoutBlissLoses(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('bittersweet');
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 102, 'hand')); // Stubbornness
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 44, 'hand')); // Indifference
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameFailed($gameId);
+    }
+
     /** A solve is never marked failed, and puzzle_failed is false while an attempt is open. */
     public function testDeadHeatSolveIsNotFailedAndOpenAttemptIsNotFailed(): void
     {
