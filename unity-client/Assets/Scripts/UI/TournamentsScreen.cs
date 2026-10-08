@@ -161,17 +161,28 @@ namespace MoodSwings.UI
             layout.childForceExpandWidth = false;
             layout.childForceExpandHeight = false;
 
-            var text = UiFactory.TwoLineText(row, theme, title, subtitle);
+            // A long description wraps beside the buttons (never under them), which are stacked in a column of their own.
+            var text = UiFactory.TwoLineText(row, theme, title, subtitle, wrap: true);
             UiFactory.Flexible(text.gameObject, width: 1f);
+
+            var stack = UiFactory.Create("Buttons", row);
+            var stackLayout = stack.gameObject.AddComponent<VerticalLayoutGroup>();
+            stackLayout.spacing = 8f;
+            stackLayout.childAlignment = TextAnchor.MiddleCenter;
+            stackLayout.childControlWidth = true;
+            stackLayout.childControlHeight = true;
+            stackLayout.childForceExpandWidth = true;
+            stackLayout.childForceExpandHeight = false;
+            var stackSize = UiFactory.Size(stack.gameObject, 190f);
+            stackSize.minWidth = 190f;
+            stackSize.flexibleWidth = 0f;
 
             foreach (var (label, primary, click) in buttons)
             {
-                var button = UiFactory.Button(row, label, theme, click, primary: primary);
+                var button = UiFactory.Button(stack, label, theme, click, primary: primary);
                 button.gameObject.name = label + " " + tournament.Name;
                 button.GetComponentInChildren<Text>().fontSize = 26;
-                var size = UiFactory.Size(button.gameObject, label.Length > 8 ? 190f : 160f);
-                size.minWidth = size.preferredWidth;
-                size.flexibleWidth = 0f;
+                UiFactory.Size(button.gameObject, height: 56f);
             }
         }
 

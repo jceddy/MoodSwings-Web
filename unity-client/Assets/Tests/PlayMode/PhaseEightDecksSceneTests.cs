@@ -376,6 +376,11 @@ namespace MoodSwings.Tests
             Assert.IsTrue(Builder().Deck.HasUnsavedChanges, "taking a card out of the sideboard is a change");
         }
 
+        // The card inside the open close-up (not the same-named one in the catalog behind it).
+        private static RectTransform OverlayCardHolder() =>
+            (RectTransform)Object.FindObjectsByType<Transform>(FindObjectsInactive.Exclude)
+                .First(t => t.name == "Card detail overlay").Find("Content/Card");
+
         [UnityTest]
         public IEnumerator TheInfoButton_KeepsTheCardLarge_AndWrapsLongRulesTextBesideIt()
         {
@@ -384,7 +389,7 @@ namespace MoodSwings.Tests
             yield return PhaseFiveSceneTests.Tap(Named("Inspect Altruism"));
             yield return PhaseTwoSceneTests.Frames(4);
 
-            var holder = (RectTransform)PhaseFiveSceneTests.Child("Card Altruism").parent;
+            var holder = OverlayCardHolder();
             var short1 = holder.rect.size;
             Assert.AreEqual(600f, short1.x, 0.5f, "the card isn't shrunk to make room for text");
 
@@ -395,7 +400,7 @@ namespace MoodSwings.Tests
             detail.Show(card);
             yield return PhaseTwoSceneTests.Frames(4);
 
-            var long1 = ((RectTransform)PhaseFiveSceneTests.Child("Card " + card.Name).parent).rect.size;
+            var long1 = OverlayCardHolder().rect.size;
             Assert.AreEqual(short1.x, long1.x, 0.5f);
             Assert.AreEqual(short1.y, long1.y, 0.5f);
             var text = Object.FindObjectsByType<Text>(FindObjectsInactive.Exclude).First(t => t.text.Contains("winding thing"));

@@ -1166,5 +1166,39 @@ namespace MoodSwings.Tests
             Assert.IsTrue(Texts().Contains("Not available"), string.Join(" | ", Texts()));
             Assert.IsNull(Object.FindObjectsByType<Toggle>(FindObjectsInactive.Exclude).FirstOrDefault(t => t.name.StartsWith("Notify ")));
         }
+
+        [UnityTest]
+        public IEnumerator Tournaments_ALongName_WrapsBesideTheButtons_WhichAreStacked()
+        {
+            var server = Serve();
+            server.DecklistsJson = OwnDecks("Mine");
+            var longName = "The Grand Annual Spring Championship Invitational of the Very Long Winded Tournament Committee Open Series";
+            server.TournamentsMineJson = TourList(Tour(3, longName, "custom_duel", creator: 3));
+            yield return OpenTournaments(server);
+
+            var view = (RectTransform)Named("View " + longName).transform;
+            var edit = (RectTransform)Named("Edit deck " + longName).transform;
+            Assert.Greater(view.position.y, edit.position.y, "View sits above Edit deck");
+            Assert.AreEqual(view.position.x, edit.position.x, 0.5f, "in one column");
+
+            var text = Object.FindObjectsByType<Text>(FindObjectsInactive.Exclude).First(t => t.text.StartsWith("The Grand Annual"));
+            var corners = new Vector3[4];
+            text.rectTransform.GetWorldCorners(corners);
+            var buttons = new Vector3[4];
+            view.GetWorldCorners(buttons);
+            Assert.LessOrEqual(corners[2].x, buttons[0].x + 0.5f, "the text ends before the buttons begin");
+            Assert.Greater(text.rectTransform.rect.height, 60f, "and it took more than one line");
+            ScreenshotHelper.Capture("tournaments-long-name");
+        }
+
+        [UnityTest]
+        public IEnumerator Settings_HasNoBoardLayoutSetting_ThisBoardHasItsOwnLayout()
+        {
+            var server = Serve();
+            yield return OpenSettingsScreen(server);
+
+            Assert.IsFalse(Texts().Contains("Display"));
+            Assert.IsFalse(Texts().Contains("Round / Score / Players position"));
+        }
     }
 }

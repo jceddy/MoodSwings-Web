@@ -8,7 +8,8 @@ namespace MoodSwings.UI
 {
     /// <summary>
     /// The account preferences the web Settings dialog offers (minus the
-    /// browser-only ones: card size and push notifications). Every toggle
+    /// browser-only ones: card size, the Round/Score/Players position -- this board has its
+    /// own layout -- and push notifications). Every toggle
     /// saves as soon as it's flipped; if the save fails it flips back and
     /// says why. Values are refreshed from /me on opening, since /login
     /// doesn't return them.
@@ -117,9 +118,6 @@ namespace MoodSwings.UI
             {
                 AddPreferenceRow(theme, preference);
             }
-
-            UiFactory.SectionTitle(_list, theme, "Display");
-            AddBoardLayoutRow(theme);
 
             UiFactory.SectionTitle(_list, theme, "Privacy");
             foreach (var preference in PreferenceCatalog.Privacy)
@@ -264,60 +262,6 @@ namespace MoodSwings.UI
                     toggle.SetIsOnWithoutNotify(!value);
                     SetStatus(result.UserMessage("Couldn't save that setting."), isError: true);
                 }
-            }
-            catch (Exception e)
-            {
-                Debug.LogException(e);
-            }
-        }
-
-        private void AddBoardLayoutRow(UiTheme theme)
-        {
-            var panel = NewPanel(theme);
-            var title = UiFactory.Label(panel.transform, "Round / Score / Players position", 30, theme.textPrimary, TextAnchor.MiddleLeft);
-            UiFactory.Size(title.gameObject, height: 40f);
-
-            var group = panel.gameObject.AddComponent<ToggleGroup>();
-            group.allowSwitchOff = false;
-            var current = AppServices.Preferences.GetBoardLayout();
-
-            AddLayoutOption(theme, panel, group, "Above the play area (default)", PreferenceCatalog.BoardLayoutAbovePlayArea, current);
-            AddLayoutOption(theme, panel, group, "Below your hand", PreferenceCatalog.BoardLayoutBelowHand, current);
-        }
-
-        private void AddLayoutOption(UiTheme theme, VerticalLayoutGroup panel, ToggleGroup group, string label, string layout, string current)
-        {
-            var toggle = UiFactory.Toggle(panel.transform, label, theme, layout == current);
-            toggle.group = group;
-            toggle.onValueChanged.AddListener(isOn =>
-            {
-                // Switching fires for the option turned off as well; only act on the new choice.
-                if (isOn && layout != AppServices.Preferences.GetBoardLayout())
-                {
-                    SaveBoardLayout(layout);
-                }
-            });
-        }
-
-        private async void SaveBoardLayout(string layout)
-        {
-            try
-            {
-                var result = await AppServices.Preferences.SetBoardLayoutAsync(layout);
-                if (this == null)
-                {
-                    return;
-                }
-
-                if (result.Ok)
-                {
-                    SetStatus("Saved.", isError: false);
-                    return;
-                }
-
-                // The saved layout didn't change, so rebuilding puts the choice back.
-                BuildRows();
-                SetStatus(result.UserMessage("Couldn't save that setting."), isError: true);
             }
             catch (Exception e)
             {
