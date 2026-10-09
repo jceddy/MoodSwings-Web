@@ -373,6 +373,54 @@ game" below.
   checks the size, rarity and copy limits as you tap cards in and out. (Rules of your own making,
   and pasting a deck from text, are web-only for now.)
 
+## Stats, achievements and card stats
+
+- **Home > Stats** shows your lifetime games and matches as `wins-losses (NN%)` (the percentage only once
+  there is something to measure) and your finished Weekly Sealed Pool weeks with where each placed you.
+  Its **Card stats** button opens the server-wide table: for every card, how many decks it made and
+  how those games went, how often it was played and how those went, and how early it gets taken in each
+  draft format. Search by name, filter by set, order by any column (the **Order by** button steps through
+  them, the arrow flips the direction; cards with no data for a column stay at the end), 40 to a
+  page; tap a card to see it.
+- **Home > Achievements** lists every achievement by category with its tier, a progress bar for the
+  counting ones and a check once unlocked; hidden ones read "???" until unlocked. **Hide locked
+  achievements** is remembered on the device. Unlocks you haven't looked at yet show on the Home button
+  as "(N new)" -- the first look on a device counts what is already unlocked as seen.
+- Home's secondary buttons sit two to a row so the menu keeps fitting a landscape screen.
+
+## Tournaments
+
+- **Home > Tournaments** lists invitations to answer (Accept / Decline), the tournaments you're in or run
+  (View, plus Edit deck and Withdraw while registration is open), the open ones you can **Join**, and
+  cancelled ones. A Power Duel tournament asks for one of your saved decks (or a friend's shared one)
+  when you join or accept, and lets you change it until the tournament starts; the other formats join at once.
+- **New tournament**: a name, the format (Power Duel, Traditional, Grid Draft -- fresh each match, pod draft or pods
+  with playoffs -- Sealed Deck, Booster Draft), the bracket (single or double elimination, Swiss; pods with playoffs
+  are always single), 4 to 16 players, open or invite-only (pick friends; it needs enough invitations to fill it).
+  Every match is a best of three, as on the web page.
+- **View** shows the bracket (or Swiss standings), each match with **Go to game** / **View game**, the players while
+  registration is open, and the draft pods of a pod tournament. **Go to your game** opens the match you're in.
+  Its maker gets **Start tournament** (once enough have joined) and **Cancel tournament** (asked first).
+  Your drafted pool and last deck can be looked through. The view refreshes every few seconds.
+- **Booster Draft** pods: **Continue drafting** opens a screen with your two boosters -- tap a card (the eye reads
+  it) and **Take card**, once from each booster per round, thirty cards in all. A **Grid Draft** pod drafts on the
+  ordinary board (its game is the pod's).
+- **Not in the app yet** (web only): casting a tournament's matches, giving casters access, inviting more friends after
+  creating one, pasting or uploading decklist text, the turn-timeout and synchronous options on a new tournament.
+
+## Weekly Sealed Pool and notification settings
+
+- **Play > Weekly pool** is the Weekly Sealed Pool: **Join queue** pairs you with the next player waiting (a game
+  appears at once if someone already is; otherwise you wait, and **Leave queue** takes you out), at most two
+  matches going at a time. **This week** / **Last week** show the standings -- rank, record and "top N%", with
+  you marked; ties share a rank, and a week with no event says so.
+- **Settings > Notify me when...** are the account's notification switches (your turn, a friend request, a game
+  finishing, a chat message, a timeout 15 minutes away, an achievement, and "send every notification immediately").
+  Each saves at once -- the whole set goes with it, since the server reads a missing field as its default -- and flips
+  back if the save fails. They govern the website's push notifications and Discord messages; the section also says
+  whether Discord is linked. **This app does not receive push notifications yet** (that needs a native push service
+  on the backend -- see the open decisions in `PLAN.md`), and Discord is linked from the website.
+
 ## Tests
 
 - **EditMode** (Window > General > Test Runner): `ApiClient`, `AuthFlow`,
@@ -454,7 +502,11 @@ Python scripts in `tools/` (`pip install pillow` for the first):
 - `convert_card_art.py` -- converts `web-static/img` card art from WebP
   (which Unity can't import) to PNGs in `Assets/Resources/CardArt/`,
   named by catalog id. That folder is git-ignored; run the script after
-  cloning. `CardArtLibrary.ForCard(id)` loads from it. Art is sized to a
+  cloning. Our own replacement card faces live in `art-overrides/`
+  (`<number>-<name>.webp`, e.g. `01-altruism.webp`); for those card numbers
+  the script uses them instead of the web-static art, so replacing a card
+  is just adding its file there and re-running. `--overrides DIR` adds
+  another folder (PNG/WebP/JPG). `CardArtLibrary.ForCard(id)` loads from it. Art is sized to a
   multiple of 4 and imported without rescaling (`CardArtImporter`), which
   GPU texture compression requires -- otherwise Unity silently keeps each
   card as uncompressed RGBA32 (~3 MB instead of under 1 MB). Mipmaps are on

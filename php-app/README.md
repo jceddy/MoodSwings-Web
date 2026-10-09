@@ -13851,6 +13851,26 @@ than a parallel bespoke system:
   which Shock activation takes Glee, and shocking and replaying Hope (a free
   card, since Hope grants its own play).
 
+- **18th puzzle, "Head Count"** (reported live: a Euphoria puzzle built on
+  Panic bouncing both players, Harmony replayed, and Intimidation from the
+  discard pile), hard, `win_game`, no new puzzle infrastructure. Both sides
+  have two round wins and the opponent went first (a tie is theirs). The
+  opponent has Triumph (5 -- worth 5 to whoever went first) and three
+  Patience (5 each -- worth 1 once their owner has played them this round) in
+  play, 20 points; the solver has Euphoria, Hope and Harmony in play (9),
+  an Intimidation in the discard pile, holds Panic and Boredom, and has two
+  plays (Hope's, seeded through `extra_play_source_card_id`). The one winning
+  line: Panic over both players (Triumph and Harmony back to hand), Harmony
+  again (its extra play is for a discard-pile card), Intimidation from the
+  discard pile taking the opponent's only card in hand -- the Triumph -- and
+  then the Triumph itself (3 for the solver, who did not go first): nine moods
+  make Euphoria 9, 9 + 0 + 2 + 1 + 1 + 3 = 16 against three Patience, 15.
+  Stealing a Patience instead is the trap (worth 1 in the solver's hands:
+  14-15), and Panic on one opponent mood followed by Boredom ties 15-15. An
+  exhaustive search of the real engine (22 states: every card in hand or the
+  discard pile, every Panic target set, Intimidation's target) found exactly
+  one winning line.
+
 ### Duel: separate per-player decks
 
 `format: 'duel'` and `format: 'draft'` (see "Draft format" below) are the

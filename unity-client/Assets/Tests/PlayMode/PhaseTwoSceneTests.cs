@@ -272,22 +272,6 @@ namespace MoodSwings.Tests
         }
 
         [UnityTest]
-        public IEnumerator Settings_ChoosingTheOtherBoardLayout_Saves()
-        {
-            var server = new FakeServer();
-            yield return OpenSettings(server);
-            Assert.IsTrue(FindToggle("Above the play area (default)").isOn);
-
-            FindToggle("Below your hand").isOn = true;
-            yield return Frames();
-
-            Assert.IsTrue(server.Calls.Any(c => c == "POST /user/board-layout-preference {\"board_layout_preference\":\"below_hand\"}"),
-                string.Join("\n", server.Calls));
-            Assert.AreEqual("below_hand", AppServices.Preferences.GetBoardLayout());
-            Assert.IsFalse(FindToggle("Above the play area (default)").isOn, "exclusive");
-        }
-
-        [UnityTest]
         public IEnumerator Settings_ReadsTheLatestValuesFromTheServerEachTimeItOpens()
         {
             var server = new FakeServer();

@@ -53,6 +53,51 @@ namespace MoodSwings.Tests
             /// <summary>GET /puzzles answers with this.</summary>
             public string PuzzlesJson = "{\"status\":\"ok\",\"puzzles\":[]}";
 
+            /// <summary>GET /user/stats answers with this.</summary>
+            public string StatsJson = "{\"status\":\"ok\",\"username\":\"bshaftoe\",\"stats\":{\"game_wins\":0,\"game_losses\":0,\"game_win_percentage\":null,\"match_wins\":0,\"match_losses\":0,\"match_win_percentage\":null},\"prior_weekly_sealed_pool_events\":[]}";
+
+            /// <summary>GET /tournaments?mine=1 answers with this.</summary>
+            public string TournamentsMineJson = "{\"status\":\"ok\",\"tournaments\":[]}";
+
+            /// <summary>GET /tournaments (the open ones) answers with this.</summary>
+            public string TournamentsOpenJson = "{\"status\":\"ok\",\"tournaments\":[]}";
+
+            /// <summary>GET /tournaments/state answers with this.</summary>
+            public string TournamentStateJson = "{\"status\":\"error\",\"message\":\"No such tournament\"}";
+
+            /// <summary>GET /tournaments/pod-draft/state answers with this.</summary>
+            public string PodDraftJson = "{\"status\":\"error\",\"message\":\"No such draft\"}";
+
+            /// <summary>Answers a POST under /tournaments with this, given its path and body; null means a plain "ok" (201 with an id for a new one).</summary>
+            public Func<string, JObject, HttpResponse> OnTournamentPost;
+
+            /// <summary>GET /weekly-sealed-pool/queue answers with this.</summary>
+            public string WeeklyQueueJson = "{\"status\":\"ok\",\"queued\":false,\"in_progress_count\":0,\"concurrent_match_cap\":2}";
+
+            /// <summary>GET /weekly-sealed-pool/standings answers with this for this week...</summary>
+            public string WeeklyStandingsJson = "{\"status\":\"ok\",\"standings\":[]}";
+
+            /// <summary>... and with this for last week (?week=prior).</summary>
+            public string WeeklyPriorStandingsJson = "{\"status\":\"ok\",\"standings\":null}";
+
+            /// <summary>POST /weekly-sealed-pool/queue answers with this.</summary>
+            public string WeeklyJoinJson = "{\"status\":\"waiting\"}";
+
+            /// <summary>GET /notifications/preferences answers with this; a POST there is echoed back as the saved set.</summary>
+            public string NotificationPreferencesJson = "{\"status\":\"ok\",\"preferences\":{\"notify_your_turn\":true,\"notify_friend_request\":true,\"notify_game_finished\":false,\"notify_chat_message\":true,\"notify_timeout_warning\":true,\"notify_achievement_unlocked\":true,\"disable_cooldown\":false}}";
+
+            /// <summary>Makes POST /notifications/preferences fail.</summary>
+            public bool FailNotificationSave;
+
+            /// <summary>GET /discord/status answers with this.</summary>
+            public string DiscordStatusJson = "{\"status\":\"ok\",\"linked\":false,\"discord_username\":null}";
+
+            /// <summary>GET /stats/cards answers with this.</summary>
+            public string CardStatsJson = "{\"status\":\"ok\",\"cards\":[]}";
+
+            /// <summary>GET /user/achievements answers with this.</summary>
+            public string AchievementsJson = "{\"status\":\"ok\",\"achievements\":[]}";
+
             /// <summary>The game POST /puzzles/attempt starts.</summary>
             public int AttemptGameId = 900;
 
@@ -92,6 +137,62 @@ namespace MoodSwings.Tests
                     return OnPost?.Invoke(path, body) ?? MainSceneTests.Reply(200, "{\"status\":\"ok\"}");
                 }
 
+                if (path == "/notifications/preferences")
+                {
+                    if (request.Method == "POST")
+                    {
+                        return FailNotificationSave
+                            ? MainSceneTests.Reply(500, "{\"status\":\"error\",\"message\":\"The server hiccuped.\"}")
+                            : MainSceneTests.Reply(200, "{\"status\":\"ok\",\"preferences\":" + request.Body + "}");
+                    }
+
+                    return MainSceneTests.Reply(200, NotificationPreferencesJson);
+                }
+
+                if (path == "/discord/status")
+                {
+                    return MainSceneTests.Reply(200, DiscordStatusJson);
+                }
+
+                if (path.StartsWith("/weekly-sealed-pool"))
+                {
+                    if (request.Method == "POST")
+                    {
+                        return MainSceneTests.Reply(200, path.EndsWith("/leave") ? "{\"status\":\"ok\"}" : WeeklyJoinJson);
+                    }
+
+                    if (path.StartsWith("/weekly-sealed-pool/standings"))
+                    {
+                        return MainSceneTests.Reply(200, path.Contains("week=prior") ? WeeklyPriorStandingsJson : WeeklyStandingsJson);
+                    }
+
+                    return MainSceneTests.Reply(200, WeeklyQueueJson);
+                }
+
+                if (path.StartsWith("/tournaments"))
+                {
+                    if (request.Method == "POST")
+                    {
+                        var tournamentBody = string.IsNullOrEmpty(request.Body) ? new JObject() : JObject.Parse(request.Body);
+                        return OnTournamentPost?.Invoke(path, tournamentBody)
+                            ?? (path == "/tournaments"
+                                ? MainSceneTests.Reply(201, "{\"status\":\"ok\",\"tournament_id\":77}")
+                                : MainSceneTests.Reply(200, "{\"status\":\"ok\"}"));
+                    }
+
+                    if (path.StartsWith("/tournaments/pod-draft/state"))
+                    {
+                        return MainSceneTests.Reply(PodDraftJson.Contains("\"error\"") ? 400 : 200, PodDraftJson);
+                    }
+
+                    if (path.StartsWith("/tournaments/state"))
+                    {
+                        return MainSceneTests.Reply(TournamentStateJson.Contains("\"error\"") ? 404 : 200, TournamentStateJson);
+                    }
+
+                    return MainSceneTests.Reply(200, path.Contains("mine=1") ? TournamentsMineJson : TournamentsOpenJson);
+                }
+
                 if (path.StartsWith("/decklists/view"))
                 {
                     return MainSceneTests.Reply(DecklistViewJson.Contains("\"error\"") ? 404 : 200, DecklistViewJson);
@@ -106,6 +207,9 @@ namespace MoodSwings.Tests
                 {
                     case "/decklists": return MainSceneTests.Reply(200, DecklistsJson ?? Fixture("decklists"));
                     case "/cards/catalog": return MainSceneTests.Reply(200, Fixture("cards_catalog"));
+                    case "/user/stats": return MainSceneTests.Reply(200, StatsJson);
+                    case "/stats/cards": return MainSceneTests.Reply(200, CardStatsJson);
+                    case "/user/achievements": return MainSceneTests.Reply(200, AchievementsJson);
                     case "/puzzles": return MainSceneTests.Reply(200, PuzzlesJson);
                     case "/puzzles/attempt":
                         return AttemptReply ?? MainSceneTests.Reply(201, "{\"status\":\"ok\",\"game_id\":" + AttemptGameId + "}");

@@ -15,6 +15,9 @@ namespace MoodSwings.Core
         public string Message { get; set; }
 
         public int? GameId { get; set; }
+
+        /// <summary>The tournament a create call made.</summary>
+        public int? TournamentId { get; set; }
     }
 
     /// <summary>
