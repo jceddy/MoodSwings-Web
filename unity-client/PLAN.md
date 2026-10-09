@@ -202,6 +202,21 @@ Each phase ends with something runnable against the dev server
 
 ### Phase 9 -- Meta features
 - Tournaments and pod drafts, stats, achievements, card stats, notifications.
+- **Plan, in steps:** (a) lifetime stats, achievements and the Home menu's two-column grid;
+  (b) card stats; (c) tournaments and pod drafts (and the Weekly Sealed Pool queue and standings);
+  (d) notification preferences and in-app unlock/turn notes (native push is the open decision below).
+- **Status:** (a) and (b) built and verified headless: the Stats screen (records and past Weekly Sealed
+  Pool weeks), Achievements (categories in the web page's order, tier badges, progress, hide-locked, "new"
+  badge on Home) and the searchable, sortable, paged Card stats table. **Not yet verified:** against the real
+  dev server -- the responses are written from the documented shapes.
+  (c) Tournaments: the list (invitations, yours, open, cancelled), join/accept/decline/withdraw with the Power
+  Duel deck choice, the tournament view (bracket, Swiss standings, pods, your pool, start/cancel, a way into your
+  game), New Tournament, and the Booster Draft pod draft. **Not included:** casting and cast grants, inviting after
+  creation, pasted decklist text, timeout/synchronous options. **Not yet verified:** any tournament against the real
+  dev server (states are written from the documented shapes and the web client's reading of them).
+  (d) The Weekly Sealed Pool queue and standings (Play > Weekly pool), and the notification switches in Settings
+  with the Discord link status. **Not included:** native push notifications (the open decision below) and linking
+  Discord from the app (its OAuth callback needs the browser to hold your session).
 
 ### Phase 10 -- Ship
 - Android and Windows builds first; iOS and macOS after.

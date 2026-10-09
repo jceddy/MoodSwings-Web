@@ -10,6 +10,8 @@ namespace MoodSwings.Core
     {
         private const string SoundKey = "device.sound";
         private const string VibrationKey = "device.vibration";
+        private const string HideLockedKey = "device.achievements.hideLocked";
+        private const string SeenAtKey = "device.achievements.seenAt";
 
         private readonly IKeyValueStore _store;
 
@@ -28,6 +30,33 @@ namespace MoodSwings.Core
         {
             get => Read(VibrationKey);
             set => _store.SetString(VibrationKey, value ? "1" : "0");
+        }
+
+        /// <summary>Show only the achievements you've unlocked (off until switched on).</summary>
+        public bool HideLockedAchievements
+        {
+            get => _store.GetString(HideLockedKey) == "1";
+            set => _store.SetString(HideLockedKey, value ? "1" : "0");
+        }
+
+        /// <summary>
+        /// The newest unlock time you have seen on the Achievements screen; null before the first look, which is
+        /// when whatever is already unlocked counts as seen.
+        /// </summary>
+        public string AchievementsSeenAt
+        {
+            get => _store.GetString(SeenAtKey);
+            set
+            {
+                if (value == null)
+                {
+                    _store.Delete(SeenAtKey);
+                }
+                else
+                {
+                    _store.SetString(SeenAtKey, value);
+                }
+            }
         }
 
         private bool Read(string key) => _store.GetString(key) != "0";

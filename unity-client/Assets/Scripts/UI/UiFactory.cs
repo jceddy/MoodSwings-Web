@@ -402,7 +402,8 @@ namespace MoodSwings.UI
         }
 
         /// <summary>A bold line over a smaller muted one, for a list row. Takes the row's spare width.</summary>
-        public static RectTransform TwoLineText(Transform parent, UiTheme theme, string title, string subtitle)
+        /// <param name="wrap">Let both lines wrap within the room the row leaves (the row grows taller) instead of running on.</param>
+        public static RectTransform TwoLineText(Transform parent, UiTheme theme, string title, string subtitle, bool wrap = false)
         {
             var rect = Create("Text", parent);
             var layout = rect.gameObject.AddComponent<VerticalLayoutGroup>();
@@ -416,11 +417,22 @@ namespace MoodSwings.UI
             // One line each, always: a long title wrapping would run over the
             // line beneath it. Better to overrun the row's spare room than overlap.
             var first = Label(rect, title, 28, theme.textPrimary, TextAnchor.MiddleLeft, FontStyle.Bold);
-            first.horizontalOverflow = HorizontalWrapMode.Overflow;
-            Size(first.gameObject, height: 36f);
             var second = Label(rect, subtitle, 22, theme.textMuted, TextAnchor.MiddleLeft);
-            second.horizontalOverflow = HorizontalWrapMode.Overflow;
-            Size(second.gameObject, height: 30f);
+            if (wrap)
+            {
+                // Wrapped lines make their own height; a zero preferred width means the text takes only the room
+                // left over beside its neighbors instead of pushing them aside.
+                first.alignment = TextAnchor.UpperLeft;
+                second.alignment = TextAnchor.UpperLeft;
+                Size(rect.gameObject, width: 0f);
+            }
+            else
+            {
+                first.horizontalOverflow = HorizontalWrapMode.Overflow;
+                Size(first.gameObject, height: 36f);
+                second.horizontalOverflow = HorizontalWrapMode.Overflow;
+                Size(second.gameObject, height: 30f);
+            }
 
             Flexible(rect.gameObject, width: 1f);
             return rect;

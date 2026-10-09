@@ -519,7 +519,7 @@ namespace MoodSwings.UI
             }
         }
 
-        private static void AddRadio(
+        internal static void AddRadio(
             UiTheme theme, VerticalLayoutGroup panel, ToggleGroup group, string label, string description, bool isOn, System.Action onChosen)
         {
             var toggle = UiFactory.Toggle(panel.transform, label, theme, isOn);

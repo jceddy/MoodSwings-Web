@@ -8,7 +8,8 @@ namespace MoodSwings.UI
 {
     /// <summary>
     /// The account preferences the web Settings dialog offers (minus the
-    /// browser-only ones: card size and push notifications). Every toggle
+    /// browser-only ones: card size, the Round/Score/Players position -- this board has its
+    /// own layout -- and push notifications). Every toggle
     /// saves as soon as it's flipped; if the save fails it flips back and
     /// says why. Values are refreshed from /me on opening, since /login
     /// doesn't return them.
@@ -21,6 +22,7 @@ namespace MoodSwings.UI
         private RectTransform _list;
         private bool _built;
         private int _loadRun;
+        private string _notificationsError;
 
         public string StatusText => _status != null ? _status.text : null;
 
@@ -86,7 +88,10 @@ namespace MoodSwings.UI
             var run = ++_loadRun;
             try
             {
+                var notifications = AppServices.Notifications.LoadAsync(); // a failure just leaves that section saying so
                 var result = await AppServices.Auth.RefreshUserAsync();
+                var notificationsResult = await notifications;
+                _notificationsError = notificationsResult.Ok ? null : notificationsResult.Message;
                 if (this == null || run != _loadRun)
                 {
                     return;
@@ -114,14 +119,13 @@ namespace MoodSwings.UI
                 AddPreferenceRow(theme, preference);
             }
 
-            UiFactory.SectionTitle(_list, theme, "Display");
-            AddBoardLayoutRow(theme);
-
             UiFactory.SectionTitle(_list, theme, "Privacy");
             foreach (var preference in PreferenceCatalog.Privacy)
             {
                 AddPreferenceRow(theme, preference);
             }
+
+            AddNotificationRows(theme);
 
             UiFactory.SectionTitle(_list, theme, "On this device");
             AddDeviceRow(theme, "Sound effects", "Chimes for your turn, cards played, and the end of a round.",
@@ -130,6 +134,70 @@ namespace MoodSwings.UI
             {
                 AddDeviceRow(theme, "Vibration", "A short buzz for your turn and for questions that need an answer.",
                     AppServices.Device.VibrationOn, on => AppServices.Device.VibrationOn = on);
+            }
+        }
+
+        // The switches for what you're told about. They govern push on the website and Discord messages; this app can't
+        // receive push itself yet, so the section says so rather than promising a buzz.
+        private void AddNotificationRows(UiTheme theme)
+        {
+            UiFactory.SectionTitle(_list, theme, "Notify me when...");
+            var notifications = AppServices.Notifications;
+            if (notifications.Preferences == null)
+            {
+                var failed = UiFactory.Label(_list, _notificationsError ?? "Couldn't load the notification settings.", 24, theme.textMuted, TextAnchor.MiddleLeft);
+                UiFactory.Size(failed.gameObject, height: 60f);
+                return;
+            }
+
+            foreach (var toggle in NotificationsFlow.Switches)
+            {
+                var panel = NewPanel(theme);
+                var box = UiFactory.Toggle(panel.transform, toggle.Label, theme, notifications.IsOn(toggle));
+                box.gameObject.name = "Notify " + toggle.Label;
+                if (!string.IsNullOrEmpty(toggle.Description))
+                {
+                    AddDescription(theme, panel.transform, toggle.Description);
+                }
+
+                var captured = toggle;
+                box.onValueChanged.AddListener(value => OnNotificationToggled(captured, box, value));
+            }
+
+            var note = NewPanel(theme);
+            var discord = notifications.DiscordLine();
+            var line = UiFactory.Label(note.transform,
+                (discord != null ? discord + ". " : string.Empty)
+                + "These are sent as push notifications on the website and as Discord messages (link Discord there). This app can't receive push notifications yet.",
+                24, theme.textMuted, TextAnchor.UpperLeft);
+            line.gameObject.name = "Notifications note";
+        }
+
+        private async void OnNotificationToggled(NotificationSwitch toggle, Toggle box, bool value)
+        {
+            try
+            {
+                box.interactable = false;
+                var result = await AppServices.Notifications.SetAsync(toggle, value);
+                if (this == null)
+                {
+                    return;
+                }
+
+                box.interactable = true;
+                if (result.Ok)
+                {
+                    SetStatus("Saved.", isError: false);
+                }
+                else
+                {
+                    box.SetIsOnWithoutNotify(!value);
+                    SetStatus(result.Message, isError: true);
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e);
             }
         }
 
@@ -194,60 +262,6 @@ namespace MoodSwings.UI
                     toggle.SetIsOnWithoutNotify(!value);
                     SetStatus(result.UserMessage("Couldn't save that setting."), isError: true);
                 }
-            }
-            catch (Exception e)
-            {
-                Debug.LogException(e);
-            }
-        }
-
-        private void AddBoardLayoutRow(UiTheme theme)
-        {
-            var panel = NewPanel(theme);
-            var title = UiFactory.Label(panel.transform, "Round / Score / Players position", 30, theme.textPrimary, TextAnchor.MiddleLeft);
-            UiFactory.Size(title.gameObject, height: 40f);
-
-            var group = panel.gameObject.AddComponent<ToggleGroup>();
-            group.allowSwitchOff = false;
-            var current = AppServices.Preferences.GetBoardLayout();
-
-            AddLayoutOption(theme, panel, group, "Above the play area (default)", PreferenceCatalog.BoardLayoutAbovePlayArea, current);
-            AddLayoutOption(theme, panel, group, "Below your hand", PreferenceCatalog.BoardLayoutBelowHand, current);
-        }
-
-        private void AddLayoutOption(UiTheme theme, VerticalLayoutGroup panel, ToggleGroup group, string label, string layout, string current)
-        {
-            var toggle = UiFactory.Toggle(panel.transform, label, theme, layout == current);
-            toggle.group = group;
-            toggle.onValueChanged.AddListener(isOn =>
-            {
-                // Switching fires for the option turned off as well; only act on the new choice.
-                if (isOn && layout != AppServices.Preferences.GetBoardLayout())
-                {
-                    SaveBoardLayout(layout);
-                }
-            });
-        }
-
-        private async void SaveBoardLayout(string layout)
-        {
-            try
-            {
-                var result = await AppServices.Preferences.SetBoardLayoutAsync(layout);
-                if (this == null)
-                {
-                    return;
-                }
-
-                if (result.Ok)
-                {
-                    SetStatus("Saved.", isError: false);
-                    return;
-                }
-
-                // The saved layout didn't change, so rebuilding puts the choice back.
-                BuildRows();
-                SetStatus(result.UserMessage("Couldn't save that setting."), isError: true);
             }
             catch (Exception e)
             {
