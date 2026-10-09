@@ -11,7 +11,7 @@ namespace MoodSwings.Editor
     /// <summary>
     /// Headless-friendly Android build:
     /// Unity -batchmode -quit -buildTarget Android -executeMethod MoodSwings.Editor.AndroidBuild.Build
-    /// Output: Build/Android/MoodSwings.apk (git-ignored).
+    /// Output: Build/Android/MOOD.apk (git-ignored).
     ///
     /// IL2CPP is required for 64-bit (Mono only does ARMv7, and Google Play
     /// requires 64-bit). ARM64 only: Unity 6.6 dropped x86/x86_64 Android, so
@@ -20,7 +20,7 @@ namespace MoodSwings.Editor
     /// </summary>
     public static class AndroidBuild
     {
-        private const string OutputPath = "Build/Android/MoodSwings.apk";
+        private const string OutputPath = "Build/Android/MOOD.apk";
 
         [MenuItem("MoodSwings/Build Android APK")]
         public static void Build()

@@ -16,6 +16,12 @@ namespace MoodSwings.Core
 
         /// <summary>Moods are listed under whoever owns them; empty for other kinds.</summary>
         public string Group { get; set; }
+
+        /// <summary>The card this option is, when it is one, so the player can look at it before choosing.</summary>
+        public BoardCard Card { get; set; }
+
+        /// <summary>Where that card is ("In your hand", "In play for Alice"), for the card's detail.</summary>
+        public string Where { get; set; }
     }
 
     /// <summary>
@@ -97,7 +103,7 @@ namespace MoodSwings.Core
                     return _state.You.Hand
                         .Where(c => _card == null || c.CardId != _card.CardId)
                         .Where(c => MatchesCardFilter(c, field.Filter))
-                        .Select(c => new ChoiceOption { Id = c.CardId.ToString(), Label = CardLabel(c) })
+                        .Select(c => new ChoiceOption { Id = c.CardId.ToString(), Label = CardLabel(c), Card = c, Where = "In your hand" })
                         .ToList();
                 case "discard_card":
                     // Grouped under whoever last owned each card, you first, so one player's cards aren't scattered.
@@ -110,6 +116,8 @@ namespace MoodSwings.Core
                             Id = c.CardId.ToString(),
                             Label = CardLabel(c),
                             Group = string.IsNullOrEmpty(c.LastOwnerName) ? PlayerName(c.LastOwnerGamePlayerId) : c.LastOwnerName,
+                            Card = c,
+                            Where = string.IsNullOrEmpty(c.LastOwnerName) ? "In the discard pile" : "Discarded from " + c.LastOwnerName,
                         })
                         .ToList();
                 case "grant_choice":
@@ -167,6 +175,8 @@ namespace MoodSwings.Core
                     Id = _card.CardId.ToString(),
                     Label = CardLabel(_card) + " [self]",
                     Group = PlayerName(_state.You.GamePlayerId),
+                    Card = _card,
+                    Where = "The card you are playing",
                 });
             }
 
@@ -198,6 +208,8 @@ namespace MoodSwings.Core
                 Id = c.CardId.ToString(),
                 Label = CardLabel(c),
                 Group = PlayerName(c.OwnerGamePlayerId),
+                Card = c,
+                Where = "In play for " + PlayerName(c.OwnerGamePlayerId),
             }));
             return options;
         }

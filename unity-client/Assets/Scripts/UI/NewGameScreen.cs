@@ -25,6 +25,9 @@ namespace MoodSwings.UI
         private Toggle _bestOfThreeToggle;
         private GameObject _bestOfThreePanel;
         private RectTransform _partnerPanel;
+        private RectTransform _botDeckPanel;
+        private GameObject _sideboardPanel;
+        private Toggle _sideboardToggle;
         private Button _create;
         private Text _createLabel;
         private bool _busy;
@@ -37,11 +40,13 @@ namespace MoodSwings.UI
         {
             EnsureBuilt();
             _setup = args as GameSetup ?? NewDefaultSetup();
+            _setup.AllowCustomContent = AppServices.Preferences.Get(PreferenceCatalog.GameDefaults.First(p => p.JsonKey == "allow_custom_content"));
             _busy = false;
             SetStatus(string.Empty);
 
             AppServices.Lobby.Changed += Rebuild;
             AppServices.Friends.Changed += Rebuild;
+            AppServices.Decklists.Changed += Rebuild;
             Rebuild();
             Run(LoadChoices);
         }
@@ -50,6 +55,7 @@ namespace MoodSwings.UI
         {
             AppServices.Lobby.Changed -= Rebuild;
             AppServices.Friends.Changed -= Rebuild;
+            AppServices.Decklists.Changed -= Rebuild;
         }
 
         protected override void BuildBelow(RectTransform column, UiTheme theme)
@@ -70,9 +76,11 @@ namespace MoodSwings.UI
             var bots = AppServices.Lobby.RefreshBotsAsync();
             var friends = AppServices.Friends.RefreshAsync();
             var flag = AppServices.Lobby.RefreshSynchronousModeFlagAsync(); // a failure just means the option stays hidden
+            var decks = AppServices.Decklists.RefreshAsync(); // only needed once a saved deck is asked for
             var botsResult = await bots;
             var friendsResult = await friends;
             await flag;
+            await decks;
             if (this == null)
             {
                 return;
@@ -122,8 +130,46 @@ namespace MoodSwings.UI
                 _partnerPanel = null;
             }
 
-            UiFactory.SectionTitle(List, theme, "Deck");
-            AddDeckChoice(theme);
+            // A sealed format is its own deck: nothing more to choose.
+            if (!_setup.IsSealedFormat)
+            {
+                UiFactory.SectionTitle(List, theme, _setup.IsDraftFormat ? "Draft" : "Deck");
+                AddDeckChoice(theme);
+            }
+
+            if (_setup.UsesPoolSource)
+            {
+                UiFactory.SectionTitle(List, theme, "Cards to draft");
+                AddPoolSourceChoice(theme);
+            }
+
+            if (_setup.UsesRotisserieCutoff)
+            {
+                UiFactory.SectionTitle(List, theme, "Picks each");
+                AddCutoffChoice(theme);
+            }
+
+            if (_setup.IsCustomDuel)
+            {
+                UiFactory.SectionTitle(List, theme, "Deck rules");
+                AddDuelRulesChoice(theme);
+            }
+
+            if (_setup.UsesSavedDeck)
+            {
+                UiFactory.SectionTitle(List, theme, _setup.DeckType == GameSetup.CustomDeck ? "Saved deck" : "Deck to draft from");
+                AddSavedDeckChoice(theme, _setup.SavedDecklistId, deck =>
+                {
+                    _setup.SavedDecklistId = deck.Id;
+                    _setup.SavedDeckCardCount = deck.CardCount;
+                    RefreshSummary();
+                });
+            }
+
+            // A practice bot can't pick its own deck for a custom duel, so its deck is chosen here. Filled in by RefreshSummary.
+            _botDeckPanel = _setup.IsCustomDuel && !_setup.PostToOpenLobby
+                ? UiFactory.Panel(List, theme).GetComponent<RectTransform>()
+                : null;
 
             UiFactory.SectionTitle(List, theme, "Options");
             var options = UiFactory.Panel(List, theme);
@@ -137,7 +183,19 @@ namespace MoodSwings.UI
             _bestOfThreeToggle.gameObject.name = "Best of three toggle";
             UiFactory.ToggleDescription(bestOfThree.transform, theme,
                 "First to win two games. The next game is created for you after each one, and the loser chooses who goes first.");
-            _bestOfThreeToggle.onValueChanged.AddListener(on => _setup.BestOfThree = on);
+            _bestOfThreeToggle.onValueChanged.AddListener(on =>
+            {
+                _setup.BestOfThree = on;
+                RefreshSummary(); // sideboarding depends on it
+            });
+
+            var sideboard = UiFactory.Panel(List, theme);
+            _sideboardPanel = sideboard.gameObject;
+            _sideboardToggle = UiFactory.Toggle(sideboard.transform, "Allow sideboarding", theme, _setup.AllowSideboarding);
+            _sideboardToggle.gameObject.name = "Sideboarding toggle";
+            UiFactory.ToggleDescription(sideboard.transform, theme,
+                "Between games of the match, each player may rebuild their deck from their first deck and sideboard.");
+            _sideboardToggle.onValueChanged.AddListener(on => _setup.AllowSideboarding = on);
 
             var synchronous = UiFactory.Panel(List, theme);
             _synchronousPanel = synchronous.gameObject;
@@ -182,14 +240,15 @@ namespace MoodSwings.UI
             foreach (var format in GameSetup.FormatOptions)
             {
                 var id = format.Id;
-                AddRadio(theme, panel, group, format.Label, format.Description, _setup.Format == id, () =>
+                AddRadio(theme, panel, group, format.Label, format.Description, _setup.FormatChoice == id, () =>
                 {
-                    if (_setup.Format == id)
+                    if (_setup.FormatChoice == id)
                     {
                         return;
                     }
 
-                    _setup.Format = id;
+                    _setup.FormatChoice = id;
+                    _setup.Normalize(AppServices.Lobby.SynchronousModeEnabled);
                     SetStatus(string.Empty);
                     Rebuild();
                 });
@@ -204,7 +263,7 @@ namespace MoodSwings.UI
 
             if (!_setup.OpenLobbyCountIsChoosable)
             {
-                AddNote(theme, panel, $"A {GameDisplay.FormatName(_setup.Format)} game from the lobby seats exactly {_setup.EffectiveOpenLobbyPlayerCount} players.");
+                AddNote(theme, panel, $"A {GameDisplay.FormatName(_setup.FormatChoice)} game from the lobby seats exactly {_setup.EffectiveOpenLobbyPlayerCount} players.");
                 if (_setup.IsTeamFormat)
                 {
                     AddNote(theme, panel, "Teams are assigned at random once everyone has joined.");
@@ -278,10 +337,14 @@ namespace MoodSwings.UI
             var toggle = UiFactory.Toggle(panel.transform, label, theme, _setup.OpponentUserIds.Contains(userId));
             toggle.onValueChanged.AddListener(on =>
             {
-                if (on && _setup.OpponentUserIds.Count >= GameSetup.MaxPlayers - 1)
+                if (on && _setup.OpponentUserIds.Count >= _setup.MaxOpponents)
                 {
                     toggle.SetIsOnWithoutNotify(false);
-                    SetStatus($"A game seats at most {GameSetup.MaxPlayers} players, so pick at most {GameSetup.MaxPlayers - 1} opponents.", isError: true);
+                    SetStatus(
+                        _setup.IsTwoPlayerOnly
+                            ? "The Sealed Pool of the Day is for exactly two players, so pick one opponent."
+                            : $"A game seats at most {GameSetup.MaxPlayers} players, so pick at most {GameSetup.MaxPlayers - 1} opponents.",
+                        isError: true);
                     return;
                 }
 
@@ -307,7 +370,152 @@ namespace MoodSwings.UI
             foreach (var deck in _setup.DecksForFormat)
             {
                 var id = deck.Id;
-                AddRadio(theme, panel, group, deck.Label, deck.Description, _setup.DeckType == id, () => _setup.DeckType = id);
+                AddRadio(theme, panel, group, deck.Label, deck.Description, _setup.DeckType == id, () =>
+                {
+                    if (_setup.DeckType != id)
+                    {
+                        _setup.DeckType = id;
+                        _setup.Normalize(AppServices.Lobby.SynchronousModeEnabled);
+                        Rebuild();
+                    }
+                });
+            }
+        }
+
+        private void AddDuelRulesChoice(UiTheme theme)
+        {
+            var panel = UiFactory.Panel(List, theme);
+            var group = panel.gameObject.AddComponent<ToggleGroup>();
+            group.allowSwitchOff = false;
+            foreach (var preset in GameSetup.DuelRulePresets)
+            {
+                var id = preset.Id;
+                AddRadio(theme, panel, group, preset.Label, preset.Description, _setup.DuelPreset == id, () =>
+                {
+                    _setup.DuelPreset = id;
+                    RefreshSummary();
+                });
+            }
+        }
+
+        // Your decks, then each friend's shared ones: one radio each. Used for the game's deck and for each bot's.
+        private void AddSavedDeckChoice(UiTheme theme, int? selected, System.Action<DecklistSummary> chosen, Transform parent = null)
+        {
+            var decks = AppServices.Decklists;
+            var panel = UiFactory.Panel(parent ?? List, theme);
+            if (!decks.Loaded)
+            {
+                AddNote(theme, panel, "Loading your decks...");
+                return;
+            }
+
+            var all = decks.Own.Select(d => (deck: d, owner: (string)null))
+                .Concat(decks.Friends.SelectMany(f => f.Decklists.Select(d => (deck: d, owner: f.FriendUsername))))
+                .ToList();
+            if (all.Count == 0)
+            {
+                AddNote(theme, panel, "No saved decks yet. Build one under Decklists on the home screen.");
+                return;
+            }
+
+            var group = panel.gameObject.AddComponent<ToggleGroup>();
+            group.allowSwitchOff = true;
+            foreach (var (deck, owner) in all)
+            {
+                var summary = deck;
+                var label = $"{deck.Name}  ({deck.CardCount} cards{(owner != null ? ", " + owner + "'s" : string.Empty)})";
+                var toggle = UiFactory.Toggle(panel.transform, label, theme, selected == deck.Id);
+                toggle.gameObject.name = "Deck " + deck.Name;
+                toggle.group = group;
+                toggle.onValueChanged.AddListener(on =>
+                {
+                    if (on)
+                    {
+                        chosen(summary);
+                    }
+                });
+            }
+        }
+
+        // One saved deck for each practice bot seated in a custom duel.
+        private void RebuildBotDeckChoices()
+        {
+            if (_botDeckPanel == null)
+            {
+                return;
+            }
+
+            foreach (Transform child in _botDeckPanel)
+            {
+                child.gameObject.SetActive(false);
+                Destroy(child.gameObject);
+            }
+
+            var theme = AppServices.Theme;
+            var panel = _botDeckPanel.GetComponent<VerticalLayoutGroup>();
+            var bots = _setup.OpponentUserIds.Where(_setup.BotUserIds.Contains).ToList();
+            _botDeckPanel.gameObject.SetActive(bots.Count > 0);
+            foreach (var botId in bots)
+            {
+                var id = botId;
+                AddGroupLabel(theme, panel, "Deck for " + NameOf(id));
+                _setup.BotDecklistIds.TryGetValue(id, out var current);
+                AddSavedDeckChoice(theme, _setup.BotDecklistIds.ContainsKey(id) ? current : (int?)null, deck =>
+                {
+                    _setup.BotDecklistIds[id] = deck.Id;
+                    RefreshSummary();
+                }, _botDeckPanel);
+            }
+        }
+
+        // How many cards each player picks in a Rotisserie Draft: a stepper between the server's limits.
+        private void AddCutoffChoice(UiTheme theme)
+        {
+            var panel = UiFactory.Panel(List, theme);
+            var row = UiFactory.Row(panel.transform, "Cutoff", 16f, TextAnchor.MiddleLeft);
+            UiFactory.Size(row.gameObject, height: UiFactory.ControlHeight);
+            var label = UiFactory.Label(row.transform, string.Empty, 30, theme.textPrimary, TextAnchor.MiddleCenter, FontStyle.Bold);
+            label.gameObject.name = "Cutoff label";
+            UiFactory.Size(label.gameObject, 360f, UiFactory.ControlHeight);
+
+            void Show() => label.text = _setup.RotisserieCutoff + " cards each";
+            void Step(int by)
+            {
+                _setup.RotisserieCutoff = Mathf.Clamp(_setup.RotisserieCutoff + by, GameSetup.MinRotisserieCutoff, GameSetup.MaxRotisserieCutoff);
+                Show();
+            }
+
+            var fewer = UiFactory.Button(row.transform, "-", theme, () => Step(-1), primary: false);
+            fewer.gameObject.name = "Fewer picks";
+            UiFactory.Size(fewer.gameObject, 90f);
+            label.transform.SetSiblingIndex(1);
+            var more = UiFactory.Button(row.transform, "+", theme, () => Step(1), primary: false);
+            more.gameObject.name = "More picks";
+            UiFactory.Size(more.gameObject, 90f);
+            Show();
+
+            UiFactory.ToggleDescription(panel.transform, theme,
+                $"Each player drafts this many cards ({GameSetup.MinRotisserieCutoff} to {GameSetup.MaxRotisserieCutoff}), then builds a deck from them.");
+        }
+
+        private void AddPoolSourceChoice(UiTheme theme)
+        {
+            var panel = UiFactory.Panel(List, theme);
+            var group = panel.gameObject.AddComponent<ToggleGroup>();
+            group.allowSwitchOff = false;
+            foreach (var source in GameSetup.PoolSourceOptions)
+            {
+                var id = source.Id;
+                AddRadio(theme, panel, group, source.Label, source.Description, _setup.PoolSource == id, () =>
+                {
+                    // Choosing (or leaving) a saved deck as the pool adds (or drops) the list of decks to pick from.
+                    var changes = (_setup.PoolSource == GameSetup.SavedDeckSource) != (id == GameSetup.SavedDeckSource);
+                    _setup.PoolSource = id;
+                    if (changes)
+                    {
+                        Rebuild();
+                    }
+                });
             }
         }
 
@@ -353,8 +561,19 @@ namespace MoodSwings.UI
 
             // "Synchronous" only makes sense for two players in a format that supports it, and only
             // while the server offers it; anything that stops applying is switched off, not just hidden.
+            _setup.BotUserIds = new HashSet<int>(AppServices.Lobby.Bots.Select(b => b.UserId));
             _setup.Normalize(AppServices.Lobby.SynchronousModeEnabled);
             RebuildPartnerChoices();
+            RebuildBotDeckChoices();
+            if (_sideboardToggle != null)
+            {
+                _sideboardPanel.SetActive(_setup.SideboardingAvailable);
+                if (!_setup.SideboardingAvailable)
+                {
+                    _sideboardToggle.SetIsOnWithoutNotify(false);
+                }
+            }
+
             if (_bestOfThreeToggle != null)
             {
                 _bestOfThreePanel.SetActive(_setup.BestOfThreeAvailable);
@@ -487,7 +706,14 @@ namespace MoodSwings.UI
                 return;
             }
 
-            // Back to wherever this was opened from, which shows what happened.
+            // A game that starts right away opens on its board (and Back from there is the lobby, as before).
+            // A posted one has no game yet, so the screen this was opened from tells what happened.
+            if (!_setup.PostToOpenLobby && result.GameId.HasValue)
+            {
+                Router.Show<BoardScreen>(BoardSession.ForPlayer(AppServices.Api, result.GameId.Value), addToHistory: false);
+                return;
+            }
+
             var message = result.Message;
             Router.Back();
             Router.Current?.ShowMessage(message);

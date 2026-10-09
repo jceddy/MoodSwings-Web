@@ -129,8 +129,104 @@ namespace MoodSwings.Networking
                 "/games/chat", new { game_id = gameId, channel, message_text = text }, cancellationToken);
         }
 
-        /// <summary>
-        /// POST /games/puzzle-hint-viewed -- say you're about to read the puzzle's hint, so the solve no longer
+        /// <summary>POST /games/decklist -- a custom duel: the saved deck you've chosen (or, for sideboarding, the deck as decklist text).</summary>
+        public static Task<ApiResult<GameActionResponse>> SubmitDuelDeckAsync(
+            this ApiClient api, int gameId, int? savedDecklistId, string decklistText, CancellationToken cancellationToken = default)
+        {
+            return savedDecklistId.HasValue
+                ? api.PostAsync<GameActionResponse>("/games/decklist", new { game_id = gameId, saved_decklist_id = savedDecklistId.Value }, cancellationToken)
+                : api.PostAsync<GameActionResponse>("/games/decklist", new { game_id = gameId, decklist_text = decklistText }, cancellationToken);
+        }
+
+        /// <summary>GET /games/deck -- the whole shared deck of a game that has one (not custom duels or drafts); a spectator may need the share code.</summary>
+        public static Task<ApiResult<SharedDeckResponse>> GetSharedDeckAsync(
+            this ApiClient api, int gameId, string spectateCode = null, CancellationToken cancellationToken = default)
+        {
+            var path = $"/games/deck?game_id={gameId}";
+            if (!string.IsNullOrEmpty(spectateCode))
+            {
+                path += "&code=" + Uri.EscapeDataString(spectateCode);
+            }
+
+            return api.GetAsync<SharedDeckResponse>(path, cancellationToken);
+        }
+
+        // --- Chaos Draft -------------------------------------------------------------------------
+
+        /// <summary>GET /games/chaos-draft-offer -- the effect choice you face this round (created on the first ask), and whether the round is clear to play.</summary>
+        public static Task<ApiResult<ChaosOfferInfo>> GetChaosOfferAsync(
+            this ApiClient api, int gameId, CancellationToken cancellationToken = default)
+        {
+            return api.GetAsync<ChaosOfferInfo>("/games/chaos-draft-offer?game_id=" + gameId, cancellationToken);
+        }
+
+        /// <summary>POST /games/chaos-draft-effect -- attach the effect you chose to a card ("choose"; a team "propose"s it for its partner to confirm).</summary>
+        public static Task<ApiResult<GameActionResponse>> ChooseChaosEffectAsync(
+            this ApiClient api, int gameId, int effectId, int cardId, bool team, CancellationToken cancellationToken = default)
+        {
+            return api.PostAsync<GameActionResponse>(
+                "/games/chaos-draft-effect",
+                new { game_id = gameId, action = team ? "propose" : "choose", chosen_effect_id = effectId, attach_game_card_id = cardId },
+                cancellationToken);
+        }
+
+        /// <summary>POST /games/chaos-draft-effect (confirm) -- a team partner agrees with, or turns down, the proposal.</summary>
+        public static Task<ApiResult<GameActionResponse>> ConfirmChaosEffectAsync(
+            this ApiClient api, int gameId, bool approve, CancellationToken cancellationToken = default)
+        {
+            return api.PostAsync<GameActionResponse>(
+                "/games/chaos-draft-effect", new { game_id = gameId, action = "confirm", approve }, cancellationToken);
+        }
+
+        /// <summary>POST /games/apply-chaos-loop-shortcut -- apply a repeating effect this many times at once.</summary>
+        public static Task<ApiResult<GameActionResponse>> ApplyChaosLoopShortcutAsync(
+            this ApiClient api, int gameId, int count, CancellationToken cancellationToken = default)
+        {
+            return api.PostAsync<GameActionResponse>("/games/apply-chaos-loop-shortcut", new { game_id = gameId, count }, cancellationToken);
+        }
+
+        // --- drafting ---------------------------------------------------------------------------
+        // Draft games sit in "waiting" until every deck is in; these are how the draft and the deck get chosen.
+
+        /// <summary>POST /games/draft/pick -- Quick Draft: the cards you keep from the pack in front of you at this round and stage.</summary>
+        public static Task<ApiResult<GameActionResponse>> PickQuickDraftAsync(
+            this ApiClient api, int gameId, int round, int stage, IEnumerable<int> cardIds, CancellationToken cancellationToken = default)
+        {
+            return api.PostAsync<GameActionResponse>(
+                "/games/draft/pick", new { game_id = gameId, round, stage, card_ids = cardIds.ToArray() }, cancellationToken);
+        }
+
+        /// <summary>POST /games/draft/winston-pick -- Winston Draft: "take" the pile you're looking at, or "pass" to the next.</summary>
+        public static Task<ApiResult<GameActionResponse>> PickWinstonDraftAsync(
+            this ApiClient api, int gameId, string action, CancellationToken cancellationToken = default)
+        {
+            return api.PostAsync<GameActionResponse>("/games/draft/winston-pick", new { game_id = gameId, action }, cancellationToken);
+        }
+
+        /// <summary>POST /games/draft/grid-pick -- Grid Draft: take the row or column ("axis") at this index (from 0).</summary>
+        public static Task<ApiResult<GameActionResponse>> PickGridDraftAsync(
+            this ApiClient api, int gameId, string axis, int index, CancellationToken cancellationToken = default)
+        {
+            return api.PostAsync<GameActionResponse>("/games/draft/grid-pick", new { game_id = gameId, axis, index }, cancellationToken);
+        }
+
+        /// <summary>POST /games/draft/rotisserie-pick (or tiered-rotisserie-pick) -- take one card from the shared pool.</summary>
+        public static Task<ApiResult<GameActionResponse>> PickRotisserieDraftAsync(
+            this ApiClient api, int gameId, int cardId, bool tiered, CancellationToken cancellationToken = default)
+        {
+            return api.PostAsync<GameActionResponse>(
+                tiered ? "/games/draft/tiered-rotisserie-pick" : "/games/draft/rotisserie-pick", new { game_id = gameId, card_id = cardId }, cancellationToken);
+        }
+
+        /// <summary>POST /games/draft/deck -- the deck you've chosen from your pool (card ids as in the pool; repeats for copies).</summary>
+        public static Task<ApiResult<GameActionResponse>> SubmitDraftDeckAsync(
+            this ApiClient api, int gameId, IEnumerable<int> cardIds, CancellationToken cancellationToken = default)
+        {
+            return api.PostAsync<GameActionResponse>(
+                "/games/draft/deck", new { game_id = gameId, card_ids = cardIds.ToArray() }, cancellationToken);
+        }
+
+        /// <summary>POST /games/puzzle-hint-viewed -- say you're about to read the puzzle's hint, so the solve no longer
         /// counts for the "Puzzle Solver" achievement. Sent before the hint is shown.
         /// </summary>
         public static Task<ApiResult<ApiEnvelope>> MarkPuzzleHintViewedAsync(

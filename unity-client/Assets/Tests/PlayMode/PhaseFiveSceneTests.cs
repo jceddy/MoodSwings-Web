@@ -36,6 +36,20 @@ namespace MoodSwings.Tests
 
             public List<string> Calls { get; } = new List<string>();
 
+            /// <summary>GET /games/deck answers with this, under DeckStatus.</summary>
+            public string DeckJson = "{\"status\":\"ok\",\"cards\":[]}";
+
+            public int DeckStatus = 200;
+
+            /// <summary>GET /games/chaos-draft-offer answers with this.</summary>
+            public string ChaosOfferJson = "{\"status\":\"ok\",\"offer\":null,\"round_ready\":true}";
+
+            /// <summary>GET /decklists answers with this (null: the captured one).</summary>
+            public string DecklistsJson;
+
+            /// <summary>GET /decklists/view answers with this.</summary>
+            public string DecklistViewJson = "{\"status\":\"error\",\"message\":\"No such decklist\"}";
+
             /// <summary>GET /puzzles answers with this.</summary>
             public string PuzzlesJson = "{\"status\":\"ok\",\"puzzles\":[]}";
 
@@ -62,14 +76,36 @@ namespace MoodSwings.Tests
                     return MainSceneTests.Reply(200, (StateFor != null ? StateFor(asked) : State).ToString());
                 }
 
+                if (path.StartsWith("/games/deck?"))
+                {
+                    return MainSceneTests.Reply(DeckStatus, DeckJson);
+                }
+
+                if (path.StartsWith("/games/chaos-draft-offer"))
+                {
+                    return MainSceneTests.Reply(200, ChaosOfferJson);
+                }
+
                 if (request.Method == "POST" && path.StartsWith("/games/"))
                 {
                     var body = string.IsNullOrEmpty(request.Body) ? new JObject() : JObject.Parse(request.Body);
                     return OnPost?.Invoke(path, body) ?? MainSceneTests.Reply(200, "{\"status\":\"ok\"}");
                 }
 
+                if (path.StartsWith("/decklists/view"))
+                {
+                    return MainSceneTests.Reply(DecklistViewJson.Contains("\"error\"") ? 404 : 200, DecklistViewJson);
+                }
+
+                if (request.Method == "POST" && path.StartsWith("/decklists"))
+                {
+                    return MainSceneTests.Reply(200, path == "/decklists" ? "{\"status\":\"ok\",\"decklist_id\":42}" : "{\"status\":\"ok\"}");
+                }
+
                 switch (path)
                 {
+                    case "/decklists": return MainSceneTests.Reply(200, DecklistsJson ?? Fixture("decklists"));
+                    case "/cards/catalog": return MainSceneTests.Reply(200, Fixture("cards_catalog"));
                     case "/puzzles": return MainSceneTests.Reply(200, PuzzlesJson);
                     case "/puzzles/attempt":
                         return AttemptReply ?? MainSceneTests.Reply(201, "{\"status\":\"ok\",\"game_id\":" + AttemptGameId + "}");
@@ -884,9 +920,9 @@ namespace MoodSwings.Tests
         // --- kinds of game the app can't play yet ---------------------------------------------------
 
         [UnityTest]
-        public IEnumerator ADraftGame_ShowsTheBoardButSaysItCantBePlayedHere()
+        public IEnumerator AKindOfGameTheAppCantPlay_ShowsTheBoardButSaysSo()
         {
-            var server = new PlayServer { State = Load(406, s => s["game"]["deck_type"] = "quick_draft") };
+            var server = new PlayServer { State = Load(406, s => s["game"]["format"] = "tournament_cast") };
             yield return OpenBoard(server, 406);
 
             StringAssert.Contains("can't be played in the app yet", Board().RoundText);

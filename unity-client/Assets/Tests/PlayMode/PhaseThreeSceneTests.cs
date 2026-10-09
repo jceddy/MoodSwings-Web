@@ -30,12 +30,21 @@ namespace MoodSwings.Tests
             public string MineJson = NoListings;
             public string JoinedJson = NoListings;
             public bool SynchronousFlag;
+            public string DecklistsJson =
+                "{\"status\":\"ok\",\"friends\":[],\"own\":[" +
+                "{\"id\":30,\"name\":\"Mine\",\"visibility\":\"private\",\"card_count\":20,\"sideboard_card_count\":0}," +
+                "{\"id\":31,\"name\":\"Tiny\",\"visibility\":\"private\",\"card_count\":10,\"sideboard_card_count\":0}]}";
             public HttpResponse JoinResponse = MainSceneTests.Reply(201, "{\"status\":\"waiting\",\"joined_count\":1,\"target_player_count\":3}");
 
             public HttpResponse Handle(HttpRequest request)
             {
                 var path = request.Url.Substring(request.Url.IndexOf("/app/", StringComparison.Ordinal) + 4);
                 Calls.Add($"{request.Method} {path} {request.Body}");
+
+                if (path.StartsWith("/games/state"))
+                {
+                    return MainSceneTests.Reply(200, Fixture("game_406_state"));
+                }
 
                 switch (path)
                 {
@@ -47,6 +56,7 @@ namespace MoodSwings.Tests
                         : MainSceneTests.Reply(200, Fixture("games"));
                     case "/games/past": return MainSceneTests.Reply(200, Fixture("games_past"));
                     case "/games/bots": return MainSceneTests.Reply(200, Fixture("games_bots"));
+                    case "/decklists": return MainSceneTests.Reply(200, DecklistsJson);
                     case "/config/synchronous-mode-enabled":
                         return MainSceneTests.Reply(200, "{\"status\":\"ok\",\"enabled\":" + (SynchronousFlag ? "true" : "false") + "}");
                     case "/open-games": return request.Method == "POST"
@@ -146,7 +156,7 @@ namespace MoodSwings.Tests
 
             yield return PhaseTwoSceneTests.Click("Show all 69");
 
-            Assert.AreEqual(1 + 3 + 1 + 69, MainSceneTests.Screen<PlayScreen>().RowCount);
+            Assert.AreEqual(1 + 3 + 1 + GameDisplay.Group(AppServices.Lobby.PastGames).Count, MainSceneTests.Screen<PlayScreen>().RowCount, "a match is one block");
             Assert.IsNull(PhaseTwoSceneTests.FindButton("Show all 69"));
         }
 
@@ -185,7 +195,7 @@ namespace MoodSwings.Tests
         }
 
         [UnityTest]
-        public IEnumerator NewGame_StartingAGameVsBots_PostsItAndReturnsToPlay()
+        public IEnumerator NewGame_StartingAGameVsBots_PostsItAndOpensItsBoard()
         {
             var server = new LobbyFakeServer();
             yield return OpenNewGame(server);
@@ -195,11 +205,16 @@ namespace MoodSwings.Tests
             yield return PhaseTwoSceneTests.Frames();
 
             yield return PhaseTwoSceneTests.Click("Start game");
-            yield return MainSceneTests.WaitFor<PlayScreen>();
+            yield return MainSceneTests.WaitFor<BoardScreen>();
 
             Assert.IsTrue(AnyCall(server, "POST /games {", "\"opponent_user_ids\":[18,20]", "\"deck_type\":\"power\"", "\"format\":\"standard\""),
                 string.Join("\n", server.Calls));
-            Assert.AreEqual("Game created.", MainSceneTests.Screen<PlayScreen>().StatusText);
+            yield return PhaseTwoSceneTests.Frames(4);
+            Assert.IsTrue(server.Calls.Any(c => c.StartsWith("GET /games/state?game_id=408")), "the new game's board is open");
+
+            // Back from the board is the lobby it was started from.
+            UnityEngine.Object.FindAnyObjectByType<ScreenRouter>().Back();
+            yield return MainSceneTests.WaitFor<PlayScreen>();
         }
 
         [UnityTest]
@@ -215,7 +230,7 @@ namespace MoodSwings.Tests
             Assert.IsNotNull(first);
             first.isOn = true;
             yield return PhaseTwoSceneTests.Click("Start game");
-            yield return MainSceneTests.WaitFor<PlayScreen>();
+            yield return MainSceneTests.WaitFor<BoardScreen>();
 
             Assert.IsTrue(AnyCall(server, "POST /games {", "\"bot_goes_first\":true"));
         }
@@ -256,7 +271,7 @@ namespace MoodSwings.Tests
             PhaseTwoSceneTests.FindToggle("BotSage  (tactical)").isOn = true;
             yield return PhaseTwoSceneTests.Frames();
             yield return PhaseTwoSceneTests.Click("Start game");
-            yield return MainSceneTests.WaitFor<PlayScreen>();
+            yield return MainSceneTests.WaitFor<BoardScreen>();
 
             Assert.IsTrue(AnyCall(server, "POST /games {", "\"format\":\"duel\"", "\"deck_type\":\"structure\""), string.Join("\n", server.Calls));
         }
@@ -302,7 +317,7 @@ namespace MoodSwings.Tests
 
             PhaseTwoSceneTests.FindToggle("Best of three").isOn = true;
             yield return PhaseTwoSceneTests.Click("Start game");
-            yield return MainSceneTests.WaitFor<PlayScreen>();
+            yield return MainSceneTests.WaitFor<BoardScreen>();
 
             Assert.IsTrue(AnyCall(server, "POST /games {", "\"best_of_three\":true"), string.Join("\n", server.Calls));
         }
@@ -341,7 +356,7 @@ namespace MoodSwings.Tests
             yield return PhaseTwoSceneTests.Frames();
 
             yield return PhaseTwoSceneTests.Click("Start game");
-            yield return MainSceneTests.WaitFor<PlayScreen>();
+            yield return MainSceneTests.WaitFor<BoardScreen>();
 
             Assert.IsTrue(AnyCall(server, "POST /games {", "\"format\":\"closed_team\"", "\"opponent_user_ids\":[18,20,21]", "\"partner_user_id\":20"),
                 string.Join("\n", server.Calls));
@@ -363,7 +378,7 @@ namespace MoodSwings.Tests
             PhaseTwoSceneTests.FindToggle("Assign my partner at random").isOn = true;
             yield return PhaseTwoSceneTests.Frames();
             yield return PhaseTwoSceneTests.Click("Start game");
-            yield return MainSceneTests.WaitFor<PlayScreen>();
+            yield return MainSceneTests.WaitFor<BoardScreen>();
 
             Assert.IsTrue(AnyCall(server, "POST /games {", "\"format\":\"team\"", "\"random_teams\":true"), string.Join("\n", server.Calls));
             Assert.IsFalse(AnyCall(server, "POST /games {", "partner_user_id"));
@@ -434,7 +449,7 @@ namespace MoodSwings.Tests
 
             PhaseTwoSceneTests.FindToggle("Synchronous (live)").isOn = true;
             yield return PhaseTwoSceneTests.Click("Start game");
-            yield return MainSceneTests.WaitFor<PlayScreen>();
+            yield return MainSceneTests.WaitFor<BoardScreen>();
 
             Assert.IsTrue(AnyCall(server, "POST /games {", "\"synchronous_mode\":true"), string.Join("\n", server.Calls));
         }
@@ -556,6 +571,242 @@ namespace MoodSwings.Tests
 
             Assert.AreEqual(0, AppServices.Lobby.ActiveGames.Count);
             Assert.AreEqual(0, AppServices.Lobby.PastGames.Count);
+        }
+
+        [UnityTest]
+        public IEnumerator NewGame_ADraft_IsSentWithItsFormatDeckTypeAndPool()
+        {
+            var server = new LobbyFakeServer();
+            yield return OpenNewGame(server);
+            PhaseTwoSceneTests.FindToggle("BotAlice").isOn = true;
+            PhaseTwoSceneTests.FindToggle("Draft").isOn = true;
+            yield return PhaseTwoSceneTests.Frames(2);
+
+            Assert.IsTrue(PhaseTwoSceneTests.FindToggle("Quick Draft").isOn, "the first of the draft types");
+            Assert.IsNull(PhaseTwoSceneTests.FindToggle("Best of three"), "a draft is always a match");
+            Assert.IsNull(PhaseTwoSceneTests.FindToggle("Power"), "no ready-made decks here");
+
+            PhaseTwoSceneTests.FindToggle("Grid Draft").isOn = true;
+            yield return PhaseTwoSceneTests.Frames(2);
+            PhaseTwoSceneTests.FindToggle("One of Each Card").isOn = true;
+            yield return PhaseTwoSceneTests.Frames(2);
+            ScreenshotHelper.Capture("new-game-draft");
+
+            yield return PhaseTwoSceneTests.Click("Start game");
+            yield return MainSceneTests.WaitFor<BoardScreen>();
+
+            Assert.IsTrue(AnyCall(server, "POST /games {", "\"format\":\"draft\"", "\"deck_type\":\"grid_draft\"", "\"grid_draft_pool_source\":\"one_of_each\""),
+                string.Join("\n", server.Calls));
+        }
+
+        [UnityTest]
+        public IEnumerator NewGame_ARotisserieDraft_LetsYouChooseHowManyCardsEachPlayerPicks()
+        {
+            var server = new LobbyFakeServer();
+            yield return OpenNewGame(server);
+            PhaseTwoSceneTests.FindToggle("BotAlice").isOn = true;
+            PhaseTwoSceneTests.FindToggle("Draft").isOn = true;
+            yield return PhaseTwoSceneTests.Frames(2);
+            PhaseTwoSceneTests.FindToggle("Rotisserie Draft").isOn = true;
+            yield return PhaseTwoSceneTests.Frames(2);
+
+            Assert.AreEqual("14 cards each", PhaseFiveSceneTests.Child("Cutoff label").GetComponent<Text>().text);
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.ButtonNamed("More picks"));
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.ButtonNamed("More picks"));
+            Assert.AreEqual("16 cards each", PhaseFiveSceneTests.Child("Cutoff label").GetComponent<Text>().text);
+
+            yield return PhaseTwoSceneTests.Click("Start game");
+            yield return MainSceneTests.WaitFor<BoardScreen>();
+
+            Assert.IsTrue(AnyCall(server, "POST /games {", "\"deck_type\":\"rotisserie_draft\"", "\"rotisserie_draft_pool_source\":\"random_48\"", "\"rotisserie_draft_cutoff_count\":16"),
+                string.Join("\n", server.Calls));
+        }
+
+        [UnityTest]
+        public IEnumerator NewGame_ThePoolOfTheDay_HoldsOneOpponent_AndSendsItsDeckType()
+        {
+            var server = new LobbyFakeServer();
+            yield return OpenNewGame(server);
+            PhaseTwoSceneTests.FindToggle("Sealed Pool of the Day").isOn = true;
+            yield return PhaseTwoSceneTests.Frames(2);
+            Assert.IsNull(PhaseTwoSceneTests.FindToggle("Random 48"), "no pool to choose");
+            Assert.IsNull(PhaseTwoSceneTests.FindToggle("Quick Draft"), "no draft to choose either");
+
+            PhaseTwoSceneTests.FindToggle("BotAlice").isOn = true;
+            PhaseTwoSceneTests.FindToggle("BotBen").isOn = true;
+            yield return PhaseTwoSceneTests.Frames();
+            StringAssert.Contains("exactly two players", MainSceneTests.Screen<NewGameScreen>().StatusText);
+            Assert.IsFalse(PhaseTwoSceneTests.FindToggle("BotBen").isOn);
+
+            yield return PhaseTwoSceneTests.Click("Start game");
+            yield return MainSceneTests.WaitFor<BoardScreen>();
+
+            Assert.IsTrue(AnyCall(server, "POST /games {", "\"format\":\"draft\"", "\"deck_type\":\"sealed_pool_of_the_day\""), string.Join("\n", server.Calls));
+        }
+
+        [UnityTest]
+        public IEnumerator NewGame_ACustomDeck_NeedsASavedDeckBigEnough_AndSendsIt()
+        {
+            var server = new LobbyFakeServer();
+            yield return OpenNewGame(server);
+            PhaseTwoSceneTests.FindToggle("BotAlice").isOn = true;
+            PhaseTwoSceneTests.FindToggle("Custom Deck").isOn = true;
+            yield return PhaseTwoSceneTests.Frames(3);
+
+            Assert.IsNotNull(PhaseTwoSceneTests.FindToggle("Mine  (20 cards)"), "your saved decks are offered");
+            Assert.IsFalse(StartButton().interactable, "no deck chosen yet");
+
+            PhaseTwoSceneTests.FindToggle("Tiny  (10 cards)").isOn = true;
+            yield return PhaseTwoSceneTests.Frames(2);
+            Assert.IsFalse(StartButton().interactable, "two players need 15 cards");
+
+            PhaseTwoSceneTests.FindToggle("Mine  (20 cards)").isOn = true;
+            yield return PhaseTwoSceneTests.Frames(2);
+            Assert.IsTrue(StartButton().interactable);
+            ScreenshotHelper.Capture("new-game-custom-deck");
+
+            yield return PhaseTwoSceneTests.Click("Start game");
+            yield return MainSceneTests.WaitFor<BoardScreen>();
+
+            Assert.IsTrue(AnyCall(server, "POST /games {", "\"deck_type\":\"custom\"", "\"saved_decklist_id\":30"), string.Join("\n", server.Calls));
+        }
+
+        [UnityTest]
+        public IEnumerator NewGame_ACustomDuel_ChoosesTheRules_AndADeckForEachBot()
+        {
+            var server = new LobbyFakeServer();
+            yield return OpenNewGame(server);
+            PhaseTwoSceneTests.FindToggle("BotAlice").isOn = true;
+            PhaseTwoSceneTests.FindToggle("Duel").isOn = true;
+            yield return PhaseTwoSceneTests.Frames(2);
+            PhaseTwoSceneTests.FindToggle("Custom Decklists (Duel)").isOn = true;
+            yield return PhaseTwoSceneTests.Frames(3);
+            PhaseTwoSceneTests.FindToggle("Power Duel").isOn = true;
+            yield return PhaseTwoSceneTests.Frames(2);
+
+            Assert.IsFalse(StartButton().interactable, "the bot has no deck yet");
+            var botDeck = PhaseFiveSceneTests.Child("Deck Mine");
+            Assert.IsNotNull(botDeck, "a deck to give BotAlice");
+            Assert.IsTrue(Texts().Contains("Deck for BotAlice"), string.Join(" | ", Texts()));
+            botDeck.GetComponent<Toggle>().isOn = true;
+            yield return PhaseTwoSceneTests.Frames(3);
+            Assert.IsTrue(StartButton().interactable);
+
+            PhaseTwoSceneTests.FindToggle("Best of three").isOn = true;
+            yield return PhaseTwoSceneTests.Frames(2);
+            var sideboarding = PhaseTwoSceneTests.FindToggle("Allow sideboarding");
+            Assert.IsNotNull(sideboarding, "Power rules in a match can be sideboarded");
+            sideboarding.isOn = true;
+            ScreenshotHelper.Capture("new-game-custom-duel");
+
+            yield return PhaseTwoSceneTests.Click("Start game");
+            yield return MainSceneTests.WaitFor<BoardScreen>();
+
+            Assert.IsTrue(AnyCall(server, "POST /games {", "\"deck_type\":\"custom_duel\"", "\"preset\":\"power\"", "\"allow_sideboarding\":true",
+                "\"bot_decklists\":{\"9\":{\"saved_decklist_id\":30}}", "\"best_of_three\":true"), string.Join("\n", server.Calls));
+        }
+
+        [UnityTest]
+        public IEnumerator NewGame_ADraftCanDealFromASavedDeck()
+        {
+            var server = new LobbyFakeServer();
+            yield return OpenNewGame(server);
+            PhaseTwoSceneTests.FindToggle("BotAlice").isOn = true;
+            PhaseTwoSceneTests.FindToggle("Draft").isOn = true;
+            yield return PhaseTwoSceneTests.Frames(2);
+            Assert.IsNull(PhaseFiveSceneTests.Child("Deck Mine"), "no deck list until a saved deck is the pool");
+
+            PhaseTwoSceneTests.FindToggle("A saved deck").isOn = true;
+            yield return PhaseTwoSceneTests.Frames(3);
+            Assert.IsFalse(StartButton().interactable);
+            PhaseFiveSceneTests.Child("Deck Mine").GetComponent<Toggle>().isOn = true;
+            yield return PhaseTwoSceneTests.Frames(2);
+
+            yield return PhaseTwoSceneTests.Click("Start game");
+            yield return MainSceneTests.WaitFor<BoardScreen>();
+
+            Assert.IsTrue(AnyCall(server, "POST /games {", "\"quick_draft_pool_source\":\"saved_deck\"", "\"saved_decklist_id\":30"), string.Join("\n", server.Calls));
+        }
+
+        private static string[] Texts() =>
+            UnityEngine.Object.FindObjectsByType<Text>(FindObjectsInactive.Exclude).Select(t => t.text).ToArray();
+
+        [UnityTest]
+        public IEnumerator Play_AMatchsGamesAreOneBlock_WithItsScoreAndEachGameBeneath()
+        {
+            var server = new LobbyFakeServer();
+            yield return OpenPlay(server);
+            yield return PhaseTwoSceneTests.Click("Show all 69");
+            yield return PhaseTwoSceneTests.Frames(3);
+
+            var block = PhaseFiveSceneTests.Child("Match draft:132");
+            Assert.IsNotNull(block, "games 349-351 are one match");
+            var texts = block.GetComponentsInChildren<Text>().Select(t => t.text).ToList();
+            Assert.IsTrue(texts.Contains("Match score: you 1, opponent 2 (first to 2 wins)"), string.Join(" | ", texts));
+            Assert.IsTrue(texts.Contains("jceddy won the match"));
+            Assert.IsTrue(texts.Contains("Game 3") && texts.Contains("Game 2") && texts.Contains("Game 1"));
+            Assert.IsTrue(texts.IndexOf("Game 3") < texts.IndexOf("Game 1"), "latest game first");
+            Assert.IsNotNull(block.Find("Match games/Game 3"));
+            Assert.AreEqual(3, block.Find("Match games").GetComponentsInChildren<Button>().Count(b => b.GetComponentInChildren<Text>().text == "Open"));
+
+            // Scroll the match to the top of the list for the picture.
+            var scroll = MainSceneTests.Screen<PlayScreen>().GetComponentInChildren<ScrollRect>();
+            Canvas.ForceUpdateCanvases();
+            var rect = (RectTransform)block;
+            scroll.content.anchoredPosition = new Vector2(0f, -rect.anchoredPosition.y - rect.rect.height / 2f - 10f);
+            yield return PhaseTwoSceneTests.Frames(2);
+            ScreenshotHelper.Capture("play-match-group");
+        }
+
+        [UnityTest]
+        public IEnumerator Play_AGameInAMatchOpensItsOwnBoard()
+        {
+            var server = new LobbyFakeServer();
+            yield return OpenPlay(server);
+            yield return PhaseTwoSceneTests.Click("Show all 69");
+            yield return PhaseTwoSceneTests.Frames(3);
+
+            var openGame2 = PhaseFiveSceneTests.Child("Match draft:132").Find("Match games/Game 2").GetComponentsInChildren<Button>()
+                .First(b => b.GetComponentInChildren<Text>().text == "Open");
+            openGame2.onClick.Invoke();
+            yield return MainSceneTests.WaitFor<BoardScreen>();
+
+            Assert.IsTrue(server.Calls.Any(c => c.StartsWith("GET /games/state?game_id=350")), string.Join("\n", server.Calls));
+        }
+
+        [UnityTest]
+        public IEnumerator NewGame_TheSealedGamesAreFormats_AndDraftNoLongerOffersThem()
+        {
+            var server = new LobbyFakeServer();
+            yield return OpenNewGame(server);
+            Assert.IsNotNull(PhaseTwoSceneTests.FindToggle("Sealed Deck"), "its own format");
+            Assert.IsNotNull(PhaseTwoSceneTests.FindToggle("Sealed Pool of the Day"));
+
+            PhaseTwoSceneTests.FindToggle("Draft").isOn = true;
+            yield return PhaseTwoSceneTests.Frames(3);
+            Assert.IsNotNull(PhaseTwoSceneTests.FindToggle("Quick Draft"));
+            Assert.AreEqual(1, UnityEngine.Object.FindObjectsByType<Toggle>(FindObjectsInactive.Exclude)
+                .Count(t => t.GetComponentInChildren<Text>()?.text == "Sealed Deck"), "only the format, not a deck under Draft");
+            ScreenshotHelper.Capture("new-game-formats");
+        }
+
+        [UnityTest]
+        public IEnumerator NewGame_ASealedDeck_SendsItsDeckType_WithNoDeckToChoose()
+        {
+            var server = new LobbyFakeServer();
+            yield return OpenNewGame(server);
+            PhaseTwoSceneTests.FindToggle("BotAlice").isOn = true;
+            PhaseTwoSceneTests.FindToggle("Sealed Deck").isOn = true;
+            yield return PhaseTwoSceneTests.Frames(3);
+
+            Assert.IsNull(PhaseTwoSceneTests.FindToggle("Structure"), "no deck list");
+            Assert.IsNull(PhaseTwoSceneTests.FindToggle("Quick Draft"));
+            Assert.IsNull(PhaseTwoSceneTests.FindToggle("Best of three"), "a sealed match is always a match");
+
+            yield return PhaseTwoSceneTests.Click("Start game");
+            yield return MainSceneTests.WaitFor<BoardScreen>();
+
+            Assert.IsTrue(AnyCall(server, "POST /games {", "\"format\":\"draft\"", "\"deck_type\":\"sealed_deck\""), string.Join("\n", server.Calls));
         }
     }
 }

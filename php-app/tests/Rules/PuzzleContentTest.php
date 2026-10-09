@@ -1478,6 +1478,128 @@ final class PuzzleContentTest extends TestCase
         }
     }
 
+    /**
+     * Plays $catalogCardId with $choices and, if Duplicity offers a repeat of
+     * its effect, accepts it with $repeatChoices (declines when null).
+     *
+     * @param array<string, mixed> $choices
+     * @param array<string, mixed>|null $repeatChoices
+     * @return array<string, mixed>
+     */
+    private function playWithRepeat(int $gameId, int $gamePlayerId, int $catalogCardId, array $choices, ?array $repeatChoices): array
+    {
+        $result = $this->games->playMood($gameId, $gamePlayerId, $this->instanceId($gameId, $catalogCardId, 'hand'), $choices);
+        if ($result['pending_decision'] ?? false) {
+            $result = $this->games->respondToDecision($gameId, $gamePlayerId, [
+                'duplicity_repeat' => $repeatChoices !== null ? ['repeat' => true, 'choices' => $repeatChoices] : ['repeat' => false],
+            ]);
+        }
+
+        return $result;
+    }
+
+    /**
+     * "Deja Vu": the only winning line (exhaustive search of the real flow --
+     * 912 states -- every play order, Shock target set and Nostalgia pick) is
+     * Duplicity; Shock doubled to put BOTH of the opponent's 3s and your own
+     * Glee into the discard pile; Nostalgia doubled to take Glee back; then
+     * Glee (6, played this round) and Laziness, the card already in hand:
+     * Hope 0 + Duplicity 0 + Shock 2 + Nostalgia 0 + Glee 6 + Laziness 4 = 12
+     * against the opponent's 11. See migration 0448's own docblock.
+     */
+    public function testDejaVuSolvedByShockingGleeAndPlayingItAgainWithLaziness(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('deja-vu');
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 37, 'hand')); // Duplicity
+        $this->playWithRepeat(
+            $gameId, $p, 101,
+            ['target_mood_ids' => [$this->ownedInstanceId($gameId, 102, 'in_play', $opp), $this->ownedInstanceId($gameId, 92, 'in_play', $p)]], // Stubbornness + Glee
+            ['target_mood_ids' => [$this->ownedInstanceId($gameId, 47, 'in_play', $opp)]], // Obsession
+        );
+        $this->playWithRepeat(
+            $gameId, $p, 128,
+            ['discard_card_id' => $this->instanceId($gameId, 92, 'discard')], // take Glee back
+            ['discard_card_id' => $this->instanceId($gameId, 47, 'discard')], // and (irrelevantly) Obsession
+        );
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 92, 'hand')); // Glee, played this round: 6
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 126, 'hand')); // Laziness, from the hand
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameSolved($gameId, $p);
+    }
+
+    /**
+     * The tie: take a stolen 3 back with Nostalgia and play it instead of
+     * Laziness -- Glee 6 + 3 + Shock 2 = 11, level with the opponent's 11, and
+     * the opponent played first.
+     */
+    public function testDejaVuPlayingAStolenThreeInsteadOfLazinessOnlyTies(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('deja-vu');
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 37, 'hand'));
+        $this->playWithRepeat(
+            $gameId, $p, 101,
+            ['target_mood_ids' => [$this->ownedInstanceId($gameId, 102, 'in_play', $opp), $this->ownedInstanceId($gameId, 92, 'in_play', $p)]],
+            ['target_mood_ids' => [$this->ownedInstanceId($gameId, 47, 'in_play', $opp)]],
+        );
+        $this->playWithRepeat(
+            $gameId, $p, 128,
+            ['discard_card_id' => $this->instanceId($gameId, 92, 'discard')],
+            ['discard_card_id' => $this->instanceId($gameId, 102, 'discard')], // Stubbornness
+        );
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 92, 'hand')); // Glee
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 102, 'hand')); // the stolen Stubbornness: 11-11
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameFailed($gameId);
+    }
+
+    /** Without Glee: stealing both 3s and playing them is only 2 + 3 + 3 = 8. */
+    public function testDejaVuStealingBothThreesWithoutGleeLoses(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('deja-vu');
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 37, 'hand'));
+        $this->playWithRepeat(
+            $gameId, $p, 101,
+            ['target_mood_ids' => [$this->ownedInstanceId($gameId, 102, 'in_play', $opp)]],
+            ['target_mood_ids' => [$this->ownedInstanceId($gameId, 47, 'in_play', $opp)]],
+        );
+        $this->playWithRepeat(
+            $gameId, $p, 128,
+            ['discard_card_id' => $this->instanceId($gameId, 102, 'discard')],
+            ['discard_card_id' => $this->instanceId($gameId, 47, 'discard')],
+        );
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 102, 'hand'));
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 47, 'hand'));
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameFailed($gameId);
+    }
+
+    /** Without Duplicity nothing is doubled: Shock, Nostalgia and one returned Glee reach only 8 against 14. */
+    public function testDejaVuWithoutDuplicityLoses(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('deja-vu');
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 101, 'hand'), [
+            'target_mood_ids' => [$this->ownedInstanceId($gameId, 102, 'in_play', $opp), $this->ownedInstanceId($gameId, 92, 'in_play', $p)],
+        ]);
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 128, 'hand'), [
+            'discard_card_id' => $this->instanceId($gameId, 92, 'discard'),
+        ]);
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 92, 'hand'));
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameFailed($gameId);
+    }
+
     /** A solve is never marked failed, and puzzle_failed is false while an attempt is open. */
     public function testDeadHeatSolveIsNotFailedAndOpenAttemptIsNotFailed(): void
     {

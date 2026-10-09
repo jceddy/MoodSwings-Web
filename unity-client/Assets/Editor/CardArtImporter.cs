@@ -11,12 +11,30 @@ namespace MoodSwings.Editor
     {
         private const string Folder = "Assets/Resources/CardArt/";
 
+        // Committed art that isn't a card face: the card back. Small, so none of the card art's size tricks apply.
+        private const string UiFolder = "Assets/Resources/UI/";
+
         // Bump when the settings below change, so Unity reimports existing
         // textures (git-ignored art has no committed .meta to invalidate).
-        public override uint GetVersion() => 3;
+        public override uint GetVersion() => 4;
 
         private void OnPreprocessTexture()
         {
+            if (assetPath.StartsWith(UiFolder))
+            {
+                // The card back is under 400 px wide and drawn smaller still; it isn't a multiple of 4, so it can't be
+                // GPU-compressed anyway. Mipmaps keep it clean when it is drawn small.
+                var ui = (TextureImporter)assetImporter;
+                ui.textureType = TextureImporterType.Sprite;
+                ui.spriteImportMode = SpriteImportMode.Single;
+                ui.mipmapEnabled = true;
+                ui.mipmapFilter = TextureImporterMipFilter.KaiserFilter;
+                ui.filterMode = UnityEngine.FilterMode.Trilinear;
+                ui.maxTextureSize = 2048;
+                ui.textureCompression = TextureImporterCompression.Uncompressed;
+                return;
+            }
+
             if (!assetPath.StartsWith(Folder))
             {
                 return;

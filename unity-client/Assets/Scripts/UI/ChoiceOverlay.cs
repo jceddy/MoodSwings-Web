@@ -56,6 +56,9 @@ namespace MoodSwings.UI
         private readonly Text _submitLabel;
         private readonly Button _cancel;
         private readonly List<OptionButton> _options = new List<OptionButton>();
+        /// <summary>Called with a card and where it is when the player taps the eye on an option that is a card.</summary>
+        public Action<BoardCard, string> Inspect;
+
         private ChoiceForm _form;
         private ChoicePrompt _prompt;
         private Action _onSubmit;
@@ -360,6 +363,28 @@ namespace MoodSwings.UI
             label.fontSize = 26;
             label.fontStyle = FontStyle.Normal;
             label.rectTransform.offsetMin = new Vector2(20f, 0f);
+
+            // A card can be looked at (its rules, its value) before it is chosen: an eye at the right end of the row.
+            if (option.Card != null)
+            {
+                var card = option.Card;
+                var where = option.Where;
+                label.rectTransform.offsetMax = new Vector2(-(OptionHeight + 12f), 0f);
+                var eye = UiFactory.Button(button.transform, string.Empty, _theme, () => Inspect?.Invoke(card, where), primary: false);
+                eye.gameObject.name = "Inspect " + option.Label;
+                var eyeRect = (RectTransform)eye.transform;
+                eyeRect.anchorMin = eyeRect.anchorMax = eyeRect.pivot = new Vector2(1f, 0.5f);
+                eyeRect.sizeDelta = new Vector2(OptionHeight - 12f, OptionHeight - 12f);
+                eyeRect.anchoredPosition = new Vector2(-8f, 0f);
+                eye.GetComponent<LayoutElement>().ignoreLayout = true;
+                var icon = UiFactory.Create("Eye", eye.transform);
+                UiFactory.Stretch(icon);
+                icon.offsetMin = new Vector2(5f, 5f);
+                icon.offsetMax = new Vector2(-5f, -5f);
+                var image = icon.gameObject.AddComponent<Image>();
+                image.sprite = UiIcons.Eye();
+                image.raycastTarget = false;
+            }
 
             _options.Add(new OptionButton
             {

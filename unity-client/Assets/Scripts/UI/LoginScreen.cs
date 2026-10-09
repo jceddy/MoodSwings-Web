@@ -83,6 +83,12 @@ namespace MoodSwings.UI
             UiFactory.Link(column, "Forgot your password?", theme, () => OpenSitePage("/forgot-password.html"));
             _resendLink = UiFactory.Link(column, "Didn't get your verification email?", theme, () => ShowVerifyPanel(true)).gameObject;
 
+            if (AppExit.IsAvailable)
+            {
+                var quit = UiFactory.Link(column, "Quit", theme, () => AppExit.Quit());
+                quit.gameObject.name = "Quit";
+            }
+
             var footer = UiFactory.Create("Footer", transform);
             footer.anchorMin = new Vector2(0f, 0f);
             footer.anchorMax = new Vector2(1f, 0f);

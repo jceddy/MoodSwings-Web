@@ -270,8 +270,8 @@ game" below.
 - **Hover.** On desktop, resting the mouse on any card for a moment shows a larger
   copy on the opposite side of the screen (with its current value and what is
   suppressing it); touch has the click close-up instead.
-- **Not playable yet:** drafts, sealed pools and custom-decklist duels (the board still
-  shows them; the header says they can't be played in the app yet). Those are Phase 8.
+- **Not playable yet:** tournaments and anything else with a format the app doesn't know (the
+  board still shows them; the header says they can't be played in the app yet).
 
 ### Other ways to play
 
@@ -300,6 +300,79 @@ game" below.
   first, since reading it costs an achievement), no Resign (just leave), and "Puzzle solved in N
   plays!" at the end.
 
+### Drafting
+
+- **Quick Draft** (New Game > Draft): the board shows the draft where the table would be. Each
+  stage is a pile of cards: tap two to keep (the eye on a card shows it large without
+  choosing it), then **Keep these cards**; the rest are passed on, and the cards you've kept so
+  far stay in view below. Your choice survives the board's refreshing every few seconds.
+- **Winston Draft:** three piles that grow. On your turn the pile you're looking at is face up
+  (the others are face down, with their sizes); **Take pile N**, or **Pass** to see the next --
+  passing the third draws from the deck, and asks first when that would get you nothing. The
+  other players' card counts and last move are listed.
+- **Grid Draft:** the face-up grid, with **Row N (cards left)** / **Col N** buttons around it. Tap
+  one to light that line up and read "Take row 2 (3 cards)" on the button; tap again (or another
+  line) to change your mind. Lines with nothing left can't be chosen. Everyone's picks so far
+  are shown, being open information, grouped by team in team games.
+- **Rotisserie Draft** and **Tiered Rotisserie Draft:** the shared pool, sorted by colour and
+  rarity. On your turn tap a card (the button then reads "Draft <name>") and confirm with it --
+  one tap on a card never commits, unlike the web, so a slip on a phone is harmless. The tiered one
+  shows its tiers above the pool ("Tiers: Common (done) > [Rare, 4 picks each] > ...").
+- **Sealed Deck, Sealed Pool of the Day, Weekly Sealed Pool:** no drafting at all -- you start at
+  deck building with the pool you were dealt. The Pool of the Day (two players, the same 50-card
+  pool for everyone that day) caps Rares and Mythics, which the status line states and the line under
+  the cards enforces ("At most 1 rare cards (3 chosen)"). Sealed Deck is also offered next to
+  the team formats' decks; the Pool of the Day holds exactly one opponent. (A weekly pool match
+  is made by the server's queue, so there's nothing to set up here.)
+- **Chaos Draft** (switch on "Show custom card/effect formats" in Settings to be offered it): drafts
+  as Quick Draft does. Once the game is under way, every round opens with a choice of two
+  effects, read from the server on every refresh: pick one, then the card in your hand it goes on
+  (in Open Team Play, your partner's too -- one of you proposes, the other agrees or sends it back),
+  then **Attach**. Nobody can play or pass until everyone has attached theirs, and the banner says
+  who is being waited for. A card carrying an effect has a **CHAOS** pill (coloured by the
+  effect's rarity) and its detail and hover text give the effect and any change to its value. When a
+  repeating effect sets up a loop, a box offers to apply it up to a cap of times at once.
+- **Building the deck** follows the last round: every card in your pool starts in your deck, tap
+  one to take it out (or put it back), **Clear** / **Select all**, and **Submit deck** once it is
+  within the size limits (and any rarity caps) -- the line under the cards says what's wrong. A
+  later game of the match starts from the deck you last played. When every deck is in, the board
+  starts the game and the table replaces the draft.
+- A draft is always a best-of-three match, so the Best of three option isn't offered, and a
+  lobby draft lets you choose 2 to 4 players. New Game's **Draft** format offers the five types;
+  **Cards to draft** is the pool they deal from (Random 48, Structure, jceddy's 75 or One of Each;
+  saved decks and pasted lists come with the deck builder), and Rotisserie also asks how many
+  cards each player picks (13 to 20). Tiered Rotisserie uses the fixed rarity tiers. Open and
+  Closed Team Play offer the same draft types next to their ready-made decks. What you've
+  selected is kept when the board refreshes, and the list doesn't jump back to the top. No draft
+  has been captured from the dev server, so this is checked against states built from the
+  server's documented shape.
+
+### Decklists and the deck builder
+
+- **Home > Decklists** lists your saved decks (open one to change it, or delete it after being
+  asked) and the decks friends have shared (a friend's can't be changed, so it opens as a copy).
+- The **deck builder** shows every card on the left -- filter by color and rarity, or search names
+  and rules text -- with the deck on the right: a name, **Share with friends**, and a line per card
+  with its copies and a minus/plus. Tap a card to add a copy; its eye shows it large. **Save
+  deck** makes a new deck or updates the one opened; leaving with unsaved changes asks first. A deck
+  of fewer than 15 cards gets a reminder, since a game's custom deck needs at least that many.
+
+### Playing a saved deck
+
+- **Custom Deck** (Traditional and the team formats): the whole table plays one saved deck, which
+  New Game asks you to pick from your decks and your friends' shared ones; it needs at least 15
+  cards, and 15 more for each player beyond two (the Start button stays grey until it is big
+  enough).
+- **A saved deck as a draft's pool:** in a draft, **Cards to draft > A saved deck** deals the
+  picks from one of your decks, copies and all.
+- **Custom Decklists (Duel):** pick the deck-building rules (Structure, Power Duel or jceddy's 75),
+  and a saved deck for each practice bot you seat. Once the game is made, each player chooses a
+  saved deck on the board's waiting-room screen, which states the rules; when every deck is in the
+  game starts. A Power Duel played as a match can allow **sideboarding**: for games 2 and 3 the
+  screen shows your last deck and its sideboard together, starting from the deck you played, and
+  checks the size, rarity and copy limits as you tap cards in and out. (Rules of your own making,
+  and pasting a deck from text, are web-only for now.)
+
 ## Tests
 
 - **EditMode** (Window > General > Test Runner): `ApiClient`, `AuthFlow`,
@@ -321,6 +394,28 @@ Headless (Unity closed): `Unity.exe -batchmode -nographics -projectPath .
 -runTests -testPlatform EditMode -testResults results.xml`. PlayMode needs
 graphics for the screenshots, so omit `-nographics` there.
 
+## Windows (for testers)
+
+- **Build the player:** **MoodSwings > Build Windows Player**, or headless: `Unity.exe -batchmode
+  -quit -buildTarget StandaloneWindows64 -executeMethod MoodSwings.Editor.WindowsBuild.Build`
+  -> `Build/Windows/MOOD/MOOD.exe` (Mono, not a development build; about 650 MB with
+  the card art, 190 MB zipped).
+- **Package it:** `powershell -File tools/package_windows.ps1` makes
+  `Build/Windows/MOOD-<version>-win64.zip` (testers unzip and run `MOOD.exe`), and, if
+  [Inno Setup 6](https://jrsoftware.org/isinfo.php) is installed, `MOOD-Setup-<version>.exe`: an
+  installer for the current user only (no administrator prompt) with a Start menu entry, an optional
+  desktop shortcut and an uninstaller. The `*_BackUpThisFolder_*` symbols folder is left out.
+- The version is `bundleVersion` in Player Settings. The app is named MOOD (it was the project
+  folder's name), so its saved login lives under a new key: sign in once after updating.
+- **Leaving the app:** a full-screen window has no close button, so Home and the login screen have a
+  **Quit** button (desktop and Android builds), and, on desktop, **F11** or **Alt+Enter** switches between full screen and a
+  window.
+- Neither build is signed, so Windows SmartScreen shows "Windows protected your PC" on first run
+  (More info > Run anyway). Signing needs a code-signing certificate.
+- **Card art:** the builds include whatever is in `Assets/Resources/CardArt` on the machine that
+  builds them -- see the art-licensing decision in `PLAN.md` before sending a build beyond people
+  you trust with it.
+
 ## Android
 
 Install the Android Build Support module for the project's editor in Unity
@@ -328,7 +423,7 @@ Hub. It bundles its own JDK/NDK/SDK.
 
 - **Build an APK:** **MoodSwings > Build Android APK**, or headless:
   `Unity.exe -batchmode -quit -buildTarget Android -executeMethod
-  MoodSwings.Editor.AndroidBuild.Build` -> `Build/Android/MoodSwings.apk`.
+  MoodSwings.Editor.AndroidBuild.Build` -> `Build/Android/MOOD.apk`.
   It forces IL2CPP and ARM64 only -- Unity 6.6 dropped x86/x86_64 Android,
   so the standard x86_64 emulator can no longer run these builds; test on a
   physical ARM64 device. A first build takes a long time; later ones reuse
