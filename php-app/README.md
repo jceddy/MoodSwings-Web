@@ -13830,6 +13830,27 @@ than a parallel bespoke system:
   (Everything Bliss and Misery change moves a total by an even amount, so
   with one play the two discards differ by a multiple of two.)
 
+- **17th puzzle, "Deja Vu"** (reported live: a Duplicity puzzle built on a
+  doubled Shock and a doubled Nostalgia), hard, `win_game`, no new puzzle
+  infrastructure. Both sides have two round wins and the opponent went first
+  (a tie is theirs). The opponent has Stubbornness (3), Obsession (3),
+  Bashfulness (6) and Neurosis (5) in play (17); the solver has Hope and Glee
+  in play, holds Duplicity, Shock, Nostalgia and Laziness, and has two plays
+  (Hope's, seeded through `extra_play_source_card_id`) -- exactly enough for
+  Duplicity, Shock, Nostalgia and then the two plays a doubled Nostalgia
+  grants. The one winning line: Duplicity; Shock doubled to put the
+  opponent's two 3s *and the solver's own Glee* (worth 0 -- it is 6 only if
+  played this round) into the discard pile (the opponent is down to 11);
+  Nostalgia doubled to take Glee back; then Glee (6) and Laziness, the card
+  already in hand: 2 + 6 + 4 = 12, a win by one. Taking a stolen 3 back and
+  playing it instead of Laziness is the tying line (11-11, and a tie is the
+  opponent's); stealing both 3s without Glee is only 8. An exhaustive search
+  (912 states: every play order, Shock target set and Nostalgia pick,
+  including Duplicity's repeat offers) found only that line, up to choices
+  that don't matter -- which throwaway card Nostalgia's second pick takes,
+  which Shock activation takes Glee, and shocking and replaying Hope (a free
+  card, since Hope grants its own play).
+
 ### Duel: separate per-player decks
 
 `format: 'duel'` and `format: 'draft'` (see "Draft format" below) are the
