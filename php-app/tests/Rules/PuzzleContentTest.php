@@ -1600,6 +1600,93 @@ final class PuzzleContentTest extends TestCase
         $this->assertGameFailed($gameId);
     }
 
+    /**
+     * Plays Head Count's Panic over both players: $opponentMoodCatalogId
+     * back to the opponent's hand and the solver's own Harmony back to the
+     * solver's, then Harmony again, Intimidation from the discard pile
+     * (the opponent's lone card in hand -- the bounced mood -- is taken), and
+     * finally the stolen mood. Returns the last play's result.
+     *
+     * @return array<string, mixed>
+     */
+    private function playHeadCountSteal(int $gameId, int $p, int $opp, int $opponentMoodCatalogId): array
+    {
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 48, 'hand'), [
+            'target_mood_ids' => [
+                $this->ownedInstanceId($gameId, $opponentMoodCatalogId, 'in_play', $opp),
+                $this->ownedInstanceId($gameId, 123, 'in_play', $p), // Harmony
+            ],
+        ]);
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 123, 'hand')); // Harmony again
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 67, 'discard'), ['target_player_id' => $opp]); // Intimidation
+
+        return $this->playDriven($gameId, $p, $this->instanceId($gameId, $opponentMoodCatalogId, 'hand')); // the stolen mood
+    }
+
+    /**
+     * "Head Count": the only winning line (exhaustive search of the real flow)
+     * is Panic over both players -- Triumph and Harmony back to hand -- then
+     * Harmony, Intimidation from the discard pile taking the Triumph, and the
+     * Triumph itself (3 for the solver, who did not go first): nine moods
+     * make Euphoria 9, and 9 + 0 + 2 + 1 + 1 + 3 = 16 against three
+     * Patience, 15. See migration 0449's own docblock.
+     */
+    public function testHeadCountSolvedByStealingTheTriumph(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('head-count');
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+
+        $result = $this->playHeadCountSteal($gameId, $p, $opp, 104);
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameSolved($gameId, $p);
+    }
+
+    /** The trap: a stolen Patience is worth only 1 once the solver plays it -- 14 against 15. */
+    public function testHeadCountStealingAPatienceLoses(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('head-count');
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+
+        $result = $this->playHeadCountSteal($gameId, $p, $opp, 21);
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameFailed($gameId);
+    }
+
+    /** Panic on one of the opponent's moods, then Boredom: 15 against 15, and a tie goes to the opponent. */
+    public function testHeadCountBouncingOneMoodThenPlayingBoredomOnlyTies(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('head-count');
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 48, 'hand'), [
+            'target_mood_ids' => [$this->ownedInstanceId($gameId, 104, 'in_play', $opp)],
+        ]);
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 83, 'hand')); // Boredom
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameFailed($gameId);
+    }
+
+    /** Panic over both players but then Boredom instead of Harmony: Harmony's extra play is never earned. */
+    public function testHeadCountPlayingBoredomInsteadOfHarmonyLoses(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('head-count');
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 48, 'hand'), [
+            'target_mood_ids' => [
+                $this->ownedInstanceId($gameId, 104, 'in_play', $opp),
+                $this->ownedInstanceId($gameId, 123, 'in_play', $p),
+            ],
+        ]);
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 83, 'hand'));
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameFailed($gameId);
+    }
+
     /** A solve is never marked failed, and puzzle_failed is false while an attempt is open. */
     public function testDeadHeatSolveIsNotFailedAndOpenAttemptIsNotFailed(): void
     {
