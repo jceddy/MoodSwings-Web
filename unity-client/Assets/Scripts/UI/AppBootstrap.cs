@@ -58,6 +58,23 @@ namespace MoodSwings.UI
             _router.Show<LoginScreen>("Your session has expired. Please log in again.", addToHistory: false);
         }
 
+        // Back in the app after a tap on a notification (it was already running): open what the notification points at.
+        private void OnApplicationFocus(bool focused)
+        {
+            if (!focused || _router == null || AppServices.Push == null || AppServices.Auth?.CurrentUser == null)
+            {
+                return;
+            }
+
+            var current = _router.Current;
+            if (current == null || current is SplashScreen || current is LoginScreen || current is MaintenanceScreen)
+            {
+                return;
+            }
+
+            PushRouter.Open(_router, AppServices.Push.TakeLaunchRoute());
+        }
+
         private void Update()
         {
             if (AppExit.CanToggleFullscreen && KeyInput.FullscreenTogglePressed)

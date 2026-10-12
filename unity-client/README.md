@@ -438,21 +438,27 @@ registers the device's token for whoever signs in, takes it back on sign-out, fo
 honours a per-device switch in Settings (shown only where push works), and opens the game, the friends
 list or the achievements when the notification that launched the app points at one (`PushRoute`).
 
-What's missing is the platform glue that produces the token: `PushProviders.ForThisPlatform()` returns
-no provider until the app is built with Firebase. To finish it:
+On Android the token comes from Firebase Cloud Messaging: `AndroidPushTokenProvider` asks for the
+notification permission (Android 13+), then `Assets/Plugins/Android/MoodPush.java` fetches the token. The
+Firebase project's settings are read from `Assets/Resources/Firebase/google-services.json` (project
+`mood-bee14`, package `com.jceddy.moodswings`; they identify the project and aren't secrets, but restrict the API
+key to the package and signing certificate in the Google Cloud console). Firebase is started from those values
+rather than with the google-services Gradle plugin, so the Gradle setup is only the messaging dependency in
+`Assets/Plugins/Android/mainTemplate.gradle`, `android.useAndroidX` in `gradleTemplate.properties`, and
+`MoodPush.androidlib` (the `POST_NOTIFICATIONS` permission, with its own `build.gradle` because the generated
+one has no namespace). Everywhere else push is simply not offered.
 
-1. In the Firebase console make a project, add an **Android app with package name
-   `com.jceddy.moodswings`**, and download its `google-services.json`.
-2. Project settings > Service accounts > **Generate new private key**; put that JSON on the server, outside
-   the web root, and set `FCM_SERVICE_ACCOUNT_FILE` to its path in `php-app`'s `.env` (apply migration
-   `0450`).
-3. Give the `google-services.json` and the Firebase Messaging package to the project (it goes in
-   `Assets/`, with the Firebase Unity SDK's Messaging package), then implement
-   `IPushTokenProvider` over `FirebaseMessaging` (token, permission request, tapped-notification
-   data) and return it from `PushProviders` on Android.
+A notification tapped while the app is in the background opens it with the notification's link as an intent
+extra; the app reads it on launch and when it regains focus (`PushRouter`).
 
-Until then nothing is registered and no Push switch shows. Android 13+ also needs the notification
-permission, which the provider asks for when it fetches the token.
+**Server steps still needed** (no app change): in the Firebase console, Project settings > Service accounts >
+**Generate new private key**; put that JSON on the server outside the web root, set `FCM_SERVICE_ACCOUNT_FILE` to
+its path in `php-app`'s `.env`, and apply migration `0450`. Without it the app registers its token but the server
+has nothing to send with.
+
+**Verified:** the build includes Firebase Messaging, the bridge, the permission and the package id, and the flow
+around the token is tested. **Not yet verified on a device:** the token request, the permission prompt and a
+real notification arriving and opening the right screen -- that needs a phone and the server key above.
 
 ## Tests
 

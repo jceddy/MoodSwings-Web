@@ -133,18 +133,7 @@ namespace MoodSwings.UI
                     return;
                 }
 
-                switch (route.Target)
-                {
-                    case PushRoute.Kind.Game:
-                        Router.Show<BoardScreen>(BoardSession.ForPlayer(AppServices.Api, route.GameId));
-                        break;
-                    case PushRoute.Kind.Friends:
-                        Router.Show<FriendsScreen>();
-                        break;
-                    case PushRoute.Kind.Achievements:
-                        Router.Show<AchievementsScreen>();
-                        break;
-                }
+                PushRouter.Open(Router, route);
             }
             catch (Exception e)
             {

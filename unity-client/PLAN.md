@@ -228,8 +228,9 @@ Each phase ends with something runnable against the dev server
   Phases 8-9; (d) store listings and iOS/macOS projects when a store is chosen.
 - **Status:** (a) done: placeholder icons (`tools/make_icons.py`), the Android build signed with a
   release keystore (kept outside the repo; **back it up**), the installer and `.exe` icon. (b) the
-  server side and the app's registration/routing are built and tested; the Firebase token glue waits for a
-  Firebase project (steps in `README.md`, "Push notifications"). The PHP side was written without PHP
+  server side and the app's registration/routing are built and tested; the Firebase token provider is in and the
+  APK builds with it (project `mood-bee14`); it still needs the server's service-account key and a first
+  test on a phone (`README.md`, "Push notifications"). The PHP side was written without PHP
   available to run its tests; CI is the first run of them.
 
 ## Open decisions

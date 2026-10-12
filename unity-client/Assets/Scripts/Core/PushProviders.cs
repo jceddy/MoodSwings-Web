@@ -1,17 +1,24 @@
+using UnityEngine;
+
 namespace MoodSwings.Core
 {
     /// <summary>
-    /// Picks the push token source for the platform being run on. Android uses Firebase Cloud Messaging once the app is
-    /// built with its Firebase setup (see unity-client/README.md, "Push notifications"); every other case has none, and
-    /// the app simply doesn't offer push.
+    /// Picks the push token source for the platform being run on: Firebase Cloud Messaging on an Android device (its
+    /// project settings come from Assets/Resources/Firebase/google-services.json), none anywhere else, so the app just
+    /// doesn't offer push there.
     /// </summary>
     public static class PushProviders
     {
         public static IPushTokenProvider ForThisPlatform()
         {
-            // The Firebase-backed provider is added here when the Firebase Messaging package and the project's
-            // google-services.json are in the build; until then there is nothing to register.
-            return new NoPushTokenProvider();
+            if (Application.platform != RuntimePlatform.Android)
+            {
+                return new NoPushTokenProvider();
+            }
+
+            var file = Resources.Load<TextAsset>("Firebase/google-services");
+            var config = FirebaseConfig.Parse(file != null ? file.text : null, AndroidPushTokenProvider.PackageName);
+            return config != null ? (IPushTokenProvider)new AndroidPushTokenProvider(config) : new NoPushTokenProvider();
         }
     }
 }
