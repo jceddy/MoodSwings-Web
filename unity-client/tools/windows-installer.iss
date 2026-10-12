@@ -15,6 +15,7 @@ DefaultDirName={autopf}\MOOD
 DefaultGroupName=MOOD
 DisableProgramGroupPage=yes
 UninstallDisplayIcon={app}\MOOD.exe
+SetupIconFile=..\Assets\Icons\MOOD.ico
 OutputDir=..\Build\Windows
 OutputBaseFilename=MOOD-Setup-{#AppVersion}
 Compression=lzma2
