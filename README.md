@@ -159,8 +159,9 @@ skips it, so a broken deploy is never announced as if it succeeded.
      frontend shows "Push notifications are not configured on the server
      yet."
    - `FCM_SERVICE_ACCOUNT_FILE` — for native push to the Unity app: the
-     *contents* of a Firebase service-account JSON key (paste the whole file).
-     The deploy workflows minify it onto one line of the generated `.env`.
+     path, on the server, of a Firebase service-account JSON key file kept
+     outside the web folder (put the file there by hand; it's never in the
+     repo). The deploy workflows write the path into the generated `.env`.
      Shared by dev and production (one Firebase project serves both).
      Optional; without it native push is off. See "Native push (FCM)" in
      `php-app/README.md`.

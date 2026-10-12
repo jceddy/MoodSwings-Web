@@ -7634,10 +7634,10 @@ service-account JSON key (a short-lived RS256-signed JWT exchanged at `oauth2.go
 `ext-openssl` and Guzzle -- no new dependency). The token is cached in a file in the system temp directory until two
 minutes before it expires, so separate requests don't each exchange a JWT.
 
-**Config**: `FCM_SERVICE_ACCOUNT_JSON` (the key's JSON text on one line -- what the deploy workflows write, from
-the `FCM_SERVICE_ACCOUNT_FILE` repository secret, which holds the key's JSON *contents*, minified with `jq -c`)
-or `FCM_SERVICE_ACCOUNT_FILE` (the path of the key file, for a server set up by hand), and, optionally,
-`FCM_PROJECT_ID` (otherwise the key's own `project_id`). The key can send to every app in its Firebase project,
+**Config**: `FCM_SERVICE_ACCOUNT_FILE` -- the path of the key file on the server, kept outside the web folder and
+never in the repo (the deploy workflows write it into `.env` from the `FCM_SERVICE_ACCOUNT_FILE` repository
+secret, which holds that path) -- and, optionally, `FCM_PROJECT_ID` (otherwise the key's own `project_id`).
+`FCM_SERVICE_ACCOUNT_JSON` (the key's JSON text on one line) is accepted instead where a file isn't practical. The key can send to every app in its Firebase project,
 so dev and prod can share one project and one key. With neither, or for a user with no registered device, the channel is a
 no-op (`false`), like the others.
 
