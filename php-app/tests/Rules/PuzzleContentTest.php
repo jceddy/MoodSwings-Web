@@ -1687,6 +1687,76 @@ final class PuzzleContentTest extends TestCase
         $this->assertGameFailed($gameId);
     }
 
+    /**
+     * "Second Thoughts": the only winning line (exhaustive search of the real
+     * flow) is Exhilaration discarding Complacency and Stubbornness as the
+     * other play. Only Chivalry is left, so there are fewer than two white
+     * and/or blue moods and BOTH Frustrations go to 6: (Joy 3 + Melancholy 3 +
+     * Frustration 6 + Chivalry 5 + Stubbornness 3) x 2 = 40 against the
+     * opponent's 39. See migration 0450's own docblock.
+     */
+    public function testSecondThoughtsSolvedByDiscardingTheCheaperWhiteMood(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('second-thoughts');
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 89, 'hand'), [
+            'discard_mood_id' => $this->ownedInstanceId($gameId, 5, 'in_play', $p), // Complacency
+        ]);
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 102, 'hand')); // Stubbornness
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameSolved($gameId, $p);
+    }
+
+    /** Stubbornness first reaches the very same board, so it is the same line. */
+    public function testSecondThoughtsPlayingStubbornnessFirstIsTheSameLine(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('second-thoughts');
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 102, 'hand')); // Stubbornness
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 89, 'hand'), [
+            'discard_mood_id' => $this->ownedInstanceId($gameId, 5, 'in_play', $p),
+        ]);
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameSolved($gameId, $p);
+    }
+
+    /**
+     * The trap: discard a mood to Exhilaration and play it again from the
+     * discard pile (Melancholy). Whichever mood it is, the board is what it
+     * started as plus Exhilaration -- 36 against 36, and a tie goes to the
+     * opponent.
+     */
+    public function testSecondThoughtsDiscardingAMoodAndReplayingItOnlyTies(): void
+    {
+        foreach ([125 => 'Joy', 5 => 'Complacency', 4 => 'Chivalry', 90 => 'Frustration'] as $catalogCardId => $label) {
+            ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('second-thoughts');
+
+            $this->playDriven($gameId, $p, $this->instanceId($gameId, 89, 'hand'), [
+                'discard_mood_id' => $this->ownedInstanceId($gameId, $catalogCardId, 'in_play', $p),
+            ]);
+            $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, $catalogCardId, 'discard'));
+
+            self::assertTrue($result['game_completed'], $label);
+            $this->assertGameFailed($gameId);
+        }
+    }
+
+    /** Discarding Chivalry instead keeps the dearer white mood out of play: 38 against 39, a loss by one. */
+    public function testSecondThoughtsDiscardingChivalryInsteadLoses(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('second-thoughts');
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 89, 'hand'), [
+            'discard_mood_id' => $this->ownedInstanceId($gameId, 4, 'in_play', $p),
+        ]);
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 102, 'hand'));
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameFailed($gameId);
+    }
+
     /** A solve is never marked failed, and puzzle_failed is false while an attempt is open. */
     public function testDeadHeatSolveIsNotFailedAndOpenAttemptIsNotFailed(): void
     {

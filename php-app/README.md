@@ -13871,6 +13871,27 @@ than a parallel bespoke system:
   discard pile, every Panic target set, Intimidation's target) found exactly
   one winning line.
 
+- **19th puzzle, "Second Thoughts"** (reported live: an Exhilaration puzzle
+  about which mood to discard, with a trap that discards and replays one),
+  hard, `win_game`, no new puzzle infrastructure. Both sides have two round
+  wins and the opponent went first (a tie is theirs). The solver has Joy,
+  Melancholy (the way to replay a mood from the discard pile), Frustration,
+  Complacency and Chivalry (5 for a player who didn't go first) in play,
+  holds Exhilaration and Stubbornness, and has two plays (Joy's banked one,
+  seeded through `extra_play_source_card_id`). The opponent has Frustration,
+  Chaos, Pity, Enjoyment, Determination, Triumph and Boredom in play: 18
+  against 36. Exhilaration doubles the solver's whole total, so the trap --
+  discard any mood and replay it -- just gets the board back plus
+  Exhilaration: 36-36, a tie. The one winning line: Exhilaration discarding
+  Complacency, then Stubbornness. Frustration is 6 but drops to 3 while two
+  or more white and/or blue moods are in play (Complacency and Chivalry are
+  the two, for both players' Frustration); with only Chivalry left, both
+  Frustrations are on: (3 + 3 + 6 + 5 + 3) x 2 = 40 against the opponent's
+  39. The opponent's side is what makes the margin one: the solver's total
+  is always even, so an odd margin needs a swing on the opponent's side.
+  Discarding Chivalry instead is 38-39. An exhaustive search found only that
+  discard winning; playing Stubbornness first reaches the same board.
+
 ### Duel: separate per-player decks
 
 `format: 'duel'` and `format: 'draft'` (see "Draft format" below) are the
