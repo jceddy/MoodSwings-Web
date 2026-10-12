@@ -26,7 +26,7 @@ namespace MoodSwings.Editor
     /// </summary>
     public static class AndroidBuild
     {
-        public const string ApplicationId = "com.MoodSwings.MOOD";
+        public const string ApplicationId = "com.jceddy.moodswings";
 
         private const string OutputPath = "Build/Android/MOOD.apk";
 
@@ -37,8 +37,7 @@ namespace MoodSwings.Editor
             PlayerSettings.Android.targetArchitectures = AndroidArchitecture.ARM64;
             EditorUserBuildSettings.buildAppBundle = false;
             AppIcons.Apply();
-            // Pinned, because Firebase (push) and every update are tied to it; it's what Unity derives from the
-            // company and product names, written out so renaming either can't change it.
+            // Pinned, because Firebase (push) and every update are tied to it; changing it later makes a different app.
             PlayerSettings.SetApplicationIdentifier(NamedBuildTarget.Android, ApplicationId);
 
             var signed = TryUseReleaseKey();

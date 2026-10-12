@@ -442,7 +442,7 @@ What's missing is the platform glue that produces the token: `PushProviders.ForT
 no provider until the app is built with Firebase. To finish it:
 
 1. In the Firebase console make a project, add an **Android app with package name
-   `com.MoodSwings.MOOD`**, and download its `google-services.json`.
+   `com.jceddy.moodswings`**, and download its `google-services.json`.
 2. Project settings > Service accounts > **Generate new private key**; put that JSON on the server, outside
    the web root, and set `FCM_SERVICE_ACCOUNT_FILE` to its path in `php-app`'s `.env` (apply migration
    `0450`).
@@ -514,7 +514,7 @@ Hub. It bundles its own JDK/NDK/SDK.
   `MOOD_KEYSTORE`, `MOOD_KEYSTORE_PASS`, `MOOD_KEY_ALIAS` environment variables. The keystore is
   never in the repo. **Back it up**: an update only installs over an app signed with the same key,
   and a lost key means a new app. Without one the build falls back to a development, debug-signed
-  APK and says so. The package id is pinned to `com.MoodSwings.MOOD`.
+  APK and says so. The package id is pinned to `com.jceddy.moodswings`.
 - **Run the Keystore tests on a device:** `ANDROID_SERIAL=<device> Unity.exe
   -batchmode -projectPath . -buildTarget Android -runTests -testPlatform
   Android -testFilter MoodSwings.Tests.AndroidKeystoreTests -testResults
