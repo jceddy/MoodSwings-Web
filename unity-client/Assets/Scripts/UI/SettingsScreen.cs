@@ -186,6 +186,27 @@ namespace MoodSwings.UI
             toggle.gameObject.name = "Push notifications";
             AddDescription(theme, panel.transform, "Alerts on this device for the things you asked to be told about above.");
             toggle.onValueChanged.AddListener(on => OnPushToggled(toggle, on));
+
+            // For testing: on the dev server, the token can be copied out (to paste into Firebase's "Send test message").
+            if (AppServices.IsDevServer)
+            {
+                var copy = UiFactory.Button(panel.transform, "Copy push token", theme, CopyPushToken, primary: false);
+                copy.gameObject.name = "Copy push token";
+                UiFactory.Size(copy.gameObject, height: 56f);
+            }
+        }
+
+        private void CopyPushToken()
+        {
+            var token = AppServices.Push.CurrentToken;
+            if (string.IsNullOrEmpty(token))
+            {
+                SetStatus("This device has no push token yet.", isError: true);
+                return;
+            }
+
+            GUIUtility.systemCopyBuffer = token;
+            SetStatus("Push token copied.", isError: false);
         }
 
         private async void OnPushToggled(Toggle toggle, bool on)

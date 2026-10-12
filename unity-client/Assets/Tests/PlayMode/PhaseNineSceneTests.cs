@@ -1393,5 +1393,34 @@ namespace MoodSwings.Tests
             yield return PhaseTwoSceneTests.Frames(8);
             Assert.IsTrue(AppServices.IsDevServer);
         }
+
+        [UnityTest]
+        public IEnumerator Push_OnTheDevServer_TheTokenCanBeCopiedFromSettings()
+        {
+            var server = Serve();
+            yield return HomeWithPush(server, new PlayPushProvider());
+            AppServices.Api.Config.UseSiteRoot(MoodSwings.Networking.ApiConfig.DevSiteRoot);
+            yield return PhaseTwoSceneTests.Click("Settings");
+            yield return MainSceneTests.WaitFor<SettingsScreen>();
+            yield return PhaseTwoSceneTests.Frames(8);
+
+            GUIUtility.systemCopyBuffer = string.Empty;
+            yield return PhaseFiveSceneTests.Tap(Named("Copy push token"));
+
+            Assert.AreEqual("fcm-play-token", GUIUtility.systemCopyBuffer);
+            Assert.AreEqual("Push token copied.", MainSceneTests.Screen<SettingsScreen>().StatusText);
+        }
+
+        [UnityTest]
+        public IEnumerator Push_OnProduction_ThereIsNoCopyTokenButton()
+        {
+            var server = Serve();
+            yield return HomeWithPush(server, new PlayPushProvider());
+            yield return PhaseTwoSceneTests.Click("Settings");
+            yield return MainSceneTests.WaitFor<SettingsScreen>();
+            yield return PhaseTwoSceneTests.Frames(8);
+
+            Assert.IsNull(Named("Copy push token"));
+        }
     }
 }

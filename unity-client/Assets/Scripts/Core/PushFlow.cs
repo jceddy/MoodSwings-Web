@@ -76,6 +76,9 @@ namespace MoodSwings.Core
 
         public bool Enabled => IsAvailable && _device.PushOn;
 
+        /// <summary>This device's push token as last registered (null before one was), e.g. to paste into Firebase's "send test message".</summary>
+        public string CurrentToken => _registeredToken ?? _store.GetString(TokenKey);
+
         /// <summary>Whether the server has this device's token as of this sign-in.</summary>
         public bool IsRegistered => _registeredToken != null;
 
