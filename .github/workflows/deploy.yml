@@ -146,6 +146,9 @@ jobs:
           VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
           VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
           VAPID_SUBJECT: ${{ secrets.VAPID_SUBJECT }}
+          # The Firebase service-account key's JSON text (native push; see "Native push (FCM)" in php-app/README.md).
+          # One Firebase project serves dev and prod, so both deploys share it.
+          FCM_SERVICE_ACCOUNT: ${{ secrets.FCM_SERVICE_ACCOUNT_FILE }}
           DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
           DISCORD_CLIENT_SECRET: ${{ secrets.DISCORD_CLIENT_SECRET }}
           DISCORD_PUBLIC_KEY: ${{ secrets.DISCORD_PUBLIC_KEY }}
@@ -247,6 +250,11 @@ jobs:
           write_env_var VAPID_PUBLIC_KEY "$VAPID_PUBLIC_KEY"
           write_env_var VAPID_PRIVATE_KEY "$VAPID_PRIVATE_KEY"
           write_env_var VAPID_SUBJECT "$VAPID_SUBJECT"
+          # .env is one line per setting, so the key's JSON is written minified onto a single line; a secret that
+          # isn't valid JSON writes nothing (native push stays off) rather than breaking the file.
+          if [ -n "$FCM_SERVICE_ACCOUNT" ]; then
+            write_env_var FCM_SERVICE_ACCOUNT_JSON "$(printf '%s' "$FCM_SERVICE_ACCOUNT" | jq -c . 2>/dev/null)"
+          fi
           write_env_var DISCORD_CLIENT_ID "$DISCORD_CLIENT_ID"
           write_env_var DISCORD_CLIENT_SECRET "$DISCORD_CLIENT_SECRET"
           write_env_var DISCORD_PUBLIC_KEY "$DISCORD_PUBLIC_KEY"

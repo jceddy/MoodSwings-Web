@@ -23,8 +23,12 @@ final class FcmAccessTokenProvider
     /** Renew this long before the token really expires, so a send never races the expiry. */
     private const EXPIRY_MARGIN_SECONDS = 120;
 
+    /**
+     * @param string $serviceAccount The service-account key: a path to its JSON file, or the JSON text itself (what a
+     *                               deployment keeps in one .env line, since .env can't hold a multi-line file).
+     */
     public function __construct(
-        private readonly string $serviceAccountFile,
+        private readonly string $serviceAccount,
         private readonly Client $http = new Client(),
         private readonly ?string $cacheDirectory = null,
     ) {
@@ -84,11 +88,11 @@ final class FcmAccessTokenProvider
     /** @return array{client_email: string, private_key: string, project_id?: string}|null */
     private function loadKey(): ?array
     {
-        if ($this->serviceAccountFile === '' || !is_readable($this->serviceAccountFile)) {
-            return null;
-        }
+        $json = str_starts_with(ltrim($this->serviceAccount), '{')
+            ? $this->serviceAccount
+            : (is_readable($this->serviceAccount) ? (string) file_get_contents($this->serviceAccount) : '');
 
-        $key = json_decode((string) file_get_contents($this->serviceAccountFile), true);
+        $key = json_decode($json, true);
         if (!is_array($key) || !isset($key['client_email'], $key['private_key'])) {
             return null;
         }

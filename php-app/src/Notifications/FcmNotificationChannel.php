@@ -106,9 +106,10 @@ final class FcmNotificationChannel implements NotificationChannel
 
     private function providerFromConfig(): ?FcmAccessTokenProvider
     {
-        $file = Config::get('FCM_SERVICE_ACCOUNT_FILE', '');
+        // The key's JSON inline (a deployed .env), else the path of a JSON file (a hand-set-up server).
+        $key = Config::get('FCM_SERVICE_ACCOUNT_JSON', '') ?: Config::get('FCM_SERVICE_ACCOUNT_FILE', '');
 
-        return $file === null || $file === '' ? null : new FcmAccessTokenProvider($file);
+        return $key === null || $key === '' ? null : new FcmAccessTokenProvider($key);
     }
 
     private function logError(string $message): void

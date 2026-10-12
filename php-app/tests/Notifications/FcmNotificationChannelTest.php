@@ -234,6 +234,24 @@ final class FcmNotificationChannelTest extends TestCase
         self::assertSame('https://www.googleapis.com/auth/firebase.messaging', $claims['scope']);
     }
 
+    public function testTheKeyCanBeGivenAsJsonTextInsteadOfAFilePath(): void
+    {
+        $json = (string) file_get_contents($this->serviceAccountFile());
+
+        $provider = new FcmAccessTokenProvider($json, new Client(['handler' => HandlerStack::create(new MockHandler([self::tokenResponse()]))]), $this->workDir);
+
+        self::assertSame('mood-test', $provider->projectId());
+        self::assertSame('ya29.test', $provider->token());
+    }
+
+    public function testAnUnusableKeyGivesNoProjectAndNoToken(): void
+    {
+        $provider = new FcmAccessTokenProvider('/no/such/key.json', new Client(['handler' => HandlerStack::create(new MockHandler([]))]), $this->workDir);
+
+        self::assertNull($provider->projectId());
+        self::assertNull($provider->token());
+    }
+
     public function testRegisteringATokenAgainMovesItToTheNewUser(): void
     {
         $first = $this->insertUser('first');
