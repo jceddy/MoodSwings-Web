@@ -221,6 +221,8 @@ Each phase ends with something runnable against the dev server
 ### Phase 10 -- Ship
 - Android and Windows builds first; iOS and macOS after.
 - Icons, signing, store listings, real mobile push.
+- **Servers:** production by default; a hidden switch (seven taps on the login screen's version text) moves the
+  app to dev (README, "Production and dev servers").
 - **Decided:** direct download first (no store accounts yet); Android push through FCM; a placeholder
   icon until real art exists. Windows installer stays unsigned for now (SmartScreen will warn).
 - **Plan, in steps:** (a) icons and release signing; (b) native push -- the backend (device tokens, FCM

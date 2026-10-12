@@ -430,6 +430,16 @@ made by `tools/make_icons.py` (the MOOD wordmark in the UI's colors). To use rea
 `python tools/make_icons.py --from-icon` to rebuild the `.ico`. `AppIcons` applies them in both build
 scripts.
 
+## Production and dev servers
+
+The app talks to **production** (`https://moodswings.jceddy.com`) by default; a Development build and the Editor
+start on **dev** (`https://moodswings-dev.jceddy.com`) instead. A hidden switch changes it while running: on the
+login screen, **tap the version text at the bottom seven times in a row** (each within two seconds of the last).
+The app signs out of the server it was on (taking this device's push token back first), forgets what it had
+fetched, points at the other server, and stays on the login screen. While on dev, a red **DEV SERVER** tag shows in
+the top-right corner of every screen. The choice is remembered on the device. Sessions are per server and never
+carried across. Both servers share one Firebase project and one package id, so push works on either.
+
 ## Push notifications
 
 The server side is built (`php-app`: `POST /notifications/device-token`, `FcmNotificationChannel`; see

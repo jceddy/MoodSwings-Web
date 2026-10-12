@@ -162,15 +162,7 @@ namespace MoodSwings.UI
                 // While the session still works: the server stops pushing to this device before the next person signs in.
                 await AppServices.Push.UnregisterAsync();
                 await AppServices.Auth.LogoutAsync();
-                AppServices.Friends.Clear();
-                AppServices.Lobby.Clear();
-                AppServices.Puzzles.Clear();
-                AppServices.Decklists.Clear();
-                AppServices.Stats.Clear();
-                AppServices.Tournaments.Clear();
-                AppServices.WeeklySealed.Clear();
-                AppServices.Notifications.Clear();
-                AppServices.Push.Clear();
+                AppServices.ClearUserData();
                 if (this == null)
                 {
                     return;

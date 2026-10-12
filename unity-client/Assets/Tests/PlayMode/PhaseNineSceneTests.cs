@@ -1314,5 +1314,84 @@ namespace MoodSwings.Tests
             Assert.AreEqual(2, server.Posts("/notifications/device-token").Count(), "registered again");
             Assert.IsTrue(AppServices.Device.PushOn);
         }
+
+        // --- the hidden dev/prod switch ------------------------------------------------------------------
+
+        private static IEnumerator LoginScreenUp(PhaseFiveSceneTests.PlayServer server)
+        {
+            yield return MainSceneTests.Launch(server.Handle);
+            yield return MainSceneTests.WaitFor<LoginScreen>();
+            yield return PhaseTwoSceneTests.Frames(6);
+        }
+
+        private static void TapVersion(int times)
+        {
+            var screen = MainSceneTests.Screen<LoginScreen>();
+            for (var i = 0; i < times; i++)
+            {
+                screen.OnVersionTapped();
+            }
+        }
+
+        private static GameObject Banner() =>
+            Object.FindObjectsByType<Transform>(FindObjectsInactive.Include).First(t => t.name == "Server banner").gameObject;
+
+        [UnityTest]
+        public IEnumerator ServerSwitch_SevenTapsOnTheVersionText_PutTheAppOnTheDevServer_AndBackAgain()
+        {
+            var server = Serve();
+            yield return LoginScreenUp(server);
+            Assert.IsFalse(Banner().activeSelf, "no tag off the dev server");
+
+            TapVersion(LoginScreen.VersionTapsToSwitch - 1);
+            yield return PhaseTwoSceneTests.Frames(4);
+            Assert.IsFalse(AppServices.IsDevServer, "six taps aren't enough");
+
+            TapVersion(1);
+            yield return PhaseTwoSceneTests.Frames(8);
+            Assert.IsTrue(AppServices.IsDevServer);
+            Assert.AreEqual(MoodSwings.Networking.ApiConfig.DevSiteRoot, AppServices.Api.Config.SiteRoot);
+            Assert.IsTrue(Banner().activeSelf, "a tag says which server this is");
+            Assert.IsTrue(Texts().Contains("Dev server mode is on."), string.Join(" | ", Texts()));
+            Assert.IsInstanceOf<LoginScreen>(Object.FindAnyObjectByType<ScreenRouter>().Current, "still at the login screen");
+            ScreenshotHelper.Capture("login-dev-server");
+
+            TapVersion(LoginScreen.VersionTapsToSwitch);
+            yield return PhaseTwoSceneTests.Frames(8);
+            Assert.IsFalse(AppServices.IsDevServer);
+            Assert.AreEqual(MoodSwings.Networking.ApiConfig.ProdSiteRoot, AppServices.Api.Config.SiteRoot);
+            Assert.IsFalse(Banner().activeSelf);
+            Assert.IsTrue(Texts().Contains("Back on the production server."));
+        }
+
+        [UnityTest]
+        public IEnumerator ServerSwitch_TapsSpreadOutOverTime_DontAddUp()
+        {
+            var server = Serve();
+            yield return LoginScreenUp(server);
+
+            TapVersion(LoginScreen.VersionTapsToSwitch - 1);
+            yield return new WaitForSecondsRealtime(2.2f);
+            TapVersion(1);
+            yield return PhaseTwoSceneTests.Frames(4);
+
+            Assert.IsFalse(AppServices.IsDevServer, "the count started over after the pause");
+        }
+
+        [UnityTest]
+        public IEnumerator ServerSwitch_TappingTheRealFooter_Counts()
+        {
+            var server = Serve();
+            yield return LoginScreenUp(server);
+
+            var footer = Object.FindObjectsByType<Button>(FindObjectsInactive.Exclude).First(b => b.name == "Footer");
+            for (var i = 0; i < LoginScreen.VersionTapsToSwitch; i++)
+            {
+                footer.onClick.Invoke();
+            }
+
+            yield return PhaseTwoSceneTests.Frames(8);
+            Assert.IsTrue(AppServices.IsDevServer);
+        }
     }
 }

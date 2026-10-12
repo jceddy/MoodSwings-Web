@@ -48,16 +48,66 @@ namespace MoodSwings.Core
             var preferences = new PlayerPrefsKeyValueStore();
             var sessionStore = new SecureSessionStore(preferences, SecretProtectors.ForCurrentPlatform());
 
-            // Dev server only for now; add a prod config (and a way to pick
-            // one per build) once the production domain is decided.
+            // Production unless this device was switched (the hidden tap switch on the login screen); a
+            // development build (and the Editor) starts on the dev server until someone chooses otherwise.
+            var chosen = new DeviceSettings(preferences).DevServerChoice;
+            var dev = chosen ?? Debug.isDebugBuild;
             var config = new ApiConfig(
-                ApiConfig.DevSiteRoot, $"MoodSwings/{Application.version} ({Application.platform})");
+                dev ? ApiConfig.DevSiteRoot : ApiConfig.ProdSiteRoot, $"MoodSwings/{Application.version} ({Application.platform})");
 
             Override(
                 new ApiClient(config, new UnityWebRequestTransport(), sessionStore),
                 null,
                 sessionStore,
                 preferences);
+        }
+
+        /// <summary>The server the app was switched to (or changed back from) while running.</summary>
+        public static event System.Action ServerChanged;
+
+        public static bool IsDevServer => Api != null && Api.Config.IsDevServer;
+
+        /// <summary>
+        /// Switches between the dev and production servers: signs out of the current one properly (taking this device's
+        /// push token back while the session still works), forgets everything fetched for that user, then points the
+        /// client at the other. The caller shows the login screen afterwards. A session never carries over: each server
+        /// has its own.
+        /// </summary>
+        public static async System.Threading.Tasks.Task SetDevServerAsync(bool dev)
+        {
+            if (Api.Config.IsDevServer == dev)
+            {
+                return;
+            }
+
+            try
+            {
+                await Push.UnregisterAsync();
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogException(e);
+            }
+
+            await Auth.LogoutAsync();
+            ClearUserData();
+            Device.DevServerChoice = dev;
+            Api.Config.UseSiteRoot(dev ? ApiConfig.DevSiteRoot : ApiConfig.ProdSiteRoot);
+            ServerChanged?.Invoke();
+        }
+
+        /// <summary>Forgets everything fetched for the signed-in user (signing out, or switching servers).</summary>
+        public static void ClearUserData()
+        {
+            Friends.Clear();
+            Lobby.Clear();
+            Puzzles.Clear();
+            Decklists.Clear();
+            Stats.Clear();
+            Tournaments.Clear();
+            WeeklySealed.Clear();
+            Notifications.Clear();
+            Push.Clear();
         }
 
         /// <summary>
