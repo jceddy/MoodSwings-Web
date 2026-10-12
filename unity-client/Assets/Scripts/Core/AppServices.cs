@@ -34,6 +34,9 @@ namespace MoodSwings.Core
 
         public static NotificationsFlow Notifications { get; private set; }
 
+        /// <summary>This device's push token, registered with the server for whoever is signed in.</summary>
+        public static PushFlow Push { get; private set; }
+
         /// <summary>Sound and vibration switches for this device.</summary>
         public static DeviceSettings Device { get; private set; }
 
@@ -63,7 +66,8 @@ namespace MoodSwings.Core
         /// it's built over the given store and preferences.
         /// </summary>
         public static void Override(
-            ApiClient api, AuthFlow auth, SecureSessionStore sessionStore = null, IKeyValueStore preferences = null)
+            ApiClient api, AuthFlow auth, SecureSessionStore sessionStore = null, IKeyValueStore preferences = null,
+            IPushTokenProvider pushProvider = null)
         {
             Api = api;
             Auth = auth ?? new AuthFlow(api, sessionStore, preferences);
@@ -77,6 +81,7 @@ namespace MoodSwings.Core
             Tournaments = new TournamentFlow(api);
             WeeklySealed = new WeeklySealedFlow(api);
             Notifications = new NotificationsFlow(api);
+            Push = new PushFlow(api, pushProvider ?? PushProviders.ForThisPlatform(), Device, preferences ?? new InMemoryKeyValueStore());
             if (Theme == null)
             {
                 Theme = ScriptableObject.CreateInstance<UiTheme>();

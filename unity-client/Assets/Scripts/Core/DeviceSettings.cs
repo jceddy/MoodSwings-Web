@@ -10,6 +10,7 @@ namespace MoodSwings.Core
     {
         private const string SoundKey = "device.sound";
         private const string VibrationKey = "device.vibration";
+        private const string PushKey = "device.push";
         private const string HideLockedKey = "device.achievements.hideLocked";
         private const string SeenAtKey = "device.achievements.seenAt";
 
@@ -30,6 +31,13 @@ namespace MoodSwings.Core
         {
             get => Read(VibrationKey);
             set => _store.SetString(VibrationKey, value ? "1" : "0");
+        }
+
+        /// <summary>Push notifications to this device: on until switched off (where the device can get them at all).</summary>
+        public bool PushOn
+        {
+            get => Read(PushKey);
+            set => _store.SetString(PushKey, value ? "1" : "0");
         }
 
         /// <summary>Show only the achievements you've unlocked (off until switched on).</summary>

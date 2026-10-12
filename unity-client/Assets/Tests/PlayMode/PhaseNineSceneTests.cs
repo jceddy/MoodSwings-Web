@@ -1200,5 +1200,119 @@ namespace MoodSwings.Tests
             Assert.IsFalse(Texts().Contains("Display"));
             Assert.IsFalse(Texts().Contains("Round / Score / Players position"));
         }
+
+        // --- push notifications --------------------------------------------------------------------------
+
+        private sealed class PlayPushProvider : IPushTokenProvider
+        {
+            public string Token = "fcm-play-token";
+
+            public string LaunchUrl;
+
+            public bool IsAvailable => true;
+
+            public string Platform => "android";
+
+            public event System.Action<string> TokenRefreshed
+            {
+                add { }
+                remove { }
+            }
+
+            public System.Threading.Tasks.Task<string> GetTokenAsync() => System.Threading.Tasks.Task.FromResult(Token);
+
+            public string TakeLaunchUrl()
+            {
+                var url = LaunchUrl;
+                LaunchUrl = null;
+                return url;
+            }
+        }
+
+        private static IEnumerator HomeWithPush(PhaseFiveSceneTests.PlayServer server, PlayPushProvider provider)
+        {
+            yield return MainSceneTests.Launch(server.Handle, rememberedSession: "tok", pushProvider: provider);
+            yield return MainSceneTests.WaitFor<HomeScreen>();
+            yield return PhaseTwoSceneTests.Frames(8);
+        }
+
+        [UnityTest]
+        public IEnumerator Push_OnHome_TheDeviceTokenIsRegistered()
+        {
+            var server = Serve();
+            yield return HomeWithPush(server, new PlayPushProvider());
+
+            var post = server.Posts("/notifications/device-token").Single();
+            Assert.AreEqual("fcm-play-token", (string)post["token"]);
+            Assert.AreEqual("android", (string)post["platform"]);
+        }
+
+        [UnityTest]
+        public IEnumerator Push_WithoutAProvider_NothingIsRegistered()
+        {
+            var server = Serve();
+            yield return Home(server);
+
+            Assert.AreEqual(0, server.Posts("/notifications/device-token").Count());
+            Assert.IsNull(Object.FindObjectsByType<Toggle>(FindObjectsInactive.Exclude).FirstOrDefault(t => t.name == "Push notifications"));
+        }
+
+        [UnityTest]
+        public IEnumerator Push_ATappedNotification_OpensItsGame()
+        {
+            var server = Serve();
+            server.StateFor = id => PhaseFiveSceneTests.Load(405);
+            yield return MainSceneTests.Launch(server.Handle, rememberedSession: "tok", pushProvider: new PlayPushProvider { LaunchUrl = "/game/?id=406" });
+            yield return MainSceneTests.WaitFor<BoardScreen>();
+            yield return PhaseTwoSceneTests.Frames(6);
+
+            Assert.IsTrue(server.Calls.Any(c => c.StartsWith("GET /games/state?game_id=406")));
+        }
+
+        [UnityTest]
+        public IEnumerator Push_ATappedFriendRequestNotification_OpensFriends()
+        {
+            var server = Serve();
+            yield return MainSceneTests.Launch(server.Handle, rememberedSession: "tok", pushProvider: new PlayPushProvider { LaunchUrl = "/game/?open_friends=1" });
+            yield return MainSceneTests.WaitFor<FriendsScreen>();
+        }
+
+        [UnityTest]
+        public IEnumerator Push_LoggingOut_TakesTheTokenBackFirst()
+        {
+            var server = Serve();
+            yield return HomeWithPush(server, new PlayPushProvider());
+
+            yield return PhaseTwoSceneTests.Click("Log out");
+            yield return PhaseTwoSceneTests.Frames(8);
+
+            Assert.AreEqual("fcm-play-token", (string)server.Posts("/notifications/device-token/remove").Single()["token"]);
+            var calls = server.Calls;
+            Assert.Less(calls.FindIndex(c => c.StartsWith("POST /notifications/device-token/remove")), calls.FindIndex(c => c.StartsWith("POST /logout")),
+                "while the session still works");
+        }
+
+        [UnityTest]
+        public IEnumerator Push_TheDeviceSwitch_IsInSettings_AndRemovesTheTokenWhenOff()
+        {
+            var server = Serve();
+            yield return HomeWithPush(server, new PlayPushProvider());
+            yield return PhaseTwoSceneTests.Click("Settings");
+            yield return MainSceneTests.WaitFor<SettingsScreen>();
+            yield return PhaseTwoSceneTests.Frames(8);
+
+            var toggle = Object.FindObjectsByType<Toggle>(FindObjectsInactive.Exclude).First(t => t.name == "Push notifications");
+            Assert.IsTrue(toggle.isOn);
+
+            toggle.isOn = false;
+            yield return PhaseTwoSceneTests.Frames(8);
+            Assert.AreEqual(1, server.Posts("/notifications/device-token/remove").Count());
+            Assert.IsFalse(AppServices.Device.PushOn);
+
+            toggle.isOn = true;
+            yield return PhaseTwoSceneTests.Frames(8);
+            Assert.AreEqual(2, server.Posts("/notifications/device-token").Count(), "registered again");
+            Assert.IsTrue(AppServices.Device.PushOn);
+        }
     }
 }

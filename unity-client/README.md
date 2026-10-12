@@ -421,6 +421,39 @@ game" below.
   whether Discord is linked. **This app does not receive push notifications yet** (that needs a native push service
   on the backend -- see the open decisions in `PLAN.md`), and Discord is linked from the website.
 
+## App icons
+
+`Assets/Icons/` holds the app icon: `icon-1024.png` (the Windows `.exe`, and the source of
+`MOOD.ico` for the installer) and the Android adaptive icon's two layers. They are a placeholder
+made by `tools/make_icons.py` (the MOOD wordmark in the UI's colors). To use real art, replace
+`icon-1024.png` and the two `android-*.png` layers (432x432, art inside the central 66%) and run
+`python tools/make_icons.py --from-icon` to rebuild the `.ico`. `AppIcons` applies them in both build
+scripts.
+
+## Push notifications
+
+The server side is built (`php-app`: `POST /notifications/device-token`, `FcmNotificationChannel`; see
+"Native push (FCM)" in `php-app/README.md`), and so is the app's side of the contract: `PushFlow`
+registers the device's token for whoever signs in, takes it back on sign-out, follows a refreshed token,
+honours a per-device switch in Settings (shown only where push works), and opens the game, the friends
+list or the achievements when the notification that launched the app points at one (`PushRoute`).
+
+What's missing is the platform glue that produces the token: `PushProviders.ForThisPlatform()` returns
+no provider until the app is built with Firebase. To finish it:
+
+1. In the Firebase console make a project, add an **Android app with package name
+   `com.MoodSwings.MOOD`**, and download its `google-services.json`.
+2. Project settings > Service accounts > **Generate new private key**; put that JSON on the server, outside
+   the web root, and set `FCM_SERVICE_ACCOUNT_FILE` to its path in `php-app`'s `.env` (apply migration
+   `0450`).
+3. Give the `google-services.json` and the Firebase Messaging package to the project (it goes in
+   `Assets/`, with the Firebase Unity SDK's Messaging package), then implement
+   `IPushTokenProvider` over `FirebaseMessaging` (token, permission request, tapped-notification
+   data) and return it from `PushProviders` on Android.
+
+Until then nothing is registered and no Push switch shows. Android 13+ also needs the notification
+permission, which the provider asks for when it fetches the token.
+
 ## Tests
 
 - **EditMode** (Window > General > Test Runner): `ApiClient`, `AuthFlow`,
@@ -476,6 +509,12 @@ Hub. It bundles its own JDK/NDK/SDK.
   so the standard x86_64 emulator can no longer run these builds; test on a
   physical ARM64 device. A first build takes a long time; later ones reuse
   the IL2CPP cache. Running it saves those settings into `ProjectSettings`.
+- **Release signing:** the build is a release build signed with the keystore in
+  `~/.mood/` (`mood-release.jks`, with its passwords in `signing.properties`), or in the
+  `MOOD_KEYSTORE`, `MOOD_KEYSTORE_PASS`, `MOOD_KEY_ALIAS` environment variables. The keystore is
+  never in the repo. **Back it up**: an update only installs over an app signed with the same key,
+  and a lost key means a new app. Without one the build falls back to a development, debug-signed
+  APK and says so. The package id is pinned to `com.MoodSwings.MOOD`.
 - **Run the Keystore tests on a device:** `ANDROID_SERIAL=<device> Unity.exe
   -batchmode -projectPath . -buildTarget Android -runTests -testPlatform
   Android -testFilter MoodSwings.Tests.AndroidKeystoreTests -testResults

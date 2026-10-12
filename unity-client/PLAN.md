@@ -221,6 +221,16 @@ Each phase ends with something runnable against the dev server
 ### Phase 10 -- Ship
 - Android and Windows builds first; iOS and macOS after.
 - Icons, signing, store listings, real mobile push.
+- **Decided:** direct download first (no store accounts yet); Android push through FCM; a placeholder
+  icon until real art exists. Windows installer stays unsigned for now (SmartScreen will warn).
+- **Plan, in steps:** (a) icons and release signing; (b) native push -- the backend (device tokens, FCM
+  channel), the app's registration and routing, then the Firebase glue; (c) real-server testing of
+  Phases 8-9; (d) store listings and iOS/macOS projects when a store is chosen.
+- **Status:** (a) done: placeholder icons (`tools/make_icons.py`), the Android build signed with a
+  release keystore (kept outside the repo; **back it up**), the installer and `.exe` icon. (b) the
+  server side and the app's registration/routing are built and tested; the Firebase token glue waits for a
+  Firebase project (steps in `README.md`, "Push notifications"). The PHP side was written without PHP
+  available to run its tests; CI is the first run of them.
 
 ## Open decisions
 
