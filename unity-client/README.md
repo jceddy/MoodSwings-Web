@@ -463,7 +463,7 @@ extra; the app reads it on launch and when it regains focus (`PushRouter`).
 
 **Server steps still needed** (no app change): in the Firebase console, Project settings > Service accounts >
 **Generate new private key**; put that JSON on the server outside the web root, set `FCM_SERVICE_ACCOUNT_FILE` to
-its path in `php-app`'s `.env`, and apply migration `0450`. Without it the app registers its token but the server
+its path in `php-app`'s `.env`, and apply migration `0451`. Without it the app registers its token but the server
 has nothing to send with.
 
 **Verified:** the build includes Firebase Messaging, the bridge, the permission and the package id, and the flow

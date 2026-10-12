@@ -7,7 +7,7 @@ namespace MoodSwings\Repository;
 use MoodSwings\Database\Connection;
 
 /**
- * FCM registration tokens of the native app installs a user has signed in on (migration 0450) -- the native
+ * FCM registration tokens of the native app installs a user has signed in on (migration 0451) -- the native
  * counterpart of PushSubscriptionRepository's browser subscriptions.
  */
 final class DevicePushTokenRepository
