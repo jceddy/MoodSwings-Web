@@ -353,6 +353,7 @@ namespace MoodSwings.Tests
         {
             var server = Serve(TeamGame("team"));
             yield return PhaseFiveSceneTests.OpenBoard(server, 407);
+            yield return PhaseFiveSceneTests.OpenMenu();
             yield return PhaseFiveSceneTests.Tap(PhaseTwoSceneTests.FindButton("Chat"));
             Assert.AreEqual("table", Board().ChatChannel);
 
@@ -371,6 +372,7 @@ namespace MoodSwings.Tests
         {
             var server = Serve(TeamGame("closed_team"));
             yield return PhaseFiveSceneTests.OpenBoard(server, 407);
+            yield return PhaseFiveSceneTests.OpenMenu();
             yield return PhaseFiveSceneTests.Tap(PhaseTwoSceneTests.FindButton("Chat"));
 
             Assert.IsNull(Named("Chat to partner"), "that format keeps information closed between partners");
@@ -382,6 +384,7 @@ namespace MoodSwings.Tests
             var server = Serve(TeamGame("team", s => s["chat_messages"] = JArray.Parse(
                 "[{\"id\":1,\"sender_username\":\"BotSage\",\"channel\":\"team\",\"message_text\":\"psst\",\"created_at\":\"2026-01-01 00:00:00\"}]")));
             yield return PhaseFiveSceneTests.OpenBoard(server, 407);
+            yield return PhaseFiveSceneTests.OpenMenu();
             yield return PhaseFiveSceneTests.Tap(PhaseTwoSceneTests.FindButton("Chat (1)"));
 
             Assert.IsTrue(UnityEngine.Object.FindObjectsByType<Text>(FindObjectsInactive.Exclude).Any(t => t.text == "[team] BotSage: psst"));

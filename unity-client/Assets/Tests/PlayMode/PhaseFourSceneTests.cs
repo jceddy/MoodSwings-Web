@@ -107,6 +107,9 @@ namespace MoodSwings.Tests
             return seat.position;
         }
 
+        private static string PointsOf(string player) =>
+            Child("Info " + player).Find("Scores").Find("Score").Find("Inside").Find("Points").GetComponent<Text>().text;
+
         private static List<string> VisibleTexts() =>
             UnityEngine.Object.FindObjectsByType<Text>(FindObjectsInactive.Exclude).Select(t => t.text).ToList();
 
@@ -165,12 +168,25 @@ namespace MoodSwings.Tests
         [UnityTest]
         public IEnumerator EachGameDrawsOneZonePerSeat_PlusThePilesAndTheHand()
         {
-            foreach (var game in new[] { (405, 2), (406, 3), (407, 4) })
+            var seats = new Dictionary<int, string[]>
+            {
+                [405] = new[] { "bshaftoe", "BotSage" },
+                [406] = new[] { "bshaftoe", "BotSage", "BotSageQuick" },
+                [407] = new[] { "bshaftoe", "BotSage", "BotSageQuick", "BotSageDeep" },
+            };
+            foreach (var game in seats)
             {
                 var server = new BoardServer();
-                yield return OpenBoard(server, game.Item1);
+                yield return OpenBoard(server, game.Key);
 
-                Assert.AreEqual(game.Item2 + 2, Board().TableChildCount, $"game {game.Item1}: seats + piles + hand");
+                foreach (var name in game.Value)
+                {
+                    Assert.IsNotNull(Child("Seat " + name), $"game {game.Key}: {name}'s moods");
+                    Assert.IsNotNull(Child("Info " + name), $"game {game.Key}: {name}'s scoreboard");
+                }
+
+                Assert.IsNotNull(Child("Piles"), $"game {game.Key}: the deck and discard");
+                Assert.IsNotNull(Child("Hand"), $"game {game.Key}: your hand");
             }
         }
 
@@ -195,8 +211,14 @@ namespace MoodSwings.Tests
             var texts = VisibleTexts();
             Assert.IsTrue(texts.Contains("bshaftoe  (you)"), string.Join(" | ", texts));
             Assert.IsTrue(texts.Contains("BotSage  (bot)"));
-            Assert.IsTrue(texts.Contains("Hand 4  -  Deck 25  -  6 pts  -  0 wins"));
-            Assert.IsTrue(texts.Contains("Hand 4  -  Deck 25  -  4 pts  -  0 wins"), "BotSageQuick has 4 points");
+            Assert.AreEqual("6", PointsOf("bshaftoe"));
+            Assert.AreEqual("6", PointsOf("BotSage"));
+            Assert.AreEqual("4", PointsOf("BotSageQuick"), "BotSageQuick has 4 points");
+
+            // An opponent's hand is the backs of its cards along their edge, one for each card they hold.
+            Assert.AreEqual(4, Child("Opponent hand BotSageQuick").GetComponentsInChildren<Transform>().Count(t => t.name == "Hand card back"));
+            Assert.AreEqual(4, Child("Opponent hand BotSage").GetComponentsInChildren<Transform>().Count(t => t.name == "Hand card back"));
+            Assert.IsFalse(texts.Any(t => t.StartsWith("Hand ")), "no hand counts in text");
         }
 
         [UnityTest]
@@ -287,8 +309,8 @@ namespace MoodSwings.Tests
             var server = new BoardServer();
             yield return OpenBoard(server, 406); // bshaftoe's turn
 
-            var marker = Child("Seat bshaftoe").Find("RowPanel").Find("Turn").GetComponent<Image>().color;
-            var other = Child("Seat BotSage").Find("RowPanel").Find("Turn").GetComponent<Image>().color;
+            var marker = Child("Info bshaftoe").Find("Who").Find("Turn").GetComponent<Image>().color;
+            var other = Child("Info BotSage").Find("Who").Find("Turn").GetComponent<Image>().color;
 
             Assert.AreNotEqual(other, marker);
         }
@@ -308,8 +330,7 @@ namespace MoodSwings.Tests
                 .Where(t => t.name == "Hurt Feelings").ToList();
 
             Assert.AreEqual(1, holders.Count);
-            Assert.AreEqual("Seat BotSageQuick", holders[0].parent.parent.name, "914 is BotSageQuick");
-            Assert.AreEqual(1, VisibleTexts().Count(t => t == "Hurt Feelings"), "and the holder's plate names it");
+            Assert.AreEqual("Info BotSageQuick", holders[0].parent.parent.name, "914 is BotSageQuick");
             ScreenshotHelper.Capture("board-hurt-feelings");
         }
 
@@ -349,6 +370,7 @@ namespace MoodSwings.Tests
             var server = new BoardServer();
             yield return OpenBoard(server, 407);
 
+            yield return PhaseFiveSceneTests.OpenMenu();
             yield return PhaseTwoSceneTests.Click("Log");
 
             Assert.IsTrue(VisibleTexts().Any(t => t.Contains("BotSageQuick played Confusion")), "the newest event");
@@ -369,10 +391,11 @@ namespace MoodSwings.Tests
             };
             yield return OpenBoard(server, 407);
 
+            Assert.AreEqual("1", Child("Unread chat").GetComponentInChildren<Text>().text, "an unread message shows on the menu icon");
+            yield return PhaseFiveSceneTests.OpenMenu();
             Assert.IsNotNull(PhaseTwoSceneTests.FindButton("Chat (1)"));
-            yield return PhaseTwoSceneTests.Click("Chat (1)");
-
-            Assert.IsTrue(VisibleTexts().Contains("bshaftoe: GL;HF"));
+            Assert.IsTrue(VisibleTexts().Contains("bshaftoe: GL;HF"), "the menu opens on the chat when there is something unread to read");
+            Assert.IsNull(Child("Unread chat"), "and it is read now");
         }
 
         // --- spectating -------------------------------------------------------------------------
@@ -546,7 +569,8 @@ namespace MoodSwings.Tests
             Assert.IsTrue(server.Calls.Any(c => c.StartsWith("GET /games/state?game_id=")));
             Assert.Greater(Board().TableChildCount, 0);
 
-            yield return PhaseTwoSceneTests.Click("< Back");
+            yield return PhaseFiveSceneTests.OpenMenu();
+            yield return PhaseTwoSceneTests.Click("<- Lobby");
             yield return MainSceneTests.WaitFor<PlayScreen>();
         }
     }

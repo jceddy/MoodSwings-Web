@@ -197,11 +197,30 @@ games are waiting on you. A game's board is Phase 4, so rows don't open yet.
 
 Open any game from **Play** (the **Open** button on a row), or watch someone
 else's from **Watch**. `BoardScreen` draws it: every seat with its moods in
-front of it, the deck and discard piles in the middle, and your hand along the
-bottom. Click any card for a readable close-up (the table cards are too small to
-read); **Log** shows the recent events (and any effects in force) and **Chat**
-the game's messages, with a box to answer. Playing is described under "Playing a
-game" below.
+front of it and a scoreboard to its left, the tops of the cards in each hand along
+its player's edge of the screen, the deck and discard peeking up either side of your
+hand, and the turn banner, messages and **Pass** in the middle. Click any card for a
+readable close-up (the table cards are too small to read). Playing is described
+under "Playing a game" below.
+
+- **Your hand** shows only the top of each card along the bottom edge -- the name and
+  the value -- which leaves the room above it for the table. Hover a card for a large
+  preview; tap it to play it, or drag it up onto the table.
+- **Opponents' hands** are the backs of their cards peeking in from their edge of the
+  screen (the top; the sides in a four-player game), one for each card they hold, so
+  there are no hand counts in text.
+- **A player's scoreboard**: their name, the points this round in a box, a trophy for
+  each round won (dim ones for the rounds still to win), a **1ST** tag for whoever went
+  first this round, and the Hurt Feelings card for whoever has it. It is lit when it is
+  their turn. In a duel, where each player has their own deck, its size shows too.
+- **The deck and discard** peek up from the bottom edge, the discard on the left of your
+  hand and the deck on the right, with a line above each: "Deck 30", "Discard 3" (and
+  "play from it" when an effect makes a card in it playable). Tap the deck for its
+  list, the discard to look through it.
+- **The menu** (three bars, upper left; a badge on it counts unread chat) slides in a
+  panel from the left: **<- Lobby**, **Resign**, and a **Log** tab (the recent events
+  and any effects in force) and a **Chat** tab (the game's messages, with a box to
+  answer). It opens on the chat when there is something unread.
 
 - **Seating matches the web client exactly** (`BoardLayout`, from
   `inPlayZoneAssignments()` in `web-static/js/game.js`): you at the bottom, and
@@ -237,7 +256,7 @@ game" below.
   card large on the left and, on the right, whatever playing it asks you to
   choose (nothing, for about half the cards). Cards you can't play right now are
   dimmed in your hand and open a form whose **Play card** is off, with the reason.
-  **Pass** and **Resign** (which asks first) sit beside your hand; **Advance turn**
+  **Pass** sits in the middle of the screen and **Resign** (which asks first) is in the menu; **Advance turn**
   replaces Pass when "pause before your turn" is on and the turn is waiting for you.
 - **A question for you** -- a card effect waiting on your answer (Confusion's
   "give a card", Fury's "discard a mood", Duplicity's repeat offer, ordering your

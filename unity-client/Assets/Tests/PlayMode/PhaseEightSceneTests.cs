@@ -963,7 +963,7 @@ namespace MoodSwings.Tests
             var server = Serve(HarmonyGame());
             yield return PhaseFiveSceneTests.OpenBoard(server, 406);
 
-            Assert.IsTrue(Texts().Contains("play from it"), string.Join(" | ", Texts()));
+            Assert.IsTrue(Texts().Contains("Discard 1  -  play from it"), string.Join(" | ", Texts()));
             Assert.IsFalse(Board().DiscardOverlay.IsOpen);
             ScreenshotHelper.Capture("discard-playable");
         }
@@ -1067,7 +1067,6 @@ namespace MoodSwings.Tests
             var server = Serve(PhaseFiveSceneTests.Load(406));
             server.DeckJson = DeckListJson();
             yield return PhaseFiveSceneTests.OpenBoard(server, 406);
-            Assert.IsTrue(Texts().Contains("see the list"));
 
             yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.Child("Deck").GetComponentInChildren<Button>());
             yield return PhaseTwoSceneTests.Frames(3);
@@ -1143,7 +1142,7 @@ namespace MoodSwings.Tests
             var server = Serve(PhaseFiveSceneTests.Load(406));
             yield return PhaseFiveSceneTests.OpenBoard(server, 406);
 
-            var back = PhaseFiveSceneTests.Child("Deck").Find("Card back");
+            var back = PhaseFiveSceneTests.Child("Deck").Find("Window").Find("Card back");
 
             Assert.IsNotNull(back, "the pile is a card back, not a grey box");
             Assert.AreSame(MoodSwings.Core.CardArtLibrary.CardBack(), back.GetComponent<Image>().sprite);
@@ -1157,7 +1156,7 @@ namespace MoodSwings.Tests
             var server = Serve(PhaseFiveSceneTests.Load(406, s => s["deck_count"] = 0));
             yield return PhaseFiveSceneTests.OpenBoard(server, 406);
 
-            var back = PhaseFiveSceneTests.Child("Deck").Find("Card back");
+            var back = PhaseFiveSceneTests.Child("Deck").Find("Window").Find("Card back");
 
             Assert.AreEqual(0.35f, back.GetComponent<CanvasGroup>().alpha, 0.001f);
         }

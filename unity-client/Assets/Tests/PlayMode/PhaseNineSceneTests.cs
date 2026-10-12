@@ -1393,5 +1393,33 @@ namespace MoodSwings.Tests
             yield return PhaseTwoSceneTests.Frames(8);
             Assert.IsTrue(AppServices.IsDevServer);
         }
+
+        // --- the board's layout ---------------------------------------------------------------------------
+
+        private static Newtonsoft.Json.Linq.JObject Quiet(int gameId, System.Action<Newtonsoft.Json.Linq.JObject> edit = null) =>
+            PhaseFiveSceneTests.Load(gameId, s =>
+            {
+                s["round"]["pending_decision"] = null;
+                edit?.Invoke(s);
+            });
+
+        [UnityTest]
+        public IEnumerator BoardLayout_Screenshots()
+        {
+            foreach (var game in new[] { 405, 406, 407 })
+            {
+                var server = Serve();
+                server.State = Quiet(game, s =>
+                {
+                    if (game == 406)
+                    {
+                        s["round"]["hurt_feelings_game_player_id"] = s["players"][1]["game_player_id"];
+                    }
+                });
+                yield return PhaseFiveSceneTests.OpenBoard(server, game);
+                yield return PhaseTwoSceneTests.Frames(6);
+                ScreenshotHelper.Capture("layout-" + game);
+            }
+        }
     }
 }

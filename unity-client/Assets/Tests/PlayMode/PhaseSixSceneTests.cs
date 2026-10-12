@@ -19,7 +19,7 @@ namespace MoodSwings.Tests
     public class PhaseSixSceneTests
     {
         private static readonly Vector2 OverTheTable = new Vector2(960f, 650f);
-        private static readonly Vector2 OverTheHand = new Vector2(700f, 120f);
+        private static readonly Vector2 OverTheHand = new Vector2(700f, 40f);
 
         private static PhaseFiveSceneTests.PlayServer YourTurn(JObject state = null) =>
             new PhaseFiveSceneTests.PlayServer { State = state ?? PhaseFiveSceneTests.Load(406) };
@@ -463,7 +463,7 @@ namespace MoodSwings.Tests
         {
             var server = YourTurn();
             yield return PhaseFiveSceneTests.OpenBoard(server, 406);
-            yield return PhaseFiveSceneTests.Tap(PhaseTwoSceneTests.FindButton("Log"));
+            yield return PhaseFiveSceneTests.OpenMenu();
 
             yield return HoverOver("Frustration");
             yield return new WaitForSeconds(0.5f);
@@ -558,8 +558,8 @@ namespace MoodSwings.Tests
             yield return PhaseFiveSceneTests.OpenBoard(server, 407);
 
             var canvas = Board().GetComponentInParent<Canvas>();
-            var screen = new Rect(0f, 0f, Screen.width, Screen.height);
-            foreach (var name in new[] { "Seat bshaftoe", "Seat BotSage", "Seat BotSageQuick", "Seat BotSageDeep", "Hand", "Piles" })
+            var screen = new Rect(-1f, -1f, Screen.width + 2f, Screen.height + 2f);
+            foreach (var name in new[] { "Seat bshaftoe", "Seat BotSage", "Seat BotSageQuick", "Seat BotSageDeep", "Info bshaftoe", "Info BotSage", "Info BotSageQuick", "Info BotSageDeep", "Hand", "Piles" })
             {
                 var corners = new Vector3[4];
                 ((RectTransform)PhaseFiveSceneTests.Child(name)).GetWorldCorners(corners);

@@ -263,6 +263,10 @@ namespace MoodSwings.Networking
         [JsonProperty("first_game_player_id")]
         public int? FirstGamePlayerId { get; set; }
 
+        /// <summary>Who actually took the first turn this round.</summary>
+        [JsonProperty("went_first_game_player_id")]
+        public int? WentFirstGamePlayerId { get; set; }
+
         /// <summary>Set in games of 3 or more: whoever has the Hurt Feelings card this round.</summary>
         [JsonProperty("hurt_feelings_game_player_id")]
         public int? HurtFeelingsGamePlayerId { get; set; }
