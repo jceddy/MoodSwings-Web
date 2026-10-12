@@ -105,6 +105,14 @@ ended, someone else spoke -- and the board reacts to each:
 - The first draw of a game is not an event, so nothing plays when you open one. The
   two switches (**Sound effects**, and **Vibration** on a phone) are under Settings >
   On this device and are stored on the device, not the account.
+- **Colors:** the palette is the game's own five colors -- white for the page, blue
+  for what you act on, black for text, red for Resign and anything that can't be undone,
+  green for good news -- in a light version (the default) and a dark one. Dark mode is
+  under Settings > On this device and is remembered on the device; because screens take
+  their colors when they are built, switching it rebuilds them and returns you to the
+  main menu. All of the colors live in `UiTheme` (`Apply(dark)`); screens use its
+  tokens (`accent`, `onAccent`, `raised`, `success`, `gold`, `faint`...) rather than
+  literals.
 - **Phone screens:** each screen is fitted to the system's safe area (notches, rounded
   corners) and refitted on rotation; layouts were checked at 16:9, 20:9, 16:10 and 4:3.
 - "Pause before your turn" (Advance turn) and "auto-pass on an empty hand" are the
@@ -222,7 +230,9 @@ under "Playing a game" below.
 - **The menu** (three bars, upper left; a badge on it counts unread chat) slides in a
   panel from the left: **< Lobby**, **Resign**, and a **Log** tab (the recent events
   and any effects in force) and a **Chat** tab (the game's messages, with a box to
-  answer). It opens on the chat when there is something unread.
+  answer). It opens on the chat when there is something unread, and the tab shows only
+  how many are unread ("Chat (2)"), not how many there have ever been. The client's
+  version is in its lower left corner.
 
 - **Seating matches the web client exactly** (`BoardLayout`, from
   `inPlayZoneAssignments()` in `web-static/js/game.js`): you at the bottom, and

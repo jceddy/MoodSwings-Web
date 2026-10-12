@@ -489,7 +489,7 @@ namespace MoodSwings.UI
             var badgeImage = badge.gameObject.AddComponent<Image>();
             badgeImage.color = theme.accent;
             badgeImage.raycastTarget = false;
-            _menuBadgeLabel = UiFactory.Label(badge, string.Empty, 22, theme.background, TextAnchor.MiddleCenter, FontStyle.Bold);
+            _menuBadgeLabel = UiFactory.Label(badge, string.Empty, 22, theme.onAccent, TextAnchor.MiddleCenter, FontStyle.Bold);
             _menuBadgeLabel.raycastTarget = false;
             UiFactory.Stretch(_menuBadgeLabel.rectTransform);
             _menuBadge = badge.gameObject;
@@ -729,6 +729,11 @@ namespace MoodSwings.UI
             close.gameObject.name = "Close menu";
             BuildChatEntry(theme, panel);
 
+            var version = UiFactory.Label(panel, $"Client {Application.version}", 20, theme.textMuted, TextAnchor.LowerLeft);
+            version.name = "Client version";
+            version.raycastTarget = false;
+            UiFactory.Size(version.gameObject, height: 26f);
+
             _menuOverlay.SetActive(false);
         }
 
@@ -753,7 +758,7 @@ namespace MoodSwings.UI
             foreach (var tab in new[] { _logTab, _chatTab })
             {
                 var on = tab == (chat ? _chatTab : _logTab);
-                tab.GetComponent<Image>().color = Color.Lerp(theme.panel, Color.white, on ? 0.24f : 0.08f);
+                tab.GetComponent<Image>().color = on ? theme.Selected : theme.raised;
                 tab.GetComponentInChildren<Text>().color = on ? theme.accent : theme.textMuted;
             }
 
@@ -775,6 +780,7 @@ namespace MoodSwings.UI
                 unread = 0;
             }
 
+            _chatTabLabel.text = unread > 0 ? $"Chat ({unread})" : "Chat";
             _menuBadge.SetActive(unread > 0 && !_menuOverlay.activeSelf);
             _menuBadgeLabel.text = unread > 9 ? "9+" : unread.ToString();
         }
@@ -818,6 +824,7 @@ namespace MoodSwings.UI
             var panel = UiFactory.Create("Panel", root);
             panel.anchorMin = panel.anchorMax = panel.pivot = new Vector2(0.5f, 0.5f);
             panel.sizeDelta = new Vector2(1780f, 760f);
+            panel.gameObject.AddComponent<Image>().color = theme.panel;
             var layout = panel.gameObject.AddComponent<VerticalLayoutGroup>();
             layout.spacing = 20f;
             layout.padding = new RectOffset(20, 20, 10, 10);
@@ -1003,7 +1010,8 @@ namespace MoodSwings.UI
             _detailCardHolder = UiFactory.Create("Card", content.transform);
             UiFactory.Size(_detailCardHolder.gameObject, DetailCardWidth, CardView.HeightFor(DetailCardWidth));
 
-            _detailText = UiFactory.Label(content.transform, string.Empty, 30, theme.textPrimary, TextAnchor.MiddleLeft);
+            // Drawn straight onto the dark shade, so light in either palette.
+            _detailText = UiFactory.Label(content.transform, string.Empty, 30, new Color(0.96f, 0.96f, 0.94f), TextAnchor.MiddleLeft);
             UiFactory.Size(_detailText.gameObject, 800f);
 
             _detail.SetActive(false);
@@ -1094,7 +1102,7 @@ namespace MoodSwings.UI
 
             if (card.ChaosEffect != null)
             {
-                notes.Add($"<b><color=#{ColorUtility.ToHtmlStringRGB(CardView.ChaosColor(card.ChaosEffect.Rarity))}>{ChaosDisplay.EffectOnCard(card.ChaosEffect)}</color></b>");
+                notes.Add($"<b><color=#{ColorUtility.ToHtmlStringRGB(CardView.ReadableText(CardView.ChaosColor(card.ChaosEffect.Rarity)))}>{ChaosDisplay.EffectOnCard(card.ChaosEffect)}</color></b>");
             }
 
             var chaosValue = ChaosDisplay.ValueNote(card);
@@ -1106,7 +1114,7 @@ namespace MoodSwings.UI
             var colorNote = BoardDisplay.ColorNote(_session?.State, card);
             if (colorNote != null)
             {
-                notes.Add($"<b><color=#{ColorUtility.ToHtmlStringRGB(CardView.IndicatorColor(card.Color))}>{colorNote}</color></b>");
+                notes.Add($"<b><color=#{ColorUtility.ToHtmlStringRGB(CardView.ReadableText(CardView.IndicatorColor(card.Color)))}>{colorNote}</color></b>");
             }
 
             if (card.IsSuppressed)
@@ -1145,8 +1153,8 @@ namespace MoodSwings.UI
             foreach (var (button, channel) in new[] { (_chatToTable, "table"), (_chatToTeam, "team") })
             {
                 var chosen = _chatChannel == channel;
-                button.GetComponent<Image>().color = chosen ? theme.accent : Color.Lerp(theme.panel, Color.white, 0.10f);
-                button.GetComponentInChildren<Text>().color = chosen ? theme.background : theme.textPrimary;
+                button.GetComponent<Image>().color = chosen ? theme.accent : theme.raised;
+                button.GetComponentInChildren<Text>().color = chosen ? theme.onAccent : theme.textPrimary;
             }
         }
 
@@ -1207,7 +1215,6 @@ namespace MoodSwings.UI
             _banner.text = _topBanner.text = BoardDisplay.TurnBanner(state);
             _banner.color = _topBanner.color = BoardDisplay.BannerNeedsViewer(state) ? theme.accent : theme.textPrimary;
             UpdateHeader(state);
-            _chatTabLabel.text = state.ChatMessages.Count > 0 ? $"Chat ({state.ChatMessages.Count})" : "Chat";
             _chatEntryAllowed = !BoardDisplay.IsSpectator(state);
             _logBody.text = LogText(state);
             _chatBody.text = state.ChatMessages.Count == 0
@@ -1497,7 +1504,7 @@ namespace MoodSwings.UI
             // The score, big, in a box.
             var box = UiFactory.Create("Score", scores.transform);
             var outer = box.gameObject.AddComponent<Image>();
-            outer.color = Color.Lerp(theme.panel, Color.white, 0.30f);
+            outer.color = theme.textMuted;
             outer.raycastTarget = false;
             UiFactory.Size(box.gameObject, 92f, 76f);
             var inner = UiFactory.Create("Inside", box);
@@ -1505,7 +1512,7 @@ namespace MoodSwings.UI
             inner.offsetMin = new Vector2(3f, 3f);
             inner.offsetMax = new Vector2(-3f, -3f);
             var innerImage = inner.gameObject.AddComponent<Image>();
-            innerImage.color = new Color(0.06f, 0.07f, 0.09f);
+            innerImage.color = theme.background;
             innerImage.raycastTarget = false;
             var points = UiFactory.Label(inner, player.TotalScore.ToString(), 52, theme.textPrimary, TextAnchor.MiddleCenter, FontStyle.Bold);
             points.name = "Points";
@@ -1522,7 +1529,7 @@ namespace MoodSwings.UI
                 var pillImage = pill.gameObject.AddComponent<Image>();
                 pillImage.color = theme.accent;
                 pillImage.raycastTarget = false;
-                var pillLabel = UiFactory.Label(pill, "1ST", 18, theme.background, TextAnchor.MiddleCenter, FontStyle.Bold);
+                var pillLabel = UiFactory.Label(pill, "1ST", 18, theme.onAccent, TextAnchor.MiddleCenter, FontStyle.Bold);
                 pillLabel.raycastTarget = false;
                 UiFactory.Stretch(pillLabel.rectTransform);
             }
@@ -1547,7 +1554,7 @@ namespace MoodSwings.UI
                     var trophy = UiFactory.Create(won ? "Trophy won" : "Trophy to win", column);
                     var image = trophy.gameObject.AddComponent<Image>();
                     image.sprite = UiIcons.Trophy();
-                    image.color = won ? theme.accent : new Color(1f, 1f, 1f, 0.16f);
+                    image.color = won ? theme.gold : new Color(theme.textMuted.r, theme.textMuted.g, theme.textMuted.b, 0.35f);
                     image.raycastTarget = false;
                     UiFactory.Size(trophy.gameObject, size, size);
                 }
@@ -1567,7 +1574,7 @@ namespace MoodSwings.UI
             var heading = UiFactory.Row(details, "Who", 6f, TextAnchor.MiddleLeft);
             heading.childForceExpandWidth = false;
             var marker = UiFactory.Create("Turn", heading.transform);
-            marker.gameObject.AddComponent<Image>().color = isTurn ? theme.accent : new Color(1f, 1f, 1f, 0.12f);
+            marker.gameObject.AddComponent<Image>().color = isTurn ? theme.accent : theme.faint;
             UiFactory.Size(marker.gameObject, 14f, 14f);
 
             var teamTag = BoardDisplay.TeamTag(state, player);
@@ -1805,7 +1812,7 @@ namespace MoodSwings.UI
             {
                 face = UiFactory.Create("Pile", window);
                 var emptyImage = face.gameObject.AddComponent<Image>();
-                emptyImage.color = new Color(1f, 1f, 1f, 0.07f);
+                emptyImage.color = theme.faint;
                 if (onClick != null)
                 {
                     face.gameObject.AddComponent<Button>().onClick.AddListener(onClick);
@@ -1934,7 +1941,7 @@ namespace MoodSwings.UI
             if (card.IsSuppressed)
             {
                 lines.Add(string.Empty);
-                lines.Add($"<b><color=#{ColorUtility.ToHtmlStringRGB(AppServices.Theme.danger)}>{BoardDisplay.SuppressedByText(card)}</color></b>");
+                lines.Add($"<b><color=#EB5252>{BoardDisplay.SuppressedByText(card)}</color></b>"); // red enough for the dark shade in either palette
             }
 
             lines.Add(string.Empty);

@@ -170,7 +170,7 @@ namespace MoodSwings.UI
             var row = UiFactory.RowPanel(_list, theme);
 
             var dot = UiFactory.Create("Presence", row.transform);
-            dot.gameObject.AddComponent<Image>().color = friend.IsOnline ? new Color(0.35f, 0.80f, 0.45f) : theme.textMuted;
+            dot.gameObject.AddComponent<Image>().color = friend.IsOnline ? theme.success : theme.textMuted;
             UiFactory.Size(dot.gameObject, 20f, 20f);
             dot.gameObject.SetActive(friend.Presence != "hidden");
 

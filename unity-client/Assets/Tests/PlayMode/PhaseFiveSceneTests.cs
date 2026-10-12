@@ -926,7 +926,7 @@ namespace MoodSwings.Tests
             Assert.IsTrue(Board().DetailOpen);
             var detail = UnityEngine.Object.FindObjectsByType<Text>(FindObjectsInactive.Exclude)
                 .Select(t => t.text).First(t => t.Contains("Suppressed by"));
-            StringAssert.Contains("<b><color=#D94040>Suppressed by Scorn</color></b>", detail);
+            StringAssert.Contains("<b><color=#EB5252>Suppressed by Scorn</color></b>", detail);
             StringAssert.DoesNotContain("switched off", detail);
             StringAssert.Contains("Value right now: 0", detail);
         }

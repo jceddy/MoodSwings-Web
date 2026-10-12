@@ -1421,5 +1421,36 @@ namespace MoodSwings.Tests
                 ScreenshotHelper.Capture("layout-" + game);
             }
         }
+
+        [UnityTest]
+        public IEnumerator BoardLayout_InDarkMode_Screenshots()
+        {
+            MainSceneTests.DarkMode = true;
+            try
+            {
+                foreach (var game in new[] { 405, 406 })
+                {
+                    var server = Serve();
+                    server.State = Quiet(game, s => { });
+                    yield return PhaseFiveSceneTests.OpenBoard(server, game);
+                    yield return PhaseTwoSceneTests.Frames(6);
+                    Assert.IsTrue(AppServices.Theme.IsDark);
+                    ScreenshotHelper.Capture("dark-layout-" + game);
+                    yield return PhaseFiveSceneTests.OpenMenu();
+                    ScreenshotHelper.Capture("dark-menu-" + game);
+                }
+
+                yield return Home(Serve());
+                ScreenshotHelper.Capture("dark-home");
+                Object.FindAnyObjectByType<ScreenRouter>().Show<SettingsScreen>();
+                yield return MainSceneTests.WaitFor<SettingsScreen>();
+                ScreenshotHelper.Capture("dark-settings");
+            }
+            finally
+            {
+                MainSceneTests.DarkMode = false;
+                AppServices.Theme.Apply(dark: false);
+            }
+        }
     }
 }

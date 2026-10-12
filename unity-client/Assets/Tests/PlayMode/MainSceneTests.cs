@@ -50,6 +50,9 @@ namespace MoodSwings.Tests
             return request => request.Url.EndsWith("/VERSION") ? Reply(200, "1.58.5\n") : api(request);
         }
 
+        /// <summary>Launches in the dark palette (for screenshots of it).</summary>
+        internal static bool DarkMode;
+
         internal static IEnumerator Launch(Func<HttpRequest, HttpResponse> handler, string rememberedSession = null, IPushTokenProvider pushProvider = null)
         {
             ScreenshotHelper.UseFullHdScreen();
@@ -64,6 +67,12 @@ namespace MoodSwings.Tests
 
             var api = new ApiClient(new ApiConfig("https://example.test", "MoodSwings/test"), new ScriptedTransport(Site(handler)), store);
             AppServices.Override(api, null, store, disk, pushProvider);
+            if (DarkMode)
+            {
+                AppServices.Device.DarkMode = true;
+                AppServices.Theme.Apply(dark: true);
+            }
+
 
             yield return SceneManager.LoadSceneAsync("Main");
             yield return null;

@@ -162,7 +162,7 @@ namespace MoodSwings.UI
             UiFactory.Size(line.gameObject, height: 26f);
 
             var track = UiFactory.Create("Track", line.transform);
-            track.gameObject.AddComponent<Image>().color = new Color(1f, 1f, 1f, 0.10f);
+            track.gameObject.AddComponent<Image>().color = theme.faint;
             var trackSize = UiFactory.Size(track.gameObject, height: 12f);
             trackSize.flexibleWidth = 1f;
             trackSize.minWidth = 100f;

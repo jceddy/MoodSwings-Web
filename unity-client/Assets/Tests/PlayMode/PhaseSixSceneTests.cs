@@ -394,6 +394,29 @@ namespace MoodSwings.Tests
             Assert.IsNull(PhaseTwoSceneTests.FindToggle("Vibration"), "vibration is only offered on a phone");
         }
 
+        [UnityTest]
+        public IEnumerator Settings_DarkMode_StartsOff_AndSwitchesThePalette()
+        {
+            var server = YourTurn();
+            yield return MainSceneTests.Launch(server.Handle, rememberedSession: "tok");
+            yield return MainSceneTests.WaitFor<HomeScreen>();
+            UnityEngine.Object.FindAnyObjectByType<ScreenRouter>().Show<SettingsScreen>();
+            yield return MainSceneTests.WaitFor<SettingsScreen>();
+
+            var toggle = PhaseTwoSceneTests.FindToggle("Dark mode");
+            Assert.IsNotNull(toggle);
+            Assert.IsFalse(toggle.isOn);
+            Assert.IsFalse(AppServices.Theme.IsDark);
+
+            toggle.isOn = true;
+            yield return PhaseTwoSceneTests.Frames();
+
+            Assert.IsTrue(AppServices.Device.DarkMode);
+            Assert.IsTrue(AppServices.Theme.IsDark);
+            AppServices.Device.DarkMode = false;
+            AppServices.Theme.Apply(dark: false);
+        }
+
         // --- resting the mouse on a card -------------------------------------------------------------------
 
         private static IEnumerator HoverOver(string cardName)

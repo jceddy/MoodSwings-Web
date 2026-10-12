@@ -17,6 +17,9 @@ namespace MoodSwings.UI
         private readonly RectTransform _cardHolder;
         private readonly Text _text;
 
+        private static readonly Color ShadeText = new Color(0.96f, 0.96f, 0.94f);
+        private static readonly Color ShadeMutedText = new Color(0.72f, 0.74f, 0.80f);
+
         public CardDetailOverlay(Transform parent, UiTheme theme)
         {
             _theme = theme;
@@ -40,7 +43,8 @@ namespace MoodSwings.UI
             cardSize.flexibleWidth = 0f;
             cardSize.flexibleHeight = 0f;
 
-            _text = UiFactory.Label(row.transform, string.Empty, 32, theme.textPrimary, TextAnchor.MiddleLeft);
+            // It is drawn straight onto a dark shade, so its text is light in either palette.
+            _text = UiFactory.Label(row.transform, string.Empty, 32, ShadeText, TextAnchor.MiddleLeft);
             _text.supportRichText = true;
             UiFactory.Flexible(_text.gameObject, width: 1f);
             _text.GetComponent<LayoutElement>().preferredWidth = 0f; // take the leftover width and wrap within it
@@ -63,7 +67,7 @@ namespace MoodSwings.UI
             var view = CardView.Create(_cardHolder, card, CardWidth, _theme, showValue: false);
             UiFactory.Stretch(view);
 
-            var muted = ColorUtility.ToHtmlStringRGB(_theme.textMuted);
+            var muted = ColorUtility.ToHtmlStringRGB(ShadeMutedText);
             var lines = new System.Collections.Generic.List<string> { "<size=46><b>" + card.Name + "</b></size>" };
             var facts = string.Join("  -  ", new[] { Capitalize(card.Color), Capitalize(card.Rarity), "Value " + card.Value }.Where(s => !string.IsNullOrEmpty(s)));
             lines.Add($"<color=#{muted}>{facts}</color>");

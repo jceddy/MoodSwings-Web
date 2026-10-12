@@ -136,6 +136,8 @@ namespace MoodSwings.Core
             {
                 Theme = ScriptableObject.CreateInstance<UiTheme>();
             }
+
+            Theme.Apply(Device.DarkMode);
         }
     }
 }

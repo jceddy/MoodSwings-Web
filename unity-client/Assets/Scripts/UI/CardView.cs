@@ -272,6 +272,13 @@ namespace MoodSwings.UI
         }
 
         /// <summary>The color a Chaos effect's pill is drawn in, by how rare the effect is.</summary>
+        /// <summary>
+        /// A card color or rarity color as TEXT: on the light palette the pale ones (white, the light blue of uncommon) are
+        /// darkened so they can be read against the page.
+        /// </summary>
+        public static Color ReadableText(Color color) =>
+            AppServices.Theme.IsDark ? color : Color.Lerp(color, Color.black, 0.5f);
+
         public static Color ChaosColor(string rarity)
         {
             switch (rarity)
@@ -341,7 +348,7 @@ namespace MoodSwings.UI
             chip.gameObject.AddComponent<Image>().color = modified ? theme.accent : new Color(0f, 0f, 0f, 0.80f);
 
             var label = UiFactory.Label(chip, card.Value.ToString(), Mathf.RoundToInt(chipHeight * 0.72f),
-                modified ? theme.background : Color.white, TextAnchor.MiddleCenter, FontStyle.Bold);
+                modified ? theme.onAccent : Color.white, TextAnchor.MiddleCenter, FontStyle.Bold);
             UiFactory.Stretch(label.rectTransform);
         }
 

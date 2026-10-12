@@ -11,6 +11,7 @@ namespace MoodSwings.Core
         private const string SoundKey = "device.sound";
         private const string VibrationKey = "device.vibration";
         private const string PushKey = "device.push";
+        private const string DarkModeKey = "device.darkMode";
         private const string DevServerKey = "device.devServer";
         private const string HideLockedKey = "device.achievements.hideLocked";
         private const string SeenAtKey = "device.achievements.seenAt";
@@ -56,6 +57,13 @@ namespace MoodSwings.Core
                     _store.Delete(DevServerKey);
                 }
             }
+        }
+
+        /// <summary>The dark palette instead of the light one (off until switched on).</summary>
+        public bool DarkMode
+        {
+            get => _store.GetString(DarkModeKey) == "1";
+            set => _store.SetString(DarkModeKey, value ? "1" : "0");
         }
 
         /// <summary>Push notifications to this device: on until switched off (where the device can get them at all).</summary>

@@ -1,3 +1,4 @@
+using MoodSwings.Core;
 using UnityEngine;
 using UnityEngine.Events;
 using UnityEngine.UI;
@@ -180,7 +181,7 @@ namespace MoodSwings.UI
             button.colors = Tints();
             button.onClick.AddListener(onClick);
 
-            var label = Label(rect, text, 30, primary ? theme.background : theme.textPrimary, TextAnchor.MiddleCenter, FontStyle.Bold);
+            var label = Label(rect, text, 30, primary ? theme.onAccent : theme.textPrimary, TextAnchor.MiddleCenter, FontStyle.Bold);
             Stretch(label.rectTransform);
 
             Size(rect.gameObject, height: ControlHeight);
@@ -321,14 +322,14 @@ namespace MoodSwings.UI
             barRect.anchorMax = new Vector2(1f, 1f);
             barRect.pivot = new Vector2(1f, 0.5f);
             barRect.sizeDelta = new Vector2(10f, 0f);
-            barRect.gameObject.AddComponent<Image>().color = new Color(1f, 1f, 1f, 0.06f);
+            barRect.gameObject.AddComponent<Image>().color = AppServices.Theme.faint;
 
             var slidingArea = Create("Sliding Area", barRect);
             Stretch(slidingArea);
             var handleRect = Create("Handle", slidingArea);
             Stretch(handleRect);
             var handleImage = handleRect.gameObject.AddComponent<Image>();
-            handleImage.color = new Color(1f, 1f, 1f, 0.35f);
+            handleImage.color = new Color(AppServices.Theme.textMuted.r, AppServices.Theme.textMuted.g, AppServices.Theme.textMuted.b, 0.55f);
 
             var scrollbar = barRect.gameObject.AddComponent<Scrollbar>();
             scrollbar.handleRect = handleRect;
@@ -445,7 +446,7 @@ namespace MoodSwings.UI
             rect.offsetMax = new Vector2(-horizontal, -vertical);
         }
 
-        private static Color Raised(UiTheme theme) => Color.Lerp(theme.panel, Color.white, 0.10f);
+        private static Color Raised(UiTheme theme) => theme.raised;
 
         private static ColorBlock Tints()
         {

@@ -128,6 +128,8 @@ namespace MoodSwings.UI
             AddNotificationRows(theme);
 
             UiFactory.SectionTitle(_list, theme, "On this device");
+            AddDeviceRow(theme, "Dark mode", "A dark palette instead of the light one. The screens are built again, so you land back on the main menu.",
+                AppServices.Device.DarkMode, SetDarkMode);
             AddDeviceRow(theme, "Sound effects", "Chimes for your turn, cards played, and the end of a round.",
                 AppServices.Device.SoundOn, on => AppServices.Device.SoundOn = on);
             if (AppServices.Push.IsAvailable)
@@ -275,6 +277,19 @@ namespace MoodSwings.UI
             var toggle = UiFactory.Toggle(panel.transform, label, theme, isOn);
             AddDescription(theme, panel.transform, description);
             toggle.onValueChanged.AddListener(value => save(value));
+        }
+
+        // The screens take their colors when they are built, so a new palette means building them again.
+        private void SetDarkMode(bool on)
+        {
+            if (AppServices.Device.DarkMode == on)
+            {
+                return;
+            }
+
+            AppServices.Device.DarkMode = on;
+            AppServices.Theme.Apply(on);
+            UnityEngine.SceneManagement.SceneManager.LoadScene(gameObject.scene.name);
         }
 
         private void AddPreferenceRow(UiTheme theme, BoolPreference preference)

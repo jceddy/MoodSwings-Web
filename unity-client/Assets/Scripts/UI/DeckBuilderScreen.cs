@@ -219,8 +219,8 @@ namespace MoodSwings.UI
             foreach (var pair in _filterButtons)
             {
                 var on = _colors.Contains(pair.Key) || _rarities.Contains(pair.Key);
-                pair.Value.color = on ? theme.accent : Color.Lerp(theme.panel, Color.white, 0.12f);
-                pair.Value.GetComponentInChildren<Text>().color = on ? theme.background : theme.textPrimary;
+                pair.Value.color = on ? theme.accent : theme.raised;
+                pair.Value.GetComponentInChildren<Text>().color = on ? theme.onAccent : theme.textPrimary;
             }
         }
 
@@ -340,7 +340,7 @@ namespace MoodSwings.UI
             var boxImage = box.gameObject.AddComponent<Image>();
             boxImage.color = theme.accent;
             boxImage.raycastTarget = false;
-            var badge = UiFactory.Label(box, string.Empty, 30, theme.background, TextAnchor.MiddleCenter, FontStyle.Bold);
+            var badge = UiFactory.Label(box, string.Empty, 30, theme.onAccent, TextAnchor.MiddleCenter, FontStyle.Bold);
             badge.raycastTarget = false;
             UiFactory.Stretch(badge.rectTransform);
             _badges[card.CardId] = badge;
@@ -351,9 +351,9 @@ namespace MoodSwings.UI
             sideBox.sizeDelta = new Vector2(96f, 44f);
             sideBox.anchoredPosition = new Vector2(8f, 8f);
             var sideImage = sideBox.gameObject.AddComponent<Image>();
-            sideImage.color = new Color(0.30f, 0.58f, 1.00f);
+            sideImage.color = theme.success;
             sideImage.raycastTarget = false;
-            var sideBadge = UiFactory.Label(sideBox, string.Empty, 26, theme.background, TextAnchor.MiddleCenter, FontStyle.Bold);
+            var sideBadge = UiFactory.Label(sideBox, string.Empty, 26, Color.white, TextAnchor.MiddleCenter, FontStyle.Bold);
             sideBadge.raycastTarget = false;
             UiFactory.Stretch(sideBadge.rectTransform);
             _sideBadges[card.CardId] = sideBadge;
@@ -420,7 +420,7 @@ namespace MoodSwings.UI
 
                 var count = UiFactory.Label(row.transform, "x" + entry.Count, 28, theme.accent, TextAnchor.MiddleLeft, FontStyle.Bold);
                 UiFactory.Size(count.gameObject, 70f, 56f);
-                var name = UiFactory.Label(row.transform, entry.Card.Name, 28, CardView.IndicatorColor(entry.Card.Color), TextAnchor.MiddleLeft);
+                var name = UiFactory.Label(row.transform, entry.Card.Name, 28, CardView.ReadableText(CardView.IndicatorColor(entry.Card.Color)), TextAnchor.MiddleLeft);
                 UiFactory.Flexible(name.gameObject, width: 1f);
                 var less = UiFactory.Button(row.transform, "-", theme, () => RemoveCard(id), primary: false);
                 less.gameObject.name = "Less " + entry.Card.Name;
@@ -451,8 +451,8 @@ namespace MoodSwings.UI
             var text = tab.GetComponentInChildren<Text>();
             text.text = label;
             text.fontSize = 26;
-            text.color = active ? theme.background : theme.textPrimary;
-            tab.GetComponent<Image>().color = active ? theme.accent : Color.Lerp(theme.panel, Color.white, 0.12f);
+            text.color = active ? theme.onAccent : theme.textPrimary;
+            tab.GetComponent<Image>().color = active ? theme.accent : theme.raised;
         }
 
         // --- saving and leaving --------------------------------------------------------------

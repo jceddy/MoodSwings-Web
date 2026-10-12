@@ -393,9 +393,11 @@ namespace MoodSwings.Tests
 
             Assert.AreEqual("1", Child("Unread chat").GetComponentInChildren<Text>().text, "an unread message shows on the menu icon");
             yield return PhaseFiveSceneTests.OpenMenu();
-            Assert.IsNotNull(PhaseTwoSceneTests.FindButton("Chat (1)"));
+            Assert.IsNotNull(PhaseTwoSceneTests.FindButton("Chat"), "and the tab only counts what is unread, so it has no number once read");
+            Assert.IsNull(PhaseTwoSceneTests.FindButton("Chat (1)"));
             Assert.IsTrue(VisibleTexts().Contains("bshaftoe: GL;HF"), "the menu opens on the chat when there is something unread to read");
             Assert.IsNull(Child("Unread chat"), "and it is read now");
+            Assert.IsTrue(VisibleTexts().Contains("Client " + Application.version), "the menu says which client this is");
         }
 
         // --- spectating -------------------------------------------------------------------------
