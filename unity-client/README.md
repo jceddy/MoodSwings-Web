@@ -209,16 +209,18 @@ under "Playing a game" below.
 - **Opponents' hands** are the backs of their cards peeking in from their edge of the
   screen (the top; the sides in a four-player game), one for each card they hold, so
   there are no hand counts in text.
-- **A player's scoreboard**: their name, the points this round in a box, a trophy for
-  each round won (dim ones for the rounds still to win), a **1ST** tag for whoever went
-  first this round, and the Hurt Feelings card for whoever has it. It is lit when it is
-  their turn. In a duel, where each player has their own deck, its size shows too.
-- **The deck and discard** peek up from the bottom edge, the discard on the left of your
-  hand and the deck on the right, with a line above each: "Deck 30", "Discard 3" (and
+- **A player's scoreboard** sits at the end of their hand that is at *their* left (so, for
+  the player across from you, at your right): the points in a box with a trophy for each
+  round won stacked beside it (dim ones for the rounds still to win), a **1ST** tag on the
+  box for whoever went first this round, then their name, and the Hurt Feelings card for
+  whoever has it. It is lit when it is their turn. In a duel, where each player has their own
+  deck, its size shows too.
+- **The deck and discard** peek up from the bottom edge, the discard at the far left and the deck at the far right of the bottom edge, with your scoreboard
+  and your hand between them, with a line above each: "Deck 30", "Discard 3" (and
   "play from it" when an effect makes a card in it playable). Tap the deck for its
   list, the discard to look through it.
 - **The menu** (three bars, upper left; a badge on it counts unread chat) slides in a
-  panel from the left: **<- Lobby**, **Resign**, and a **Log** tab (the recent events
+  panel from the left: **< Lobby**, **Resign**, and a **Log** tab (the recent events
   and any effects in force) and a **Chat** tab (the game's messages, with a box to
   answer). It opens on the chat when there is something unread.
 

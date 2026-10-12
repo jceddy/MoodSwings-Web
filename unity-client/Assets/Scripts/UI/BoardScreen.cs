@@ -68,16 +68,17 @@ namespace MoodSwings.UI
             public Rect HandSpan;
         }
 
-        // Opponents along the top (and, in a four-player game, the sides); you at the bottom. The middle is left clear
-        // for the turn banner, messages and the Pass button.
+        // Opponents along the top (and, in a four-player game, the sides); you at the bottom. Each player's scoreboard
+        // sits at the end of their hand that is at THEIR left (so for the player across from you, your right). The middle
+        // is left clear for the turn banner, messages and the Pass button.
         private static readonly Dictionary<SeatZone, SeatPlace> Places = new Dictionary<SeatZone, SeatPlace>
         {
-            [SeatZone.South] = new SeatPlace { Moods = Fraction(0.20f, 0.11f, 0.80f, 0.30f), Info = Fraction(0.015f, 0.14f, 0.18f, 0.33f), Edge = HandEdge.None },
-            [SeatZone.North] = new SeatPlace { Moods = Fraction(0.20f, 0.70f, 0.80f, 0.89f), Info = Fraction(0.015f, 0.70f, 0.18f, 0.89f), Edge = HandEdge.Top, HandSpan = Fraction(0.30f, 0f, 0.70f, 0f) },
-            [SeatZone.Northwest] = new SeatPlace { Moods = Fraction(0.18f, 0.70f, 0.49f, 0.89f), Info = Fraction(0.015f, 0.70f, 0.17f, 0.89f), Edge = HandEdge.Top, HandSpan = Fraction(0.10f, 0f, 0.40f, 0f) },
-            [SeatZone.Northeast] = new SeatPlace { Moods = Fraction(0.68f, 0.70f, 0.985f, 0.89f), Info = Fraction(0.515f, 0.70f, 0.67f, 0.89f), Edge = HandEdge.Top, HandSpan = Fraction(0.58f, 0f, 0.88f, 0f) },
-            [SeatZone.West] = new SeatPlace { Moods = Fraction(0.05f, 0.34f, 0.30f, 0.50f), Info = Fraction(0.05f, 0.505f, 0.20f, 0.69f), Edge = HandEdge.Left, HandSpan = Fraction(0f, 0.30f, 0f, 0.70f) },
-            [SeatZone.East] = new SeatPlace { Moods = Fraction(0.70f, 0.34f, 0.95f, 0.50f), Info = Fraction(0.80f, 0.505f, 0.95f, 0.69f), Edge = HandEdge.Right, HandSpan = Fraction(0f, 0.30f, 0f, 0.70f) },
+            [SeatZone.South] = new SeatPlace { Moods = Fraction(0.20f, 0.11f, 0.80f, 0.30f), Info = Fraction(0.103f, 0.008f, 0.268f, 0.113f), Edge = HandEdge.None },
+            [SeatZone.North] = new SeatPlace { Moods = Fraction(0.20f, 0.70f, 0.80f, 0.88f), Info = Fraction(0.705f, 0.888f, 0.87f, 0.995f), Edge = HandEdge.Top, HandSpan = Fraction(0.30f, 0f, 0.70f, 0f) },
+            [SeatZone.Northwest] = new SeatPlace { Moods = Fraction(0.08f, 0.70f, 0.49f, 0.88f), Info = Fraction(0.345f, 0.888f, 0.51f, 0.995f), Edge = HandEdge.Top, HandSpan = Fraction(0.08f, 0f, 0.34f, 0f) },
+            [SeatZone.Northeast] = new SeatPlace { Moods = Fraction(0.55f, 0.70f, 0.985f, 0.88f), Info = Fraction(0.805f, 0.888f, 0.97f, 0.995f), Edge = HandEdge.Top, HandSpan = Fraction(0.54f, 0f, 0.80f, 0f) },
+            [SeatZone.West] = new SeatPlace { Moods = Fraction(0.05f, 0.34f, 0.30f, 0.50f), Info = Fraction(0.0f, 0.715f, 0.165f, 0.82f), Edge = HandEdge.Left, HandSpan = Fraction(0f, 0.30f, 0f, 0.70f) },
+            [SeatZone.East] = new SeatPlace { Moods = Fraction(0.70f, 0.34f, 0.95f, 0.50f), Info = Fraction(0.835f, 0.18f, 1.0f, 0.285f), Edge = HandEdge.Right, HandSpan = Fraction(0f, 0.30f, 0f, 0.70f) },
         };
 
         private BoardSession _session;
@@ -628,10 +629,13 @@ namespace MoodSwings.UI
             _message.name = "Message";
             _message.raycastTarget = false;
 
-            _primaryAction = UiFactory.Button(_center, "Pass", theme, () => OnPrimaryAction());
+            // The button doesn't stretch across the middle: a row keeps it a button's width, centered.
+            var primaryRow = UiFactory.Row(_center, "Primary row", 0f, TextAnchor.MiddleCenter);
+            primaryRow.childForceExpandWidth = false;
+            _primaryAction = UiFactory.Button(primaryRow.transform, "Pass", theme, () => OnPrimaryAction());
             _primaryAction.gameObject.name = "Primary action";
             _primaryLabel = _primaryAction.GetComponentInChildren<Text>();
-            UiFactory.Size(_primaryAction.gameObject, height: 80f);
+            UiFactory.Size(_primaryAction.gameObject, 380f, 80f);
 
             DockCenter(atTable: true);
         }
@@ -685,7 +689,7 @@ namespace MoodSwings.UI
             var actions = UiFactory.Row(panel, "Menu actions", 12f, TextAnchor.MiddleCenter);
             actions.childForceExpandWidth = true;
             UiFactory.Size(actions.gameObject, height: UiFactory.ControlHeight);
-            var lobby = UiFactory.Button(actions.transform, "<- Lobby", theme, () => Router.Back(), primary: false);
+            var lobby = UiFactory.Button(actions.transform, "< Lobby", theme, () => Router.Back(), primary: false);
             lobby.gameObject.name = "Lobby";
             UiFactory.Flexible(lobby.gameObject, width: 1f);
             _resignAction = UiFactory.Button(actions.transform, "Resign", theme, () =>
@@ -694,6 +698,8 @@ namespace MoodSwings.UI
                 Run(Resign);
             }, primary: false);
             _resignAction.gameObject.name = "Resign";
+            _resignAction.GetComponent<Image>().color = theme.danger;
+            _resignAction.GetComponentInChildren<Text>().color = Color.white;
             UiFactory.Flexible(_resignAction.gameObject, width: 1f);
 
             var tabs = UiFactory.Row(panel, "Menu tabs", 12f, TextAnchor.MiddleCenter);
@@ -1466,49 +1472,25 @@ namespace MoodSwings.UI
             }
         }
 
-        // A player's scoreboard, to the left of their moods: the name, the round's points in a box, a trophy for each
-        // round won, who went first, and the Hurt Feelings card for whoever has it.
+        // A player's scoreboard, at the end of their hand: the points in a box with a trophy for each round won stacked
+        // beside it (and a 1ST tag on the box for whoever went first), then their name, and the Hurt Feelings card for
+        // whoever has it.
         private void BuildInfo(UiTheme theme, GameState state, BoardPlayer player, RectTransform area)
         {
             var isTurn = state.Round.CurrentTurnGamePlayerId == player.GamePlayerId && state.Game.Status != "completed";
             var background = area.gameObject.AddComponent<Image>();
             background.color = isTurn ? Color.Lerp(theme.panel, theme.accent, 0.35f) : theme.panel;
             background.raycastTarget = false;
-            var layout = area.gameObject.AddComponent<VerticalLayoutGroup>();
-            layout.padding = new RectOffset(14, 12, 10, 10);
-            layout.spacing = 6f;
-            layout.childAlignment = TextAnchor.UpperLeft;
+            var layout = area.gameObject.AddComponent<HorizontalLayoutGroup>();
+            layout.padding = new RectOffset(10, 10, 8, 8);
+            layout.spacing = 10f;
+            layout.childAlignment = TextAnchor.MiddleLeft;
             layout.childControlWidth = true;
             layout.childControlHeight = true;
-            layout.childForceExpandWidth = true;
+            layout.childForceExpandWidth = false;
             layout.childForceExpandHeight = false;
 
-            var heading = UiFactory.Row(area, "Who", 10f, TextAnchor.MiddleLeft);
-            heading.childForceExpandWidth = false;
-            var marker = UiFactory.Create("Turn", heading.transform);
-            marker.gameObject.AddComponent<Image>().color = isTurn ? theme.accent : new Color(1f, 1f, 1f, 0.12f);
-            UiFactory.Size(marker.gameObject, 16f, 16f);
-
-            var teamTag = BoardDisplay.TeamTag(state, player);
-            var name = player.Username
-                + (player.IsBot ? "  (bot)" : string.Empty)
-                + (player.GamePlayerId == state.You.GamePlayerId ? "  (you)" : string.Empty)
-                + (teamTag != null ? $"  ({teamTag})" : string.Empty)
-                + (player.Resigned ? "  (resigned)" : string.Empty);
-            var nameLabel = UiFactory.Label(heading.transform, name, 26, theme.textPrimary, TextAnchor.MiddleLeft, FontStyle.Bold);
-            nameLabel.name = "Name";
-            nameLabel.raycastTarget = false;
-            UiFactory.Flexible(nameLabel.gameObject, width: 1f);
-
-            // Each player has their own deck in a duel, so its size is theirs to show.
-            if (BoardDisplay.HasSeparateDecks(state))
-            {
-                var deck = UiFactory.Label(area, $"Deck {player.DeckCount}", 22, theme.textMuted, TextAnchor.MiddleLeft);
-                deck.raycastTarget = false;
-                UiFactory.Size(deck.gameObject, height: 26f);
-            }
-
-            var scores = UiFactory.Row(area, "Scores", 14f, TextAnchor.UpperLeft);
+            var scores = UiFactory.Row(area, "Scores", 6f, TextAnchor.MiddleLeft);
             scores.childForceExpandWidth = false;
             scores.childForceExpandHeight = false;
 
@@ -1517,7 +1499,7 @@ namespace MoodSwings.UI
             var outer = box.gameObject.AddComponent<Image>();
             outer.color = Color.Lerp(theme.panel, Color.white, 0.30f);
             outer.raycastTarget = false;
-            UiFactory.Size(box.gameObject, 112f, 84f);
+            UiFactory.Size(box.gameObject, 92f, 76f);
             var inner = UiFactory.Create("Inside", box);
             UiFactory.Stretch(inner);
             inner.offsetMin = new Vector2(3f, 3f);
@@ -1525,10 +1507,25 @@ namespace MoodSwings.UI
             var innerImage = inner.gameObject.AddComponent<Image>();
             innerImage.color = new Color(0.06f, 0.07f, 0.09f);
             innerImage.raycastTarget = false;
-            var points = UiFactory.Label(inner, player.TotalScore.ToString(), 56, theme.textPrimary, TextAnchor.MiddleCenter, FontStyle.Bold);
+            var points = UiFactory.Label(inner, player.TotalScore.ToString(), 52, theme.textPrimary, TextAnchor.MiddleCenter, FontStyle.Bold);
             points.name = "Points";
             points.raycastTarget = false;
             UiFactory.Stretch(points.rectTransform);
+
+            // Whoever went first wears a tag on the corner of their box.
+            if (state.Round.WentFirstGamePlayerId == player.GamePlayerId)
+            {
+                var pill = UiFactory.Create("First player", box);
+                pill.anchorMin = pill.anchorMax = pill.pivot = new Vector2(0f, 0f);
+                pill.sizeDelta = new Vector2(52f, 24f);
+                pill.anchoredPosition = new Vector2(-4f, -6f);
+                var pillImage = pill.gameObject.AddComponent<Image>();
+                pillImage.color = theme.accent;
+                pillImage.raycastTarget = false;
+                var pillLabel = UiFactory.Label(pill, "1ST", 18, theme.background, TextAnchor.MiddleCenter, FontStyle.Bold);
+                pillLabel.raycastTarget = false;
+                UiFactory.Stretch(pillLabel.rectTransform);
+            }
 
             // A trophy for each round won (and a dim one for each still to win), stacked beside the box.
             var trophyCount = state.Game.WinsNeeded > 0 ? Mathf.Max(state.Game.WinsNeeded, player.TotalWins) : player.TotalWins;
@@ -1537,13 +1534,13 @@ namespace MoodSwings.UI
                 var column = UiFactory.Create("Trophies", scores.transform);
                 var stack = column.gameObject.AddComponent<VerticalLayoutGroup>();
                 stack.spacing = 2f;
-                stack.childAlignment = TextAnchor.UpperCenter;
+                stack.childAlignment = TextAnchor.MiddleCenter;
                 stack.childControlWidth = true;
                 stack.childControlHeight = true;
                 stack.childForceExpandWidth = false;
                 stack.childForceExpandHeight = false;
-                var size = Mathf.Min(30f, 96f / trophyCount);
-                UiFactory.Size(column.gameObject, size + 4f);
+                var size = Mathf.Min(26f, 76f / trophyCount);
+                UiFactory.Size(column.gameObject, size + 2f);
                 for (var i = 0; i < trophyCount; i++)
                 {
                     var won = i < player.TotalWins;
@@ -1556,28 +1553,45 @@ namespace MoodSwings.UI
                 }
             }
 
-            var wentFirst = state.Round.WentFirstGamePlayerId == player.GamePlayerId;
-            var hurt = state.Round.HurtFeelingsGamePlayerId == player.GamePlayerId;
-            if (wentFirst || hurt)
-            {
-                var badges = UiFactory.Row(area, "Badges", 12f, TextAnchor.MiddleLeft);
-                badges.childForceExpandWidth = false;
-                if (wentFirst)
-                {
-                    var pill = UiFactory.Create("First player", badges.transform);
-                    var pillImage = pill.gameObject.AddComponent<Image>();
-                    pillImage.color = theme.accent;
-                    pillImage.raycastTarget = false;
-                    UiFactory.Size(pill.gameObject, 112f, 36f);
-                    var pillLabel = UiFactory.Label(pill, "1ST", 22, theme.background, TextAnchor.MiddleCenter, FontStyle.Bold);
-                    pillLabel.raycastTarget = false;
-                    UiFactory.Stretch(pillLabel.rectTransform);
-                }
+            // The name, beside the score.
+            var details = UiFactory.Create("Details", area);
+            var column2 = details.gameObject.AddComponent<VerticalLayoutGroup>();
+            column2.spacing = 2f;
+            column2.childAlignment = TextAnchor.MiddleLeft;
+            column2.childControlWidth = true;
+            column2.childControlHeight = true;
+            column2.childForceExpandWidth = true;
+            column2.childForceExpandHeight = false;
+            UiFactory.Flexible(details.gameObject, width: 1f);
 
-                if (hurt)
-                {
-                    CardView.CreateHurtFeelings(badges.transform, 50f, theme);
-                }
+            var heading = UiFactory.Row(details, "Who", 6f, TextAnchor.MiddleLeft);
+            heading.childForceExpandWidth = false;
+            var marker = UiFactory.Create("Turn", heading.transform);
+            marker.gameObject.AddComponent<Image>().color = isTurn ? theme.accent : new Color(1f, 1f, 1f, 0.12f);
+            UiFactory.Size(marker.gameObject, 14f, 14f);
+
+            var teamTag = BoardDisplay.TeamTag(state, player);
+            var name = player.Username
+                + (player.IsBot ? "  (bot)" : string.Empty)
+                + (player.GamePlayerId == state.You.GamePlayerId ? "  (you)" : string.Empty)
+                + (teamTag != null ? $"  ({teamTag})" : string.Empty)
+                + (player.Resigned ? "  (resigned)" : string.Empty);
+            var nameLabel = UiFactory.Label(heading.transform, name, 22, theme.textPrimary, TextAnchor.MiddleLeft, FontStyle.Bold);
+            nameLabel.name = "Name";
+            nameLabel.raycastTarget = false;
+            UiFactory.Flexible(nameLabel.gameObject, width: 1f);
+
+            // Each player has their own deck in a duel, so its size is theirs to show.
+            if (BoardDisplay.HasSeparateDecks(state))
+            {
+                var deck = UiFactory.Label(details, $"Deck {player.DeckCount}", 20, theme.textMuted, TextAnchor.MiddleLeft);
+                deck.raycastTarget = false;
+                UiFactory.Size(deck.gameObject, height: 24f);
+            }
+
+            if (state.Round.HurtFeelingsGamePlayerId == player.GamePlayerId)
+            {
+                CardView.CreateHurtFeelings(details, 34f, theme);
             }
         }
 
@@ -1623,7 +1637,10 @@ namespace MoodSwings.UI
                 row.childForceExpandHeight = false;
                 for (var i = 0; i < count; i++)
                 {
-                    CardView.CreateCardBack(holder, OpponentBackWidth, theme).name = "Hand card back";
+                    // Turned around, so it's the tops of the cards that peek out from the top of the screen.
+                    var back = CardView.CreateCardBack(holder, OpponentBackWidth, theme);
+                    back.name = "Hand card back";
+                    back.localRotation = Quaternion.Euler(0f, 0f, 180f);
                 }
 
                 return;
@@ -1658,12 +1675,12 @@ namespace MoodSwings.UI
             var piles = Place(_table, "Piles", Fraction(0f, 0f, 1f, PilePeek / TableHeight));
 
             // Tapping the deck lists every card it started with, if the table shares one deck.
-            BuildPile(theme, piles, "Deck", 0.81f, BoardDisplay.DeckCaption(state), null, onClick: OpenDeckList, dim: state.DeckCount == 0);
+            BuildPile(theme, piles, "Deck", 0.90f, BoardDisplay.DeckCaption(state), null, onClick: OpenDeckList, dim: state.DeckCount == 0);
 
             // An effect (Harmony, Grief...) can make a card in the pile playable: say so, since the pile shows only its top card.
             var top = state.DiscardPile.LastOrDefault();
             var playable = BoardDisplay.CanAct(state) && state.DiscardPile.Any(c => c.IsPlayable);
-            BuildPile(theme, piles, "Discard", 0.19f,
+            BuildPile(theme, piles, "Discard", 0.065f,
                 $"Discard {state.DiscardPile.Count}" + (playable ? "  -  play from it" : string.Empty), top,
                 onClick: OpenDiscardPile, highlight: playable);
         }
@@ -1821,7 +1838,7 @@ namespace MoodSwings.UI
         // screen, which leaves the room above it for the table.
         private void BuildHand(UiTheme theme, GameState state)
         {
-            var hand = Place(_table, "Hand", Fraction(0.22f, 0f, 0.78f, HandPeek / TableHeight));
+            var hand = Place(_table, "Hand", Fraction(0.27f, 0f, 0.79f, HandPeek / TableHeight));
             if (BoardDisplay.IsSpectator(state))
             {
                 var note = UiFactory.Label(hand, "You're watching this game.", 28, theme.textMuted);

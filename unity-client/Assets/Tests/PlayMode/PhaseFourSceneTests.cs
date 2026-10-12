@@ -309,8 +309,8 @@ namespace MoodSwings.Tests
             var server = new BoardServer();
             yield return OpenBoard(server, 406); // bshaftoe's turn
 
-            var marker = Child("Info bshaftoe").Find("Who").Find("Turn").GetComponent<Image>().color;
-            var other = Child("Info BotSage").Find("Who").Find("Turn").GetComponent<Image>().color;
+            var marker = Child("Info bshaftoe").Find("Details").Find("Who").Find("Turn").GetComponent<Image>().color;
+            var other = Child("Info BotSage").Find("Details").Find("Who").Find("Turn").GetComponent<Image>().color;
 
             Assert.AreNotEqual(other, marker);
         }
@@ -570,7 +570,7 @@ namespace MoodSwings.Tests
             Assert.Greater(Board().TableChildCount, 0);
 
             yield return PhaseFiveSceneTests.OpenMenu();
-            yield return PhaseTwoSceneTests.Click("<- Lobby");
+            yield return PhaseTwoSceneTests.Click("< Lobby");
             yield return MainSceneTests.WaitFor<PlayScreen>();
         }
     }
