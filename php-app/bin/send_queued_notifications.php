@@ -6,8 +6,10 @@ declare(strict_types=1);
 require dirname(__DIR__) . '/vendor/autoload.php';
 
 use MoodSwings\Discord\DiscordNotificationChannel;
+use MoodSwings\Notifications\FcmNotificationChannel;
 use MoodSwings\Notifications\NotificationService;
 use MoodSwings\Notifications\PushNotificationChannel;
+use MoodSwings\Repository\DevicePushTokenRepository;
 use MoodSwings\Repository\DiscordAccountRepository;
 use MoodSwings\Repository\NotificationCooldownRepository;
 use MoodSwings\Repository\NotificationPreferenceRepository;
@@ -28,6 +30,7 @@ $notifications = new NotificationService(
     [
         new PushNotificationChannel(new PushSubscriptionRepository()),
         new DiscordNotificationChannel(new DiscordAccountRepository()),
+        new FcmNotificationChannel(new DevicePushTokenRepository()),
     ]
 );
 
