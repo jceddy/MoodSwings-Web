@@ -149,6 +149,11 @@ namespace MoodSwings.Tests
                     return MainSceneTests.Reply(200, NotificationPreferencesJson);
                 }
 
+                if (path.StartsWith("/notifications/device-token"))
+                {
+                    return MainSceneTests.Reply(path.EndsWith("/remove") ? 200 : 201, "{\"status\":\"ok\"}");
+                }
+
                 if (path == "/discord/status")
                 {
                     return MainSceneTests.Reply(200, DiscordStatusJson);

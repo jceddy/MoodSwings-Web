@@ -421,6 +421,55 @@ game" below.
   whether Discord is linked. **This app does not receive push notifications yet** (that needs a native push service
   on the backend -- see the open decisions in `PLAN.md`), and Discord is linked from the website.
 
+## App icons
+
+`Assets/Icons/` holds the app icon: `icon-1024.png` (the Windows `.exe`, and the source of
+`MOOD.ico` for the installer) and the Android adaptive icon's two layers. They are a placeholder
+made by `tools/make_icons.py` (the MOOD wordmark in the UI's colors). To use real art, replace
+`icon-1024.png` and the two `android-*.png` layers (432x432, art inside the central 66%) and run
+`python tools/make_icons.py --from-icon` to rebuild the `.ico`. `AppIcons` applies them in both build
+scripts.
+
+## Production and dev servers
+
+The app talks to **production** (`https://moodswings.jceddy.com`) by default; a Development build and the Editor
+start on **dev** (`https://moodswings-dev.jceddy.com`) instead. A hidden switch changes it while running: on the
+login screen, **tap the version text at the bottom seven times in a row** (each within two seconds of the last).
+The app signs out of the server it was on (taking this device's push token back first), forgets what it had
+fetched, points at the other server, and stays on the login screen. While on dev, a red **DEV SERVER** tag shows in
+the top-right corner of every screen. The choice is remembered on the device. Sessions are per server and never
+carried across. Both servers share one Firebase project and one package id, so push works on either.
+
+## Push notifications
+
+The server side is built (`php-app`: `POST /notifications/device-token`, `FcmNotificationChannel`; see
+"Native push (FCM)" in `php-app/README.md`), and so is the app's side of the contract: `PushFlow`
+registers the device's token for whoever signs in, takes it back on sign-out, follows a refreshed token,
+honours a per-device switch in Settings (shown only where push works), and opens the game, the friends
+list or the achievements when the notification that launched the app points at one (`PushRoute`).
+
+On Android the token comes from Firebase Cloud Messaging: `AndroidPushTokenProvider` asks for the
+notification permission (Android 13+), then `Assets/Plugins/Android/MoodPush.java` fetches the token. The
+Firebase project's settings are read from `Assets/Resources/Firebase/google-services.json` (project
+`mood-bee14`, package `com.jceddy.moodswings`; they identify the project and aren't secrets, but restrict the API
+key to the package and signing certificate in the Google Cloud console). Firebase is started from those values
+rather than with the google-services Gradle plugin, so the Gradle setup is only the messaging dependency in
+`Assets/Plugins/Android/mainTemplate.gradle`, `android.useAndroidX` in `gradleTemplate.properties`, and
+`MoodPush.androidlib` (the `POST_NOTIFICATIONS` permission, with its own `build.gradle` because the generated
+one has no namespace). Everywhere else push is simply not offered.
+
+A notification tapped while the app is in the background opens it with the notification's link as an intent
+extra; the app reads it on launch and when it regains focus (`PushRouter`).
+
+**Server steps still needed** (no app change): in the Firebase console, Project settings > Service accounts >
+**Generate new private key**; put that JSON on the server outside the web root, set `FCM_SERVICE_ACCOUNT_FILE` to
+its path in `php-app`'s `.env`, and apply migration `0451`. Without it the app registers its token but the server
+has nothing to send with.
+
+**Verified:** the build includes Firebase Messaging, the bridge, the permission and the package id, and the flow
+around the token is tested. **Not yet verified on a device:** the token request, the permission prompt and a
+real notification arriving and opening the right screen -- that needs a phone and the server key above.
+
 ## Tests
 
 - **EditMode** (Window > General > Test Runner): `ApiClient`, `AuthFlow`,
@@ -476,6 +525,12 @@ Hub. It bundles its own JDK/NDK/SDK.
   so the standard x86_64 emulator can no longer run these builds; test on a
   physical ARM64 device. A first build takes a long time; later ones reuse
   the IL2CPP cache. Running it saves those settings into `ProjectSettings`.
+- **Release signing:** the build is a release build signed with the keystore in
+  `~/.mood/` (`mood-release.jks`, with its passwords in `signing.properties`), or in the
+  `MOOD_KEYSTORE`, `MOOD_KEYSTORE_PASS`, `MOOD_KEY_ALIAS` environment variables. The keystore is
+  never in the repo. **Back it up**: an update only installs over an app signed with the same key,
+  and a lost key means a new app. Without one the build falls back to a development, debug-signed
+  APK and says so. The package id is pinned to `com.jceddy.moodswings`.
 - **Run the Keystore tests on a device:** `ANDROID_SERIAL=<device> Unity.exe
   -batchmode -projectPath . -buildTarget Android -runTests -testPlatform
   Android -testFilter MoodSwings.Tests.AndroidKeystoreTests -testResults

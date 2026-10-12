@@ -130,6 +130,11 @@ namespace MoodSwings.UI
             UiFactory.SectionTitle(_list, theme, "On this device");
             AddDeviceRow(theme, "Sound effects", "Chimes for your turn, cards played, and the end of a round.",
                 AppServices.Device.SoundOn, on => AppServices.Device.SoundOn = on);
+            if (AppServices.Push.IsAvailable)
+            {
+                AddPushRow(theme);
+            }
+
             if (Application.isMobilePlatform)
             {
                 AddDeviceRow(theme, "Vibration", "A short buzz for your turn and for questions that need an answer.",
@@ -171,6 +176,45 @@ namespace MoodSwings.UI
                 + "These are sent as push notifications on the website and as Discord messages (link Discord there). This app can't receive push notifications yet.",
                 24, theme.textMuted, TextAnchor.UpperLeft);
             line.gameObject.name = "Notifications note";
+        }
+
+        // Where the device can get push: a switch for this device alone (the account's own switches above decide what's sent).
+        private void AddPushRow(UiTheme theme)
+        {
+            var panel = NewPanel(theme);
+            var toggle = UiFactory.Toggle(panel.transform, "Push notifications", theme, AppServices.Push.Enabled);
+            toggle.gameObject.name = "Push notifications";
+            AddDescription(theme, panel.transform, "Alerts on this device for the things you asked to be told about above.");
+            toggle.onValueChanged.AddListener(on => OnPushToggled(toggle, on));
+        }
+
+        private async void OnPushToggled(Toggle toggle, bool on)
+        {
+            try
+            {
+                toggle.interactable = false;
+                var result = await AppServices.Push.SetEnabledAsync(on);
+                if (this == null)
+                {
+                    return;
+                }
+
+                toggle.interactable = true;
+                if (result.Ok)
+                {
+                    SetStatus("Saved.", isError: false);
+                }
+                else
+                {
+                    toggle.SetIsOnWithoutNotify(!on);
+                    AppServices.Device.PushOn = !on;
+                    SetStatus(result.Message, isError: true);
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e);
+            }
         }
 
         private async void OnNotificationToggled(NotificationSwitch toggle, Toggle box, bool value)

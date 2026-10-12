@@ -50,7 +50,7 @@ namespace MoodSwings.Tests
             return request => request.Url.EndsWith("/VERSION") ? Reply(200, "1.58.5\n") : api(request);
         }
 
-        internal static IEnumerator Launch(Func<HttpRequest, HttpResponse> handler, string rememberedSession = null)
+        internal static IEnumerator Launch(Func<HttpRequest, HttpResponse> handler, string rememberedSession = null, IPushTokenProvider pushProvider = null)
         {
             ScreenshotHelper.UseFullHdScreen();
             yield return null;
@@ -63,7 +63,7 @@ namespace MoodSwings.Tests
             }
 
             var api = new ApiClient(new ApiConfig("https://example.test", "MoodSwings/test"), new ScriptedTransport(Site(handler)), store);
-            AppServices.Override(api, null, store, disk);
+            AppServices.Override(api, null, store, disk, pushProvider);
 
             yield return SceneManager.LoadSceneAsync("Main");
             yield return null;

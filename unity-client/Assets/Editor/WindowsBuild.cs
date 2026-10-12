@@ -26,6 +26,7 @@ namespace MoodSwings.Editor
             // What the window and the folder under %AppData% are called, instead of the project's folder name.
             PlayerSettings.productName = "MOOD";
             PlayerSettings.companyName = "MoodSwings";
+            AppIcons.Apply();
             PlayerSettings.SetScriptingBackend(NamedBuildTarget.Standalone, ScriptingImplementation.Mono2x);
 
             if (Directory.Exists(OutputFolder))

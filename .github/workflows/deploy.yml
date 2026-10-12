@@ -146,6 +146,10 @@ jobs:
           VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
           VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
           VAPID_SUBJECT: ${{ secrets.VAPID_SUBJECT }}
+          # The path, on the server, of the Firebase service-account key file (native push; see "Native push
+          # (FCM)" in php-app/README.md). The key file itself is put there by hand, outside the web folder, and is
+          # never in the repo. One Firebase project serves dev and prod, so both deploys can share it.
+          FCM_SERVICE_ACCOUNT_FILE: ${{ secrets.FCM_SERVICE_ACCOUNT_FILE }}
           DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
           DISCORD_CLIENT_SECRET: ${{ secrets.DISCORD_CLIENT_SECRET }}
           DISCORD_PUBLIC_KEY: ${{ secrets.DISCORD_PUBLIC_KEY }}
@@ -247,6 +251,7 @@ jobs:
           write_env_var VAPID_PUBLIC_KEY "$VAPID_PUBLIC_KEY"
           write_env_var VAPID_PRIVATE_KEY "$VAPID_PRIVATE_KEY"
           write_env_var VAPID_SUBJECT "$VAPID_SUBJECT"
+          write_env_var FCM_SERVICE_ACCOUNT_FILE "$FCM_SERVICE_ACCOUNT_FILE"
           write_env_var DISCORD_CLIENT_ID "$DISCORD_CLIENT_ID"
           write_env_var DISCORD_CLIENT_SECRET "$DISCORD_CLIENT_SECRET"
           write_env_var DISCORD_PUBLIC_KEY "$DISCORD_PUBLIC_KEY"

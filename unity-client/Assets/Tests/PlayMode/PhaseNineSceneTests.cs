@@ -1200,5 +1200,198 @@ namespace MoodSwings.Tests
             Assert.IsFalse(Texts().Contains("Display"));
             Assert.IsFalse(Texts().Contains("Round / Score / Players position"));
         }
+
+        // --- push notifications --------------------------------------------------------------------------
+
+        private sealed class PlayPushProvider : IPushTokenProvider
+        {
+            public string Token = "fcm-play-token";
+
+            public string LaunchUrl;
+
+            public bool IsAvailable => true;
+
+            public string Platform => "android";
+
+            public event System.Action<string> TokenRefreshed
+            {
+                add { }
+                remove { }
+            }
+
+            public System.Threading.Tasks.Task<string> GetTokenAsync() => System.Threading.Tasks.Task.FromResult(Token);
+
+            public string TakeLaunchUrl()
+            {
+                var url = LaunchUrl;
+                LaunchUrl = null;
+                return url;
+            }
+        }
+
+        private static IEnumerator HomeWithPush(PhaseFiveSceneTests.PlayServer server, PlayPushProvider provider)
+        {
+            yield return MainSceneTests.Launch(server.Handle, rememberedSession: "tok", pushProvider: provider);
+            yield return MainSceneTests.WaitFor<HomeScreen>();
+            yield return PhaseTwoSceneTests.Frames(8);
+        }
+
+        [UnityTest]
+        public IEnumerator Push_OnHome_TheDeviceTokenIsRegistered()
+        {
+            var server = Serve();
+            yield return HomeWithPush(server, new PlayPushProvider());
+
+            var post = server.Posts("/notifications/device-token").Single();
+            Assert.AreEqual("fcm-play-token", (string)post["token"]);
+            Assert.AreEqual("android", (string)post["platform"]);
+        }
+
+        [UnityTest]
+        public IEnumerator Push_WithoutAProvider_NothingIsRegistered()
+        {
+            var server = Serve();
+            yield return Home(server);
+
+            Assert.AreEqual(0, server.Posts("/notifications/device-token").Count());
+            Assert.IsNull(Object.FindObjectsByType<Toggle>(FindObjectsInactive.Exclude).FirstOrDefault(t => t.name == "Push notifications"));
+        }
+
+        [UnityTest]
+        public IEnumerator Push_ATappedNotification_OpensItsGame()
+        {
+            var server = Serve();
+            server.StateFor = id => PhaseFiveSceneTests.Load(405);
+            yield return MainSceneTests.Launch(server.Handle, rememberedSession: "tok", pushProvider: new PlayPushProvider { LaunchUrl = "/game/?id=406" });
+            yield return MainSceneTests.WaitFor<BoardScreen>();
+            yield return PhaseTwoSceneTests.Frames(6);
+
+            Assert.IsTrue(server.Calls.Any(c => c.StartsWith("GET /games/state?game_id=406")));
+        }
+
+        [UnityTest]
+        public IEnumerator Push_ATappedFriendRequestNotification_OpensFriends()
+        {
+            var server = Serve();
+            yield return MainSceneTests.Launch(server.Handle, rememberedSession: "tok", pushProvider: new PlayPushProvider { LaunchUrl = "/game/?open_friends=1" });
+            yield return MainSceneTests.WaitFor<FriendsScreen>();
+        }
+
+        [UnityTest]
+        public IEnumerator Push_LoggingOut_TakesTheTokenBackFirst()
+        {
+            var server = Serve();
+            yield return HomeWithPush(server, new PlayPushProvider());
+
+            yield return PhaseTwoSceneTests.Click("Log out");
+            yield return PhaseTwoSceneTests.Frames(8);
+
+            Assert.AreEqual("fcm-play-token", (string)server.Posts("/notifications/device-token/remove").Single()["token"]);
+            var calls = server.Calls;
+            Assert.Less(calls.FindIndex(c => c.StartsWith("POST /notifications/device-token/remove")), calls.FindIndex(c => c.StartsWith("POST /logout")),
+                "while the session still works");
+        }
+
+        [UnityTest]
+        public IEnumerator Push_TheDeviceSwitch_IsInSettings_AndRemovesTheTokenWhenOff()
+        {
+            var server = Serve();
+            yield return HomeWithPush(server, new PlayPushProvider());
+            yield return PhaseTwoSceneTests.Click("Settings");
+            yield return MainSceneTests.WaitFor<SettingsScreen>();
+            yield return PhaseTwoSceneTests.Frames(8);
+
+            var toggle = Object.FindObjectsByType<Toggle>(FindObjectsInactive.Exclude).First(t => t.name == "Push notifications");
+            Assert.IsTrue(toggle.isOn);
+
+            toggle.isOn = false;
+            yield return PhaseTwoSceneTests.Frames(8);
+            Assert.AreEqual(1, server.Posts("/notifications/device-token/remove").Count());
+            Assert.IsFalse(AppServices.Device.PushOn);
+
+            toggle.isOn = true;
+            yield return PhaseTwoSceneTests.Frames(8);
+            Assert.AreEqual(2, server.Posts("/notifications/device-token").Count(), "registered again");
+            Assert.IsTrue(AppServices.Device.PushOn);
+        }
+
+        // --- the hidden dev/prod switch ------------------------------------------------------------------
+
+        private static IEnumerator LoginScreenUp(PhaseFiveSceneTests.PlayServer server)
+        {
+            yield return MainSceneTests.Launch(server.Handle);
+            yield return MainSceneTests.WaitFor<LoginScreen>();
+            yield return PhaseTwoSceneTests.Frames(6);
+        }
+
+        private static void TapVersion(int times)
+        {
+            var screen = MainSceneTests.Screen<LoginScreen>();
+            for (var i = 0; i < times; i++)
+            {
+                screen.OnVersionTapped();
+            }
+        }
+
+        private static GameObject Banner() =>
+            Object.FindObjectsByType<Transform>(FindObjectsInactive.Include).First(t => t.name == "Server banner").gameObject;
+
+        [UnityTest]
+        public IEnumerator ServerSwitch_SevenTapsOnTheVersionText_PutTheAppOnTheDevServer_AndBackAgain()
+        {
+            var server = Serve();
+            yield return LoginScreenUp(server);
+            Assert.IsFalse(Banner().activeSelf, "no tag off the dev server");
+
+            TapVersion(LoginScreen.VersionTapsToSwitch - 1);
+            yield return PhaseTwoSceneTests.Frames(4);
+            Assert.IsFalse(AppServices.IsDevServer, "six taps aren't enough");
+
+            TapVersion(1);
+            yield return PhaseTwoSceneTests.Frames(8);
+            Assert.IsTrue(AppServices.IsDevServer);
+            Assert.AreEqual(MoodSwings.Networking.ApiConfig.DevSiteRoot, AppServices.Api.Config.SiteRoot);
+            Assert.IsTrue(Banner().activeSelf, "a tag says which server this is");
+            Assert.IsTrue(Texts().Contains("Dev server mode is on."), string.Join(" | ", Texts()));
+            Assert.IsInstanceOf<LoginScreen>(Object.FindAnyObjectByType<ScreenRouter>().Current, "still at the login screen");
+            ScreenshotHelper.Capture("login-dev-server");
+
+            TapVersion(LoginScreen.VersionTapsToSwitch);
+            yield return PhaseTwoSceneTests.Frames(8);
+            Assert.IsFalse(AppServices.IsDevServer);
+            Assert.AreEqual(MoodSwings.Networking.ApiConfig.ProdSiteRoot, AppServices.Api.Config.SiteRoot);
+            Assert.IsFalse(Banner().activeSelf);
+            Assert.IsTrue(Texts().Contains("Back on the production server."));
+        }
+
+        [UnityTest]
+        public IEnumerator ServerSwitch_TapsSpreadOutOverTime_DontAddUp()
+        {
+            var server = Serve();
+            yield return LoginScreenUp(server);
+
+            TapVersion(LoginScreen.VersionTapsToSwitch - 1);
+            yield return new WaitForSecondsRealtime(2.2f);
+            TapVersion(1);
+            yield return PhaseTwoSceneTests.Frames(4);
+
+            Assert.IsFalse(AppServices.IsDevServer, "the count started over after the pause");
+        }
+
+        [UnityTest]
+        public IEnumerator ServerSwitch_TappingTheRealFooter_Counts()
+        {
+            var server = Serve();
+            yield return LoginScreenUp(server);
+
+            var footer = Object.FindObjectsByType<Button>(FindObjectsInactive.Exclude).First(b => b.name == "Footer");
+            for (var i = 0; i < LoginScreen.VersionTapsToSwitch; i++)
+            {
+                footer.onClick.Invoke();
+            }
+
+            yield return PhaseTwoSceneTests.Frames(8);
+            Assert.IsTrue(AppServices.IsDevServer);
+        }
     }
 }

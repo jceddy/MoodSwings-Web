@@ -158,6 +158,13 @@ skips it, so a broken deploy is never announced as if it succeeded.
      `GET /notifications/vapid-public-key` returns an empty key and the
      frontend shows "Push notifications are not configured on the server
      yet."
+   - `FCM_SERVICE_ACCOUNT_FILE` — for native push to the Unity app: the
+     path, on the server, of a Firebase service-account JSON key file kept
+     outside the web folder (put the file there by hand; it's never in the
+     repo). The deploy workflows write the path into the generated `.env`.
+     Shared by dev and production (one Firebase project serves both).
+     Optional; without it native push is off. See "Native push (FCM)" in
+     `php-app/README.md`.
    - `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `DISCORD_PUBLIC_KEY`,
      `DISCORD_BOT_TOKEN` — for Discord account linking/notifications (issue
      #232), **production's own Discord Application** (dev gets a second,
