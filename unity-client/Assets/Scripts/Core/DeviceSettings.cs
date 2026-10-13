@@ -10,6 +10,8 @@ namespace MoodSwings.Core
     {
         private const string SoundKey = "device.sound";
         private const string VibrationKey = "device.vibration";
+        private const string PushKey = "device.push";
+        private const string DevServerKey = "device.devServer";
         private const string HideLockedKey = "device.achievements.hideLocked";
         private const string SeenAtKey = "device.achievements.seenAt";
 
@@ -30,6 +32,37 @@ namespace MoodSwings.Core
         {
             get => Read(VibrationKey);
             set => _store.SetString(VibrationKey, value ? "1" : "0");
+        }
+
+        /// <summary>
+        /// Which server this device was switched to by the hidden tap switch on the login screen: true for the dev
+        /// server, false for production, null if it never was (the build's own default applies).
+        /// </summary>
+        public bool? DevServerChoice
+        {
+            get
+            {
+                var stored = _store.GetString(DevServerKey);
+                return stored == null ? (bool?)null : stored == "1";
+            }
+            set
+            {
+                if (value.HasValue)
+                {
+                    _store.SetString(DevServerKey, value.Value ? "1" : "0");
+                }
+                else
+                {
+                    _store.Delete(DevServerKey);
+                }
+            }
+        }
+
+        /// <summary>Push notifications to this device: on until switched off (where the device can get them at all).</summary>
+        public bool PushOn
+        {
+            get => Read(PushKey);
+            set => _store.SetString(PushKey, value ? "1" : "0");
         }
 
         /// <summary>Show only the achievements you've unlocked (off until switched on).</summary>

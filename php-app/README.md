@@ -118,6 +118,8 @@ HTML maintenance page) — see "Maintenance mode" below.
 | GET    | `/notifications/vapid-public-key` | —                                                | No auth required -- the VAPID public key isn't secret (that's the point of asymmetric VAPID auth), same reasoning as `/cards/catalog` being public. Returns `{"public_key"}` (empty string if the server has none configured). See "Browser push notifications" below. |
 | POST   | `/notifications/subscribe` | `{"endpoint", "keys": {"p256dh", "auth"}}`                | Requires auth. Stores (or updates, if the endpoint's already known) a `PushSubscription` for the current user. `400` if `endpoint`/`keys.p256dh`/`keys.auth` are missing. See "Browser push notifications" below. |
 | POST   | `/notifications/unsubscribe` | `{"endpoint"}`                                          | Requires auth. Removes the current user's subscription for that endpoint, if any (silently a no-op otherwise). |
+| POST   | `/notifications/device-token` | `{"token", "platform"}` | Requires auth. Registers a native app install's FCM registration token (`platform` is `android` or `ios`; token up to 512 characters) so `FcmNotificationChannel` can push to it; re-registering the same token moves it to the caller. `400` for a missing/oversized token or an unknown platform. See "Native push (FCM)" below. |
+| POST   | `/notifications/device-token/remove` | `{"token"}` | Requires auth. Removes the caller's own registration of that token (the app calls it on sign-out); a no-op if it isn't theirs or isn't there. |
 | GET    | `/notifications/preferences` | —                                                        | Requires auth. Returns `{"preferences": {"notify_your_turn", "notify_friend_request", "notify_game_finished", "notify_chat_message", "notify_timeout_warning", "disable_cooldown"}}` -- the five `notify_*` toggles default `true`, `disable_cooldown` defaults `false`, for a user who's never changed them. |
 | POST   | `/notifications/preferences` | `{"notify_your_turn"?, "notify_friend_request"?, "notify_game_finished"?, "notify_chat_message"?, "notify_timeout_warning"?, "disable_cooldown"?}` | Requires auth. Upserts the current user's preferences (each `notify_*` field defaults to `true` if omitted, `disable_cooldown` defaults to `false`); returns the saved `{"preferences"}`. See "Browser push notifications" below for what `disable_cooldown` does, "In-game chat" above for `notify_chat_message`, "Turn and decision timeouts" above for `notify_timeout_warning`. |
 | GET    | `/discord/status` | —                                                             | Requires auth. Returns `{"linked", "discord_username"}` (the latter `null` if unlinked). See "Discord" below. |
@@ -7609,6 +7611,36 @@ the sender, per the Web Push protocol. Generate a key pair with the
 frontend; if the server has no keys configured, `PushNotificationChannel`
 silently no-ops every send rather than erroring.
 
+### Native push (FCM)
+
+The Unity client's Android installs get the same notifications as browsers and Discord, through a third
+`NotificationChannel`: `Notifications\FcmNotificationChannel`, wired into `NotificationService` beside
+`PushNotificationChannel` and `DiscordNotificationChannel`, so the "notify me when..." preferences, the five-minute
+cooldown and the queue apply to it unchanged.
+
+**Storage** (migration `0451`): `device_push_tokens` -- one row per install (`user_id`, `platform`, the FCM
+`token`, and `token_hash`, a SHA-256 that carries the uniqueness constraint like `push_subscriptions.endpoint_hash`).
+`POST /notifications/device-token` upserts on the hash, so an install that signs in as someone else moves to them
+instead of duplicating; `POST /notifications/device-token/remove` (sign-out) deletes only the caller's own row.
+
+**Sending**: for each of a user's tokens, `POST https://fcm.googleapis.com/v1/projects/{project}/messages:send` with the
+payload's title/body as the notification, `url` and `tag` as data (the app routes on `url`; a repeated `tag`
+replaces the earlier notification on the device), and HIGH Android priority. A token FCM reports `UNREGISTERED` or
+`NOT_FOUND` is deleted; any other failure is logged to `notification-errors.log` and never thrown. `INVALID_ARGUMENT`
+is deliberately not treated as a dead token, since it also means a malformed message.
+
+**Auth**: FCM's HTTP v1 API wants an OAuth2 access token, which `FcmAccessTokenProvider` mints from a Firebase
+service-account JSON key (a short-lived RS256-signed JWT exchanged at `oauth2.googleapis.com/token`, with
+`ext-openssl` and Guzzle -- no new dependency). The token is cached in a file in the system temp directory until two
+minutes before it expires, so separate requests don't each exchange a JWT.
+
+**Config**: `FCM_SERVICE_ACCOUNT_FILE` -- the path of the key file on the server, kept outside the web folder and
+never in the repo (the deploy workflows write it into `.env` from the `FCM_SERVICE_ACCOUNT_FILE` repository
+secret, which holds that path) -- and, optionally, `FCM_PROJECT_ID` (otherwise the key's own `project_id`).
+`FCM_SERVICE_ACCOUNT_JSON` (the key's JSON text on one line) is accepted instead where a file isn't practical. The key can send to every app in its Firebase project,
+so dev and prod can share one project and one key. With neither, or for a user with no registered device, the channel is a
+no-op (`false`), like the others.
+
 ### Discord (issue #232)
 
 Three parts: account linking, the Interactions Endpoint plumbing, and
@@ -13891,6 +13923,32 @@ than a parallel bespoke system:
   is always even, so an odd margin needs a swing on the opponent's side.
   Discarding Chivalry instead is 38-39. An exhaustive search found only that
   discard winning; playing Stubbornness first reaches the same board.
+
+- **20th puzzle, "Hope Springs Eternal"** (reported live: a Hope puzzle where
+  bouncing Hope and replaying it gets an extra play), hard, `win_game`.
+  Both sides have two round wins and the opponent went first (a tie is
+  theirs). The opponent has Apathy (4), Patience (5 -- 1 only if its owner
+  played it this round), Vulnerability (1 -- 7 only if a card was put into the
+  discard pile this round), Bashfulness (6) and Chaos (6) in play: 22 against
+  nothing. The solver has Hope in play, holds Scorn, Fear, Stubbornness and
+  Indifference, and has two plays (Hope's, seeded through
+  `extra_play_source_card_id`). Every mood played after Scorn is a chance to
+  suppress a mood of the same color, and Fear (blue) and a replayed Hope
+  (green) are plays that cost nothing. The one winning line: Scorn
+  suppressing the Patience; Fear bouncing Hope (its own play already spent)
+  and suppressing Bashfulness; Hope again, suppressing Vulnerability, which
+  grants a fresh play; Stubbornness suppressing Chaos. Scorn 2 + Stubbornness
+  3 = 5 against the Apathy's 4. Skipping the Hope bounce leaves the
+  Vulnerability: 5-5, a tie, and so does suppressing the Apathy rather than
+  the Patience first. Indifference (4, blue) looks better than Stubbornness
+  but suppresses nothing new. An exhaustive search (70 states: every Scorn
+  target, Fear's bounce choice and Scorn reaction on every play) found
+  exactly one winning line. One small engine fix came with it: a seeded
+  extra play whose source is Hope (`extra_play_source_card_id`) is now Hope's
+  real turn-start grant (`requiresSourceInPlay`), lost if Hope leaves play
+  before the play is used, rather than a banked play that outlives its
+  source -- without it bouncing an unspent Hope would keep the play and gain
+  another.
 
 ### Duel: separate per-player decks
 

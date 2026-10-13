@@ -1,0 +1,16 @@
+// Holds only the manifest entry for the notification permission. Written out (rather than left for Unity to
+// generate) because the generated one has no namespace, which the Android Gradle Plugin now requires.
+apply plugin: 'com.android.library'
+
+android {
+    namespace "com.jceddy.moodswings.push"
+    compileSdk 36
+
+    defaultConfig {
+        minSdk 26
+    }
+
+    lint {
+        abortOnError false
+    }
+}

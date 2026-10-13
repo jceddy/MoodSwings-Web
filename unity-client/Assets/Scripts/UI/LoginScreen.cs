@@ -27,6 +27,8 @@ namespace MoodSwings.UI
         private Button _resend;
         private Text _verifyStatus;
         private Text _footer;
+        private int _versionTaps;
+        private float _lastVersionTap;
         private bool _built;
         private bool _busy;
 
@@ -99,6 +101,12 @@ namespace MoodSwings.UI
             _footer.fontSize = 22;
             _footer.color = theme.textMuted;
             _footer.alignment = TextAnchor.MiddleCenter;
+
+            // The hidden switch between the production and dev servers: tap the version text several times.
+            var versionTap = footer.gameObject.AddComponent<Button>();
+            versionTap.targetGraphic = _footer;
+            versionTap.transition = Selectable.Transition.None;
+            versionTap.onClick.AddListener(OnVersionTapped);
 
             _username.onEndEdit.AddListener(_ =>
             {
@@ -265,6 +273,46 @@ namespace MoodSwings.UI
                     : result.Failure == ApiFailureKind.Network
                         ? "Can't reach the server. Check your connection and try again."
                         : result.Message ?? "Couldn't send the email. Please try again.");
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e);
+            }
+        }
+
+        /// <summary>Taps on the version text needed, in a row, to switch servers.</summary>
+        public const int VersionTapsToSwitch = 7;
+
+        private const float VersionTapWindowSeconds = 2f;
+
+        /// <summary>One tap on the version text; enough of them in a row switch between production and dev.</summary>
+        public void OnVersionTapped()
+        {
+            _versionTaps = Time.unscaledTime - _lastVersionTap > VersionTapWindowSeconds ? 1 : _versionTaps + 1;
+            _lastVersionTap = Time.unscaledTime;
+            if (_versionTaps < VersionTapsToSwitch)
+            {
+                return;
+            }
+
+            _versionTaps = 0;
+            SwitchServer();
+        }
+
+        private async void SwitchServer()
+        {
+            try
+            {
+                var toDev = !AppServices.IsDevServer;
+                await AppServices.SetDevServerAsync(toDev);
+                if (this == null)
+                {
+                    return;
+                }
+
+                _password.text = string.Empty;
+                _error.text = toDev ? "Dev server mode is on." : "Back on the production server.";
+                ShowVersions();
             }
             catch (Exception e)
             {

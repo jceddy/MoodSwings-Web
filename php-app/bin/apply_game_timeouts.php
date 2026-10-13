@@ -11,8 +11,10 @@ use MoodSwings\Friends\FriendshipService;
 use MoodSwings\Game\BoardStateRepository;
 use MoodSwings\Game\GameService;
 use MoodSwings\Game\ReplayStateBuilder;
+use MoodSwings\Notifications\FcmNotificationChannel;
 use MoodSwings\Notifications\NotificationService;
 use MoodSwings\Notifications\PushNotificationChannel;
+use MoodSwings\Repository\DevicePushTokenRepository;
 use MoodSwings\Repository\DiscordAccountRepository;
 use MoodSwings\Repository\FriendshipRepository;
 use MoodSwings\Repository\NotificationCooldownRepository;
@@ -58,6 +60,7 @@ $notifications = new NotificationService(
     [
         new PushNotificationChannel(new PushSubscriptionRepository()),
         new DiscordNotificationChannel(new DiscordAccountRepository()),
+        new FcmNotificationChannel(new DevicePushTokenRepository()),
     ]
 );
 

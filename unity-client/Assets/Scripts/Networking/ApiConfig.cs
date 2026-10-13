@@ -10,9 +10,23 @@ namespace MoodSwings.Networking
     {
         public const string DevSiteRoot = "https://moodswings-dev.jceddy.com";
 
+        public const string ProdSiteRoot = "https://moodswings.jceddy.com";
+
         public static ApiConfig Dev => new ApiConfig(DevSiteRoot);
 
-        public string SiteRoot { get; }
+        public static ApiConfig Prod => new ApiConfig(ProdSiteRoot);
+
+        /// <summary>
+        /// Where requests go. Changeable (see <see cref="UseSiteRoot"/>) because the app can be switched between the
+        /// dev and production servers while it runs; everything reads it at the moment of each request.
+        /// </summary>
+        public string SiteRoot { get; private set; }
+
+        /// <summary>True when pointed at the development server.</summary>
+        public bool IsDevServer => SiteRoot == DevSiteRoot;
+
+        /// <summary>Points the client at another server. Sessions don't carry over, so the caller signs out first.</summary>
+        public void UseSiteRoot(string siteRoot) => SiteRoot = siteRoot.TrimEnd('/');
 
         public string ApiBase => SiteRoot + "/app";
 

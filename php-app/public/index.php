@@ -43,8 +43,10 @@ use MoodSwings\Matchmaking\NotAuthorizedToCancelListingException;
 use MoodSwings\Matchmaking\NotDiscoverableException;
 use MoodSwings\Matchmaking\OpenGameListingNotFoundException;
 use MoodSwings\Matchmaking\WeeklySealedPoolQueueService;
+use MoodSwings\Notifications\FcmNotificationChannel;
 use MoodSwings\Notifications\NotificationService;
 use MoodSwings\Notifications\PushNotificationChannel;
+use MoodSwings\Repository\DevicePushTokenRepository;
 use MoodSwings\Repository\DiscordAccountRepository;
 use MoodSwings\Repository\DiscordOAuthStateRepository;
 use MoodSwings\Repository\EmailVerificationRepository;
@@ -553,6 +555,7 @@ if ($path === '/me' && $method === 'GET') {
 }
 
 $pushSubscriptions = new PushSubscriptionRepository();
+$devicePushTokens = new DevicePushTokenRepository();
 $notificationPreferences = new NotificationPreferenceRepository();
 $queuedNotifications = new QueuedNotificationRepository();
 $notificationCooldowns = new NotificationCooldownRepository();
@@ -566,6 +569,7 @@ $discordAccounts = new DiscordAccountRepository();
 $notifications = new NotificationService($notificationPreferences, $queuedNotifications, $notificationCooldowns, [
     new PushNotificationChannel($pushSubscriptions),
     new DiscordNotificationChannel($discordAccounts),
+    new FcmNotificationChannel($devicePushTokens),
 ]);
 $achievements = new AchievementService($notifications);
 
@@ -683,6 +687,31 @@ if ($path === '/notifications/unsubscribe' && $method === 'POST') {
 
     $pushSubscriptions->deleteByEndpoint((int) $currentUser['id'], (string) ($body['endpoint'] ?? ''));
     respond(200, ['status' => 'ok', 'message' => 'Unsubscribed from push notifications.']);
+}
+
+// Native apps (the Unity client) register the FCM token they were handed, so notifications reach the device
+// itself -- see FcmNotificationChannel. A token belongs to whoever registered it last (a different user
+// signing in on the same install moves it); the app removes it again when its user signs out.
+if ($path === '/notifications/device-token' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $token = trim((string) ($body['token'] ?? ''));
+    $platform = (string) ($body['platform'] ?? '');
+
+    if ($token === '' || strlen($token) > 512 || !in_array($platform, DevicePushTokenRepository::PLATFORMS, true)) {
+        respond(400, ['status' => 'error', 'message' => 'A device token (up to 512 characters) and a platform of android or ios are required.']);
+    }
+
+    $devicePushTokens->save((int) $currentUser['id'], $platform, $token);
+    respond(201, ['status' => 'ok', 'message' => 'Device registered for push notifications.']);
+}
+
+if ($path === '/notifications/device-token/remove' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    $devicePushTokens->deleteByToken((int) $currentUser['id'], (string) ($body['token'] ?? ''));
+    respond(200, ['status' => 'ok', 'message' => 'Device removed from push notifications.']);
 }
 
 if ($path === '/notifications/preferences' && $method === 'GET') {

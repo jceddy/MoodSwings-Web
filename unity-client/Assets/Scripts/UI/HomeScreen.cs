@@ -40,6 +40,7 @@ namespace MoodSwings.UI
             AppServices.Stats.Changed += UpdateBadges;
             UpdateBadges();
             RefreshBadgeData();
+            SetUpPush();
         }
 
         public override void OnHidden()
@@ -117,6 +118,29 @@ namespace MoodSwings.UI
             _achievementsLabel.text = unseen > 0 ? $"Achievements  ({unseen} new)" : "Achievements";
         }
 
+        /// <summary>
+        /// Gives the server this device's push token, then opens whatever the notification that launched the app pointed
+        /// at (a game, the friends list, the achievements). Quietly does nothing where push isn't available.
+        /// </summary>
+        private async void SetUpPush()
+        {
+            try
+            {
+                await AppServices.Push.RegisterAsync();
+                var route = AppServices.Push.TakeLaunchRoute();
+                if (this == null || route == null)
+                {
+                    return;
+                }
+
+                PushRouter.Open(Router, route);
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e);
+            }
+        }
+
         /// <summary>Quietly fetches what the badges count; a failure just leaves them as they were.</summary>
         private async void RefreshBadgeData()
         {
@@ -135,15 +159,10 @@ namespace MoodSwings.UI
         {
             try
             {
+                // While the session still works: the server stops pushing to this device before the next person signs in.
+                await AppServices.Push.UnregisterAsync();
                 await AppServices.Auth.LogoutAsync();
-                AppServices.Friends.Clear();
-                AppServices.Lobby.Clear();
-                AppServices.Puzzles.Clear();
-                AppServices.Decklists.Clear();
-                AppServices.Stats.Clear();
-                AppServices.Tournaments.Clear();
-                AppServices.WeeklySealed.Clear();
-                AppServices.Notifications.Clear();
+                AppServices.ClearUserData();
                 if (this == null)
                 {
                     return;
