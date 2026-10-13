@@ -25,7 +25,7 @@ namespace MoodSwings.UI
         public Color onAccent = new Color(1.00f, 1.00f, 1.00f);
 
         public Color textPrimary = new Color(0.08f, 0.09f, 0.11f);
-        public Color textMuted = new Color(0.36f, 0.39f, 0.45f);
+        public Color textMuted = new Color(0.28f, 0.31f, 0.38f);
 
         /// <summary>Red: errors, Resign, anything that can't be undone.</summary>
         public Color danger = new Color(0.78f, 0.16f, 0.16f);
@@ -74,7 +74,7 @@ namespace MoodSwings.UI
                 accent = new Color(0.13f, 0.38f, 0.74f);
                 onAccent = new Color(1.00f, 1.00f, 1.00f);
                 textPrimary = new Color(0.08f, 0.09f, 0.11f);
-                textMuted = new Color(0.36f, 0.39f, 0.45f);
+                textMuted = new Color(0.28f, 0.31f, 0.38f);
                 danger = new Color(0.78f, 0.16f, 0.16f);
                 success = new Color(0.14f, 0.55f, 0.30f);
                 gold = new Color(0.86f, 0.64f, 0.08f);

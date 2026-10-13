@@ -42,6 +42,8 @@ namespace MoodSwings.UI
                 }
             };
 
+            // Before the screens, so they know there is a table behind them (and sit above it).
+            Backdrop.Create(transform);
             BuildServerBanner();
             _router.Show<SplashScreen>();
         }
@@ -65,13 +67,15 @@ namespace MoodSwings.UI
             UpdateServerBanner();
         }
 
-        // In the upper right corner of the safe area, a little way in: the corner of the screen itself can be rounded off.
+        // In the upper right corner of the safe area, a good way in: the corner of the screen itself can be rounded off.
         private void FitServerBanner()
         {
             var tag = (RectTransform)_banner.transform;
             ScreenSafeArea.Anchors(ScreenSafeArea.Current, Screen.width, Screen.height, out _, out var max);
             tag.anchorMin = tag.anchorMax = max;
-            tag.anchoredPosition = new Vector2(-32f, -16f);
+            // Further in than the safe area asks: phones with rounded corners don't count those as unsafe, and clip a tag
+            // that sits right in one.
+            tag.anchoredPosition = new Vector2(-96f, -24f);
             _bannerSafeArea = ScreenSafeArea.Current;
             _bannerScreenSize = new Vector2Int(Screen.width, Screen.height);
         }

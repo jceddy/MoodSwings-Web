@@ -85,6 +85,7 @@ namespace MoodSwings.UI
         private bool _built;
         private RectTransform _table;
         private bool _centerAtTable = true;
+        private bool _catalogRequested;
         private Text _banner;
         private Text _roundLine;
         private Text _topBanner;
@@ -285,6 +286,10 @@ namespace MoodSwings.UI
             _primaryAction.gameObject.SetActive(false);
             _moodViews.Clear();
             _linksLayer.Clear();
+            _catalogRequested = false;
+
+            // A game starts on the main theme; its first mood played moves it on.
+            MusicPlayer.Instance.SetTheme(MusicTheme.Main);
             _chatSeen = _session == null ? 0 : AppServices.Device.ChatSeen(_session.GameId);
             _chatTabShown = false;
 
@@ -1243,6 +1248,36 @@ namespace MoodSwings.UI
             _roundLine.color = _topRound.color = color;
         }
 
+        // The music follows the latest mood played by anyone. A mood that has already left play has no color to read, so
+        // the card catalog (fetched once, only if that happens) says what it was; until then the music stays as it is.
+        private void UpdateMusic(GameState state)
+        {
+            var catalog = AppServices.Decklists?.Catalog;
+            var music = MusicPlayer.Instance;
+            var theme = MusicThemes.Latest(state, catalog, out var needsCatalog);
+            if (theme.HasValue)
+            {
+                music.SetTheme(theme.Value);
+            }
+
+            if (needsCatalog && !_catalogRequested && AppServices.Decklists != null)
+            {
+                _catalogRequested = true;
+                Run(async () =>
+                {
+                    await AppServices.Decklists.LoadCatalogAsync();
+                    if (this != null && _session?.State != null)
+                    {
+                        var later = MusicThemes.Latest(_session.State, AppServices.Decklists.Catalog, out _);
+                        if (later.HasValue)
+                        {
+                            MusicPlayer.Instance.SetTheme(later.Value);
+                        }
+                    }
+                });
+            }
+        }
+
         private void Render()
         {
             var state = _session?.State;
@@ -1254,7 +1289,7 @@ namespace MoodSwings.UI
             var theme = AppServices.Theme;
             _loading.gameObject.SetActive(false);
             React(state);
-            MusicPlayer.Instance.SetTheme(MusicThemes.For(state, AppServices.Decklists?.Catalog));
+            UpdateMusic(state);
 
             _topBanner.text = BoardDisplay.TurnBanner(state);
             _banner.text = BoardDisplay.TurnBanner(state, includeTurn: false);

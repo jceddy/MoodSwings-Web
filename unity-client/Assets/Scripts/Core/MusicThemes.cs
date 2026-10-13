@@ -42,37 +42,46 @@ namespace MoodSwings.Core
 
         /// <summary>
         /// The theme for a game on the board: the color of the mood played most recently by anyone, which the game's
-        /// recent events say (the moods in play are listed by card, not in the order they were played). The main theme
-        /// before anything has been played this round, once the round has been scored, or when there is nothing to go on.
+        /// recent events say (the moods in play are listed by card, not in the order they were played). When it can't be
+        /// told -- nothing has been played yet, or the mood has left play and its color isn't known -- the music stays as
+        /// it is, <paramref name="current"/>, rather than starting over. That includes the end of a round: the theme
+        /// carries on into the next until a mood is played.
         /// </summary>
         /// <param name="catalog">Every card, if it is known: gives the color of a mood that has already left play.</param>
-        public static MusicTheme For(GameState state, IEnumerable<BoardCard> catalog = null)
+        public static MusicTheme For(GameState state, IEnumerable<BoardCard> catalog, MusicTheme current) =>
+            Latest(state, catalog, out _) ?? current;
+
+        /// <summary>
+        /// The theme of the latest mood played, or null when that can't be told. <paramref name="needsCatalog"/> is set
+        /// when it is only the color of a card that has left play that is missing, so loading the catalog would settle it.
+        /// </summary>
+        public static MusicTheme? Latest(GameState state, IEnumerable<BoardCard> catalog, out bool needsCatalog)
         {
-            var inPlay = state?.InPlay;
-            if (inPlay == null || inPlay.Count == 0 || state.RecentEvents == null)
+            needsCatalog = false;
+            if (state?.RecentEvents == null || state.InPlay == null)
             {
-                return MusicTheme.Main;
+                return null;
             }
 
             foreach (var entry in state.RecentEvents.OrderByDescending(e => e.Id))
             {
-                var text = entry.Description ?? string.Empty;
-                if (text.StartsWith("Round scored", StringComparison.OrdinalIgnoreCase))
-                {
-                    return MusicTheme.Main; // a new round, with nothing played in it yet
-                }
-
-                var match = Played.Match(text);
+                var match = Played.Match(entry.Description ?? string.Empty);
                 if (!match.Success)
                 {
                     continue;
                 }
 
                 var color = ColorOfPlayed(state, match.Groups["who"].Value, match.Groups["card"].Value, catalog);
-                return color != null ? ForColor(color) : MusicTheme.Main;
+                if (color == null)
+                {
+                    needsCatalog = true;
+                    return null;
+                }
+
+                return ForColor(color);
             }
 
-            return MusicTheme.Main;
+            return null;
         }
 
         // The color of the card a player played: the mood in play by that name (theirs, if more than one), else the catalog's.

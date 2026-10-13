@@ -50,7 +50,9 @@ namespace MoodSwings.UI
         {
             var rect = Create("Background", parent);
             Stretch(rect);
-            rect.gameObject.AddComponent<Image>().color = color;
+            // The table behind every screen is drawn once, under all of them (see Backdrop), so a screen's own backing
+            // is clear and lets it show through; the color is only used when there is no table.
+            rect.gameObject.AddComponent<Image>().color = Backdrop.IsShowing ? Color.clear : color;
             return rect;
         }
 

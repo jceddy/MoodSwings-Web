@@ -1647,6 +1647,57 @@ namespace MoodSwings.Tests
         }
 
         [UnityTest]
+        public IEnumerator TheScreens_SitOnAWoodTable_LightOrDark_ThatCoversTheWholeDisplay()
+        {
+            ScreenSafeArea.Override = new Rect(100f, 0f, Screen.width - 200f, Screen.height);
+            try
+            {
+                yield return Home(Serve());
+                var backdrops = Object.FindObjectsByType<Backdrop>(FindObjectsInactive.Include);
+                Assert.AreEqual(1, backdrops.Length);
+                Assert.IsNotNull(backdrops[0].Texture, "the picture loaded");
+                StringAssert.Contains("light", backdrops[0].Texture.name);
+
+                var rect = (RectTransform)backdrops[0].transform;
+                var canvas = Object.FindAnyObjectByType<ScreenRouter>().GetComponent<RectTransform>();
+                Assert.AreEqual(canvas.rect.width, rect.rect.width, 0.5f, "under the notch and the corners too, not just the safe area");
+                Assert.AreEqual(canvas.rect.height, rect.rect.height, 0.5f);
+
+                Assert.IsTrue(Backdrop.IsShowing);
+                Assert.AreEqual(0f, MainSceneTests.Screen<HomeScreen>().transform.Find("Background").GetComponent<UnityEngine.UI.Image>().color.a, "a screen's own backing is clear");
+                ScreenshotHelper.Capture("backdrop-light");
+            }
+            finally
+            {
+                ScreenSafeArea.Override = null;
+            }
+
+            MainSceneTests.DarkMode = true;
+            try
+            {
+                yield return Home(Serve());
+                var dark = Object.FindObjectsByType<Backdrop>(FindObjectsInactive.Include).Single();
+                StringAssert.Contains("dark", dark.Texture.name);
+            }
+            finally
+            {
+                MainSceneTests.DarkMode = false;
+                AppServices.Theme.Apply(dark: false);
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator TheDevTag_SitsWellInFromTheScreenCorner()
+        {
+            // The dev tag is a good way in from the right edge and the top.
+            yield return Home(Serve());
+            yield return PhaseTwoSceneTests.Frames(3);
+            var tag = (RectTransform)Object.FindObjectsByType<Transform>(FindObjectsInactive.Include).First(t => t.name == "Server banner");
+            Assert.LessOrEqual(tag.anchoredPosition.x, -90f);
+            Assert.LessOrEqual(tag.anchoredPosition.y, -20f);
+        }
+
+        [UnityTest]
         public IEnumerator BoardLayout_Screenshots()
         {
             foreach (var game in new[] { 405, 406, 407 })

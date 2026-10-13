@@ -35,12 +35,12 @@ namespace MoodSwings.Tests
         {
             // Game 406: BotSageQuick played Frustration (red), and then you played Ambition (black).
             var state = BoardFixtures.Load(406);
-            Assert.AreEqual(MusicTheme.Black, MusicThemes.For(state), "your own play");
+            Assert.AreEqual(MusicTheme.Black, MusicThemes.For(state, null, MusicTheme.Main), "your own play");
 
             // Now an opponent's play is the latest one: the music follows it too.
             var newest = state.RecentEvents.Max(e => e.Id);
             state.RecentEvents.Add(new BoardEvent { Id = newest + 2, Description = "BotSageQuick played Frustration from hand" });
-            Assert.AreEqual(MusicTheme.Red, MusicThemes.For(state), "an opponent's play counts");
+            Assert.AreEqual(MusicTheme.Red, MusicThemes.For(state, null, MusicTheme.Main), "an opponent's play counts");
         }
 
         [Test]
@@ -50,31 +50,51 @@ namespace MoodSwings.Tests
             var state = BoardFixtures.Load(407);
             Assert.AreEqual("Tranquility", state.InPlay.Last().Name);
 
-            Assert.AreEqual(MusicTheme.Blue, MusicThemes.For(state));
+            Assert.AreEqual(MusicTheme.Blue, MusicThemes.For(state, null, MusicTheme.Main));
         }
 
         [Test]
-        public void AfterTheRoundIsScored_ItIsTheMainThemeAgainUntilSomethingIsPlayed()
+        public void WhenTheRoundIsScored_TheMusicCarriesOnUntilSomethingIsPlayed()
         {
             var state = BoardFixtures.Load(406);
             var newest = state.RecentEvents.Max(e => e.Id);
             state.RecentEvents.Add(new BoardEvent { Id = newest + 1, Description = "Round scored (bshaftoe: 4, BotSage: 9) -- BotSage won" });
-            Assert.AreEqual(MusicTheme.Main, MusicThemes.For(state));
+            state.InPlay.Clear(); // the moods are cleared away at the end of a round
 
+            Assert.AreEqual(MusicTheme.Green, MusicThemes.For(state, null, MusicTheme.Green), "no new color to go by: it stays as it was");
+
+            state.InPlay.Add(new BoardCard { CardId = 1, Name = "Frustration", Color = "red", OwnerGamePlayerId = 911 });
             state.RecentEvents.Add(new BoardEvent { Id = newest + 2, Description = "BotSageQuick played Frustration from hand" });
-            Assert.AreEqual(MusicTheme.Red, MusicThemes.For(state));
+            Assert.AreEqual(MusicTheme.Red, MusicThemes.For(state, null, MusicTheme.Green), "and then follows the first mood of the new round");
         }
 
         [Test]
-        public void AMoodThatHasLeftPlay_IsColoredFromTheCatalog()
+        public void AMoodThatHasLeftPlay_KeepsTheMusic_UntilTheCatalogSaysWhatColorItWas()
         {
             var state = BoardFixtures.Load(406);
             var newest = state.RecentEvents.Max(e => e.Id);
             state.RecentEvents.Add(new BoardEvent { Id = newest + 1, Description = "BotSage played Joy from hand (using an extra play from Gluttony)" });
-            Assert.AreEqual(MusicTheme.Main, MusicThemes.For(state), "not in play and no catalog");
+
+            Assert.IsNull(MusicThemes.Latest(state, null, out var needsCatalog));
+            Assert.IsTrue(needsCatalog, "the catalog would settle it");
+            Assert.AreEqual(MusicTheme.Green, MusicThemes.For(state, null, MusicTheme.Green), "not in play and no catalog: unchanged");
 
             var catalog = new[] { new BoardCard { Name = "Joy", Color = "white" } };
-            Assert.AreEqual(MusicTheme.White, MusicThemes.For(state, catalog));
+            Assert.AreEqual(MusicTheme.White, MusicThemes.For(state, catalog, MusicTheme.Green));
+        }
+
+        [Test]
+        public void WithNothingPlayedYet_TheMusicIsLeftAlone()
+        {
+            var state = BoardFixtures.Load(406);
+            state.RecentEvents.Clear();
+            state.RecentEvents.Add(new BoardEvent { Id = 1, Description = "BotSage was dealt 5 cards" });
+
+            Assert.IsNull(MusicThemes.Latest(state, null, out var needsCatalog));
+            Assert.IsFalse(needsCatalog);
+            Assert.AreEqual(MusicTheme.Main, MusicThemes.For(state, null, MusicTheme.Main));
+            Assert.AreEqual(MusicTheme.Blue, MusicThemes.For(state, null, MusicTheme.Blue));
+            Assert.AreEqual(MusicTheme.Red, MusicThemes.For(null, null, MusicTheme.Red));
         }
 
         [Test]
@@ -85,16 +105,6 @@ namespace MoodSwings.Tests
 
             CollectionAssert.DoesNotContain(clips, null);
             Assert.AreEqual(clips.Count, clips.Select(c => c.length).Distinct().Count(), "no two themes are the same recording");
-        }
-
-        [Test]
-        public void WithNothingInPlay_ItIsTheMainTheme()
-        {
-            var state = BoardFixtures.Load(406);
-            state.InPlay.Clear();
-
-            Assert.AreEqual(MusicTheme.Main, MusicThemes.For(state));
-            Assert.AreEqual(MusicTheme.Main, MusicThemes.For(null));
         }
 
         [Test]

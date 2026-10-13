@@ -14,9 +14,12 @@ namespace MoodSwings.Editor
         // Committed art that isn't a card face: the card back. Small, so none of the card art's size tricks apply.
         private const string UiFolder = "Assets/Resources/UI/";
 
+        // The table backgrounds (tools/make_backgrounds.py).
+        private const string BackgroundFolder = "Assets/Resources/Backgrounds/";
+
         // Bump when the settings below change, so Unity reimports existing
         // textures (git-ignored art has no committed .meta to invalidate).
-        public override uint GetVersion() => 4;
+        public override uint GetVersion() => 5;
 
         private void OnPreprocessTexture()
         {
@@ -32,6 +35,20 @@ namespace MoodSwings.Editor
                 ui.filterMode = UnityEngine.FilterMode.Trilinear;
                 ui.maxTextureSize = 2048;
                 ui.textureCompression = TextureImporterCompression.Uncompressed;
+                return;
+            }
+
+            if (assetPath.StartsWith(BackgroundFolder))
+            {
+                // The wood the screens sit on: 1920 x 1072, drawn full screen and never shrunk much, so no mipmaps.
+                var background = (TextureImporter)assetImporter;
+                background.textureType = TextureImporterType.Default;
+                background.mipmapEnabled = false;
+                background.filterMode = UnityEngine.FilterMode.Bilinear;
+                background.wrapMode = UnityEngine.TextureWrapMode.Clamp;
+                background.maxTextureSize = 2048;
+                background.textureCompression = TextureImporterCompression.Compressed;
+                background.npotScale = TextureImporterNPOTScale.None;
                 return;
             }
 

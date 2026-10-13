@@ -125,8 +125,13 @@ ended, someone else spoke -- and the board reacts to each:
   main menu. All of the colors live in `UiTheme` (`Apply(dark)`); screens use its
   tokens (`accent`, `onAccent`, `raised`, `success`, `gold`, `faint`...) rather than
   literals.
+- **Background:** every screen sits on a wood table, light or dark to match the palette
+  (`Backdrop`, under all the screens, covering the whole display including a phone's notch and
+  rounded corners; cropped rather than stretched to fit any shape, with a thin wash of the page
+  color over it for legibility). The pictures are `Assets/Resources/Backgrounds/{light,dark}-background.jpg`,
+  made by `tools/make_backgrounds.py` from the full-size originals. A screen's own backing is clear.
 - **Phone screens:** each screen is fitted to the system's safe area (notches, rounded
-  corners) and refitted on rotation; layouts were checked at 16:9, 20:9, 16:10 and 4:3.
+  corners) and refitted on rotation (phones do not count their rounded corners as unsafe, so the dev server tag and the draft deck buttons sit further in from the corner); layouts were checked at 16:9, 20:9, 16:10 and 4:3.
 - "Pause before your turn" (Advance turn) and "auto-pass on an empty hand" are the
   account preferences from Settings; the board honors them as the server applies them.
 
