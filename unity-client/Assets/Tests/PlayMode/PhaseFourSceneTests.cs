@@ -199,7 +199,7 @@ namespace MoodSwings.Tests
             yield return OpenBoard(server, 407);
 
             Assert.AreEqual("Your response is needed  -  Confusion", Board().BannerText);
-            Assert.AreEqual("Round 1  -  First to 3 wins", Board().RoundText);
+            Assert.AreEqual("Round 1", Board().RoundText, "the trophies on the scoreboards say how many wins it takes");
         }
 
         [UnityTest]
@@ -539,12 +539,12 @@ namespace MoodSwings.Tests
                 ? Fixture("game_406_state")
                 : Edited(406, s => s["round"]["current_turn_game_player_id"] = 910);
             yield return OpenBoard(server, 406);
-            Assert.AreEqual("Your turn", Board().BannerText);
+            Assert.AreEqual("Your turn", Board().TurnText);
 
             yield return new WaitForSeconds(3.6f);
             yield return PhaseTwoSceneTests.Frames();
 
-            Assert.AreEqual("BotSage's turn", Board().BannerText);
+            Assert.AreEqual("BotSage's turn", Board().TurnText);
         }
 
         [UnityTest]

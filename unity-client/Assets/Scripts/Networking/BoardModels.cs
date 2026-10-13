@@ -89,6 +89,10 @@ namespace MoodSwings.Networking
         [JsonProperty("value_locked")]
         public bool ValueLocked { get; set; }
 
+        /// <summary>In play, Bliss only: the color of the card that was discarded to it, which is what it now cares about.</summary>
+        [JsonProperty("bliss_discard_color")]
+        public string BlissDiscardColor { get; set; }
+
         /// <summary>In play only: the mood whose ability is changing which value this one has (the dice value).</summary>
         [JsonProperty("boosted_by_card_id")]
         public int? BoostedByCardId { get; set; }

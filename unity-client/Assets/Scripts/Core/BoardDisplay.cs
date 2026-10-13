@@ -23,7 +23,7 @@ namespace MoodSwings.Core
             state.InPlay.Where(c => c.OwnerGamePlayerId == gamePlayerId).ToList();
 
         /// <summary>"Round 2  -  First to 3 wins".</summary>
-        public static string RoundLine(GameState state)
+        public static string RoundLine(GameState state, bool includeWinsNeeded = true)
         {
             if (IsPuzzle(state))
             {
@@ -41,7 +41,7 @@ namespace MoodSwings.Core
             }
 
             var round = state.Round.RoundNumber > 0 ? "Round " + state.Round.RoundNumber : "Not started";
-            return state.Game.WinsNeeded > 0 ? $"{round}  -  First to {state.Game.WinsNeeded} wins" : round;
+            return includeWinsNeeded && state.Game.WinsNeeded > 0 ? $"{round}  -  First to {state.Game.WinsNeeded} wins" : round;
         }
 
         /// <summary>
@@ -49,9 +49,9 @@ namespace MoodSwings.Core
         /// ready check or the action clock when there is one, and a warning when the app can't
         /// play this kind of game yet.
         /// </summary>
-        public static string HeaderLine(GameState state, bool spectating, DateTime nowUtc)
+        public static string HeaderLine(GameState state, bool spectating, DateTime nowUtc, bool includeWinsNeeded = true)
         {
-            var parts = new List<string> { RoundLine(state) };
+            var parts = new List<string> { RoundLine(state, includeWinsNeeded) };
             var matchLine = MatchLine(state);
             if (matchLine != null)
             {
@@ -89,9 +89,10 @@ namespace MoodSwings.Core
 
         /// <summary>
         /// What's happening right now: whose turn it is, or who a card effect is
-        /// waiting on, or the result if the game is over.
+        /// waiting on, or the result if the game is over. With <paramref name="includeTurn"/> off, the plain
+        /// "whose turn" lines are left out (the board shows that on the scoreboards): only what else there is to say.
         /// </summary>
-        public static string TurnBanner(GameState state)
+        public static string TurnBanner(GameState state, bool includeTurn = true)
         {
             var viewer = Viewer(state);
 
@@ -177,10 +178,17 @@ namespace MoodSwings.Core
             var current = PlayerById(state, state.Round.CurrentTurnGamePlayerId);
             if (current == null)
             {
-                return Prettify(state.Game.Status);
+                return includeTurn ? Prettify(state.Game.Status) : string.Empty;
             }
 
-            if (viewer != null && current.GamePlayerId == viewer.GamePlayerId)
+            var yourTurn = viewer != null && current.GamePlayerId == viewer.GamePlayerId;
+            if (!includeTurn)
+            {
+                // Whose turn it is shows on the scoreboards; what they do not say is that there are plays to spare.
+                return yourTurn && state.Round.PlaysRemaining > 1 ? $"{state.Round.PlaysRemaining} plays left" : string.Empty;
+            }
+
+            if (yourTurn)
             {
                 return state.Round.PlaysRemaining > 1 ? $"Your turn  -  {state.Round.PlaysRemaining} plays left" : "Your turn";
             }
@@ -712,6 +720,22 @@ namespace MoodSwings.Core
                 .Distinct()
                 .ToList();
             return names.Count == 0 ? "Suppressed" : "Suppressed by " + string.Join(" and ", names);
+        }
+
+        /// <summary>
+        /// "Discarded a red card", for a Bliss in play: the color of what was discarded to it, which it keeps (null for any
+        /// other card, or before it has one). The word for the color is given by <paramref name="colorWord"/> so the caller
+        /// can color it.
+        /// </summary>
+        public static string BlissNote(BoardCard card, Func<string, string> colorWord = null)
+        {
+            if (card == null || card.EffectKey != "bliss" || string.IsNullOrEmpty(card.BlissDiscardColor))
+            {
+                return null;
+            }
+
+            var word = card.BlissDiscardColor.ToLowerInvariant();
+            return $"Discarded a {(colorWord != null ? colorWord(word) : word)} card to {card.Name}";
         }
 
         /// <summary>"3 pts  -  1 win", for a player's seat.</summary>

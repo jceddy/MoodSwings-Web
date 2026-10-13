@@ -32,7 +32,7 @@ namespace MoodSwings.UI
         private const float HeaderHeight = 100f;
         private const float TableHeight = 1080f;
         private const float ReferenceWidth = 1920f;
-        private const float MoodWidth = 118f;
+        private const float MoodWidth = 180f;
         private const float HandCardWidth = 140f;
         private const float DetailCardWidth = 460f;
 
@@ -73,10 +73,10 @@ namespace MoodSwings.UI
         // is left clear for the turn banner, messages and the Pass button.
         private static readonly Dictionary<SeatZone, SeatPlace> Places = new Dictionary<SeatZone, SeatPlace>
         {
-            [SeatZone.South] = new SeatPlace { Moods = Fraction(0.20f, 0.11f, 0.80f, 0.30f), Info = Fraction(0.103f, 0.008f, 0.268f, 0.113f), Edge = HandEdge.None },
-            [SeatZone.North] = new SeatPlace { Moods = Fraction(0.20f, 0.70f, 0.80f, 0.88f), Info = Fraction(0.705f, 0.888f, 0.87f, 0.995f), Edge = HandEdge.Top, HandSpan = Fraction(0.30f, 0f, 0.70f, 0f) },
-            [SeatZone.Northwest] = new SeatPlace { Moods = Fraction(0.08f, 0.70f, 0.49f, 0.88f), Info = Fraction(0.345f, 0.888f, 0.51f, 0.995f), Edge = HandEdge.Top, HandSpan = Fraction(0.08f, 0f, 0.34f, 0f) },
-            [SeatZone.Northeast] = new SeatPlace { Moods = Fraction(0.55f, 0.70f, 0.985f, 0.88f), Info = Fraction(0.805f, 0.888f, 0.97f, 0.995f), Edge = HandEdge.Top, HandSpan = Fraction(0.54f, 0f, 0.80f, 0f) },
+            [SeatZone.South] = new SeatPlace { Moods = Fraction(0.20f, 0.11f, 0.80f, 0.37f), Info = Fraction(0.103f, 0.008f, 0.268f, 0.113f), Edge = HandEdge.None },
+            [SeatZone.North] = new SeatPlace { Moods = Fraction(0.20f, 0.63f, 0.80f, 0.88f), Info = Fraction(0.705f, 0.888f, 0.87f, 0.995f), Edge = HandEdge.Top, HandSpan = Fraction(0.30f, 0f, 0.70f, 0f) },
+            [SeatZone.Northwest] = new SeatPlace { Moods = Fraction(0.08f, 0.64f, 0.49f, 0.88f), Info = Fraction(0.345f, 0.888f, 0.51f, 0.995f), Edge = HandEdge.Top, HandSpan = Fraction(0.08f, 0f, 0.34f, 0f) },
+            [SeatZone.Northeast] = new SeatPlace { Moods = Fraction(0.55f, 0.64f, 0.985f, 0.88f), Info = Fraction(0.805f, 0.888f, 0.97f, 0.995f), Edge = HandEdge.Top, HandSpan = Fraction(0.54f, 0f, 0.80f, 0f) },
             [SeatZone.West] = new SeatPlace { Moods = Fraction(0.05f, 0.34f, 0.30f, 0.50f), Info = Fraction(0.0f, 0.715f, 0.165f, 0.82f), Edge = HandEdge.Left, HandSpan = Fraction(0f, 0.30f, 0f, 0.70f) },
             [SeatZone.East] = new SeatPlace { Moods = Fraction(0.70f, 0.34f, 0.95f, 0.50f), Info = Fraction(0.835f, 0.18f, 1.0f, 0.285f), Edge = HandEdge.Right, HandSpan = Fraction(0f, 0.30f, 0f, 0.70f) },
         };
@@ -84,6 +84,7 @@ namespace MoodSwings.UI
         private BoardSession _session;
         private bool _built;
         private RectTransform _table;
+        private bool _centerAtTable = true;
         private Text _banner;
         private Text _roundLine;
         private Text _topBanner;
@@ -185,11 +186,16 @@ namespace MoodSwings.UI
 
         public string BannerText => _banner != null ? _banner.text : null;
 
+        /// <summary>Whose turn it is, in words (the board itself shows that on the scoreboards, so this is not on screen).</summary>
+        public string TurnText => _topBanner != null ? _topBanner.text : null;
+
         public string RoundText => _roundLine != null ? _roundLine.text : null;
 
         public string MessageText => _message != null ? _message.text : null;
 
         public bool DetailOpen => _detail != null && _detail.activeSelf;
+
+        public string DetailText => _detailText != null ? _detailText.text : null;
 
         /// <summary>The play form or decision form, when one is open.</summary>
         public ChoiceOverlay Choices => _choices;
@@ -624,14 +630,14 @@ namespace MoodSwings.UI
             _center.sizeDelta = Vector2.zero; // its width is the span between its anchors; the height is its content's
             _center.gameObject.AddComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
             var layout = _center.gameObject.AddComponent<VerticalLayoutGroup>();
-            layout.spacing = 10f;
+            layout.spacing = 8f;
             layout.childAlignment = TextAnchor.MiddleCenter;
             layout.childControlWidth = true;
             layout.childControlHeight = true;
             layout.childForceExpandWidth = true;
             layout.childForceExpandHeight = false;
 
-            _banner = UiFactory.Label(_center, string.Empty, 42, theme.textPrimary, TextAnchor.MiddleCenter, FontStyle.Bold);
+            _banner = UiFactory.Label(_center, string.Empty, 38, theme.textPrimary, TextAnchor.MiddleCenter, FontStyle.Bold);
             _banner.name = "Banner";
             _banner.raycastTarget = false;
             _roundLine = UiFactory.Label(_center, string.Empty, 26, theme.textMuted);
@@ -647,14 +653,15 @@ namespace MoodSwings.UI
             _primaryAction = UiFactory.Button(primaryRow.transform, "Pass", theme, () => OnPrimaryAction());
             _primaryAction.gameObject.name = "Primary action";
             _primaryLabel = _primaryAction.GetComponentInChildren<Text>();
-            UiFactory.Size(_primaryAction.gameObject, 380f, 80f);
+            UiFactory.Size(_primaryAction.gameObject, 260f, 56f);
 
             DockCenter(atTable: true);
         }
 
         private void DockCenter(bool atTable)
         {
-            _banner.gameObject.SetActive(atTable);
+            _centerAtTable = atTable;
+            _banner.gameObject.SetActive(atTable && !string.IsNullOrEmpty(_banner.text));
             _roundLine.gameObject.SetActive(atTable);
             _topBanner.gameObject.SetActive(!atTable);
             _topRound.gameObject.SetActive(!atTable);
@@ -1138,6 +1145,12 @@ namespace MoodSwings.UI
                 notes.Add(chaosValue);
             }
 
+            var bliss = BoardDisplay.BlissNote(card, word => $"<b><color=#{ColorUtility.ToHtmlStringRGB(CardView.ReadableText(CardView.IndicatorColor(word)))}>{word}</color></b>");
+            if (bliss != null)
+            {
+                notes.Add(bliss);
+            }
+
             var colorNote = BoardDisplay.ColorNote(_session?.State, card);
             if (colorNote != null)
             {
@@ -1221,9 +1234,12 @@ namespace MoodSwings.UI
 
         private void UpdateHeader(GameState state)
         {
+            // At the table the trophies on the scoreboards already say how many wins it takes; in a draft there are none.
             var line = BoardDisplay.HeaderLine(state, _session.IsSpectating, DateTime.UtcNow);
+            var tableLine = BoardDisplay.HeaderLine(state, _session.IsSpectating, DateTime.UtcNow, includeWinsNeeded: false);
             var color = BoardDisplay.ClockIsUrgent(state, DateTime.UtcNow) ? AppServices.Theme.danger : AppServices.Theme.textMuted;
-            _roundLine.text = _topRound.text = line;
+            _roundLine.text = tableLine;
+            _topRound.text = line;
             _roundLine.color = _topRound.color = color;
         }
 
@@ -1239,7 +1255,9 @@ namespace MoodSwings.UI
             _loading.gameObject.SetActive(false);
             React(state);
 
-            _banner.text = _topBanner.text = BoardDisplay.TurnBanner(state);
+            _topBanner.text = BoardDisplay.TurnBanner(state);
+            _banner.text = BoardDisplay.TurnBanner(state, includeTurn: false);
+            _banner.gameObject.SetActive(_centerAtTable && !string.IsNullOrEmpty(_banner.text));
             _banner.color = _topBanner.color = BoardDisplay.BannerNeedsViewer(state) ? theme.accent : theme.textPrimary;
             UpdateHeader(state);
             _chatEntryAllowed = !BoardDisplay.IsSpectator(state);
@@ -1471,7 +1489,9 @@ namespace MoodSwings.UI
             layout.spacing = 6f;
             layout.padding = new RectOffset(8, 8, 4, 4);
             // Beside their scoreboard where the seat is off to one side, centered where it is across from you.
-            layout.childAlignment = zone == SeatZone.South || zone == SeatZone.North ? TextAnchor.UpperCenter : TextAnchor.UpperLeft;
+            // Your own moods settle toward your hand, theirs toward their edge.
+            layout.childAlignment = zone == SeatZone.South ? TextAnchor.LowerCenter
+                : zone == SeatZone.North ? TextAnchor.UpperCenter : TextAnchor.UpperLeft;
             layout.childControlWidth = true;
             layout.childControlHeight = true;
             layout.childForceExpandWidth = false;
@@ -1487,7 +1507,8 @@ namespace MoodSwings.UI
             var spacing = 10f;
             var availableWidth = area.width * ReferenceWidth - 16f;
             var slots = moods.Sum(m => m.IsSuppressed ? CardView.HeightOverWidth : 1f);
-            var width = Mathf.Min(MoodWidth, (availableWidth - spacing * (moods.Count - 1)) / slots);
+            var heightFit = (area.height * TableHeight - 8f) / CardView.HeightOverWidth;
+            var width = Mathf.Min(MoodWidth, heightFit, (availableWidth - spacing * (moods.Count - 1)) / slots);
             var row = UiFactory.Row(seat, "Moods", spacing, TextAnchor.UpperCenter);
             foreach (var mood in moods)
             {
@@ -1969,6 +1990,13 @@ namespace MoodSwings.UI
             if (chaosValue != null)
             {
                 lines.Add(chaosValue);
+            }
+
+            var bliss = BoardDisplay.BlissNote(card, word => $"<b><color=#{ColorUtility.ToHtmlStringRGB(CardView.IndicatorColor(word))}>{word}</color></b>");
+            if (bliss != null)
+            {
+                lines.Add(string.Empty);
+                lines.Add(bliss);
             }
 
             var colorNote = BoardDisplay.ColorNote(_session?.State, card);

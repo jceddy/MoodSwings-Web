@@ -146,7 +146,7 @@ namespace MoodSwings.Tests
             yield return PhaseTwoSceneTests.Frames(8);
 
             Assert.IsTrue(server.Calls.Any(c => c.StartsWith("GET /games/state?game_id=777")), string.Join("\n", server.Calls));
-            Assert.AreEqual("Your turn", Board().BannerText, "the next game's board");
+            Assert.AreEqual("Your turn", Board().TurnText, "the next game's board");
         }
 
         [UnityTest]

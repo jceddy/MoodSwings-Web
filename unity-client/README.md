@@ -238,6 +238,10 @@ under "Playing a game" below.
   (`BoardEffects` works out which, from `suppressions`, `boosted_by_card_id`,
   `temporary_ownership` and `affecting`; `CardAura` and `EffectLinksLayer` draw them).
   Neither takes a tap.
+- **The middle of the table** is kept small, to leave room for cards: no "whose turn" line
+  (the scoreboards light up for that) and no "First to 3 wins" (the trophies say it). What
+  is left is the round, game and match line, the clock, messages, "2 plays left" when you
+  have plays to spare, any question or result, and a modest **Pass** / **Next game** button.
 - **The menu** (three bars, upper left; a badge on it counts unread chat) slides in a
   panel from the left: **< Lobby**, **Resign**, and a **Log** tab (the recent events
   and any effects in force) and a **Chat** tab (the game's messages, with a box to
@@ -466,8 +470,9 @@ under "Playing a game" below.
 ## App icons
 
 `Assets/Icons/` holds the app icon: `icon-1024.png` (the Windows `.exe`, and the source of
-`MOOD.ico` for the installer) and the Android adaptive icon's two layers. They are a placeholder
-made by `tools/make_icons.py` (the MOOD wordmark in the UI's colors). To use real art, replace
+`MOOD.ico` for the installer) and the Android adaptive icon's two layers. They are made by
+`tools/make_icons.py` to look like the back of a card: black, with the four color corners
+(blue, purple, green, red) around a white diamond with an M in it. To use real art, replace
 `icon-1024.png` and the two `android-*.png` layers (432x432, art inside the central 66%) and run
 `python tools/make_icons.py --from-icon` to rebuild the `.ico`. `AppIcons` applies them in both build
 scripts.

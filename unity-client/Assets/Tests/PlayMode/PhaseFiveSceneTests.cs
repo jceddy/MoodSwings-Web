@@ -361,7 +361,7 @@ namespace MoodSwings.Tests
 
             Assert.AreEqual(1, server.Posts("/games/pass").Count());
             Assert.AreEqual(406, (int)server.Posts("/games/pass").Single()["game_id"]);
-            Assert.AreEqual("BotSage's turn", Board().BannerText);
+            Assert.AreEqual("BotSage's turn", Board().TurnText);
             Assert.IsFalse(ButtonNamed("Primary action").interactable, "it isn't your turn any more");
         }
 
@@ -507,7 +507,7 @@ namespace MoodSwings.Tests
             Assert.AreEqual(14171, (int)play["card_id"]);
             Assert.AreEqual(0, ((JObject)play["choices"]).Count);
             Assert.IsFalse(Board().Choices.IsOpen);
-            Assert.AreEqual("BotSage's turn", Board().BannerText);
+            Assert.AreEqual("BotSage's turn", Board().TurnText);
             Assert.IsNull(Child("Card Superiority"), "it's gone from your hand");
         }
 
@@ -627,7 +627,7 @@ namespace MoodSwings.Tests
             yield return Poll();
 
             Assert.IsFalse(Board().Choices.IsOpen, "the turn timed out under you");
-            Assert.AreEqual("BotSage's turn", Board().BannerText);
+            Assert.AreEqual("BotSage's turn", Board().TurnText);
         }
 
         [UnityTest]
@@ -1005,7 +1005,7 @@ namespace MoodSwings.Tests
             yield return OpenBoard(server, 406);
 
             Assert.AreEqual(1, server.Posts("/games/start").Count());
-            Assert.AreEqual("Your turn", Board().BannerText);
+            Assert.AreEqual("Your turn", Board().TurnText);
         }
 
         [UnityTest]
@@ -1038,7 +1038,7 @@ namespace MoodSwings.Tests
 
             yield return Poll();
             Assert.AreEqual(1, server.Posts("/games/start").Count(), "now that everyone is ready");
-            Assert.AreEqual("Your turn", Board().BannerText);
+            Assert.AreEqual("Your turn", Board().TurnText);
         }
 
         // --- kinds of game the app can't play yet ---------------------------------------------------

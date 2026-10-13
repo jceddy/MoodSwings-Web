@@ -346,6 +346,51 @@ namespace MoodSwings.Tests
         }
 
         [Test]
+        public void TheTableBanner_LeavesOutWhoseTurnItIs()
+        {
+            var state = BoardFixtures.Load(406);
+            Assert.AreEqual(string.Empty, BoardDisplay.TurnBanner(state, includeTurn: false), "your turn");
+
+            state.Round.PlaysRemaining = 2;
+            Assert.AreEqual("2 plays left", BoardDisplay.TurnBanner(state, includeTurn: false));
+
+            state.Round.PlaysRemaining = 1;
+            state.Round.CurrentTurnGamePlayerId = 910;
+            Assert.AreEqual(string.Empty, BoardDisplay.TurnBanner(state, includeTurn: false), "someone else's turn");
+        }
+
+        [Test]
+        public void TheTableBanner_StillSaysWhatElseIsGoingOn()
+        {
+            // 407 is waiting on an answer from you.
+            var state = BoardFixtures.Load(407);
+
+            Assert.AreEqual(BoardDisplay.TurnBanner(state), BoardDisplay.TurnBanner(state, includeTurn: false));
+            Assert.IsNotEmpty(BoardDisplay.TurnBanner(state, includeTurn: false));
+        }
+
+        [Test]
+        public void TheRoundLine_CanLeaveOutHowManyWinsItTakes()
+        {
+            var state = BoardFixtures.Load(405);
+
+            Assert.AreEqual("Round 2", BoardDisplay.RoundLine(state, includeWinsNeeded: false));
+            StringAssert.StartsWith("Round 2", BoardDisplay.HeaderLine(state, false, System.DateTime.UtcNow, includeWinsNeeded: false));
+            StringAssert.DoesNotContain("First to", BoardDisplay.HeaderLine(state, false, System.DateTime.UtcNow, includeWinsNeeded: false));
+        }
+
+        [Test]
+        public void ABlissInPlay_SaysWhatColorWasDiscardedToIt()
+        {
+            var bliss = new BoardCard { Name = "Bliss", EffectKey = "bliss", BlissDiscardColor = "Red" };
+
+            Assert.AreEqual("Discarded a red card to Bliss", BoardDisplay.BlissNote(bliss));
+            Assert.AreEqual("Discarded a [red] card to Bliss", BoardDisplay.BlissNote(bliss, word => "[" + word + "]"));
+            Assert.IsNull(BoardDisplay.BlissNote(new BoardCard { Name = "Bliss", EffectKey = "bliss" }), "nothing discarded yet");
+            Assert.IsNull(BoardDisplay.BlissNote(new BoardCard { Name = "Fury", EffectKey = "fury", BlissDiscardColor = "red" }), "only Bliss");
+        }
+
+        [Test]
         public void TheBanner_WhenYouHaveSeveralPlaysLeft()
         {
             var state = BoardFixtures.Load(406);

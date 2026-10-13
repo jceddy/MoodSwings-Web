@@ -148,7 +148,7 @@ namespace MoodSwings.Tests
             Assert.AreEqual(0, ((JObject)play["choices"]).Count);
             Assert.IsFalse(Board().Choices.IsOpen, "dragging it there was the decision; no form to confirm");
             Assert.IsFalse(Board().IsDragging);
-            Assert.AreEqual("BotSage's turn", Board().BannerText);
+            Assert.AreEqual("BotSage's turn", Board().TurnText);
         }
 
         [UnityTest]

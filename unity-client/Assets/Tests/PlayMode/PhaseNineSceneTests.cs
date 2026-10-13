@@ -1534,6 +1534,44 @@ namespace MoodSwings.Tests
         }
 
         [UnityTest]
+        public IEnumerator TheCenter_DoesNotRepeatWhoseTurnItIs_AndKeepsAModestButton()
+        {
+            var server = Serve();
+            server.State = Quiet(406, s => { });
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+
+            Assert.AreEqual("Your turn", PhaseFiveSceneTests.Board().TurnText);
+            Assert.AreEqual(string.Empty, PhaseFiveSceneTests.Board().BannerText, "that is on the scoreboards");
+            Assert.IsNull(PhaseFiveSceneTests.Child("Banner"), "and the empty line takes no room");
+            StringAssert.DoesNotContain("First to", PhaseFiveSceneTests.Board().RoundText);
+
+            var pass = (RectTransform)PhaseFiveSceneTests.Child("Primary action");
+            Assert.LessOrEqual(pass.rect.height, 60f);
+            Assert.LessOrEqual(pass.rect.width, 300f);
+        }
+
+        [UnityTest]
+        public IEnumerator ABlissInPlay_NamesTheColorDiscardedToIt_WhenClicked()
+        {
+            var server = Serve();
+            server.State = Quiet(405, s =>
+            {
+                var card = s["in_play"][0];
+                card["effect_key"] = "bliss";
+                card["name"] = "Bliss";
+                card["bliss_discard_color"] = "red";
+            });
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+
+            PhaseFiveSceneTests.Child("Card Bliss").GetComponent<UnityEngine.UI.Button>().onClick.Invoke();
+            yield return PhaseTwoSceneTests.Frames();
+
+            StringAssert.Contains("Discarded a", PhaseFiveSceneTests.Board().DetailText);
+            StringAssert.Contains(">red</color>", PhaseFiveSceneTests.Board().DetailText);
+            StringAssert.Contains("to Bliss", PhaseFiveSceneTests.Board().DetailText);
+        }
+
+        [UnityTest]
         public IEnumerator BoardLayout_Screenshots()
         {
             foreach (var game in new[] { 405, 406, 407 })

@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Generate the placeholder app icons (a "MOOD" wordmark in the UI's colors) under Assets/Icons/.
+"""Generate the app icons under Assets/Icons/: the back of a Mood Swings card.
+
+A black card with the four color corners (blue, purple, green and red, in wavy stripes with a little sun in each
+corner) around a white diamond with a hand-lettered M in it, like the card back the game is played with.
 
     pip install pillow
     python tools/make_icons.py
@@ -14,93 +17,145 @@ To use real art instead, replace icon-1024.png (and the two android-* layers) wi
 only the .ico step: python tools/make_icons.py --from-icon
 """
 import argparse
+import math
+import random
 import sys
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
 OUT = Path(__file__).resolve().parent.parent / "Assets" / "Icons"
-BACKGROUND = (18, 20, 26, 255)   # UiTheme.background
-ACCENT = (242, 173, 51, 255)     # UiTheme.accent
-FONT_CANDIDATES = [
-    "C:/Windows/Fonts/arialbd.ttf",
-    "/Library/Fonts/Arial Bold.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-]
+
+BLACK = (12, 12, 14, 255)
+WHITE = (250, 249, 245, 255)
+BLUE = (28, 132, 232, 255)
+PURPLE = (126, 56, 206, 255)
+GREEN = (24, 160, 84, 255)
+RED = (216, 52, 42, 255)
+
+SCALE = 2  # drawn at twice the size and shrunk, for smooth edges
 
 
-def font(size: int) -> ImageFont.FreeTypeFont:
-    for path in FONT_CANDIDATES:
-        if Path(path).exists():
-            return ImageFont.truetype(path, size)
-    return ImageFont.load_default()
+def stroke(draw, points, width, color):
+    """A thick line through closely spaced points, stamped as discs so it has no ragged joints."""
+    r = width / 2
+    for x, y in points:
+        draw.ellipse([x - r, y - r, x + r, y + r], fill=color)
 
 
-def wordmark(size: int, fraction: float) -> Image.Image:
-    """The word MOOD in the accent color, centered on a transparent square, `fraction` of its width wide."""
-    layer = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+def wavy(draw, origin, along, normal, length, offset, amplitude, wavelength, width, color):
+    """A stripe `offset` out from `origin` (the middle of an edge), running `length` each way along it, wobbling."""
+    points = []
+    steps = max(24, int(length / 2))
+    for i in range(steps + 1):
+        u = -length + 2 * length * i / steps
+        out = offset + amplitude * math.sin(2 * math.pi * u / wavelength)
+        points.append((origin[0] + along[0] * u + normal[0] * out, origin[1] + along[1] * u + normal[1] * out))
+    stroke(draw, points, width, color)
+
+
+def corners(size, d):
+    """The black card with its four color corners, for a diamond whose half-diagonal is `d` (a fraction of size)."""
+    s = size * SCALE
+    c = s / 2
+    d *= s
+    frame = 0.05 * s
+    img = Image.new("RGBA", (s, s), BLACK)
+    r2 = math.sqrt(2)
+
+    # (color, direction out of the middle of that corner's edge of the diamond, quadrant it lives in)
+    for color, (nx, ny), (qx, qy) in ((BLUE, (-1, -1), (0, 0)), (PURPLE, (1, -1), (1, 0)),
+                                       (GREEN, (-1, 1), (0, 1)), (RED, (1, 1), (1, 1))):
+        layer = Image.new("RGBA", (s, s), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(layer)
+        normal = (nx / r2, ny / r2)
+        along = (-ny / r2, nx / r2)
+        origin = (c + nx * d / 2, c + ny * d / 2)
+        gap = 0.075 * s
+        stripe = 0.030 * s
+        for k in range(8):
+            wavy(draw, origin, along, normal, d * 0.9, gap + k * 0.058 * s, 0.012 * s, 0.11 * s, stripe, color)
+
+        # A little sun in the corner: a ring and a dot.
+        sx = frame + 0.075 * s if qx == 0 else s - frame - 0.075 * s
+        sy = frame + 0.075 * s if qy == 0 else s - frame - 0.075 * s
+        backing = 0.058 * s
+        draw.ellipse([sx - backing, sy - backing, sx + backing, sy + backing], fill=BLACK)
+        ring = 0.036 * s
+        draw.ellipse([sx - ring, sy - ring, sx + ring, sy + ring], outline=color, width=int(0.011 * s))
+        dot = 0.014 * s
+        draw.ellipse([sx - dot, sy - dot, sx + dot, sy + dot], fill=color)
+
+        # Only this corner's quarter, inside the black frame.
+        mask = Image.new("L", (s, s), 0)
+        mdraw = ImageDraw.Draw(mask)
+        x0, x1 = (frame, c) if qx == 0 else (c, s - frame)
+        y0, y1 = (frame, c) if qy == 0 else (c, s - frame)
+        mdraw.rectangle([x0, y0, x1, y1], fill=255)
+        img.paste(layer, (0, 0), Image.composite(layer.split()[3], Image.new("L", (s, s), 0), mask))
+    return img.resize((size, size), Image.LANCZOS)
+
+
+def diamond_with_m(size, d, with_corners_behind=None):
+    """The white diamond, ragged at the edge, with a stylized M in it, on a transparent square (or on `with_corners_behind`)."""
+    s = size * SCALE
+    c = s / 2
+    d *= s
+    layer = Image.new("RGBA", (s, s), (0, 0, 0, 0))
     draw = ImageDraw.Draw(layer)
-    text = "MOOD"
-    target = size * fraction
-    px = size
-    while px > 8:
-        f = font(px)
-        box = draw.textbbox((0, 0), text, font=f)
-        if box[2] - box[0] <= target:
-            break
-        px -= 4
-    box = draw.textbbox((0, 0), text, font=f)
-    x = (size - (box[2] - box[0])) / 2 - box[0]
-    y = (size - (box[3] - box[1])) / 2 - box[1]
-    draw.text((x, y), text, font=f, fill=ACCENT)
-    # A thin accent rule under the word, like the title screen's tagline underline.
-    rule_y = y + box[3] + size * 0.035
-    draw.rectangle([ (size - target) / 2, rule_y, (size + target) / 2, rule_y + size * 0.012 ], fill=ACCENT)
+    draw.polygon([(c - d, c), (c, c - d), (c + d, c), (c, c + d)], fill=WHITE)
+
+    # Ink splatter along the edge, like the printed card back.
+    rng = random.Random(7)
+    for _ in range(int(260 * (s / 2048) + 160)):
+        edge = rng.randrange(4)
+        t = rng.random()
+        ax, ay = ((c - d, c), (c, c - d), (c + d, c), (c, c + d))[edge]
+        bx, by = ((c, c - d), (c + d, c), (c, c + d), (c - d, c))[edge]
+        x, y = ax + (bx - ax) * t, ay + (by - ay) * t
+        # Inward from the edge, mostly close to it.
+        inward = rng.random() ** 2.2 * 0.09 * s
+        nx, ny = c - x, c - y
+        norm = math.hypot(nx, ny)
+        x, y = x + nx / norm * inward, y + ny / norm * inward
+        r = rng.random() ** 2 * 0.007 * s + 0.0015 * s
+        draw.ellipse([x - r, y - r, x + r, y + r], fill=BLACK)
+
+    # The M: one wobbling stroke, left foot up to the left shoulder, down to the middle, up to the right shoulder, down.
+    m = [(-0.44, 0.40), (-0.47, -0.36), (0.0, 0.10), (0.47, -0.36), (0.44, 0.40)]
+    pts = []
+    for (ax, ay), (bx, by) in zip(m, m[1:]):
+        for i in range(0, 60):
+            t = i / 60
+            x = ax + (bx - ax) * t
+            y = ay + (by - ay) * t
+            wob = 0.018 * math.sin(2 * math.pi * (x + y) * 1.7)
+            pts.append((c + (x + wob) * d * 0.98, c + (y - wob) * d * 0.90))
+    pts.append((c + m[-1][0] * d * 0.98, c + m[-1][1] * d * 0.90))
+    stroke(draw, pts, 0.17 * d, BLACK)
+    # A small flourish under it, a short wavy rule.
+    rule = [(c + (-0.30 + 0.6 * i / 80) * d, c + 0.64 * d + 0.012 * s * math.sin(i * 0.18)) for i in range(81)]
+    stroke(draw, rule, 0.045 * d, BLACK)
+
+    layer = layer.resize((size, size), Image.LANCZOS)
+    if with_corners_behind is not None:
+        with_corners_behind.alpha_composite(layer)
+        return with_corners_behind
     return layer
 
 
 def make_icons() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
 
-    full = Image.new("RGBA", (1024, 1024), BACKGROUND)
-    full.alpha_composite(wordmark(1024, 0.74))
+    # The full icon: the whole card back, the diamond filling most of it.
+    full = corners(1024, 0.40)
+    diamond_with_m(1024, 0.40, with_corners_behind=full)
     full.save(OUT / "icon-1024.png")
 
-    Image.new("RGBA", (432, 432), BACKGROUND).save(OUT / "android-background.png")
-    wordmark(432, 0.66 * 0.86).save(OUT / "android-foreground.png")
-
-
-def make_icons() -> None:
-    OUT.mkdir(parents=True, exist_ok=True)
-
-    full = Image.new("RGBA", (1024, 1024), BACKGROUND)
-    full.alpha_composite(wordmark(1024, 0.74))
-    full.save(OUT / "icon-1024.png")
-
-    Image.new("RGBA", (432, 432), BACKGROUND).save(OUT / "android-background.png")
-    wordmark(432, 0.66 * 0.86).save(OUT / "android-foreground.png")
-
-
-def make_icons() -> None:
-    OUT.mkdir(parents=True, exist_ok=True)
-
-    full = Image.new("RGBA", (1024, 1024), BACKGROUND)
-    full.alpha_composite(wordmark(1024, 0.74))
-    full.save(OUT / "icon-1024.png")
-
-    Image.new("RGBA", (432, 432), BACKGROUND).save(OUT / "android-background.png")
-    wordmark(432, 0.66 * 0.86).save(OUT / "android-foreground.png")
-
-    for name, mask in (("android-round.png", "circle"), ("android-legacy.png", "rounded")):
-        icon = full.resize((192, 192), Image.LANCZOS)
-        shape = Image.new("L", (192, 192), 0)
-        draw = ImageDraw.Draw(shape)
-        if mask == "circle":
-            draw.ellipse([0, 0, 191, 191], fill=255)
-        else:
-            draw.rounded_rectangle([0, 0, 191, 191], radius=36, fill=255)
-        icon.putalpha(shape)
-        icon.save(OUT / name)
+    # The adaptive icon: the corners are the background layer and the diamond the foreground, which stays inside the
+    # central 66% so any shape of mask leaves it whole.
+    corners(432, 0.27).save(OUT / "android-background.png")
+    diamond_with_m(432, 0.27).save(OUT / "android-foreground.png")
 
 
 def make_ico() -> None:
