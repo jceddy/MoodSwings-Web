@@ -14,6 +14,7 @@ namespace MoodSwings.Core
         private const string DarkModeKey = "device.darkMode";
         private const string DevServerKey = "device.devServer";
         private const string HideLockedKey = "device.achievements.hideLocked";
+        private const string ChatSeenPrefix = "device.chatSeen.";
         private const string SeenAtKey = "device.achievements.seenAt";
 
         private readonly IKeyValueStore _store;
@@ -99,6 +100,15 @@ namespace MoodSwings.Core
                 }
             }
         }
+
+        /// <summary>
+        /// How many of a game's chat messages have been read on this device, so a game opened again (or the app coming back
+        /// from the background) doesn't count them as unread a second time.
+        /// </summary>
+        public int ChatSeen(int gameId) =>
+            int.TryParse(_store.GetString(ChatSeenPrefix + gameId), out var count) ? count : 0;
+
+        public void SetChatSeen(int gameId, int count) => _store.SetString(ChatSeenPrefix + gameId, count.ToString());
 
         private bool Read(string key) => _store.GetString(key) != "0";
     }

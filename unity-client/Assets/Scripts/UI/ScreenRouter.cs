@@ -62,7 +62,9 @@ namespace MoodSwings.UI
             var previous = Current;
             if (previous != null)
             {
-                if (addToHistory)
+                // Showing the screen that is already up (a notification for another game, say) mustn't leave a copy of
+                // it to go "back" to: it would come back with nothing to show.
+                if (addToHistory && previous != next)
                 {
                     _history.Push((previous, null));
                 }

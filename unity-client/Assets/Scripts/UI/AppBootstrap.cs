@@ -14,12 +14,23 @@ namespace MoodSwings.UI
     {
         private ScreenRouter _router;
         private GameObject _banner;
+        private Rect _bannerSafeArea;
+        private Vector2Int _bannerScreenSize;
 
         private void Start()
         {
             _router = GetComponent<ScreenRouter>();
             AppServices.Api.MaintenanceEntered += OnMaintenance;
             AppServices.Api.SessionExpired += OnSessionExpired;
+            // The camera's color is what shows around a notch and in the rounded corners, so it follows the palette.
+            var canvas = GetComponent<Canvas>();
+            var camera = canvas != null && canvas.worldCamera != null ? canvas.worldCamera : Camera.main;
+            if (camera != null)
+            {
+                camera.clearFlags = CameraClearFlags.SolidColor;
+                camera.backgroundColor = AppServices.Theme.background;
+            }
+
             BuildServerBanner();
             _router.Show<SplashScreen>();
         }
@@ -29,18 +40,29 @@ namespace MoodSwings.UI
         {
             var theme = AppServices.Theme;
             var tag = UiFactory.Create("Server banner", transform);
-            tag.anchorMin = tag.anchorMax = tag.pivot = new Vector2(1f, 1f);
+            _banner = tag.gameObject;
+            tag.pivot = new Vector2(1f, 1f);
             tag.sizeDelta = new Vector2(150f, 34f);
-            tag.anchoredPosition = new Vector2(-12f, -8f);
+            FitServerBanner();
             var back = tag.gameObject.AddComponent<UnityEngine.UI.Image>();
             back.color = new Color(theme.danger.r, theme.danger.g, theme.danger.b, 0.85f);
             back.raycastTarget = false;
             var label = UiFactory.Label(tag, "DEV SERVER", 20, Color.white, TextAnchor.MiddleCenter, FontStyle.Bold);
             label.raycastTarget = false;
             UiFactory.Stretch(label.rectTransform);
-            _banner = tag.gameObject;
             AppServices.ServerChanged += UpdateServerBanner;
             UpdateServerBanner();
+        }
+
+        // In the upper right corner of the safe area, a little way in: the corner of the screen itself can be rounded off.
+        private void FitServerBanner()
+        {
+            var tag = (RectTransform)_banner.transform;
+            ScreenSafeArea.Anchors(ScreenSafeArea.Current, Screen.width, Screen.height, out _, out var max);
+            tag.anchorMin = tag.anchorMax = max;
+            tag.anchoredPosition = new Vector2(-32f, -16f);
+            _bannerSafeArea = ScreenSafeArea.Current;
+            _bannerScreenSize = new Vector2Int(Screen.width, Screen.height);
         }
 
         private void UpdateServerBanner()
@@ -106,6 +128,12 @@ namespace MoodSwings.UI
 
         private void Update()
         {
+            if (_banner != null && (ScreenSafeArea.Current != _bannerSafeArea
+                || _bannerScreenSize != new Vector2Int(Screen.width, Screen.height)))
+            {
+                FitServerBanner();
+            }
+
             if (AppExit.CanToggleFullscreen && KeyInput.FullscreenTogglePressed)
             {
                 AppExit.ToggleFullscreen();

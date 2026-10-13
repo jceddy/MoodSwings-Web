@@ -400,6 +400,33 @@ namespace MoodSwings.Tests
             Assert.IsTrue(VisibleTexts().Contains("Client " + Application.version), "the menu says which client this is");
         }
 
+        [UnityTest]
+        public IEnumerator Chat_WhatYouHaveRead_StaysReadWhenYouLeaveAndComeBack()
+        {
+            var server = new BoardServer
+            {
+                PlayerState = id => Edited(407, s => s["chat_messages"] = new JArray(
+                    new JObject
+                    {
+                        ["id"] = 1, ["sender_user_id"] = 2, ["sender_username"] = "bshaftoe", ["channel"] = "game",
+                        ["message_text"] = "GL;HF", ["created_at"] = "2026-10-01 12:00:00",
+                    })),
+            };
+            yield return OpenBoard(server, 407);
+            yield return PhaseFiveSceneTests.OpenMenu();
+            Assert.IsNull(Child("Unread chat"));
+
+            // Away to the main menu (as when the app is put down and picked up again) and back to the same game.
+            var router = UnityEngine.Object.FindAnyObjectByType<ScreenRouter>();
+            router.Show<HomeScreen>();
+            yield return PhaseTwoSceneTests.Frames(3);
+            router.Show<BoardScreen>(BoardSession.ForPlayer(AppServices.Api, 407));
+            yield return MainSceneTests.WaitFor<BoardScreen>();
+            yield return PhaseTwoSceneTests.Frames(8);
+
+            Assert.IsNull(Child("Unread chat"), "a message that was read is not unread again");
+        }
+
         // --- spectating -------------------------------------------------------------------------
 
         [UnityTest]

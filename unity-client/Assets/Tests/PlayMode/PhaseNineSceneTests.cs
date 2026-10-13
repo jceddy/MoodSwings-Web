@@ -1404,6 +1404,50 @@ namespace MoodSwings.Tests
             });
 
         [UnityTest]
+        public IEnumerator Back_AfterAScreenWasShownOverItself_DoesNotReturnToAnEmptyBoard()
+        {
+            var server = Serve();
+            server.State = Quiet(406, s => { });
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+            var router = Object.FindAnyObjectByType<ScreenRouter>();
+
+            // As when a notification for another game is tapped while a board is up.
+            router.Show<BoardScreen>(BoardSession.ForPlayer(AppServices.Api, 405));
+            yield return MainSceneTests.WaitFor<BoardScreen>();
+            Assert.IsTrue(router.Back());
+            yield return PhaseTwoSceneTests.Frames(3);
+
+            Assert.IsInstanceOf<HomeScreen>(router.Current, "straight back to where the first board was opened from");
+        }
+
+        [UnityTest]
+        public IEnumerator TheCameraBackground_FollowsThePalette_AndTheDevTagStaysInsideTheSafeArea()
+        {
+            MainSceneTests.DarkMode = true;
+            ScreenSafeArea.Override = new Rect(100f, 0f, Screen.width - 200f, Screen.height);
+            try
+            {
+                var server = Serve();
+                yield return LoginScreenUp(server);
+                Assert.AreEqual(AppServices.Theme.background, Camera.main.backgroundColor, "so a notch isn't a light strip in dark mode");
+
+                TapVersion(7);
+                yield return PhaseTwoSceneTests.Frames(3);
+                var tag = (RectTransform)Banner().transform;
+                var corners = new Vector3[4];
+                tag.GetWorldCorners(corners);
+                var right = RectTransformUtility.WorldToScreenPoint(Camera.main, corners[2]).x;
+                Assert.LessOrEqual(right, Screen.width - 100f, "inside the safe area, not up against the edge");
+            }
+            finally
+            {
+                ScreenSafeArea.Override = null;
+                MainSceneTests.DarkMode = false;
+                AppServices.Theme.Apply(dark: false);
+            }
+        }
+
+        [UnityTest]
         public IEnumerator BoardLayout_Screenshots()
         {
             foreach (var game in new[] { 405, 406, 407 })

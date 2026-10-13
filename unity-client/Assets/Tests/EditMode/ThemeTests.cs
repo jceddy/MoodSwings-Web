@@ -73,6 +73,18 @@ namespace MoodSwings.Tests
         }
 
         [Test]
+        public void ChatSeen_IsRememberedPerGame()
+        {
+            var store = new InMemoryKeyValueStore();
+            Assert.AreEqual(0, new DeviceSettings(store).ChatSeen(407));
+
+            new DeviceSettings(store).SetChatSeen(407, 3);
+
+            Assert.AreEqual(3, new DeviceSettings(store).ChatSeen(407));
+            Assert.AreEqual(0, new DeviceSettings(store).ChatSeen(408), "another game has its own count");
+        }
+
+        [Test]
         public void DarkMode_IsOffUntilSwitchedOn_AndRemembered()
         {
             var store = new InMemoryKeyValueStore();

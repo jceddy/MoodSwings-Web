@@ -272,13 +272,15 @@ namespace MoodSwings.UI
             _chatError.text = string.Empty;
             SetMessage(string.Empty);
             _primaryAction.gameObject.SetActive(false);
-            _chatSeen = 0;
+            _chatSeen = _session == null ? 0 : AppServices.Device.ChatSeen(_session.GameId);
             _chatTabShown = false;
 
             if (_session == null)
             {
                 _draft.Hide();
                 ClearTable();
+                // Nothing of a game that was shown before stays up (the banner, the round line...).
+                _banner.text = _topBanner.text = _roundLine.text = _topRound.text = string.Empty;
                 ShowLoading("No game to show.");
                 return;
             }
@@ -764,8 +766,23 @@ namespace MoodSwings.UI
 
             if (chat && _menuOverlay.activeSelf && _session?.State != null)
             {
-                _chatSeen = _session.State.ChatMessages.Count;
+                MarkChatSeen(_session.State.ChatMessages.Count);
                 UpdateMenuBadge();
+            }
+        }
+
+        // Remembered on the device, so it survives leaving the game or the app.
+        private void MarkChatSeen(int count)
+        {
+            if (count == _chatSeen)
+            {
+                return;
+            }
+
+            _chatSeen = count;
+            if (_session != null)
+            {
+                AppServices.Device.SetChatSeen(_session.GameId, count);
             }
         }
 
@@ -776,7 +793,7 @@ namespace MoodSwings.UI
             // Chat that is being read as it arrives isn't unread.
             if (_menuOverlay.activeSelf && _chatTabShown && state != null)
             {
-                _chatSeen = state.ChatMessages.Count;
+                MarkChatSeen(state.ChatMessages.Count);
                 unread = 0;
             }
 
