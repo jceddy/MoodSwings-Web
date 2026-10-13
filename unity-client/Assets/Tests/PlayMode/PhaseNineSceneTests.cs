@@ -1591,12 +1591,11 @@ namespace MoodSwings.Tests
         public IEnumerator OnTheBoard_TheMusicFollowsTheColorOfTheLatestMood_AndLeavingBringsTheMainThemeBack()
         {
             var server = Serve();
-            server.State = Quiet(405, s => { });
-            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+            server.State = Quiet(407, s => { });
+            yield return PhaseFiveSceneTests.OpenBoard(server, 407);
 
-            var inPlay = (Newtonsoft.Json.Linq.JArray)server.State["in_play"];
-            var expected = MusicThemes.ForColor((string)inPlay[inPlay.Count - 1]["color"]);
-            Assert.AreNotEqual(MusicTheme.Main, expected, "the fixture has moods in play");
+            // BotSageQuick's Confusion (blue) was played last -- not the mood listed last (Tranquility, green).
+            var expected = MusicTheme.Blue;
             Assert.AreEqual(expected, MusicPlayer.Instance.Theme);
 
             yield return new WaitForSeconds(MusicPlayer.FadeSeconds + 0.5f);

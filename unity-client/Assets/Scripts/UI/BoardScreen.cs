@@ -1254,7 +1254,7 @@ namespace MoodSwings.UI
             var theme = AppServices.Theme;
             _loading.gameObject.SetActive(false);
             React(state);
-            MusicPlayer.Instance.SetTheme(MusicThemes.For(state));
+            MusicPlayer.Instance.SetTheme(MusicThemes.For(state, AppServices.Decklists?.Catalog));
 
             _topBanner.text = BoardDisplay.TurnBanner(state);
             _banner.text = BoardDisplay.TurnBanner(state, includeTurn: false);

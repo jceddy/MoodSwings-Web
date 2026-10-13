@@ -1,4 +1,7 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text.RegularExpressions;
 using MoodSwings.Networking;
 
 namespace MoodSwings.Core
@@ -34,19 +37,57 @@ namespace MoodSwings.Core
             }
         }
 
+        // "bshaftoe played Ambition from hand (discard card: Confusion); ..." -- who, and which card.
+        private static readonly Regex Played = new Regex(@"^(?<who>.+?) played (?<card>.+?)(?: from |,|;| \(|$)", RegexOptions.Compiled);
+
         /// <summary>
-        /// The theme for a game on the board: the color of the mood played most recently (the server lists the moods in
-        /// play in the order they came into play), or the main theme before any has been played this round.
+        /// The theme for a game on the board: the color of the mood played most recently by anyone, which the game's
+        /// recent events say (the moods in play are listed by card, not in the order they were played). The main theme
+        /// before anything has been played this round, once the round has been scored, or when there is nothing to go on.
         /// </summary>
-        public static MusicTheme For(GameState state)
+        /// <param name="catalog">Every card, if it is known: gives the color of a mood that has already left play.</param>
+        public static MusicTheme For(GameState state, IEnumerable<BoardCard> catalog = null)
         {
             var inPlay = state?.InPlay;
-            if (inPlay == null || inPlay.Count == 0)
+            if (inPlay == null || inPlay.Count == 0 || state.RecentEvents == null)
             {
                 return MusicTheme.Main;
             }
 
-            return ForColor(inPlay[inPlay.Count - 1].Color);
+            foreach (var entry in state.RecentEvents.OrderByDescending(e => e.Id))
+            {
+                var text = entry.Description ?? string.Empty;
+                if (text.StartsWith("Round scored", StringComparison.OrdinalIgnoreCase))
+                {
+                    return MusicTheme.Main; // a new round, with nothing played in it yet
+                }
+
+                var match = Played.Match(text);
+                if (!match.Success)
+                {
+                    continue;
+                }
+
+                var color = ColorOfPlayed(state, match.Groups["who"].Value, match.Groups["card"].Value, catalog);
+                return color != null ? ForColor(color) : MusicTheme.Main;
+            }
+
+            return MusicTheme.Main;
+        }
+
+        // The color of the card a player played: the mood in play by that name (theirs, if more than one), else the catalog's.
+        private static string ColorOfPlayed(GameState state, string who, string cardName, IEnumerable<BoardCard> catalog)
+        {
+            var named = state.InPlay.Where(c => string.Equals(c.Name, cardName, StringComparison.OrdinalIgnoreCase)).ToList();
+            var ownerIds = state.Players.Where(p => string.Equals(p.Username, who, StringComparison.OrdinalIgnoreCase)).Select(p => p.GamePlayerId).ToList();
+            var theirs = named.FirstOrDefault(c => c.OwnerGamePlayerId.HasValue && ownerIds.Contains(c.OwnerGamePlayerId.Value));
+            var found = theirs ?? named.FirstOrDefault();
+            if (found != null)
+            {
+                return found.Color;
+            }
+
+            return catalog?.FirstOrDefault(c => string.Equals(c.Name, cardName, StringComparison.OrdinalIgnoreCase))?.Color;
         }
 
         /// <summary>The level of one track after a step of a fade: moves toward 1 (wanted) or 0, taking `seconds` to cross it.</summary>

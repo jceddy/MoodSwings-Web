@@ -31,17 +31,60 @@ namespace MoodSwings.Tests
         }
 
         [Test]
-        public void TheBoard_PlaysTheThemeOfTheMoodPlayedMostRecently()
+        public void TheBoard_PlaysTheThemeOfTheMoodPlayedMostRecently_ByAnyone()
+        {
+            // Game 406: BotSageQuick played Frustration (red), and then you played Ambition (black).
+            var state = BoardFixtures.Load(406);
+            Assert.AreEqual(MusicTheme.Black, MusicThemes.For(state), "your own play");
+
+            // Now an opponent's play is the latest one: the music follows it too.
+            var newest = state.RecentEvents.Max(e => e.Id);
+            state.RecentEvents.Add(new BoardEvent { Id = newest + 2, Description = "BotSageQuick played Frustration from hand" });
+            Assert.AreEqual(MusicTheme.Red, MusicThemes.For(state), "an opponent's play counts");
+        }
+
+        [Test]
+        public void TheLatestPlay_IsNotTheMoodWithTheHighestCardNumber()
+        {
+            // Game 407 lists Tranquility (green) last, but the latest play was BotSageQuick's Confusion (blue).
+            var state = BoardFixtures.Load(407);
+            Assert.AreEqual("Tranquility", state.InPlay.Last().Name);
+
+            Assert.AreEqual(MusicTheme.Blue, MusicThemes.For(state));
+        }
+
+        [Test]
+        public void AfterTheRoundIsScored_ItIsTheMainThemeAgainUntilSomethingIsPlayed()
         {
             var state = BoardFixtures.Load(406);
-            Assert.Greater(state.InPlay.Count, 1);
+            var newest = state.RecentEvents.Max(e => e.Id);
+            state.RecentEvents.Add(new BoardEvent { Id = newest + 1, Description = "Round scored (bshaftoe: 4, BotSage: 9) -- BotSage won" });
+            Assert.AreEqual(MusicTheme.Main, MusicThemes.For(state));
 
-            state.InPlay[state.InPlay.Count - 1].Color = "green";
-            Assert.AreEqual(MusicTheme.Green, MusicThemes.For(state));
-
-            // The server lists moods in the order they came into play, so the last one is the latest.
-            state.InPlay[state.InPlay.Count - 1].Color = "red";
+            state.RecentEvents.Add(new BoardEvent { Id = newest + 2, Description = "BotSageQuick played Frustration from hand" });
             Assert.AreEqual(MusicTheme.Red, MusicThemes.For(state));
+        }
+
+        [Test]
+        public void AMoodThatHasLeftPlay_IsColoredFromTheCatalog()
+        {
+            var state = BoardFixtures.Load(406);
+            var newest = state.RecentEvents.Max(e => e.Id);
+            state.RecentEvents.Add(new BoardEvent { Id = newest + 1, Description = "BotSage played Joy from hand (using an extra play from Gluttony)" });
+            Assert.AreEqual(MusicTheme.Main, MusicThemes.For(state), "not in play and no catalog");
+
+            var catalog = new[] { new BoardCard { Name = "Joy", Color = "white" } };
+            Assert.AreEqual(MusicTheme.White, MusicThemes.For(state, catalog));
+        }
+
+        [Test]
+        public void TheMusicFiles_AreAllThere_AndAreDifferentPieces()
+        {
+            var clips = new[] { MusicTheme.Main, MusicTheme.White, MusicTheme.Blue, MusicTheme.Black, MusicTheme.Red, MusicTheme.Green }
+                .Select(t => UnityEngine.Resources.Load<UnityEngine.AudioClip>("Music/" + MusicThemes.ClipName(t))).ToList();
+
+            CollectionAssert.DoesNotContain(clips, null);
+            Assert.AreEqual(clips.Count, clips.Select(c => c.length).Distinct().Count(), "no two themes are the same recording");
         }
 
         [Test]

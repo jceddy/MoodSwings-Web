@@ -101,9 +101,10 @@ ended, someone else spoke -- and the board reacts to each:
   (`SoundBank`) because the repo has no sound files. Replace `SoundBank.Create` with
   real clips when there are some; nothing else needs to change.
 - **Music:** `MusicPlayer` plays the main theme while the app is open. On the board it
-  crossfades (two seconds) to the theme of the color of the mood played most recently
-  (the last mood in the server's in-play list; none in play means the main theme), and
-  leaving the board brings the main theme back. Each theme keeps its place while it is
+  crossfades (two seconds) to the theme of the color of the mood played most recently by
+  anyone (read from the game's recent events -- the in-play list is ordered by card, not by
+  when it was played; the main theme again once the round has been scored, until something is
+  played in the next), and leaving the board brings the main theme back. Each theme keeps its place while it is
   faded out. The tracks are `Assets/Resources/Music/{main,white,blue,black,red,green}.mp3`
   (`MusicImporter` streams them as Vorbis rather than decoding them into memory); they came
   from `Boots_on_the_Tavern_Floor` (main), `Beneath_the_Willow_Canopy` (white),
