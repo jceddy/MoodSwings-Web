@@ -3815,6 +3815,15 @@ final class GameService
                 $sourceInstanceId = $sourceInstanceStmt->fetchColumn();
                 if ($sourceInstanceId !== false) {
                     $extraPlayGrant = ['sourceCardId' => (int) $sourceInstanceId];
+                    // A Hope source is Hope's own real turn-start grant, which
+                    // is lost if Hope leaves play before the play is used --
+                    // exactly what computeFreshGrants() builds -- rather than a
+                    // banked play (Joy/Generosity) that outlives its source.
+                    $sourceEffectKeyStmt = $pdo->prepare('SELECT effect_key FROM cards WHERE id = :id');
+                    $sourceEffectKeyStmt->execute(['id' => $extraPlaySourceCatalogCardId]);
+                    if ($sourceEffectKeyStmt->fetchColumn() === 'hope') {
+                        $extraPlayGrant['requiresSourceInPlay'] = true;
+                    }
                 }
             }
             $playGrants = $extraPlayGrant !== null ? [null, $extraPlayGrant] : [null];

@@ -1757,6 +1757,127 @@ final class PuzzleContentTest extends TestCase
         $this->assertGameFailed($gameId);
     }
 
+    /**
+     * Starts a Hope Springs Eternal attempt and plays Scorn, suppressing
+     * $scornTargetCatalogId (the opponent's Patience by default). Returns the
+     * game and seat ids for the later plays.
+     *
+     * @return array{gameId: int, p: int, opp: int}
+     */
+    private function startHopeSpringsEternal(int $scornTargetCatalogId = 21): array
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('hope-springs-eternal');
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 24, 'hand'), [
+            'target_mood_id' => $this->ownedInstanceId($gameId, $scornTargetCatalogId, 'in_play', $opp), // Scorn suppresses the Patience
+        ]);
+
+        return ['gameId' => $gameId, 'p' => $p, 'opp' => $opp];
+    }
+
+    /** Fear, bouncing Hope (or nothing) and suppressing the opponent's blue Bashfulness. */
+    private function playHopeSpringsEternalFear(int $gameId, int $p, int $opp, bool $bounceHope): void
+    {
+        $choices = ['scorn_suppress_target' => $this->ownedInstanceId($gameId, 30, 'in_play', $opp)]; // Bashfulness
+        if ($bounceHope) {
+            $choices['hand_mood_id'] = $this->ownedInstanceId($gameId, 124, 'in_play', $p);
+        }
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 38, 'hand'), $choices);
+    }
+
+    /**
+     * "Hope Springs Eternal": the only winning line (exhaustive search of the
+     * real flow, 70 states) is Scorn suppressing the Patience; Fear bouncing
+     * Hope (its own play already spent) and suppressing Bashfulness; Hope
+     * again, suppressing Vulnerability, which grants a fresh play; then
+     * Stubbornness, suppressing Chaos. Scorn 2 + Hope 0 + Fear 0 +
+     * Stubbornness 3 = 5 against the Apathy's 4. See migration 0453's own
+     * docblock.
+     */
+    public function testHopeSpringsEternalSolvedByReplayingHopeUnderScorn(): void
+    {
+        ['gameId' => $gameId, 'p' => $p, 'opp' => $opp] = $this->startHopeSpringsEternal();
+
+        $this->playHopeSpringsEternalFear($gameId, $p, $opp, true);
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 124, 'hand'), [
+            'scorn_suppress_target' => $this->ownedInstanceId($gameId, 132, 'in_play', $opp), // Vulnerability
+        ]);
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 102, 'hand'), [
+            'scorn_suppress_target' => $this->ownedInstanceId($gameId, 85, 'in_play', $opp), // Chaos
+        ]);
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameSolved($gameId, $p);
+    }
+
+    /** Without the Hope bounce the green Vulnerability stays: 5 against 5, and a tie goes to the opponent. */
+    public function testHopeSpringsEternalSkippingTheHopeBounceOnlyTies(): void
+    {
+        ['gameId' => $gameId, 'p' => $p, 'opp' => $opp] = $this->startHopeSpringsEternal();
+
+        $this->playHopeSpringsEternalFear($gameId, $p, $opp, false);
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 102, 'hand'), [
+            'scorn_suppress_target' => $this->ownedInstanceId($gameId, 85, 'in_play', $opp),
+        ]);
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameFailed($gameId);
+    }
+
+    /** Scorn's first suppress aimed at the Apathy instead of the Patience leaves the dearer mood: 5 against 5. */
+    public function testHopeSpringsEternalSuppressingTheApathyFirstOnlyTies(): void
+    {
+        ['gameId' => $gameId, 'p' => $p, 'opp' => $opp] = $this->startHopeSpringsEternal(55);
+
+        $this->playHopeSpringsEternalFear($gameId, $p, $opp, true);
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 124, 'hand'), [
+            'scorn_suppress_target' => $this->ownedInstanceId($gameId, 132, 'in_play', $opp),
+        ]);
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 102, 'hand'), [
+            'scorn_suppress_target' => $this->ownedInstanceId($gameId, 85, 'in_play', $opp),
+        ]);
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameFailed($gameId);
+    }
+
+    /** Indifference looks better than Stubbornness (4 against 3) but is blue, like Fear: nothing new to suppress, so Chaos stays. */
+    public function testHopeSpringsEternalPlayingIndifferenceInsteadLoses(): void
+    {
+        ['gameId' => $gameId, 'p' => $p, 'opp' => $opp] = $this->startHopeSpringsEternal();
+
+        $this->playHopeSpringsEternalFear($gameId, $p, $opp, true);
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 124, 'hand'), [
+            'scorn_suppress_target' => $this->ownedInstanceId($gameId, 132, 'in_play', $opp),
+        ]);
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 44, 'hand'));
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameFailed($gameId);
+    }
+
+    /**
+     * A seeded extra play whose source is Hope is Hope's real turn-start grant:
+     * lost if Hope leaves play before it is used. Fear played first (spending
+     * the turn's own play) and bouncing Hope leaves only Fear's own extra
+     * play; Hope in play would have left two.
+     */
+    public function testHopeSeededGrantIsLostWhenHopeIsBouncedBeforeItIsUsed(): void
+    {
+        foreach ([[true, 1], [false, 2]] as [$bounce, $expectedPlaysRemaining]) {
+            ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('hope-springs-eternal');
+            $opp = $this->opponentGamePlayerId($gameId, $p);
+
+            $choices = $bounce ? ['hand_mood_id' => $this->ownedInstanceId($gameId, 124, 'in_play', $p)] : [];
+            $this->playDriven($gameId, $p, $this->instanceId($gameId, 38, 'hand'), $choices);
+
+            $stmt = $this->pdo->prepare("SELECT plays_remaining FROM game_rounds WHERE game_id = :g AND status = 'in_progress'");
+            $stmt->execute(['g' => $gameId]);
+            self::assertSame($expectedPlaysRemaining, (int) $stmt->fetchColumn(), $bounce ? 'Hope bounced unused' : 'Hope kept');
+        }
+    }
+
     /** A solve is never marked failed, and puzzle_failed is false while an attempt is open. */
     public function testDeadHeatSolveIsNotFailedAndOpenAttemptIsNotFailed(): void
     {

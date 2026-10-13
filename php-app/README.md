@@ -13924,6 +13924,32 @@ than a parallel bespoke system:
   Discarding Chivalry instead is 38-39. An exhaustive search found only that
   discard winning; playing Stubbornness first reaches the same board.
 
+- **20th puzzle, "Hope Springs Eternal"** (reported live: a Hope puzzle where
+  bouncing Hope and replaying it gets an extra play), hard, `win_game`.
+  Both sides have two round wins and the opponent went first (a tie is
+  theirs). The opponent has Apathy (4), Patience (5 -- 1 only if its owner
+  played it this round), Vulnerability (1 -- 7 only if a card was put into the
+  discard pile this round), Bashfulness (6) and Chaos (6) in play: 22 against
+  nothing. The solver has Hope in play, holds Scorn, Fear, Stubbornness and
+  Indifference, and has two plays (Hope's, seeded through
+  `extra_play_source_card_id`). Every mood played after Scorn is a chance to
+  suppress a mood of the same color, and Fear (blue) and a replayed Hope
+  (green) are plays that cost nothing. The one winning line: Scorn
+  suppressing the Patience; Fear bouncing Hope (its own play already spent)
+  and suppressing Bashfulness; Hope again, suppressing Vulnerability, which
+  grants a fresh play; Stubbornness suppressing Chaos. Scorn 2 + Stubbornness
+  3 = 5 against the Apathy's 4. Skipping the Hope bounce leaves the
+  Vulnerability: 5-5, a tie, and so does suppressing the Apathy rather than
+  the Patience first. Indifference (4, blue) looks better than Stubbornness
+  but suppresses nothing new. An exhaustive search (70 states: every Scorn
+  target, Fear's bounce choice and Scorn reaction on every play) found
+  exactly one winning line. One small engine fix came with it: a seeded
+  extra play whose source is Hope (`extra_play_source_card_id`) is now Hope's
+  real turn-start grant (`requiresSourceInPlay`), lost if Hope leaves play
+  before the play is used, rather than a banked play that outlives its
+  source -- without it bouncing an unspent Hope would keep the play and gain
+  another.
+
 ### Duel: separate per-player decks
 
 `format: 'duel'` and `format: 'draft'` (see "Draft format" below) are the
