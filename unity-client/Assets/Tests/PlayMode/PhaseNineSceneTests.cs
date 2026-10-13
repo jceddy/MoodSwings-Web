@@ -1571,6 +1571,82 @@ namespace MoodSwings.Tests
             StringAssert.Contains("to Bliss", PhaseFiveSceneTests.Board().DetailText);
         }
 
+        private static UnityEngine.UI.Slider SliderNamed(string name) =>
+            Object.FindObjectsByType<UnityEngine.UI.Slider>(FindObjectsInactive.Exclude).FirstOrDefault(x => x.name == name);
+
+        [UnityTest]
+        public IEnumerator TheMainTheme_PlaysWhileTheAppIsOpen_AtTheDeviceVolume()
+        {
+            yield return Home(Serve());
+            yield return new WaitForSeconds(0.8f);
+
+            var music = MusicPlayer.Instance;
+            Assert.AreEqual(MusicTheme.Main, music.Theme);
+            Assert.AreEqual(AppServices.Device.MusicVolume, music.Gain, 0.0001f);
+            Assert.Greater(music.LevelOf(MusicTheme.Main), 0f, "it is fading in (so the clip loaded)");
+            Assert.Greater(music.VolumeOf(MusicTheme.Main), 0f);
+        }
+
+        [UnityTest]
+        public IEnumerator OnTheBoard_TheMusicFollowsTheColorOfTheLatestMood_AndLeavingBringsTheMainThemeBack()
+        {
+            var server = Serve();
+            server.State = Quiet(405, s => { });
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+
+            var inPlay = (Newtonsoft.Json.Linq.JArray)server.State["in_play"];
+            var expected = MusicThemes.ForColor((string)inPlay[inPlay.Count - 1]["color"]);
+            Assert.AreNotEqual(MusicTheme.Main, expected, "the fixture has moods in play");
+            Assert.AreEqual(expected, MusicPlayer.Instance.Theme);
+
+            yield return new WaitForSeconds(MusicPlayer.FadeSeconds + 0.5f);
+            Assert.AreEqual(1f, MusicPlayer.Instance.LevelOf(expected), 0.05f, "faded all the way in");
+            Assert.AreEqual(0f, MusicPlayer.Instance.LevelOf(MusicTheme.Main), 0.05f, "and the main theme out");
+
+            Object.FindAnyObjectByType<ScreenRouter>().Show<HomeScreen>();
+            yield return PhaseTwoSceneTests.Frames(3);
+            Assert.AreEqual(MusicTheme.Main, MusicPlayer.Instance.Theme);
+        }
+
+        [UnityTest]
+        public IEnumerator Settings_HaveMusicAndEffectsVolumes_AndMuteForEach()
+        {
+            yield return Home(Serve());
+            Object.FindAnyObjectByType<ScreenRouter>().Show<SettingsScreen>();
+            yield return MainSceneTests.WaitFor<SettingsScreen>();
+
+            var music = SliderNamed("Music volume");
+            var effects = SliderNamed("Effects volume");
+            Assert.IsNotNull(music);
+            Assert.IsNotNull(effects);
+            Assert.AreEqual(AppServices.Device.MusicVolume, music.value, 0.0001f);
+            Assert.AreEqual(AppServices.Device.EffectsVolume, effects.value, 0.0001f);
+            foreach (var scroll in Object.FindObjectsByType<UnityEngine.UI.ScrollRect>(FindObjectsInactive.Exclude))
+            {
+                scroll.verticalNormalizedPosition = 0f;
+            }
+
+            yield return PhaseTwoSceneTests.Frames(3);
+            ScreenshotHelper.Capture("settings-device");
+            Assert.IsNotNull(PhaseTwoSceneTests.FindToggle("Music"));
+            Assert.IsNotNull(PhaseTwoSceneTests.FindToggle("Sound effects"));
+
+            music.value = 0.2f;
+            effects.value = 0.4f;
+            yield return PhaseTwoSceneTests.Frames(3);
+            Assert.AreEqual(0.2f, AppServices.Device.MusicVolume, 0.0001f);
+            Assert.AreEqual(0.4f, AppServices.Device.EffectsVolume, 0.0001f);
+            Assert.AreEqual(0.2f, MusicPlayer.Instance.Gain, 0.0001f, "the music follows the slider as it moves");
+            Assert.IsTrue(Texts().Contains("20%"));
+            Assert.IsTrue(Texts().Contains("40%"));
+
+            PhaseTwoSceneTests.FindToggle("Music").isOn = false;
+            yield return PhaseTwoSceneTests.Frames(3);
+            Assert.IsFalse(AppServices.Device.MusicOn);
+            Assert.AreEqual(0f, MusicPlayer.Instance.Gain, "muted");
+            Assert.IsTrue(AppServices.Device.SoundOn, "the effects are a separate switch");
+        }
+
         [UnityTest]
         public IEnumerator BoardLayout_Screenshots()
         {

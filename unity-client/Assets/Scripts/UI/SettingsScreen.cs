@@ -132,6 +132,17 @@ namespace MoodSwings.UI
                 AppServices.Device.DarkMode, SetDarkMode);
             AddDeviceRow(theme, "Sound effects", "Chimes for your turn, cards played, and the end of a round.",
                 AppServices.Device.SoundOn, on => AppServices.Device.SoundOn = on);
+            AddVolumeRow(theme, "Effects volume", AppServices.Device.EffectsVolume, value => AppServices.Device.EffectsVolume = value,
+                preview: () =>
+                {
+                    if (AppServices.Device.SoundOn)
+                    {
+                        GameFeedback.Sound.Play(SoundId.Chat);
+                    }
+                });
+            AddDeviceRow(theme, "Music", "The background music: the main theme, and on the board a theme for the color of the mood played last.",
+                AppServices.Device.MusicOn, on => AppServices.Device.MusicOn = on);
+            AddVolumeRow(theme, "Music volume", AppServices.Device.MusicVolume, value => AppServices.Device.MusicVolume = value);
             if (AppServices.Push.IsAvailable)
             {
                 AddPushRow(theme);
@@ -278,6 +289,29 @@ namespace MoodSwings.UI
             AddDescription(theme, panel.transform, description);
             toggle.onValueChanged.AddListener(value => save(value));
         }
+
+        // A slider for how loud something is, with the percentage beside its name. It is applied as it moves.
+        private void AddVolumeRow(UiTheme theme, string label, float value, System.Action<float> save, System.Action preview = null)
+        {
+            var panel = NewPanel(theme);
+            var heading = UiFactory.Row(panel.transform, "Volume heading", 12f, TextAnchor.MiddleLeft);
+            UiFactory.Size(heading.gameObject, height: 36f);
+            var name = UiFactory.Label(heading.transform, label, 26, theme.textPrimary, TextAnchor.MiddleLeft);
+            UiFactory.Flexible(name.gameObject, width: 1f);
+            var percent = UiFactory.Label(heading.transform, Percent(value), 26, theme.textMuted, TextAnchor.MiddleRight);
+            percent.name = "Percent";
+            UiFactory.Size(percent.gameObject, 90f, 36f);
+
+            var slider = UiFactory.Slider(panel.transform, theme, value, preview);
+            slider.gameObject.name = label;
+            slider.onValueChanged.AddListener(v =>
+            {
+                save(v);
+                percent.text = Percent(v);
+            });
+        }
+
+        private static string Percent(float value) => Mathf.RoundToInt(value * 100f) + "%";
 
         // The screens take their colors when they are built, so a new palette means building them again.
         private void SetDarkMode(bool on)

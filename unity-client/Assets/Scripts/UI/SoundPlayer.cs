@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using MoodSwings.Core;
 using UnityEngine;
 
 namespace MoodSwings.UI
@@ -41,7 +42,9 @@ namespace MoodSwings.UI
                 _clips[sound] = clip;
             }
 
-            _source.PlayOneShot(clip);
+            // The device effects volume scales the level of this player.
+            var volume = AppServices.Device != null ? AppServices.Device.EffectsVolume : 1f;
+            _source.PlayOneShot(clip, volume);
         }
     }
 

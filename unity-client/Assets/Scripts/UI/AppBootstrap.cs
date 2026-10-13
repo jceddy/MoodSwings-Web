@@ -31,6 +31,17 @@ namespace MoodSwings.UI
                 camera.backgroundColor = AppServices.Theme.background;
             }
 
+            // The main theme plays while the app is open; the board changes it to suit the game, and leaving the board
+            // brings it back.
+            MusicPlayer.Instance.SetTheme(MusicTheme.Main);
+            _router.ScreenChanged += (previous, next) =>
+            {
+                if (!(next is BoardScreen))
+                {
+                    MusicPlayer.Instance.SetTheme(MusicTheme.Main);
+                }
+            };
+
             BuildServerBanner();
             _router.Show<SplashScreen>();
         }

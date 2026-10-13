@@ -608,17 +608,25 @@ namespace MoodSwings.Tests
                 UnityEngine.Object.Destroy(existing.gameObject);
             }
 
+            // The music player brings a listener too (and the app keeps it across scenes).
+            foreach (var leftover in UnityEngine.Object.FindObjectsByType<MusicPlayer>(FindObjectsInactive.Include))
+            {
+                UnityEngine.Object.Destroy(leftover.gameObject);
+            }
+
             yield return null;
             Assert.AreEqual(0, UnityEngine.Object.FindObjectsByType<AudioListener>(FindObjectsInactive.Include).Length);
 
             var first = SoundPlayer.Create();
             var second = SoundPlayer.Create();
+            var music = MusicPlayer.Instance;
             yield return null;
 
             Assert.AreEqual(1, UnityEngine.Object.FindObjectsByType<AudioListener>(FindObjectsInactive.Include).Length,
                 "Unity warns on screen, and plays nothing, without a listener -- and complains about two");
             UnityEngine.Object.Destroy(first.gameObject);
             UnityEngine.Object.Destroy(second.gameObject);
+            UnityEngine.Object.Destroy(music.gameObject);
         }
 
         [UnityTest]

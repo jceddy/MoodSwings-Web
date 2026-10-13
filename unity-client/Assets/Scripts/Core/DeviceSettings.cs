@@ -1,3 +1,4 @@
+using System;
 using MoodSwings.Core.Storage;
 
 namespace MoodSwings.Core
@@ -10,6 +11,9 @@ namespace MoodSwings.Core
     {
         private const string SoundKey = "device.sound";
         private const string VibrationKey = "device.vibration";
+        private const string EffectsVolumeKey = "device.effectsVolume";
+        private const string MusicKey = "device.music";
+        private const string MusicVolumeKey = "device.musicVolume";
         private const string PushKey = "device.push";
         private const string DarkModeKey = "device.darkMode";
         private const string DevServerKey = "device.devServer";
@@ -24,10 +28,32 @@ namespace MoodSwings.Core
             _store = store;
         }
 
+        /// <summary>Sound effects, on until switched off.</summary>
         public bool SoundOn
         {
             get => Read(SoundKey);
             set => _store.SetString(SoundKey, value ? "1" : "0");
+        }
+
+        /// <summary>How loud the sound effects are, 0 to 1 (a little under full to start with).</summary>
+        public float EffectsVolume
+        {
+            get => ReadVolume(EffectsVolumeKey, 0.8f);
+            set => WriteVolume(EffectsVolumeKey, value);
+        }
+
+        /// <summary>The background music, on until switched off.</summary>
+        public bool MusicOn
+        {
+            get => Read(MusicKey);
+            set => _store.SetString(MusicKey, value ? "1" : "0");
+        }
+
+        /// <summary>How loud the music is, 0 to 1 (quieter than the effects to start with: it is always on).</summary>
+        public float MusicVolume
+        {
+            get => ReadVolume(MusicVolumeKey, 0.5f);
+            set => WriteVolume(MusicVolumeKey, value);
         }
 
         public bool VibrationOn
@@ -109,6 +135,12 @@ namespace MoodSwings.Core
             int.TryParse(_store.GetString(ChatSeenPrefix + gameId), out var count) ? count : 0;
 
         public void SetChatSeen(int gameId, int count) => _store.SetString(ChatSeenPrefix + gameId, count.ToString());
+
+        private float ReadVolume(string key, float fallback) =>
+            int.TryParse(_store.GetString(key), out var percent) ? Math.Max(0, Math.Min(100, percent)) / 100f : fallback;
+
+        private void WriteVolume(string key, float value) =>
+            _store.SetString(key, Math.Max(0, Math.Min(100, (int)Math.Round(value * 100f))).ToString());
 
         private bool Read(string key) => _store.GetString(key) != "0";
     }

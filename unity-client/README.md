@@ -100,11 +100,22 @@ ended, someone else spoke -- and the board reacts to each:
 - **Sound:** short placeholder tones and a thump, synthesized in code
   (`SoundBank`) because the repo has no sound files. Replace `SoundBank.Create` with
   real clips when there are some; nothing else needs to change.
+- **Music:** `MusicPlayer` plays the main theme while the app is open. On the board it
+  crossfades (two seconds) to the theme of the color of the mood played most recently
+  (the last mood in the server's in-play list; none in play means the main theme), and
+  leaving the board brings the main theme back. Each theme keeps its place while it is
+  faded out. The tracks are `Assets/Resources/Music/{main,white,blue,black,red,green}.mp3`
+  (`MusicImporter` streams them as Vorbis rather than decoding them into memory); they came
+  from `Boots_on_the_Tavern_Floor` (main), `Beneath_the_Willow_Canopy` (white),
+  `Beneath_the_Iron_Bough` (blue), `Before_the_Fire_Dies` (black),
+  `Beneath_the_Gallows_Tree` (red) and `Copper_Coins_in_the_Hat` (green). Replace a file to
+  change a track.
 - **Vibration** (Android): a short buzz for your turn, questions for you and your own
   plays, a long one for the end of a game. Needs a physical device to feel.
 - The first draw of a game is not an event, so nothing plays when you open one. The
-  two switches (**Sound effects**, and **Vibration** on a phone) are under Settings >
-  On this device and are stored on the device, not the account.
+  switches (**Sound effects** with its **Effects volume**, **Music** with its **Music volume**,
+  and **Vibration** on a phone) are under Settings > On this device and are stored on the
+  device, not the account. The volumes are sliders that apply as they move.
 - **Colors:** the palette is the game's own five colors -- white for the page, blue
   for what you act on, black for text, red for Resign and anything that can't be undone,
   green for good news -- in a light version (the default) and a dark one. Dark mode is
