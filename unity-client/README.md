@@ -227,6 +227,17 @@ under "Playing a game" below.
   and your hand between them, with a line above each: "Deck 30", "Discard 3" (and
   "play from it" when an effect makes a card in it playable). Tap the deck for its
   list, the discard to look through it.
+- **Ongoing effects** are shown on the table. A mood whose "While in play" ability is
+  doing something right now -- its value has moved because of it, the server lists it
+  among the effects changing scoring or the board, or it is acting on another mood --
+  has a halo in its color that breathes and a ring that spreads outwards from it and
+  fades. One that is switched off (suppressed, shown on its side) or only waiting for its
+  condition doesn't. When one mood is acting on another, a curve runs from the source
+  to the target with glowing dots streaming along it: red for a suppression, blue for a
+  dice-value boost, amber for a mood held by someone else because of it
+  (`BoardEffects` works out which, from `suppressions`, `boosted_by_card_id`,
+  `temporary_ownership` and `affecting`; `CardAura` and `EffectLinksLayer` draw them).
+  Neither takes a tap.
 - **The menu** (three bars, upper left; a badge on it counts unread chat) slides in a
   panel from the left: **< Lobby**, **Resign**, and a **Log** tab (the recent events
   and any effects in force) and a **Chat** tab (the game's messages, with a box to

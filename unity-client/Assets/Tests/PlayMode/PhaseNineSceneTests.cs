@@ -1447,6 +1447,92 @@ namespace MoodSwings.Tests
             }
         }
 
+        // Game 405 with its first mood's rules saying "while in play" and its value moved by them, and (optionally) its
+        // second mood suppressed by that first one.
+        private static Newtonsoft.Json.Linq.JObject WithAnOngoingEffect(bool suppressing) => Quiet(405, s =>
+        {
+            var inPlay = (Newtonsoft.Json.Linq.JArray)s["in_play"];
+            inPlay[0]["rules_text"] = "While in play - This mood's value is 6 if there are two or more blue moods.";
+            inPlay[0]["base_value"] = 3;
+            inPlay[0]["value"] = 6;
+            if (suppressing)
+            {
+                inPlay[1]["is_suppressed"] = true;
+                inPlay[1]["value"] = 0;
+                inPlay[1]["suppressions"] = Newtonsoft.Json.Linq.JArray.Parse(
+                    "[{\"expiry\":\"while_source_in_play\",\"suppressed_by_card_id\":" + (int)inPlay[0]["card_id"] + ",\"suppressed_by_name\":\"" + (string)inPlay[0]["name"] + "\"}]");
+            }
+        });
+
+        [UnityTest]
+        public IEnumerator AMoodWithAnOngoingEffect_Glows_AndOthersDoNot()
+        {
+            var server = Serve();
+            server.State = WithAnOngoingEffect(suppressing: false);
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+
+            var name = (string)server.State["in_play"][0]["name"];
+            var other = (string)server.State["in_play"][1]["name"];
+            var aura = PhaseFiveSceneTests.Child("Card " + name).Find("Aura");
+            Assert.IsNotNull(aura, "the glow is part of the card");
+            Assert.IsNotNull(aura.Find("Halo"));
+            Assert.IsNotNull(aura.Find("Ripple"));
+            Assert.AreEqual(0, aura.GetSiblingIndex(), "under the card's own pieces");
+            Assert.IsNull(PhaseFiveSceneTests.Child("Card " + other).Find("Aura"), "a mood with nothing going on has no glow");
+            Assert.IsFalse(aura.GetComponentsInChildren<UnityEngine.UI.Graphic>().Any(g => g.raycastTarget), "and it never takes a tap");
+
+            // It moves: the halo's brightness changes as it breathes.
+            var halo = aura.GetComponent<CardAura>().Halo;
+            var before = halo.color.a;
+            var changed = false;
+            for (var i = 0; i < 40 && !changed; i++)
+            {
+                yield return null;
+                changed = !Mathf.Approximately(halo.color.a, before);
+            }
+
+            Assert.IsTrue(changed, "it pulses");
+            ScreenshotHelper.Capture("effect-aura");
+        }
+
+        [UnityTest]
+        public IEnumerator AMoodSuppressingAnother_IsLinkedToIt_AndNoGlowOnTheSuppressedOne()
+        {
+            var server = Serve();
+            server.State = WithAnOngoingEffect(suppressing: true);
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+
+            var layer = Object.FindAnyObjectByType<EffectLinksLayer>();
+            Assert.IsNotNull(layer);
+            Assert.AreEqual(1, layer.LineCount, "one line, from the source to what it suppresses");
+            Assert.IsFalse(layer.raycastTarget);
+            yield return PhaseTwoSceneTests.Frames(30);
+            Assert.Greater(layer.VertexCount, 0, "and it is drawn");
+
+            var other = (string)server.State["in_play"][1]["name"];
+            Assert.IsNull(PhaseFiveSceneTests.Child("Card " + other).Find("Aura"), "a suppressed mood is switched off, so it doesn't glow");
+
+            for (var i = 0; i < 4; i++)
+            {
+                yield return PhaseTwoSceneTests.Frames(12);
+                ScreenshotHelper.Capture("effect-link-" + i);
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator TheLinks_GoWhenTheEffectEnds()
+        {
+            var server = Serve();
+            server.State = WithAnOngoingEffect(suppressing: true);
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+            Assert.AreEqual(1, Object.FindAnyObjectByType<EffectLinksLayer>().LineCount);
+
+            server.State = WithAnOngoingEffect(suppressing: false);
+            yield return PhaseFiveSceneTests.Poll();
+
+            Assert.AreEqual(0, Object.FindAnyObjectByType<EffectLinksLayer>().LineCount);
+        }
+
         [UnityTest]
         public IEnumerator BoardLayout_Screenshots()
         {

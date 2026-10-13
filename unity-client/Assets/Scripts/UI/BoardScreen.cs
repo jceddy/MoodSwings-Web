@@ -169,6 +169,11 @@ namespace MoodSwings.UI
 
         private GameState _previous;
         private readonly HashSet<int> _entering = new HashSet<int>();
+
+        // The moods on the table by card id (for the lines between them), and the lines' layer.
+        private readonly Dictionary<int, RectTransform> _moodViews = new Dictionary<int, RectTransform>();
+        private List<EffectLink> _links = new List<EffectLink>();
+        private EffectLinksLayer _linksLayer;
         private readonly List<Flight> _flights = new List<Flight>();
         private float _messageExpires;
 
@@ -272,6 +277,8 @@ namespace MoodSwings.UI
             _chatError.text = string.Empty;
             SetMessage(string.Empty);
             _primaryAction.gameObject.SetActive(false);
+            _moodViews.Clear();
+            _linksLayer.Clear();
             _chatSeen = _session == null ? 0 : AppServices.Device.ChatSeen(_session.GameId);
             _chatTabShown = false;
 
@@ -400,6 +407,9 @@ namespace MoodSwings.UI
             _table.anchorMax = Vector2.one;
             _table.offsetMin = Vector2.zero;
             _table.offsetMax = Vector2.zero;
+
+            // Over the table, under everything built after it (the header, the center, the menu).
+            _linksLayer = EffectLinksLayer.Create(transform);
 
             _draft = new DraftView(
                 transform, theme,
@@ -1269,6 +1279,8 @@ namespace MoodSwings.UI
 
             if (DraftDisplay.InDraftStage(state) || DuelDeckDisplay.InStage(state))
             {
+                _moodViews.Clear();
+                _linksLayer.Clear();
                 ClearTable();
                 CancelDrag();
                 HideHover();
@@ -1283,10 +1295,14 @@ namespace MoodSwings.UI
             DockCenter(atTable: true);
             ClearTable();
             var zones = BoardLayout.Assign(state.Players, state.You.GamePlayerId);
+            _moodViews.Clear();
+            _links = BoardEffects.Links(state);
             foreach (var player in state.Players)
             {
                 BuildSeat(theme, state, player, zones[player.GamePlayerId]);
             }
+
+            _linksLayer.SetLinks(_links, _moodViews);
 
             // The table is rebuilt, so a card being dragged out of the old hand is gone, and so is
             // whatever the mouse was resting on.
@@ -1481,6 +1497,12 @@ namespace MoodSwings.UI
                 {
                     var upright = CardView.Create(row.transform, card, width, theme, showValue: true, onClick: open);
                     MakeHoverable(upright, card);
+                    _moodViews[card.CardId] = upright;
+                    if (BoardEffects.IsAffectingTheGame(state, card, _links))
+                    {
+                        CardAura.Attach(upright, card.Color, card.CardId * 0.37f % 1f);
+                    }
+
                     NoteFlight(upright, card, player.GamePlayerId, width);
                     continue;
                 }
@@ -1492,6 +1514,7 @@ namespace MoodSwings.UI
                 MakeHoverable(tapped, card);
                 tapped.anchorMin = tapped.anchorMax = tapped.pivot = new Vector2(0.5f, 0.5f);
                 tapped.anchoredPosition = Vector2.zero;
+                _moodViews[card.CardId] = tapped;
                 NoteFlight(tapped, card, player.GamePlayerId, width);
             }
         }

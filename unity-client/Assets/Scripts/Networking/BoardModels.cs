@@ -89,6 +89,18 @@ namespace MoodSwings.Networking
         [JsonProperty("value_locked")]
         public bool ValueLocked { get; set; }
 
+        /// <summary>In play only: the mood whose ability is changing which value this one has (the dice value).</summary>
+        [JsonProperty("boosted_by_card_id")]
+        public int? BoostedByCardId { get; set; }
+
+        /// <summary>In play only: the other moods this one's ability is acting on right now.</summary>
+        [JsonProperty("affecting")]
+        public List<AffectingEntry> Affecting { get; set; } = new List<AffectingEntry>();
+
+        /// <summary>In play only: this mood is only held for now, by an effect on another card (and goes back).</summary>
+        [JsonProperty("temporary_ownership")]
+        public TemporaryOwnership TemporaryOwnership { get; set; }
+
         /// <summary>In play only: whose mood it is (the seat it sits in front of).</summary>
         [JsonProperty("owner_game_player_id")]
         public int? OwnerGamePlayerId { get; set; }
@@ -117,6 +129,33 @@ namespace MoodSwings.Networking
 
         /// <summary>True when an effect (Imagination) has changed the color from the printed one.</summary>
         public bool IsRecolored => !string.IsNullOrEmpty(BaseColor) && !string.IsNullOrEmpty(Color) && Color != BaseColor;
+    }
+
+    /// <summary>A mood another mood's ability is acting on: "suppressed" or "dice_value".</summary>
+    public class AffectingEntry
+    {
+        [JsonProperty("card_id")]
+        public int CardId { get; set; }
+
+        [JsonProperty("name")]
+        public string Name { get; set; }
+
+        [JsonProperty("relationship")]
+        public string Relationship { get; set; }
+    }
+
+    /// <summary>Why a mood is held by someone other than its owner, and when it goes back.</summary>
+    public class TemporaryOwnership
+    {
+        [JsonProperty("source_card_id")]
+        public int SourceCardId { get; set; }
+
+        [JsonProperty("source_card_name")]
+        public string SourceCardName { get; set; }
+
+        /// <summary>when_source_leaves_play or after_scoring.</summary>
+        [JsonProperty("reverts")]
+        public string Reverts { get; set; }
     }
 
     /// <summary>One thing suppressing a mood: a suppressed mood's value is 0; nothing else about it changes.</summary>
