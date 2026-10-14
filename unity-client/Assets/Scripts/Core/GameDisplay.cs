@@ -192,14 +192,16 @@ namespace MoodSwings.Core
                     return "Your response is needed";
                 }
 
-                if (game.IsYourTurn)
-                {
-                    return "Your turn";
-                }
-
+                // A question open to someone else holds the whole game, even on what is nominally your own turn (you played
+                // a card that makes them answer): there is nothing for you to do until they have.
                 if (game.AwaitingResponseUsernames.Count > 0)
                 {
                     return "Waiting for " + string.Join(", ", game.AwaitingResponseUsernames) + " to respond";
+                }
+
+                if (game.IsYourTurn)
+                {
+                    return "Your turn";
                 }
 
                 return string.IsNullOrEmpty(game.CurrentTurnUsername)
@@ -210,9 +212,12 @@ namespace MoodSwings.Core
             return Prettify(game.Status);
         }
 
-        /// <summary>True when the game is waiting on you -- worth drawing attention to.</summary>
+        /// <summary>
+        /// True when the game is waiting on you -- worth drawing attention to. Your turn doesn't count while an answer is
+        /// being waited for from someone (even from you, which is then the thing that needs you).
+        /// </summary>
         public static bool NeedsYou(GameSummary game) =>
-            !game.IsCompleted && (game.IsYourTurn || game.IsAwaitingYourResponse);
+            !game.IsCompleted && (game.IsAwaitingYourResponse || (game.IsYourTurn && game.AwaitingResponseUsernames.Count == 0));
 
         /// <summary>
         /// "Alice's game  -  2 of 3 seated", or "Your game  -  ..." for one you posted.

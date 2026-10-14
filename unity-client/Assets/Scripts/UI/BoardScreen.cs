@@ -62,6 +62,12 @@ namespace MoodSwings.UI
             /// <summary>Their name, score, round wins and badges: to the left of the moods (above them for the side seats).</summary>
             public Rect Info;
 
+            /// <summary>
+            /// How far the scoreboard may grow, as a fraction of the table's width, when a long name needs more room: to
+            /// the right if this is past its right edge, to the left if it is before its left edge.
+            /// </summary>
+            public float InfoGrowTo;
+
             public HandEdge Edge;
 
             /// <summary>How far along that edge the backs of their hand run.</summary>
@@ -73,12 +79,12 @@ namespace MoodSwings.UI
         // is left clear for the turn banner, messages and the Pass button.
         private static readonly Dictionary<SeatZone, SeatPlace> Places = new Dictionary<SeatZone, SeatPlace>
         {
-            [SeatZone.South] = new SeatPlace { Moods = Fraction(0.20f, 0.11f, 0.80f, 0.37f), Info = Fraction(0.103f, 0.008f, 0.268f, 0.113f), Edge = HandEdge.None },
-            [SeatZone.North] = new SeatPlace { Moods = Fraction(0.20f, 0.63f, 0.80f, 0.88f), Info = Fraction(0.705f, 0.888f, 0.87f, 0.995f), Edge = HandEdge.Top, HandSpan = Fraction(0.30f, 0f, 0.70f, 0f) },
-            [SeatZone.Northwest] = new SeatPlace { Moods = Fraction(0.08f, 0.64f, 0.49f, 0.88f), Info = Fraction(0.345f, 0.888f, 0.51f, 0.995f), Edge = HandEdge.Top, HandSpan = Fraction(0.08f, 0f, 0.34f, 0f) },
-            [SeatZone.Northeast] = new SeatPlace { Moods = Fraction(0.55f, 0.64f, 0.985f, 0.88f), Info = Fraction(0.805f, 0.888f, 0.97f, 0.995f), Edge = HandEdge.Top, HandSpan = Fraction(0.54f, 0f, 0.80f, 0f) },
-            [SeatZone.West] = new SeatPlace { Moods = Fraction(0.05f, 0.34f, 0.30f, 0.50f), Info = Fraction(0.0f, 0.715f, 0.165f, 0.82f), Edge = HandEdge.Left, HandSpan = Fraction(0f, 0.30f, 0f, 0.70f) },
-            [SeatZone.East] = new SeatPlace { Moods = Fraction(0.70f, 0.34f, 0.95f, 0.50f), Info = Fraction(0.835f, 0.18f, 1.0f, 0.285f), Edge = HandEdge.Right, HandSpan = Fraction(0f, 0.30f, 0f, 0.70f) },
+            [SeatZone.South] = new SeatPlace { Moods = Fraction(0.20f, 0.11f, 0.80f, 0.37f), Info = Fraction(0.103f, 0.008f, 0.268f, 0.113f), InfoGrowTo = 0.268f, Edge = HandEdge.None },
+            [SeatZone.North] = new SeatPlace { Moods = Fraction(0.20f, 0.63f, 0.80f, 0.88f), Info = Fraction(0.705f, 0.888f, 0.87f, 0.995f), InfoGrowTo = 0.99f, Edge = HandEdge.Top, HandSpan = Fraction(0.30f, 0f, 0.70f, 0f) },
+            [SeatZone.Northwest] = new SeatPlace { Moods = Fraction(0.08f, 0.64f, 0.49f, 0.88f), Info = Fraction(0.345f, 0.888f, 0.51f, 0.995f), InfoGrowTo = 0.535f, Edge = HandEdge.Top, HandSpan = Fraction(0.08f, 0f, 0.34f, 0f) },
+            [SeatZone.Northeast] = new SeatPlace { Moods = Fraction(0.55f, 0.64f, 0.985f, 0.88f), Info = Fraction(0.805f, 0.888f, 0.97f, 0.995f), InfoGrowTo = 0.995f, Edge = HandEdge.Top, HandSpan = Fraction(0.54f, 0f, 0.80f, 0f) },
+            [SeatZone.West] = new SeatPlace { Moods = Fraction(0.05f, 0.34f, 0.30f, 0.50f), Info = Fraction(0.0f, 0.715f, 0.165f, 0.82f), InfoGrowTo = 0.40f, Edge = HandEdge.Left, HandSpan = Fraction(0f, 0.30f, 0f, 0.70f) },
+            [SeatZone.East] = new SeatPlace { Moods = Fraction(0.70f, 0.34f, 0.95f, 0.50f), Info = Fraction(0.835f, 0.18f, 1.0f, 0.285f), InfoGrowTo = 0.60f, Edge = HandEdge.Right, HandSpan = Fraction(0f, 0.30f, 0f, 0.70f) },
         };
 
         private BoardSession _session;
@@ -1527,7 +1533,7 @@ namespace MoodSwings.UI
         private void BuildSeat(UiTheme theme, GameState state, BoardPlayer player, SeatZone zone)
         {
             var place = Places[zone];
-            BuildInfo(theme, state, player, Place(_table, "Info " + player.Username, place.Info));
+            BuildInfo(theme, state, player, Place(_table, "Info " + player.Username, place.Info), place.InfoGrowTo);
             if (place.Edge != HandEdge.None)
             {
                 BuildOpponentHand(theme, player, place);
@@ -1590,10 +1596,47 @@ namespace MoodSwings.UI
             }
         }
 
+        // What the rest of a scoreboard takes up beside the name: its padding, the score box, the trophies, the gaps and the
+        // turn marker.
+        private const float InfoOverhead = 190f;
+
+        // A long screen name must not break in the middle of a word. The scoreboard grows toward where there is room (up
+        // to InfoGrowTo, a fraction of the table's width) until the name fits on a line, and where there is none the name
+        // is set a little smaller instead.
+        private static void FitInfoToName(RectTransform area, Text nameLabel, string username, float growTo)
+        {
+            var text = nameLabel.text;
+            nameLabel.text = username;
+            var wanted = nameLabel.preferredWidth + InfoOverhead;
+            nameLabel.text = text;
+
+            var width = (area.anchorMax.x - area.anchorMin.x) * ReferenceWidth;
+            if (wanted > width && !float.IsNaN(growTo))
+            {
+                var extra = (wanted - width) / ReferenceWidth;
+                if (growTo > area.anchorMax.x)
+                {
+                    area.anchorMax = new Vector2(Mathf.Min(growTo, area.anchorMax.x + extra), area.anchorMax.y);
+                }
+                else if (growTo < area.anchorMin.x)
+                {
+                    area.anchorMin = new Vector2(Mathf.Max(growTo, area.anchorMin.x - extra), area.anchorMin.y);
+                }
+
+                width = (area.anchorMax.x - area.anchorMin.x) * ReferenceWidth;
+            }
+
+            if (wanted > width)
+            {
+                var room = Mathf.Max(60f, width - InfoOverhead);
+                nameLabel.fontSize = Mathf.Max(15, Mathf.FloorToInt(nameLabel.fontSize * room / (wanted - InfoOverhead)));
+            }
+        }
+
         // A player's scoreboard, at the end of their hand: the points in a box with a trophy for each round won stacked
         // beside it (and a 1ST tag on the box for whoever went first), then their name, and the Hurt Feelings card for
         // whoever has it.
-        private void BuildInfo(UiTheme theme, GameState state, BoardPlayer player, RectTransform area)
+        private void BuildInfo(UiTheme theme, GameState state, BoardPlayer player, RectTransform area, float growTo)
         {
             var isTurn = state.Round.CurrentTurnGamePlayerId == player.GamePlayerId && state.Game.Status != "completed";
             var background = area.gameObject.AddComponent<Image>();
@@ -1698,6 +1741,7 @@ namespace MoodSwings.UI
             nameLabel.name = "Name";
             nameLabel.raycastTarget = false;
             UiFactory.Flexible(nameLabel.gameObject, width: 1f);
+            FitInfoToName(area, nameLabel, player.Username, growTo);
 
             // Each player has their own deck in a duel, so its size is theirs to show.
             if (BoardDisplay.HasSeparateDecks(state))

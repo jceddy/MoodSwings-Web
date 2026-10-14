@@ -1838,6 +1838,33 @@ namespace MoodSwings.Tests
         }
 
         [UnityTest]
+        public IEnumerator ALongScreenName_GetsAWiderScoreboard_AndIsNotBrokenInTheMiddleOfAWord()
+        {
+            var server = Serve();
+            server.State = Quiet(405, s =>
+            {
+                var opponent = s["players"].First(p => (string)p["username"] != "bshaftoe");
+                opponent["username"] = "TheAngryRedBird";
+                opponent["is_bot"] = true;
+            });
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+            yield return PhaseTwoSceneTests.Frames(4);
+
+            var info = (RectTransform)PhaseFiveSceneTests.Child("Info TheAngryRedBird");
+            Assert.IsNotNull(info);
+            var shortInfo = (RectTransform)PhaseFiveSceneTests.Child("Info bshaftoe");
+            Assert.Greater(info.anchorMax.x - info.anchorMin.x, 0.165f, "wider than a scoreboard for a short name");
+            Assert.LessOrEqual(info.anchorMax.x, 1f, "and still on the screen");
+
+            var name = info.GetComponentsInChildren<Text>().First(t => t.gameObject.name == "Name");
+            var generator = name.cachedTextGenerator;
+            Assert.Greater(generator.lineCount, 0);
+            var firstLineHolds = generator.lineCount == 1 || generator.lines[1].startCharIdx >= "TheAngryRedBird".Length;
+            Assert.IsTrue(firstLineHolds, "the name stays whole on its first line, not " + generator.lineCount + " lines cut mid-word");
+            ScreenshotHelper.Capture("long-screen-name");
+        }
+
+        [UnityTest]
         public IEnumerator BoardLayout_Screenshots()
         {
             foreach (var game in new[] { 405, 406, 407 })
