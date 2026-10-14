@@ -450,6 +450,9 @@ cards or all of them. The choice is stored on the device.
   pack can be flat. The card back (`back.png`) and Hurt Feelings (`hurt-feelings.png`) sit **at the top of the
   pack**, not in a set folder. WebP isn't supported (Unity can't read it at run time). Images are shrunk to at
   most 1040 px tall; the card art that ships is 744 x 1040, so that shape looks right.
+- **An example:** `art-packs/Original-Mood-Swings-Art.zip` is the original Mood Swings art as a pack (all 138
+  cards under `MSW/`, `back.png`, `hurt-feelings.png`, and a `README.txt` describing the format). Unzip it to
+  see the layout, or add it as it is. `python tools/make_original_art_pack.py` rebuilds it from `web-static/img`.
 - **Adding one:** **Add a folder...** / **Add a .zip...** open the system's own dialog (PowerShell's on Windows,
   AppleScript's on macOS, the document picker on Android -- which needs no storage permission). The images are
   **copied into the app's own storage** (`<persistentDataPath>/ArtPacks/<name>/<SET>/<number>.png`), so the pack keeps working if the
