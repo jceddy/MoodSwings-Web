@@ -74,3 +74,6 @@ crashlytics-build.properties
 /[Aa]ssets/InitTestScene*.unity.meta
 # Example art pack built by tools/make_original_art_pack.py (81 MB; not kept in the repo)
 /art-packs/
+
+# Gradle's cache, created inside the plugin folder by an Android build
+/Assets/Plugins/Android/MoodPush.androidlib/.gradle/
