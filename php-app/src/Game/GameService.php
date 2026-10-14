@@ -3794,6 +3794,26 @@ final class GameService
                 $insertCard->execute(['game_id' => $gameId, 'card_id' => $catalogCardId, 'zone' => 'discard', 'owner' => $gamePlayerId, 'deck_position' => null]);
             }
 
+            // puzzles.starting_effect_state: per-mood state a card carried
+            // into the puzzle already chosen (e.g. the color an opponent's
+            // Wonder was played with), keyed by catalog card id and written
+            // onto that card's in-play instance exactly as the live
+            // afterPlaying() would have stored it.
+            $startingEffectState = json_decode((string) ($puzzle['starting_effect_state'] ?? '{}'), true) ?: [];
+            if ($startingEffectState !== []) {
+                $setEffectState = $pdo->prepare(
+                    "UPDATE game_cards SET effect_state = :effect_state
+                     WHERE game_id = :game_id AND card_id = :card_id AND zone = 'in_play' LIMIT 1"
+                );
+                foreach ($startingEffectState as $catalogCardId => $effectState) {
+                    $setEffectState->execute([
+                        'effect_state' => json_encode($effectState),
+                        'game_id' => $gameId,
+                        'card_id' => (int) $catalogCardId,
+                    ]);
+                }
+            }
+
             // A puzzle whose intended solution needs an extra play already
             // in hand at turn start (e.g. "you have one extra play from
             // Joy", reported live) can't just rely on computeFreshGrants()

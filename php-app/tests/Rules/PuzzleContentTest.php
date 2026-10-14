@@ -1878,6 +1878,82 @@ final class PuzzleContentTest extends TestCase
         }
     }
 
+    /**
+     * Plays Hindsight's Regret returning the solver's moods $returnCatalogIds
+     * and taking the opponent's $takeCatalogId.
+     *
+     * @param array<int, int> $returnCatalogIds
+     * @return array<string, mixed>
+     */
+    private function playHindsightRegret(int $gameId, int $p, int $opp, array $returnCatalogIds, int $takeCatalogId): array
+    {
+        return $this->playDriven($gameId, $p, $this->instanceId($gameId, 50, 'hand'), [
+            'hand_mood_ids' => array_map(fn (int $catalogId) => $this->ownedInstanceId($gameId, $catalogId, 'in_play', $p), $returnCatalogIds),
+            'target_mood_id' => $this->ownedInstanceId($gameId, $takeCatalogId, 'in_play', $opp),
+        ]);
+    }
+
+    /** The opponent's Wonder starts with its seeded color already chosen (puzzles.starting_effect_state). */
+    public function testHindsightSeedsTheOpponentsWonderColor(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('hindsight');
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+
+        $stmt = $this->pdo->prepare("SELECT effect_state FROM game_cards WHERE game_id = :g AND card_id = 133 AND zone = 'in_play' AND owner_game_player_id = :o");
+        $stmt->execute(['g' => $gameId, 'o' => $opp]);
+        self::assertSame(['colors' => ['green']], json_decode((string) $stmt->fetchColumn(), true));
+    }
+
+    /**
+     * "Hindsight": the only winning line (exhaustive search of the real flow,
+     * one play) is Regret returning Cheer and Cynicism and taking Joy -- the
+     * green mood pumping Wonder: 6 + Regret 4 = 10 against Suspicion 3 +
+     * Apathy 4 + Wonder 2 = 9. See migration 0454's own docblock.
+     */
+    public function testHindsightSolvedByTakingTheMoodPumpingWonder(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('hindsight');
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+
+        $result = $this->playHindsightRegret($gameId, $p, $opp, [110, 62], 125);
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameSolved($gameId, $p);
+    }
+
+    /** The obvious line -- taking Wonder itself -- ties 10-10, and a tie goes to the opponent; so does taking Apathy. */
+    public function testHindsightTakingWonderOrApathyOnlyTies(): void
+    {
+        foreach ([133, 55] as $takeCatalogId) {
+            ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('hindsight');
+            $opp = $this->opponentGamePlayerId($gameId, $p);
+
+            $result = $this->playHindsightRegret($gameId, $p, $opp, [110, 62], $takeCatalogId);
+
+            self::assertTrue($result['game_completed'], "take {$takeCatalogId}");
+            $this->assertGameFailed($gameId);
+        }
+    }
+
+    /** Taking Suspicion, or paying with Self-Loathing, or playing Shame instead of Regret, all lose. */
+    public function testHindsightEveryOtherLineLoses(): void
+    {
+        foreach ([[[110, 62], 78], [[75, 110], 125], [[75, 62], 125]] as [$returnCatalogIds, $takeCatalogId]) {
+            ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('hindsight');
+            $opp = $this->opponentGamePlayerId($gameId, $p);
+
+            $result = $this->playHindsightRegret($gameId, $p, $opp, $returnCatalogIds, $takeCatalogId);
+
+            self::assertTrue($result['game_completed'], implode('+', $returnCatalogIds) . " take {$takeCatalogId}");
+            $this->assertGameFailed($gameId);
+        }
+
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('hindsight');
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 25, 'hand'));
+        self::assertTrue($result['game_completed']);
+        $this->assertGameFailed($gameId);
+    }
+
     /** A solve is never marked failed, and puzzle_failed is false while an attempt is open. */
     public function testDeadHeatSolveIsNotFailedAndOpenAttemptIsNotFailed(): void
     {

@@ -13950,6 +13950,24 @@ than a parallel bespoke system:
   source -- without it bouncing an unspent Hope would keep the play and gain
   another.
 
+- **21st puzzle, "Hindsight"** (reported live: a Regret puzzle where the
+  obvious take, a Wonder, only ties and the win is the mood pumping it),
+  medium, `win_game`. New puzzle infrastructure: `puzzles.starting_effect_state`
+  (JSON, NULL = none), a map from catalog card id to the per-mood state that
+  card's in-play instance starts with -- here `{"133":{"colors":["green"]}}`,
+  the color the opponent's Wonder was played with. Both sides have two round
+  wins and the opponent went first (a tie is theirs). The opponent has Wonder
+  (green: 2 for each green mood in play and green card in the discard pile),
+  Joy, Suspicion and Apathy in play: 16. The solver has Self-Loathing (6),
+  Cheer and Cynicism (3 each) in play, holds Regret and Shame, and has one
+  play. Regret returns two of the solver's moods to hand to play it, then
+  takes an opponent's. The one winning line: return Cheer and Cynicism, take
+  Joy -- the green mood pumping Wonder, which costs the opponent its 3 and 2
+  more off Wonder (Cheer leaving already cost it 2): 10 against 9. Taking
+  Wonder itself (or Apathy) ties 10-10; returning Self-Loathing leaves the
+  solver at 7. An exhaustive search (every card in hand, every pair returned,
+  every mood taken) found exactly one winning line.
+
 ### Duel: separate per-player decks
 
 `format: 'duel'` and `format: 'draft'` (see "Draft format" below) are the
