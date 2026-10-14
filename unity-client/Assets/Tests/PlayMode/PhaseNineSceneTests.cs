@@ -1807,6 +1807,37 @@ namespace MoodSwings.Tests
         }
 
         [UnityTest]
+        public IEnumerator OpeningAnotherGame_DoesNotLeaveTheLastOnesTextUnderLoading()
+        {
+            var server = Serve();
+            server.State = Quiet(405, s => { });
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+            Assert.IsNotEmpty(PhaseFiveSceneTests.Board().RoundText, "the game that was up has its round line");
+
+            // The next game's state hasn't arrived yet when its board is shown (the server is slow to answer).
+            MainSceneTests.ResponseDelayMilliseconds = 1500;
+            try
+            {
+                Object.FindAnyObjectByType<ScreenRouter>().Show<BoardScreen>(BoardSession.ForPlayer(AppServices.Api, 406), addToHistory: false);
+                yield return PhaseTwoSceneTests.Frames(3);
+
+                var board = PhaseFiveSceneTests.Board();
+                Assert.IsTrue(Texts().Contains("Loading the game..."));
+                Assert.IsEmpty(board.RoundText, "so nothing of the last game is drawn under the loading message");
+                Assert.IsEmpty(board.BannerText);
+                Assert.IsFalse(board.Draft.IsShown);
+                Assert.IsNull(PhaseFiveSceneTests.Child("Card Laziness"), "or its cards");
+
+                // Let the slow answer arrive while this test's board is still there.
+                yield return new WaitForSeconds(1.8f);
+            }
+            finally
+            {
+                MainSceneTests.ResponseDelayMilliseconds = 0;
+            }
+        }
+
+        [UnityTest]
         public IEnumerator BoardLayout_Screenshots()
         {
             foreach (var game in new[] { 405, 406, 407 })

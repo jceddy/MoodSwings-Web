@@ -293,12 +293,17 @@ namespace MoodSwings.UI
             _chatSeen = _session == null ? 0 : AppServices.Device.ChatSeen(_session.GameId);
             _chatTabShown = false;
 
+            // Nothing of the game that was up before stays up while this one loads: the draft or deck-building view, the
+            // text in the middle (a result, the round), a puzzle's goal and the old table. Otherwise "Loading the game..."
+            // is drawn over the top of them.
+            _draft.Hide();
+            _goalPanel.gameObject.SetActive(false);
+            _banner.text = _topBanner.text = _roundLine.text = _topRound.text = string.Empty;
+            DockCenter(atTable: true);
+            ClearTable();
+
             if (_session == null)
             {
-                _draft.Hide();
-                ClearTable();
-                // Nothing of a game that was shown before stays up (the banner, the round line...).
-                _banner.text = _topBanner.text = _roundLine.text = _topRound.text = string.Empty;
                 ShowLoading("No game to show.");
                 return;
             }
@@ -310,12 +315,21 @@ namespace MoodSwings.UI
             }
             else
             {
-                ClearTable();
                 ShowLoading("Loading the game...");
             }
 
             Run(Refresh);
             PollWhileShown(PollSeconds, Refresh);
+        }
+
+        private void OnDestroy()
+        {
+            // The scene can be rebuilt (the palette changed) while a game's answer is on its way: it must not arrive at a
+            // board that is gone.
+            if (_session != null)
+            {
+                _session.Changed -= Render;
+            }
         }
 
         public override void OnHidden()

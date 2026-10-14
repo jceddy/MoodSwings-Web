@@ -98,6 +98,32 @@ namespace MoodSwings.Tests
         // --- Quick Draft: the pick ----------------------------------------------------------------
 
         [UnityTest]
+        public IEnumerator LeavingADraft_ForTheNextGame_ClearsTheDraftBeforeTheNewOneLoads()
+        {
+            var server = Serve(DraftBoard(Drafting(round: 2, stage: 2)));
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+            Assert.IsTrue(Board().Draft.IsShown);
+
+            MainSceneTests.ResponseDelayMilliseconds = 1500;
+            try
+            {
+                UnityEngine.Object.FindAnyObjectByType<ScreenRouter>().Show<BoardScreen>(BoardSession.ForPlayer(AppServices.Api, 406), addToHistory: false);
+                yield return PhaseTwoSceneTests.Frames(3);
+
+                Assert.IsFalse(Board().Draft.IsShown, "the old deck-building view isn't left up under the loading message");
+                Assert.IsEmpty(Board().RoundText);
+                Assert.IsEmpty(Board().BannerText);
+
+                // Let the slow answer arrive while this test's board is still there.
+                yield return new WaitForSeconds(1.8f);
+            }
+            finally
+            {
+                MainSceneTests.ResponseDelayMilliseconds = 0;
+            }
+        }
+
+        [UnityTest]
         public IEnumerator AQuickDraftPick_ShowsThePile_AndTheStage()
         {
             var server = Serve(DraftBoard(Drafting(round: 2, stage: 2)));

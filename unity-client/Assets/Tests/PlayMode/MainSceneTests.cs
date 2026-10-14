@@ -29,9 +29,23 @@ namespace MoodSwings.Tests
 
             public ScriptedTransport(Func<HttpRequest, HttpResponse> handler) => _handler = handler;
 
-            public Task<HttpResponse> SendAsync(HttpRequest request, CancellationToken cancellationToken) =>
-                Task.FromResult(_handler(request));
+            public Task<HttpResponse> SendAsync(HttpRequest request, CancellationToken cancellationToken)
+            {
+                if (ResponseDelayMilliseconds <= 0)
+                {
+                    return Task.FromResult(_handler(request));
+                }
+
+                return Task.Run(async () =>
+                {
+                    await Task.Delay(ResponseDelayMilliseconds);
+                    return _handler(request);
+                });
+            }
         }
+
+        /// <summary>How long the stand-in server takes to answer (for tests of what shows while waiting); 0 is at once.</summary>
+        internal static int ResponseDelayMilliseconds;
 
         internal static HttpResponse Reply(int status, string body, string setCookie = null)
         {
