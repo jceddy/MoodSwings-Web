@@ -14,6 +14,7 @@ namespace MoodSwings.Core
         private const string EffectsVolumeKey = "device.effectsVolume";
         private const string MusicKey = "device.music";
         private const string MusicVolumeKey = "device.musicVolume";
+        private const string ArtPackKey = "device.artPack";
         private const string PushKey = "device.push";
         private const string DarkModeKey = "device.darkMode";
         private const string DevServerKey = "device.devServer";
@@ -40,6 +41,27 @@ namespace MoodSwings.Core
         {
             get => ReadVolume(EffectsVolumeKey, 0.8f);
             set => WriteVolume(EffectsVolumeKey, value);
+        }
+
+        /// <summary>The id of the art pack in use, or null for the art that ships with the app.</summary>
+        public string ArtPack
+        {
+            get
+            {
+                var stored = _store.GetString(ArtPackKey);
+                return string.IsNullOrEmpty(stored) ? null : stored;
+            }
+            set
+            {
+                if (string.IsNullOrEmpty(value))
+                {
+                    _store.Delete(ArtPackKey);
+                }
+                else
+                {
+                    _store.SetString(ArtPackKey, value);
+                }
+            }
         }
 
         /// <summary>The background music, on until switched off.</summary>

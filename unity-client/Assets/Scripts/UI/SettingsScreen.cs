@@ -1,4 +1,6 @@
 using System;
+using System.Linq;
+using System.Threading.Tasks;
 using MoodSwings.Core;
 using MoodSwings.Networking;
 using UnityEngine;
@@ -152,6 +154,166 @@ namespace MoodSwings.UI
             {
                 AddDeviceRow(theme, "Vibration", "A short buzz for your turn and for questions that need an answer.",
                     AppServices.Device.VibrationOn, on => AppServices.Device.VibrationOn = on);
+            }
+
+            AddArtPackRows(theme);
+        }
+
+        // --- card art -------------------------------------------------------------------------------
+
+        private string _armedRemoval;
+
+        // The art that ships with the app, and each art pack that has been added: one of them is in use. A pack is a
+        // folder or zip of images; adding one copies it into the app, so the original can be moved or deleted.
+        private void AddArtPackRows(UiTheme theme)
+        {
+            UiFactory.SectionTitle(_list, theme, "Card art");
+            var note = NewPanel(theme);
+            var text = UiFactory.Label(note.transform,
+                "Use your own card art. An art pack is a folder or a .zip of PNG or JPG images named like 12-faith.png (the card's number first); "
+                + "it can replace some or all of the cards, the card back (back.png) and Hurt Feelings (hurt-feelings.png).",
+                24, theme.textMuted, TextAnchor.UpperLeft);
+            text.name = "Art pack note";
+
+            var packs = AppServices.ArtPacks.List();
+            var active = AppServices.Device.ArtPack;
+            if (active != null && packs.All(p => p.Id != active))
+            {
+                active = null; // it has been deleted: the default again
+            }
+
+            AddArtChoice(theme, "Default", "The art that comes with the app.", null, active == null, removable: false);
+            foreach (var pack in packs)
+            {
+                AddArtChoice(theme, pack.Name, pack.Summary, pack.Id, pack.Id == active, removable: true);
+            }
+
+            var picker = AppServices.FilePicker;
+            var add = NewPanel(theme);
+            if (picker != null && picker.IsAvailable)
+            {
+                var row = UiFactory.Row(add.transform, "Add art pack", 12f, TextAnchor.MiddleLeft);
+                UiFactory.Size(row.gameObject, height: UiFactory.ControlHeight);
+                var folder = UiFactory.Button(row.transform, "Add a folder...", theme, () => AddPack(folder: true), primary: false);
+                folder.gameObject.name = "Add art pack folder";
+                UiFactory.Flexible(folder.gameObject, width: 1f);
+                var zip = UiFactory.Button(row.transform, "Add a .zip...", theme, () => AddPack(folder: false), primary: false);
+                zip.gameObject.name = "Add art pack zip";
+                UiFactory.Flexible(zip.gameObject, width: 1f);
+            }
+            else
+            {
+                UiFactory.Label(add.transform, "Adding art packs isn't available on this device.", 24, theme.textMuted, TextAnchor.UpperLeft);
+            }
+        }
+
+        private void AddArtChoice(UiTheme theme, string name, string detail, string id, bool inUse, bool removable)
+        {
+            var panel = NewPanel(theme);
+            var row = UiFactory.Row(panel.transform, "Art choice", 12f, TextAnchor.MiddleLeft);
+            UiFactory.Size(row.gameObject, height: UiFactory.ControlHeight);
+            var choose = UiFactory.Button(row.transform, inUse ? name + "  -  in use" : name, theme, () => UseArt(id, name), primary: inUse);
+            choose.gameObject.name = "Art: " + name;
+            UiFactory.Flexible(choose.gameObject, width: 1f);
+            if (removable)
+            {
+                var armed = _armedRemoval == id;
+                var remove = UiFactory.Button(row.transform, armed ? "Sure?" : "Remove", theme, () => RemoveArt(id, name), primary: false);
+                remove.gameObject.name = "Remove " + name;
+                UiFactory.Size(remove.gameObject, 180f);
+                if (armed)
+                {
+                    remove.GetComponent<Image>().color = theme.danger;
+                    remove.GetComponentInChildren<Text>().color = Color.white;
+                }
+            }
+
+            AddDescription(theme, panel.transform, detail);
+        }
+
+        private void UseArt(string id, string name)
+        {
+            _armedRemoval = null;
+            AppServices.Device.ArtPack = id;
+            CardArtLibrary.ActivePackId = id;
+            BuildRows();
+            SetStatus(id == null ? "Using the card art that comes with the app." : "Using " + name + ".", isError: false);
+        }
+
+        // Two taps, so a stray one doesn't delete a pack: the first asks "Sure?".
+        private void RemoveArt(string id, string name)
+        {
+            if (_armedRemoval != id)
+            {
+                _armedRemoval = id;
+                BuildRows();
+                return;
+            }
+
+            _armedRemoval = null;
+            AppServices.ArtPacks.Delete(id);
+            CardArtLibrary.Forget(id);
+            if (AppServices.Device.ArtPack == id)
+            {
+                AppServices.Device.ArtPack = null;
+            }
+
+            BuildRows();
+            SetStatus("Removed " + name + ".", isError: false);
+        }
+
+        private async void AddPack(bool folder)
+        {
+            PickedPath picked = null;
+            try
+            {
+                var picker = AppServices.FilePicker;
+                SetStatus(folder ? "Choose the folder..." : "Choose the zip file...", isError: false);
+                picked = folder ? await picker.PickFolderAsync() : await picker.PickZipAsync();
+                if (this == null)
+                {
+                    return;
+                }
+
+                if (picked == null)
+                {
+                    SetStatus(string.Empty, isError: false);
+                    return;
+                }
+
+                SetStatus("Adding it...", isError: false);
+                var store = AppServices.ArtPacks;
+                var path = picked.Path;
+                var name = picked.Name;
+                var result = await Task.Run(() => folder ? store.AddFolder(path, name) : store.AddZip(path, name));
+                if (this == null)
+                {
+                    return;
+                }
+
+                BuildRows();
+                if (!result.Ok)
+                {
+                    SetStatus(result.Problem, isError: true);
+                    return;
+                }
+
+                var left = result.Skipped.Count > 0
+                    ? $" {result.Skipped.Count} {(result.Skipped.Count == 1 ? "file was" : "files were")} left out ({result.Skipped[0]})."
+                    : string.Empty;
+                SetStatus($"Added {result.Pack.Name}: {result.Pack.Summary}. Tap it to use it.{left}", isError: false);
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e);
+                if (this != null)
+                {
+                    SetStatus("Couldn't add it: " + e.Message, isError: true);
+                }
+            }
+            finally
+            {
+                picked?.Cleanup();
             }
         }
 

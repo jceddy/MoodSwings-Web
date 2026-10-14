@@ -53,6 +53,9 @@ namespace MoodSwings.Tests
         /// <summary>Launches in the dark palette (for screenshots of it).</summary>
         internal static bool DarkMode;
 
+        /// <summary>A stand-in for the system's file dialogs, for tests of adding art packs.</summary>
+        internal static IFilePicker FilePicker;
+
         internal static IEnumerator Launch(Func<HttpRequest, HttpResponse> handler, string rememberedSession = null, IPushTokenProvider pushProvider = null)
         {
             ScreenshotHelper.UseFullHdScreen();
@@ -66,7 +69,9 @@ namespace MoodSwings.Tests
             }
 
             var api = new ApiClient(new ApiConfig("https://example.test", "MoodSwings/test"), new ScriptedTransport(Site(handler)), store);
-            AppServices.Override(api, null, store, disk, pushProvider);
+            AppServices.Override(api, null, store, disk, pushProvider,
+                artPacksFolder: System.IO.Path.Combine(System.IO.Path.GetTempPath(), "moodswings-test-artpacks-" + System.Guid.NewGuid().ToString("N")));
+            AppServices.FilePicker = FilePicker ?? AppServices.FilePicker;
             if (DarkMode)
             {
                 AppServices.Device.DarkMode = true;

@@ -436,6 +436,29 @@ under "Playing a game" below.
   checks the size, rarity and copy limits as you tap cards in and out. (Rules of your own making,
   and pasting a deck from text, are web-only for now.)
 
+## Art packs (your own card art)
+
+**Settings > Card art** lists **Default** (the art that comes with the app) and every art pack that has been added;
+tap one to use it. A pack that doesn't have a card leaves that card on the default art, so a pack can replace a few
+cards or all of them. The choice is stored on the device.
+
+- **A pack** is a folder, or a `.zip`, of **PNG or JPG** images named with the card's number first, like the
+  `art-overrides` folder: `12-faith.png`, `012.jpg`, `Card 7 - courage.png`. Also `back.png` (the card back) and
+  `hurt-feelings.png`. WebP isn't supported (Unity can't read it at run time). Images are shrunk to at most 1040 px
+  tall; the card art that ships is 744 x 1040, so that shape looks right.
+- **Adding one:** **Add a folder...** / **Add a .zip...** open the system's own dialog (PowerShell's on Windows,
+  AppleScript's on macOS, the document picker on Android -- which needs no storage permission). The images are
+  **copied into the app's own storage** (`<persistentDataPath>/ArtPacks/<name>/`), so the pack keeps working if the
+  original moves, and on Android, where a chosen folder can't be read in place, the picker first copies it to the cache.
+  Files that aren't card art are skipped and the status line says how many (and why, for the first).
+  **Remove** (two taps) deletes the app's copy only.
+- **Limits:** 12 MB a file, 600 files and 400 MB a pack; a zip entry's own file name is all that is used (never its
+  path).
+- **Code:** `ArtPackStore` (adding, listing, removing; UI-free), `CardArtLibrary` (the active pack's image first,
+  then the shipped art; pack images are loaded and GPU-compressed the first time a card is drawn),
+  `FilePickers` and `Assets/Plugins/Android/ArtPicker.java` (the dialogs). The Android picker has been compiled but
+  **not yet run on a device**.
+
 ## Stats, achievements and card stats
 
 - **Home > Stats** shows your lifetime games and matches as `wins-losses (NN%)` (the percentage only once

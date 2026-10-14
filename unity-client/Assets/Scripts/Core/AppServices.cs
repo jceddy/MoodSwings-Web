@@ -42,6 +42,12 @@ namespace MoodSwings.Core
 
         public static UiTheme Theme { get; private set; }
 
+        /// <summary>The art packs the player has added (replacement card art), kept in the app's own storage.</summary>
+        public static ArtPackStore ArtPacks { get; private set; }
+
+        /// <summary>Asks the player for a folder or a zip on their device (a native dialog); replaceable for tests.</summary>
+        public static IFilePicker FilePicker { get; set; }
+
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
         private static void Initialize()
         {
@@ -117,7 +123,7 @@ namespace MoodSwings.Core
         /// </summary>
         public static void Override(
             ApiClient api, AuthFlow auth, SecureSessionStore sessionStore = null, IKeyValueStore preferences = null,
-            IPushTokenProvider pushProvider = null)
+            IPushTokenProvider pushProvider = null, string artPacksFolder = null)
         {
             Api = api;
             Auth = auth ?? new AuthFlow(api, sessionStore, preferences);
@@ -138,6 +144,12 @@ namespace MoodSwings.Core
             }
 
             Theme.Apply(Device.DarkMode);
+
+            ArtPacks = new ArtPackStore(artPacksFolder ?? System.IO.Path.Combine(Application.persistentDataPath, "ArtPacks"));
+            CardArtLibrary.Packs = ArtPacks;
+            // A pack that has since been deleted is just the default again.
+            CardArtLibrary.ActivePackId = ArtPacks.Find(Device.ArtPack)?.Id;
+            FilePicker = FilePickers.ForThisPlatform();
         }
     }
 }

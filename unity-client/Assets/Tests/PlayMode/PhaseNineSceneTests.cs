@@ -1697,6 +1697,115 @@ namespace MoodSwings.Tests
             Assert.LessOrEqual(tag.anchoredPosition.y, -20f);
         }
 
+        private sealed class FakePicker : IFilePicker
+        {
+            public string Folder;
+
+            public bool IsAvailable => true;
+
+            public System.Threading.Tasks.Task<PickedPath> PickFolderAsync() => System.Threading.Tasks.Task.FromResult(
+                Folder == null ? null : new PickedPath { Path = Folder, Name = System.IO.Path.GetFileName(Folder) });
+
+            public System.Threading.Tasks.Task<PickedPath> PickZipAsync() => System.Threading.Tasks.Task.FromResult<PickedPath>(null);
+        }
+
+        private static string AsText(Sprite sprite) => sprite == null ? "none" : sprite.texture.name;
+
+        [UnityTest]
+        public IEnumerator ArtPacks_CanBeAdded_Chosen_AndRemoved_InSettings()
+        {
+            var source = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "moodswings-test-source-" + System.Guid.NewGuid().ToString("N"), "Test Pack");
+            System.IO.Directory.CreateDirectory(source);
+            var texture = new Texture2D(64, 88, TextureFormat.RGBA32, false);
+            texture.SetPixels(Enumerable.Repeat(Color.red, 64 * 88).ToArray());
+            texture.Apply();
+            System.IO.File.WriteAllBytes(System.IO.Path.Combine(source, "7-courage.png"), ImageConversion.EncodeToPNG(texture));
+            Object.Destroy(texture);
+
+            MainSceneTests.FilePicker = new FakePicker { Folder = source };
+            try
+            {
+                yield return Home(Serve());
+                var shipped = AsText(CardArtLibrary.ForCard(7));
+                Assert.AreNotEqual("Art pack image", shipped);
+
+                Object.FindAnyObjectByType<ScreenRouter>().Show<SettingsScreen>();
+                yield return MainSceneTests.WaitFor<SettingsScreen>();
+                Assert.IsNotNull(PhaseFiveSceneTests.Child("Art: Default"), "the shipped art is always there to pick");
+                StringAssert.Contains("in use", PhaseFiveSceneTests.Child("Art: Default").GetComponentInChildren<Text>().text);
+
+                PhaseFiveSceneTests.ButtonNamed("Add art pack folder").onClick.Invoke();
+                var waited = 0f;
+                while (PhaseFiveSceneTests.Child("Art: Test Pack") == null && waited < 6f)
+                {
+                    waited += Time.unscaledDeltaTime;
+                    yield return null;
+                }
+
+                Assert.IsNotNull(PhaseFiveSceneTests.Child("Art: Test Pack"), "the pack is an entry beside Default");
+                StringAssert.Contains("Added Test Pack", MainSceneTests.Screen<SettingsScreen>().StatusText);
+                Assert.IsNull(AppServices.Device.ArtPack, "adding doesn't switch to it");
+                Assert.AreEqual(shipped, AsText(CardArtLibrary.ForCard(7)));
+
+                PhaseFiveSceneTests.ButtonNamed("Art: Test Pack").onClick.Invoke();
+                yield return PhaseTwoSceneTests.Frames(2);
+                Assert.AreEqual("test-pack", AppServices.Device.ArtPack);
+                Assert.AreEqual("Art pack image", AsText(CardArtLibrary.ForCard(7)), "card 7 now has the pack's art");
+                Assert.AreNotEqual("Art pack image", AsText(CardArtLibrary.ForCard(8)), "and the cards it leaves alone keep the shipped art");
+                StringAssert.Contains("in use", PhaseFiveSceneTests.Child("Art: Test Pack").GetComponentInChildren<Text>().text);
+
+                PhaseFiveSceneTests.ButtonNamed("Art: Default").onClick.Invoke();
+                yield return PhaseTwoSceneTests.Frames(2);
+                Assert.IsNull(AppServices.Device.ArtPack);
+                Assert.AreEqual(shipped, AsText(CardArtLibrary.ForCard(7)));
+
+                // Removing takes two taps.
+                PhaseFiveSceneTests.ButtonNamed("Remove Test Pack").onClick.Invoke();
+                yield return PhaseTwoSceneTests.Frames(2);
+                Assert.IsNotNull(PhaseFiveSceneTests.Child("Art: Test Pack"), "the first tap only asks");
+                PhaseFiveSceneTests.ButtonNamed("Remove Test Pack").onClick.Invoke();
+                yield return PhaseTwoSceneTests.Frames(2);
+                Assert.IsNull(PhaseFiveSceneTests.Child("Art: Test Pack"));
+                Assert.IsEmpty(AppServices.ArtPacks.List());
+            }
+            finally
+            {
+                MainSceneTests.FilePicker = null;
+                CardArtLibrary.ActivePackId = null;
+                var parent = System.IO.Path.GetDirectoryName(source);
+                if (System.IO.Directory.Exists(parent))
+                {
+                    System.IO.Directory.Delete(parent, recursive: true);
+                }
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator AnArtPackInUse_IsRememberedAcrossARestart_AndADeletedOneFallsBackToDefault()
+        {
+            yield return Home(Serve());
+            var store = AppServices.ArtPacks;
+            var folder = System.IO.Path.Combine(store.Root, "..", "src-" + System.Guid.NewGuid().ToString("N"));
+            System.IO.Directory.CreateDirectory(folder);
+            var texture = new Texture2D(40, 56, TextureFormat.RGBA32, false);
+            System.IO.File.WriteAllBytes(System.IO.Path.Combine(folder, "3-charity.png"), ImageConversion.EncodeToPNG(texture));
+            Object.Destroy(texture);
+            var pack = store.AddFolder(folder, "Kept").Pack;
+            AppServices.Device.ArtPack = pack.Id;
+
+            // Start the services again over the same storage, as a new run of the app would.
+            var root = store.Root;
+            AppServices.Override(AppServices.Api, null, null, null, artPacksFolder: root);
+            Assert.AreEqual(root, AppServices.ArtPacks.Root);
+            CardArtLibrary.ActivePackId = AppServices.ArtPacks.Find(AppServices.Device.ArtPack)?.Id;
+
+            store.Delete(pack.Id);
+            Assert.IsNull(store.Find(pack.Id));
+            CardArtLibrary.Forget(pack.Id);
+            Assert.IsNull(CardArtLibrary.ActivePackId, "the pack is gone, so it is the default again");
+            System.IO.Directory.Delete(folder, recursive: true);
+        }
+
         [UnityTest]
         public IEnumerator BoardLayout_Screenshots()
         {
