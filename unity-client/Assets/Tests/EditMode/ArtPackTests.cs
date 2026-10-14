@@ -226,6 +226,113 @@ namespace MoodSwings.Tests
             Assert.IsFalse(_store.Delete(pack.Id));
         }
 
+        private string MakeSetFolder(string name, params (string path, byte[] bytes)[] files)
+        {
+            var folder = Path.Combine(_temp, name);
+            foreach (var (path, bytes) in files)
+            {
+                var full = Path.Combine(folder, path.Replace('/', Path.DirectorySeparatorChar));
+                Directory.CreateDirectory(Path.GetDirectoryName(full));
+                File.WriteAllBytes(full, bytes);
+            }
+
+            return folder;
+        }
+
+        [Test]
+        public void ASetFolder_HoldsItsCards_AndTheBackAndHurtFeelingsSitAtTheTop()
+        {
+            var folder = MakeSetFolder("WithSets",
+                ("MSW/1-altruism.png", Image(Color.red)), ("MSW/12-faith.png", Image(Color.green)),
+                ("back.png", Image(Color.blue)), ("hurt-feelings.png", Image(Color.black)));
+
+            var result = _store.AddFolder(folder);
+
+            Assert.IsTrue(result.Ok, result.Problem);
+            Assert.AreEqual(2, result.Pack.CardCount);
+            Assert.AreEqual(2, result.Pack.Sets["MSW"]);
+            Assert.IsTrue(result.Pack.HasBack);
+            Assert.IsTrue(result.Pack.HasHurtFeelings);
+            StringAssert.EndsWith(Path.Combine("MSW", "12.png"), _store.FileFor(result.Pack.Id, ArtKind.Card, 12), "kept in its set's folder");
+            StringAssert.EndsWith("back.png", _store.FileFor(result.Pack.Id, ArtKind.Back));
+            Assert.IsNotNull(_store.FileFor(result.Pack.Id, ArtKind.HurtFeelings));
+        }
+
+        [Test]
+        public void ImagesOutsideAnySetFolder_AreMoodSwingsCards()
+        {
+            var flat = _store.AddFolder(MakeFolder("Flat", ("7-courage.png", Image(Color.red)))).Pack;
+
+            Assert.AreEqual(1, flat.Sets["MSW"]);
+            StringAssert.EndsWith(Path.Combine("MSW", "7.png"), _store.FileFor(flat.Id, ArtKind.Card, 7));
+        }
+
+        [Test]
+        public void SeveralSets_AreCountedApart_AndTheBaseGameIsLookedInFirst()
+        {
+            var folder = MakeSetFolder("TwoSets",
+                ("MSW/5-complacency.png", Image(Color.red)), ("MSW/9-discipline.png", Image(Color.red)), ("ABC/5-other.png", Image(Color.green)),
+                ("ABC/200-newcard.png", Image(Color.green)));
+
+            var pack = _store.AddFolder(folder).Pack;
+
+            Assert.AreEqual(4, pack.CardCount);
+            Assert.AreEqual("4 cards (ABC 2, MSW 2)", pack.Summary);
+            StringAssert.Contains("MSW", _store.FileFor(pack.Id, ArtKind.Card, 5), "card 5 is in both: the base game's");
+            StringAssert.Contains("ABC", _store.FileFor(pack.Id, ArtKind.Card, 200), "card 200 only in the other set");
+        }
+
+        [Test]
+        public void TheBackInsideASetFolder_IsSkipped_AndSaid()
+        {
+            var folder = MakeSetFolder("BackInSet", ("MSW/3-charity.png", Image(Color.red)), ("MSW/back.png", Image(Color.blue)));
+
+            var result = _store.AddFolder(folder);
+
+            Assert.IsTrue(result.Ok, result.Problem);
+            Assert.IsFalse(result.Pack.HasBack);
+            Assert.IsTrue(result.Skipped.Any(x => x.StartsWith("MSW/back.png") && x.Contains("top of the pack")));
+        }
+
+        [Test]
+        public void AFlatCardAndTheSameCardInTheSetFolder_AreOneCard()
+        {
+            var folder = MakeSetFolder("Both", ("4-chivalry.png", Image(Color.red)), ("MSW/4-chivalry.png", Image(Color.green)));
+
+            var result = _store.AddFolder(folder);
+
+            Assert.AreEqual(1, result.Pack.CardCount);
+            Assert.AreEqual(1, result.Skipped.Count);
+        }
+
+        [Test]
+        public void AFolderThatIsNotASetCode_IsNotLookedInto()
+        {
+            var folder = MakeSetFolder("Other", ("2-benevolence.png", Image(Color.red)), ("images/3-charity.png", Image(Color.red)), ("msw/6-conviction.png", Image(Color.red)));
+
+            var result = _store.AddFolder(folder);
+
+            Assert.AreEqual(1, result.Pack.CardCount, "set codes are capitals, so only MSW-style folders count");
+        }
+
+        [Test]
+        public void AZip_WithSetFoldersInsideAWrappingFolder_IsRead()
+        {
+            var zipPath = Path.Combine(_temp, "Wrapped.zip");
+            using (var archive = ZipFile.Open(zipPath, ZipArchiveMode.Create))
+            {
+                Add(archive, "My Pack/MSW/5-complacency.png", Image(Color.red));
+                Add(archive, "My Pack/MSW/6-conviction.png", Image(Color.red));
+                Add(archive, "My Pack/back.png", Image(Color.blue));
+            }
+
+            var result = _store.AddZip(zipPath);
+
+            Assert.IsTrue(result.Ok, result.Problem);
+            Assert.AreEqual(2, result.Pack.Sets["MSW"]);
+            Assert.IsTrue(result.Pack.HasBack);
+        }
+
         [TestCase("../outside")]
         [TestCase("a/b")]
         [TestCase("..")]

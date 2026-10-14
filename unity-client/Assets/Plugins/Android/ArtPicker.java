@@ -223,10 +223,14 @@ public final class ArtPicker {
         return "Art pack";
     }
 
-    /** Copies the PNG and JPG files directly inside the chosen folder. */
+    /** Copies the PNG and JPG files directly inside the chosen folder, and inside any set folders (MSW) directly in it. */
     private static void copyTree(ContentResolver resolver, Uri tree, File target) throws Exception {
-        String treeId = DocumentsContract.getTreeDocumentId(tree);
-        Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, treeId);
+        copyFolder(resolver, tree, DocumentsContract.getTreeDocumentId(tree), target, true, new long[] {0, 0});
+    }
+
+    // counts = {files copied, bytes copied}, shared across the folders so the limits are for the whole pack.
+    private static void copyFolder(ContentResolver resolver, Uri tree, String folderId, File target, boolean topLevel, long[] counts) throws Exception {
+        Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, folderId);
         Cursor cursor = resolver.query(children, new String[] {
                 DocumentsContract.Document.COLUMN_DOCUMENT_ID,
                 DocumentsContract.Document.COLUMN_DISPLAY_NAME,
@@ -235,15 +239,25 @@ public final class ArtPicker {
         if (cursor == null) {
             return;
         }
-        int files = 0;
-        long total = 0;
         try {
-            while (cursor.moveToNext() && files < MAX_FILES && total < MAX_TOTAL_BYTES) {
+            while (cursor.moveToNext() && counts[0] < MAX_FILES && counts[1] < MAX_TOTAL_BYTES) {
                 String documentId = cursor.getString(0);
                 String fileName = cursor.getString(1);
                 String mime = cursor.getString(2);
                 long size = cursor.isNull(3) ? 0 : cursor.getLong(3);
-                if (fileName == null || DocumentsContract.Document.MIME_TYPE_DIR.equals(mime) || size > MAX_FILE_BYTES) {
+                if (fileName == null) {
+                    continue;
+                }
+                if (DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)) {
+                    // Only a set's folder (a short code in capitals, like MSW), only straight inside the chosen one.
+                    if (topLevel && fileName.matches("[A-Z][A-Z0-9]{1,9}")) {
+                        File sub = new File(target, fileName);
+                        sub.mkdirs();
+                        copyFolder(resolver, tree, documentId, sub, false, counts);
+                    }
+                    continue;
+                }
+                if (size > MAX_FILE_BYTES) {
                     continue;
                 }
                 String lower = fileName.toLowerCase(Locale.ROOT);
@@ -253,8 +267,8 @@ public final class ArtPicker {
                 Uri document = DocumentsContract.buildDocumentUriUsingTree(tree, documentId);
                 // Only the file's own name is used, never a path.
                 File out = new File(target, fileName.replace('/', '_').replace('\\', '_'));
-                total += copy(resolver.openInputStream(document), out, MAX_FILE_BYTES);
-                files++;
+                counts[1] += copy(resolver.openInputStream(document), out, MAX_FILE_BYTES);
+                counts[0]++;
             }
         } finally {
             cursor.close();

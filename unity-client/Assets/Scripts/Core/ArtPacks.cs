@@ -86,6 +86,19 @@ namespace MoodSwings.Core
         private static string Normalize(string extension) => extension.ToLowerInvariant().StartsWith("jp") ? "jpg" : "png";
     }
 
+    /// <summary>The set codes cards are printed under ("MSW" for the base game).</summary>
+    public static class ArtSets
+    {
+        /// <summary>The only set that exists so far, and what card images outside any set folder belong to.</summary>
+        public const string Default = "MSW";
+
+        // Codes are short and in capitals, like the sets table's: MSW. Anything else (a folder called "Neon Cards"
+        // or "images") is just a folder, not a set.
+        private static readonly Regex Code = new Regex(@"^[A-Z][A-Z0-9]{1,9}$", RegexOptions.Compiled);
+
+        public static bool IsCode(string name) => !string.IsNullOrEmpty(name) && Code.IsMatch(name);
+    }
+
     /// <summary>One art pack that has been added to the app.</summary>
     public sealed class ArtPackInfo
     {
@@ -93,19 +106,28 @@ namespace MoodSwings.Core
 
         public string Name { get; set; }
 
-        /// <summary>How many card faces it replaces.</summary>
+        /// <summary>How many card faces it replaces, in every set.</summary>
         public int CardCount { get; set; }
+
+        /// <summary>The card faces it replaces in each set, by set code.</summary>
+        public Dictionary<string, int> Sets { get; } = new Dictionary<string, int>();
 
         public bool HasBack { get; set; }
 
         public bool HasHurtFeelings { get; set; }
 
-        /// <summary>"12 cards", "12 cards and the card back".</summary>
+        /// <summary>"12 cards", "12 cards and the card back", "30 cards (MSW 24, ABC 6) and the card back".</summary>
         public string Summary
         {
             get
             {
-                var parts = new List<string> { CardCount + (CardCount == 1 ? " card" : " cards") };
+                var cards = CardCount + (CardCount == 1 ? " card" : " cards");
+                if (Sets.Count > 1)
+                {
+                    cards += " (" + string.Join(", ", Sets.OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => p.Key + " " + p.Value)) + ")";
+                }
+
+                var parts = new List<string> { cards };
                 if (HasBack)
                 {
                     parts.Add("the card back");
@@ -136,10 +158,12 @@ namespace MoodSwings.Core
     }
 
     /// <summary>
-    /// The art packs on this device. A pack is a folder or a .zip of PNG or JPG images named like the art-overrides
-    /// folder's ("12-faith.png": the card's number first); it can replace any of the cards, and the card back and the
-    /// Hurt Feelings card (<c>back.png</c>, <c>hurt-feelings.png</c>). Adding one copies its images into the app's own
-    /// storage (so it works wherever the pack came from, and stays when the original is moved or deleted).
+    /// The art packs on this device. A pack is a folder or a .zip of PNG or JPG images. Card faces go in a folder named
+    /// for their set ("MSW/12-faith.png": the card's number first -- the catalog id, the same number the web client's
+    /// art files use, which is unique across sets); images with no set folder are Mood Swings (MSW) cards, so a simple
+    /// pack can be flat. The card back and the Hurt Feelings card (<c>back.png</c>, <c>hurt-feelings.png</c>) sit at the
+    /// top, outside any set. A pack can replace any of them. Adding one copies its images into the app's own storage
+    /// (so it works wherever the pack came from, and stays when the original is moved or deleted).
     /// </summary>
     public sealed class ArtPackStore
     {
@@ -148,6 +172,14 @@ namespace MoodSwings.Core
         public const long MaxTotalBytes = 400L * 1024 * 1024;
 
         private const string InfoFile = "pack.json";
+
+        private sealed class Candidate
+        {
+            public string Name;      // the file's own name
+            public string Set;       // null: outside any set folder
+            public long Size;
+            public Func<byte[]> Read;
+        }
 
         private readonly string _root;
 
@@ -181,10 +213,13 @@ namespace MoodSwings.Core
 
         public ArtPackInfo Find(string id) => string.IsNullOrEmpty(id) ? null : List().FirstOrDefault(p => p.Id == id);
 
-        /// <summary>The path of the pack's image for a card face, the back or Hurt Feelings; null if it doesn't replace that.</summary>
+        /// <summary>
+        /// The path of the pack's image for a card face (in whichever set has it, the base game first), the back or Hurt
+        /// Feelings; null if it doesn't replace that.
+        /// </summary>
         public string FileFor(string packId, ArtKind kind, int number = 0)
         {
-            if (string.IsNullOrEmpty(packId) || packId.IndexOfAny(new[] { '/', '\\', ':' }) >= 0 || packId.Contains(".."))
+            if (!IsSafeId(packId))
             {
                 return null;
             }
@@ -195,10 +230,33 @@ namespace MoodSwings.Core
                 return null;
             }
 
+            if (kind != ArtKind.Card)
+            {
+                return Existing(folder, kind, 0);
+            }
+
+            foreach (var set in SetsIn(folder))
+            {
+                var path = Existing(Path.Combine(folder, set), ArtKind.Card, number);
+                if (path != null)
+                {
+                    return path;
+                }
+            }
+
+            return null;
+        }
+
+        // The set folders of a pack, the base game's first.
+        private static IEnumerable<string> SetsIn(string packFolder) =>
+            Directory.GetDirectories(packFolder).Select(Path.GetFileName).Where(ArtSets.IsCode)
+                .OrderBy(set => set == ArtSets.Default ? 0 : 1).ThenBy(set => set, StringComparer.Ordinal);
+
+        private static string Existing(string folder, ArtKind kind, int number)
+        {
             foreach (var extension in new[] { "png", "jpg" })
             {
-                var name = new ArtFileName(kind, number, extension).StoredName;
-                var path = Path.Combine(folder, name);
+                var path = Path.Combine(folder, new ArtFileName(kind, number, extension).StoredName);
                 if (File.Exists(path))
                 {
                     return path;
@@ -208,7 +266,12 @@ namespace MoodSwings.Core
             return null;
         }
 
-        /// <summary>Adds a pack from a folder of images (the files directly in it).</summary>
+        private static bool IsSafeId(string id) =>
+            !string.IsNullOrEmpty(id) && id.IndexOfAny(new[] { '/', '\\', ':' }) < 0 && !id.Contains("..");
+
+        /// <summary>
+        /// Adds a pack from a folder of images: the files in it, and in any set folders (MSW) directly inside it.
+        /// </summary>
         public ArtPackImport AddFolder(string folder, string name = null)
         {
             var result = new ArtPackImport();
@@ -218,17 +281,30 @@ namespace MoodSwings.Core
                 return result;
             }
 
-            var files = new List<(string name, long size, Func<byte[]> read)>();
-            foreach (var file in Directory.GetFiles(folder))
+            var files = new List<Candidate>();
+            Gather(folder, null, files);
+            foreach (var sub in Directory.GetDirectories(folder))
             {
-                var path = file;
-                files.Add((Path.GetFileName(file), new FileInfo(file).Length, () => File.ReadAllBytes(path)));
+                var code = Path.GetFileName(sub);
+                if (ArtSets.IsCode(code))
+                {
+                    Gather(sub, code, files);
+                }
             }
 
             return Add(files, name ?? new DirectoryInfo(folder).Name, result);
         }
 
-        /// <summary>Adds a pack from a .zip of images (the files directly in it, or in the one folder it holds).</summary>
+        private static void Gather(string folder, string set, List<Candidate> files)
+        {
+            foreach (var file in Directory.GetFiles(folder))
+            {
+                var path = file;
+                files.Add(new Candidate { Name = Path.GetFileName(file), Set = set, Size = new FileInfo(file).Length, Read = () => File.ReadAllBytes(path) });
+            }
+        }
+
+        /// <summary>Adds a pack from a .zip of images, laid out like a folder (set folders may be inside one wrapping folder).</summary>
         public ArtPackImport AddZip(string zipPath, string name = null)
         {
             var result = new ArtPackImport();
@@ -243,7 +319,7 @@ namespace MoodSwings.Core
                 using (var stream = new FileStream(zipPath, FileMode.Open, FileAccess.Read, FileShare.Read))
                 using (var archive = new ZipArchive(stream, ZipArchiveMode.Read))
                 {
-                    var files = new List<(string name, long size, Func<byte[]> read)>();
+                    var files = new List<Candidate>();
                     foreach (var entry in archive.Entries)
                     {
                         if (string.IsNullOrEmpty(entry.Name))
@@ -252,16 +328,25 @@ namespace MoodSwings.Core
                         }
 
                         // Only the file's own name is used (never its path), so nothing can be written outside the pack.
+                        // The folder it is in only matters if it is a set's.
+                        var folders = entry.FullName.Split('/');
+                        var set = folders.Length >= 2 && ArtSets.IsCode(folders[folders.Length - 2]) ? folders[folders.Length - 2] : null;
                         var captured = entry;
-                        files.Add((entry.Name, entry.Length, () =>
+                        files.Add(new Candidate
                         {
-                            using (var input = captured.Open())
-                            using (var memory = new MemoryStream())
+                            Name = entry.Name,
+                            Set = set,
+                            Size = entry.Length,
+                            Read = () =>
                             {
-                                input.CopyTo(memory);
-                                return memory.ToArray();
-                            }
-                        }));
+                                using (var input = captured.Open())
+                                using (var memory = new MemoryStream())
+                                {
+                                    input.CopyTo(memory);
+                                    return memory.ToArray();
+                                }
+                            },
+                        });
                     }
 
                     return Add(files, name ?? Path.GetFileNameWithoutExtension(zipPath), result);
@@ -277,7 +362,7 @@ namespace MoodSwings.Core
         /// <summary>Removes a pack and its images.</summary>
         public bool Delete(string id)
         {
-            if (string.IsNullOrEmpty(id) || id.IndexOfAny(new[] { '/', '\\', ':' }) >= 0 || id.Contains(".."))
+            if (!IsSafeId(id))
             {
                 return false;
             }
@@ -292,48 +377,57 @@ namespace MoodSwings.Core
             return true;
         }
 
-        private ArtPackImport Add(List<(string name, long size, Func<byte[]> read)> files, string name, ArtPackImport result)
+        private ArtPackImport Add(List<Candidate> files, string name, ArtPackImport result)
         {
-            var chosen = new Dictionary<string, (ArtFileName parsed, Func<byte[]> read, string file)>();
+            var chosen = new Dictionary<string, (ArtFileName parsed, string set, Candidate file)>();
             var total = 0L;
-            foreach (var file in files.OrderBy(f => f.name, StringComparer.OrdinalIgnoreCase))
+            foreach (var file in files.OrderBy(f => f.Set ?? string.Empty, StringComparer.Ordinal).ThenBy(f => f.Name, StringComparer.OrdinalIgnoreCase))
             {
-                if (!ArtFileName.TryParse(file.name, out var parsed))
+                var label = file.Set != null ? file.Set + "/" + file.Name : file.Name;
+                if (!ArtFileName.TryParse(file.Name, out var parsed))
                 {
-                    if (file.name.EndsWith(".webp", StringComparison.OrdinalIgnoreCase))
+                    if (file.Name.EndsWith(".webp", StringComparison.OrdinalIgnoreCase))
                     {
-                        result.Skipped.Add(file.name + ": WebP images aren't supported -- save it as PNG or JPG");
+                        result.Skipped.Add(label + ": WebP images aren't supported -- save it as PNG or JPG");
                     }
-                    else if (LooksLikeImage(file.name))
+                    else if (LooksLikeImage(file.Name))
                     {
-                        result.Skipped.Add(file.name + ": the card's number isn't at the start of the name");
+                        result.Skipped.Add(label + ": the card's number isn't at the start of the name");
                     }
 
                     continue;
                 }
 
-                if (file.size > MaxFileBytes)
+                // The card back and Hurt Feelings belong to the pack as a whole, not to a set.
+                if (parsed.Kind != ArtKind.Card && file.Set != null)
                 {
-                    result.Skipped.Add(file.name + ": over " + MaxFileBytes / (1024 * 1024) + " MB");
+                    result.Skipped.Add(label + ": the " + (parsed.Kind == ArtKind.Back ? "card back" : "Hurt Feelings card") + " goes at the top of the pack, not in a set folder");
                     continue;
                 }
 
-                if (chosen.Count >= MaxFiles || total + file.size > MaxTotalBytes)
+                if (file.Size > MaxFileBytes)
                 {
-                    result.Skipped.Add(file.name + ": the pack is too big");
+                    result.Skipped.Add(label + ": over " + MaxFileBytes / (1024 * 1024) + " MB");
                     continue;
                 }
 
-                // Two files for one card: the first by name wins.
-                var key = parsed.Kind + ":" + parsed.Number;
+                if (chosen.Count >= MaxFiles || total + file.Size > MaxTotalBytes)
+                {
+                    result.Skipped.Add(label + ": the pack is too big");
+                    continue;
+                }
+
+                // Images outside any set folder are Mood Swings cards. Two files for one card: the first by name wins.
+                var set = parsed.Kind == ArtKind.Card ? file.Set ?? ArtSets.Default : null;
+                var key = parsed.Kind + ":" + set + ":" + parsed.Number;
                 if (chosen.ContainsKey(key))
                 {
-                    result.Skipped.Add(file.name + ": another file is already the art for that card");
+                    result.Skipped.Add(label + ": another file is already the art for that card");
                     continue;
                 }
 
-                total += file.size;
-                chosen[key] = (parsed, file.read, file.name);
+                total += file.Size;
+                chosen[key] = (parsed, set, file);
             }
 
             if (chosen.Count == 0)
@@ -350,18 +444,27 @@ namespace MoodSwings.Core
             {
                 foreach (var item in chosen.Values)
                 {
-                    var bytes = item.read();
+                    var bytes = item.file.Read();
+                    var label = item.file.Set != null ? item.file.Set + "/" + item.file.Name : item.file.Name;
                     if (!HasImageHeader(bytes, item.parsed.Extension))
                     {
-                        result.Skipped.Add(item.file + ": not really a " + item.parsed.Extension.ToUpperInvariant() + " image");
+                        result.Skipped.Add(label + ": not really a " + item.parsed.Extension.ToUpperInvariant() + " image");
                         continue;
                     }
 
-                    File.WriteAllBytes(Path.Combine(folder, item.parsed.StoredName), bytes);
+                    var target = folder;
+                    if (item.set != null)
+                    {
+                        target = Path.Combine(folder, item.set);
+                        Directory.CreateDirectory(target);
+                    }
+
+                    File.WriteAllBytes(Path.Combine(target, item.parsed.StoredName), bytes);
                     switch (item.parsed.Kind)
                     {
                         case ArtKind.Card:
                             info.CardCount++;
+                            info.Sets[item.set] = (info.Sets.TryGetValue(item.set, out var n) ? n : 0) + 1;
                             break;
                         case ArtKind.Back:
                             info.HasBack = true;
@@ -416,22 +519,26 @@ namespace MoodSwings.Core
             var pack = new ArtPackInfo { Id = Path.GetFileName(folder), Name = string.IsNullOrWhiteSpace(name) ? Path.GetFileName(folder) : name };
             foreach (var file in Directory.GetFiles(folder))
             {
-                if (!ArtFileName.TryParse(Path.GetFileName(file), out var parsed))
+                if (ArtFileName.TryParse(Path.GetFileName(file), out var parsed))
                 {
-                    continue;
-                }
-
-                switch (parsed.Kind)
-                {
-                    case ArtKind.Card:
-                        pack.CardCount++;
-                        break;
-                    case ArtKind.Back:
+                    if (parsed.Kind == ArtKind.Back)
+                    {
                         pack.HasBack = true;
-                        break;
-                    default:
+                    }
+                    else if (parsed.Kind == ArtKind.HurtFeelings)
+                    {
                         pack.HasHurtFeelings = true;
-                        break;
+                    }
+                }
+            }
+
+            foreach (var set in SetsIn(folder))
+            {
+                var count = Directory.GetFiles(Path.Combine(folder, set)).Count(f => ArtFileName.TryParse(Path.GetFileName(f), out var parsed) && parsed.Kind == ArtKind.Card);
+                if (count > 0)
+                {
+                    pack.Sets[set] = count;
+                    pack.CardCount += count;
                 }
             }
 

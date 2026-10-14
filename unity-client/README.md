@@ -442,13 +442,17 @@ under "Playing a game" below.
 tap one to use it. A pack that doesn't have a card leaves that card on the default art, so a pack can replace a few
 cards or all of them. The choice is stored on the device.
 
-- **A pack** is a folder, or a `.zip`, of **PNG or JPG** images named with the card's number first, like the
-  `art-overrides` folder: `12-faith.png`, `012.jpg`, `Card 7 - courage.png`. Also `back.png` (the card back) and
-  `hurt-feelings.png`. WebP isn't supported (Unity can't read it at run time). Images are shrunk to at most 1040 px
-  tall; the card art that ships is 744 x 1040, so that shape looks right.
+- **A pack** is a folder, or a `.zip` with the same layout, of **PNG or JPG** images. Card faces go in a folder named
+  for their **set code**, in capitals -- `MSW/12-faith.png` (`MSW` is Mood Swings, the only set so far) -- with the
+  card's number first (the catalog number, the same one the `art-overrides` and the web client's art files use; it
+  is unique across sets, so a card is found in whichever set folder has it, the base game's first). Also
+  `012.jpg`, `12.png` or `Card 7 - courage.png`. Images **outside any set folder are read as MSW**, so a small
+  pack can be flat. The card back (`back.png`) and Hurt Feelings (`hurt-feelings.png`) sit **at the top of the
+  pack**, not in a set folder. WebP isn't supported (Unity can't read it at run time). Images are shrunk to at
+  most 1040 px tall; the card art that ships is 744 x 1040, so that shape looks right.
 - **Adding one:** **Add a folder...** / **Add a .zip...** open the system's own dialog (PowerShell's on Windows,
   AppleScript's on macOS, the document picker on Android -- which needs no storage permission). The images are
-  **copied into the app's own storage** (`<persistentDataPath>/ArtPacks/<name>/`), so the pack keeps working if the
+  **copied into the app's own storage** (`<persistentDataPath>/ArtPacks/<name>/<SET>/<number>.png`), so the pack keeps working if the
   original moves, and on Android, where a chosen folder can't be read in place, the picker first copies it to the cache.
   Files that aren't card art are skipped and the status line says how many (and why, for the first).
   **Remove** (two taps) deletes the app's copy only.
