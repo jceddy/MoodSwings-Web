@@ -577,6 +577,29 @@ graphics for the screenshots, so omit `-nographics` there.
   builds them -- see the art-licensing decision in `PLAN.md` before sending a build beyond people
   you trust with it.
 
+## macOS (for testers)
+
+- **Build it from Windows:** the Editor needs its **Mac Build Support (Mono)** module (Unity Hub >
+  Installs > the gear > Add modules, or `"Unity Hub.exe" -- --headless install-modules --version <editor>
+  -m mac-mono`). Then **MoodSwings > Build macOS Player**, or headless: `Unity.exe -batchmode -quit
+  -buildTarget StandaloneOSX -executeMethod MoodSwings.Editor.MacBuild.Build` -> `Build/macOS/MOOD.app`
+  (Mono). The bundle id is `com.jceddy.moodswings`.
+- **Package it:** `python tools/package_macos.py` makes `Build/macOS/MOOD-<version>-mac.zip`. A plain
+  zip of the `.app` made on Windows would not start on a Mac (the program inside loses its "executable"
+  permission), so this writes the zip with the permissions set, and adds an `OPEN ME FIRST.txt`.
+- **Intel by default:** the build is Intel (x64), which runs on every Mac -- on Apple silicon through Rosetta 2,
+  and without being signed. An Apple-silicon build (`MOOD_MAC_ARCH=universal` when building) has to be
+  code-signed to run at all; `package_macos.py` signs it ad hoc if
+  [rcodesign](https://github.com/indygreg/apple-platform-rs) is installed (it runs on Windows).
+- **Not signed or notarized**, so the first launch is stopped: System Settings > Privacy & Security > **Open
+  Anyway** (macOS 15), or right-click > Open (macOS 14 and earlier). Removing that needs an Apple Developer ID
+  ($99 a year) and notarization -- see the signing notes for Windows above; there is no free equivalent.
+- **Saved login:** the session is encrypted with a key in the login Keychain (`KeychainSecretProtector`, using the
+  system's `security` tool), like DPAPI on Windows. That part only runs on a Mac and **has not been run on one yet**;
+  if the Keychain can't be used, the app simply doesn't remember the login.
+- No push notifications on the Mac (as on Windows). Cmd+Q quits; **Option+Enter** switches between full screen and a
+  window (macOS keeps F11 for itself), and so does the green window button.
+
 ## Android
 
 Install the Android Build Support module for the project's editor in Unity

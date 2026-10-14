@@ -5,8 +5,8 @@ namespace MoodSwings.Core.Storage
     public static class SecretProtectors
     {
         /// <summary>
-        /// Windows: DPAPI. Android: Keystore. Everything else (macOS, Linux,
-        /// iOS -- Keychain is still to do) gets a protector that reports
+        /// Windows: DPAPI. Android: Keystore. macOS: a key in the login Keychain. Everything else (Linux,
+        /// iOS -- its Keychain is still to do) gets a protector that reports
         /// unavailable, so sessions simply aren't remembered there.
         /// </summary>
         public static ISecretProtector ForCurrentPlatform()
@@ -18,6 +18,9 @@ namespace MoodSwings.Core.Storage
                     return new DpapiSecretProtector();
                 case RuntimePlatform.Android:
                     return new AndroidKeystoreSecretProtector();
+                case RuntimePlatform.OSXEditor:
+                case RuntimePlatform.OSXPlayer:
+                    return new KeychainSecretProtector(new MacKeychainKeyStore());
                 default:
                     return new NullSecretProtector();
             }

@@ -103,7 +103,7 @@ PlayerSettings:
   useFlipModelSwapchain: 1
   resizableWindow: 0
   useMacAppStoreValidation: 0
-  macAppStoreCategory: public.app-category.games
+  macAppStoreCategory: public.app-category.card-games
   gpuSkinning: 0
   meshDeformation: 0
   xboxPIXTextureCapture: 0
@@ -171,6 +171,7 @@ PlayerSettings:
   androidMinAspectRatio: 1
   applicationIdentifier:
     Android: com.jceddy.moodswings
+    Standalone: com.jceddy.moodswings
   buildNumber:
     Standalone: 0
     VisionOS: 0
