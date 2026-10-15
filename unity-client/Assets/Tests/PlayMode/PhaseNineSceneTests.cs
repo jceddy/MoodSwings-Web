@@ -1838,30 +1838,43 @@ namespace MoodSwings.Tests
         }
 
         [UnityTest]
-        public IEnumerator ALongScreenName_GetsAWiderScoreboard_AndIsNotBrokenInTheMiddleOfAWord()
+        public IEnumerator ALongScreenName_IsSetSmallerBeforeTheScoreboardGrows_AndIsNotBrokenInTheMiddleOfAWord()
         {
-            var server = Serve();
-            server.State = Quiet(405, s =>
+            foreach (var username in new[] { "TheAngryRedBird", "AVeryLongScreenNameIndeedXYZ" })
             {
-                var opponent = s["players"].First(p => (string)p["username"] != "bshaftoe");
-                opponent["username"] = "TheAngryRedBird";
-                opponent["is_bot"] = true;
-            });
-            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
-            yield return PhaseTwoSceneTests.Frames(4);
+                var server = Serve();
+                server.State = Quiet(405, s =>
+                {
+                    var opponent = s["players"].First(p => (string)p["username"] != "bshaftoe");
+                    opponent["username"] = username;
+                    opponent["is_bot"] = true;
+                });
+                yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+                yield return PhaseTwoSceneTests.Frames(4);
 
-            var info = (RectTransform)PhaseFiveSceneTests.Child("Info TheAngryRedBird");
-            Assert.IsNotNull(info);
-            var shortInfo = (RectTransform)PhaseFiveSceneTests.Child("Info bshaftoe");
-            Assert.Greater(info.anchorMax.x - info.anchorMin.x, 0.165f, "wider than a scoreboard for a short name");
-            Assert.LessOrEqual(info.anchorMax.x, 1f, "and still on the screen");
+                var info = (RectTransform)PhaseFiveSceneTests.Child("Info " + username);
+                Assert.IsNotNull(info);
+                var name = info.GetComponentsInChildren<Text>().First(t => t.gameObject.name == "Name");
+                var generator = name.cachedTextGenerator;
+                Assert.Greater(generator.lineCount, 0);
+                Assert.IsTrue(generator.lineCount == 1 || generator.lines[1].startCharIdx >= username.Length,
+                    username + " stays whole on its first line, not cut mid-word over " + generator.lineCount + " lines");
+                var grown = info.anchorMax.x - info.anchorMin.x > 0.165f + 0.0001f;
+                if (username == "TheAngryRedBird")
+                {
+                    Assert.Less(name.fontSize, 22, "shrunk first");
+                    Assert.GreaterOrEqual(name.fontSize, 15);
+                    Assert.IsFalse(grown, "and the box is left as it was, since the smaller name fits");
+                }
+                else
+                {
+                    Assert.AreEqual(15, name.fontSize, "as small as it goes");
+                    Assert.IsTrue(grown, "so now the box grows");
+                    Assert.LessOrEqual(info.anchorMax.x, 1f);
+                }
 
-            var name = info.GetComponentsInChildren<Text>().First(t => t.gameObject.name == "Name");
-            var generator = name.cachedTextGenerator;
-            Assert.Greater(generator.lineCount, 0);
-            var firstLineHolds = generator.lineCount == 1 || generator.lines[1].startCharIdx >= "TheAngryRedBird".Length;
-            Assert.IsTrue(firstLineHolds, "the name stays whole on its first line, not " + generator.lineCount + " lines cut mid-word");
-            ScreenshotHelper.Capture("long-screen-name");
+                ScreenshotHelper.Capture("long-screen-name-" + username.Length);
+            }
         }
 
         [UnityTest]

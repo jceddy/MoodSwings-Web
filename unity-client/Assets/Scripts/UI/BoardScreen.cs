@@ -1598,22 +1598,41 @@ namespace MoodSwings.UI
 
         // What the rest of a scoreboard takes up beside the name: its padding, the score box, the trophies, the gaps and the
         // turn marker.
-        private const float InfoOverhead = 190f;
+        private const float InfoOverhead = 178f;
 
-        // A long screen name must not break in the middle of a word. The scoreboard grows toward where there is room (up
-        // to InfoGrowTo, a fraction of the table's width) until the name fits on a line, and where there is none the name
-        // is set a little smaller instead.
+        // The smallest the name is set before the scoreboard grows instead.
+        private const int MinNameSize = 15;
+
+        // A long screen name must not break in the middle of a word. It is set smaller first, as far as MinNameSize; only if
+        // it still doesn't fit does the scoreboard grow, toward where there is room (up to InfoGrowTo, a fraction of the
+        // table's width).
         private static void FitInfoToName(RectTransform area, Text nameLabel, string username, float growTo)
         {
             var text = nameLabel.text;
+            var size = nameLabel.fontSize;
             nameLabel.text = username;
-            var wanted = nameLabel.preferredWidth + InfoOverhead;
-            nameLabel.text = text;
-
             var width = (area.anchorMax.x - area.anchorMin.x) * ReferenceWidth;
-            if (wanted > width && !float.IsNaN(growTo))
+            var room = width - InfoOverhead;
+
+            // The largest size at which the whole name fits on a line, if there is one.
+            var fitted = size;
+            while (fitted > MinNameSize)
             {
-                var extra = (wanted - width) / ReferenceWidth;
+                nameLabel.fontSize = fitted;
+                if (nameLabel.preferredWidth <= room)
+                {
+                    break;
+                }
+
+                fitted--;
+            }
+
+            nameLabel.fontSize = fitted;
+            var needed = nameLabel.preferredWidth;
+            if (needed > room && !float.IsNaN(growTo))
+            {
+                // Even at the smallest size it doesn't fit: now the box grows, away from the hand.
+                var extra = (needed - room) / ReferenceWidth;
                 if (growTo > area.anchorMax.x)
                 {
                     area.anchorMax = new Vector2(Mathf.Min(growTo, area.anchorMax.x + extra), area.anchorMax.y);
@@ -1622,15 +1641,9 @@ namespace MoodSwings.UI
                 {
                     area.anchorMin = new Vector2(Mathf.Max(growTo, area.anchorMin.x - extra), area.anchorMin.y);
                 }
-
-                width = (area.anchorMax.x - area.anchorMin.x) * ReferenceWidth;
             }
 
-            if (wanted > width)
-            {
-                var room = Mathf.Max(60f, width - InfoOverhead);
-                nameLabel.fontSize = Mathf.Max(15, Mathf.FloorToInt(nameLabel.fontSize * room / (wanted - InfoOverhead)));
-            }
+            nameLabel.text = text;
         }
 
         // A player's scoreboard, at the end of their hand: the points in a box with a trophy for each round won stacked
