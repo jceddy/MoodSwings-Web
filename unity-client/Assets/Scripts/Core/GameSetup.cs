@@ -628,6 +628,35 @@ namespace MoodSwings.Core
             };
         }
 
+        /// <summary>
+        /// A rematch of the game on the board: the same opponents and settings (null if this can't express it, as above).
+        /// </summary>
+        public static GameSetup ForRematch(GameState state, int yourUserId)
+        {
+            if (!FormatOptions.Any(f => f.Id == state.Game.Format) || !SupportsDeck(state.Game.DeckType))
+            {
+                return null;
+            }
+
+            // A partner is whoever shares your team.
+            var you = state.Players.FirstOrDefault(p => p.UserId == yourUserId);
+            var partner = you?.TeamId != null
+                ? state.Players.FirstOrDefault(p => p.UserId != yourUserId && p.TeamId == you.TeamId)?.UserId
+                : null;
+
+            return new GameSetup
+            {
+                Format = state.Game.Format,
+                PartnerUserId = partner,
+                BestOfThree = state.GameMatch != null,
+                DeckType = state.Game.DeckType,
+                WinsNeeded = state.Game.WinsNeeded > 0 ? state.Game.WinsNeeded : DefaultWinsNeeded,
+                DefaultSelectionsMode = state.Game.DefaultSelectionsMode,
+                OpponentUserIds = state.Players.Where(p => p.UserId != yourUserId).Select(p => p.UserId).ToList(),
+                OpponentNames = state.Players.Where(p => p.UserId != yourUserId).ToDictionary(p => p.UserId, p => p.Username),
+            };
+        }
+
         public static bool SupportsDeck(string deckType) => DeckOptions.Any(o => o.Id == deckType);
 
         private Dictionary<string, object> SharedBody()

@@ -1930,6 +1930,57 @@ namespace MoodSwings.Tests
             ScreenshotHelper.Capture("creativity-copy");
         }
 
+        private static Newtonsoft.Json.Linq.JObject FinishedGame(bool youMadeIt) => Quiet(405, s =>
+        {
+            s["game"]["status"] = "completed";
+            s["game"]["winner_usernames"] = Newtonsoft.Json.Linq.JArray.Parse("[\"bshaftoe\"]");
+            s["game"]["created_by_user_id"] = youMadeIt ? 2 : 18;
+            s["round"]["pending_decision"] = null;
+        });
+
+        [UnityTest]
+        public IEnumerator AFinishedGame_OffersTheLobbyAndARematch_InTheCenter()
+        {
+            var server = Serve();
+            server.State = FinishedGame(youMadeIt: true);
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+
+            Assert.IsNotNull(PhaseFiveSceneTests.Child("Lobby action"), "a way back");
+            Assert.IsNotNull(PhaseFiveSceneTests.Child("Rematch action"), "you made it, so you can rematch it");
+            Assert.IsNull(PhaseFiveSceneTests.Child("Primary action"), "and there is no Pass or Next game");
+            ScreenshotHelper.Capture("game-over-buttons");
+
+            PhaseFiveSceneTests.ButtonNamed("Rematch action").onClick.Invoke();
+            yield return PhaseTwoSceneTests.Frames(3);
+            Assert.IsInstanceOf<NewGameScreen>(Object.FindAnyObjectByType<ScreenRouter>().Current, "the new game form, set up like this one");
+        }
+
+        [UnityTest]
+        public IEnumerator AFinishedGameYouDidNotMake_HasNoRematch_ButStillTheLobby()
+        {
+            var server = Serve();
+            server.State = FinishedGame(youMadeIt: false);
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+
+            Assert.IsNotNull(PhaseFiveSceneTests.Child("Lobby action"));
+            Assert.IsNull(PhaseFiveSceneTests.Child("Rematch action"));
+
+            PhaseFiveSceneTests.ButtonNamed("Lobby action").onClick.Invoke();
+            yield return PhaseTwoSceneTests.Frames(3);
+            Assert.IsInstanceOf<HomeScreen>(Object.FindAnyObjectByType<ScreenRouter>().Current, "back to where the game was opened from");
+        }
+
+        [UnityTest]
+        public IEnumerator AGameStillOn_HasNeither()
+        {
+            var server = Serve();
+            server.State = Quiet(405, s => { });
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+
+            Assert.IsNull(PhaseFiveSceneTests.Child("Lobby action"));
+            Assert.IsNull(PhaseFiveSceneTests.Child("Rematch action"));
+        }
+
         [UnityTest]
         public IEnumerator BoardLayout_Screenshots()
         {

@@ -459,6 +459,33 @@ namespace MoodSwings.Core
             return $"{game}Match: you {match.YourWins} - {match.OpponentWins} {others}".TrimEnd();
         }
 
+        /// <summary>
+        /// Whether to offer the viewer a rematch of this game, by the web client's rules: they made it, it was a
+        /// real game (not a tournament match or a puzzle) that was played out (it finished, nobody resigned, someone won),
+        /// and if it was one of a best-of-three, the whole match is over (until then there is a next game to go on to).
+        /// </summary>
+        public static bool CanRematch(GameState state)
+        {
+            var viewer = Viewer(state);
+            if (viewer == null || IsSpectator(state) || state.Game.CreatedByUserId != viewer.UserId)
+            {
+                return false;
+            }
+
+            if (state.Game.IsTournamentMatch || IsPuzzle(state) || state.Game.Status != "completed")
+            {
+                return false;
+            }
+
+            if (state.Players.Any(p => p.Resigned) || state.Game.WinnerUsernames.Count == 0)
+            {
+                return false;
+            }
+
+            var match = CurrentMatch(state);
+            return match == null || match.Status == "completed";
+        }
+
         /// <summary>The game to go on to once this one is over and the match goes on; null otherwise.</summary>
         public static int? NextGameId(GameState state) =>
             state.Game.Status == "completed" ? CurrentMatch(state)?.NextGameId : null;

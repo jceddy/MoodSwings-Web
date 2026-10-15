@@ -416,6 +416,17 @@ namespace MoodSwings.Networking
         [JsonProperty("id")]
         public int Id { get; set; }
 
+        /// <summary>Who made the game: the only one a rematch is offered to.</summary>
+        [JsonProperty("created_by_user_id")]
+        public int? CreatedByUserId { get; set; }
+
+        /// <summary>A game in a tournament bracket: the bracket decides who plays whom next, so there is no rematch.</summary>
+        [JsonProperty("is_tournament_match")]
+        public bool IsTournamentMatch { get; set; }
+
+        [JsonProperty("default_selections_mode")]
+        public bool DefaultSelectionsMode { get; set; }
+
         [JsonProperty("status")]
         public string Status { get; set; }
 

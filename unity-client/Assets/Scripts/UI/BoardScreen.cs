@@ -153,6 +153,9 @@ namespace MoodSwings.UI
         private string _shortcutKey;
         private bool _decksRequested;
         private Button _primaryAction;
+        private RectTransform _overRow;
+        private Button _lobbyAction;
+        private Button _rematchAction;
         private Text _primaryLabel;
         private Button _resignAction;
 
@@ -290,6 +293,7 @@ namespace MoodSwings.UI
             _chatError.text = string.Empty;
             SetMessage(string.Empty);
             _primaryAction.gameObject.SetActive(false);
+            _overRow.gameObject.SetActive(false);
             _moodViews.Clear();
             _linksLayer.Clear();
             _catalogRequested = false;
@@ -679,6 +683,18 @@ namespace MoodSwings.UI
             _primaryAction.gameObject.name = "Primary action";
             _primaryLabel = _primaryAction.GetComponentInChildren<Text>();
             UiFactory.Size(_primaryAction.gameObject, 260f, 56f);
+
+            // When the game is over with nowhere to go on to: back to the lobby, and (for the game's maker) a rematch.
+            var overLayout = UiFactory.Row(_center, "Game over row", 16f, TextAnchor.MiddleCenter);
+            overLayout.childForceExpandWidth = false;
+            _overRow = (RectTransform)overLayout.transform;
+            _rematchAction = UiFactory.Button(_overRow, "Rematch", theme, OnRematch);
+            _rematchAction.gameObject.name = "Rematch action";
+            UiFactory.Size(_rematchAction.gameObject, 190f, 56f);
+            _lobbyAction = UiFactory.Button(_overRow, "Lobby", theme, GoToLobby, primary: false);
+            _lobbyAction.gameObject.name = "Lobby action";
+            UiFactory.Size(_lobbyAction.gameObject, 190f, 56f);
+            _overRow.gameObject.SetActive(false);
 
             DockCenter(atTable: true);
         }
@@ -2177,6 +2193,11 @@ namespace MoodSwings.UI
                 primaryEnabled = BoardDisplay.CanAct(state);
             }
 
+            // Over, and nothing to go on to (no next game in the match): the way back to the lobby, and a rematch if offered.
+            var over = state.Game.Status == "completed" && BoardDisplay.NextGameId(state) == null && !DraftDisplay.InDraftStage(state);
+            _overRow.gameObject.SetActive(over);
+            _rematchAction.gameObject.SetActive(over && RematchSetup(state) != null);
+
             _primaryAction.gameObject.SetActive(primary != null);
             if (primary != null)
             {
@@ -2188,6 +2209,32 @@ namespace MoodSwings.UI
             var showResign = viewerSeated && inProgress && !BoardDisplay.IsPuzzle(state);
             _resignAction.gameObject.SetActive(showResign);
             _resignAction.interactable = BoardDisplay.CanResign(state) && !busy;
+        }
+
+        // The setup for a rematch of this game, or null when it isn't offered or can't be expressed.
+        private static GameSetup RematchSetup(GameState state)
+        {
+            var viewer = BoardDisplay.Viewer(state);
+            return viewer != null && BoardDisplay.CanRematch(state) ? GameSetup.ForRematch(state, viewer.UserId) : null;
+        }
+
+        // Back to where the game was opened from; the lobby when there is nowhere to go back to.
+        private void GoToLobby()
+        {
+            if (!Router.Back())
+            {
+                Router.Show<PlayScreen>(addToHistory: false);
+            }
+        }
+
+        private void OnRematch()
+        {
+            var setup = _session?.State != null ? RematchSetup(_session.State) : null;
+            if (setup != null)
+            {
+                // The finished board isn't kept to come back to: the new game takes its place once it is made.
+                Router.Show<NewGameScreen>(setup, addToHistory: false);
+            }
         }
 
         private void OnPrimaryAction()
