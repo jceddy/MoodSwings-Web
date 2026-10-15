@@ -13968,6 +13968,24 @@ than a parallel bespoke system:
   solver at 7. An exhaustive search (every card in hand, every pair returned,
   every mood taken) found exactly one winning line.
 
+- **22nd puzzle, "Switchback"** (reported live: a Thrill puzzle where you
+  return two moods and then play two different cards, to switch off an
+  opponent mood that cares about colors), medium, `win_game`, no new puzzle
+  infrastructure. Both sides have two round wins and the opponent went first
+  (a tie is theirs). The opponent has Excitement (6 while two or more black
+  and/or green moods are in play, else 3), Loyalty (6 while two or more green
+  and/or blue moods, else 3) and Indifference (4): 16. The solver has Disgust
+  (6, but 3 while two or more green and/or white moods) and Laziness in play,
+  holds Thrill, Complacency, Apathy and Pity (6 while two or more blue and/or
+  red moods, else 3), and has one play. The one winning line: Thrill returning
+  Disgust and Laziness (nothing black or green is left, so Excitement and
+  Loyalty fall to 3: 10), then Complacency and Pity -- Thrill is red and
+  Indifference blue, so Pity is 6: 1 + 4 + 6 = 11. Returning only Laziness
+  (keeping Disgust) or replaying Disgust with Pity turns Excitement back on:
+  13-13, a tie. Complacency and Apathy is 9-10. An exhaustive search (9
+  states: every set of moods Thrill returns, every follow-up play) found
+  exactly one winning board, reachable with the two plays in either order.
+
 ### Duel: separate per-player decks
 
 `format: 'duel'` and `format: 'draft'` (see "Draft format" below) are the
