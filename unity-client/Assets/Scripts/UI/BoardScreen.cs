@@ -1176,6 +1176,12 @@ namespace MoodSwings.UI
                 notes.Add(bliss);
             }
 
+            var copy = BoardDisplay.CreativityCopyNote(card);
+            if (copy != null)
+            {
+                notes.Add($"<b><color=#{ColorUtility.ToHtmlStringRGB(CardView.ReadableText(CardView.CopyColor))}>{copy}</color></b>");
+            }
+
             var colorNote = BoardDisplay.ColorNote(_session?.State, card);
             if (colorNote != null)
             {
@@ -2104,6 +2110,13 @@ namespace MoodSwings.UI
             {
                 lines.Add(string.Empty);
                 lines.Add(bliss);
+            }
+
+            var copy = BoardDisplay.CreativityCopyNote(card);
+            if (copy != null)
+            {
+                lines.Add(string.Empty);
+                lines.Add($"<b><color=#{ColorUtility.ToHtmlStringRGB(CardView.CopyColor)}>{copy}</color></b>");
             }
 
             var colorNote = BoardDisplay.ColorNote(_session?.State, card);

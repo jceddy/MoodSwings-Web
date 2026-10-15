@@ -99,6 +99,14 @@ namespace MoodSwings.UI
                 AddPill(rect, "Chaos badge", "CHAOS", ChaosColor(card.ChaosEffect.Rarity), width, upright: !onItsSide, level: card.IsRecolored ? 1 : 0);
             }
 
+            // Creativity in play looks exactly like the mood it copies (that is its name, art and rules); a pill, above
+            // the others, says it is only a copy.
+            if (card.IsCreativityCopy)
+            {
+                AddPill(rect, "Copy badge", "COPY", CopyColor, width, upright: !onItsSide,
+                    level: (card.IsRecolored ? 1 : 0) + (card.ChaosEffect != null ? 1 : 0));
+            }
+
             if (showValue && (card.ValueIsModified || art == null))
             {
                 AddValueChip(rect, card, width, theme, upright: !onItsSide);
@@ -293,6 +301,9 @@ namespace MoodSwings.UI
         // A pill at the bottom of the card, naming a color or marking an attached effect. Sized from the card's
         // width, so it is the same share of the card at every size; on a small card it is just the color.
         // Level 1 sits a pill's height above level 0, for a card that has two.
+        /// <summary>The color of the pill on a Creativity copy.</summary>
+        public static readonly Color CopyColor = new Color(0.58f, 0.38f, 0.92f);
+
         private static void AddPill(RectTransform rect, string name, string text, Color tint, float width, bool upright, int level)
         {
             var pillWidth = width * 0.72f;

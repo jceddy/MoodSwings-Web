@@ -115,6 +115,17 @@ namespace MoodSwings.Tests
         }
 
         [Test]
+        public void ACreativityCopy_SaysSo_ButAnotherCardDoesNot()
+        {
+            var copy = Card(1, "Shock");
+            copy.IsCreativityCopy = true;
+
+            Assert.AreEqual("A copy made by Creativity, playing as Shock", BoardDisplay.CreativityCopyNote(copy));
+            Assert.IsNull(BoardDisplay.CreativityCopyNote(Card(2)));
+            Assert.IsNull(BoardDisplay.CreativityCopyNote(null));
+        }
+
+        [Test]
         public void TheEffectsInTheCapturedGames_ParseWithoutTheNewFields()
         {
             foreach (var id in new[] { 405, 406, 407 })

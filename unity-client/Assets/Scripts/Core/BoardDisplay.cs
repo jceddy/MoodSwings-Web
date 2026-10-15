@@ -738,6 +738,13 @@ namespace MoodSwings.Core
             return $"Discarded a {(colorWord != null ? colorWord(word) : word)} card to {card.Name}";
         }
 
+        /// <summary>
+        /// "A copy made by Creativity" for a mood that is Creativity in play as another mood (it shows as the mood it
+        /// copies, so nothing else says so); null for any other card.
+        /// </summary>
+        public static string CreativityCopyNote(BoardCard card) =>
+            card != null && card.IsCreativityCopy ? "A copy made by Creativity, playing as " + card.Name : null;
+
         /// <summary>"3 pts  -  1 win", for a player's seat.</summary>
         public static string ScoreLine(BoardPlayer player) =>
             $"{player.TotalScore} {(player.TotalScore == 1 ? "pt" : "pts")}  -  {player.TotalWins} {(player.TotalWins == 1 ? "win" : "wins")}";

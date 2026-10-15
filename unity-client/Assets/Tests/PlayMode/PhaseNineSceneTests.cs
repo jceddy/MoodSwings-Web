@@ -1878,6 +1878,59 @@ namespace MoodSwings.Tests
         }
 
         [UnityTest]
+        public IEnumerator CreativityCopyingShock_AsksForShocksTargets()
+        {
+            var server = Serve();
+            server.State = Quiet(406, s =>
+            {
+                var hand = s["you"]["hand"][0];
+                hand["name"] = "Creativity";
+                hand["effect_key"] = "creativity";
+                hand["choice_fields"] = Newtonsoft.Json.Linq.JArray.Parse(
+                    "[{\"key\":\"copy_card_id\",\"type\":\"mood\",\"scope\":\"any\",\"required\":false,\"label\":\"A mood to copy\"}]");
+                var ambition = (int)s["in_play"][0]["card_id"];
+                var frustration = (int)s["in_play"][1]["card_id"];
+                var shock = "{\"extra_fields\":[{\"key\":\"target_mood_ids\",\"type\":\"mood\",\"scope\":\"any\",\"multi\":true,\"required\":false,"
+                    + "\"label\":\"Moods to put into the discard pile (value 3 or less, up to 2, one per player)\",\"filter\":{\"max_value\":3},"
+                    + "\"count\":{\"max\":2},\"constraint\":{\"type\":\"distinct_owners\"},\"includes_self\":true}],\"cost_payable\":true}";
+                hand["copy_simulation"] = Newtonsoft.Json.Linq.JObject.Parse("{\"" + ambition + "\":" + shock + ",\"" + frustration + "\":" + shock + "}");
+            });
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.Child("Card Creativity").GetComponent<UnityEngine.UI.Button>());
+            Assert.IsTrue(PhaseFiveSceneTests.Board().Choices.IsOpen);
+
+            // Copy a mood: its own questions appear.
+            var option = Object.FindObjectsByType<UnityEngine.UI.Button>(FindObjectsInactive.Exclude).First(b => b.name.StartsWith("Option Ambition"));
+            yield return PhaseFiveSceneTests.Tap(option);
+            yield return PhaseTwoSceneTests.Frames(3);
+
+            var texts = Texts();
+            Assert.IsTrue(texts.Any(t => t.StartsWith("Moods to put into the discard pile")), "the copied Shock's target question is asked: " + string.Join(" | ", texts));
+            Assert.IsTrue(Object.FindObjectsByType<UnityEngine.UI.Button>(FindObjectsInactive.Exclude).Any(b => b.name.Contains("[self]")), "and the copy itself can be named");
+        }
+
+        [UnityTest]
+        public IEnumerator ACreativityCopyInPlay_IsMarkedAsACopy_OnTheCardAndInItsDetail()
+        {
+            var server = Serve();
+            server.State = Quiet(406, s => s["in_play"][0]["is_creativity_copy"] = true);
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+
+            var name = (string)server.State["in_play"][0]["name"];
+            var card = PhaseFiveSceneTests.Child("Card " + name);
+            Assert.IsNotNull(card.Find("Copy badge"), "a pill on the card");
+            Assert.AreEqual("COPY", card.Find("Copy badge").GetComponentInChildren<UnityEngine.UI.Text>().text);
+            var other = (string)server.State["in_play"][1]["name"];
+            Assert.IsNull(PhaseFiveSceneTests.Child("Card " + other).Find("Copy badge"), "and on no other");
+
+            card.GetComponent<UnityEngine.UI.Button>().onClick.Invoke();
+            yield return PhaseTwoSceneTests.Frames(2);
+            StringAssert.Contains("A copy made by Creativity, playing as " + name, PhaseFiveSceneTests.Board().DetailText);
+            ScreenshotHelper.Capture("creativity-copy");
+        }
+
+        [UnityTest]
         public IEnumerator BoardLayout_Screenshots()
         {
             foreach (var game in new[] { 405, 406, 407 })
