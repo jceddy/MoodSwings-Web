@@ -1981,6 +1981,53 @@ namespace MoodSwings.Tests
             Assert.IsNull(PhaseFiveSceneTests.Child("Rematch action"));
         }
 
+        private static int StateReads() { lock (MainSceneTests.Issued) { return MainSceneTests.Issued.Count(u => u.Contains("/games/state")); } }
+
+        [UnityTest]
+        public IEnumerator TheBoardIsNotReadAgain_WhileOneOfYourMovesIsOnItsWay()
+        {
+            var server = Serve();
+            server.State = Quiet(406, s => { });
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+
+            // The server is slow to answer your move: longer than the board's reading interval.
+            MainSceneTests.ResponseDelayMilliseconds = 5500;
+            try
+            {
+                var before = StateReads();
+                PhaseFiveSceneTests.ButtonNamed("Primary action").onClick.Invoke();
+                yield return new WaitForSeconds(4.6f);
+
+                Assert.AreEqual(before, StateReads(), "no second read of the board while the move is still being made");
+
+                yield return new WaitForSeconds(2.5f);
+                Assert.Greater(StateReads(), before, "the move reads the board itself once it is done");
+            }
+            finally
+            {
+                MainSceneTests.ResponseDelayMilliseconds = 0;
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator OneServerErrorReadingTheBoard_IsNotShown_ButTwoInARowAre()
+        {
+            var server = Serve();
+            server.State = Quiet(406, s => { });
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+
+            server.FailStateRequests = 1;
+            yield return new WaitForSeconds(3.8f);
+            Assert.IsEmpty(PhaseFiveSceneTests.Board().MessageText, "one hiccup is not worth a red message");
+
+            server.FailStateRequests = 2;
+            yield return new WaitForSeconds(7.5f);
+            StringAssert.Contains("Something went wrong", PhaseFiveSceneTests.Board().MessageText);
+
+            yield return new WaitForSeconds(3.5f);
+            Assert.IsEmpty(PhaseFiveSceneTests.Board().MessageText, "and it goes when the board reads fine again");
+        }
+
         [UnityTest]
         public IEnumerator BoardLayout_Screenshots()
         {

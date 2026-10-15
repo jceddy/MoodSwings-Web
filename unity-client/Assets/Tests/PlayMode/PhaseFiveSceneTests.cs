@@ -36,6 +36,9 @@ namespace MoodSwings.Tests
 
             public List<string> Calls { get; } = new List<string>();
 
+            /// <summary>The next this-many GET /games/state requests fail like a server error.</summary>
+            public int FailStateRequests;
+
             /// <summary>GET /games/deck answers with this, under DeckStatus.</summary>
             public string DeckJson = "{\"status\":\"ok\",\"cards\":[]}";
 
@@ -114,6 +117,12 @@ namespace MoodSwings.Tests
             {
                 var path = request.Url.Substring(request.Url.IndexOf("/app/", StringComparison.Ordinal) + 4);
                 Calls.Add($"{request.Method} {path} {request.Body}");
+
+                if ((path.StartsWith("/games/state") || path.StartsWith("/games/spectate/state")) && FailStateRequests > 0)
+                {
+                    FailStateRequests--;
+                    return MainSceneTests.Reply(500, "{\"status\":\"error\",\"message\":\"Something went wrong. Please try again.\"}");
+                }
 
                 if (path.StartsWith("/games/state") || path.StartsWith("/games/spectate/state"))
                 {

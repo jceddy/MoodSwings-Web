@@ -31,6 +31,11 @@ namespace MoodSwings.Tests
 
             public Task<HttpResponse> SendAsync(HttpRequest request, CancellationToken cancellationToken)
             {
+                lock (Issued)
+                {
+                    Issued.Add(request.Method + " " + request.Url);
+                }
+
                 if (ResponseDelayMilliseconds <= 0)
                 {
                     return Task.FromResult(_handler(request));
@@ -43,6 +48,9 @@ namespace MoodSwings.Tests
                 });
             }
         }
+
+        /// <summary>Every request the app has sent, in order (when it was sent, not when it was answered).</summary>
+        internal static readonly System.Collections.Generic.List<string> Issued = new System.Collections.Generic.List<string>();
 
         /// <summary>How long the stand-in server takes to answer (for tests of what shows while waiting); 0 is at once.</summary>
         internal static int ResponseDelayMilliseconds;

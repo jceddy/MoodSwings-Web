@@ -13,6 +13,9 @@ namespace MoodSwings.Core
         public bool Ok { get; set; }
 
         public string Message { get; set; }
+
+        /// <summary>The server answered with an error of its own (a 5xx), as opposed to not being reachable or refusing.</summary>
+        public bool ServerError { get; set; }
     }
 
     /// <summary>A game's whole deck list, or why it couldn't be had.</summary>
@@ -90,7 +93,7 @@ namespace MoodSwings.Core
 
             if (!result.Ok)
             {
-                return new BoardRefreshResult { Ok = false, Message = result.UserMessage("Couldn't load the game.") };
+                return new BoardRefreshResult { Ok = false, Message = result.UserMessage("Couldn't load the game."), ServerError = result.HttpStatus >= 500 };
             }
 
             State = result.Value;

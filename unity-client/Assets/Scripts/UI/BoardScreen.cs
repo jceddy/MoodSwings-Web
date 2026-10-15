@@ -297,6 +297,7 @@ namespace MoodSwings.UI
             _moodViews.Clear();
             _linksLayer.Clear();
             _catalogRequested = false;
+            _refreshFailures = 0;
 
             // A game starts on the main theme; its first mood played moves it on.
             MusicPlayer.Instance.SetTheme(MusicTheme.Main);
@@ -396,8 +397,20 @@ namespace MoodSwings.UI
             UpdateHeader(_session.State);
         }
 
+        // The board is read every few seconds while it is up. One error from the server is not worth a red message (a
+        // hiccup on its side, gone by the next read); a second in a row is. Not being able to reach it at all is said at once.
+        private int _refreshFailures;
+
         private async Task Refresh()
         {
+            // While one of your own moves is on its way, the move reads the board again itself when it is done. Reading it
+            // at the same time as well asks the server to do the same work twice at once, which it can trip over (it
+            // advances the game's bots in both requests).
+            if (_session.Busy)
+            {
+                return;
+            }
+
             var result = await _session.RefreshAsync();
             if (this == null)
             {
@@ -406,6 +419,7 @@ namespace MoodSwings.UI
 
             if (result.Ok)
             {
+                _refreshFailures = 0;
                 if (_messageFromRefresh)
                 {
                     SetMessage(string.Empty);
@@ -418,8 +432,9 @@ namespace MoodSwings.UI
             {
                 ShowLoading(result.Message);
             }
-            else
+            else if (!result.ServerError || ++_refreshFailures >= 2)
             {
+                // Not reaching the server at all is said at once; a server error only once it repeats.
                 SetMessage(result.Message, isError: true, fromRefresh: true);
             }
         }
