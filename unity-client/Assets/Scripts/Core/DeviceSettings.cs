@@ -12,6 +12,7 @@ namespace MoodSwings.Core
         private const string SoundKey = "device.sound";
         private const string VibrationKey = "device.vibration";
         private const string EffectsVolumeKey = "device.effectsVolume";
+        private const string BackgroundSoundKey = "device.backgroundSound";
         private const string MusicKey = "device.music";
         private const string MusicVolumeKey = "device.musicVolume";
         private const string ArtPackKey = "device.artPack";
@@ -62,6 +63,16 @@ namespace MoodSwings.Core
                     _store.SetString(ArtPackKey, value);
                 }
             }
+        }
+
+        /// <summary>
+        /// Keep playing the music and sounds while the window is in the background (a desktop setting; a phone's app is
+        /// put to sleep when it is left, and there is no choice about it). On until switched off.
+        /// </summary>
+        public bool BackgroundSoundOn
+        {
+            get => Read(BackgroundSoundKey);
+            set => _store.SetString(BackgroundSoundKey, value ? "1" : "0");
         }
 
         /// <summary>The background music, on until switched off.</summary>

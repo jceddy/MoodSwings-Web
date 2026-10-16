@@ -45,6 +45,7 @@ namespace MoodSwings.UI
             // Before the screens, so they know there is a table behind them (and sit above it).
             Backdrop.Create(transform);
             AndroidBack.Register();
+            BackgroundSound.Apply();
             BuildServerBanner();
             _router.Show<SplashScreen>();
         }

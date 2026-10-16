@@ -145,6 +145,15 @@ namespace MoodSwings.UI
             AddDeviceRow(theme, "Music", "The background music: the main theme, and on the board a theme for the color of the mood played last.",
                 AppServices.Device.MusicOn, on => AppServices.Device.MusicOn = on);
             AddVolumeRow(theme, "Music volume", AppServices.Device.MusicVolume, value => AppServices.Device.MusicVolume = value);
+            if (BackgroundSound.IsOffered)
+            {
+                AddDeviceRow(theme, "Play sound in the background", "Keep the music and sounds going while this window isn't the one in front.",
+                    AppServices.Device.BackgroundSoundOn, on =>
+                    {
+                        AppServices.Device.BackgroundSoundOn = on;
+                        BackgroundSound.Apply();
+                    });
+            }
             if (AppServices.Push.IsAvailable)
             {
                 AddPushRow(theme);

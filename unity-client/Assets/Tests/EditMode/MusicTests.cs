@@ -138,6 +138,17 @@ namespace MoodSwings.Tests
         }
 
         [Test]
+        public void SoundInTheBackground_IsOnUntilSwitchedOff_AndRemembered()
+        {
+            var store = new InMemoryKeyValueStore();
+            Assert.IsTrue(new DeviceSettings(store).BackgroundSoundOn);
+
+            new DeviceSettings(store).BackgroundSoundOn = false;
+
+            Assert.IsFalse(new DeviceSettings(store).BackgroundSoundOn);
+        }
+
+        [Test]
         public void AVolume_IsKeptBetweenSilenceAndFull()
         {
             var settings = new DeviceSettings(new InMemoryKeyValueStore());

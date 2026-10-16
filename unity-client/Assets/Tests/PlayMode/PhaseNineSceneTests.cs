@@ -2096,6 +2096,36 @@ namespace MoodSwings.Tests
         }
 
         [UnityTest]
+        public IEnumerator TheWindow_KeepsRunningInTheBackground_UnlessTheSettingIsOff()
+        {
+            var before = Application.runInBackground;
+            try
+            {
+                yield return Home(Serve());
+                Assert.IsTrue(Application.runInBackground, "on by default, so the music goes on when the window isn't in front");
+
+                Object.FindAnyObjectByType<ScreenRouter>().Show<SettingsScreen>();
+                yield return MainSceneTests.WaitFor<SettingsScreen>();
+                var toggle = PhaseTwoSceneTests.FindToggle("Play sound in the background");
+                Assert.IsNotNull(toggle, "offered on a computer");
+                Assert.IsTrue(toggle.isOn);
+
+                toggle.isOn = false;
+                yield return PhaseTwoSceneTests.Frames(2);
+                Assert.IsFalse(AppServices.Device.BackgroundSoundOn);
+                Assert.IsFalse(Application.runInBackground, "so the window pauses (and the music with it) when left");
+
+                toggle.isOn = true;
+                yield return PhaseTwoSceneTests.Frames(2);
+                Assert.IsTrue(Application.runInBackground);
+            }
+            finally
+            {
+                Application.runInBackground = before;
+            }
+        }
+
+        [UnityTest]
         public IEnumerator BoardLayout_Screenshots()
         {
             foreach (var game in new[] { 405, 406, 407 })
