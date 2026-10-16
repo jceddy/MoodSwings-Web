@@ -8749,8 +8749,14 @@
 
         // .hidden was already decided above (before the 'waiting' branch's
         // early return) -- only .disabled needs the in_progress round's
-        // own pending-decision state, which isn't known until here.
-        resignButton.disabled = Boolean(pendingDecision);
+        // own pending-decision state, which isn't known until here. A
+        // decision waiting on SOMEONE ELSE still blocks resigning (the
+        // server refuses it -- see GameService::assertNoPendingDecision()),
+        // but one waiting on the viewer themselves doesn't:
+        // GameService::resignGame() answers it with a legal default and
+        // then resigns them (reported live: "can we allow players to
+        // resign from a game while a choice is waiting on them?").
+        resignButton.disabled = Boolean(pendingDecision) && !pendingDecision.is_you;
 
         // "View decklist" (issue #197) -- hidden entirely for a deck_type
         // with no single shared deck (custom_duel and the three

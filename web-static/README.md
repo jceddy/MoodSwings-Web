@@ -5177,8 +5177,11 @@ button).
     unlike Pass, it isn't turn-gated (you can resign any time it's
     `in_progress`, not just on your own turn), so it's only ever hidden
     once the game's over or the viewer has already resigned, and disabled
-    while a decision is pending (mirrors the backend's own
-    `assertNoPendingDecision()` gate -- resolve it first). Clicking it
+    while a decision is pending on SOMEONE ELSE (mirrors the backend's own
+    `assertNoPendingDecision()` gate). A decision waiting on the viewer
+    themselves (`round.pending_decision.is_you`) leaves it enabled --
+    `resignGame()` answers that one with a legal default and then resigns
+    them. Clicking it
     shows a `showConfirmDialog()` prompt first, since resigning can't be
     undone, then calls `POST /games/resign` (`resignGame()` in `app.js`)
     and runs the exact same success path Pass does
