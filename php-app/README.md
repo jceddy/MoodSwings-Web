@@ -6349,6 +6349,19 @@ being cancelled/completed for a week") over tournaments' own simpler
    tournament orphans nothing there; those clean up independently, on
    their own per-game staleness clock, via passes 1/2 above.
 
+Reported live (completed games from July still listed): the cron died on
+the first old game that still had rows pointing at its players --
+`game_team_decisions`, `game_pending_decisions`/`_batches` and
+`chaos_draft_offers` reference `game_players` with a plain (RESTRICT)
+foreign key, and production MySQL checks that before the cascade reaches
+those rows -- and, the exception being uncaught and the CLI hiding it,
+exited 255 with no output, so nothing was ever deleted.
+`deleteStaleCompletedGames()` now clears those rows first, per game in its
+own transaction, and logs and skips a game it still can't delete instead
+of stopping the run. If the cron seems to do nothing, run it by hand with
+`php -d display_errors=1 -d log_errors=1 -d error_log=$HOME/cleanup-error.log ...`
+to see the real error.
+
 All three methods return an `int` count of rows affected, and
 `bin/expire_and_delete_stale_games.php` prints a one-line summary.
 Example crontab line (once daily, 3am):
