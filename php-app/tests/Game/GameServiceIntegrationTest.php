@@ -2466,6 +2466,85 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame([], $this->fetchGameEvents($gameId));
     }
 
+    /**
+     * Reported live: stale completed games never went away because the
+     * production MySQL refused the DELETE when a per-game table still
+     * pointed at game_players with a plain (RESTRICT) foreign key
+     * (game_team_decisions, game_pending_decision_batches/_decisions,
+     * chaos_draft_offers). Those rows are cleared first now.
+     */
+    public function testDeleteStaleCompletedGamesDeletesAGameStillHoldingRowsThatReferenceItsPlayers(): void
+    {
+        $creator = $this->insertUser('deleterestrict-alice');
+        $bob = $this->insertUser('deleterestrict-bob');
+
+        $gameId = $this->games->createGame($creator, [$creator, $bob]);
+        $this->games->startGame($gameId);
+        $round = $this->fetchRound($gameId);
+        $playerId = $this->games->gamePlayerIdFor($gameId, $creator);
+        $cardStmt = $this->pdo->prepare('SELECT id FROM game_cards WHERE game_id = :g LIMIT 1');
+        $cardStmt->execute(['g' => $gameId]);
+        $cardId = (int) $cardStmt->fetchColumn();
+
+        $this->pdo->prepare(
+            "INSERT INTO game_team_decisions (game_id, game_round_id, team_id, decision_type, phase, candidate_game_player_ids, proposer_game_player_id, proposed_game_player_id, rejected_game_player_id)
+             VALUES (:g, :r, 1, 'turn_order', 'confirm', :candidates, :p, :p2, :p3)"
+        )->execute(['g' => $gameId, 'r' => $round['id'], 'candidates' => json_encode([$playerId]), 'p' => $playerId, 'p2' => $playerId, 'p3' => $playerId]);
+        $this->pdo->prepare(
+            "INSERT INTO game_pending_decision_batches (game_id, game_round_id, played_card_id, initiating_game_player_id, top_level_choices, invocation_choices)
+             VALUES (:g, :r, :card, :p, '{}', '{}')"
+        )->execute(['g' => $gameId, 'r' => $round['id'], 'card' => $cardId, 'p' => $playerId]);
+        $batchId = (int) $this->pdo->lastInsertId();
+        $this->pdo->prepare(
+            "INSERT INTO game_pending_decisions (batch_id, step_index, target_game_player_id, decision_type, field)
+             VALUES (:b, 0, :p, 'test', '{}')"
+        )->execute(['b' => $batchId, 'p' => $playerId]);
+
+        $this->pdo->prepare(
+            "UPDATE games SET status = 'completed', completed_at = NOW(), winner_game_player_id = :winner WHERE id = :id"
+        )->execute(['winner' => $playerId, 'id' => $gameId]);
+        $this->markGameStale($gameId, 8);
+
+        self::assertSame(1, $this->games->deleteStaleCompletedGames());
+        self::assertFalse($this->gameRowStillExists($gameId));
+    }
+
+    /** One game the database refuses to delete is logged and skipped; it must not stop the others. */
+    public function testDeleteStaleCompletedGamesSkipsAGameThatCannotBeDeletedAndDeletesTheRest(): void
+    {
+        $creator = $this->insertUser('deleteskip-alice');
+        $bob = $this->insertUser('deleteskip-bob');
+
+        $ids = [];
+        foreach ([1, 2] as $_) {
+            $gameId = $this->games->createGame($creator, [$creator, $bob]);
+            $this->games->startGame($gameId);
+            $this->pdo->prepare(
+                "UPDATE games SET status = 'completed', completed_at = NOW(), winner_game_player_id = :winner WHERE id = :id"
+            )->execute(['winner' => $this->games->gamePlayerIdFor($gameId, $creator), 'id' => $gameId]);
+            $this->markGameStale($gameId, 8);
+            $ids[] = $gameId;
+        }
+        [$blockedId, $deletableId] = $ids;
+
+        $this->pdo->exec('DROP TRIGGER IF EXISTS test_block_game_delete');
+        $this->pdo->exec(
+            "CREATE TRIGGER test_block_game_delete BEFORE DELETE ON games FOR EACH ROW
+             BEGIN IF OLD.id = {$blockedId} THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'blocked for test'; END IF; END"
+        );
+        $previousErrorLog = ini_set('error_log', '/dev/null');
+        try {
+            $deletedCount = $this->games->deleteStaleCompletedGames();
+        } finally {
+            ini_set('error_log', (string) $previousErrorLog);
+            $this->pdo->exec('DROP TRIGGER IF EXISTS test_block_game_delete');
+        }
+
+        self::assertSame(1, $deletedCount);
+        self::assertTrue($this->gameRowStillExists($blockedId), 'the game the database refused to delete is still there');
+        self::assertFalse($this->gameRowStillExists($deletableId), 'the other stale game was still deleted');
+    }
+
     public function testDeleteStaleCompletedGamesDeletesOrphanedDraftMatchButKeepsOneStillReferenced(): void
     {
         ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture(winsNeeded: 1);

@@ -14953,9 +14953,51 @@ final class GameService
             return 0;
         }
 
+        // Reported live: games completed months ago never went away -- the
+        // production MySQL refused the DELETE with "Cannot delete or update
+        // a parent row ... game_team_decisions ... fk_team_decisions_proposer".
+        // A handful of per-game tables point at game_players with a plain
+        // (RESTRICT) foreign key, and the database checks that against the
+        // game_players rows the cascade removes BEFORE it has reached those
+        // tables' own rows -- so the first game still holding one of them
+        // threw, uncaught, and ended the whole cron run. Clearing those
+        // rows first makes the order irrelevant, and a game that still
+        // can't be deleted is logged and skipped rather than stopping the
+        // rest.
+        $restrictingChildren = [
+            'DELETE d FROM game_pending_decisions d
+             JOIN game_pending_decision_batches b ON b.id = d.batch_id
+             WHERE b.game_id = :id',
+            'DELETE FROM game_pending_decision_batches WHERE game_id = :id',
+            'DELETE FROM game_team_decisions WHERE game_id = :id',
+            'DELETE FROM chaos_draft_offers WHERE game_id = :id',
+        ];
+        $clearStmts = array_map(static fn (string $sql) => $pdo->prepare($sql), $restrictingChildren);
         $deleteStmt = $pdo->prepare('DELETE FROM games WHERE id = :id');
+
+        $deleted = 0;
         foreach ($gameIds as $gameId) {
-            $deleteStmt->execute(['id' => $gameId]);
+            $ownsTransaction = !$pdo->inTransaction();
+            if ($ownsTransaction) {
+                $pdo->beginTransaction();
+            }
+
+            try {
+                foreach ($clearStmts as $clearStmt) {
+                    $clearStmt->execute(['id' => $gameId]);
+                }
+                $deleteStmt->execute(['id' => $gameId]);
+
+                if ($ownsTransaction) {
+                    $pdo->commit();
+                }
+                $deleted++;
+            } catch (PDOException $e) {
+                if ($ownsTransaction) {
+                    $pdo->rollBack();
+                }
+                error_log("deleteStaleCompletedGames: could not delete game {$gameId}: " . $e->getMessage());
+            }
         }
 
         $pdo->exec(
@@ -14964,7 +15006,7 @@ final class GameService
              WHERE g.id IS NULL'
         );
 
-        return count($gameIds);
+        return $deleted;
     }
 
     /**
