@@ -2024,6 +2024,69 @@ final class PuzzleContentTest extends TestCase
         $this->assertGameFailed($gameId);
     }
 
+    /**
+     * Plays First Things First's hand cards in $catalogIds order (each a plain
+     * play, no choices) and returns the last result.
+     *
+     * @param array<int, int> $catalogIds
+     * @return array<string, mixed>
+     */
+    private function playFirstThingsFirst(int $gameId, int $p, array $catalogIds): array
+    {
+        $result = [];
+        foreach ($catalogIds as $catalogId) {
+            $result = $this->playDriven($gameId, $p, $this->ownedInstanceId($gameId, $catalogId, 'hand', $p));
+        }
+
+        return $result;
+    }
+
+    /**
+     * "First Things First": the only winning line (exhaustive search of the
+     * real flow, 9 states) is Validation, then the free Glee and Vulnerability
+     * (either order), then Boredom: 1 + 6 + 1 + 4 = 12 against Obsession 3 +
+     * Indifference 4 + Laziness 4 = 11. See migration 0458's own docblock.
+     */
+    public function testFirstThingsFirstSolvedByPlayingTheFreeMoodsBeforeTheBigOne(): void
+    {
+        foreach ([[26, 92, 132, 83], [26, 132, 92, 83]] as $order) {
+            ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('first-things-first');
+
+            $result = $this->playFirstThingsFirst($gameId, $p, $order);
+
+            self::assertTrue($result['game_completed'], implode(',', $order));
+            $this->assertGameSolved($gameId, $p);
+        }
+    }
+
+    /** Leaving Vulnerability (a free play) in hand ties 11-11, and a tie goes to the opponent. */
+    public function testFirstThingsFirstSkippingTheLastFreeMoodOnlyTies(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('first-things-first');
+
+        $result = $this->playFirstThingsFirst($gameId, $p, [26, 92, 83]);
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameFailed($gameId);
+    }
+
+    /**
+     * Sadness (free, but black beside Validation's white) or Apathy (black)
+     * switches Obsession on: 12 against 14. Playing Boredom before the free
+     * moods leaves no play for them.
+     */
+    public function testFirstThingsFirstEveryOtherLineLoses(): void
+    {
+        foreach ([[26, 92, 132, 74, 83], [26, 92, 132, 55], [26, 83], [83]] as $order) {
+            ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('first-things-first');
+
+            $result = $this->playFirstThingsFirst($gameId, $p, $order);
+
+            self::assertTrue($result['game_completed'], implode(',', $order));
+            $this->assertGameFailed($gameId);
+        }
+    }
+
     /** A solve is never marked failed, and puzzle_failed is false while an attempt is open. */
     public function testDeadHeatSolveIsNotFailedAndOpenAttemptIsNotFailed(): void
     {
