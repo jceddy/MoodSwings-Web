@@ -13999,6 +13999,23 @@ than a parallel bespoke system:
   states: every set of moods Thrill returns, every follow-up play) found
   exactly one winning board, reachable with the two plays in either order.
 
+- **23rd puzzle, "First Things First"** (reported live: an easy Validation
+  sequencing puzzle, with a tie line and one free card that must not be
+  played), easy, `win_game`, no new puzzle infrastructure. Both sides have
+  two round wins and the opponent went first (a tie is theirs). The opponent
+  has Obsession (3, but 6 while two or more white and/or black moods are in
+  play), Indifference (4) and Laziness (4): 11 with Obsession off. The
+  solver has nothing in play, holds Validation, Glee, Vulnerability, Sadness,
+  Boredom and Apathy, and has one play. Once Validation is down, every mood
+  with a 0 or 1 in its corner (Glee, Vulnerability, Sadness) pays for itself,
+  and the first bigger mood is the last play. The one winning line:
+  Validation, Glee and Vulnerability (either order), then Boredom --
+  1 + 6 (Glee scores 6 the round it is played) + 1 + 4 = 12 against 11.
+  Skipping Vulnerability ties 11-11. Sadness is free too, but black beside
+  Validation's white switches Obsession on (12 against 14), and so does
+  Apathy as the big mood. An exhaustive search (9 states) found exactly one
+  winning board, reachable with Glee and Vulnerability in either order.
+
 ### Duel: separate per-player decks
 
 `format: 'duel'` and `format: 'draft'` (see "Draft format" below) are the
