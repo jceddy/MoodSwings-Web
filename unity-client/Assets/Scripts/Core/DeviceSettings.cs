@@ -13,6 +13,8 @@ namespace MoodSwings.Core
         private const string VibrationKey = "device.vibration";
         private const string EffectsVolumeKey = "device.effectsVolume";
         private const string BackgroundSoundKey = "device.backgroundSound";
+        private const string CheckForUpdatesKey = "device.checkForUpdates";
+        private const string SkippedUpdateKey = "device.skippedUpdate";
         private const string MusicKey = "device.music";
         private const string MusicVolumeKey = "device.musicVolume";
         private const string ArtPackKey = "device.artPack";
@@ -61,6 +63,34 @@ namespace MoodSwings.Core
                 else
                 {
                     _store.SetString(ArtPackKey, value);
+                }
+            }
+        }
+
+        /// <summary>Look for a newer version of the app when it starts, on until switched off.</summary>
+        public bool CheckForUpdates
+        {
+            get => Read(CheckForUpdatesKey);
+            set => _store.SetString(CheckForUpdatesKey, value ? "1" : "0");
+        }
+
+        /// <summary>The version the player chose not to be asked about again, or null.</summary>
+        public string SkippedUpdateVersion
+        {
+            get
+            {
+                var stored = _store.GetString(SkippedUpdateKey);
+                return string.IsNullOrEmpty(stored) ? null : stored;
+            }
+            set
+            {
+                if (string.IsNullOrEmpty(value))
+                {
+                    _store.Delete(SkippedUpdateKey);
+                }
+                else
+                {
+                    _store.SetString(SkippedUpdateKey, value);
                 }
             }
         }

@@ -685,10 +685,42 @@ Python scripts in `tools/` (`pip install pillow` for the first):
   card as uncompressed RGBA32 (~3 MB instead of under 1 MB). Mipmaps are on
   (Kaiser filter, trilinear): cards are drawn at ~112 px from 744 px art, and
   without them the shrunken art is harsh, speckled noise.
+- `publish_client.py` -- writes the update manifest for the builds (see Updates above) and, with `--upload`, publishes them.
 - `capture_fixtures.py` -- logs in to a server with a throwaway account
   (credentials from `MOODSWINGS_USER`/`MOODSWINGS_PASSWORD`) and saves
   read-only API responses, email/phone redacted, to
   `Assets/Tests/Fixtures/` for model tests.
+
+## Updates
+
+The Windows, macOS and Android apps look for a newer version once each time they start (when the player gets to the
+main menu), and from **Settings > Check for updates now**. **Settings > Check for updates** switches the start-up
+look off. The look is one small download of a manifest at a fixed address, `UpdateConfig.ManifestUrl`
+(`Assets/Scripts/Core/UpdateFlow.cs`), by default `https://github.com/jceddy/MoodSwings-Web/releases/download/client-latest/latest.json`.
+A check that can't be made (offline, no manifest yet) says nothing. The Editor never checks.
+
+```json
+{ "version": "1.3.0", "released": "2026-10-20", "notes": ["What is new, a line each"],
+  "windows": { "url": "...MOOD-Setup-1.3.0.exe", "sha256": "..." },
+  "macos":   { "url": "...MOOD-1.3.0-mac.zip",   "sha256": "..." },
+  "android": { "url": "...MOOD-1.3.0.apk",       "sha256": "..." } }
+```
+
+When `version` is newer than the app's (`bundleVersion`, compared number by number) and the platform has an entry, a box
+offers **Update**, **Later** (asks again next start) and **Skip this version** (quiet until a newer one is published;
+a manual check still shows it).
+
+- **Windows** downloads the installer to a temp folder with progress, checks its SHA-256 against the manifest, starts it
+  and quits so the installer can replace the app. A failed download says why and can be retried.
+- **macOS** and **Android** open the download in the browser (the macOS zip is unpacked by hand; the Android apk is
+  installed from the notification -- the phone asks once to allow installs from the browser). Android needs no Play
+  Store for this; the Play Store is only needed for updates the system applies for you.
+
+Publishing: build the clients, then `python tools/publish_client.py --note "What is new"` writes `Build/latest.json`
+(hashing each build; a platform with no build is left out). Adding `--upload` puts the builds and the manifest on the
+`client-latest` GitHub release with `gh` (the manifest last). Nothing is uploaded without that flag. Note the
+repository is public, so builds on its releases are downloadable by anyone; point `ManifestUrl` and the script at
+another host to change that.
 
 ## Mobile + desktop from one project
 

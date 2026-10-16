@@ -13,6 +13,8 @@ namespace MoodSwings.UI
     public sealed class AppBootstrap : MonoBehaviour
     {
         private ScreenRouter _router;
+        private UpdatePrompt _updates;
+        private bool _updatesChecked;
         private GameObject _banner;
         private Rect _bannerSafeArea;
         private Vector2Int _bannerScreenSize;
@@ -34,8 +36,20 @@ namespace MoodSwings.UI
             // The main theme plays while the app is open; the board changes it to suit the game, and leaving the board
             // brings it back.
             MusicPlayer.Instance.SetTheme(MusicTheme.Main);
+            _updates = new UpdatePrompt(transform, AppServices.Theme);
+            UpdatePrompt.Current = _updates;
             _router.ScreenChanged += (previous, next) =>
             {
+                // Once a launch, when the player gets as far as the main menu (not while logging in, or mid-game).
+                if (!_updatesChecked && next is HomeScreen)
+                {
+                    _updatesChecked = true;
+                    if (AppServices.Device.CheckForUpdates && AppServices.Updates != null)
+                    {
+                        _ = _updates.CheckAsync(manual: false);
+                    }
+                }
+
                 if (!(next is BoardScreen))
                 {
                     MusicPlayer.Instance.SetTheme(MusicTheme.Main);
@@ -94,6 +108,11 @@ namespace MoodSwings.UI
         private void OnDestroy()
         {
             AppServices.ServerChanged -= UpdateServerBanner;
+            if (UpdatePrompt.Current == _updates)
+            {
+                UpdatePrompt.Current = null;
+            }
+
             if (AppServices.Api != null)
             {
                 AppServices.Api.MaintenanceEntered -= OnMaintenance;
@@ -159,6 +178,11 @@ namespace MoodSwings.UI
             // Escape on desktop; the system Back button on Android (which has no keyboard to report it as Escape).
             if (KeyInput.EscapePressed || AndroidBack.Consume())
             {
+                if (_updates.Dismiss())
+                {
+                    return;
+                }
+
                 var current = _router.Current;
                 if ((current == null || !current.HandleBack()) && !_router.Back())
                 {

@@ -159,6 +159,11 @@ namespace MoodSwings.UI
                 AddPushRow(theme);
             }
 
+            if (AppServices.Updates != null)
+            {
+                AddUpdateRows(theme);
+            }
+
             if (Application.isMobilePlatform)
             {
                 AddDeviceRow(theme, "Vibration", "A short buzz for your turn and for questions that need an answer.",
@@ -166,6 +171,35 @@ namespace MoodSwings.UI
             }
 
             AddArtPackRows(theme);
+        }
+
+        // --- updates --------------------------------------------------------------------------------
+
+        // Whether to look for a newer version when the app starts, and a button to look right now.
+        private void AddUpdateRows(UiTheme theme)
+        {
+            var panel = NewPanel(theme);
+            var toggle = UiFactory.Toggle(panel.transform, "Check for updates", theme, AppServices.Device.CheckForUpdates);
+            AddDescription(theme, panel.transform,
+                $"When the app starts, look for a newer version than this one ({Application.version}) and offer it.");
+            toggle.onValueChanged.AddListener(value => AppServices.Device.CheckForUpdates = value);
+
+            var check = UiFactory.Button(panel.transform, "Check for updates now", theme, async () =>
+            {
+                var prompt = UpdatePrompt.Current;
+                if (prompt == null)
+                {
+                    return;
+                }
+
+                SetStatus("Looking for updates...", isError: false);
+                var message = await prompt.CheckAsync(manual: true);
+                if (this != null)
+                {
+                    SetStatus(message, isError: false);
+                }
+            }, primary: false);
+            check.name = "Check for updates now";
         }
 
         // --- card art -------------------------------------------------------------------------------
