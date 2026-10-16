@@ -1954,6 +1954,76 @@ final class PuzzleContentTest extends TestCase
         $this->assertGameFailed($gameId);
     }
 
+    /**
+     * Plays Switchback's Thrill returning the solver's moods $returnCatalogIds,
+     * then each of $playCatalogIds in order.
+     *
+     * @param array<int, int> $returnCatalogIds
+     * @param array<int, int> $playCatalogIds
+     * @return array<string, mixed>
+     */
+    private function playSwitchback(int $gameId, int $p, array $returnCatalogIds, array $playCatalogIds): array
+    {
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 103, 'hand'), [
+            'hand_mood_ids' => array_map(fn (int $catalogId) => $this->ownedInstanceId($gameId, $catalogId, 'in_play', $p), $returnCatalogIds),
+        ]);
+        foreach ($playCatalogIds as $catalogId) {
+            $result = $this->playDriven($gameId, $p, $this->ownedInstanceId($gameId, $catalogId, 'hand', $p));
+        }
+
+        return $result;
+    }
+
+    /**
+     * "Switchback": the only winning line (exhaustive search of the real flow,
+     * 9 states) is Thrill returning Disgust and Laziness, then Complacency and
+     * Pity: nothing black or green is left to switch on Excitement or Loyalty
+     * (10 for the opponent), while Thrill and the opponent's blue Indifference
+     * switch Pity on -- 1 + 4 + 6 = 11. See migration 0455's own docblock.
+     */
+    public function testSwitchbackSolvedByReturningTheMoodsThatSwitchTheOpponentOn(): void
+    {
+        foreach ([[5, 72], [72, 5]] as $order) {
+            ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('switchback');
+
+            $result = $this->playSwitchback($gameId, $p, [63, 126], $order);
+
+            self::assertTrue($result['game_completed'], implode(',', $order));
+            $this->assertGameSolved($gameId, $p);
+        }
+    }
+
+    /**
+     * Keeping Disgust in play (returning only Laziness) or replaying it with
+     * Pity turns Excitement back on: 13-13, a tie, and a tie goes to the
+     * opponent.
+     */
+    public function testSwitchbackKeepingOrReplayingDisgustOnlyTies(): void
+    {
+        foreach ([[[126], [72]], [[63, 126], [63, 72]]] as [$returned, $played]) {
+            ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('switchback');
+
+            $result = $this->playSwitchback($gameId, $p, $returned, $played);
+
+            self::assertTrue($result['game_completed'], implode(',', $played));
+            $this->assertGameFailed($gameId);
+        }
+    }
+
+    /** Apathy instead of Pity (nothing switches it on) is 9 against 10, and Thrill returning nothing loses. */
+    public function testSwitchbackEveryOtherLineLoses(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('switchback');
+        $result = $this->playSwitchback($gameId, $p, [63, 126], [5, 55]);
+        self::assertTrue($result['game_completed']);
+        $this->assertGameFailed($gameId);
+
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('switchback');
+        $result = $this->playSwitchback($gameId, $p, [], []);
+        self::assertTrue($result['game_completed']);
+        $this->assertGameFailed($gameId);
+    }
+
     /** A solve is never marked failed, and puzzle_failed is false while an attempt is open. */
     public function testDeadHeatSolveIsNotFailedAndOpenAttemptIsNotFailed(): void
     {
