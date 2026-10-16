@@ -11,6 +11,8 @@ namespace MoodSwings.UI
         private const int Size = 96;
 
         private static Sprite _eye;
+        private static Sprite _menu;
+        private static Sprite _trophy;
 
         /// <summary>An eye: an almond outline around an iris with a pupil. For "look at this".</summary>
         public static Sprite Eye()
@@ -21,6 +23,79 @@ namespace MoodSwings.UI
             }
 
             return _eye;
+        }
+
+        /// <summary>Three bars: the menu ("hamburger") icon.</summary>
+        public static Sprite Menu()
+        {
+            if (_menu == null)
+            {
+                _menu = Create(DrawMenu);
+            }
+
+            return _menu;
+        }
+
+        /// <summary>A cup with handles on a stem and base: a round won.</summary>
+        public static Sprite Trophy()
+        {
+            if (_trophy == null)
+            {
+                _trophy = Create(DrawTrophy);
+            }
+
+            return _trophy;
+        }
+
+        private static float DrawMenu(float x, float y)
+        {
+            // Three rounded bars, each a rounded-end capsule of half-length 0.78 and half-thickness 0.13.
+            var best = 0f;
+            foreach (var center in new[] { 0.55f, 0f, -0.55f })
+            {
+                var dx = Mathf.Max(0f, Mathf.Abs(x) - 0.65f);
+                var distance = Mathf.Sqrt(dx * dx + (y - center) * (y - center));
+                best = Mathf.Max(best, Coverage(0.13f - distance));
+            }
+
+            return best;
+        }
+
+        private static float DrawTrophy(float x, float y)
+        {
+            // The bowl: flat across the top, rounded below.
+            var top = 0.78f;
+            var rim = 0.58f;
+            float halfWidth;
+            if (y >= 0.34f)
+            {
+                halfWidth = rim;
+            }
+            else
+            {
+                var t = (0.34f - y) / 0.5f;
+                halfWidth = t >= 1f ? 0f : rim * Mathf.Sqrt(1f - t * t);
+            }
+
+            var bowl = Coverage(Mathf.Min(halfWidth - Mathf.Abs(x), top - y));
+
+            // Handles: rings on either side, hollow in the middle.
+            var handles = 0f;
+            foreach (var side in new[] { -1f, 1f })
+            {
+                var dx = x - side * 0.66f;
+                var dy = y - 0.42f;
+                var radius = Mathf.Sqrt(dx * dx + dy * dy);
+                var ring = Coverage(0.27f - radius) * (1f - Coverage(0.14f - radius));
+                // Only the part outside the bowl, so the rings read as handles.
+                handles = Mathf.Max(handles, ring * (Mathf.Abs(x) > 0.5f ? 1f : 0f));
+            }
+
+            // The stem and the base.
+            var stem = Coverage(Mathf.Min(0.11f - Mathf.Abs(x), Mathf.Min(0.08f - y, y + 0.46f)));
+            var foot = Coverage(Mathf.Min(0.42f - Mathf.Abs(x), Mathf.Min(-0.44f - y, y + 0.78f)));
+
+            return Mathf.Max(Mathf.Max(bowl, handles), Mathf.Max(stem, foot));
         }
 
         private static float Draw(float x, float y)

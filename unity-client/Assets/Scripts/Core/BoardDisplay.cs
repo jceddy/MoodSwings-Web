@@ -23,7 +23,7 @@ namespace MoodSwings.Core
             state.InPlay.Where(c => c.OwnerGamePlayerId == gamePlayerId).ToList();
 
         /// <summary>"Round 2  -  First to 3 wins".</summary>
-        public static string RoundLine(GameState state)
+        public static string RoundLine(GameState state, bool includeWinsNeeded = true)
         {
             if (IsPuzzle(state))
             {
@@ -41,7 +41,7 @@ namespace MoodSwings.Core
             }
 
             var round = state.Round.RoundNumber > 0 ? "Round " + state.Round.RoundNumber : "Not started";
-            return state.Game.WinsNeeded > 0 ? $"{round}  -  First to {state.Game.WinsNeeded} wins" : round;
+            return includeWinsNeeded && state.Game.WinsNeeded > 0 ? $"{round}  -  First to {state.Game.WinsNeeded} wins" : round;
         }
 
         /// <summary>
@@ -49,9 +49,9 @@ namespace MoodSwings.Core
         /// ready check or the action clock when there is one, and a warning when the app can't
         /// play this kind of game yet.
         /// </summary>
-        public static string HeaderLine(GameState state, bool spectating, DateTime nowUtc)
+        public static string HeaderLine(GameState state, bool spectating, DateTime nowUtc, bool includeWinsNeeded = true)
         {
-            var parts = new List<string> { RoundLine(state) };
+            var parts = new List<string> { RoundLine(state, includeWinsNeeded) };
             var matchLine = MatchLine(state);
             if (matchLine != null)
             {
@@ -89,9 +89,10 @@ namespace MoodSwings.Core
 
         /// <summary>
         /// What's happening right now: whose turn it is, or who a card effect is
-        /// waiting on, or the result if the game is over.
+        /// waiting on, or the result if the game is over. With <paramref name="includeTurn"/> off, the plain
+        /// "whose turn" lines are left out (the board shows that on the scoreboards): only what else there is to say.
         /// </summary>
-        public static string TurnBanner(GameState state)
+        public static string TurnBanner(GameState state, bool includeTurn = true)
         {
             var viewer = Viewer(state);
 
@@ -177,15 +178,38 @@ namespace MoodSwings.Core
             var current = PlayerById(state, state.Round.CurrentTurnGamePlayerId);
             if (current == null)
             {
-                return Prettify(state.Game.Status);
+                return includeTurn ? Prettify(state.Game.Status) : string.Empty;
             }
 
-            if (viewer != null && current.GamePlayerId == viewer.GamePlayerId)
+            var yourTurn = viewer != null && current.GamePlayerId == viewer.GamePlayerId;
+            if (!includeTurn)
+            {
+                // Whose turn it is, and how many plays they have, show on the scoreboards.
+                return string.Empty;
+            }
+
+            if (yourTurn)
             {
                 return state.Round.PlaysRemaining > 1 ? $"Your turn  -  {state.Round.PlaysRemaining} plays left" : "Your turn";
             }
 
             return current.Username + "'s turn";
+        }
+
+        /// <summary>
+        /// "2 plays left": under the name of whoever's turn it is, for the plays (the turn's own and any extra ones granted)
+        /// they still have. Null for everyone else, once the game is over, and during the pause before a turn is acknowledged
+        /// (nothing can be played yet).
+        /// </summary>
+        public static string PlaysLeftNote(GameState state, BoardPlayer player)
+        {
+            if (state.Game.Status == "completed" || state.Round.TurnPendingAcknowledgment
+                || state.Round.CurrentTurnGamePlayerId != player.GamePlayerId || state.Round.PlaysRemaining < 1)
+            {
+                return null;
+            }
+
+            return state.Round.PlaysRemaining == 1 ? "1 play left" : $"{state.Round.PlaysRemaining} plays left";
         }
 
         /// <summary>Whether to draw attention to the banner: it's on the viewer.</summary>
@@ -451,6 +475,33 @@ namespace MoodSwings.Core
             return $"{game}Match: you {match.YourWins} - {match.OpponentWins} {others}".TrimEnd();
         }
 
+        /// <summary>
+        /// Whether to offer the viewer a rematch of this game, by the web client's rules: they made it, it was a
+        /// real game (not a tournament match or a puzzle) that was played out (it finished, nobody resigned, someone won),
+        /// and if it was one of a best-of-three, the whole match is over (until then there is a next game to go on to).
+        /// </summary>
+        public static bool CanRematch(GameState state)
+        {
+            var viewer = Viewer(state);
+            if (viewer == null || IsSpectator(state) || state.Game.CreatedByUserId != viewer.UserId)
+            {
+                return false;
+            }
+
+            if (state.Game.IsTournamentMatch || IsPuzzle(state) || state.Game.Status != "completed")
+            {
+                return false;
+            }
+
+            if (state.Players.Any(p => p.Resigned) || state.Game.WinnerUsernames.Count == 0)
+            {
+                return false;
+            }
+
+            var match = CurrentMatch(state);
+            return match == null || match.Status == "completed";
+        }
+
         /// <summary>The game to go on to once this one is over and the match goes on; null otherwise.</summary>
         public static int? NextGameId(GameState state) =>
             state.Game.Status == "completed" ? CurrentMatch(state)?.NextGameId : null;
@@ -521,7 +572,11 @@ namespace MoodSwings.Core
                 && UnsupportedReason(state) == null;
         }
 
-        /// <summary>Resigning is possible any time in a game you're still in, except while a decision freezes the round.</summary>
+        /// <summary>
+        /// Resigning is possible any time in a game you're still in, except while a decision freezes the round for someone
+        /// else to answer. A decision waiting on you doesn't count: nobody else could ever answer it, so the server answers
+        /// it for you as part of resigning.
+        /// </summary>
         public static bool CanResign(GameState state)
         {
             var viewer = Viewer(state);
@@ -529,7 +584,7 @@ namespace MoodSwings.Core
                 && !IsPuzzle(state)
                 && !viewer.Resigned
                 && state.Game.Status == "in_progress"
-                && state.Round.PendingDecision == null;
+                && (state.Round.PendingDecision == null || state.Round.PendingDecision.IsYou);
         }
 
         /// <summary>A synchronous game's ready check is waiting on the viewer.</summary>
@@ -713,6 +768,29 @@ namespace MoodSwings.Core
                 .ToList();
             return names.Count == 0 ? "Suppressed" : "Suppressed by " + string.Join(" and ", names);
         }
+
+        /// <summary>
+        /// "Discarded a red card", for a Bliss in play: the color of what was discarded to it, which it keeps (null for any
+        /// other card, or before it has one). The word for the color is given by <paramref name="colorWord"/> so the caller
+        /// can color it.
+        /// </summary>
+        public static string BlissNote(BoardCard card, Func<string, string> colorWord = null)
+        {
+            if (card == null || card.EffectKey != "bliss" || string.IsNullOrEmpty(card.BlissDiscardColor))
+            {
+                return null;
+            }
+
+            var word = card.BlissDiscardColor.ToLowerInvariant();
+            return $"Discarded a {(colorWord != null ? colorWord(word) : word)} card to {card.Name}";
+        }
+
+        /// <summary>
+        /// "A copy made by Creativity" for a mood that is Creativity in play as another mood (it shows as the mood it
+        /// copies, so nothing else says so); null for any other card.
+        /// </summary>
+        public static string CreativityCopyNote(BoardCard card) =>
+            card != null && card.IsCreativityCopy ? "A copy made by Creativity, playing as " + card.Name : null;
 
         /// <summary>"3 pts  -  1 win", for a player's seat.</summary>
         public static string ScoreLine(BoardPlayer player) =>

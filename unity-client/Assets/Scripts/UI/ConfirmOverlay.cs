@@ -65,6 +65,9 @@ namespace MoodSwings.UI
             _answer?.TrySetResult(false);
             _answer = new TaskCompletionSource<bool>();
 
+            // Over anything else up, the menu included (Resign asks from there).
+            _root.transform.SetAsLastSibling();
+
             _message.text = message;
             _yesLabel.text = yesLabel;
             _no.gameObject.SetActive(noLabel != null);

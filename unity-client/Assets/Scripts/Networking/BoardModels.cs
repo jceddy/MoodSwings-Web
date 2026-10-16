@@ -89,6 +89,22 @@ namespace MoodSwings.Networking
         [JsonProperty("value_locked")]
         public bool ValueLocked { get; set; }
 
+        /// <summary>In play, Bliss only: the color of the card that was discarded to it, which is what it now cares about.</summary>
+        [JsonProperty("bliss_discard_color")]
+        public string BlissDiscardColor { get; set; }
+
+        /// <summary>In play only: the mood whose ability is changing which value this one has (the dice value).</summary>
+        [JsonProperty("boosted_by_card_id")]
+        public int? BoostedByCardId { get; set; }
+
+        /// <summary>In play only: the other moods this one's ability is acting on right now.</summary>
+        [JsonProperty("affecting")]
+        public List<AffectingEntry> Affecting { get; set; } = new List<AffectingEntry>();
+
+        /// <summary>In play only: this mood is only held for now, by an effect on another card (and goes back).</summary>
+        [JsonProperty("temporary_ownership")]
+        public TemporaryOwnership TemporaryOwnership { get; set; }
+
         /// <summary>In play only: whose mood it is (the seat it sits in front of).</summary>
         [JsonProperty("owner_game_player_id")]
         public int? OwnerGamePlayerId { get; set; }
@@ -117,6 +133,33 @@ namespace MoodSwings.Networking
 
         /// <summary>True when an effect (Imagination) has changed the color from the printed one.</summary>
         public bool IsRecolored => !string.IsNullOrEmpty(BaseColor) && !string.IsNullOrEmpty(Color) && Color != BaseColor;
+    }
+
+    /// <summary>A mood another mood's ability is acting on: "suppressed" or "dice_value".</summary>
+    public class AffectingEntry
+    {
+        [JsonProperty("card_id")]
+        public int CardId { get; set; }
+
+        [JsonProperty("name")]
+        public string Name { get; set; }
+
+        [JsonProperty("relationship")]
+        public string Relationship { get; set; }
+    }
+
+    /// <summary>Why a mood is held by someone other than its owner, and when it goes back.</summary>
+    public class TemporaryOwnership
+    {
+        [JsonProperty("source_card_id")]
+        public int SourceCardId { get; set; }
+
+        [JsonProperty("source_card_name")]
+        public string SourceCardName { get; set; }
+
+        /// <summary>when_source_leaves_play or after_scoring.</summary>
+        [JsonProperty("reverts")]
+        public string Reverts { get; set; }
     }
 
     /// <summary>One thing suppressing a mood: a suppressed mood's value is 0; nothing else about it changes.</summary>
@@ -263,6 +306,10 @@ namespace MoodSwings.Networking
         [JsonProperty("first_game_player_id")]
         public int? FirstGamePlayerId { get; set; }
 
+        /// <summary>Who actually took the first turn this round.</summary>
+        [JsonProperty("went_first_game_player_id")]
+        public int? WentFirstGamePlayerId { get; set; }
+
         /// <summary>Set in games of 3 or more: whoever has the Hurt Feelings card this round.</summary>
         [JsonProperty("hurt_feelings_game_player_id")]
         public int? HurtFeelingsGamePlayerId { get; set; }
@@ -368,6 +415,17 @@ namespace MoodSwings.Networking
     {
         [JsonProperty("id")]
         public int Id { get; set; }
+
+        /// <summary>Who made the game: the only one a rematch is offered to.</summary>
+        [JsonProperty("created_by_user_id")]
+        public int? CreatedByUserId { get; set; }
+
+        /// <summary>A game in a tournament bracket: the bracket decides who plays whom next, so there is no rematch.</summary>
+        [JsonProperty("is_tournament_match")]
+        public bool IsTournamentMatch { get; set; }
+
+        [JsonProperty("default_selections_mode")]
+        public bool DefaultSelectionsMode { get; set; }
 
         [JsonProperty("status")]
         public string Status { get; set; }

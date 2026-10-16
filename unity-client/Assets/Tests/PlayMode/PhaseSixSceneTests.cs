@@ -19,7 +19,7 @@ namespace MoodSwings.Tests
     public class PhaseSixSceneTests
     {
         private static readonly Vector2 OverTheTable = new Vector2(960f, 650f);
-        private static readonly Vector2 OverTheHand = new Vector2(700f, 120f);
+        private static readonly Vector2 OverTheHand = new Vector2(700f, 40f);
 
         private static PhaseFiveSceneTests.PlayServer YourTurn(JObject state = null) =>
             new PhaseFiveSceneTests.PlayServer { State = state ?? PhaseFiveSceneTests.Load(406) };
@@ -148,7 +148,7 @@ namespace MoodSwings.Tests
             Assert.AreEqual(0, ((JObject)play["choices"]).Count);
             Assert.IsFalse(Board().Choices.IsOpen, "dragging it there was the decision; no form to confirm");
             Assert.IsFalse(Board().IsDragging);
-            Assert.AreEqual("BotSage's turn", Board().BannerText);
+            Assert.AreEqual("BotSage's turn", Board().TurnText);
         }
 
         [UnityTest]
@@ -394,6 +394,29 @@ namespace MoodSwings.Tests
             Assert.IsNull(PhaseTwoSceneTests.FindToggle("Vibration"), "vibration is only offered on a phone");
         }
 
+        [UnityTest]
+        public IEnumerator Settings_DarkMode_StartsOff_AndSwitchesThePalette()
+        {
+            var server = YourTurn();
+            yield return MainSceneTests.Launch(server.Handle, rememberedSession: "tok");
+            yield return MainSceneTests.WaitFor<HomeScreen>();
+            UnityEngine.Object.FindAnyObjectByType<ScreenRouter>().Show<SettingsScreen>();
+            yield return MainSceneTests.WaitFor<SettingsScreen>();
+
+            var toggle = PhaseTwoSceneTests.FindToggle("Dark mode");
+            Assert.IsNotNull(toggle);
+            Assert.IsFalse(toggle.isOn);
+            Assert.IsFalse(AppServices.Theme.IsDark);
+
+            toggle.isOn = true;
+            yield return PhaseTwoSceneTests.Frames();
+
+            Assert.IsTrue(AppServices.Device.DarkMode);
+            Assert.IsTrue(AppServices.Theme.IsDark);
+            AppServices.Device.DarkMode = false;
+            AppServices.Theme.Apply(dark: false);
+        }
+
         // --- resting the mouse on a card -------------------------------------------------------------------
 
         private static IEnumerator HoverOver(string cardName)
@@ -463,7 +486,7 @@ namespace MoodSwings.Tests
         {
             var server = YourTurn();
             yield return PhaseFiveSceneTests.OpenBoard(server, 406);
-            yield return PhaseFiveSceneTests.Tap(PhaseTwoSceneTests.FindButton("Log"));
+            yield return PhaseFiveSceneTests.OpenMenu();
 
             yield return HoverOver("Frustration");
             yield return new WaitForSeconds(0.5f);
@@ -558,8 +581,8 @@ namespace MoodSwings.Tests
             yield return PhaseFiveSceneTests.OpenBoard(server, 407);
 
             var canvas = Board().GetComponentInParent<Canvas>();
-            var screen = new Rect(0f, 0f, Screen.width, Screen.height);
-            foreach (var name in new[] { "Seat bshaftoe", "Seat BotSage", "Seat BotSageQuick", "Seat BotSageDeep", "Hand", "Piles" })
+            var screen = new Rect(-1f, -1f, Screen.width + 2f, Screen.height + 2f);
+            foreach (var name in new[] { "Seat bshaftoe", "Seat BotSage", "Seat BotSageQuick", "Seat BotSageDeep", "Info bshaftoe", "Info BotSage", "Info BotSageQuick", "Info BotSageDeep", "Hand", "Piles" })
             {
                 var corners = new Vector3[4];
                 ((RectTransform)PhaseFiveSceneTests.Child(name)).GetWorldCorners(corners);
@@ -585,17 +608,25 @@ namespace MoodSwings.Tests
                 UnityEngine.Object.Destroy(existing.gameObject);
             }
 
+            // The music player brings a listener too (and the app keeps it across scenes).
+            foreach (var leftover in UnityEngine.Object.FindObjectsByType<MusicPlayer>(FindObjectsInactive.Include))
+            {
+                UnityEngine.Object.Destroy(leftover.gameObject);
+            }
+
             yield return null;
             Assert.AreEqual(0, UnityEngine.Object.FindObjectsByType<AudioListener>(FindObjectsInactive.Include).Length);
 
             var first = SoundPlayer.Create();
             var second = SoundPlayer.Create();
+            var music = MusicPlayer.Instance;
             yield return null;
 
             Assert.AreEqual(1, UnityEngine.Object.FindObjectsByType<AudioListener>(FindObjectsInactive.Include).Length,
                 "Unity warns on screen, and plays nothing, without a listener -- and complains about two");
             UnityEngine.Object.Destroy(first.gameObject);
             UnityEngine.Object.Destroy(second.gameObject);
+            UnityEngine.Object.Destroy(music.gameObject);
         }
 
         [UnityTest]

@@ -146,7 +146,7 @@ namespace MoodSwings.Tests
             yield return PhaseTwoSceneTests.Frames(8);
 
             Assert.IsTrue(server.Calls.Any(c => c.StartsWith("GET /games/state?game_id=777")), string.Join("\n", server.Calls));
-            Assert.AreEqual("Your turn", Board().BannerText, "the next game's board");
+            Assert.AreEqual("Your turn", Board().TurnText, "the next game's board");
         }
 
         [UnityTest]
@@ -353,6 +353,7 @@ namespace MoodSwings.Tests
         {
             var server = Serve(TeamGame("team"));
             yield return PhaseFiveSceneTests.OpenBoard(server, 407);
+            yield return PhaseFiveSceneTests.OpenMenu();
             yield return PhaseFiveSceneTests.Tap(PhaseTwoSceneTests.FindButton("Chat"));
             Assert.AreEqual("table", Board().ChatChannel);
 
@@ -371,6 +372,7 @@ namespace MoodSwings.Tests
         {
             var server = Serve(TeamGame("closed_team"));
             yield return PhaseFiveSceneTests.OpenBoard(server, 407);
+            yield return PhaseFiveSceneTests.OpenMenu();
             yield return PhaseFiveSceneTests.Tap(PhaseTwoSceneTests.FindButton("Chat"));
 
             Assert.IsNull(Named("Chat to partner"), "that format keeps information closed between partners");
@@ -382,7 +384,8 @@ namespace MoodSwings.Tests
             var server = Serve(TeamGame("team", s => s["chat_messages"] = JArray.Parse(
                 "[{\"id\":1,\"sender_username\":\"BotSage\",\"channel\":\"team\",\"message_text\":\"psst\",\"created_at\":\"2026-01-01 00:00:00\"}]")));
             yield return PhaseFiveSceneTests.OpenBoard(server, 407);
-            yield return PhaseFiveSceneTests.Tap(PhaseTwoSceneTests.FindButton("Chat (1)"));
+            yield return PhaseFiveSceneTests.OpenMenu();
+            yield return PhaseFiveSceneTests.Tap(PhaseTwoSceneTests.FindButton("Chat"));
 
             Assert.IsTrue(UnityEngine.Object.FindObjectsByType<Text>(FindObjectsInactive.Exclude).Any(t => t.text == "[team] BotSage: psst"));
         }

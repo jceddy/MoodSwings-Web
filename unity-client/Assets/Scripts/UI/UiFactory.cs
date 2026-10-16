@@ -1,3 +1,4 @@
+using MoodSwings.Core;
 using UnityEngine;
 using UnityEngine.Events;
 using UnityEngine.UI;
@@ -49,7 +50,9 @@ namespace MoodSwings.UI
         {
             var rect = Create("Background", parent);
             Stretch(rect);
-            rect.gameObject.AddComponent<Image>().color = color;
+            // The table behind every screen is drawn once, under all of them (see Backdrop), so a screen's own backing
+            // is clear and lets it show through; the color is only used when there is no table.
+            rect.gameObject.AddComponent<Image>().color = Backdrop.IsShowing ? Color.clear : color;
             return rect;
         }
 
@@ -180,7 +183,7 @@ namespace MoodSwings.UI
             button.colors = Tints();
             button.onClick.AddListener(onClick);
 
-            var label = Label(rect, text, 30, primary ? theme.background : theme.textPrimary, TextAnchor.MiddleCenter, FontStyle.Bold);
+            var label = Label(rect, text, 30, primary ? theme.onAccent : theme.textPrimary, TextAnchor.MiddleCenter, FontStyle.Bold);
             Stretch(label.rectTransform);
 
             Size(rect.gameObject, height: ControlHeight);
@@ -257,6 +260,68 @@ namespace MoodSwings.UI
             return toggle;
         }
 
+        /// <summary>
+        /// A horizontal slider from 0 to 1 in the theme colors: a bar that fills with the accent color and a handle to
+        /// drag. <paramref name="onReleased"/> is called when the pointer lets go of it (to play a sample of the new volume).
+        /// </summary>
+        public static Slider Slider(Transform parent, UiTheme theme, float value, System.Action onReleased = null)
+        {
+            var root = Create("Slider", parent);
+            Size(root.gameObject, height: 44f);
+
+            var bar = Create("Background", root);
+            bar.anchorMin = new Vector2(0f, 0.5f);
+            bar.anchorMax = new Vector2(1f, 0.5f);
+            bar.sizeDelta = new Vector2(0f, 12f);
+            var barImage = bar.gameObject.AddComponent<Image>();
+            barImage.color = Raised(theme);
+
+            var fillArea = Create("Fill Area", root);
+            fillArea.anchorMin = new Vector2(0f, 0.5f);
+            fillArea.anchorMax = new Vector2(1f, 0.5f);
+            fillArea.sizeDelta = new Vector2(0f, 12f);
+            var fill = Create("Fill", fillArea);
+            fill.anchorMin = Vector2.zero;
+            fill.anchorMax = Vector2.one;
+            fill.sizeDelta = Vector2.zero;
+            fill.gameObject.AddComponent<Image>().color = theme.accent;
+
+            // The handle centre travels the bar length less half a handle at either end.
+            var slideArea = Create("Handle Slide Area", root);
+            Stretch(slideArea);
+            slideArea.offsetMin = new Vector2(16f, 0f);
+            slideArea.offsetMax = new Vector2(-16f, 0f);
+            var handle = Create("Handle", slideArea);
+            handle.anchorMin = new Vector2(0f, 0.5f);
+            handle.anchorMax = new Vector2(0f, 0.5f);
+            handle.sizeDelta = new Vector2(32f, 40f);
+            var handleImage = handle.gameObject.AddComponent<Image>();
+            handleImage.color = theme.accent;
+
+            var slider = root.gameObject.AddComponent<Slider>();
+            slider.fillRect = fill;
+            slider.handleRect = handle;
+            slider.targetGraphic = handleImage;
+            slider.direction = UnityEngine.UI.Slider.Direction.LeftToRight;
+            slider.minValue = 0f;
+            slider.maxValue = 1f;
+            slider.SetValueWithoutNotify(Mathf.Clamp01(value));
+            if (onReleased != null)
+            {
+                root.gameObject.AddComponent<SliderRelease>().Released = onReleased;
+            }
+
+            return slider;
+        }
+
+        /// <summary>Calls back when the pointer is lifted from the slider it is on.</summary>
+        public sealed class SliderRelease : MonoBehaviour, UnityEngine.EventSystems.IPointerUpHandler
+        {
+            public System.Action Released;
+
+            public void OnPointerUp(UnityEngine.EventSystems.PointerEventData eventData) => Released?.Invoke();
+        }
+
         /// <summary>Lets a layout child take leftover space (a text field beside a button, a list filling its screen).</summary>
         public static LayoutElement Flexible(GameObject go, float? width = null, float? height = null)
         {
@@ -321,14 +386,14 @@ namespace MoodSwings.UI
             barRect.anchorMax = new Vector2(1f, 1f);
             barRect.pivot = new Vector2(1f, 0.5f);
             barRect.sizeDelta = new Vector2(10f, 0f);
-            barRect.gameObject.AddComponent<Image>().color = new Color(1f, 1f, 1f, 0.06f);
+            barRect.gameObject.AddComponent<Image>().color = AppServices.Theme.faint;
 
             var slidingArea = Create("Sliding Area", barRect);
             Stretch(slidingArea);
             var handleRect = Create("Handle", slidingArea);
             Stretch(handleRect);
             var handleImage = handleRect.gameObject.AddComponent<Image>();
-            handleImage.color = new Color(1f, 1f, 1f, 0.35f);
+            handleImage.color = new Color(AppServices.Theme.textMuted.r, AppServices.Theme.textMuted.g, AppServices.Theme.textMuted.b, 0.55f);
 
             var scrollbar = barRect.gameObject.AddComponent<Scrollbar>();
             scrollbar.handleRect = handleRect;
@@ -445,7 +510,7 @@ namespace MoodSwings.UI
             rect.offsetMax = new Vector2(-horizontal, -vertical);
         }
 
-        private static Color Raised(UiTheme theme) => Color.Lerp(theme.panel, Color.white, 0.10f);
+        private static Color Raised(UiTheme theme) => theme.raised;
 
         private static ColorBlock Tints()
         {

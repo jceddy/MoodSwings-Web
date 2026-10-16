@@ -418,7 +418,7 @@ namespace MoodSwings.UI
             {
                 var id = order[i];
                 var row = UiFactory.Row(parent, "Order " + id, 12f, TextAnchor.MiddleLeft);
-                row.gameObject.AddComponent<Image>().color = Color.Lerp(_theme.panel, Color.white, 0.10f);
+                row.gameObject.AddComponent<Image>().color = _theme.raised;
                 row.padding = new RectOffset(20, 12, 8, 8);
                 UiFactory.Size(row.gameObject, height: 80f);
 
@@ -464,8 +464,8 @@ namespace MoodSwings.UI
             foreach (var option in _options)
             {
                 var picked = _form.IsSelected(option.Path, option.Id);
-                option.Background.color = picked ? _theme.accent : Color.Lerp(_theme.panel, Color.white, 0.10f);
-                option.Label.color = picked ? _theme.background : _theme.textPrimary;
+                option.Background.color = picked ? _theme.accent : _theme.raised;
+                option.Label.color = picked ? _theme.onAccent : _theme.textPrimary;
             }
 
             var problem = _error ?? _form.Problem;

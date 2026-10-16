@@ -212,7 +212,7 @@ namespace MoodSwings.UI
         {
             var image = button.GetComponent<Image>();
             // The chosen week is the brighter button with accent text, so it never reads as a second primary action.
-            image.color = Color.Lerp(theme.panel, Color.white, on ? 0.24f : 0.08f);
+            image.color = on ? theme.Selected : theme.raised;
             button.GetComponentInChildren<Text>().color = on ? theme.accent : theme.textMuted;
         }
     }

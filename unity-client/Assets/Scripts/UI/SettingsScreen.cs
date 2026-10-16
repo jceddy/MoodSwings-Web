@@ -1,4 +1,6 @@
 using System;
+using System.Linq;
+using System.Threading.Tasks;
 using MoodSwings.Core;
 using MoodSwings.Networking;
 using UnityEngine;
@@ -128,17 +130,233 @@ namespace MoodSwings.UI
             AddNotificationRows(theme);
 
             UiFactory.SectionTitle(_list, theme, "On this device");
+            AddDeviceRow(theme, "Dark mode", "A dark palette instead of the light one. The screens are built again, so you land back on the main menu.",
+                AppServices.Device.DarkMode, SetDarkMode);
             AddDeviceRow(theme, "Sound effects", "Chimes for your turn, cards played, and the end of a round.",
                 AppServices.Device.SoundOn, on => AppServices.Device.SoundOn = on);
+            AddVolumeRow(theme, "Effects volume", AppServices.Device.EffectsVolume, value => AppServices.Device.EffectsVolume = value,
+                preview: () =>
+                {
+                    if (AppServices.Device.SoundOn)
+                    {
+                        GameFeedback.Sound.Play(SoundId.Chat);
+                    }
+                });
+            AddDeviceRow(theme, "Music", "The background music: the main theme, and on the board a theme for the color of the mood played last.",
+                AppServices.Device.MusicOn, on => AppServices.Device.MusicOn = on);
+            AddVolumeRow(theme, "Music volume", AppServices.Device.MusicVolume, value => AppServices.Device.MusicVolume = value);
+            if (BackgroundSound.IsOffered)
+            {
+                AddDeviceRow(theme, "Play sound in the background", "Keep the music and sounds going while this window isn't the one in front.",
+                    AppServices.Device.BackgroundSoundOn, on =>
+                    {
+                        AppServices.Device.BackgroundSoundOn = on;
+                        BackgroundSound.Apply();
+                    });
+            }
             if (AppServices.Push.IsAvailable)
             {
                 AddPushRow(theme);
+            }
+
+            if (AppServices.Updates != null)
+            {
+                AddUpdateRows(theme);
             }
 
             if (Application.isMobilePlatform)
             {
                 AddDeviceRow(theme, "Vibration", "A short buzz for your turn and for questions that need an answer.",
                     AppServices.Device.VibrationOn, on => AppServices.Device.VibrationOn = on);
+            }
+
+            AddArtPackRows(theme);
+        }
+
+        // --- updates --------------------------------------------------------------------------------
+
+        // Whether to look for a newer version when the app starts, and a button to look right now.
+        private void AddUpdateRows(UiTheme theme)
+        {
+            var panel = NewPanel(theme);
+            var toggle = UiFactory.Toggle(panel.transform, "Check for updates", theme, AppServices.Device.CheckForUpdates);
+            AddDescription(theme, panel.transform,
+                $"When the app starts, look for a newer version than this one ({Application.version}) and offer it.");
+            toggle.onValueChanged.AddListener(value => AppServices.Device.CheckForUpdates = value);
+
+            var check = UiFactory.Button(panel.transform, "Check for updates now", theme, async () =>
+            {
+                var prompt = UpdatePrompt.Current;
+                if (prompt == null)
+                {
+                    return;
+                }
+
+                SetStatus("Looking for updates...", isError: false);
+                var message = await prompt.CheckAsync(manual: true);
+                if (this != null)
+                {
+                    SetStatus(message, isError: false);
+                }
+            }, primary: false);
+            check.name = "Check for updates now";
+        }
+
+        // --- card art -------------------------------------------------------------------------------
+
+        private string _armedRemoval;
+
+        // The art that ships with the app, and each art pack that has been added: one of them is in use. A pack is a
+        // folder or zip of images; adding one copies it into the app, so the original can be moved or deleted.
+        private void AddArtPackRows(UiTheme theme)
+        {
+            UiFactory.SectionTitle(_list, theme, "Card art");
+            var note = NewPanel(theme);
+            var text = UiFactory.Label(note.transform,
+                "Use your own card art. An art pack is a folder or a .zip of PNG or JPG images named like 12-faith.png (the card's number first); "
+                + "it can replace some or all of the cards, the card back (back.png) and Hurt Feelings (hurt-feelings.png).",
+                24, theme.textMuted, TextAnchor.UpperLeft);
+            text.name = "Art pack note";
+
+            var packs = AppServices.ArtPacks.List();
+            var active = AppServices.Device.ArtPack;
+            if (active != null && packs.All(p => p.Id != active))
+            {
+                active = null; // it has been deleted: the default again
+            }
+
+            AddArtChoice(theme, "Default", "The art that comes with the app.", null, active == null, removable: false);
+            foreach (var pack in packs)
+            {
+                AddArtChoice(theme, pack.Name, pack.Summary, pack.Id, pack.Id == active, removable: true);
+            }
+
+            var picker = AppServices.FilePicker;
+            var add = NewPanel(theme);
+            if (picker != null && picker.IsAvailable)
+            {
+                var row = UiFactory.Row(add.transform, "Add art pack", 12f, TextAnchor.MiddleLeft);
+                UiFactory.Size(row.gameObject, height: UiFactory.ControlHeight);
+                var folder = UiFactory.Button(row.transform, "Add a folder...", theme, () => AddPack(folder: true), primary: false);
+                folder.gameObject.name = "Add art pack folder";
+                UiFactory.Flexible(folder.gameObject, width: 1f);
+                var zip = UiFactory.Button(row.transform, "Add a .zip...", theme, () => AddPack(folder: false), primary: false);
+                zip.gameObject.name = "Add art pack zip";
+                UiFactory.Flexible(zip.gameObject, width: 1f);
+            }
+            else
+            {
+                UiFactory.Label(add.transform, "Adding art packs isn't available on this device.", 24, theme.textMuted, TextAnchor.UpperLeft);
+            }
+        }
+
+        private void AddArtChoice(UiTheme theme, string name, string detail, string id, bool inUse, bool removable)
+        {
+            var panel = NewPanel(theme);
+            var row = UiFactory.Row(panel.transform, "Art choice", 12f, TextAnchor.MiddleLeft);
+            UiFactory.Size(row.gameObject, height: UiFactory.ControlHeight);
+            var choose = UiFactory.Button(row.transform, inUse ? name + "  -  in use" : name, theme, () => UseArt(id, name), primary: inUse);
+            choose.gameObject.name = "Art: " + name;
+            UiFactory.Flexible(choose.gameObject, width: 1f);
+            if (removable)
+            {
+                var armed = _armedRemoval == id;
+                var remove = UiFactory.Button(row.transform, armed ? "Sure?" : "Remove", theme, () => RemoveArt(id, name), primary: false);
+                remove.gameObject.name = "Remove " + name;
+                UiFactory.Size(remove.gameObject, 180f);
+                if (armed)
+                {
+                    remove.GetComponent<Image>().color = theme.danger;
+                    remove.GetComponentInChildren<Text>().color = Color.white;
+                }
+            }
+
+            AddDescription(theme, panel.transform, detail);
+        }
+
+        private void UseArt(string id, string name)
+        {
+            _armedRemoval = null;
+            AppServices.Device.ArtPack = id;
+            CardArtLibrary.ActivePackId = id;
+            BuildRows();
+            SetStatus(id == null ? "Using the card art that comes with the app." : "Using " + name + ".", isError: false);
+        }
+
+        // Two taps, so a stray one doesn't delete a pack: the first asks "Sure?".
+        private void RemoveArt(string id, string name)
+        {
+            if (_armedRemoval != id)
+            {
+                _armedRemoval = id;
+                BuildRows();
+                return;
+            }
+
+            _armedRemoval = null;
+            AppServices.ArtPacks.Delete(id);
+            CardArtLibrary.Forget(id);
+            if (AppServices.Device.ArtPack == id)
+            {
+                AppServices.Device.ArtPack = null;
+            }
+
+            BuildRows();
+            SetStatus("Removed " + name + ".", isError: false);
+        }
+
+        private async void AddPack(bool folder)
+        {
+            PickedPath picked = null;
+            try
+            {
+                var picker = AppServices.FilePicker;
+                SetStatus(folder ? "Choose the folder..." : "Choose the zip file...", isError: false);
+                picked = folder ? await picker.PickFolderAsync() : await picker.PickZipAsync();
+                if (this == null)
+                {
+                    return;
+                }
+
+                if (picked == null)
+                {
+                    SetStatus(string.Empty, isError: false);
+                    return;
+                }
+
+                SetStatus("Adding it...", isError: false);
+                var store = AppServices.ArtPacks;
+                var path = picked.Path;
+                var name = picked.Name;
+                var result = await Task.Run(() => folder ? store.AddFolder(path, name) : store.AddZip(path, name));
+                if (this == null)
+                {
+                    return;
+                }
+
+                BuildRows();
+                if (!result.Ok)
+                {
+                    SetStatus(result.Problem, isError: true);
+                    return;
+                }
+
+                var left = result.Skipped.Count > 0
+                    ? $" {result.Skipped.Count} {(result.Skipped.Count == 1 ? "file was" : "files were")} left out ({result.Skipped[0]})."
+                    : string.Empty;
+                SetStatus($"Added {result.Pack.Name}: {result.Pack.Summary}. Tap it to use it.{left}", isError: false);
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e);
+                if (this != null)
+                {
+                    SetStatus("Couldn't add it: " + e.Message, isError: true);
+                }
+            }
+            finally
+            {
+                picked?.Cleanup();
             }
         }
 
@@ -275,6 +493,42 @@ namespace MoodSwings.UI
             var toggle = UiFactory.Toggle(panel.transform, label, theme, isOn);
             AddDescription(theme, panel.transform, description);
             toggle.onValueChanged.AddListener(value => save(value));
+        }
+
+        // A slider for how loud something is, with the percentage beside its name. It is applied as it moves.
+        private void AddVolumeRow(UiTheme theme, string label, float value, System.Action<float> save, System.Action preview = null)
+        {
+            var panel = NewPanel(theme);
+            var heading = UiFactory.Row(panel.transform, "Volume heading", 12f, TextAnchor.MiddleLeft);
+            UiFactory.Size(heading.gameObject, height: 36f);
+            var name = UiFactory.Label(heading.transform, label, 26, theme.textPrimary, TextAnchor.MiddleLeft);
+            UiFactory.Flexible(name.gameObject, width: 1f);
+            var percent = UiFactory.Label(heading.transform, Percent(value), 26, theme.textMuted, TextAnchor.MiddleRight);
+            percent.name = "Percent";
+            UiFactory.Size(percent.gameObject, 90f, 36f);
+
+            var slider = UiFactory.Slider(panel.transform, theme, value, preview);
+            slider.gameObject.name = label;
+            slider.onValueChanged.AddListener(v =>
+            {
+                save(v);
+                percent.text = Percent(v);
+            });
+        }
+
+        private static string Percent(float value) => Mathf.RoundToInt(value * 100f) + "%";
+
+        // The screens take their colors when they are built, so a new palette means building them again.
+        private void SetDarkMode(bool on)
+        {
+            if (AppServices.Device.DarkMode == on)
+            {
+                return;
+            }
+
+            AppServices.Device.DarkMode = on;
+            AppServices.Theme.Apply(on);
+            UnityEngine.SceneManagement.SceneManager.LoadScene(gameObject.scene.name);
         }
 
         private void AddPreferenceRow(UiTheme theme, BoolPreference preference)

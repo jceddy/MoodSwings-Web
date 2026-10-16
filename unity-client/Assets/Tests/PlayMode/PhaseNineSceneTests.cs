@@ -1393,5 +1393,806 @@ namespace MoodSwings.Tests
             yield return PhaseTwoSceneTests.Frames(8);
             Assert.IsTrue(AppServices.IsDevServer);
         }
+
+        // --- the board's layout ---------------------------------------------------------------------------
+
+        private static Newtonsoft.Json.Linq.JObject Quiet(int gameId, System.Action<Newtonsoft.Json.Linq.JObject> edit = null) =>
+            PhaseFiveSceneTests.Load(gameId, s =>
+            {
+                s["round"]["pending_decision"] = null;
+                edit?.Invoke(s);
+            });
+
+        [UnityTest]
+        public IEnumerator Back_AfterAScreenWasShownOverItself_DoesNotReturnToAnEmptyBoard()
+        {
+            var server = Serve();
+            server.State = Quiet(406, s => { });
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+            var router = Object.FindAnyObjectByType<ScreenRouter>();
+
+            // As when a notification for another game is tapped while a board is up.
+            router.Show<BoardScreen>(BoardSession.ForPlayer(AppServices.Api, 405));
+            yield return MainSceneTests.WaitFor<BoardScreen>();
+            Assert.IsTrue(router.Back());
+            yield return PhaseTwoSceneTests.Frames(3);
+
+            Assert.IsInstanceOf<HomeScreen>(router.Current, "straight back to where the first board was opened from");
+        }
+
+        [UnityTest]
+        public IEnumerator TheCameraBackground_FollowsThePalette_AndTheDevTagStaysInsideTheSafeArea()
+        {
+            MainSceneTests.DarkMode = true;
+            ScreenSafeArea.Override = new Rect(100f, 0f, Screen.width - 200f, Screen.height);
+            try
+            {
+                var server = Serve();
+                yield return LoginScreenUp(server);
+                Assert.AreEqual(AppServices.Theme.background, Camera.main.backgroundColor, "so a notch isn't a light strip in dark mode");
+
+                TapVersion(7);
+                yield return PhaseTwoSceneTests.Frames(3);
+                var tag = (RectTransform)Banner().transform;
+                var corners = new Vector3[4];
+                tag.GetWorldCorners(corners);
+                var right = RectTransformUtility.WorldToScreenPoint(Camera.main, corners[2]).x;
+                Assert.LessOrEqual(right, Screen.width - 100f, "inside the safe area, not up against the edge");
+            }
+            finally
+            {
+                ScreenSafeArea.Override = null;
+                MainSceneTests.DarkMode = false;
+                AppServices.Theme.Apply(dark: false);
+            }
+        }
+
+        // Game 405 with its first mood's rules saying "while in play" and its value moved by them, and (optionally) its
+        // second mood suppressed by that first one.
+        private static Newtonsoft.Json.Linq.JObject WithAnOngoingEffect(bool suppressing) => Quiet(405, s =>
+        {
+            var inPlay = (Newtonsoft.Json.Linq.JArray)s["in_play"];
+            inPlay[0]["rules_text"] = "While in play - This mood's value is 6 if there are two or more blue moods.";
+            inPlay[0]["base_value"] = 3;
+            inPlay[0]["value"] = 6;
+            if (suppressing)
+            {
+                inPlay[1]["is_suppressed"] = true;
+                inPlay[1]["value"] = 0;
+                inPlay[1]["suppressions"] = Newtonsoft.Json.Linq.JArray.Parse(
+                    "[{\"expiry\":\"while_source_in_play\",\"suppressed_by_card_id\":" + (int)inPlay[0]["card_id"] + ",\"suppressed_by_name\":\"" + (string)inPlay[0]["name"] + "\"}]");
+            }
+        });
+
+        [UnityTest]
+        public IEnumerator AMoodWithAnOngoingEffect_Glows_AndOthersDoNot()
+        {
+            var server = Serve();
+            server.State = WithAnOngoingEffect(suppressing: false);
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+
+            var name = (string)server.State["in_play"][0]["name"];
+            var other = (string)server.State["in_play"][1]["name"];
+            var aura = PhaseFiveSceneTests.Child("Card " + name).Find("Aura");
+            Assert.IsNotNull(aura, "the glow is part of the card");
+            Assert.IsNotNull(aura.Find("Halo"));
+            Assert.IsNotNull(aura.Find("Ripple"));
+            Assert.AreEqual(0, aura.GetSiblingIndex(), "under the card's own pieces");
+            Assert.IsNull(PhaseFiveSceneTests.Child("Card " + other).Find("Aura"), "a mood with nothing going on has no glow");
+            Assert.IsFalse(aura.GetComponentsInChildren<UnityEngine.UI.Graphic>().Any(g => g.raycastTarget), "and it never takes a tap");
+
+            // It moves: the halo's brightness changes as it breathes.
+            var halo = aura.GetComponent<CardAura>().Halo;
+            var before = halo.color.a;
+            var changed = false;
+            for (var i = 0; i < 40 && !changed; i++)
+            {
+                yield return null;
+                changed = !Mathf.Approximately(halo.color.a, before);
+            }
+
+            Assert.IsTrue(changed, "it pulses");
+            ScreenshotHelper.Capture("effect-aura");
+        }
+
+        [UnityTest]
+        public IEnumerator AMoodSuppressingAnother_IsLinkedToIt_AndNoGlowOnTheSuppressedOne()
+        {
+            var server = Serve();
+            server.State = WithAnOngoingEffect(suppressing: true);
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+
+            var layer = Object.FindAnyObjectByType<EffectLinksLayer>();
+            Assert.IsNotNull(layer);
+            Assert.AreEqual(1, layer.LineCount, "one line, from the source to what it suppresses");
+            Assert.IsFalse(layer.raycastTarget);
+            yield return PhaseTwoSceneTests.Frames(30);
+            Assert.Greater(layer.VertexCount, 0, "and it is drawn");
+
+            var other = (string)server.State["in_play"][1]["name"];
+            Assert.IsNull(PhaseFiveSceneTests.Child("Card " + other).Find("Aura"), "a suppressed mood is switched off, so it doesn't glow");
+
+            for (var i = 0; i < 4; i++)
+            {
+                yield return PhaseTwoSceneTests.Frames(12);
+                ScreenshotHelper.Capture("effect-link-" + i);
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator TheLinks_GoWhenTheEffectEnds()
+        {
+            var server = Serve();
+            server.State = WithAnOngoingEffect(suppressing: true);
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+            Assert.AreEqual(1, Object.FindAnyObjectByType<EffectLinksLayer>().LineCount);
+
+            server.State = WithAnOngoingEffect(suppressing: false);
+            yield return PhaseFiveSceneTests.Poll();
+
+            Assert.AreEqual(0, Object.FindAnyObjectByType<EffectLinksLayer>().LineCount);
+        }
+
+        [UnityTest]
+        public IEnumerator TheCenter_DoesNotRepeatWhoseTurnItIs_AndKeepsAModestButton()
+        {
+            var server = Serve();
+            server.State = Quiet(406, s => { });
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+
+            Assert.AreEqual("Your turn", PhaseFiveSceneTests.Board().TurnText);
+            Assert.AreEqual(string.Empty, PhaseFiveSceneTests.Board().BannerText, "that is on the scoreboards");
+            Assert.IsNull(PhaseFiveSceneTests.Child("Banner"), "and the empty line takes no room");
+            StringAssert.DoesNotContain("First to", PhaseFiveSceneTests.Board().RoundText);
+
+            var pass = (RectTransform)PhaseFiveSceneTests.Child("Primary action");
+            Assert.LessOrEqual(pass.rect.height, 60f);
+            Assert.LessOrEqual(pass.rect.width, 300f);
+        }
+
+        [UnityTest]
+        public IEnumerator TheScoreboard_ShowsHowManyPlaysTheCurrentPlayerHasLeft()
+        {
+            var server = Serve();
+            server.State = Quiet(406, s => s["round"]["plays_remaining"] = 1);
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+
+            var label = PhaseFiveSceneTests.Child("Plays left");
+            Assert.IsNotNull(label);
+            Assert.AreEqual("1 play left", label.GetComponent<Text>().text);
+            Assert.AreEqual(1, Object.FindObjectsByType<Text>(FindObjectsInactive.Exclude).Count(t => t.name == "Plays left"), "only whose turn it is");
+            ScreenshotHelper.Capture("plays-left-one");
+
+            server.State = Quiet(406, s => s["round"]["plays_remaining"] = 3);
+            yield return PhaseFiveSceneTests.Poll();
+
+            Assert.AreEqual("3 plays left", PhaseFiveSceneTests.Child("Plays left").GetComponent<Text>().text);
+            ScreenshotHelper.Capture("plays-left-three");
+        }
+
+        [UnityTest]
+        public IEnumerator ABlissInPlay_NamesTheColorDiscardedToIt_WhenClicked()
+        {
+            var server = Serve();
+            server.State = Quiet(405, s =>
+            {
+                var card = s["in_play"][0];
+                card["effect_key"] = "bliss";
+                card["name"] = "Bliss";
+                card["bliss_discard_color"] = "red";
+            });
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+
+            PhaseFiveSceneTests.Child("Card Bliss").GetComponent<UnityEngine.UI.Button>().onClick.Invoke();
+            yield return PhaseTwoSceneTests.Frames();
+
+            StringAssert.Contains("Discarded a", PhaseFiveSceneTests.Board().DetailText);
+            StringAssert.Contains(">red</color>", PhaseFiveSceneTests.Board().DetailText);
+            StringAssert.Contains("to Bliss", PhaseFiveSceneTests.Board().DetailText);
+        }
+
+        private static UnityEngine.UI.Slider SliderNamed(string name) =>
+            Object.FindObjectsByType<UnityEngine.UI.Slider>(FindObjectsInactive.Exclude).FirstOrDefault(x => x.name == name);
+
+        [UnityTest]
+        public IEnumerator TheMainTheme_PlaysWhileTheAppIsOpen_AtTheDeviceVolume()
+        {
+            yield return Home(Serve());
+            yield return new WaitForSeconds(0.8f);
+
+            var music = MusicPlayer.Instance;
+            Assert.AreEqual(MusicTheme.Main, music.Theme);
+            Assert.AreEqual(AppServices.Device.MusicVolume, music.Gain, 0.0001f);
+            Assert.Greater(music.LevelOf(MusicTheme.Main), 0f, "it is fading in (so the clip loaded)");
+            Assert.Greater(music.VolumeOf(MusicTheme.Main), 0f);
+        }
+
+        [UnityTest]
+        public IEnumerator OnTheBoard_TheMusicFollowsTheColorOfTheLatestMood_AndLeavingBringsTheMainThemeBack()
+        {
+            var server = Serve();
+            server.State = Quiet(407, s => { });
+            yield return PhaseFiveSceneTests.OpenBoard(server, 407);
+
+            // BotSageQuick's Confusion (blue) was played last -- not the mood listed last (Tranquility, green).
+            var expected = MusicTheme.Blue;
+            Assert.AreEqual(expected, MusicPlayer.Instance.Theme);
+
+            yield return new WaitForSeconds(MusicPlayer.FadeSeconds + 0.5f);
+            Assert.AreEqual(1f, MusicPlayer.Instance.LevelOf(expected), 0.05f, "faded all the way in");
+            Assert.AreEqual(0f, MusicPlayer.Instance.LevelOf(MusicTheme.Main), 0.05f, "and the main theme out");
+
+            Object.FindAnyObjectByType<ScreenRouter>().Show<HomeScreen>();
+            yield return PhaseTwoSceneTests.Frames(3);
+            Assert.AreEqual(MusicTheme.Main, MusicPlayer.Instance.Theme);
+        }
+
+        [UnityTest]
+        public IEnumerator Settings_HaveMusicAndEffectsVolumes_AndMuteForEach()
+        {
+            yield return Home(Serve());
+            Object.FindAnyObjectByType<ScreenRouter>().Show<SettingsScreen>();
+            yield return MainSceneTests.WaitFor<SettingsScreen>();
+
+            var music = SliderNamed("Music volume");
+            var effects = SliderNamed("Effects volume");
+            Assert.IsNotNull(music);
+            Assert.IsNotNull(effects);
+            Assert.AreEqual(AppServices.Device.MusicVolume, music.value, 0.0001f);
+            Assert.AreEqual(AppServices.Device.EffectsVolume, effects.value, 0.0001f);
+            foreach (var scroll in Object.FindObjectsByType<UnityEngine.UI.ScrollRect>(FindObjectsInactive.Exclude))
+            {
+                scroll.verticalNormalizedPosition = 0f;
+            }
+
+            yield return PhaseTwoSceneTests.Frames(3);
+            ScreenshotHelper.Capture("settings-device");
+            Assert.IsNotNull(PhaseTwoSceneTests.FindToggle("Music"));
+            Assert.IsNotNull(PhaseTwoSceneTests.FindToggle("Sound effects"));
+
+            music.value = 0.2f;
+            effects.value = 0.4f;
+            yield return PhaseTwoSceneTests.Frames(3);
+            Assert.AreEqual(0.2f, AppServices.Device.MusicVolume, 0.0001f);
+            Assert.AreEqual(0.4f, AppServices.Device.EffectsVolume, 0.0001f);
+            Assert.AreEqual(0.2f, MusicPlayer.Instance.Gain, 0.0001f, "the music follows the slider as it moves");
+            Assert.IsTrue(Texts().Contains("20%"));
+            Assert.IsTrue(Texts().Contains("40%"));
+
+            PhaseTwoSceneTests.FindToggle("Music").isOn = false;
+            yield return PhaseTwoSceneTests.Frames(3);
+            Assert.IsFalse(AppServices.Device.MusicOn);
+            Assert.AreEqual(0f, MusicPlayer.Instance.Gain, "muted");
+            Assert.IsTrue(AppServices.Device.SoundOn, "the effects are a separate switch");
+        }
+
+        [UnityTest]
+        public IEnumerator TheScreens_SitOnAWoodTable_LightOrDark_ThatCoversTheWholeDisplay()
+        {
+            ScreenSafeArea.Override = new Rect(100f, 0f, Screen.width - 200f, Screen.height);
+            try
+            {
+                yield return Home(Serve());
+                var backdrops = Object.FindObjectsByType<Backdrop>(FindObjectsInactive.Include);
+                Assert.AreEqual(1, backdrops.Length);
+                Assert.IsNotNull(backdrops[0].Texture, "the picture loaded");
+                StringAssert.Contains("light", backdrops[0].Texture.name);
+
+                var rect = (RectTransform)backdrops[0].transform;
+                var canvas = Object.FindAnyObjectByType<ScreenRouter>().GetComponent<RectTransform>();
+                Assert.AreEqual(canvas.rect.width, rect.rect.width, 0.5f, "under the notch and the corners too, not just the safe area");
+                Assert.AreEqual(canvas.rect.height, rect.rect.height, 0.5f);
+
+                Assert.IsTrue(Backdrop.IsShowing);
+                Assert.AreEqual(0f, MainSceneTests.Screen<HomeScreen>().transform.Find("Background").GetComponent<UnityEngine.UI.Image>().color.a, "a screen's own backing is clear");
+                ScreenshotHelper.Capture("backdrop-light");
+            }
+            finally
+            {
+                ScreenSafeArea.Override = null;
+            }
+
+            MainSceneTests.DarkMode = true;
+            try
+            {
+                yield return Home(Serve());
+                var dark = Object.FindObjectsByType<Backdrop>(FindObjectsInactive.Include).Single();
+                StringAssert.Contains("dark", dark.Texture.name);
+            }
+            finally
+            {
+                MainSceneTests.DarkMode = false;
+                AppServices.Theme.Apply(dark: false);
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator TheDevTag_SitsWellInFromTheScreenCorner()
+        {
+            // The dev tag is a good way in from the right edge and the top.
+            yield return Home(Serve());
+            yield return PhaseTwoSceneTests.Frames(3);
+            var tag = (RectTransform)Object.FindObjectsByType<Transform>(FindObjectsInactive.Include).First(t => t.name == "Server banner");
+            Assert.LessOrEqual(tag.anchoredPosition.x, -90f);
+            Assert.LessOrEqual(tag.anchoredPosition.y, -20f);
+        }
+
+        private sealed class FakePicker : IFilePicker
+        {
+            public string Folder;
+
+            public bool IsAvailable => true;
+
+            public System.Threading.Tasks.Task<PickedPath> PickFolderAsync() => System.Threading.Tasks.Task.FromResult(
+                Folder == null ? null : new PickedPath { Path = Folder, Name = System.IO.Path.GetFileName(Folder) });
+
+            public System.Threading.Tasks.Task<PickedPath> PickZipAsync() => System.Threading.Tasks.Task.FromResult<PickedPath>(null);
+        }
+
+        private static string AsText(Sprite sprite) => sprite == null ? "none" : sprite.texture.name;
+
+        [UnityTest]
+        public IEnumerator ArtPacks_CanBeAdded_Chosen_AndRemoved_InSettings()
+        {
+            var source = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "moodswings-test-source-" + System.Guid.NewGuid().ToString("N"), "Test Pack");
+            System.IO.Directory.CreateDirectory(source);
+            var texture = new Texture2D(64, 88, TextureFormat.RGBA32, false);
+            texture.SetPixels(Enumerable.Repeat(Color.red, 64 * 88).ToArray());
+            texture.Apply();
+            System.IO.File.WriteAllBytes(System.IO.Path.Combine(source, "7-courage.png"), ImageConversion.EncodeToPNG(texture));
+            Object.Destroy(texture);
+
+            MainSceneTests.FilePicker = new FakePicker { Folder = source };
+            try
+            {
+                yield return Home(Serve());
+                var shipped = AsText(CardArtLibrary.ForCard(7));
+                Assert.AreNotEqual("Art pack image", shipped);
+
+                Object.FindAnyObjectByType<ScreenRouter>().Show<SettingsScreen>();
+                yield return MainSceneTests.WaitFor<SettingsScreen>();
+                Assert.IsNotNull(PhaseFiveSceneTests.Child("Art: Default"), "the shipped art is always there to pick");
+                StringAssert.Contains("in use", PhaseFiveSceneTests.Child("Art: Default").GetComponentInChildren<Text>().text);
+
+                PhaseFiveSceneTests.ButtonNamed("Add art pack folder").onClick.Invoke();
+                var waited = 0f;
+                while (PhaseFiveSceneTests.Child("Art: Test Pack") == null && waited < 6f)
+                {
+                    waited += Time.unscaledDeltaTime;
+                    yield return null;
+                }
+
+                Assert.IsNotNull(PhaseFiveSceneTests.Child("Art: Test Pack"), "the pack is an entry beside Default");
+                StringAssert.Contains("Added Test Pack", MainSceneTests.Screen<SettingsScreen>().StatusText);
+                Assert.IsNull(AppServices.Device.ArtPack, "adding doesn't switch to it");
+                Assert.AreEqual(shipped, AsText(CardArtLibrary.ForCard(7)));
+
+                PhaseFiveSceneTests.ButtonNamed("Art: Test Pack").onClick.Invoke();
+                yield return PhaseTwoSceneTests.Frames(2);
+                Assert.AreEqual("test-pack", AppServices.Device.ArtPack);
+                Assert.AreEqual("Art pack image", AsText(CardArtLibrary.ForCard(7)), "card 7 now has the pack's art");
+                Assert.AreNotEqual("Art pack image", AsText(CardArtLibrary.ForCard(8)), "and the cards it leaves alone keep the shipped art");
+                StringAssert.Contains("in use", PhaseFiveSceneTests.Child("Art: Test Pack").GetComponentInChildren<Text>().text);
+
+                PhaseFiveSceneTests.ButtonNamed("Art: Default").onClick.Invoke();
+                yield return PhaseTwoSceneTests.Frames(2);
+                Assert.IsNull(AppServices.Device.ArtPack);
+                Assert.AreEqual(shipped, AsText(CardArtLibrary.ForCard(7)));
+
+                // Removing takes two taps.
+                PhaseFiveSceneTests.ButtonNamed("Remove Test Pack").onClick.Invoke();
+                yield return PhaseTwoSceneTests.Frames(2);
+                Assert.IsNotNull(PhaseFiveSceneTests.Child("Art: Test Pack"), "the first tap only asks");
+                PhaseFiveSceneTests.ButtonNamed("Remove Test Pack").onClick.Invoke();
+                yield return PhaseTwoSceneTests.Frames(2);
+                Assert.IsNull(PhaseFiveSceneTests.Child("Art: Test Pack"));
+                Assert.IsEmpty(AppServices.ArtPacks.List());
+            }
+            finally
+            {
+                MainSceneTests.FilePicker = null;
+                CardArtLibrary.ActivePackId = null;
+                var parent = System.IO.Path.GetDirectoryName(source);
+                if (System.IO.Directory.Exists(parent))
+                {
+                    System.IO.Directory.Delete(parent, recursive: true);
+                }
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator AnArtPackInUse_IsRememberedAcrossARestart_AndADeletedOneFallsBackToDefault()
+        {
+            yield return Home(Serve());
+            var store = AppServices.ArtPacks;
+            var folder = System.IO.Path.Combine(store.Root, "..", "src-" + System.Guid.NewGuid().ToString("N"));
+            System.IO.Directory.CreateDirectory(folder);
+            var texture = new Texture2D(40, 56, TextureFormat.RGBA32, false);
+            System.IO.File.WriteAllBytes(System.IO.Path.Combine(folder, "3-charity.png"), ImageConversion.EncodeToPNG(texture));
+            Object.Destroy(texture);
+            var pack = store.AddFolder(folder, "Kept").Pack;
+            AppServices.Device.ArtPack = pack.Id;
+
+            // Start the services again over the same storage, as a new run of the app would.
+            var root = store.Root;
+            AppServices.Override(AppServices.Api, null, null, null, artPacksFolder: root);
+            Assert.AreEqual(root, AppServices.ArtPacks.Root);
+            CardArtLibrary.ActivePackId = AppServices.ArtPacks.Find(AppServices.Device.ArtPack)?.Id;
+
+            store.Delete(pack.Id);
+            Assert.IsNull(store.Find(pack.Id));
+            CardArtLibrary.Forget(pack.Id);
+            Assert.IsNull(CardArtLibrary.ActivePackId, "the pack is gone, so it is the default again");
+            System.IO.Directory.Delete(folder, recursive: true);
+        }
+
+        [UnityTest]
+        public IEnumerator OpeningAnotherGame_DoesNotLeaveTheLastOnesTextUnderLoading()
+        {
+            var server = Serve();
+            server.State = Quiet(405, s => { });
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+            Assert.IsNotEmpty(PhaseFiveSceneTests.Board().RoundText, "the game that was up has its round line");
+
+            // The next game's state hasn't arrived yet when its board is shown (the server is slow to answer).
+            MainSceneTests.ResponseDelayMilliseconds = 1500;
+            try
+            {
+                Object.FindAnyObjectByType<ScreenRouter>().Show<BoardScreen>(BoardSession.ForPlayer(AppServices.Api, 406), addToHistory: false);
+                yield return PhaseTwoSceneTests.Frames(3);
+
+                var board = PhaseFiveSceneTests.Board();
+                Assert.IsTrue(Texts().Contains("Loading the game..."));
+                Assert.IsEmpty(board.RoundText, "so nothing of the last game is drawn under the loading message");
+                Assert.IsEmpty(board.BannerText);
+                Assert.IsFalse(board.Draft.IsShown);
+                Assert.IsNull(PhaseFiveSceneTests.Child("Card Laziness"), "or its cards");
+
+                // Let the slow answer arrive while this test's board is still there.
+                yield return new WaitForSeconds(1.8f);
+            }
+            finally
+            {
+                MainSceneTests.ResponseDelayMilliseconds = 0;
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator ALongScreenName_IsSetSmallerBeforeTheScoreboardGrows_AndIsNotBrokenInTheMiddleOfAWord()
+        {
+            foreach (var username in new[] { "TheAngryRedBird", "AVeryLongScreenNameIndeedXYZ" })
+            {
+                var server = Serve();
+                server.State = Quiet(405, s =>
+                {
+                    var opponent = s["players"].First(p => (string)p["username"] != "bshaftoe");
+                    opponent["username"] = username;
+                    opponent["is_bot"] = true;
+                });
+                yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+                yield return PhaseTwoSceneTests.Frames(4);
+
+                var info = (RectTransform)PhaseFiveSceneTests.Child("Info " + username);
+                Assert.IsNotNull(info);
+                var name = info.GetComponentsInChildren<Text>().First(t => t.gameObject.name == "Name");
+                var generator = name.cachedTextGenerator;
+                Assert.Greater(generator.lineCount, 0);
+                Assert.IsTrue(generator.lineCount == 1 || generator.lines[1].startCharIdx >= username.Length,
+                    username + " stays whole on its first line, not cut mid-word over " + generator.lineCount + " lines");
+                var grown = info.anchorMax.x - info.anchorMin.x > 0.165f + 0.0001f;
+                if (username == "TheAngryRedBird")
+                {
+                    Assert.Less(name.fontSize, 22, "shrunk first");
+                    Assert.GreaterOrEqual(name.fontSize, 15);
+                    Assert.IsFalse(grown, "and the box is left as it was, since the smaller name fits");
+                }
+                else
+                {
+                    Assert.AreEqual(15, name.fontSize, "as small as it goes");
+                    Assert.IsTrue(grown, "so now the box grows");
+                    Assert.LessOrEqual(info.anchorMax.x, 1f);
+                }
+
+                ScreenshotHelper.Capture("long-screen-name-" + username.Length);
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator CreativityCopyingShock_AsksForShocksTargets()
+        {
+            var server = Serve();
+            server.State = Quiet(406, s =>
+            {
+                var hand = s["you"]["hand"][0];
+                hand["name"] = "Creativity";
+                hand["effect_key"] = "creativity";
+                hand["choice_fields"] = Newtonsoft.Json.Linq.JArray.Parse(
+                    "[{\"key\":\"copy_card_id\",\"type\":\"mood\",\"scope\":\"any\",\"required\":false,\"label\":\"A mood to copy\"}]");
+                var ambition = (int)s["in_play"][0]["card_id"];
+                var frustration = (int)s["in_play"][1]["card_id"];
+                var shock = "{\"extra_fields\":[{\"key\":\"target_mood_ids\",\"type\":\"mood\",\"scope\":\"any\",\"multi\":true,\"required\":false,"
+                    + "\"label\":\"Moods to put into the discard pile (value 3 or less, up to 2, one per player)\",\"filter\":{\"max_value\":3},"
+                    + "\"count\":{\"max\":2},\"constraint\":{\"type\":\"distinct_owners\"},\"includes_self\":true}],\"cost_payable\":true}";
+                hand["copy_simulation"] = Newtonsoft.Json.Linq.JObject.Parse("{\"" + ambition + "\":" + shock + ",\"" + frustration + "\":" + shock + "}");
+            });
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.Child("Card Creativity").GetComponent<UnityEngine.UI.Button>());
+            Assert.IsTrue(PhaseFiveSceneTests.Board().Choices.IsOpen);
+
+            // Copy a mood: its own questions appear.
+            var option = Object.FindObjectsByType<UnityEngine.UI.Button>(FindObjectsInactive.Exclude).First(b => b.name.StartsWith("Option Ambition"));
+            yield return PhaseFiveSceneTests.Tap(option);
+            yield return PhaseTwoSceneTests.Frames(3);
+
+            var texts = Texts();
+            Assert.IsTrue(texts.Any(t => t.StartsWith("Moods to put into the discard pile")), "the copied Shock's target question is asked: " + string.Join(" | ", texts));
+            Assert.IsTrue(Object.FindObjectsByType<UnityEngine.UI.Button>(FindObjectsInactive.Exclude).Any(b => b.name.Contains("[self]")), "and the copy itself can be named");
+        }
+
+        [UnityTest]
+        public IEnumerator ACreativityCopyInPlay_IsMarkedAsACopy_OnTheCardAndInItsDetail()
+        {
+            var server = Serve();
+            server.State = Quiet(406, s => s["in_play"][0]["is_creativity_copy"] = true);
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+
+            var name = (string)server.State["in_play"][0]["name"];
+            var card = PhaseFiveSceneTests.Child("Card " + name);
+            Assert.IsNotNull(card.Find("Copy badge"), "a pill on the card");
+            Assert.AreEqual("COPY", card.Find("Copy badge").GetComponentInChildren<UnityEngine.UI.Text>().text);
+            var other = (string)server.State["in_play"][1]["name"];
+            Assert.IsNull(PhaseFiveSceneTests.Child("Card " + other).Find("Copy badge"), "and on no other");
+
+            card.GetComponent<UnityEngine.UI.Button>().onClick.Invoke();
+            yield return PhaseTwoSceneTests.Frames(2);
+            StringAssert.Contains("A copy made by Creativity, playing as " + name, PhaseFiveSceneTests.Board().DetailText);
+            ScreenshotHelper.Capture("creativity-copy");
+        }
+
+        private static Newtonsoft.Json.Linq.JObject FinishedGame(bool youMadeIt) => Quiet(405, s =>
+        {
+            s["game"]["status"] = "completed";
+            s["game"]["winner_usernames"] = Newtonsoft.Json.Linq.JArray.Parse("[\"bshaftoe\"]");
+            s["game"]["created_by_user_id"] = youMadeIt ? 2 : 18;
+            s["round"]["pending_decision"] = null;
+        });
+
+        [UnityTest]
+        public IEnumerator AFinishedGame_OffersTheLobbyAndARematch_InTheCenter()
+        {
+            var server = Serve();
+            server.State = FinishedGame(youMadeIt: true);
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+
+            Assert.IsNotNull(PhaseFiveSceneTests.Child("Lobby action"), "a way back");
+            Assert.IsNotNull(PhaseFiveSceneTests.Child("Rematch action"), "you made it, so you can rematch it");
+            Assert.IsNull(PhaseFiveSceneTests.Child("Primary action"), "and there is no Pass or Next game");
+            ScreenshotHelper.Capture("game-over-buttons");
+
+            PhaseFiveSceneTests.ButtonNamed("Rematch action").onClick.Invoke();
+            yield return PhaseTwoSceneTests.Frames(3);
+            Assert.IsInstanceOf<NewGameScreen>(Object.FindAnyObjectByType<ScreenRouter>().Current, "the new game form, set up like this one");
+        }
+
+        [UnityTest]
+        public IEnumerator AFinishedGameYouDidNotMake_HasNoRematch_ButStillTheLobby()
+        {
+            var server = Serve();
+            server.State = FinishedGame(youMadeIt: false);
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+
+            Assert.IsNotNull(PhaseFiveSceneTests.Child("Lobby action"));
+            Assert.IsNull(PhaseFiveSceneTests.Child("Rematch action"));
+
+            PhaseFiveSceneTests.ButtonNamed("Lobby action").onClick.Invoke();
+            yield return PhaseTwoSceneTests.Frames(3);
+            Assert.IsInstanceOf<HomeScreen>(Object.FindAnyObjectByType<ScreenRouter>().Current, "back to where the game was opened from");
+        }
+
+        [UnityTest]
+        public IEnumerator AGameStillOn_HasNeither()
+        {
+            var server = Serve();
+            server.State = Quiet(405, s => { });
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+
+            Assert.IsNull(PhaseFiveSceneTests.Child("Lobby action"));
+            Assert.IsNull(PhaseFiveSceneTests.Child("Rematch action"));
+        }
+
+        private static int StateReads() { lock (MainSceneTests.Issued) { return MainSceneTests.Issued.Count(u => u.Contains("/games/state")); } }
+
+        [UnityTest]
+        public IEnumerator TheBoardIsNotReadAgain_WhileOneOfYourMovesIsOnItsWay()
+        {
+            var server = Serve();
+            server.State = Quiet(406, s => { });
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+
+            // The server is slow to answer your move: longer than the board's reading interval.
+            MainSceneTests.ResponseDelayMilliseconds = 5500;
+            try
+            {
+                var before = StateReads();
+                PhaseFiveSceneTests.ButtonNamed("Primary action").onClick.Invoke();
+                yield return new WaitForSeconds(4.6f);
+
+                Assert.AreEqual(before, StateReads(), "no second read of the board while the move is still being made");
+
+                yield return new WaitForSeconds(2.5f);
+                Assert.Greater(StateReads(), before, "the move reads the board itself once it is done");
+            }
+            finally
+            {
+                MainSceneTests.ResponseDelayMilliseconds = 0;
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator OneServerErrorReadingTheBoard_IsNotShown_ButTwoInARowAre()
+        {
+            var server = Serve();
+            server.State = Quiet(406, s => { });
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+
+            server.FailStateRequests = 1;
+            yield return new WaitForSeconds(3.8f);
+            Assert.IsEmpty(PhaseFiveSceneTests.Board().MessageText, "one hiccup is not worth a red message");
+
+            server.FailStateRequests = 2;
+            yield return new WaitForSeconds(7.5f);
+            StringAssert.Contains("Something went wrong", PhaseFiveSceneTests.Board().MessageText);
+
+            yield return new WaitForSeconds(3.5f);
+            Assert.IsEmpty(PhaseFiveSceneTests.Board().MessageText, "and it goes when the board reads fine again");
+        }
+
+        [UnityTest]
+        public IEnumerator TheAndroidBackButton_GoesBackOneScreenAtATime()
+        {
+            var server = Serve();
+            server.State = Quiet(406, s => { });
+            yield return Home(server);
+            var router = Object.FindAnyObjectByType<ScreenRouter>();
+
+            // Menu > lobby > a game, then back out again.
+            router.Show<PlayScreen>();
+            yield return MainSceneTests.WaitFor<PlayScreen>();
+            router.Show<BoardScreen>(BoardSession.ForPlayer(AppServices.Api, 406));
+            yield return MainSceneTests.WaitFor<BoardScreen>();
+
+            AndroidBack.SimulatedPresses = 1;
+            yield return PhaseTwoSceneTests.Frames(3);
+            Assert.IsInstanceOf<PlayScreen>(router.Current, "from the game to the lobby");
+
+            AndroidBack.SimulatedPresses = 1;
+            yield return PhaseTwoSceneTests.Frames(3);
+            Assert.IsInstanceOf<HomeScreen>(router.Current, "from the lobby to the menu");
+
+            // At the top of the app there is nowhere further back (a phone puts the app away; nothing else happens).
+            AndroidBack.SimulatedPresses = 1;
+            yield return PhaseTwoSceneTests.Frames(3);
+            Assert.IsInstanceOf<HomeScreen>(router.Current);
+            Assert.AreEqual(0, AndroidBack.SimulatedPresses, "the press was used up");
+        }
+
+        [UnityTest]
+        public IEnumerator TheAndroidBackButton_ClosesAnOpenMenuBeforeLeavingTheGame()
+        {
+            var server = Serve();
+            server.State = Quiet(406, s => { });
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+            yield return PhaseFiveSceneTests.OpenMenu();
+            Assert.IsNotNull(PhaseFiveSceneTests.Child("Menu overlay"));
+
+            AndroidBack.SimulatedPresses = 1;
+            yield return PhaseTwoSceneTests.Frames(3);
+
+            Assert.IsInstanceOf<BoardScreen>(Object.FindAnyObjectByType<ScreenRouter>().Current, "still on the game");
+            Assert.IsNull(PhaseFiveSceneTests.Child("Menu overlay"), "with the menu put away");
+        }
+
+        [UnityTest]
+        public IEnumerator WithAQuestionWaitingOnYou_TheMenuAndResignAreStillInReach()
+        {
+            var server = Serve();
+            server.State = PhaseFiveSceneTests.Load(407);
+            yield return PhaseFiveSceneTests.OpenBoard(server, 407);
+            Assert.IsTrue(PhaseFiveSceneTests.Board().Choices.IsOpen, "the question is up and can't be called off");
+            Assert.IsFalse(PhaseFiveSceneTests.Board().Choices.Cancellable);
+
+            var menuCanvas = PhaseFiveSceneTests.Child("Menu").GetComponent<Canvas>();
+            Assert.IsTrue(menuCanvas.overrideSorting, "the menu button is drawn above the question");
+
+            yield return PhaseFiveSceneTests.OpenMenu();
+            var resign = PhaseFiveSceneTests.ButtonNamed("Resign");
+            Assert.IsNotNull(resign);
+            Assert.IsTrue(resign.interactable, "Resign stays enabled");
+
+            yield return PhaseFiveSceneTests.Tap(resign);
+            Assert.IsTrue(PhaseFiveSceneTests.Board().Confirm.IsOpen, "and asks first");
+            StringAssert.Contains("Resign this game", PhaseFiveSceneTests.Board().Confirm.MessageText);
+        }
+
+        [UnityTest]
+        public IEnumerator TheWindow_KeepsRunningInTheBackground_UnlessTheSettingIsOff()
+        {
+            var before = Application.runInBackground;
+            try
+            {
+                yield return Home(Serve());
+                Assert.IsTrue(Application.runInBackground, "on by default, so the music goes on when the window isn't in front");
+
+                Object.FindAnyObjectByType<ScreenRouter>().Show<SettingsScreen>();
+                yield return MainSceneTests.WaitFor<SettingsScreen>();
+                var toggle = PhaseTwoSceneTests.FindToggle("Play sound in the background");
+                Assert.IsNotNull(toggle, "offered on a computer");
+                Assert.IsTrue(toggle.isOn);
+
+                toggle.isOn = false;
+                yield return PhaseTwoSceneTests.Frames(2);
+                Assert.IsFalse(AppServices.Device.BackgroundSoundOn);
+                Assert.IsFalse(Application.runInBackground, "so the window pauses (and the music with it) when left");
+
+                toggle.isOn = true;
+                yield return PhaseTwoSceneTests.Frames(2);
+                Assert.IsTrue(Application.runInBackground);
+            }
+            finally
+            {
+                Application.runInBackground = before;
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator BoardLayout_Screenshots()
+        {
+            foreach (var game in new[] { 405, 406, 407 })
+            {
+                var server = Serve();
+                server.State = Quiet(game, s =>
+                {
+                    if (game == 406)
+                    {
+                        s["round"]["hurt_feelings_game_player_id"] = s["players"][1]["game_player_id"];
+                    }
+                });
+                yield return PhaseFiveSceneTests.OpenBoard(server, game);
+                yield return PhaseTwoSceneTests.Frames(6);
+                ScreenshotHelper.Capture("layout-" + game);
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator BoardLayout_InDarkMode_Screenshots()
+        {
+            MainSceneTests.DarkMode = true;
+            try
+            {
+                foreach (var game in new[] { 405, 406 })
+                {
+                    var server = Serve();
+                    server.State = Quiet(game, s => { });
+                    yield return PhaseFiveSceneTests.OpenBoard(server, game);
+                    yield return PhaseTwoSceneTests.Frames(6);
+                    Assert.IsTrue(AppServices.Theme.IsDark);
+                    ScreenshotHelper.Capture("dark-layout-" + game);
+                    yield return PhaseFiveSceneTests.OpenMenu();
+                    ScreenshotHelper.Capture("dark-menu-" + game);
+                }
+
+                yield return Home(Serve());
+                ScreenshotHelper.Capture("dark-home");
+                Object.FindAnyObjectByType<ScreenRouter>().Show<SettingsScreen>();
+                yield return MainSceneTests.WaitFor<SettingsScreen>();
+                ScreenshotHelper.Capture("dark-settings");
+            }
+            finally
+            {
+                MainSceneTests.DarkMode = false;
+                AppServices.Theme.Apply(dark: false);
+            }
+        }
     }
 }

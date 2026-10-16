@@ -762,6 +762,74 @@ namespace MoodSwings.Tests
             Assert.AreEqual("{}", form.BuildChoices().ToString(Formatting.None));
         }
 
+        // Creativity copying a mood in play (card 10 on this table, named for the test): that mood's own questions, a
+        // simulation that carries them, and a form that asks the way the real card would.
+        private static ChoiceForm CreativityCopying(string effectKey, string name, params ChoiceField[] extras)
+        {
+            var state = Table();
+            var copied = state.InPlay.First(c => c.CardId == 10);
+            copied.Name = name;
+            copied.EffectKey = effectKey;
+            var creativity = Creativity();
+            creativity.CopySimulation[10].ExtraFields = extras.ToList();
+            return ChoiceForm.ForCard(state, creativity);
+        }
+
+        [Test]
+        public void CreativityCopyingAMoodWithAnOptionalTarget_AsksAboutAnEmptyTargetLikeThatMoodWould()
+        {
+            var form = CreativityCopying("hate", "Hate", Field(@"{""key"":""target_mood_id"",""type"":""mood"",""scope"":""any"",""required"":false,""label"":""x""}"));
+            form.Select("copy_card_id", "10");
+
+            StringAssert.Contains("haven't selected a target for Creativity (copying Hate)", form.Confirmations().Single());
+
+            form.Select("target_mood_id", "20");
+            Assert.AreEqual(0, form.Confirmations().Count);
+        }
+
+        [Test]
+        public void CreativityCopyingWrath_AsksAboutItsUncheckedBox()
+        {
+            var form = CreativityCopying("wrath", "Wrath", Field(@"{""key"":""discard_all_other_moods"",""type"":""bool"",""label"":""Put every other mood into the discard pile""}"));
+            form.Select("copy_card_id", "10");
+
+            StringAssert.Contains("Creativity (copying Wrath)", form.Confirmations().Single());
+
+            form.SetChecked("discard_all_other_moods", true);
+            Assert.AreEqual(0, form.Confirmations().Count);
+        }
+
+        [Test]
+        public void CreativityCopyingNothing_AsksNothing()
+        {
+            var form = CreativityCopying("hate", "Hate", Field(@"{""key"":""target_mood_id"",""type"":""mood"",""scope"":""any"",""required"":false,""label"":""x""}"));
+
+            Assert.AreEqual(0, form.Confirmations().Count, "uncopied it is only a blue 0");
+        }
+
+        [Test]
+        public void CreativityCopyingAMoodWithSeveralQuestions_DoesNotAskAboutAnEmptyOne()
+        {
+            var form = CreativityCopying("worry", "Worry",
+                Field(@"{""key"":""a"",""type"":""mood"",""scope"":""own"",""label"":""x""}"),
+                Field(@"{""key"":""b"",""type"":""mood"",""scope"":""any"",""label"":""x""}"));
+            form.Select("copy_card_id", "10");
+
+            Assert.AreEqual(0, form.Confirmations().Count);
+        }
+
+        [Test]
+        public void CreativityCopyingAMoodWithADefaultSelection_StartsOnIt()
+        {
+            // The server sends the default the copied mood would have had played directly (when the game uses default selections).
+            var form = CreativityCopying("wonder", "Wonder",
+                Field(@"{""key"":""direction"",""type"":""mode"",""required"":true,""options"":[""left"",""right""],""default"":""right"",""label"":""x""}"));
+
+            form.Select("copy_card_id", "10");
+
+            CollectionAssert.AreEqual(new[] { "right" }, form.Selected("direction"));
+        }
+
         [Test]
         public void Creativity_CopyingAMoodWhoseCostCantBePaid_IsRefused()
         {
