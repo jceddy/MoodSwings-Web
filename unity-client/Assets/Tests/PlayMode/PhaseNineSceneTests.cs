@@ -1551,6 +1551,26 @@ namespace MoodSwings.Tests
         }
 
         [UnityTest]
+        public IEnumerator TheScoreboard_ShowsHowManyPlaysTheCurrentPlayerHasLeft()
+        {
+            var server = Serve();
+            server.State = Quiet(406, s => s["round"]["plays_remaining"] = 1);
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+
+            var label = PhaseFiveSceneTests.Child("Plays left");
+            Assert.IsNotNull(label);
+            Assert.AreEqual("1 play left", label.GetComponent<Text>().text);
+            Assert.AreEqual(1, Object.FindObjectsByType<Text>(FindObjectsInactive.Exclude).Count(t => t.name == "Plays left"), "only whose turn it is");
+            ScreenshotHelper.Capture("plays-left-one");
+
+            server.State = Quiet(406, s => s["round"]["plays_remaining"] = 3);
+            yield return PhaseFiveSceneTests.Poll();
+
+            Assert.AreEqual("3 plays left", PhaseFiveSceneTests.Child("Plays left").GetComponent<Text>().text);
+            ScreenshotHelper.Capture("plays-left-three");
+        }
+
+        [UnityTest]
         public IEnumerator ABlissInPlay_NamesTheColorDiscardedToIt_WhenClicked()
         {
             var server = Serve();

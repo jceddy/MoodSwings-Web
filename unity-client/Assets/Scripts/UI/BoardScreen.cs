@@ -1803,6 +1803,17 @@ namespace MoodSwings.UI
             UiFactory.Flexible(nameLabel.gameObject, width: 1f);
             FitInfoToName(area, nameLabel, player.Username, growTo);
 
+            // How many plays the player whose turn it is has: one, unless something has granted more.
+            var plays = BoardDisplay.PlaysLeftNote(state, player);
+            if (plays != null)
+            {
+                var playsLabel = UiFactory.Label(details, plays, 20,
+                    state.Round.PlaysRemaining > 1 ? theme.accent : theme.textMuted, TextAnchor.MiddleLeft, FontStyle.Bold);
+                playsLabel.name = "Plays left";
+                playsLabel.raycastTarget = false;
+                UiFactory.Size(playsLabel.gameObject, height: 24f);
+            }
+
             // Each player has their own deck in a duel, so its size is theirs to show.
             if (BoardDisplay.HasSeparateDecks(state))
             {

@@ -352,11 +352,46 @@ namespace MoodSwings.Tests
             Assert.AreEqual(string.Empty, BoardDisplay.TurnBanner(state, includeTurn: false), "your turn");
 
             state.Round.PlaysRemaining = 2;
-            Assert.AreEqual("2 plays left", BoardDisplay.TurnBanner(state, includeTurn: false));
+            Assert.AreEqual(string.Empty, BoardDisplay.TurnBanner(state, includeTurn: false), "the plays are on the scoreboard");
 
             state.Round.PlaysRemaining = 1;
             state.Round.CurrentTurnGamePlayerId = 910;
             Assert.AreEqual(string.Empty, BoardDisplay.TurnBanner(state, includeTurn: false), "someone else's turn");
+        }
+
+        [Test]
+        public void TheScoreboard_SaysHowManyPlaysTheCurrentPlayerHas()
+        {
+            var state = BoardFixtures.Load(406); // your turn
+            var you = state.Players.First(p => p.GamePlayerId == state.You.GamePlayerId);
+            var other = state.Players.First(p => p.GamePlayerId != state.You.GamePlayerId);
+            state.Round.TurnPendingAcknowledgment = false;
+
+            state.Round.PlaysRemaining = 1;
+            Assert.AreEqual("1 play left", BoardDisplay.PlaysLeftNote(state, you));
+            Assert.IsNull(BoardDisplay.PlaysLeftNote(state, other), "it is not their turn");
+
+            state.Round.PlaysRemaining = 3;
+            Assert.AreEqual("3 plays left", BoardDisplay.PlaysLeftNote(state, you));
+
+            state.Round.CurrentTurnGamePlayerId = other.GamePlayerId;
+            Assert.AreEqual("3 plays left", BoardDisplay.PlaysLeftNote(state, other), "whoever's turn it is");
+            Assert.IsNull(BoardDisplay.PlaysLeftNote(state, you));
+        }
+
+        [Test]
+        public void TheScoreboard_SaysNothingAboutPlays_BeforeTheTurnIsAcknowledged_OrWhenTheGameIsOver()
+        {
+            var state = BoardFixtures.Load(406);
+            var you = state.Players.First(p => p.GamePlayerId == state.You.GamePlayerId);
+            state.Round.PlaysRemaining = 2;
+
+            state.Round.TurnPendingAcknowledgment = true;
+            Assert.IsNull(BoardDisplay.PlaysLeftNote(state, you));
+
+            state.Round.TurnPendingAcknowledgment = false;
+            state.Game.Status = "completed";
+            Assert.IsNull(BoardDisplay.PlaysLeftNote(state, you));
         }
 
         [Test]

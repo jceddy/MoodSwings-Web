@@ -184,8 +184,8 @@ namespace MoodSwings.Core
             var yourTurn = viewer != null && current.GamePlayerId == viewer.GamePlayerId;
             if (!includeTurn)
             {
-                // Whose turn it is shows on the scoreboards; what they do not say is that there are plays to spare.
-                return yourTurn && state.Round.PlaysRemaining > 1 ? $"{state.Round.PlaysRemaining} plays left" : string.Empty;
+                // Whose turn it is, and how many plays they have, show on the scoreboards.
+                return string.Empty;
             }
 
             if (yourTurn)
@@ -194,6 +194,22 @@ namespace MoodSwings.Core
             }
 
             return current.Username + "'s turn";
+        }
+
+        /// <summary>
+        /// "2 plays left": under the name of whoever's turn it is, for the plays (the turn's own and any extra ones granted)
+        /// they still have. Null for everyone else, once the game is over, and during the pause before a turn is acknowledged
+        /// (nothing can be played yet).
+        /// </summary>
+        public static string PlaysLeftNote(GameState state, BoardPlayer player)
+        {
+            if (state.Game.Status == "completed" || state.Round.TurnPendingAcknowledgment
+                || state.Round.CurrentTurnGamePlayerId != player.GamePlayerId || state.Round.PlaysRemaining < 1)
+            {
+                return null;
+            }
+
+            return state.Round.PlaysRemaining == 1 ? "1 play left" : $"{state.Round.PlaysRemaining} plays left";
         }
 
         /// <summary>Whether to draw attention to the banner: it's on the viewer.</summary>
