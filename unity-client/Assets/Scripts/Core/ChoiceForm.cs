@@ -388,6 +388,18 @@ namespace MoodSwings.Core
             }
         }
 
+        // The mood Creativity is copying right now, if it is Creativity and a mood has been picked.
+        private BoardCard CopiedMood()
+        {
+            if (_creativityPicker == null)
+            {
+                return null;
+            }
+
+            var picked = Selected("copy_card_id").FirstOrDefault();
+            return picked != null && int.TryParse(picked, out var id) ? _state.InPlay.FirstOrDefault(c => c.CardId == id) : null;
+        }
+
         // Once Creativity has a mood to copy, the rest of its questions are that mood's own.
         private void ApplyCreativityCopy()
         {
@@ -704,34 +716,40 @@ namespace MoodSwings.Core
 
             var choices = BuildChoices();
 
+            // Creativity is asked about as the mood it copies: that mood's own questions, under that mood's own effect.
+            var copied = CopiedMood();
+            var effectKey = copied != null ? copied.EffectKey : _card.EffectKey;
+            var name = copied != null ? $"{_card.Name} (copying {copied.Name})" : _card.Name;
+            var fields = _creativityPicker != null ? _fields.Where(f => f.Key != "copy_card_id").ToList() : _fields;
+
             // A card whose only question is an optional "pick one" and nothing was picked.
-            if (_fields.Count == 1)
+            if (fields.Count == 1)
             {
-                var only = _fields[0];
+                var only = fields[0];
                 var pickType = only.Type == "mood" || only.Type == "player" || only.Type == "hand_card" || only.Type == "discard_card";
                 if (!only.Required && pickType && !choices.ContainsKey(only.Key))
                 {
-                    questions.Add($"You haven't selected a target for {_card.Name} -- its ability won't do anything. Play it anyway?");
+                    questions.Add($"You haven't selected a target for {name} -- its ability won't do anything. Play it anyway?");
                 }
             }
 
             // Wrath and Rage with their one box left unchecked.
-            var boxKey = _card.EffectKey == "wrath" ? "discard_all_other_moods"
-                : _card.EffectKey == "rage" ? "discard_qualifying_moods"
+            var boxKey = effectKey == "wrath" ? "discard_all_other_moods"
+                : effectKey == "rage" ? "discard_qualifying_moods"
                 : null;
             if (boxKey != null && !choices.ContainsKey(boxKey))
             {
-                var box = _fields.FirstOrDefault(f => f.Key == boxKey);
+                var box = fields.FirstOrDefault(f => f.Key == boxKey);
                 if (box != null)
                 {
-                    questions.Add($"You haven't checked \"{box.Label}\" -- {_card.Name}'s ability won't do anything. Play it anyway?");
+                    questions.Add($"You haven't checked \"{box.Label}\" -- {name}'s ability won't do anything. Play it anyway?");
                 }
             }
 
             // A target chosen for a card that does nothing without its mode.
-            if (_fields.Any(f => f.RequiresMode != null && choices.ContainsKey(f.Key)) && !choices.ContainsKey("mode"))
+            if (fields.Any(f => f.RequiresMode != null && choices.ContainsKey(f.Key)) && !choices.ContainsKey("mode"))
             {
-                questions.Add($"You've chosen a target for {_card.Name}, but haven't chosen a mode -- as submitted, its ability won't do anything. Play it anyway?");
+                questions.Add($"You've chosen a target for {name}, but haven't chosen a mode -- as submitted, its ability won't do anything. Play it anyway?");
             }
 
             return questions;

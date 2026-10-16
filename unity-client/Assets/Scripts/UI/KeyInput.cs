@@ -6,7 +6,7 @@ namespace MoodSwings.UI
     /// The few keys the screens react to, read through the Input System package
     /// (the old Input Manager is deprecated). Each is true only on the frame the key
     /// went down; all are false when there is no keyboard, as on a phone. The Android
-    /// Back button arrives as Escape.
+    /// Back button has no key there: see AndroidBack.
     /// </summary>
     public static class KeyInput
     {

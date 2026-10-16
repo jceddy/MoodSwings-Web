@@ -109,6 +109,27 @@ namespace MoodSwings.Tests
             Assert.IsTrue(GameSetup.ForRematch(state, 2).BestOfThree);
         }
 
+        // --- resigning with a question open ----------------------------------------------------------
+
+        [Test]
+        public void ResigningIsAllowed_WhileAQuestionIsWaitingOnYou()
+        {
+            var state = BoardFixtures.Load(407); // a Confusion answer is needed from you
+
+            Assert.IsNotNull(state.Round.PendingDecision);
+            Assert.IsTrue(state.Round.PendingDecision.IsYou);
+            Assert.IsTrue(BoardDisplay.CanResign(state), "nobody else could answer it, so the server answers it for you");
+        }
+
+        [Test]
+        public void ResigningIsNotAllowed_WhileAQuestionIsWaitingOnSomeoneElse()
+        {
+            var state = BoardFixtures.Load(407);
+            state.Round.PendingDecision.IsYou = false;
+
+            Assert.IsFalse(BoardDisplay.CanResign(state));
+        }
+
         [Test]
         public void ADeckTheAppCannotSetUp_HasNoRematch()
         {

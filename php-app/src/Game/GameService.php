@@ -20872,7 +20872,7 @@ final class GameService
             'is_playable' => $reactingViewerId === null || $this->plays->isPlayable($state, $reactingViewerId, $cardId),
             'is_creativity_copy' => $isCreativityCopy,
             'copy_simulation' => ($reactingViewerId !== null && $catalog['effectKey'] === 'creativity')
-                ? $this->creativityCopySimulation($state, $reactingViewerId, $cardId)
+                ? $this->creativityCopySimulation($state, $reactingViewerId, $cardId, $defaultSelectionsMode)
                 : null,
             // Chaos Draft (issue #405): the effect currently applying to
             // this card, if any -- see BoardState::chaosEffectRow(). Null
@@ -21299,11 +21299,23 @@ final class GameService
      *
      * @return array<int, array{extra_fields: array<int, array<string, mixed>>, cost_payable: bool}>
      */
-    private function creativityCopySimulation(BoardState $state, int $viewerId, int $creativityCardId): array
+    private function creativityCopySimulation(BoardState $state, int $viewerId, int $creativityCardId, bool $defaultSelectionsMode = false): array
     {
         $simulation = [];
         foreach ($state->moodsInPlay() as $candidateCardId => $mood) {
             $candidateRow = $state->catalogRow($state->effectiveCardId($candidateCardId));
+            $extraFields = [
+                ...CardChoiceSchema::forEffectKey($candidateRow['effectKey']),
+                ...$this->reactionFields($state, $viewerId, $candidateRow['color']),
+            ];
+            // "Default selections" mode (issue #274) pre-fills the copied card's own fields exactly as playing that card
+            // directly would (see serializeCard()'s own withChoiceDefault() pass over its choice_fields).
+            if ($defaultSelectionsMode) {
+                $extraFields = array_map(
+                    fn (array $field) => $this->withChoiceDefault($state, $field, $candidateRow['effectKey'], $viewerId),
+                    $extraFields
+                );
+            }
             $simulation[$candidateCardId] = [
                 // The candidate's own after-playing/cost fields, keyed by
                 // its EFFECTIVE effect_key -- not the candidate's own
@@ -21315,10 +21327,7 @@ final class GameService
                 // effectiveCardId() here means copying a Creativity-that's-
                 // copying-Intimidation offers Intimidation's own
                 // target_player_id field, not another copy_card_id picker.
-                'extra_fields' => [
-                    ...CardChoiceSchema::forEffectKey($candidateRow['effectKey']),
-                    ...$this->reactionFields($state, $viewerId, $candidateRow['color']),
-                ],
+                'extra_fields' => $extraFields,
                 'cost_payable' => $this->plays->canPayCopiedToPlayCost($state, $viewerId, $creativityCardId, $candidateCardId),
             ];
         }

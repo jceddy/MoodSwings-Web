@@ -44,6 +44,7 @@ namespace MoodSwings.UI
 
             // Before the screens, so they know there is a table behind them (and sit above it).
             Backdrop.Create(transform);
+            AndroidBack.Register();
             BuildServerBanner();
             _router.Show<SplashScreen>();
         }
@@ -154,13 +155,14 @@ namespace MoodSwings.UI
                 AppExit.ToggleFullscreen();
             }
 
-            // Escape on desktop; the system Back button on Android.
-            if (KeyInput.EscapePressed)
+            // Escape on desktop; the system Back button on Android (which has no keyboard to report it as Escape).
+            if (KeyInput.EscapePressed || AndroidBack.Consume())
             {
                 var current = _router.Current;
-                if (current == null || !current.HandleBack())
+                if ((current == null || !current.HandleBack()) && !_router.Back())
                 {
-                    _router.Back();
+                    // Nowhere further back: on a phone that puts the app away, as Back does at the top of any app.
+                    AndroidBack.Leave();
                 }
             }
         }

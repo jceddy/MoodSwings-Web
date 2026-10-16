@@ -91,6 +91,7 @@ namespace MoodSwings.UI
         private bool _built;
         private RectTransform _table;
         private bool _centerAtTable = true;
+        private Canvas _menuCanvas;
         private bool _catalogRequested;
         private Text _banner;
         private Text _roundLine;
@@ -374,6 +375,8 @@ namespace MoodSwings.UI
 
         private void Update()
         {
+            UpdateMenuLayering();
+
             // A result worth a few seconds of attention (a round won) fades on its own.
             if (_messageExpires > 0f && Time.unscaledTime > _messageExpires)
             {
@@ -530,6 +533,11 @@ namespace MoodSwings.UI
             // The menu: the way back to the lobby, Resign, the recent events and the chat.
             var menu = UiFactory.Button(bar, string.Empty, theme, OpenMenu, primary: false);
             menu.gameObject.name = "Menu";
+            // A question that can't be called off covers the whole screen; the menu (Resign is in it) has to stay in reach,
+            // so while one is up the button is drawn above it (see UpdateMenuLayering).
+            _menuCanvas = menu.gameObject.AddComponent<Canvas>();
+            menu.gameObject.AddComponent<GraphicRaycaster>();
+            _menuCanvas.sortingOrder = 50;
             var menuRect = (RectTransform)menu.transform;
             menuRect.anchorMin = menuRect.anchorMax = menuRect.pivot = new Vector2(0f, 1f);
             menuRect.sizeDelta = new Vector2(76f, 76f);
@@ -817,6 +825,8 @@ namespace MoodSwings.UI
             var state = _session?.State;
             // Unread chat is what you probably came for.
             var unread = state != null && state.ChatMessages.Count > _chatSeen;
+            // Above whatever else is up (a question waiting on you, say), so Resign can be reached.
+            _menuOverlay.transform.SetAsLastSibling();
             _menuOverlay.SetActive(true);
             ShowMenuTab(unread || _chatTabShown);
         }
@@ -2599,6 +2609,15 @@ namespace MoodSwings.UI
         /// closes, a question the game has for you opens (once), and a warning about a repeating
         /// board is shown once.
         /// </summary>
+        // The menu button sits above a question that is up, so there is always a way to the menu (and to Resign).
+        private void UpdateMenuLayering()
+        {
+            if (_menuCanvas != null)
+            {
+                _menuCanvas.overrideSorting = _choices != null && _choices.IsOpen;
+            }
+        }
+
         private void SyncOverlays(GameState state)
         {
             if (_discardOverlay.IsOpen)

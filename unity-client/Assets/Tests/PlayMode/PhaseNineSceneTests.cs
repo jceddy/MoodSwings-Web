@@ -2029,6 +2029,73 @@ namespace MoodSwings.Tests
         }
 
         [UnityTest]
+        public IEnumerator TheAndroidBackButton_GoesBackOneScreenAtATime()
+        {
+            var server = Serve();
+            server.State = Quiet(406, s => { });
+            yield return Home(server);
+            var router = Object.FindAnyObjectByType<ScreenRouter>();
+
+            // Menu > lobby > a game, then back out again.
+            router.Show<PlayScreen>();
+            yield return MainSceneTests.WaitFor<PlayScreen>();
+            router.Show<BoardScreen>(BoardSession.ForPlayer(AppServices.Api, 406));
+            yield return MainSceneTests.WaitFor<BoardScreen>();
+
+            AndroidBack.SimulatedPresses = 1;
+            yield return PhaseTwoSceneTests.Frames(3);
+            Assert.IsInstanceOf<PlayScreen>(router.Current, "from the game to the lobby");
+
+            AndroidBack.SimulatedPresses = 1;
+            yield return PhaseTwoSceneTests.Frames(3);
+            Assert.IsInstanceOf<HomeScreen>(router.Current, "from the lobby to the menu");
+
+            // At the top of the app there is nowhere further back (a phone puts the app away; nothing else happens).
+            AndroidBack.SimulatedPresses = 1;
+            yield return PhaseTwoSceneTests.Frames(3);
+            Assert.IsInstanceOf<HomeScreen>(router.Current);
+            Assert.AreEqual(0, AndroidBack.SimulatedPresses, "the press was used up");
+        }
+
+        [UnityTest]
+        public IEnumerator TheAndroidBackButton_ClosesAnOpenMenuBeforeLeavingTheGame()
+        {
+            var server = Serve();
+            server.State = Quiet(406, s => { });
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+            yield return PhaseFiveSceneTests.OpenMenu();
+            Assert.IsNotNull(PhaseFiveSceneTests.Child("Menu overlay"));
+
+            AndroidBack.SimulatedPresses = 1;
+            yield return PhaseTwoSceneTests.Frames(3);
+
+            Assert.IsInstanceOf<BoardScreen>(Object.FindAnyObjectByType<ScreenRouter>().Current, "still on the game");
+            Assert.IsNull(PhaseFiveSceneTests.Child("Menu overlay"), "with the menu put away");
+        }
+
+        [UnityTest]
+        public IEnumerator WithAQuestionWaitingOnYou_TheMenuAndResignAreStillInReach()
+        {
+            var server = Serve();
+            server.State = PhaseFiveSceneTests.Load(407);
+            yield return PhaseFiveSceneTests.OpenBoard(server, 407);
+            Assert.IsTrue(PhaseFiveSceneTests.Board().Choices.IsOpen, "the question is up and can't be called off");
+            Assert.IsFalse(PhaseFiveSceneTests.Board().Choices.Cancellable);
+
+            var menuCanvas = PhaseFiveSceneTests.Child("Menu").GetComponent<Canvas>();
+            Assert.IsTrue(menuCanvas.overrideSorting, "the menu button is drawn above the question");
+
+            yield return PhaseFiveSceneTests.OpenMenu();
+            var resign = PhaseFiveSceneTests.ButtonNamed("Resign");
+            Assert.IsNotNull(resign);
+            Assert.IsTrue(resign.interactable, "Resign stays enabled");
+
+            yield return PhaseFiveSceneTests.Tap(resign);
+            Assert.IsTrue(PhaseFiveSceneTests.Board().Confirm.IsOpen, "and asks first");
+            StringAssert.Contains("Resign this game", PhaseFiveSceneTests.Board().Confirm.MessageText);
+        }
+
+        [UnityTest]
         public IEnumerator BoardLayout_Screenshots()
         {
             foreach (var game in new[] { 405, 406, 407 })

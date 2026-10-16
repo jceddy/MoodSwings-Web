@@ -556,7 +556,11 @@ namespace MoodSwings.Core
                 && UnsupportedReason(state) == null;
         }
 
-        /// <summary>Resigning is possible any time in a game you're still in, except while a decision freezes the round.</summary>
+        /// <summary>
+        /// Resigning is possible any time in a game you're still in, except while a decision freezes the round for someone
+        /// else to answer. A decision waiting on you doesn't count: nobody else could ever answer it, so the server answers
+        /// it for you as part of resigning.
+        /// </summary>
         public static bool CanResign(GameState state)
         {
             var viewer = Viewer(state);
@@ -564,7 +568,7 @@ namespace MoodSwings.Core
                 && !IsPuzzle(state)
                 && !viewer.Resigned
                 && state.Game.Status == "in_progress"
-                && state.Round.PendingDecision == null;
+                && (state.Round.PendingDecision == null || state.Round.PendingDecision.IsYou);
         }
 
         /// <summary>A synchronous game's ready check is waiting on the viewer.</summary>
