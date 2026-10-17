@@ -98,6 +98,32 @@ namespace MoodSwings.Tests
         // --- Quick Draft: the pick ----------------------------------------------------------------
 
         [UnityTest]
+        public IEnumerator LeavingADraft_ForTheNextGame_ClearsTheDraftBeforeTheNewOneLoads()
+        {
+            var server = Serve(DraftBoard(Drafting(round: 2, stage: 2)));
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+            Assert.IsTrue(Board().Draft.IsShown);
+
+            MainSceneTests.ResponseDelayMilliseconds = 1500;
+            try
+            {
+                UnityEngine.Object.FindAnyObjectByType<ScreenRouter>().Show<BoardScreen>(BoardSession.ForPlayer(AppServices.Api, 406), addToHistory: false);
+                yield return PhaseTwoSceneTests.Frames(3);
+
+                Assert.IsFalse(Board().Draft.IsShown, "the old deck-building view isn't left up under the loading message");
+                Assert.IsEmpty(Board().RoundText);
+                Assert.IsEmpty(Board().BannerText);
+
+                // Let the slow answer arrive while this test's board is still there.
+                yield return new WaitForSeconds(1.8f);
+            }
+            finally
+            {
+                MainSceneTests.ResponseDelayMilliseconds = 0;
+            }
+        }
+
+        [UnityTest]
         public IEnumerator AQuickDraftPick_ShowsThePile_AndTheStage()
         {
             var server = Serve(DraftBoard(Drafting(round: 2, stage: 2)));
@@ -963,7 +989,7 @@ namespace MoodSwings.Tests
             var server = Serve(HarmonyGame());
             yield return PhaseFiveSceneTests.OpenBoard(server, 406);
 
-            Assert.IsTrue(Texts().Contains("play from it"), string.Join(" | ", Texts()));
+            Assert.IsTrue(Texts().Contains("Discard 1  -  play from it"), string.Join(" | ", Texts()));
             Assert.IsFalse(Board().DiscardOverlay.IsOpen);
             ScreenshotHelper.Capture("discard-playable");
         }
@@ -1067,7 +1093,6 @@ namespace MoodSwings.Tests
             var server = Serve(PhaseFiveSceneTests.Load(406));
             server.DeckJson = DeckListJson();
             yield return PhaseFiveSceneTests.OpenBoard(server, 406);
-            Assert.IsTrue(Texts().Contains("see the list"));
 
             yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.Child("Deck").GetComponentInChildren<Button>());
             yield return PhaseTwoSceneTests.Frames(3);
@@ -1143,7 +1168,7 @@ namespace MoodSwings.Tests
             var server = Serve(PhaseFiveSceneTests.Load(406));
             yield return PhaseFiveSceneTests.OpenBoard(server, 406);
 
-            var back = PhaseFiveSceneTests.Child("Deck").Find("Card back");
+            var back = PhaseFiveSceneTests.Child("Deck").Find("Window").Find("Card back");
 
             Assert.IsNotNull(back, "the pile is a card back, not a grey box");
             Assert.AreSame(MoodSwings.Core.CardArtLibrary.CardBack(), back.GetComponent<Image>().sprite);
@@ -1157,7 +1182,7 @@ namespace MoodSwings.Tests
             var server = Serve(PhaseFiveSceneTests.Load(406, s => s["deck_count"] = 0));
             yield return PhaseFiveSceneTests.OpenBoard(server, 406);
 
-            var back = PhaseFiveSceneTests.Child("Deck").Find("Card back");
+            var back = PhaseFiveSceneTests.Child("Deck").Find("Window").Find("Card back");
 
             Assert.AreEqual(0.35f, back.GetComponent<CanvasGroup>().alpha, 0.001f);
         }

@@ -50,6 +50,34 @@ namespace MoodSwings.Tests
         }
 
         [Test]
+        public void YourTurn_WhileSomeoneElseIsAskedToRespond_IsWaitingOnThem()
+        {
+            // You played a card that makes TheAngryRedBird answer: the turn is nominally yours, but nothing is.
+            var game = InProgress("jceddy", yourTurn: true, awaitingYou: false, "TheAngryRedBird");
+
+            Assert.AreEqual("Waiting for TheAngryRedBird to respond", GameDisplay.StatusLine(game, Me));
+            Assert.IsFalse(GameDisplay.NeedsYou(game), "so the lobby doesn't call you to a game you can't act in");
+        }
+
+        [Test]
+        public void YourTurn_WithNothingBeingWaitedFor_StillNeedsYou()
+        {
+            var game = InProgress("jceddy", yourTurn: true);
+
+            Assert.AreEqual("Your turn", GameDisplay.StatusLine(game, Me));
+            Assert.IsTrue(GameDisplay.NeedsYou(game));
+        }
+
+        [Test]
+        public void ARespondingYouAreAskedFor_BeatsEverything()
+        {
+            var game = InProgress("jceddy", yourTurn: true, awaitingYou: true, "Someone");
+
+            Assert.AreEqual("Your response is needed", GameDisplay.StatusLine(game, Me));
+            Assert.IsTrue(GameDisplay.NeedsYou(game));
+        }
+
+        [Test]
         public void StatusLine_WithNothingKnown_JustSaysInProgress()
         {
             Assert.AreEqual("In progress", GameDisplay.StatusLine(InProgress(), Me));

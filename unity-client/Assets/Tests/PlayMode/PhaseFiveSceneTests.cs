@@ -36,6 +36,9 @@ namespace MoodSwings.Tests
 
             public List<string> Calls { get; } = new List<string>();
 
+            /// <summary>The next this-many GET /games/state requests fail like a server error.</summary>
+            public int FailStateRequests;
+
             /// <summary>GET /games/deck answers with this, under DeckStatus.</summary>
             public string DeckJson = "{\"status\":\"ok\",\"cards\":[]}";
 
@@ -114,6 +117,12 @@ namespace MoodSwings.Tests
             {
                 var path = request.Url.Substring(request.Url.IndexOf("/app/", StringComparison.Ordinal) + 4);
                 Calls.Add($"{request.Method} {path} {request.Body}");
+
+                if ((path.StartsWith("/games/state") || path.StartsWith("/games/spectate/state")) && FailStateRequests > 0)
+                {
+                    FailStateRequests--;
+                    return MainSceneTests.Reply(500, "{\"status\":\"error\",\"message\":\"Something went wrong. Please try again.\"}");
+                }
 
                 if (path.StartsWith("/games/state") || path.StartsWith("/games/spectate/state"))
                 {
@@ -282,6 +291,12 @@ namespace MoodSwings.Tests
             UnityEngine.Object.FindObjectsByType<Button>(FindObjectsInactive.Exclude)
                 .FirstOrDefault(b => b.name.StartsWith("Option " + labelStart));
 
+        /// <summary>Opens the board's menu (the three bars), where the way back, Resign, the log and the chat are.</summary>
+        internal static IEnumerator OpenMenu()
+        {
+            yield return Tap(ButtonNamed("Menu"));
+        }
+
         internal static IEnumerator Tap(Button button)
         {
             Assert.IsNotNull(button, "No such button on screen");
@@ -318,8 +333,10 @@ namespace MoodSwings.Tests
 
             Assert.AreEqual("Pass", Primary());
             Assert.IsTrue(ButtonNamed("Primary action").interactable);
-            Assert.IsTrue(ButtonNamed("Resign").interactable);
             ScreenshotHelper.Capture("board-your-turn");
+            yield return OpenMenu();
+            Assert.IsTrue(ButtonNamed("Resign").interactable);
+            ScreenshotHelper.Capture("board-menu");
         }
 
         [UnityTest]
@@ -330,6 +347,7 @@ namespace MoodSwings.Tests
 
             Assert.AreEqual("Pass", Primary());
             Assert.IsFalse(ButtonNamed("Primary action").interactable);
+            yield return OpenMenu();
             Assert.IsTrue(ButtonNamed("Resign").interactable);
         }
 
@@ -352,7 +370,7 @@ namespace MoodSwings.Tests
 
             Assert.AreEqual(1, server.Posts("/games/pass").Count());
             Assert.AreEqual(406, (int)server.Posts("/games/pass").Single()["game_id"]);
-            Assert.AreEqual("BotSage's turn", Board().BannerText);
+            Assert.AreEqual("BotSage's turn", Board().TurnText);
             Assert.IsFalse(ButtonNamed("Primary action").interactable, "it isn't your turn any more");
         }
 
@@ -386,6 +404,7 @@ namespace MoodSwings.Tests
             var server = new PlayServer { State = Load(406) };
             yield return OpenBoard(server, 406);
 
+            yield return OpenMenu();
             yield return Tap(ButtonNamed("Resign"));
             Assert.IsTrue(Board().Confirm.IsOpen);
             StringAssert.Contains("cannot be undone", Board().Confirm.MessageText);
@@ -394,6 +413,7 @@ namespace MoodSwings.Tests
             Assert.IsFalse(Board().Confirm.IsOpen);
             Assert.AreEqual(0, server.Posts("/games/resign").Count());
 
+            yield return OpenMenu();
             yield return Tap(ButtonNamed("Resign"));
             yield return Tap(PhaseTwoSceneTests.FindButton("Resign"));
             Assert.AreEqual(1, server.Posts("/games/resign").Count());
@@ -496,7 +516,7 @@ namespace MoodSwings.Tests
             Assert.AreEqual(14171, (int)play["card_id"]);
             Assert.AreEqual(0, ((JObject)play["choices"]).Count);
             Assert.IsFalse(Board().Choices.IsOpen);
-            Assert.AreEqual("BotSage's turn", Board().BannerText);
+            Assert.AreEqual("BotSage's turn", Board().TurnText);
             Assert.IsNull(Child("Card Superiority"), "it's gone from your hand");
         }
 
@@ -616,7 +636,7 @@ namespace MoodSwings.Tests
             yield return Poll();
 
             Assert.IsFalse(Board().Choices.IsOpen, "the turn timed out under you");
-            Assert.AreEqual("BotSage's turn", Board().BannerText);
+            Assert.AreEqual("BotSage's turn", Board().TurnText);
         }
 
         [UnityTest]
@@ -800,6 +820,7 @@ namespace MoodSwings.Tests
             Assert.IsFalse(Board().Choices.IsOpen);
             StringAssert.StartsWith("Waiting for BotSage to respond", Board().BannerText);
             Assert.IsFalse(ButtonNamed("Primary action").interactable);
+            yield return OpenMenu();
             Assert.IsFalse(ButtonNamed("Resign").interactable, "a decision freezes the round");
         }
 
@@ -914,7 +935,7 @@ namespace MoodSwings.Tests
             Assert.IsTrue(Board().DetailOpen);
             var detail = UnityEngine.Object.FindObjectsByType<Text>(FindObjectsInactive.Exclude)
                 .Select(t => t.text).First(t => t.Contains("Suppressed by"));
-            StringAssert.Contains("<b><color=#D94040>Suppressed by Scorn</color></b>", detail);
+            StringAssert.Contains("<b><color=#EB5252>Suppressed by Scorn</color></b>", detail);
             StringAssert.DoesNotContain("switched off", detail);
             StringAssert.Contains("Value right now: 0", detail);
         }
@@ -927,6 +948,7 @@ namespace MoodSwings.Tests
             var server = new PlayServer { State = Load(406) };
             yield return OpenBoard(server, 406);
 
+            yield return OpenMenu();
             yield return Tap(PhaseTwoSceneTests.FindButton("Chat"));
             Child("ChatEntry").GetComponentInChildren<InputField>().text = "good luck";
             yield return Tap(ButtonNamed("Send chat"));
@@ -944,6 +966,7 @@ namespace MoodSwings.Tests
             server.OnPost = (path, body) => Refuse("Message too long.", 400);
             yield return OpenBoard(server, 406);
 
+            yield return OpenMenu();
             yield return Tap(PhaseTwoSceneTests.FindButton("Chat"));
             Child("ChatEntry").GetComponentInChildren<InputField>().text = "x";
             yield return Tap(ButtonNamed("Send chat"));
@@ -968,6 +991,7 @@ namespace MoodSwings.Tests
             yield return OpenBoard(server, 406, spectate: true);
 
             Assert.IsNull(Child("Primary action"));
+            yield return OpenMenu();
             Assert.IsNull(Child("Resign"));
             Assert.IsFalse(Board().Choices.IsOpen);
 
@@ -990,7 +1014,7 @@ namespace MoodSwings.Tests
             yield return OpenBoard(server, 406);
 
             Assert.AreEqual(1, server.Posts("/games/start").Count());
-            Assert.AreEqual("Your turn", Board().BannerText);
+            Assert.AreEqual("Your turn", Board().TurnText);
         }
 
         [UnityTest]
@@ -1023,7 +1047,7 @@ namespace MoodSwings.Tests
 
             yield return Poll();
             Assert.AreEqual(1, server.Posts("/games/start").Count(), "now that everyone is ready");
-            Assert.AreEqual("Your turn", Board().BannerText);
+            Assert.AreEqual("Your turn", Board().TurnText);
         }
 
         // --- kinds of game the app can't play yet ---------------------------------------------------

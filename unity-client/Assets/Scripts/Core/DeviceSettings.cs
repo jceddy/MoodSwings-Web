@@ -1,3 +1,4 @@
+using System;
 using MoodSwings.Core.Storage;
 
 namespace MoodSwings.Core
@@ -10,9 +11,18 @@ namespace MoodSwings.Core
     {
         private const string SoundKey = "device.sound";
         private const string VibrationKey = "device.vibration";
+        private const string EffectsVolumeKey = "device.effectsVolume";
+        private const string BackgroundSoundKey = "device.backgroundSound";
+        private const string CheckForUpdatesKey = "device.checkForUpdates";
+        private const string SkippedUpdateKey = "device.skippedUpdate";
+        private const string MusicKey = "device.music";
+        private const string MusicVolumeKey = "device.musicVolume";
+        private const string ArtPackKey = "device.artPack";
         private const string PushKey = "device.push";
+        private const string DarkModeKey = "device.darkMode";
         private const string DevServerKey = "device.devServer";
         private const string HideLockedKey = "device.achievements.hideLocked";
+        private const string ChatSeenPrefix = "device.chatSeen.";
         private const string SeenAtKey = "device.achievements.seenAt";
 
         private readonly IKeyValueStore _store;
@@ -22,10 +32,91 @@ namespace MoodSwings.Core
             _store = store;
         }
 
+        /// <summary>Sound effects, on until switched off.</summary>
         public bool SoundOn
         {
             get => Read(SoundKey);
             set => _store.SetString(SoundKey, value ? "1" : "0");
+        }
+
+        /// <summary>How loud the sound effects are, 0 to 1 (a little under full to start with).</summary>
+        public float EffectsVolume
+        {
+            get => ReadVolume(EffectsVolumeKey, 0.8f);
+            set => WriteVolume(EffectsVolumeKey, value);
+        }
+
+        /// <summary>The id of the art pack in use, or null for the art that ships with the app.</summary>
+        public string ArtPack
+        {
+            get
+            {
+                var stored = _store.GetString(ArtPackKey);
+                return string.IsNullOrEmpty(stored) ? null : stored;
+            }
+            set
+            {
+                if (string.IsNullOrEmpty(value))
+                {
+                    _store.Delete(ArtPackKey);
+                }
+                else
+                {
+                    _store.SetString(ArtPackKey, value);
+                }
+            }
+        }
+
+        /// <summary>Look for a newer version of the app when it starts, on until switched off.</summary>
+        public bool CheckForUpdates
+        {
+            get => Read(CheckForUpdatesKey);
+            set => _store.SetString(CheckForUpdatesKey, value ? "1" : "0");
+        }
+
+        /// <summary>The version the player chose not to be asked about again, or null.</summary>
+        public string SkippedUpdateVersion
+        {
+            get
+            {
+                var stored = _store.GetString(SkippedUpdateKey);
+                return string.IsNullOrEmpty(stored) ? null : stored;
+            }
+            set
+            {
+                if (string.IsNullOrEmpty(value))
+                {
+                    _store.Delete(SkippedUpdateKey);
+                }
+                else
+                {
+                    _store.SetString(SkippedUpdateKey, value);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Keep playing the music and sounds while the window is in the background (a desktop setting; a phone's app is
+        /// put to sleep when it is left, and there is no choice about it). On until switched off.
+        /// </summary>
+        public bool BackgroundSoundOn
+        {
+            get => Read(BackgroundSoundKey);
+            set => _store.SetString(BackgroundSoundKey, value ? "1" : "0");
+        }
+
+        /// <summary>The background music, on until switched off.</summary>
+        public bool MusicOn
+        {
+            get => Read(MusicKey);
+            set => _store.SetString(MusicKey, value ? "1" : "0");
+        }
+
+        /// <summary>How loud the music is, 0 to 1 (quieter than the effects to start with: it is always on).</summary>
+        public float MusicVolume
+        {
+            get => ReadVolume(MusicVolumeKey, 0.5f);
+            set => WriteVolume(MusicVolumeKey, value);
         }
 
         public bool VibrationOn
@@ -56,6 +147,13 @@ namespace MoodSwings.Core
                     _store.Delete(DevServerKey);
                 }
             }
+        }
+
+        /// <summary>The dark palette instead of the light one (off until switched on).</summary>
+        public bool DarkMode
+        {
+            get => _store.GetString(DarkModeKey) == "1";
+            set => _store.SetString(DarkModeKey, value ? "1" : "0");
         }
 
         /// <summary>Push notifications to this device: on until switched off (where the device can get them at all).</summary>
@@ -91,6 +189,21 @@ namespace MoodSwings.Core
                 }
             }
         }
+
+        /// <summary>
+        /// How many of a game's chat messages have been read on this device, so a game opened again (or the app coming back
+        /// from the background) doesn't count them as unread a second time.
+        /// </summary>
+        public int ChatSeen(int gameId) =>
+            int.TryParse(_store.GetString(ChatSeenPrefix + gameId), out var count) ? count : 0;
+
+        public void SetChatSeen(int gameId, int count) => _store.SetString(ChatSeenPrefix + gameId, count.ToString());
+
+        private float ReadVolume(string key, float fallback) =>
+            int.TryParse(_store.GetString(key), out var percent) ? Math.Max(0, Math.Min(100, percent)) / 100f : fallback;
+
+        private void WriteVolume(string key, float value) =>
+            _store.SetString(key, Math.Max(0, Math.Min(100, (int)Math.Round(value * 100f))).ToString());
 
         private bool Read(string key) => _store.GetString(key) != "0";
     }

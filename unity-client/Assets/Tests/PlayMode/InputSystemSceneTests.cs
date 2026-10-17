@@ -53,6 +53,16 @@ namespace MoodSwings.Tests
             return RectTransformUtility.WorldToScreenPoint(canvas.worldCamera, component.transform.position);
         }
 
+        // A hand card shows only its top, with its middle off the screen: aim at what is visible.
+        private static Vector2 TopOfCard(Component card)
+        {
+            var corners = new Vector3[4];
+            ((RectTransform)card.transform).GetWorldCorners(corners);
+            var canvas = card.GetComponentInParent<Canvas>();
+            var top = RectTransformUtility.WorldToScreenPoint(canvas.worldCamera, (corners[1] + corners[2]) / 2f);
+            return top + new Vector2(0f, -30f);
+        }
+
         private IEnumerator ClickOn(Component target)
         {
             // Let the screen finish settling at the test resolution before aiming at a position.
@@ -114,7 +124,7 @@ namespace MoodSwings.Tests
             yield return PhaseFiveSceneTests.OpenBoard(server, 406);
             yield return ReEnableTheUiModule();
             var card = PhaseFiveSceneTests.Child("Card Superiority");
-            var from = ScreenPointOf(card);
+            var from = TopOfCard(card);
             var to = new Vector2(960f, 650f);
 
             Set(_mouse.position, from);

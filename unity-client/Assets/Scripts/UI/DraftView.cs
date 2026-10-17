@@ -87,7 +87,7 @@ namespace MoodSwings.UI
             _root = UiFactory.Create("Draft view", parent);
             _root.anchorMin = Vector2.zero;
             _root.anchorMax = Vector2.one;
-            _root.offsetMin = new Vector2(24f, 16f);
+            _root.offsetMin = new Vector2(24f, 40f);
             _root.offsetMax = new Vector2(-24f, -topInset);
             var layout = _root.gameObject.AddComponent<VerticalLayoutGroup>();
             layout.spacing = 10f;
@@ -105,7 +105,11 @@ namespace MoodSwings.UI
 
             _problem = UiFactory.Label(_root, string.Empty, 26, theme.danger, TextAnchor.MiddleLeft);
             UiFactory.Size(_problem.gameObject, height: 36f);
-            _buttons = (RectTransform)UiFactory.Row(_root, "Buttons", 16f, TextAnchor.MiddleRight).transform;
+            var buttons = UiFactory.Row(_root, "Buttons", 16f, TextAnchor.MiddleRight);
+            // The buttons sit in from the right edge and up from the bottom: a phone's rounded corner isn't part of its safe
+            // area, and clips a button that is right in it.
+            buttons.padding = new RectOffset(0, 72, 0, 0);
+            _buttons = (RectTransform)buttons.transform;
             UiFactory.Size(_buttons.gameObject, height: UiFactory.ControlHeight);
 
             _root.gameObject.SetActive(false);

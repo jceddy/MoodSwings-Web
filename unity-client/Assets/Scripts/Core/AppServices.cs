@@ -42,6 +42,15 @@ namespace MoodSwings.Core
 
         public static UiTheme Theme { get; private set; }
 
+        /// <summary>The art packs the player has added (replacement card art), kept in the app's own storage.</summary>
+        public static ArtPackStore ArtPacks { get; private set; }
+
+        /// <summary>Looks for a newer version of the app (null where updates aren't offered).</summary>
+        public static UpdateFlow Updates { get; set; }
+
+        /// <summary>Asks the player for a folder or a zip on their device (a native dialog); replaceable for tests.</summary>
+        public static IFilePicker FilePicker { get; set; }
+
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
         private static void Initialize()
         {
@@ -117,7 +126,7 @@ namespace MoodSwings.Core
         /// </summary>
         public static void Override(
             ApiClient api, AuthFlow auth, SecureSessionStore sessionStore = null, IKeyValueStore preferences = null,
-            IPushTokenProvider pushProvider = null)
+            IPushTokenProvider pushProvider = null, string artPacksFolder = null)
         {
             Api = api;
             Auth = auth ?? new AuthFlow(api, sessionStore, preferences);
@@ -136,6 +145,20 @@ namespace MoodSwings.Core
             {
                 Theme = ScriptableObject.CreateInstance<UiTheme>();
             }
+
+            Theme.Apply(Device.DarkMode);
+
+            ArtPacks = new ArtPackStore(artPacksFolder ?? System.IO.Path.Combine(Application.persistentDataPath, "ArtPacks"));
+            CardArtLibrary.Packs = ArtPacks;
+            // A pack that has since been deleted is just the default again.
+            CardArtLibrary.ActivePackId = ArtPacks.Find(Device.ArtPack)?.Id;
+            FilePicker = FilePickers.ForThisPlatform();
+
+            // Only a built app looks (never the Editor or its tests, which set their own when they want to).
+            var platform = UpdateFlow.PlatformKey(Application.platform);
+            Updates = platform == null
+                ? null
+                : new UpdateFlow(new UnityWebRequestTransport(15), UpdateConfig.ManifestUrl, Application.version, platform, Device);
         }
     }
 }

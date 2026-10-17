@@ -29,9 +29,31 @@ namespace MoodSwings.Tests
 
             public ScriptedTransport(Func<HttpRequest, HttpResponse> handler) => _handler = handler;
 
-            public Task<HttpResponse> SendAsync(HttpRequest request, CancellationToken cancellationToken) =>
-                Task.FromResult(_handler(request));
+            public Task<HttpResponse> SendAsync(HttpRequest request, CancellationToken cancellationToken)
+            {
+                lock (Issued)
+                {
+                    Issued.Add(request.Method + " " + request.Url);
+                }
+
+                if (ResponseDelayMilliseconds <= 0)
+                {
+                    return Task.FromResult(_handler(request));
+                }
+
+                return Task.Run(async () =>
+                {
+                    await Task.Delay(ResponseDelayMilliseconds);
+                    return _handler(request);
+                });
+            }
         }
+
+        /// <summary>Every request the app has sent, in order (when it was sent, not when it was answered).</summary>
+        internal static readonly System.Collections.Generic.List<string> Issued = new System.Collections.Generic.List<string>();
+
+        /// <summary>How long the stand-in server takes to answer (for tests of what shows while waiting); 0 is at once.</summary>
+        internal static int ResponseDelayMilliseconds;
 
         internal static HttpResponse Reply(int status, string body, string setCookie = null)
         {
@@ -50,6 +72,12 @@ namespace MoodSwings.Tests
             return request => request.Url.EndsWith("/VERSION") ? Reply(200, "1.58.5\n") : api(request);
         }
 
+        /// <summary>Launches in the dark palette (for screenshots of it).</summary>
+        internal static bool DarkMode;
+
+        /// <summary>A stand-in for the system's file dialogs, for tests of adding art packs.</summary>
+        internal static IFilePicker FilePicker;
+
         internal static IEnumerator Launch(Func<HttpRequest, HttpResponse> handler, string rememberedSession = null, IPushTokenProvider pushProvider = null)
         {
             ScreenshotHelper.UseFullHdScreen();
@@ -63,7 +91,15 @@ namespace MoodSwings.Tests
             }
 
             var api = new ApiClient(new ApiConfig("https://example.test", "MoodSwings/test"), new ScriptedTransport(Site(handler)), store);
-            AppServices.Override(api, null, store, disk, pushProvider);
+            AppServices.Override(api, null, store, disk, pushProvider,
+                artPacksFolder: System.IO.Path.Combine(System.IO.Path.GetTempPath(), "moodswings-test-artpacks-" + System.Guid.NewGuid().ToString("N")));
+            AppServices.FilePicker = FilePicker ?? AppServices.FilePicker;
+            if (DarkMode)
+            {
+                AppServices.Device.DarkMode = true;
+                AppServices.Theme.Apply(dark: true);
+            }
+
 
             yield return SceneManager.LoadSceneAsync("Main");
             yield return null;

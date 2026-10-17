@@ -100,13 +100,38 @@ ended, someone else spoke -- and the board reacts to each:
 - **Sound:** short placeholder tones and a thump, synthesized in code
   (`SoundBank`) because the repo has no sound files. Replace `SoundBank.Create` with
   real clips when there are some; nothing else needs to change.
+- **Music:** `MusicPlayer` plays the main theme while the app is open. On the board it
+  crossfades (two seconds) to the theme of the color of the mood played most recently by
+  anyone (read from the game's recent events -- the in-play list is ordered by card, not by
+  when it was played; the main theme again once the round has been scored, until something is
+  played in the next), and leaving the board brings the main theme back. Each theme keeps its place while it is
+  faded out. The tracks are `Assets/Resources/Music/{main,white,blue,black,red,green}.mp3`
+  (`MusicImporter` streams them as Vorbis rather than decoding them into memory); they came
+  from `Boots_on_the_Tavern_Floor` (main), `Beneath_the_Willow_Canopy` (white),
+  `Beneath_the_Iron_Bough` (blue), `Before_the_Fire_Dies` (black),
+  `Beneath_the_Gallows_Tree` (red) and `Copper_Coins_in_the_Hat` (green). Replace a file to
+  change a track.
 - **Vibration** (Android): a short buzz for your turn, questions for you and your own
   plays, a long one for the end of a game. Needs a physical device to feel.
 - The first draw of a game is not an event, so nothing plays when you open one. The
-  two switches (**Sound effects**, and **Vibration** on a phone) are under Settings >
-  On this device and are stored on the device, not the account.
+  switches (**Sound effects** with its **Effects volume**, **Music** with its **Music volume**,
+  and **Vibration** on a phone) are under Settings > On this device and are stored on the
+  device, not the account. The volumes are sliders that apply as they move.
+- **Colors:** the palette is the game's own five colors -- white for the page, blue
+  for what you act on, black for text, red for Resign and anything that can't be undone,
+  green for good news -- in a light version (the default) and a dark one. Dark mode is
+  under Settings > On this device and is remembered on the device; because screens take
+  their colors when they are built, switching it rebuilds them and returns you to the
+  main menu. All of the colors live in `UiTheme` (`Apply(dark)`); screens use its
+  tokens (`accent`, `onAccent`, `raised`, `success`, `gold`, `faint`...) rather than
+  literals.
+- **Background:** every screen sits on a wood table, light or dark to match the palette
+  (`Backdrop`, under all the screens, covering the whole display including a phone's notch and
+  rounded corners; cropped rather than stretched to fit any shape, with a thin wash of the page
+  color over it for legibility). The pictures are `Assets/Resources/Backgrounds/{light,dark}-background.jpg`,
+  made by `tools/make_backgrounds.py` from the full-size originals. A screen's own backing is clear.
 - **Phone screens:** each screen is fitted to the system's safe area (notches, rounded
-  corners) and refitted on rotation; layouts were checked at 16:9, 20:9, 16:10 and 4:3.
+  corners) and refitted on rotation (phones do not count their rounded corners as unsafe, so the dev server tag and the draft deck buttons sit further in from the corner); layouts were checked at 16:9, 20:9, 16:10 and 4:3.
 - "Pause before your turn" (Advance turn) and "auto-pass on an empty hand" are the
   account preferences from Settings; the board honors them as the server applies them.
 
@@ -197,11 +222,49 @@ games are waiting on you. A game's board is Phase 4, so rows don't open yet.
 
 Open any game from **Play** (the **Open** button on a row), or watch someone
 else's from **Watch**. `BoardScreen` draws it: every seat with its moods in
-front of it, the deck and discard piles in the middle, and your hand along the
-bottom. Click any card for a readable close-up (the table cards are too small to
-read); **Log** shows the recent events (and any effects in force) and **Chat**
-the game's messages, with a box to answer. Playing is described under "Playing a
-game" below.
+front of it and a scoreboard to its left, the tops of the cards in each hand along
+its player's edge of the screen, the deck and discard peeking up either side of your
+hand, and the turn banner, messages and **Pass** in the middle. Click any card for a
+readable close-up (the table cards are too small to read). Playing is described
+under "Playing a game" below.
+
+- **Your hand** shows only the top of each card along the bottom edge -- the name and
+  the value -- which leaves the room above it for the table. Hover a card for a large
+  preview; tap it to play it, or drag it up onto the table.
+- **Opponents' hands** are the backs of their cards peeking in from their edge of the
+  screen (the top; the sides in a four-player game), one for each card they hold, so
+  there are no hand counts in text.
+- **A player's scoreboard** sits at the end of their hand that is at *their* left (so, for
+  the player across from you, at your right): the points in a box with a trophy for each
+  round won stacked beside it (dim ones for the rounds still to win), a **1ST** tag on the
+  box for whoever went first this round, then their name, and the Hurt Feelings card for
+  whoever has it. It is lit when it is their turn. In a duel, where each player has their own
+  deck, its size shows too.
+- **The deck and discard** peek up from the bottom edge, the discard at the far left and the deck at the far right of the bottom edge, with your scoreboard
+  and your hand between them, with a line above each: "Deck 30", "Discard 3" (and
+  "play from it" when an effect makes a card in it playable). Tap the deck for its
+  list, the discard to look through it.
+- **Ongoing effects** are shown on the table. A mood whose "While in play" ability is
+  doing something right now -- its value has moved because of it, the server lists it
+  among the effects changing scoring or the board, or it is acting on another mood --
+  has a halo in its color that breathes and a ring that spreads outwards from it and
+  fades. One that is switched off (suppressed, shown on its side) or only waiting for its
+  condition doesn't. When one mood is acting on another, a curve runs from the source
+  to the target with glowing dots streaming along it: red for a suppression, blue for a
+  dice-value boost, amber for a mood held by someone else because of it
+  (`BoardEffects` works out which, from `suppressions`, `boosted_by_card_id`,
+  `temporary_ownership` and `affecting`; `CardAura` and `EffectLinksLayer` draw them).
+  Neither takes a tap.
+- **The middle of the table** is kept small, to leave room for cards: no "whose turn" line
+  (the scoreboards light up for that) and no "First to 3 wins" (the trophies say it). What
+  is left is the round, game and match line, the clock, messages, "2 plays left" when you
+  have plays to spare, any question or result, and a modest **Pass** / **Next game** button.
+- **The menu** (three bars, upper left; a badge on it counts unread chat) slides in a
+  panel from the left: **< Lobby**, **Resign**, and a **Log** tab (the recent events
+  and any effects in force) and a **Chat** tab (the game's messages, with a box to
+  answer). It opens on the chat when there is something unread, and the tab shows only
+  how many are unread ("Chat (2)"), not how many there have ever been. The client's
+  version is in its lower left corner.
 
 - **Seating matches the web client exactly** (`BoardLayout`, from
   `inPlayZoneAssignments()` in `web-static/js/game.js`): you at the bottom, and
@@ -237,7 +300,7 @@ game" below.
   card large on the left and, on the right, whatever playing it asks you to
   choose (nothing, for about half the cards). Cards you can't play right now are
   dimmed in your hand and open a form whose **Play card** is off, with the reason.
-  **Pass** and **Resign** (which asks first) sit beside your hand; **Advance turn**
+  **Pass** sits in the middle of the screen and **Resign** (which asks first) is in the menu; **Advance turn**
   replaces Pass when "pause before your turn" is on and the turn is waiting for you.
 - **A question for you** -- a card effect waiting on your answer (Confusion's
   "give a card", Fury's "discard a mood", Duplicity's repeat offer, ordering your
@@ -373,6 +436,37 @@ game" below.
   checks the size, rarity and copy limits as you tap cards in and out. (Rules of your own making,
   and pasting a deck from text, are web-only for now.)
 
+## Art packs (your own card art)
+
+**Settings > Card art** lists **Default** (the art that comes with the app) and every art pack that has been added;
+tap one to use it. A pack that doesn't have a card leaves that card on the default art, so a pack can replace a few
+cards or all of them. The choice is stored on the device.
+
+- **A pack** is a folder, or a `.zip` with the same layout, of **PNG or JPG** images. Card faces go in a folder named
+  for their **set code**, in capitals -- `MSW/12-faith.png` (`MSW` is Mood Swings, the only set so far) -- with the
+  card's number first (the catalog number, the same one the `art-overrides` and the web client's art files use; it
+  is unique across sets, so a card is found in whichever set folder has it, the base game's first). Also
+  `012.jpg`, `12.png` or `Card 7 - courage.png`. Images **outside any set folder are read as MSW**, so a small
+  pack can be flat. The card back (`back.png`) and Hurt Feelings (`hurt-feelings.png`) sit **at the top of the
+  pack**, not in a set folder. WebP isn't supported (Unity can't read it at run time). Images are shrunk to at
+  most 1040 px tall; the card art that ships is 744 x 1040, so that shape looks right.
+- **An example:** `python tools/make_original_art_pack.py` builds the original Mood Swings art as a pack from
+  `web-static/img` -- all 138 cards under `MSW/`, `back.png`, `hurt-feelings.png`, and a `README.txt` describing the
+  format -- as `art-packs/Original-Mood-Swings-Art.zip` (81 MB, git-ignored; `--folder DIR` also leaves it unzipped).
+  Unzip it to see the layout, or add it as it is.
+- **Adding one:** **Add a folder...** / **Add a .zip...** open the system's own dialog (PowerShell's on Windows,
+  AppleScript's on macOS, the document picker on Android -- which needs no storage permission). The images are
+  **copied into the app's own storage** (`<persistentDataPath>/ArtPacks/<name>/<SET>/<number>.png`), so the pack keeps working if the
+  original moves, and on Android, where a chosen folder can't be read in place, the picker first copies it to the cache.
+  Files that aren't card art are skipped and the status line says how many (and why, for the first).
+  **Remove** (two taps) deletes the app's copy only.
+- **Limits:** 12 MB a file, 600 files and 400 MB a pack; a zip entry's own file name is all that is used (never its
+  path).
+- **Code:** `ArtPackStore` (adding, listing, removing; UI-free), `CardArtLibrary` (the active pack's image first,
+  then the shipped art; pack images are loaded and GPU-compressed the first time a card is drawn),
+  `FilePickers` and `Assets/Plugins/Android/ArtPicker.java` (the dialogs). The Android picker has been compiled but
+  **not yet run on a device**.
+
 ## Stats, achievements and card stats
 
 - **Home > Stats** shows your lifetime games and matches as `wins-losses (NN%)` (the percentage only once
@@ -424,8 +518,9 @@ game" below.
 ## App icons
 
 `Assets/Icons/` holds the app icon: `icon-1024.png` (the Windows `.exe`, and the source of
-`MOOD.ico` for the installer) and the Android adaptive icon's two layers. They are a placeholder
-made by `tools/make_icons.py` (the MOOD wordmark in the UI's colors). To use real art, replace
+`MOOD.ico` for the installer) and the Android adaptive icon's two layers. They are made by
+`tools/make_icons.py` to look like the back of a card: black, with the four color corners
+(blue, purple, green, red) around a white diamond with an M in it. To use real art, replace
 `icon-1024.png` and the two `android-*.png` layers (432x432, art inside the central 66%) and run
 `python tools/make_icons.py --from-icon` to rebuild the `.ico`. `AppIcons` applies them in both build
 scripts.
@@ -513,6 +608,29 @@ graphics for the screenshots, so omit `-nographics` there.
   builds them -- see the art-licensing decision in `PLAN.md` before sending a build beyond people
   you trust with it.
 
+## macOS (for testers)
+
+- **Build it from Windows:** the Editor needs its **Mac Build Support (Mono)** module (Unity Hub >
+  Installs > the gear > Add modules, or `"Unity Hub.exe" -- --headless install-modules --version <editor>
+  -m mac-mono`). Then **MoodSwings > Build macOS Player**, or headless: `Unity.exe -batchmode -quit
+  -buildTarget StandaloneOSX -executeMethod MoodSwings.Editor.MacBuild.Build` -> `Build/macOS/MOOD.app`
+  (Mono). The bundle id is `com.jceddy.moodswings`.
+- **Package it:** `python tools/package_macos.py` makes `Build/macOS/MOOD-<version>-mac.zip`. A plain
+  zip of the `.app` made on Windows would not start on a Mac (the program inside loses its "executable"
+  permission), so this writes the zip with the permissions set, and adds an `OPEN ME FIRST.txt`.
+- **Intel by default:** the build is Intel (x64), which runs on every Mac -- on Apple silicon through Rosetta 2,
+  and without being signed. An Apple-silicon build (`MOOD_MAC_ARCH=universal` when building) has to be
+  code-signed to run at all; `package_macos.py` signs it ad hoc if
+  [rcodesign](https://github.com/indygreg/apple-platform-rs) is installed (it runs on Windows).
+- **Not signed or notarized**, so the first launch is stopped: System Settings > Privacy & Security > **Open
+  Anyway** (macOS 15), or right-click > Open (macOS 14 and earlier). Removing that needs an Apple Developer ID
+  ($99 a year) and notarization -- see the signing notes for Windows above; there is no free equivalent.
+- **Saved login:** the session is encrypted with a key in the login Keychain (`KeychainSecretProtector`, using the
+  system's `security` tool), like DPAPI on Windows. That part only runs on a Mac and **has not been run on one yet**;
+  if the Keychain can't be used, the app simply doesn't remember the login.
+- No push notifications on the Mac (as on Windows). Cmd+Q quits; **Option+Enter** switches between full screen and a
+  window (macOS keeps F11 for itself), and so does the green window button.
+
 ## Android
 
 Install the Android Build Support module for the project's editor in Unity
@@ -567,10 +685,42 @@ Python scripts in `tools/` (`pip install pillow` for the first):
   card as uncompressed RGBA32 (~3 MB instead of under 1 MB). Mipmaps are on
   (Kaiser filter, trilinear): cards are drawn at ~112 px from 744 px art, and
   without them the shrunken art is harsh, speckled noise.
+- `publish_client.py` -- writes the update manifest for the builds (see Updates above) and, with `--upload`, publishes them.
 - `capture_fixtures.py` -- logs in to a server with a throwaway account
   (credentials from `MOODSWINGS_USER`/`MOODSWINGS_PASSWORD`) and saves
   read-only API responses, email/phone redacted, to
   `Assets/Tests/Fixtures/` for model tests.
+
+## Updates
+
+The Windows, macOS and Android apps look for a newer version once each time they start (when the player gets to the
+main menu), and from **Settings > Check for updates now**. **Settings > Check for updates** switches the start-up
+look off. The look is one small download of a manifest at a fixed address, `UpdateConfig.ManifestUrl`
+(`Assets/Scripts/Core/UpdateFlow.cs`), by default `https://github.com/jceddy/MoodSwings-Web/releases/download/client-latest/latest.json`.
+A check that can't be made (offline, no manifest yet) says nothing. The Editor never checks.
+
+```json
+{ "version": "1.3.0", "released": "2026-10-20", "notes": ["What is new, a line each"],
+  "windows": { "url": "...MOOD-Setup-1.3.0.exe", "sha256": "..." },
+  "macos":   { "url": "...MOOD-1.3.0-mac.zip",   "sha256": "..." },
+  "android": { "url": "...MOOD-1.3.0.apk",       "sha256": "..." } }
+```
+
+When `version` is newer than the app's (`bundleVersion`, compared number by number) and the platform has an entry, a box
+offers **Update**, **Later** (asks again next start) and **Skip this version** (quiet until a newer one is published;
+a manual check still shows it).
+
+- **Windows** downloads the installer to a temp folder with progress, checks its SHA-256 against the manifest, starts it
+  and quits so the installer can replace the app. A failed download says why and can be retried.
+- **macOS** and **Android** open the download in the browser (the macOS zip is unpacked by hand; the Android apk is
+  installed from the notification -- the phone asks once to allow installs from the browser). Android needs no Play
+  Store for this; the Play Store is only needed for updates the system applies for you.
+
+Publishing: build the clients, then `python tools/publish_client.py --note "What is new"` writes `Build/latest.json`
+(hashing each build; a platform with no build is left out). Adding `--upload` puts the builds and the manifest on the
+`client-latest` GitHub release with `gh` (the manifest last). Nothing is uploaded without that flag. Note the
+repository is public, so builds on its releases are downloadable by anyone; point `ManifestUrl` and the script at
+another host to change that.
 
 ## Mobile + desktop from one project
 
