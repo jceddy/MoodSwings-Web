@@ -45,6 +45,9 @@ use MoodSwings\Repository\QueuedNotificationRepository;
  * docblock) to clear every seated player's row for that game at once,
  * not just whoever's own action ended it.
  *
+ * Game-finished (win/loss) notifications are the exception: they always
+ * bypass the cooldown and are sent immediately -- see notifyGameFinished().
+ *
  * A user can opt out of this cooldown/queue behavior entirely via their
  * own disable_cooldown preference (migration 0051, off by default) --
  * with it on, notify() delivers every eligible event immediately instead
@@ -103,6 +106,16 @@ final class NotificationService
         ]);
     }
 
+    /**
+     * Always delivered immediately, never queued behind the game's 5-minute
+     * cooldown (reported live: a win/loss notification arriving up to 15
+     * minutes after the game ended because a "your turn" notification for
+     * the same game had just been sent). Unlike a turn reminder, a result
+     * is a one-off the player has no way to "catch up on" by acting, and a
+     * late one is just confusing. A successful send still stamps the
+     * game's cooldown and clears whatever was queued for it, same as any
+     * other delivery.
+     */
     public function notifyGameFinished(int $userId, int $gameId, string $resultSummary): void
     {
         $this->notify($userId, NotificationScope::forGame($gameId), 'notify_game_finished', [
@@ -110,7 +123,7 @@ final class NotificationService
             'body' => $resultSummary,
             'url' => "/game/?id={$gameId}",
             'tag' => "game-{$gameId}-finished",
-        ]);
+        ], bypassCooldown: true);
     }
 
     /**
@@ -245,9 +258,13 @@ final class NotificationService
     }
 
     /**
+     * $bypassCooldown sends immediately even inside the scope's cooldown
+     * window (see notifyGameFinished()), instead of queueing for the cron
+     * flush.
+     *
      * @param array{title: string, body: string, url: string, tag: string} $payload
      */
-    private function notify(int $userId, string $scope, string $preferenceKey, array $payload): void
+    private function notify(int $userId, string $scope, string $preferenceKey, array $payload, bool $bypassCooldown = false): void
     {
         // The class docblock above promises every failure here is
         // swallowed, not thrown -- but nothing below actually enforced
@@ -274,7 +291,7 @@ final class NotificationService
             // is skipped outright rather than checked-and-ignored, so a
             // user with this on never queues a notification behind
             // another one either.
-            if (!$preferences['disable_cooldown'] && $this->cooldowns->wasNotifiedRecently($userId, $scope, self::COOLDOWN_SECONDS)) {
+            if (!$bypassCooldown && !$preferences['disable_cooldown'] && $this->cooldowns->wasNotifiedRecently($userId, $scope, self::COOLDOWN_SECONDS)) {
                 $this->queuedNotifications->enqueue($userId, $scope, $preferenceKey, $payload);
                 $this->logError("Queued notification instead of sending (user {$userId}, scope {$scope}): within the cooldown window");
                 return;
