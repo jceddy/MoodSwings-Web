@@ -7511,6 +7511,14 @@ it), sends if still eligible, and clears the row either way. A live
 (or the same friend-request scope) just went out and an older queued
 reminder would otherwise still arrive stale on top of it.
 
+**Game-finished (win/loss) notifications bypass the cooldown** (reported
+live: a result arriving up to 15 minutes after the game ended because a
+"your turn" notification for that game had just been sent):
+`notifyGameFinished()` passes `bypassCooldown: true` to `notify()`, so it is
+always sent immediately and never queued. A successful send still stamps the
+game's cooldown and clears whatever was queued for it. The user's
+`notify_game_finished` preference still applies.
+
 Separately, `GameService::clearQueuedNotificationForGamePlayer()` (called
 from `playMood()`, `pass()`, `resignGame()`, `respondToDecision()`,
 `submitInitialCardPass()`, `proposeTeamDecision()`, `confirmTeamDecision()`,
