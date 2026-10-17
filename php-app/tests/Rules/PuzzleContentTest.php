@@ -2087,6 +2087,80 @@ final class PuzzleContentTest extends TestCase
         }
     }
 
+    /**
+     * Plays Short Fuse's Anger discarding the moods named by $discards, a list of
+     * [catalog id, zone owner: 'solver'|'opponent'|'anger'] pairs ('anger' is the
+     * Anger being played itself).
+     *
+     * @param array<int, array{0: int, 1: string}> $discards
+     * @return array<string, mixed>
+     */
+    private function playShortFuseAnger(int $gameId, int $p, array $discards): array
+    {
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+        $ids = [];
+        foreach ($discards as [$catalogId, $who]) {
+            $ids[] = match ($who) {
+                'anger' => $this->instanceId($gameId, 80, 'hand'),
+                'opponent' => $this->ownedInstanceId($gameId, $catalogId, 'in_play', $opp),
+                default => $this->ownedInstanceId($gameId, $catalogId, 'in_play', $p),
+            };
+        }
+
+        return $this->playDriven($gameId, $p, $this->instanceId($gameId, 80, 'hand'), $ids === [] ? [] : ['target_mood_ids' => $ids]);
+    }
+
+    /**
+     * "Short Fuse": the only winning line (exhaustive search of the real flow,
+     * every subset of the moods in play) is Anger discarding your own Bitterness
+     * and the opponent's Panic: Obsession falls to 3 (only Self-Loathing is
+     * black), so 10 against 3 + 0 + 6 = 9. See migration 0459's own docblock.
+     */
+    public function testShortFuseSolvedByDiscardingMyZeroAndTheirOne(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('short-fuse');
+
+        $result = $this->playShortFuseAnger($gameId, $p, [[57, 'solver'], [48, 'opponent']]);
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameSolved($gameId, $p);
+    }
+
+    /** Discarding Bitterness alone leaves Panic: 10-10, a tie, and a tie goes to the opponent. */
+    public function testShortFuseDiscardingOnlyTheBitternessTies(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('short-fuse');
+
+        $result = $this->playShortFuseAnger($gameId, $p, [[57, 'solver']]);
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameFailed($gameId);
+    }
+
+    /**
+     * The opponent's Wrath (or Anger itself) is one of the two red moods that
+     * keep Enjoyment at 6, so discarding either loses; so does discarding Panic
+     * without Bitterness, or nothing at all.
+     */
+    public function testShortFuseEveryOtherLineLoses(): void
+    {
+        $lines = [
+            [],
+            [[48, 'opponent']],
+            [[105, 'opponent']],
+            [[57, 'solver'], [48, 'opponent'], [105, 'opponent']],
+            [[57, 'solver'], [48, 'opponent'], [80, 'anger']],
+        ];
+        foreach ($lines as $discards) {
+            ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('short-fuse');
+
+            $result = $this->playShortFuseAnger($gameId, $p, $discards);
+
+            self::assertTrue($result['game_completed'], json_encode($discards));
+            $this->assertGameFailed($gameId);
+        }
+    }
+
     /** A solve is never marked failed, and puzzle_failed is false while an attempt is open. */
     public function testDeadHeatSolveIsNotFailedAndOpenAttemptIsNotFailed(): void
     {

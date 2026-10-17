@@ -14016,6 +14016,25 @@ than a parallel bespoke system:
   Apathy as the big mood. An exhaustive search (9 states) found exactly one
   winning board, reachable with Glee and Vulnerability in either order.
 
+- **24th puzzle, "Short Fuse"** (reported live: an Anger puzzle -- discard
+  one of your own zero-value moods to switch off an opponent mood that cares
+  about color, while leaving an opponent's zero-value mood that is switching
+  one of yours on), medium, `win_game`, no new puzzle infrastructure. Both
+  sides have two round wins and the opponent went first (a tie is theirs).
+  The opponent has Obsession (3, but 6 while two or more white and/or black
+  moods are in play), Wrath (0), Panic (1) and Self-Loathing (6): 13. The
+  solver has Enjoyment (3, but 6 while two or more red and/or white moods are
+  in play), Bitterness (0) and Laziness (4) in play and holds Anger (red 0),
+  with one play: 10. Obsession is on because Bitterness and Self-Loathing are
+  both black; Enjoyment is on because Anger and the opponent's Wrath are the
+  two red moods. Anger discards any number of moods with a combined value of 5
+  or less (values as they stand when you choose). The one winning line:
+  discard Bitterness and Panic -- Obsession drops to 3 and Panic's 1 goes too,
+  10 against 9. Bitterness alone ties 10-10. Discarding Wrath (worth 0, but one
+  of Enjoyment's two reds) or Anger itself loses, as does Panic alone or
+  nothing. An exhaustive search over every subset of the nine moods in play
+  (through the real engine) found exactly one winning set.
+
 ### Duel: separate per-player decks
 
 `format: 'duel'` and `format: 'draft'` (see "Draft format" below) are the
