@@ -191,4 +191,74 @@ final class NotificationServiceMultiChannelTest extends TestCase
 
         self::assertSame(0, $liveChannel->calls);
     }
+
+    // Reported live: a win/loss notification arrived up to 15 minutes late
+    // because a "your turn" notification for the same game had just been
+    // sent. A result is never held back by the game's cooldown.
+    public function testGameFinishedIsSentImmediatelyEvenWithinTheGamesCooldown(): void
+    {
+        $userId = $this->insertUser('finished-bypasses-cooldown');
+        $liveChannel = $this->stubChannel(true);
+        $service = $this->service([$liveChannel]);
+
+        $service->notifyYourTurn($userId, 9, 'waiting on you');
+        self::assertSame(1, $liveChannel->calls);
+
+        $service->notifyGameFinished($userId, 9, 'Game #9 is over -- you won!');
+
+        self::assertSame(2, $liveChannel->calls, 'the result must be delivered right away, not queued');
+        self::assertNull($this->queuedRow($userId, NotificationScope::forGame(9)), 'nothing left queued for the game');
+    }
+
+    // An ordinary turn notification inside the same window is still queued.
+    public function testYourTurnInsideTheCooldownIsStillQueued(): void
+    {
+        $userId = $this->insertUser('turn-still-queued');
+        $liveChannel = $this->stubChannel(true);
+        $service = $this->service([$liveChannel]);
+
+        $service->notifyYourTurn($userId, 10, 'waiting on you');
+        $service->notifyYourTurn($userId, 10, 'waiting on you again');
+
+        self::assertSame(1, $liveChannel->calls);
+        self::assertNotNull($this->queuedRow($userId, NotificationScope::forGame(10)));
+    }
+
+    // Sending the result clears any stale "your turn" reminder queued for the game.
+    public function testGameFinishedClearsAReminderQueuedForTheSameGame(): void
+    {
+        $userId = $this->insertUser('finished-clears-queue');
+        $liveChannel = $this->stubChannel(true);
+        $service = $this->service([$liveChannel]);
+
+        $service->notifyYourTurn($userId, 11, 'waiting on you');
+        $service->notifyYourTurn($userId, 11, 'waiting on you again');
+        self::assertNotNull($this->queuedRow($userId, NotificationScope::forGame(11)));
+
+        $service->notifyGameFinished($userId, 11, 'Game #11 is over -- you lost.');
+
+        self::assertNull($this->queuedRow($userId, NotificationScope::forGame(11)));
+    }
+
+    // The user's own notify_game_finished preference still applies.
+    public function testGameFinishedStillRespectsItsOffPreference(): void
+    {
+        $userId = $this->insertUser('finished-pref-off');
+        $this->preferences->save($userId, true, true, false, true, true);
+        $liveChannel = $this->stubChannel(true);
+
+        $this->service([$liveChannel])->notifyGameFinished($userId, 12, 'Game #12 is over -- you won!');
+
+        self::assertSame(0, $liveChannel->calls);
+    }
+
+    /** @return array<string, mixed>|null */
+    private function queuedRow(int $userId, string $scope): ?array
+    {
+        $stmt = $this->pdo->prepare('SELECT * FROM queued_notifications WHERE user_id = :u AND scope = :s');
+        $stmt->execute(['u' => $userId, 's' => $scope]);
+        $row = $stmt->fetch();
+
+        return $row === false ? null : $row;
+    }
 }
