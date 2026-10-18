@@ -4091,6 +4091,15 @@ button).
       immediately, the same way an invalid size already did, rather than
       only surfacing as a rejected-submission error after the fact.
 
+    Live selection counters (`#draft-deck-counts`, filled by
+    `renderDraftDeckCounts()` on every `renderDraftDeckBuilding()` render, so
+    for every draft/sealed deck type): "Cards selected: N (minimum M)" with
+    the number in the error color while N is under the minimum (or over the
+    maximum, where Submit is disabled too), and -- when `rarity_caps` is
+    present (Sealed Pool of the Day / Weekly Sealed Pool) -- "Rares: N of 4,
+    Mythics: N of 2", each number turning the error color once it exceeds its
+    cap. Hidden once your deck is submitted.
+
     Clicking any hand
     card opens `#choices-panel` inline, underneath the hand -- a plain
     block element (not a `<dialog>`/overlay, deliberately: an overlay was
