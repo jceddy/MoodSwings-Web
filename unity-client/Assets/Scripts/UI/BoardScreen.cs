@@ -169,6 +169,30 @@ namespace MoodSwings.UI
             public float Width;
         }
 
+        // Moods taken out of play by one just played: where each was on the table (the table is about to be redrawn without
+        // it), so a copy can stay there for the lightning to strike.
+        private sealed class ZapTarget
+        {
+            public BoardCard Mood;
+            public Vector3 Center;
+            public float Width;
+        }
+
+        private sealed class ZapPlan
+        {
+            public BoardCue Cue;
+            public int? ViewerId;
+            public List<ZapTarget> Targets = new List<ZapTarget>();
+        }
+
+        private const string ZappedCardName = "Zapped card";
+        private const float ZapDelaySeconds = 0.45f;  // the mood that did it slides onto the table first
+        private const float ZapSeconds = 0.6f;
+        private const float ZapFadeSeconds = 0.25f;
+
+        private ZapPlan _pendingZap;
+        private LightningLayer _lightning;
+
         private const float HoverDelaySeconds = 0.35f;
         private const float HoverCardWidth = 340f;
 
@@ -196,6 +220,27 @@ namespace MoodSwings.UI
         private float _nextHeaderUpdate;
 
         public string BannerText => _banner != null ? _banner.text : null;
+
+        /// <summary>How many moods are still on the table only to be struck by lightning (or fading away after it).</summary>
+        public int ZappedCardCount
+        {
+            get
+            {
+                var count = 0;
+                foreach (Transform child in transform)
+                {
+                    if (child.name == ZappedCardName && child.gameObject.activeSelf)
+                    {
+                        count++;
+                    }
+                }
+
+                return count;
+            }
+        }
+
+        /// <summary>How many bolts of lightning are up right now.</summary>
+        public int LightningBoltCount => _lightning != null ? _lightning.BoltCount : 0;
 
         /// <summary>Whose turn it is, in words (the board itself shows that on the scoreboards, so this is not on screen).</summary>
         public string TurnText => _topBanner != null ? _topBanner.text : null;
@@ -280,10 +325,16 @@ namespace MoodSwings.UI
             _chatChannel = "table";
             _previous = null;
             _entering.Clear();
+            _pendingZap = null;
+            if (_lightning != null)
+            {
+                _lightning.Clear();
+            }
+
             HideHover();
             foreach (Transform child in transform)
             {
-                if (child.name == "Flying card")
+                if (child.name == "Flying card" || child.name == ZappedCardName)
                 {
                     child.gameObject.SetActive(false);
                     Destroy(child.gameObject);
@@ -1435,6 +1486,7 @@ namespace MoodSwings.UI
             UpdateActions(state);
             SyncOverlays(state);
             StartFlights();
+            StartZap();
         }
 
         // --- reacting to what just happened ----------------------------------------------------------
@@ -1444,11 +1496,19 @@ namespace MoodSwings.UI
         {
             var cues = BoardCues.Between(_previous, state);
             _previous = state;
+            _pendingZap = null;
             foreach (var cue in cues)
             {
                 if (cue.Kind == CueKind.CardPlayed)
                 {
                     _entering.Add(cue.CardId);
+                }
+
+                if (cue.Kind == CueKind.MoodsDestroyed)
+                {
+                    // Seen (and heard) once the table has been redrawn, with the moods it struck still on it.
+                    _pendingZap = PlanZap(cue, state.You.GamePlayerId);
+                    continue;
                 }
 
                 if (!string.IsNullOrEmpty(cue.Text))
@@ -1459,6 +1519,147 @@ namespace MoodSwings.UI
                 GameFeedback.Play(cue, state.You.GamePlayerId, AppServices.Device);
             }
         }
+
+        // Where each mood that is about to disappear stands on the table now, before the table is redrawn without it.
+        private ZapPlan PlanZap(BoardCue cue, int? viewerId)
+        {
+            var plan = new ZapPlan { Cue = cue, ViewerId = viewerId };
+            foreach (var mood in cue.Removed)
+            {
+                if (!_moodViews.TryGetValue(mood.CardId, out var view) || view == null || !view.gameObject.activeInHierarchy)
+                {
+                    continue;
+                }
+
+                // A card on its side takes a card's height across; the card itself is as wide as the space is tall.
+                var across = mood.IsSuppressed ? view.rect.height : view.rect.width;
+                plan.Targets.Add(new ZapTarget
+                {
+                    Mood = mood,
+                    Center = view.TransformPoint(view.rect.center),
+                    Width = across * view.lossyScale.x / transform.lossyScale.x,
+                });
+            }
+
+            if (plan.Targets.Count > 0)
+            {
+                return plan;
+            }
+
+            // Nothing of it was on the table to strike: the sound still goes with the play.
+            GameFeedback.Play(cue, viewerId, AppServices.Device);
+            return null;
+        }
+
+        private void StartZap()
+        {
+            if (_pendingZap != null)
+            {
+                StartCoroutine(Zap(_pendingZap));
+                _pendingZap = null;
+            }
+        }
+
+        // Lightning from the mood just played to each mood it takes out of play, which stay where they were until it
+        // strikes, then flash, and fade away into the discard pile.
+        private IEnumerator Zap(ZapPlan plan)
+        {
+            yield return null; // the layout settles before positions mean anything
+            var theme = AppServices.Theme;
+            var ghosts = new List<RectTransform>();
+            foreach (var target in plan.Targets)
+            {
+                var ghost = CardView.Create(transform, target.Mood, target.Width, theme, showValue: true, onItsSide: target.Mood.IsSuppressed);
+                ghost.name = ZappedCardName;
+                ghost.anchorMin = ghost.anchorMax = ghost.pivot = new Vector2(0.5f, 0.5f);
+                ghost.position = target.Center;
+                var group = ghost.gameObject.AddComponent<CanvasGroup>();
+                group.blocksRaycasts = false;
+                group.interactable = false;
+                ghost.SetSiblingIndex(_detail.transform.GetSiblingIndex());
+
+                // Reddened while it is struck.
+                var tint = UiFactory.Create("Tint", ghost);
+                UiFactory.Stretch(tint);
+                var image = tint.gameObject.AddComponent<Image>();
+                image.color = new Color(1f, 0.1f, 0.05f, 0f);
+                image.raycastTarget = false;
+                ghosts.Add(ghost);
+            }
+
+            yield return new WaitForSecondsRealtime(ZapDelaySeconds);
+            if (this == null)
+            {
+                yield break;
+            }
+
+            var source = CenterOf(plan.Cue.CardId) ?? SourceOf(plan.Cue.PlayerId);
+            if (_lightning == null)
+            {
+                _lightning = LightningLayer.Create(transform);
+            }
+
+            // Over the cards just put up, under the menu and the rest.
+            _lightning.transform.SetSiblingIndex(_detail.transform.GetSiblingIndex());
+            if (source.HasValue)
+            {
+                foreach (var target in plan.Targets)
+                {
+                    _lightning.Strike(source.Value, target.Center, ZapSeconds);
+                }
+            }
+
+            GameFeedback.Play(plan.Cue, plan.ViewerId, AppServices.Device);
+
+            var start = Time.unscaledTime;
+            var total = ZapSeconds + ZapFadeSeconds;
+            while (Time.unscaledTime - start < total)
+            {
+                var elapsed = Time.unscaledTime - start;
+                for (var i = 0; i < ghosts.Count; i++)
+                {
+                    var ghost = ghosts[i];
+                    if (ghost == null)
+                    {
+                        continue;
+                    }
+
+                    var tint = ghost.GetChild(ghost.childCount - 1).GetComponent<Image>();
+                    var group = ghost.GetComponent<CanvasGroup>();
+                    if (elapsed < ZapSeconds)
+                    {
+                        // Shaken, and flashing red.
+                        var shake = UnityEngine.Random.insideUnitCircle * 5f * transform.lossyScale.x;
+                        ghost.position = plan.Targets[i].Center + new Vector3(shake.x, shake.y, 0f);
+                        tint.color = new Color(1f, 0.1f, 0.05f, UnityEngine.Random.Range(0.15f, 0.5f));
+                    }
+                    else
+                    {
+                        var fade = (elapsed - ZapSeconds) / ZapFadeSeconds;
+                        ghost.position = plan.Targets[i].Center;
+                        ghost.localScale = Vector3.one * Mathf.Lerp(1f, 0.85f, fade);
+                        tint.color = new Color(1f, 0.1f, 0.05f, 0.4f);
+                        group.alpha = 1f - fade;
+                    }
+                }
+
+                yield return null;
+            }
+
+            foreach (var ghost in ghosts)
+            {
+                if (ghost != null)
+                {
+                    ghost.gameObject.SetActive(false);
+                    Destroy(ghost.gameObject);
+                }
+            }
+        }
+
+        private Vector3? CenterOf(int cardId) =>
+            _moodViews.TryGetValue(cardId, out var view) && view != null && view.gameObject.activeInHierarchy
+                ? view.TransformPoint(view.rect.center)
+                : (Vector3?)null;
 
         private void NoteFlight(RectTransform card, BoardCard mood, int ownerId, float width)
         {
