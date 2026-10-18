@@ -33,6 +33,9 @@ namespace MoodSwings.Core
 
         /// <summary>Someone else said something.</summary>
         Chat,
+
+        /// <summary>A mood just played put moods that were in play into the discard pile (Shock).</summary>
+        MoodsDestroyed,
     }
 
     /// <summary>Something that just happened on the board, worth a sound, a buzz or a moment of animation.</summary>
@@ -40,11 +43,14 @@ namespace MoodSwings.Core
     {
         public CueKind Kind { get; set; }
 
-        /// <summary>CardPlayed: which mood.</summary>
+        /// <summary>CardPlayed: which mood. MoodsDestroyed: the mood just played, the one that did it.</summary>
         public int CardId { get; set; }
 
-        /// <summary>CardPlayed: whose seat it entered.</summary>
+        /// <summary>CardPlayed, MoodsDestroyed: whose seat the mood entered.</summary>
         public int PlayerId { get; set; }
+
+        /// <summary>MoodsDestroyed: the moods that left play for the discard pile, as they were.</summary>
+        public List<BoardCard> Removed { get; set; } = new List<BoardCard>();
 
         /// <summary>For the end of a round or game: what to tell the player.</summary>
         public string Text { get; set; }
@@ -79,6 +85,26 @@ namespace MoodSwings.Core
                     CardId = mood.CardId,
                     PlayerId = mood.OwnerGamePlayerId ?? 0,
                 });
+            }
+
+            // A mood played that took other moods out of play and into the discard pile. (Not the end of a round, when
+            // everything is cleared away, nor the end of the game.)
+            if (before.Round.RoundNumber == after.Round.RoundNumber && after.Game.Status != "completed")
+            {
+                var stillThere = new HashSet<int>(after.InPlay.Select(c => c.CardId));
+                var discarded = new HashSet<int>(after.DiscardPile.Select(c => c.CardId));
+                var removed = before.InPlay.Where(c => !stillThere.Contains(c.CardId) && discarded.Contains(c.CardId)).ToList();
+                var source = after.InPlay.LastOrDefault(c => !known.Contains(c.CardId));
+                if (removed.Count > 0 && source != null)
+                {
+                    cues.Add(new BoardCue
+                    {
+                        Kind = CueKind.MoodsDestroyed,
+                        CardId = source.CardId,
+                        PlayerId = source.OwnerGamePlayerId ?? 0,
+                        Removed = removed,
+                    });
+                }
             }
 
             var gameEnded = before.Game.Status != "completed" && after.Game.Status == "completed";

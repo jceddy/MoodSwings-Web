@@ -83,9 +83,41 @@ namespace MoodSwings.UI
                     return Notes(0.22f, 330f, 262f, 196f);
                 case SoundId.Chat:
                     return Notes(0.05f, 1200f);
+                case SoundId.Zap:
+                    return Zap();
                 default:
                     throw new ArgumentOutOfRangeException(nameof(sound));
             }
+        }
+
+        // Electricity: a sharp crack, then a crackling buzz over a falling whine, dying away.
+        private static float[] Zap()
+        {
+            var random = new System.Random(23);
+            var samples = new float[Mathf.RoundToInt(0.55f * SampleRate)];
+            var phase = 0f;
+            var crackle = 0f;
+            var hold = 0;
+            for (var i = 0; i < samples.Length; i++)
+            {
+                var progress = (float)i / samples.Length;
+                var crack = ((float)random.NextDouble() * 2f - 1f) * Mathf.Exp(-30f * progress) * 0.9f;
+
+                // The crackle is noise that switches on and off at random, a few milliseconds at a time.
+                if (hold <= 0)
+                {
+                    crackle = random.NextDouble() < 0.45 ? (float)random.NextDouble() * 2f - 1f : 0f;
+                    hold = random.Next(40, 260);
+                }
+
+                hold--;
+                var buzz = crackle * 0.55f * Mathf.Exp(-3.2f * progress);
+                phase += 2f * Mathf.PI * Mathf.Lerp(900f, 140f, progress) / SampleRate;
+                var whine = Mathf.Sign(Mathf.Sin(phase)) * 0.18f * Mathf.Exp(-5f * progress);
+                samples[i] = Mathf.Clamp(crack + buzz + whine, -1f, 1f);
+            }
+
+            return samples;
         }
 
         private static float[] Tone(float seconds, float hertz, float volume = 0.5f)

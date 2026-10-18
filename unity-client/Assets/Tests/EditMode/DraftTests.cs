@@ -176,6 +176,32 @@ namespace MoodSwings.Tests
         }
 
         [Test]
+        public void TheDeckBuilder_CountsEachCappedRarity_AgainstItsCap()
+        {
+            var building = JsonConvert.DeserializeObject<DraftMatchState>(Building(false, false, "{\"mythic\":2,\"rare\":4}")).DeckBuilding;
+            var deck = Enumerable.Range(0, 8).Select(i => Card(i, "C" + i, "white", "common"))
+                .Concat(Enumerable.Range(10, 5).Select(i => Card(i, "R" + i, "red", "rare")))
+                .Concat(Enumerable.Range(20, 2).Select(i => Card(i, "M" + i, "blue", "mythic")))
+                .Concat(new[] { Card(30, "U", "green", "uncommon") }).ToList();
+
+            var counts = DraftDisplay.RarityCounts(building, deck);
+
+            CollectionAssert.AreEqual(new[] { "rare", "mythic" }, counts.Select(c => c.Rarity).ToArray(), "rarest last, whatever order the server sent");
+            Assert.AreEqual("Rares 5/4", counts[0].Label);
+            Assert.IsTrue(counts[0].Over);
+            Assert.AreEqual("Mythics 2/2", counts[1].Label);
+            Assert.IsFalse(counts[1].Over, "at the cap is allowed");
+        }
+
+        [Test]
+        public void ADeckWithoutRarityCaps_HasNoRarityCounts()
+        {
+            var building = JsonConvert.DeserializeObject<DraftMatchState>(Building(false, false)).DeckBuilding;
+
+            Assert.IsEmpty(DraftDisplay.RarityCounts(building, new[] { Card(1, "R", "red", "rare") }));
+        }
+
+        [Test]
         public void RarityCaps_AreAbsentWhenTheServerSendsAnEmptyList()
         {
             var building = JsonConvert.DeserializeObject<DraftMatchState>(Building(false, false)).DeckBuilding;

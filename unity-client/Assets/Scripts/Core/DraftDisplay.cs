@@ -313,6 +313,38 @@ namespace MoodSwings.Core
                 : $"{building.MinDeckSize} to {building.MaxDeckSize} cards";
         }
 
+        /// <summary>How many cards of a capped rarity are in the deck being built, against its cap.</summary>
+        public struct RarityCount
+        {
+            public string Rarity;
+            public int Count;
+            public int Cap;
+
+            public bool Over => Count > Cap;
+
+            /// <summary>"Rares 3/4".</summary>
+            public string Label => char.ToUpperInvariant(Rarity[0]) + Rarity.Substring(1) + "s " + Count + "/" + Cap;
+        }
+
+        private static readonly string[] CappedOrder = { "common", "uncommon", "rare", "mythic" };
+
+        /// <summary>The chosen deck's count of each capped rarity (a daily or weekly pool: Rares and Mythics), rarest last. Empty without caps.</summary>
+        public static List<RarityCount> RarityCounts(DraftDeckBuilding building, IReadOnlyCollection<BoardCard> chosen)
+        {
+            var counts = new List<RarityCount>();
+            if (building.RarityCaps == null)
+            {
+                return counts;
+            }
+
+            foreach (var rarity in CappedOrder.Where(r => building.RarityCaps.ContainsKey(r)))
+            {
+                counts.Add(new RarityCount { Rarity = rarity, Count = chosen.Count(c => c.Rarity == rarity), Cap = building.RarityCaps[rarity] });
+            }
+
+            return counts;
+        }
+
         /// <summary>What's wrong with this choice of deck -- too few or too many cards, or too many of a capped rarity -- or null.</summary>
         public static string DeckProblem(DraftDeckBuilding building, IReadOnlyCollection<BoardCard> chosen)
         {

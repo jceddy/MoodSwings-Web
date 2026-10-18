@@ -55,6 +55,81 @@ namespace MoodSwings.Tests
             Assert.AreEqual(910, cue.PlayerId);
         }
 
+        // Frustration (14181, player 911's) leaves play for the discard pile as a Shock (9001, player 909's) is played.
+        private static GameState AfterAShock()
+        {
+            var after = Fresh();
+            var struck = after.InPlay.Single(c => c.CardId == 14181);
+            after.InPlay.Remove(struck);
+            after.DiscardPile.Add(struck);
+            after.InPlay.Add(new BoardCard { CardId = 9001, Name = "Shock", OwnerGamePlayerId = 909 });
+            return after;
+        }
+
+        [Test]
+        public void AMoodPlayed_ThatPutsMoodsFromPlayIntoTheDiscardPile_IsLightning()
+        {
+            var cues = BoardCues.Between(Fresh(), AfterAShock());
+
+            CollectionAssert.AreEquivalent(new[] { CueKind.CardPlayed, CueKind.MoodsDestroyed }, cues.Select(c => c.Kind).ToArray());
+            var zap = cues.Single(c => c.Kind == CueKind.MoodsDestroyed);
+            Assert.AreEqual(9001, zap.CardId, "the mood that did it");
+            Assert.AreEqual(909, zap.PlayerId);
+            CollectionAssert.AreEqual(new[] { 14181 }, zap.Removed.Select(m => m.CardId).ToArray());
+            Assert.AreEqual("Frustration", zap.Removed[0].Name, "as it was, for drawing it once more");
+        }
+
+        [Test]
+        public void MoodsThatLeavePlayForSomewhereElse_AreNotStruck()
+        {
+            var after = AfterAShock();
+            after.DiscardPile.Clear(); // gone, but not to the discard pile (back to a hand, say)
+
+            CollectionAssert.DoesNotContain(Kinds(Fresh(), after), CueKind.MoodsDestroyed);
+        }
+
+        [Test]
+        public void MoodsLeavingPlay_WithNoMoodPlayed_AreNotStruck()
+        {
+            var after = Fresh();
+            var gone = after.InPlay.Single(c => c.CardId == 14181);
+            after.InPlay.Remove(gone);
+            after.DiscardPile.Add(gone);
+
+            CollectionAssert.DoesNotContain(Kinds(Fresh(), after), CueKind.MoodsDestroyed);
+        }
+
+        [Test]
+        public void TheEndOfARound_ClearingTheTable_IsNotLightning()
+        {
+            var after = AfterAShock();
+            after.Round.RoundNumber += 1;
+
+            CollectionAssert.DoesNotContain(Kinds(Fresh(), after), CueKind.MoodsDestroyed);
+        }
+
+        [Test]
+        public void TheEndOfTheGame_IsNotLightning()
+        {
+            var after = AfterAShock();
+            after.Game.Status = "completed";
+
+            CollectionAssert.DoesNotContain(Kinds(Fresh(), after), CueKind.MoodsDestroyed);
+        }
+
+        [Test]
+        public void Lightning_Zaps_AndBuzzesOnlyWhoIsInvolved()
+        {
+            var zap = BoardCues.Between(Fresh(), AfterAShock()).Single(c => c.Kind == CueKind.MoodsDestroyed);
+
+            var byYou = FeedbackPlan.For(zap, 909).Value;
+            Assert.AreEqual(SoundId.Zap, byYou.Sound);
+            Assert.AreEqual(HapticKind.Medium, byYou.Haptic, "you played it");
+            Assert.AreEqual(HapticKind.Medium, FeedbackPlan.For(zap, 911).Value.Haptic, "yours was struck");
+            Assert.AreEqual(SoundId.Zap, FeedbackPlan.For(zap, 910).Value.Sound, "everyone hears it");
+            Assert.IsNull(FeedbackPlan.For(zap, 910).Value.Haptic, "but it is nothing to you");
+        }
+
         [Test]
         public void AMoodThatChangedHands_IsNotAnotherPlay()
         {
