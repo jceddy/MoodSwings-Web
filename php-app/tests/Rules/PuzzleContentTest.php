@@ -2161,6 +2161,62 @@ final class PuzzleContentTest extends TestCase
         }
     }
 
+    /** Plays Forced Hand's Compulsion aimed at the opponent, whose single card is handed over. */
+    private function playForcedHandCompulsion(int $gameId, int $p): array
+    {
+        return $this->playDriven($gameId, $p, $this->instanceId($gameId, 86, 'hand'), [
+            'target_player_id' => $this->opponentGamePlayerId($gameId, $p),
+        ]);
+    }
+
+    /**
+     * "Forced Hand": the only winning line (exhaustive search of the real flow,
+     * every play order and Compulsion outcome) is Compulsion, which hands over
+     * the opponent's lone Boredom, then Boredom: 3 + 3 + 4 = 10 against Loyalty
+     * 3 + Self-Loathing 6 = 9. See migration 0462's own docblock.
+     */
+    public function testForcedHandSolvedByCompulsionThenBoredom(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('forced-hand');
+
+        $this->playForcedHandCompulsion($gameId, $p);
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 83, 'hand'));
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameSolved($gameId, $p);
+    }
+
+    /**
+     * Ambivalence + Pity looks like 12 against 9, but Ambivalence's blue (with
+     * Joy's green) switches Loyalty on: 12-12, a tie, which goes to the opponent.
+     */
+    public function testForcedHandAmbivalenceAndPityTies(): void
+    {
+        foreach ([[27, 72], [72, 27]] as $order) {
+            ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('forced-hand');
+
+            $this->playDriven($gameId, $p, $this->instanceId($gameId, $order[0], 'hand'));
+            $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, $order[1], 'hand'));
+
+            self::assertTrue($result['game_completed'], implode(',', $order));
+            $this->assertGameFailed($gameId);
+        }
+    }
+
+    /** Compulsion + Pity ties 9-9; Compulsion + Ambivalence loses (Ambivalence drops to 3, Loyalty is on). */
+    public function testForcedHandCompulsionWithEitherOtherCardDoesNotWin(): void
+    {
+        foreach ([72, 27] as $catalogId) {
+            ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('forced-hand');
+
+            $this->playForcedHandCompulsion($gameId, $p);
+            $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, $catalogId, 'hand'));
+
+            self::assertTrue($result['game_completed'], (string) $catalogId);
+            $this->assertGameFailed($gameId);
+        }
+    }
+
     /** A solve is never marked failed, and puzzle_failed is false while an attempt is open. */
     public function testDeadHeatSolveIsNotFailedAndOpenAttemptIsNotFailed(): void
     {
