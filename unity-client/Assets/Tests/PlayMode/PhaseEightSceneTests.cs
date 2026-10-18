@@ -610,11 +610,15 @@ namespace MoodSwings.Tests
             StringAssert.Contains("At most 1 rare and 1 mythic.", Board().Draft.StatusText);
             Assert.AreEqual("At most 1 rare cards (3 chosen).", Board().Draft.ProblemText);
             Assert.IsFalse(Named("Submit deck").interactable);
+            Assert.AreEqual("Rares 3/1      Mythics 3/1", Board().Draft.RarityText, "both are over");
+            Assert.AreEqual(2, System.Text.RegularExpressions.Regex.Matches(Board().Draft.RarityMarkup, "<color=").Count, "and both are in red");
 
             // The pool's rarities run common, uncommon, rare, mythic card by card: three rares, three mythics.
             yield return ToggleCard("Card302");
             yield return ToggleCard("Card306");
             Assert.AreEqual("At most 1 mythic cards (3 chosen).", Board().Draft.ProblemText, "the rares are fine now");
+            Assert.AreEqual("Rares 1/1      Mythics 3/1", Board().Draft.RarityText);
+            Assert.AreEqual(1, System.Text.RegularExpressions.Regex.Matches(Board().Draft.RarityMarkup, "<color=").Count, "only the mythics are in red");
             ScreenshotHelper.Capture("draft-sealed-caps");
         }
 

@@ -65,6 +65,7 @@ namespace MoodSwings.UI
         private readonly Text _status;
         private readonly RectTransform _content;
         private readonly Text _problem;
+        private readonly Text _rarities;
         private readonly RectTransform _buttons;
         private readonly HashSet<int> _selected = new HashSet<int>();
         private readonly List<Cell> _cells = new List<Cell>();
@@ -105,6 +106,10 @@ namespace MoodSwings.UI
 
             _problem = UiFactory.Label(_root, string.Empty, 26, theme.danger, TextAnchor.MiddleLeft);
             UiFactory.Size(_problem.gameObject, height: 36f);
+            _rarities = UiFactory.Label(_root, string.Empty, 26, theme.textMuted, TextAnchor.MiddleLeft);
+            UiFactory.Size(_rarities.gameObject, height: 36f);
+            _rarities.supportRichText = true;
+            _rarities.gameObject.SetActive(false);
             var buttons = UiFactory.Row(_root, "Buttons", 16f, TextAnchor.MiddleRight);
             // The buttons sit in from the right edge and up from the bottom: a phone's rounded corner isn't part of its safe
             // area, and clips a button that is right in it.
@@ -122,6 +127,12 @@ namespace MoodSwings.UI
         public string StatusText => _status.text;
 
         public string ProblemText => _problem.text;
+
+        /// <summary>The Rares and Mythics line under the deck's size, as marked up (a count over its limit is in the danger color).</summary>
+        public string RarityMarkup => _rarities.gameObject.activeSelf ? _rarities.text : string.Empty;
+
+        /// <summary>The same line without its markup.</summary>
+        public string RarityText => System.Text.RegularExpressions.Regex.Replace(RarityMarkup, "<[^>]+>", string.Empty);
 
         /// <summary>How many cards are selected right now (picks to keep, or cards in the deck).</summary>
         public int SelectedCount => _selected.Count;
@@ -169,6 +180,8 @@ namespace MoodSwings.UI
             _lineHighlights.Clear();
             _problem.text = string.Empty;
             _problem.color = _theme.textMuted;
+            _rarities.text = string.Empty;
+            _rarities.gameObject.SetActive(false);
             _refresh = null;
             _singlePick = false;
             _pickLimit = int.MaxValue;
@@ -669,8 +682,18 @@ namespace MoodSwings.UI
                 var problem = DraftDisplay.DeckProblem(building, chosen);
                 _problem.text = problem ?? $"{chosen.Count} cards in your deck.";
                 _problem.color = problem != null ? _theme.danger : _theme.textMuted;
+                ShowRarityCounts(building, chosen);
                 submit.interactable = problem == null && !_busy;
             };
+        }
+
+        // A pool game caps its rares and mythics: show how many of each are in the deck, in red once one is over its limit.
+        private void ShowRarityCounts(DraftDeckBuilding building, IReadOnlyCollection<BoardCard> chosen)
+        {
+            var counts = DraftDisplay.RarityCounts(building, chosen);
+            _rarities.gameObject.SetActive(counts.Count > 0);
+            var danger = ColorUtility.ToHtmlStringRGB(_theme.danger);
+            _rarities.text = string.Join("      ", counts.Select(c => c.Over ? $"<color=#{danger}><b>{c.Label}</b></color>" : c.Label));
         }
 
         // Maps card ids (one per copy) back to positions in the pool, so duplicates are matched one for one.
