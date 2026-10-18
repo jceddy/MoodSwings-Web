@@ -14043,6 +14043,27 @@ than a parallel bespoke system:
   nothing. An exhaustive search over every subset of the nine moods in play
   (through the real engine) found exactly one winning set.
 
+- **25th puzzle, "Forced Hand"** (a Compulsion puzzle: the line that plays
+  your other two cards looks like a win but ties, because one of them
+  switches on an opponent mood that cares about color; the win is to take
+  the opponent's lone card with Compulsion and play it), medium, `win_game`,
+  no new puzzle infrastructure (Joy seeded in play and as
+  `extra_play_source_card_id`, so there are two plays). Both sides have two
+  round wins and the opponent went first (a tie is theirs). The opponent has
+  Loyalty (3, but 6 while two or more green and/or blue moods are in play)
+  and Self-Loathing (6) in play and holds Boredom: 9, with Joy's green the
+  only one Loyalty is waiting on. The solver has Joy (3) in play and holds
+  Compulsion (red 3), Ambivalence (blue 6, but 3 while two or more red and/or
+  green moods are in play) and Pity (black 3, but 6 while two or more blue
+  and/or red moods are in play). The one winning line: Compulsion (the
+  opponent's only card, Boredom, comes to your hand), then Boredom -- 3 + 3 +
+  4 = 10 against 9. Ambivalence + Pity looks like 12 against 9 but
+  Ambivalence's blue switches Loyalty on: 12-12, a tie. Compulsion + Pity
+  ties 9-9; Compulsion + Ambivalence loses (Ambivalence drops to 3 and
+  Loyalty is on). An exhaustive search through the real engine, every play
+  order and the one forced Compulsion outcome, found exactly one winning
+  line.
+
 ### Duel: separate per-player decks
 
 `format: 'duel'` and `format: 'draft'` (see "Draft format" below) are the

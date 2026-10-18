@@ -380,6 +380,13 @@
             <div id="draft-deck-building" hidden>
                 <h3 id="draft-deck-building-title"></h3>
                 <p id="draft-deck-building-status"></p>
+                <!-- Live selection counters (renderDraftDeckBuilding() fills these): cards selected so far
+                     (red under the format's minimum), and -- Sealed Pool of the Day/Weekly Sealed Pool only --
+                     rares/mythics selected against their caps (each number red once over its cap). -->
+                <p id="draft-deck-counts" class="deck-counts" hidden>
+                    <span id="draft-deck-selected-count"></span>
+                    <span id="draft-deck-rarity-counts"></span>
+                </p>
                 <div id="draft-deck-team-drafted" hidden></div>
                 <div id="draft-deck-picker"></div>
                 <div id="draft-deck-selection-actions">

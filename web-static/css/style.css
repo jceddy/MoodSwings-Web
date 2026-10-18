@@ -812,6 +812,17 @@ dialog#resources-dialog #resources-close-button {
     color: var(--color-success);
 }
 
+/* Deck builder's live selection counters (#draft-deck-counts): the number
+   itself turns the error color when it is out of bounds. */
+#draft-deck-rarity-counts {
+    margin-left: 1rem;
+}
+
+.deck-counts .count-out-of-bounds {
+    color: var(--color-error);
+    font-weight: bold;
+}
+
 .waiting-icon {
     display: inline-block;
     margin-right: 0.35rem;

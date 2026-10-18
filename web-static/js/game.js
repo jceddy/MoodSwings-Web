@@ -10433,8 +10433,10 @@
         const clearSelectionButton = document.getElementById('draft-deck-clear-selection-button');
         const resetButton = document.getElementById('draft-deck-reset-button');
         const statusEl = document.getElementById('draft-deck-building-status');
+        const countsEl = document.getElementById('draft-deck-counts');
 
         if (deckBuilding.you_submitted) {
+            countsEl.hidden = true;
             statusEl.innerHTML = '';
             // other_players (issue #189) covers every other seated player --
             // 1 for Winston/Grid Draft and 2-player Quick Draft, up to 3 for
@@ -10540,6 +10542,8 @@
             picker.appendChild(thumb);
         });
 
+        renderDraftDeckCounts(deckBuilding);
+
         // Sealed Pool of the Day's own per-rarity caps (see this
         // function's own rarityCapsText above) -- mirrors
         // GameService::assertWithinPeriodicSealedPoolRarityCaps() so a
@@ -10561,6 +10565,47 @@
         // reset back to -- the very first game's own trim has nothing
         // yet, so this stays hidden rather than resetting to nothing.
         resetButton.hidden = !deckBuilding.previous_deck_card_ids;
+    }
+
+    /**
+     * The deck builder's live counters: how many cards are selected (red
+     * while under the format's minimum -- or over its maximum, since Submit
+     * is disabled then too), and, for the daily/weekly sealed pools
+     * (deckBuilding.rarity_caps), how many rares and mythics are selected
+     * against their caps, each number red once it goes over its cap.
+     */
+    function renderDraftDeckCounts(deckBuilding) {
+        const countsEl = document.getElementById('draft-deck-counts');
+        const selectedEl = document.getElementById('draft-deck-selected-count');
+        const rarityEl = document.getElementById('draft-deck-rarity-counts');
+
+        const selectedCount = draftDeckSelection.size;
+        const outOfBounds = selectedCount < deckBuilding.min_deck_size || selectedCount > deckBuilding.max_deck_size;
+        selectedEl.textContent = '';
+        selectedEl.appendChild(document.createTextNode('Cards selected: '));
+        const selectedNumber = document.createElement('span');
+        selectedNumber.textContent = String(selectedCount);
+        selectedNumber.classList.toggle('count-out-of-bounds', outOfBounds);
+        selectedEl.appendChild(selectedNumber);
+        selectedEl.appendChild(document.createTextNode(' (minimum ' + deckBuilding.min_deck_size + ')'));
+
+        rarityEl.textContent = '';
+        if (deckBuilding.rarity_caps) {
+            Object.entries(deckBuilding.rarity_caps).forEach(([rarity, cap], position) => {
+                const count = [...draftDeckSelection].filter((index) => deckBuilding.drafted_cards[index].rarity === rarity).length;
+                if (position > 0) {
+                    rarityEl.appendChild(document.createTextNode(', '));
+                }
+                rarityEl.appendChild(document.createTextNode(rarity.charAt(0).toUpperCase() + rarity.slice(1) + 's: '));
+                const number = document.createElement('span');
+                number.textContent = String(count);
+                number.classList.toggle('count-out-of-bounds', count > cap);
+                rarityEl.appendChild(number);
+                rarityEl.appendChild(document.createTextNode(' of ' + cap));
+            });
+        }
+
+        countsEl.hidden = false;
     }
 
     document.getElementById('draft-deck-select-all-button').addEventListener('click', () => {
