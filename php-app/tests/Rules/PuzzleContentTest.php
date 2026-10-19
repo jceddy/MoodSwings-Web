@@ -2217,6 +2217,83 @@ final class PuzzleContentTest extends TestCase
         }
     }
 
+    /**
+     * Plays Cut Your Losses' Hate bottoming the mood named by [catalog id, owner:
+     * 'solver'|'opponent'|'hate'] ('hate' is the Hate being played itself), or
+     * nothing when $target is null.
+     *
+     * @param array{0: int, 1: string}|null $target
+     * @return array<string, mixed>
+     */
+    private function playCutYourLossesHate(int $gameId, int $p, ?array $target): array
+    {
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+        $choices = [];
+        if ($target !== null) {
+            [$catalogId, $who] = $target;
+            $choices['target_mood_id'] = match ($who) {
+                'hate' => $this->instanceId($gameId, 66, 'hand'),
+                'opponent' => $this->ownedInstanceId($gameId, $catalogId, 'in_play', $opp),
+                default => $this->ownedInstanceId($gameId, $catalogId, 'in_play', $p),
+            };
+        }
+
+        return $this->playDriven($gameId, $p, $this->instanceId($gameId, 66, 'hand'), $choices);
+    }
+
+    /**
+     * "Cut Your Losses": the only winning line (exhaustive search of the real
+     * flow, every play order and every Hate target) is Hate bottoming ITSELF,
+     * then the Disregard it draws: with Hate gone only Pity is black, so
+     * Disregard stays at 6 -- 3 + 6 + 6 = 15 against 14. See migration 0463's
+     * own docblock.
+     */
+    public function testCutYourLossesSolvedByHateBottomingItselfThenDisregard(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('cut-your-losses');
+
+        $this->playCutYourLossesHate($gameId, $p, [66, 'hate']);
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 113, 'hand'));
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameSolved($gameId, $p);
+    }
+
+    /** Bottoming the opponent's Boredom (Pity drops) or Complacency (Frustration jumps) and then Apathy ties. */
+    public function testCutYourLossesBottomingBoredomOrComplacencyThenApathyTies(): void
+    {
+        foreach ([83, 5] as $catalogId) {
+            ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('cut-your-losses');
+
+            $this->playCutYourLossesHate($gameId, $p, [$catalogId, 'opponent']);
+            $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 55, 'hand'));
+
+            self::assertTrue($result['game_completed'], (string) $catalogId);
+            $this->assertGameFailed($gameId);
+        }
+    }
+
+    /** Every other Hate target, followed by the drawn Disregard, loses: Hate stays in play or something backfires. */
+    public function testCutYourLossesEveryOtherTargetLoses(): void
+    {
+        $targets = [[83, 'opponent'], [5, 'opponent'], [9, 'opponent'], [90, 'opponent'], [125, 'solver'], [72, 'solver'], [66, 'hate']];
+        foreach ($targets as $i => $target) {
+            if ($i === 6) {
+                // Hate bottoming itself, then Apathy (not the drawn Disregard).
+                ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('cut-your-losses');
+                $this->playCutYourLossesHate($gameId, $p, $target);
+                $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 55, 'hand'));
+            } else {
+                ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('cut-your-losses');
+                $this->playCutYourLossesHate($gameId, $p, $target);
+                $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 113, 'hand'));
+            }
+
+            self::assertTrue($result['game_completed'], json_encode($target));
+            $this->assertGameFailed($gameId);
+        }
+    }
+
     /** A solve is never marked failed, and puzzle_failed is false while an attempt is open. */
     public function testDeadHeatSolveIsNotFailedAndOpenAttemptIsNotFailed(): void
     {
