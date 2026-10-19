@@ -993,7 +993,20 @@ namespace MoodSwings.Tests
             var server = Serve(HarmonyGame());
             yield return PhaseFiveSceneTests.OpenBoard(server, 406);
 
-            Assert.IsTrue(Texts().Contains("Discard 1  -  play from it"), string.Join(" | ", Texts()));
+            Assert.IsTrue(Texts().Contains("Discard 1\n(play from it)"), "stacked, so it can't run off the screen: " + string.Join(" | ", Texts()));
+
+            // Both lines are centered over the pile and inside the screen.
+            var caption = Object.FindObjectsByType<Text>(FindObjectsInactive.Exclude).First(t => t.text.StartsWith("Discard 1"));
+            Assert.AreEqual(TextAnchor.LowerCenter, caption.alignment);
+            var screen = Object.FindAnyObjectByType<Canvas>().rootCanvas.GetComponent<RectTransform>();
+            var screenCorners = new Vector3[4];
+            screen.GetWorldCorners(screenCorners);
+            var corners = new Vector3[4];
+            caption.rectTransform.GetWorldCorners(corners);
+            var pile = caption.transform.parent.Find("Window");
+            Assert.AreEqual(((RectTransform)pile).position.x, caption.rectTransform.position.x, 0.5f, "centered on the pile");
+            Assert.GreaterOrEqual(corners[0].x, screenCorners[0].x - 0.5f);
+            Assert.LessOrEqual(caption.preferredWidth, caption.rectTransform.rect.width, "the widest line fits in the space for it");
             Assert.IsFalse(Board().DiscardOverlay.IsOpen);
             ScreenshotHelper.Capture("discard-playable");
         }

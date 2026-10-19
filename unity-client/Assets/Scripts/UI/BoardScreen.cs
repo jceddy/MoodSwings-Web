@@ -2115,7 +2115,7 @@ namespace MoodSwings.UI
             var top = state.DiscardPile.LastOrDefault();
             var playable = BoardDisplay.CanAct(state) && state.DiscardPile.Any(c => c.IsPlayable);
             BuildPile(theme, piles, "Discard", 0.065f,
-                $"Discard {state.DiscardPile.Count}" + (playable ? "  -  play from it" : string.Empty), top,
+                $"Discard {state.DiscardPile.Count}" + (playable ? "\n(play from it)" : string.Empty), top,
                 onClick: OpenDiscardPile, highlight: playable);
         }
 
@@ -2257,14 +2257,16 @@ namespace MoodSwings.UI
             face.pivot = new Vector2(0.5f, 1f);
             face.anchoredPosition = Vector2.zero;
 
-            // One line above it, centered on the pile even if it's wider than the card.
-            var caption = UiFactory.Label(column, captionText, 24, highlight ? theme.accent : theme.textMuted);
+            // A line above it (a second one stacked over the pile, not beside the first, which would run off the screen),
+            // each centered on the pile even if it's wider than the card.
+            var caption = UiFactory.Label(column, captionText, 24, highlight ? theme.accent : theme.textMuted, TextAnchor.LowerCenter);
             caption.name = "Caption";
             caption.raycastTarget = false;
             caption.horizontalOverflow = HorizontalWrapMode.Overflow;
             caption.rectTransform.anchorMin = caption.rectTransform.anchorMax = new Vector2(0.5f, 0f);
             caption.rectTransform.pivot = new Vector2(0.5f, 0f);
-            caption.rectTransform.sizeDelta = new Vector2(PileWidth + 120f, 32f);
+            var lines = captionText.Split('\n').Length;
+            caption.rectTransform.sizeDelta = new Vector2(PileWidth + 120f, 30f * lines + 2f);
             caption.rectTransform.anchoredPosition = new Vector2(0f, PilePeek + 2f);
         }
 
