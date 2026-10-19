@@ -14068,13 +14068,14 @@ than a parallel bespoke system:
   target backfires; the win is Hate bottoming itself, so the drawn card plays
   at full value), hard, `win_game`, no new puzzle infrastructure (Joy seeded
   in play and as `extra_play_source_card_id`, so there are two plays; the
-  drawn card is seeded as the top of the deck). Both sides have two round wins
+  drawn card is seeded as the top of a full filler deck, and the description
+  deliberately doesn't name it). Both sides have two round wins
   and the opponent went first (a tie is theirs). The opponent has Discipline
   (white 6, but 3 while two or more black and/or red moods are in play),
   Frustration (red 6, but 3 while two or more white and/or blue moods are in
   play), Complacency (4) and Boredom (4): 14. The solver has Joy (3) and Pity
   (black 3, but 6 while two or more blue and/or red moods are in play): 9, and
-  holds Hate and Apathy with Disregard (green 6, but 3 while two or more blue
+  holds Hate and Apathy, with Disregard (green 6, but 3 while two or more blue
   and/or black moods are in play) on top of the deck. The one winning line:
   Hate bottoming itself, then Disregard -- only Pity is black, so Disregard
   stays at 6: 3 + 6 + 6 = 15 against 14. Bottoming Boredom drops Pity to 3
