@@ -1312,6 +1312,55 @@ namespace MoodSwings.Tests
             Assert.IsTrue(Board().Choices.IsOpen, "an answer that is owed can't be dismissed");
         }
 
+        // --- looking at the board before answering ---------------------------------------------------------
+
+        [UnityTest]
+        public IEnumerator Choosing_YouCanLookAtTheBoard_AndComeBackToTheSameQuestion()
+        {
+            var server = Serve(PhaseFiveSceneTests.Load(407));
+            yield return PhaseFiveSceneTests.OpenBoard(server, 407);
+            var option = Object.FindObjectsByType<Button>(FindObjectsInactive.Exclude).First(b => b.name.StartsWith("Option Loyalty"));
+            yield return PhaseFiveSceneTests.Tap(option);
+            Assert.IsTrue(Board().Choices.SubmitEnabled);
+            Assert.IsNull(PhaseTwoSceneTests.FindButton("Back to decision"), "nothing to go back to yet");
+
+            yield return PhaseTwoSceneTests.Click("View board");
+            yield return PhaseTwoSceneTests.Frames(4);
+
+            Assert.IsFalse(Board().Choices.IsCovering, "the form is out of the way");
+            Assert.IsTrue(Board().Choices.IsOpen, "but the question is still outstanding");
+            Assert.IsTrue(Board().Choices.IsViewingBoard);
+            Assert.IsNotNull(PhaseTwoSceneTests.FindButton("Back to decision"));
+            ScreenshotHelper.Capture("choice-view-board");
+
+            // The board is read again while looking, and that doesn't put the form back over it.
+            yield return PhaseFiveSceneTests.Poll();
+            Assert.IsFalse(Board().Choices.IsCovering);
+            Assert.IsTrue(Board().Choices.IsViewingBoard);
+
+            yield return PhaseTwoSceneTests.Click("Back to decision");
+            yield return PhaseTwoSceneTests.Frames(4);
+
+            Assert.IsTrue(Board().Choices.IsCovering);
+            Assert.IsFalse(Board().Choices.IsViewingBoard);
+            Assert.IsNull(PhaseTwoSceneTests.FindButton("Back to decision"));
+            Assert.IsTrue(Board().Choices.SubmitEnabled, "the choice made before looking is still made");
+        }
+
+        [UnityTest]
+        public IEnumerator WhileLookingAtTheBoard_BackReturnsToTheQuestion()
+        {
+            var server = Serve(PhaseFiveSceneTests.Load(407));
+            yield return PhaseFiveSceneTests.OpenBoard(server, 407);
+            yield return PhaseTwoSceneTests.Click("View board");
+
+            Assert.IsTrue(Board().HandleBack());
+
+            Assert.IsTrue(Board().Choices.IsCovering);
+            Assert.IsTrue(Board().HandleBack() == false, "an answer that is owed can't be dismissed");
+            Assert.IsTrue(Board().Choices.IsOpen);
+        }
+
         // --- Winston's piles: five to a row, and face-down piles show card backs -------------------------
 
         private static float TopOf(Transform t) => ((RectTransform)t).position.y;

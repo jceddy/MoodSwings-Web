@@ -1211,7 +1211,7 @@ namespace MoodSwings.UI
 
         private bool AnyPopUpOrDrag() =>
             IsDragging || _detail.activeSelf || _discardOverlay.IsOpen || _deckList.IsOpen || _menuOverlay.activeSelf || _teammateOverlay.activeSelf
-            || _choices.IsOpen || _confirm.IsOpen;
+            || _choices.IsCovering || _confirm.IsOpen;
 
         /// <summary>Wires a card to bring up the preview while a mouse rests on it.</summary>
         private void MakeHoverable(Component card, BoardCard data)
