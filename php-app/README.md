@@ -14064,6 +14064,26 @@ than a parallel bespoke system:
   order and the one forced Compulsion outcome, found exactly one winning
   line.
 
+- **26th puzzle, "Cut Your Losses"** (a Hate puzzle: every appealing Hate
+  target backfires; the win is Hate bottoming itself, so the drawn card plays
+  at full value), hard, `win_game`, no new puzzle infrastructure (Joy seeded
+  in play and as `extra_play_source_card_id`, so there are two plays; the
+  drawn card is seeded as the top of a full filler deck, and the description
+  deliberately doesn't name it). Both sides have two round wins
+  and the opponent went first (a tie is theirs). The opponent has Discipline
+  (white 6, but 3 while two or more black and/or red moods are in play),
+  Frustration (red 6, but 3 while two or more white and/or blue moods are in
+  play), Complacency (4) and Boredom (4): 14. The solver has Joy (3) and Pity
+  (black 3, but 6 while two or more blue and/or red moods are in play): 9, and
+  holds Hate and Apathy, with Disregard (green 6, but 3 while two or more blue
+  and/or black moods are in play) on top of the deck. The one winning line:
+  Hate bottoming itself, then Disregard -- only Pity is black, so Disregard
+  stays at 6: 3 + 6 + 6 = 15 against 14. Bottoming Boredom drops Pity to 3
+  (10-10 with Apathy), bottoming Complacency lets Frustration jump to 6
+  (13-13 with Apathy); Hate left in play makes Disregard a 3. An exhaustive
+  search through the real engine, every play order and every Hate target,
+  found exactly one winning line.
+
 ### Duel: separate per-player decks
 
 `format: 'duel'` and `format: 'draft'` (see "Draft format" below) are the

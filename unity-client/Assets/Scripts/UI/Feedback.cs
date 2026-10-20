@@ -1,3 +1,4 @@
+using System.Linq;
 using MoodSwings.Core;
 using UnityEngine;
 
@@ -13,6 +14,7 @@ namespace MoodSwings.UI
         GameWon,
         GameLost,
         Chat,
+        Zap,
     }
 
     public enum HapticKind
@@ -70,6 +72,10 @@ namespace MoodSwings.UI
                     return new FeedbackPlan(SoundId.GameLost, HapticKind.Heavy);
                 case CueKind.Chat:
                     return new FeedbackPlan(SoundId.Chat, null);
+                case CueKind.MoodsDestroyed:
+                    // Felt when it is yours that did it, or yours that was struck.
+                    var involved = cue.PlayerId == viewerGamePlayerId || cue.Removed.Any(m => m.OwnerGamePlayerId == viewerGamePlayerId);
+                    return new FeedbackPlan(SoundId.Zap, involved ? HapticKind.Medium : (HapticKind?)null);
                 default:
                     return null;
             }

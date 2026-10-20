@@ -1570,6 +1570,74 @@ namespace MoodSwings.Tests
             ScreenshotHelper.Capture("plays-left-three");
         }
 
+        private sealed class ZapSounds : ISoundPlayer
+        {
+            public readonly System.Collections.Generic.List<SoundId> Played = new System.Collections.Generic.List<SoundId>();
+
+            public void Play(SoundId sound) => Played.Add(sound);
+        }
+
+        private static IEnumerator WaitUntilTrue(System.Func<bool> condition, float seconds)
+        {
+            var waited = 0f;
+            while (!condition() && waited < seconds)
+            {
+                waited += Time.unscaledDeltaTime;
+                yield return null;
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator AMoodThatTakesOthersOutOfPlay_StrikesThemWithLightning_BeforeTheyAreDiscarded()
+        {
+            var sounds = new ZapSounds();
+            GameFeedback.Sound = sounds;
+            try
+            {
+                var server = Serve();
+                server.State = Quiet(406, s => { });
+                yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+                Assert.AreEqual(0, PhaseFiveSceneTests.Board().ZappedCardCount);
+
+                // A Shock is played, and Frustration (the other player's) goes to the discard pile.
+                server.State = Quiet(406, s =>
+                {
+                    var inPlay = (Newtonsoft.Json.Linq.JArray)s["in_play"];
+                    var struck = inPlay[1];
+                    inPlay.RemoveAt(1);
+                    ((Newtonsoft.Json.Linq.JArray)s["discard_pile"]).Add(struck);
+                    var shock = inPlay[0].DeepClone();
+                    shock["card_id"] = 14190;
+                    shock["name"] = "Shock";
+                    shock["effect_key"] = "shock";
+                    inPlay.Add(shock);
+                });
+
+                // The struck mood stays on the table when the board is redrawn without it ...
+                yield return WaitUntilTrue(() => PhaseFiveSceneTests.Board().ZappedCardCount > 0, 7f);
+                Assert.AreEqual(1, PhaseFiveSceneTests.Board().ZappedCardCount, "still on the table, about to be struck");
+                CollectionAssert.DoesNotContain(sounds.Played, SoundId.Zap, "the sound goes with the bolt");
+
+                // ... until the bolt lands, with its sound.
+                yield return WaitUntilTrue(() => PhaseFiveSceneTests.Board().LightningBoltCount > 0, 2f);
+                Assert.AreEqual(1, PhaseFiveSceneTests.Board().LightningBoltCount);
+                CollectionAssert.Contains(sounds.Played, SoundId.Zap);
+                yield return new WaitForSeconds(0.25f);
+                Assert.Greater(Object.FindAnyObjectByType<LightningLayer>().VertexCount, 0, "something is being drawn");
+                ScreenshotHelper.Capture("lightning");
+
+                // Then it fades away, and nothing is left behind.
+                yield return WaitUntilTrue(() => PhaseFiveSceneTests.Board().ZappedCardCount == 0 && PhaseFiveSceneTests.Board().LightningBoltCount == 0, 3f);
+                Assert.AreEqual(0, PhaseFiveSceneTests.Board().ZappedCardCount);
+                Assert.AreEqual(0, PhaseFiveSceneTests.Board().LightningBoltCount);
+                Assert.AreEqual(1, sounds.Played.Count(s => s == SoundId.Zap), "it zapped once");
+            }
+            finally
+            {
+                GameFeedback.Sound = null;
+            }
+        }
+
         [UnityTest]
         public IEnumerator ABlissInPlay_NamesTheColorDiscardedToIt_WhenClicked()
         {
