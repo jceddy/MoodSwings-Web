@@ -117,6 +117,10 @@ namespace MoodSwings.UI
         private GameObject _detail;
         private Text _logBody;
         private Text _chatBody;
+        private EmojiText _chatEmoji;
+        private GameObject _emojiPicker;
+        private GameObject _chatQuick;
+        private bool _chatSending;
         private GameObject _chatEntry;
         private InputField _chatInput;
         private Text _chatError;
@@ -858,6 +862,8 @@ namespace MoodSwings.UI
             UiFactory.Flexible(chatScroll.gameObject, height: 1f);
             _chatPane = chatScroll.gameObject;
             _chatBody = UiFactory.Label(chatContent, string.Empty, 26, theme.textPrimary, TextAnchor.UpperLeft);
+            // Emoji in what people say are drawn as images: the text can't draw them itself.
+            _chatEmoji = _chatBody.gameObject.AddComponent<EmojiText>();
 
             var close = UiFactory.Button(panel, "Close", theme, CloseOverlays, primary: false);
             close.gameObject.name = "Close menu";
@@ -889,6 +895,12 @@ namespace MoodSwings.UI
             _logPane.SetActive(!chat);
             _chatPane.SetActive(chat);
             _chatEntry.SetActive(chat && _chatEntryAllowed);
+            _chatQuick.SetActive(chat && _chatEntryAllowed);
+            if (!chat || !_chatEntryAllowed)
+            {
+                _emojiPicker.SetActive(false);
+            }
+
             _chatChannelRow.SetActive(chat && _chatChannelAllowed);
             _chatError.gameObject.SetActive(chat);
             foreach (var tab in new[] { _logTab, _chatTab })
@@ -1171,6 +1183,7 @@ namespace MoodSwings.UI
         // A line to say something to the table, above the chat's Close button. Players only.
         private void BuildChatEntry(UiTheme theme, RectTransform panel)
         {
+            EmojiSprites.EnsureLoaded();
             _chatError = UiFactory.Label(panel, string.Empty, 24, theme.danger, TextAnchor.MiddleLeft);
             UiFactory.Size(_chatError.gameObject, height: 30f);
             _chatError.transform.SetSiblingIndex(panel.childCount - 2);
@@ -1188,25 +1201,119 @@ namespace MoodSwings.UI
             UiFactory.Size(_chatToTeam.gameObject, 280f, 56f);
             _chatChannelRow.SetActive(false);
 
+            BuildEmojiPicker(theme, panel);
+
             var row = UiFactory.Row(panel, "ChatEntry", 12f, TextAnchor.MiddleCenter);
             _chatEntry = row.gameObject;
             row.transform.SetSiblingIndex(panel.childCount - 2);
             UiFactory.Size(_chatEntry, height: UiFactory.ControlHeight);
 
-            _chatInput = UiFactory.Input(row.transform, "Say something to the table", theme);
+            _chatInput = UiFactory.Input(row.transform, "Say something", theme);
             _chatInput.characterLimit = 500;
             UiFactory.Flexible(_chatInput.gameObject, width: 1f);
             _chatInput.onEndEdit.AddListener(_ =>
             {
                 if (KeyInput.EnterPressed)
                 {
-                    Run(SendChat);
+                    Run(() => SendChat(_chatInput.text, fromBox: true));
                 }
             });
 
-            var send = UiFactory.Button(row.transform, "Send", theme, () => Run(SendChat));
+            // The emoji picker opens above the box.
+            var more = UiFactory.Button(row.transform, string.Empty, theme, () => _emojiPicker.SetActive(!_emojiPicker.activeSelf), primary: false);
+            more.gameObject.name = "Emoji picker button";
+            UiFactory.Size(more.gameObject, UiFactory.ControlHeight, UiFactory.ControlHeight);
+            AddEmojiImage(more.transform, EmojiSet.Find("1f600"), UiFactory.ControlHeight - 22f);
+
+            var send = UiFactory.Button(row.transform, "Send", theme, () => Run(() => SendChat(_chatInput.text, fromBox: true)));
             send.gameObject.name = "Send chat";
-            UiFactory.Size(send.gameObject, 180f);
+            UiFactory.Size(send.gameObject, 150f);
+
+            // Canned messages, one tap to send, as on the web: GL;HF, GG and some emoji.
+            var quick = UiFactory.Row(panel, "ChatQuick", 8f, TextAnchor.MiddleLeft);
+            quick.childForceExpandWidth = false;
+            quick.transform.SetSiblingIndex(panel.childCount - 2);
+            UiFactory.Size(quick.gameObject, height: 56f);
+            _chatQuick = quick.gameObject;
+            foreach (var message in QuickChat.Messages)
+            {
+                var text = message.Text;
+                var button = UiFactory.Button(quick.transform, message.Label, theme, () => Run(() => SendChat(text, fromBox: false)), primary: false);
+                button.gameObject.name = "Quick " + (message.EmojiHex ?? message.Label);
+                if (message.EmojiHex != null)
+                {
+                    UiFactory.Size(button.gameObject, 76f, 56f);
+                    AddEmojiImage(button.transform, EmojiSet.Find(message.EmojiHex), 40f);
+                }
+                else
+                {
+                    UiFactory.Size(button.gameObject, message.Label.Length > 2 ? 130f : 90f, 56f);
+                }
+            }
+        }
+
+        // An emoji picture in the middle of a button.
+        private static void AddEmojiImage(Transform button, EmojiEntry emoji, float size)
+        {
+            EmojiSprites.EnsureLoaded();
+            emoji = emoji ?? EmojiSet.Find("1f600");
+            if (emoji == null)
+            {
+                return;
+            }
+
+            var holder = UiFactory.Create("Emoji " + emoji.Name, button);
+            holder.anchorMin = holder.anchorMax = holder.pivot = new Vector2(0.5f, 0.5f);
+            holder.sizeDelta = new Vector2(size, size);
+            holder.anchoredPosition = Vector2.zero;
+            var image = holder.gameObject.AddComponent<Image>();
+            image.sprite = EmojiSprites.For(emoji);
+            image.preserveAspect = true;
+            image.raycastTarget = false;
+        }
+
+        // Every emoji the chat has, to tap into the box (as :shortcodes:, which are turned into the emoji when it is sent).
+        private void BuildEmojiPicker(UiTheme theme, RectTransform panel)
+        {
+            EmojiSprites.EnsureLoaded();
+            var scroll = UiFactory.ScrollList(panel, out var content);
+            scroll.gameObject.name = "Emoji picker";
+            scroll.transform.SetSiblingIndex(panel.childCount - 2);
+            UiFactory.Size(scroll.gameObject, height: 280f);
+            _emojiPicker = scroll.gameObject;
+
+            var gridHolder = UiFactory.Create("Emoji grid", content);
+            var grid = gridHolder.gameObject.AddComponent<GridLayoutGroup>();
+            grid.cellSize = new Vector2(52f, 52f);
+            grid.spacing = new Vector2(4f, 4f);
+            grid.constraint = GridLayoutGroup.Constraint.FixedColumnCount;
+            grid.constraintCount = 10;
+            gridHolder.gameObject.AddComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+            foreach (var emoji in EmojiSet.All)
+            {
+                var entry = emoji;
+                var button = UiFactory.Button(gridHolder, string.Empty, theme, () => AddToChat(entry), primary: false);
+                button.gameObject.name = "Pick " + entry.Name;
+                AddEmojiImage(button.transform, entry, 38f);
+            }
+
+            var credit = UiFactory.Label(content, "Emoji art: Twemoji, CC-BY 4.0", 18, theme.textMuted, TextAnchor.MiddleRight);
+            credit.raycastTarget = false;
+            UiFactory.Size(credit.gameObject, height: 26f);
+
+            _emojiPicker.SetActive(false);
+        }
+
+        private void AddToChat(EmojiEntry emoji)
+        {
+            var text = _chatInput.text + emoji.Shortcode;
+            if (text.Length <= _chatInput.characterLimit || _chatInput.characterLimit <= 0)
+            {
+                _chatInput.text = text;
+            }
+
+            _chatInput.ActivateInputField();
         }
 
         private bool AnyPopUpOrDrag() =>
@@ -1416,9 +1523,9 @@ namespace MoodSwings.UI
             UpdateHeader(state);
             _chatEntryAllowed = !BoardDisplay.IsSpectator(state);
             _logBody.text = LogText(state);
-            _chatBody.text = state.ChatMessages.Count == 0
+            _chatEmoji.SetText(state.ChatMessages.Count == 0
                 ? "No messages yet."
-                : string.Join("\n\n", state.ChatMessages.Select(m => (m.Channel == "team" ? "[team] " : string.Empty) + $"{m.SenderUsername}: {m.MessageText}"));
+                : string.Join("\n\n", state.ChatMessages.Select(m => (m.Channel == "team" ? "[team] " : string.Empty) + $"{m.SenderUsername}: {m.MessageText}")));
             _chatChannelAllowed = state.Game.Format == GameSetup.OpenTeamFormat && !BoardDisplay.IsSpectator(state);
             if (!_chatChannelAllowed)
             {
@@ -2445,7 +2552,7 @@ namespace MoodSwings.UI
             }
 
             // Resign lives in the menu.
-            var showResign = viewerSeated && inProgress && !BoardDisplay.IsPuzzle(state);
+            var showResign = viewerSeated && BoardDisplay.ResignOffered(state);
             _resignAction.gameObject.SetActive(showResign);
             _resignAction.interactable = BoardDisplay.CanResign(state) && !busy;
         }
@@ -2506,7 +2613,11 @@ namespace MoodSwings.UI
 
         private async Task Resign()
         {
-            if (!await _confirm.AskAsync("Resign this game? This cannot be undone.", "Resign", "Keep playing"))
+            var drafting = _session?.State != null && DraftDisplay.InDraftStage(_session.State);
+            var question = drafting
+                ? "Resign from this draft? You will leave the match, and this cannot be undone."
+                : "Resign this game? This cannot be undone.";
+            if (!await _confirm.AskAsync(question, "Resign", drafting ? "Stay in the draft" : "Keep playing"))
             {
                 return;
             }
@@ -2803,18 +2914,34 @@ namespace MoodSwings.UI
             }
         }
 
-        private async Task SendChat()
+        // What is in the box (or a quick chat button's message). Shortcodes become the emoji they name; the box is only
+        // cleared by sending what was in it.
+        private async Task SendChat(string text, bool fromBox)
         {
-            var result = await _session.SendChatAsync(_chatInput.text, _chatChannel);
-            if (this == null)
+            if (_chatSending)
             {
                 return;
             }
 
-            _chatError.text = result.Ok ? string.Empty : result.Message ?? "Couldn't send that message.";
-            if (result.Ok)
+            _chatSending = true;
+            try
             {
-                _chatInput.text = string.Empty;
+                var result = await _session.SendChatAsync(EmojiSet.ExpandShortcodes(text), _chatChannel);
+                if (this == null)
+                {
+                    return;
+                }
+
+                _chatError.text = result.Ok ? string.Empty : result.Message ?? "Couldn't send that message.";
+                if (result.Ok && fromBox)
+                {
+                    _chatInput.text = string.Empty;
+                    _emojiPicker.SetActive(false);
+                }
+            }
+            finally
+            {
+                _chatSending = false;
             }
         }
 

@@ -622,6 +622,43 @@ namespace MoodSwings.Tests
             ScreenshotHelper.Capture("draft-sealed-caps");
         }
 
+        [UnityTest]
+        public IEnumerator DuringDeckBuilding_APlayerCanResign_FromTheMenu()
+        {
+            var server = Serve(DraftBoard(DeckBuilding(poolSize: 14), null, "sealed_pool_of_the_day"));
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+            Assert.IsTrue(Board().Draft.IsShown);
+
+            yield return PhaseFiveSceneTests.OpenMenu();
+            var resign = PhaseFiveSceneTests.ButtonNamed("Resign");
+            Assert.IsNotNull(resign, "Resign is in the menu while building a deck");
+            Assert.IsTrue(resign.interactable);
+
+            yield return PhaseFiveSceneTests.Tap(resign);
+            Assert.IsTrue(Board().Confirm.IsOpen);
+            StringAssert.Contains("Resign from this draft", Board().Confirm.MessageText);
+            yield return PhaseFiveSceneTests.Tap(PhaseTwoSceneTests.FindButton("Stay in the draft"));
+            Assert.AreEqual(0, server.Posts("/games/resign").Count());
+
+            yield return PhaseFiveSceneTests.OpenMenu();
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.ButtonNamed("Resign"));
+            yield return PhaseFiveSceneTests.Tap(PhaseTwoSceneTests.FindButton("Resign"));
+            Assert.AreEqual(1, server.Posts("/games/resign").Count());
+        }
+
+        [UnityTest]
+        public IEnumerator DuringADraft_APlayerCanResign_FromTheMenu()
+        {
+            var server = Serve(Rotisserie());
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+
+            yield return PhaseFiveSceneTests.OpenMenu();
+
+            var resign = PhaseFiveSceneTests.ButtonNamed("Resign");
+            Assert.IsNotNull(resign);
+            Assert.IsTrue(resign.interactable);
+        }
+
         // --- Chaos Draft --------------------------------------------------------------------------
 
         private const string TwoEffects =

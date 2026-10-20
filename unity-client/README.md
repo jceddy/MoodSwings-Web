@@ -467,6 +467,22 @@ cards or all of them. The choice is stored on the device.
   `FilePickers` and `Assets/Plugins/Android/ArtPicker.java` (the dialogs). The Android picker has been compiled but
   **not yet run on a device**.
 
+## Chat and emoji
+
+The board's menu has the table's chat. Under the box are the quick buttons the web client has -- **GL;HF**, **GG** and five
+emoji -- which send at once (what is in the box is left alone); the smiley beside the box opens a picker of about a hundred
+emoji, which puts `:shortcodes:` (like `:skull:`) in the box, and a shortcode is turned into the emoji itself when the message
+is sent, so the web client and the other players see the real thing.
+
+The app's text system can't draw emoji: its font has none, and Unity's legacy `Text` skips every character outside the Basic
+Multilingual Plane, whatever the font. So `EmojiText` (UI) replaces each emoji it has an image for with a blank of the right
+width and lays the image over the blank once the text has been laid out; an emoji it has no image for is left out rather than
+shown as an empty box. `EmojiSet` (Core) finds emoji in text and expands shortcodes. The list and the art live in
+`Assets/Resources/Emoji/` (`emoji.txt` and one 72 px PNG each), made by `tools/fetch_emoji.py` -- edit the list there to add
+more and run it again.
+
+Emoji art: [Twemoji](https://github.com/jdecked/twemoji), graphics licensed CC-BY 4.0 (credited in the picker too).
+
 ## Stats, achievements and card stats
 
 - **Home > Stats** shows your lifetime games and matches as `wins-losses (NN%)` (the percentage only once
@@ -685,6 +701,7 @@ Python scripts in `tools/` (`pip install pillow` for the first):
   card as uncompressed RGBA32 (~3 MB instead of under 1 MB). Mipmaps are on
   (Kaiser filter, trilinear): cards are drawn at ~112 px from 744 px art, and
   without them the shrunken art is harsh, speckled noise.
+- `fetch_emoji.py` -- downloads the emoji the chat can draw (see Chat and emoji above) into `Assets/Resources/Emoji/`.
 - `publish_client.py` -- writes the update manifest for the builds (see Updates above) and, with `--upload`, publishes them.
 - `capture_fixtures.py` -- logs in to a server with a throwaway account
   (credentials from `MOODSWINGS_USER`/`MOODSWINGS_PASSWORD`) and saves

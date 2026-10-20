@@ -14,12 +14,15 @@ namespace MoodSwings.Editor
         // Committed art that isn't a card face: the card back. Small, so none of the card art's size tricks apply.
         private const string UiFolder = "Assets/Resources/UI/";
 
+        // The emoji the chat can draw (tools/fetch_emoji.py): 72 px, drawn at about 30.
+        private const string EmojiFolder = "Assets/Resources/Emoji/";
+
         // The table backgrounds (tools/make_backgrounds.py).
         private const string BackgroundFolder = "Assets/Resources/Backgrounds/";
 
         // Bump when the settings below change, so Unity reimports existing
         // textures (git-ignored art has no committed .meta to invalidate).
-        public override uint GetVersion() => 5;
+        public override uint GetVersion() => 6;
 
         private void OnPreprocessTexture()
         {
@@ -35,6 +38,20 @@ namespace MoodSwings.Editor
                 ui.filterMode = UnityEngine.FilterMode.Trilinear;
                 ui.maxTextureSize = 2048;
                 ui.textureCompression = TextureImporterCompression.Uncompressed;
+                return;
+            }
+
+            if (assetPath.StartsWith(EmojiFolder))
+            {
+                var emoji = (TextureImporter)assetImporter;
+                emoji.textureType = TextureImporterType.Sprite;
+                emoji.spriteImportMode = SpriteImportMode.Single;
+                emoji.mipmapEnabled = true;
+                emoji.mipmapFilter = TextureImporterMipFilter.KaiserFilter;
+                emoji.filterMode = UnityEngine.FilterMode.Trilinear;
+                emoji.alphaIsTransparency = true;
+                emoji.maxTextureSize = 128;
+                emoji.textureCompression = TextureImporterCompression.Uncompressed;
                 return;
             }
 
