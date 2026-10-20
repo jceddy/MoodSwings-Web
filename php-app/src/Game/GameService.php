@@ -3805,7 +3805,19 @@ final class GameService
                     "UPDATE game_cards SET effect_state = :effect_state
                      WHERE game_id = :game_id AND card_id = :card_id AND zone = 'in_play' LIMIT 1"
                 );
+                // 'playedInRound': 'current' and 'playedByPlayerId':
+                // 'solver'|'opponent' stand in for the live round's number
+                // and a seat's id, neither of which exists until the attempt
+                // does -- how a "played this round" mood (Patience, Glee)
+                // starts a puzzle already played by someone.
+                $seededLiveRoundNumber = (int) $puzzle['solver_round_wins'] + ($opponentGamePlayerId !== null ? (int) $puzzle['opponent_round_wins'] : 0) + 1;
                 foreach ($startingEffectState as $catalogCardId => $effectState) {
+                    if (($effectState['playedInRound'] ?? null) === 'current') {
+                        $effectState['playedInRound'] = $seededLiveRoundNumber;
+                    }
+                    if (isset($effectState['playedByPlayerId']) && is_string($effectState['playedByPlayerId'])) {
+                        $effectState['playedByPlayerId'] = $effectState['playedByPlayerId'] === 'solver' ? $gamePlayerId : $opponentGamePlayerId;
+                    }
                     $setEffectState->execute([
                         'effect_state' => json_encode($effectState),
                         'game_id' => $gameId,
@@ -3898,6 +3910,31 @@ final class GameService
                 'pending_play_grants' => json_encode($playGrants),
             ]);
             $currentRoundId = (int) $pdo->lastInsertId();
+
+            // puzzles.starting_skip_scoring_first_player: "your opponent
+            // played Awe this round" -- the round is already marked to skip
+            // scoring (see AweEffect), and the chosen seat goes first next
+            // round (a tie there goes to them). The marker's source is the
+            // opponent's own Awe on the board.
+            $startingSkipFirstPlayer = $puzzle['starting_skip_scoring_first_player'] ?? null;
+            if ($startingSkipFirstPlayer !== null && $opponentGamePlayerId !== null) {
+                $aweStmt = $pdo->prepare(
+                    "SELECT gc.id FROM game_cards gc JOIN cards c ON c.id = gc.card_id
+                     WHERE gc.game_id = :game_id AND gc.zone = 'in_play' AND gc.owner_game_player_id = :opponent AND c.effect_key = 'awe'
+                     ORDER BY gc.id LIMIT 1"
+                );
+                $aweStmt->execute(['game_id' => $gameId, 'opponent' => $opponentGamePlayerId]);
+                $aweInstanceId = $aweStmt->fetchColumn();
+                $pdo->prepare(
+                    'UPDATE game_rounds SET skip_scoring = 1, skip_scoring_first_player_game_player_id = :first_player,
+                        skip_scoring_source_card_id = :source_card, skip_scoring_owner_game_player_id = :owner WHERE id = :round_id'
+                )->execute([
+                    'first_player' => $startingSkipFirstPlayer === 'solver' ? $gamePlayerId : $opponentGamePlayerId,
+                    'source_card' => $aweInstanceId !== false ? (int) $aweInstanceId : null,
+                    'owner' => $opponentGamePlayerId,
+                    'round_id' => $currentRoundId,
+                ]);
+            }
 
             if ($preludeLog !== []) {
                 $this->seedPuzzlePreludeLog($gameId, $currentRoundId, $gamePlayerId, $opponentGamePlayerId, $preludeLog);
@@ -11757,6 +11794,14 @@ final class GameService
         $puzzleStmt->execute(['id' => (int) $game['puzzle_id']]);
         $puzzle = $puzzleStmt->fetch();
         $goalParams = json_decode((string) $puzzle['goal_params'], true);
+
+        // A round marked to skip scoring (Awe) can't be won, however the
+        // board reads: nothing is scored, so nobody wins the game from it.
+        // The attempt carries on into the next round instead -- see
+        // advancePuzzleTurn().
+        if ($puzzle['goal_type'] === 'win_game' && $this->hasSkipScoringMarker($state)) {
+            return false;
+        }
 
         $winsAwardedThisRound = null;
         $goalMet = match ($puzzle['goal_type']) {
