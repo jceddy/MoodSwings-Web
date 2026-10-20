@@ -2294,6 +2294,95 @@ final class PuzzleContentTest extends TestCase
         }
     }
 
+    /** The round number of the puzzle attempt's live round. */
+    private function liveRoundNumber(int $gameId): int
+    {
+        $stmt = $this->pdo->prepare("SELECT round_number FROM game_rounds WHERE game_id = :game_id AND status = 'in_progress'");
+        $stmt->execute(['game_id' => $gameId]);
+
+        return (int) $stmt->fetchColumn();
+    }
+
+    /**
+     * Plays Borrowed Time's first round: Insecurity, Awe as its additional
+     * mood (choosing $firstPlayerGamePlayerId to go first next round), then
+     * Patience.
+     */
+    private function playBorrowedTimeFirstRound(int $gameId, int $p, int $firstPlayerGamePlayerId): void
+    {
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 45, 'hand'));
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 107, 'hand'), ['target_player_id' => $firstPlayerGamePlayerId]);
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 21, 'hand'));
+    }
+
+    /**
+     * "Borrowed Time": the first puzzle that runs past one turn. Awe's "no
+     * scoring this round" carries the attempt into a second round (see
+     * migration 0465's own docblock): Insecurity, Awe (it stays in play --
+     * its return to hand is an after-scoring effect, and nothing is scored)
+     * and Patience (1 now, 5 next round), choosing yourself to go first, then
+     * Glee (6 because it is played in the new round): 0 + 2 + 4 + 5 + 6 = 17
+     * against 17, a tie that goes to the first player.
+     */
+    public function testBorrowedTimeSolvedAcrossTheAweRound(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('borrowed-time');
+
+        $firstRound = $this->liveRoundNumber($gameId);
+
+        $this->playBorrowedTimeFirstRound($gameId, $p, $p);
+
+        $this->assertGameNotSolved($gameId);
+        self::assertSame($firstRound + 1, $this->liveRoundNumber($gameId), 'Awe carried the attempt into a second round');
+        self::assertNotNull($this->ownedInstanceId($gameId, 107, 'in_play', $p), 'Awe stays in play: nothing is scored, so nothing returns it to hand');
+
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 92, 'hand'));
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameSolved($gameId, $p);
+    }
+
+    /** Choosing the OPPONENT to go first makes the same board 17-17 -- and a tie goes to them. */
+    public function testBorrowedTimeChoosingTheOpponentToGoFirstTies(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('borrowed-time');
+
+        $this->playBorrowedTimeFirstRound($gameId, $p, $this->opponentGamePlayerId($gameId, $p));
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 92, 'hand'));
+        $this->games->advanceAutomatedTurns($gameId);
+
+        $this->assertGameFailed($gameId);
+    }
+
+    /** Without Awe the turn simply ends the attempt: Glee now (worth 6) is only 9 against 17. */
+    public function testBorrowedTimeGleeNowWithoutAweLoses(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('borrowed-time');
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 45, 'hand'));
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 92, 'hand'));
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 21, 'hand'));
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameFailed($gameId);
+    }
+
+    /** Playing Glee in the first round wastes it: worth 0 once the next round begins. */
+    public function testBorrowedTimeGleeInTheFirstRoundIsWorthNothingLater(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('borrowed-time');
+        $firstRound = $this->liveRoundNumber($gameId);
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 45, 'hand'));
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 107, 'hand'), ['target_player_id' => $p]);
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 92, 'hand'));
+        self::assertSame($firstRound + 1, $this->liveRoundNumber($gameId));
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 21, 'hand'));
+        $this->games->advanceAutomatedTurns($gameId);
+
+        $this->assertGameFailed($gameId);
+    }
+
     /** A solve is never marked failed, and puzzle_failed is false while an attempt is open. */
     public function testDeadHeatSolveIsNotFailedAndOpenAttemptIsNotFailed(): void
     {

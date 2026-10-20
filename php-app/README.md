@@ -14084,6 +14084,33 @@ than a parallel bespoke system:
   search through the real engine, every play order and every Hate target,
   found exactly one winning line.
 
+- **27th puzzle, "Borrowed Time"** (an Awe / Insecurity puzzle: Awe's skipped
+  scoring means Insecurity's return-to-hand never happens and the solver gets
+  a second round), hard, `win_game`. **New puzzle infrastructure: a
+  `win_game` attempt can run past one turn -- but only through Awe.** A
+  `win_game` turn that ends without a win is still a loss
+  (`failPuzzleAttempt()`), except when Awe's skip-scoring marker is set:
+  `advancePuzzleTurn()` then calls `skipScoringAndAdvance()` (its new
+  `$turnPlayerId` argument seats the solver for the new round's turn -- the
+  puzzle opponent never plays -- while whoever Awe chose is still that
+  round's first player, i.e. who a tie goes to). The game's own rules do the
+  rest: everything in play stays, nothing is drawn, after-scoring tags
+  (Insecurity's return to hand) are cleared without firing, "played this
+  round" moods are re-stamped by round number, and Hope's turn-start grant
+  applies to the new round. Both sides have two round wins and the opponent
+  went first. The opponent has Self-Loathing (6), Bashfulness (6), Apathy (4)
+  and Panic (1): 17. The solver has Hope in play (two plays a turn) and holds
+  Insecurity (2), Awe (4), Patience (white 5, but 1 if played this round) and
+  Glee (red 0, but 6 if played this round). The one winning line: Insecurity,
+  Awe as its additional mood, Patience (worth 1 now, 5 once it was played
+  last round) and choose yourself to go first; next round, Glee (6): 0 + 2 +
+  4 + 5 + 6 = 17 against 17, a tie that goes to the first player Awe made
+  you. (Insecurity may equally be played in the second round -- the same
+  board.) Choosing the opponent to go first ties and loses; Glee now is 9
+  against 17, and Glee played in the first round is worth 0 later. An
+  exhaustive search through the real engine -- every play order, both Awe
+  choices, passing included -- found that one board.
+
 ### Duel: separate per-player decks
 
 `format: 'duel'` and `format: 'draft'` (see "Draft format" below) are the

@@ -11631,6 +11631,19 @@ final class GameService
         // -- a solve completes the game before ever getting here, see
         // playMood() -- the solver has lost; no second turn.
         if ($this->puzzleGoalType($gameId) === 'win_game') {
+            // The one exception: Awe. "There is no scoring this round" and
+            // the next round starts with whoever Awe chose going first --
+            // so the solver's turn doesn't end the attempt, it carries it
+            // into a second round (skipScoringAndAdvance()). Everything in
+            // play stays there, nothing is drawn, and the opponent (who
+            // never plays in a puzzle) keeps their board; the solver is
+            // seated for the new round's turn whoever was chosen first, and
+            // a chosen first player only matters for who a tie goes to (and
+            // first-player cards). Without Awe the turn ends the attempt.
+            if ($this->hasSkipScoringMarker($state)) {
+                return $this->skipScoringAndAdvance($gameId, $round, $state, $playerId);
+            }
+
             return $this->failPuzzleAttempt($gameId, $round, $playerId);
         }
 
@@ -14531,9 +14544,14 @@ final class GameService
      * not fired, so no "return to original owner" happens either now or
      * later; that's the effect never triggering, not triggering early.)
      *
+     * $turnPlayerId, when given, is who actually takes the new round's turn
+     * (default: whoever Awe chose to go first) -- a puzzle's one live seat is
+     * always the solver, while the chosen player is still the round's first
+     * player (who a tie goes to).
+     *
      * @return array{round_scored: bool, game_completed: bool}
      */
-    private function skipScoringAndAdvance(int $gameId, array $round, BoardState $state): array
+    private function skipScoringAndAdvance(int $gameId, array $round, BoardState $state, ?int $turnPlayerId = null): array
     {
         $roundId = (int) $round['id'];
 
@@ -14581,7 +14599,7 @@ final class GameService
         // seatFirstPlayerOverride(), which computes its own fresh grants
         // once that player is actually known, the same way
         // applyTurnOrderDecision()/applyClosedTeamLeaderDecision() already do.
-        $nextRoundGrants = $isTeamFormat ? [] : $this->computeFreshGrants($state, $nextFirstPlayer, 1);
+        $nextRoundGrants = $isTeamFormat ? [] : $this->computeFreshGrants($state, $turnPlayerId ?? $nextFirstPlayer, 1);
 
         $pdo = Connection::get();
         $pdo->beginTransaction();
@@ -14631,16 +14649,20 @@ final class GameService
                     'game_id' => $gameId,
                     'round_number' => (int) $round['round_number'] + 1,
                     'first_player' => $nextFirstPlayer,
-                    'first_player_turn' => $nextFirstPlayer,
+                    'first_player_turn' => $turnPlayerId ?? $nextFirstPlayer,
                     'plays_remaining' => count($nextRoundGrants),
                     'pending_play_grants' => json_encode($nextRoundGrants),
                 ]);
                 $newRoundId = (int) $pdo->lastInsertId();
-                $this->logFreshGrants($gameId, $newRoundId, $nextFirstPlayer, $nextRoundGrants);
+                $this->logFreshGrants($gameId, $newRoundId, $turnPlayerId ?? $nextFirstPlayer, $nextRoundGrants);
                 // Same gap as finishScoringAndAdvance()'s own "create the
                 // next round" INSERT -- this is Awe's own skip-scoring
                 // equivalent of it, and was missing the same notification.
-                $this->notifyItsYourTurn($newRoundId, $nextFirstPlayer);
+                // (A puzzle seats its solver regardless of who Awe chose to
+                // go first -- see advancePuzzleTurn() -- so no notification.)
+                if ($turnPlayerId === null) {
+                    $this->notifyItsYourTurn($newRoundId, $nextFirstPlayer);
+                }
             }
 
             $pdo->commit();
