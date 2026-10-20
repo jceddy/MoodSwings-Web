@@ -14084,6 +14084,42 @@ than a parallel bespoke system:
   search through the real engine, every play order and every Hate target,
   found exactly one winning line.
 
+- **27th puzzle, "Borrowed Time"** (an Awe / Recklessness puzzle: the opponent
+  has played Awe, so nothing is scored this round and Recklessness's "give it
+  back after scoring" never happens -- the steal is permanent), hard,
+  `win_game`. **New puzzle infrastructure: a puzzle can open in an Awe round
+  and run past one turn.** (1) `puzzles.starting_skip_scoring_first_player`
+  (`'solver'`/`'opponent'`, NULL = none): `createPuzzleAttempt()` marks the
+  live round as skipping scoring -- `game_rounds.skip_scoring` with the
+  opponent's own Awe as the source -- and that seat goes first next round
+  (who a tie there goes to). (2) A `win_game` turn that ends in a round
+  marked to skip scoring no longer ends the attempt: `advancePuzzleTurn()`
+  calls `skipScoringAndAdvance()` (new `$turnPlayerId` argument: the solver is
+  seated for the new round's turn, since the puzzle opponent never plays,
+  while the chosen seat is its first player). The game's own rules do the
+  rest: everything in play stays, nothing is drawn, after-scoring tags
+  (Recklessness's `returnsToOwnerAfterScoring`, Insecurity's return to hand)
+  are cleared without firing, and "played this round" moods are re-stamped by
+  round number. Any other way for a `win_game` turn to end without a win is
+  still a loss, and `checkPuzzleGoal()` never counts a win in a round that
+  skips scoring (nothing is scored, so nobody wins the game from it). (3)
+  `starting_effect_state` accepts `"playedInRound": "current"` and
+  `"playedByPlayerId": "solver"|"opponent"` -- the live round's number and a
+  seat's id don't exist until the attempt does -- so the opponent's Patience
+  and Glee can start the puzzle already played by them this round. Both sides
+  have two round wins; the opponent played first, played Awe and chose to go
+  first next round too (a tie goes to them). The opponent has Awe (4),
+  Patience (white 5, but 1 if you played it this round), Glee (red 0, but 6 if
+  you played it this round), Boredom (4), Panic (1) and Charity (1); the solver
+  holds Recklessness, Glee and Patience with one play a turn. Next round the
+  opponent's Patience is 5 and Glee 0 (15 in all). The one winning line:
+  Recklessness taking their Patience this round (it reads 1 now; the steal
+  sticks, and a stolen mood was never "played" by its new owner), then Glee
+  next round (6): 0 + 5 + 6 = 11 against 10. Taking Glee (it reads 6 now), Awe
+  or Boredom loses; your own Patience next round instead of Glee ties 10-10.
+  An exhaustive search through the real engine -- every play order, every
+  Recklessness target, passing included -- found that one board.
+
 ### Duel: separate per-player decks
 
 `format: 'duel'` and `format: 'draft'` (see "Draft format" below) are the

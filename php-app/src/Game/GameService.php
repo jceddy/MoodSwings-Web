@@ -3805,7 +3805,19 @@ final class GameService
                     "UPDATE game_cards SET effect_state = :effect_state
                      WHERE game_id = :game_id AND card_id = :card_id AND zone = 'in_play' LIMIT 1"
                 );
+                // 'playedInRound': 'current' and 'playedByPlayerId':
+                // 'solver'|'opponent' stand in for the live round's number
+                // and a seat's id, neither of which exists until the attempt
+                // does -- how a "played this round" mood (Patience, Glee)
+                // starts a puzzle already played by someone.
+                $seededLiveRoundNumber = (int) $puzzle['solver_round_wins'] + ($opponentGamePlayerId !== null ? (int) $puzzle['opponent_round_wins'] : 0) + 1;
                 foreach ($startingEffectState as $catalogCardId => $effectState) {
+                    if (($effectState['playedInRound'] ?? null) === 'current') {
+                        $effectState['playedInRound'] = $seededLiveRoundNumber;
+                    }
+                    if (isset($effectState['playedByPlayerId']) && is_string($effectState['playedByPlayerId'])) {
+                        $effectState['playedByPlayerId'] = $effectState['playedByPlayerId'] === 'solver' ? $gamePlayerId : $opponentGamePlayerId;
+                    }
                     $setEffectState->execute([
                         'effect_state' => json_encode($effectState),
                         'game_id' => $gameId,
@@ -3898,6 +3910,31 @@ final class GameService
                 'pending_play_grants' => json_encode($playGrants),
             ]);
             $currentRoundId = (int) $pdo->lastInsertId();
+
+            // puzzles.starting_skip_scoring_first_player: "your opponent
+            // played Awe this round" -- the round is already marked to skip
+            // scoring (see AweEffect), and the chosen seat goes first next
+            // round (a tie there goes to them). The marker's source is the
+            // opponent's own Awe on the board.
+            $startingSkipFirstPlayer = $puzzle['starting_skip_scoring_first_player'] ?? null;
+            if ($startingSkipFirstPlayer !== null && $opponentGamePlayerId !== null) {
+                $aweStmt = $pdo->prepare(
+                    "SELECT gc.id FROM game_cards gc JOIN cards c ON c.id = gc.card_id
+                     WHERE gc.game_id = :game_id AND gc.zone = 'in_play' AND gc.owner_game_player_id = :opponent AND c.effect_key = 'awe'
+                     ORDER BY gc.id LIMIT 1"
+                );
+                $aweStmt->execute(['game_id' => $gameId, 'opponent' => $opponentGamePlayerId]);
+                $aweInstanceId = $aweStmt->fetchColumn();
+                $pdo->prepare(
+                    'UPDATE game_rounds SET skip_scoring = 1, skip_scoring_first_player_game_player_id = :first_player,
+                        skip_scoring_source_card_id = :source_card, skip_scoring_owner_game_player_id = :owner WHERE id = :round_id'
+                )->execute([
+                    'first_player' => $startingSkipFirstPlayer === 'solver' ? $gamePlayerId : $opponentGamePlayerId,
+                    'source_card' => $aweInstanceId !== false ? (int) $aweInstanceId : null,
+                    'owner' => $opponentGamePlayerId,
+                    'round_id' => $currentRoundId,
+                ]);
+            }
 
             if ($preludeLog !== []) {
                 $this->seedPuzzlePreludeLog($gameId, $currentRoundId, $gamePlayerId, $opponentGamePlayerId, $preludeLog);
@@ -11631,6 +11668,19 @@ final class GameService
         // -- a solve completes the game before ever getting here, see
         // playMood() -- the solver has lost; no second turn.
         if ($this->puzzleGoalType($gameId) === 'win_game') {
+            // The one exception: Awe. "There is no scoring this round" and
+            // the next round starts with whoever Awe chose going first --
+            // so the solver's turn doesn't end the attempt, it carries it
+            // into a second round (skipScoringAndAdvance()). Everything in
+            // play stays there, nothing is drawn, and the opponent (who
+            // never plays in a puzzle) keeps their board; the solver is
+            // seated for the new round's turn whoever was chosen first, and
+            // a chosen first player only matters for who a tie goes to (and
+            // first-player cards). Without Awe the turn ends the attempt.
+            if ($this->hasSkipScoringMarker($state)) {
+                return $this->skipScoringAndAdvance($gameId, $round, $state, $playerId);
+            }
+
             return $this->failPuzzleAttempt($gameId, $round, $playerId);
         }
 
@@ -11744,6 +11794,14 @@ final class GameService
         $puzzleStmt->execute(['id' => (int) $game['puzzle_id']]);
         $puzzle = $puzzleStmt->fetch();
         $goalParams = json_decode((string) $puzzle['goal_params'], true);
+
+        // A round marked to skip scoring (Awe) can't be won, however the
+        // board reads: nothing is scored, so nobody wins the game from it.
+        // The attempt carries on into the next round instead -- see
+        // advancePuzzleTurn().
+        if ($puzzle['goal_type'] === 'win_game' && $this->hasSkipScoringMarker($state)) {
+            return false;
+        }
 
         $winsAwardedThisRound = null;
         $goalMet = match ($puzzle['goal_type']) {
@@ -14531,9 +14589,14 @@ final class GameService
      * not fired, so no "return to original owner" happens either now or
      * later; that's the effect never triggering, not triggering early.)
      *
+     * $turnPlayerId, when given, is who actually takes the new round's turn
+     * (default: whoever Awe chose to go first) -- a puzzle's one live seat is
+     * always the solver, while the chosen player is still the round's first
+     * player (who a tie goes to).
+     *
      * @return array{round_scored: bool, game_completed: bool}
      */
-    private function skipScoringAndAdvance(int $gameId, array $round, BoardState $state): array
+    private function skipScoringAndAdvance(int $gameId, array $round, BoardState $state, ?int $turnPlayerId = null): array
     {
         $roundId = (int) $round['id'];
 
@@ -14581,7 +14644,7 @@ final class GameService
         // seatFirstPlayerOverride(), which computes its own fresh grants
         // once that player is actually known, the same way
         // applyTurnOrderDecision()/applyClosedTeamLeaderDecision() already do.
-        $nextRoundGrants = $isTeamFormat ? [] : $this->computeFreshGrants($state, $nextFirstPlayer, 1);
+        $nextRoundGrants = $isTeamFormat ? [] : $this->computeFreshGrants($state, $turnPlayerId ?? $nextFirstPlayer, 1);
 
         $pdo = Connection::get();
         $pdo->beginTransaction();
@@ -14631,16 +14694,20 @@ final class GameService
                     'game_id' => $gameId,
                     'round_number' => (int) $round['round_number'] + 1,
                     'first_player' => $nextFirstPlayer,
-                    'first_player_turn' => $nextFirstPlayer,
+                    'first_player_turn' => $turnPlayerId ?? $nextFirstPlayer,
                     'plays_remaining' => count($nextRoundGrants),
                     'pending_play_grants' => json_encode($nextRoundGrants),
                 ]);
                 $newRoundId = (int) $pdo->lastInsertId();
-                $this->logFreshGrants($gameId, $newRoundId, $nextFirstPlayer, $nextRoundGrants);
+                $this->logFreshGrants($gameId, $newRoundId, $turnPlayerId ?? $nextFirstPlayer, $nextRoundGrants);
                 // Same gap as finishScoringAndAdvance()'s own "create the
                 // next round" INSERT -- this is Awe's own skip-scoring
                 // equivalent of it, and was missing the same notification.
-                $this->notifyItsYourTurn($newRoundId, $nextFirstPlayer);
+                // (A puzzle seats its solver regardless of who Awe chose to
+                // go first -- see advancePuzzleTurn() -- so no notification.)
+                if ($turnPlayerId === null) {
+                    $this->notifyItsYourTurn($newRoundId, $nextFirstPlayer);
+                }
             }
 
             $pdo->commit();

@@ -2294,6 +2294,112 @@ final class PuzzleContentTest extends TestCase
         }
     }
 
+    /** The round number of the puzzle attempt's live round. */
+    private function liveRoundNumber(int $gameId): int
+    {
+        $stmt = $this->pdo->prepare("SELECT round_number FROM game_rounds WHERE game_id = :game_id AND status = 'in_progress'");
+        $stmt->execute(['game_id' => $gameId]);
+
+        return (int) $stmt->fetchColumn();
+    }
+
+    /** Borrowed Time's first turn: Recklessness taking the opponent's mood $catalogId. */
+    private function playBorrowedTimeRecklessness(int $gameId, int $p, int $catalogId): void
+    {
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 100, 'hand'), [
+            'target_mood_id' => $this->ownedInstanceId($gameId, $catalogId, 'in_play', $opp),
+        ]);
+    }
+
+    /**
+     * "Borrowed Time": the first puzzle that opens in an Awe round and runs
+     * past one turn (see migration 0465's own docblock). The opponent's Awe
+     * means nothing is scored this round, so Recklessness taking their Patience
+     * (it reads 1 now) is permanent -- the "give it back after scoring" tag is
+     * cleared, not fired -- and next round it is 5 for you; Glee played then is
+     * worth 6: 0 + 5 + 6 = 11 against 4 + 0 + 4 + 1 + 1 = 10.
+     */
+    public function testBorrowedTimeSolvedByTakingPatienceAndPlayingGleeNextRound(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('borrowed-time');
+        $firstRound = $this->liveRoundNumber($gameId);
+
+        $this->playBorrowedTimeRecklessness($gameId, $p, 21);
+
+        $this->assertGameNotSolved($gameId);
+        self::assertSame($firstRound + 1, $this->liveRoundNumber($gameId), "the opponent's Awe carried the attempt into a second round");
+        $patience = $this->ownedInstanceId($gameId, 21, 'in_play', $p);
+        self::assertNotNull($patience, 'the taken Patience stays with you: nothing is scored, so nothing gives it back');
+        $stateStmt = $this->pdo->prepare('SELECT effect_state FROM game_cards WHERE id = :id');
+        $stateStmt->execute(['id' => $patience]);
+        self::assertStringNotContainsString('returnsToOwnerAfterScoring', (string) $stateStmt->fetchColumn());
+        self::assertNotNull($this->ownedInstanceId($gameId, 100, 'in_play', $p), "Recklessness's own bottom-of-the-deck-and-draw doesn't happen either");
+
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 92, 'hand'));
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameSolved($gameId, $p);
+    }
+
+    /** Your own Patience in the second round instead of Glee: 5 + 5 = 10 against 10 -- a tie, which goes to the opponent. */
+    public function testBorrowedTimeTakingPatienceThenPlayingYourOwnPatienceTies(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('borrowed-time');
+
+        $this->playBorrowedTimeRecklessness($gameId, $p, 21);
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 21, 'hand'));
+        $this->games->advanceAutomatedTurns($gameId);
+
+        $this->assertGameFailed($gameId);
+    }
+
+    /** Glee reads 6 now, but taking it is worth nothing next round -- and nor is any other mood but Patience enough. */
+    public function testBorrowedTimeTakingAnythingButPatienceLoses(): void
+    {
+        foreach ([92, 107, 83] as $catalogId) {
+            ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('borrowed-time');
+
+            $this->playBorrowedTimeRecklessness($gameId, $p, $catalogId);
+            $this->playDriven($gameId, $p, $this->instanceId($gameId, 92, 'hand'));
+            $this->games->advanceAutomatedTurns($gameId);
+
+            $this->assertGameFailed($gameId);
+        }
+    }
+
+    /** Playing Glee now is wasted (worth 0 next round): Recklessness next round is too little. */
+    public function testBorrowedTimeGleeFirstLoses(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('borrowed-time');
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 92, 'hand'));
+        $this->playBorrowedTimeRecklessness($gameId, $p, 21);
+        $this->games->advanceAutomatedTurns($gameId);
+
+        $this->assertGameFailed($gameId);
+    }
+
+    /**
+     * A round that skips scoring can't be won, however the board reads:
+     * with the opponent's other moods out of the way, Glee (6) now outscores
+     * what is left (Patience 1 + Charity 1) -- but nothing is scored this round,
+     * so it isn't a solve and the attempt carries on into the next round.
+     */
+    public function testBorrowedTimeOutscoringInTheRoundThatSkipsScoringIsNotAWin(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('borrowed-time');
+        $firstRound = $this->liveRoundNumber($gameId);
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+        $this->pdo->prepare("UPDATE game_cards SET zone = 'discard' WHERE game_id = :game_id AND owner_game_player_id = :opp AND zone = 'in_play' AND card_id IN (107, 92, 83, 48)")
+            ->execute(['game_id' => $gameId, 'opp' => $opp]);
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 92, 'hand'));
+
+        $this->assertGameNotSolved($gameId);
+        self::assertSame($firstRound + 1, $this->liveRoundNumber($gameId));
+    }
+
     /** A solve is never marked failed, and puzzle_failed is false while an attempt is open. */
     public function testDeadHeatSolveIsNotFailedAndOpenAttemptIsNotFailed(): void
     {
