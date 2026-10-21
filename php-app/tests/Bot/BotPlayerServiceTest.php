@@ -3104,6 +3104,75 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame([], $this->bot->chooseDecisionAnswer($state, $field, 1));
     }
 
+    // -- Instability (reported live: bots make bad decisions responding to it) --
+
+    /** @param array<int, int[]> $inPlay seat => catalog ids to put into play */
+    private function instabilityState(array $inPlay): BoardState
+    {
+        $state = new BoardState($this->sampleCatalog(), DefaultEffectRegistry::build(), [1, 2], hands: array_map(static fn (array $ids) => $ids, $inPlay));
+        foreach ($inPlay as $seat => $cardIds) {
+            foreach ($cardIds as $cardId) {
+                $state->moveHandToInPlay($seat, $cardId);
+            }
+        }
+
+        return $state;
+    }
+
+    /** @param int[] $candidates */
+    private function instabilityChooseAnswer(BoardState $state, array $candidates, array $roundWinsNeeded = []): ?int
+    {
+        $field = ['key' => 'taken_mood_id', 'type' => 'mood', 'candidate_card_ids' => $candidates, 'required' => true];
+
+        return $this->bot->chooseDecisionAnswer($state, $field, 1, 'instability_choose_mood', 96, $roundWinsNeeded)['taken_mood_id'] ?? null;
+    }
+
+    /** The bot gives up the cheaper of the two moods, not (as the generic resolver did) the most valuable one. */
+    public function testInstabilityTheBotGivesUpTheLowestSwingMood(): void
+    {
+        $state = $this->instabilityState([1 => [55, 7], 2 => [96]]); // Apathy (4), Courage (1); their Instability
+
+        self::assertSame(7, $this->instabilityChooseAnswer($state, [55, 7]));
+        self::assertSame(7, $this->instabilityChooseAnswer($state, [7, 55]));
+    }
+
+    /** A powerful while-in-play mood (Hope) is kept even though giving it up would cost fewer points. */
+    public function testInstabilityTheBotKeepsAPowerfulMoodOverALowerSwing(): void
+    {
+        $state = $this->instabilityState([1 => [124, 55], 2 => [96]]); // Hope (0), Apathy (4)
+
+        self::assertSame(55, $this->instabilityChooseAnswer($state, [124, 55]));
+    }
+
+    /** With two powerful moods to choose between, it is back to the lowest swing. */
+    public function testInstabilityTheBotGivesUpTheCheaperOfTwoPowerfulMoods(): void
+    {
+        $state = $this->instabilityState([1 => [26, 37], 2 => [96]]); // Validation (1), Duplicity (0)
+
+        self::assertSame(37, $this->instabilityChooseAnswer($state, [26, 37]));
+    }
+
+    /** ...unless keeping the powerful mood loses the game: the rival is one round win away and would take the round. */
+    public function testInstabilityTheBotGivesUpThePowerfulMoodWhenKeepingItLosesTheGame(): void
+    {
+        $state = $this->instabilityState([1 => [124, 55, 5], 2 => [96, 3]]); // Hope, Apathy, Complacency vs Instability, Charity
+
+        self::assertSame(124, $this->instabilityChooseAnswer($state, [124, 55], [2 => 1]), 'giving Apathy would be 4 against 7');
+        self::assertSame(55, $this->instabilityChooseAnswer($state, [124, 55], [2 => 2]), 'the rival is not one win from the game');
+        self::assertSame(55, $this->instabilityChooseAnswer($state, [124, 55]), 'unknown round wins never create the exception');
+    }
+
+    /** When the bot is the one playing Instability, the mood it gives back is the cheapest non-powerful one, not a 0-value Hope. */
+    public function testInstabilityTheBotGivesBackTheCheapestNonPowerfulMood(): void
+    {
+        $state = $this->instabilityState([1 => [96, 124, 7, 55], 2 => [5]]); // Instability (2), Hope (0), Courage (1), Apathy (4)
+        $field = ['key' => 'given_mood_id', 'type' => 'mood', 'scope' => 'own', 'required' => true];
+
+        $answer = $this->bot->chooseDecisionAnswer($state, $field, 1, 'instability_give_mood', 96);
+
+        self::assertSame(['given_mood_id' => 7], $answer);
+    }
+
     // -- Enthusiasm/Passion scoring decisions (reported live) --------------
     //
     // Both fields are optional, which the generic resolver never fills, so a
