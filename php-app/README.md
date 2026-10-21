@@ -14120,6 +14120,22 @@ than a parallel bespoke system:
   An exhaustive search through the real engine -- every play order, every
   Recklessness target, passing included -- found that one board.
 
+- **28th puzzle, "Return to Sender"** (a Denial puzzle: the tempting bounce of
+  the opponent's two big green moods only ties; bounce a red mood of theirs and
+  your own Recklessness instead, then play Recklessness again to take one),
+  medium, `win_game`, no new puzzle infrastructure. Both sides have two round
+  wins and the opponent went first (a tie is theirs). The opponent has two
+  Generosity (green 6), Thrill (red 1) and Contempt (black 1): 14. The solver has
+  Validation (1) and Recklessness (0) in play and holds Denial, with one play;
+  Validation grants a play for each 0/1-valued mood played, so Denial and
+  Recklessness each pay for themselves. The one winning line: Denial bouncing
+  their Thrill and your own Recklessness (both red), then Recklessness again
+  taking a Generosity -- 2 + 6 = 8 against 6 + 1 = 7. (The two Generosities are
+  identical, so which one you take is the same board.) Denial on the two
+  Generosities leaves 2 against 2: a tie. An exhaustive search through the real
+  engine -- every legal Denial pair and every Recklessness target -- found that
+  one board.
+
 ### Duel: separate per-player decks
 
 `format: 'duel'` and `format: 'draft'` (see "Draft format" below) are the

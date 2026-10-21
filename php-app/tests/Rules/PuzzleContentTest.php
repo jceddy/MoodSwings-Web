@@ -2400,6 +2400,70 @@ final class PuzzleContentTest extends TestCase
         self::assertSame($firstRound + 1, $this->liveRoundNumber($gameId));
     }
 
+    /** Every in-play instance id of catalog card $catalogCardId in $gameId (several copies of one card are possible). @return int[] */
+    private function inPlayInstanceIds(int $gameId, int $catalogCardId): array
+    {
+        $stmt = $this->pdo->prepare("SELECT id FROM game_cards WHERE game_id = :game_id AND card_id = :card_id AND zone = 'in_play' ORDER BY id");
+        $stmt->execute(['game_id' => $gameId, 'card_id' => $catalogCardId]);
+
+        return array_map(intval(...), $stmt->fetchAll(\PDO::FETCH_COLUMN));
+    }
+
+    /**
+     * "Return to Sender": the only winning line (exhaustive search of the real
+     * flow, every legal Denial pair and Recklessness target) is Denial bouncing
+     * the opponent's Thrill and your own Recklessness (both red), then
+     * Recklessness again taking a Generosity: 2 + 6 = 8 against 6 + 1 = 7. See
+     * migration 0466's own docblock.
+     */
+    public function testReturnToSenderSolvedByBouncingTheRedMoodsThenTakingAGenerosity(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('return-to-sender');
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 34, 'hand'), ['target_mood_ids' => [
+            $this->ownedInstanceId($gameId, 103, 'in_play', $opp),
+            $this->ownedInstanceId($gameId, 100, 'in_play', $p),
+        ]]);
+        $this->assertGameNotSolved($gameId);
+
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 100, 'hand'), [
+            'target_mood_id' => $this->inPlayInstanceIds($gameId, 120)[0],
+        ]);
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameSolved($gameId, $p);
+    }
+
+    /** Bouncing the two Generosities leaves 2 against 2: a tie, and a tie goes to the opponent. */
+    public function testReturnToSenderBouncingTheTwoGenerositiesTies(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('return-to-sender');
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 34, 'hand'), ['target_mood_ids' => $this->inPlayInstanceIds($gameId, 120)]);
+        $this->games->advanceAutomatedTurns($gameId);
+
+        $this->assertGameFailed($gameId);
+    }
+
+    /** Playing Denial for nothing, or bouncing the two 1-value moods that share a value, leaves far too much on their side. */
+    public function testReturnToSenderOtherDenialsLose(): void
+    {
+        foreach ([[], 'ones'] as $targets) {
+            ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('return-to-sender');
+            $opp = $this->opponentGamePlayerId($gameId, $p);
+            $choices = $targets === [] ? [] : ['target_mood_ids' => [
+                $this->ownedInstanceId($gameId, 103, 'in_play', $opp),
+                $this->ownedInstanceId($gameId, 59, 'in_play', $opp),
+            ]];
+
+            $this->playDriven($gameId, $p, $this->instanceId($gameId, 34, 'hand'), $choices);
+            $this->games->advanceAutomatedTurns($gameId);
+
+            $this->assertGameFailed($gameId);
+        }
+    }
+
     /** A solve is never marked failed, and puzzle_failed is false while an attempt is open. */
     public function testDeadHeatSolveIsNotFailedAndOpenAttemptIsNotFailed(): void
     {
