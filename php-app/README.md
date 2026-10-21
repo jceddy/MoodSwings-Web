@@ -12124,6 +12124,27 @@ rejected purely for the points it gives up. *Opponent's:* never a target
 tests Rationalization/Shock use. Every other opponent mood stays a normal
 Panic candidate.
 
+**Instability (reported live: "bots seem to make bad decisions when
+responding to Instability").** Both of its decisions used to fall through to
+`BotChoiceResolver`'s generic policy -- the HIGHEST-value candidate for "which
+of the two moods do you give up" (the field's scope defaults to `'any'`), and
+the LOWEST-value own mood for the give-back, which hands over a 0-value Hope
+or Duplicity. `BotPlayerService::chooseDecisionAnswer()` now answers
+`instability_choose_mood` and (against a single opponent) `instability_give_mood`
+through `instabilityMoodToGive()`: the candidate that leaves the bot's round
+lead best off -- its projected total minus the strongest rival's, with the mood
+moved, through the real `RoundScorer` (`projectedGroupTotals()`, shared with
+Panic's projection) -- i.e. the lowest point swing, ties to the lower printed
+value. A mood with a powerful while-in-play ability
+(`POWERFUL_WHILE_IN_PLAY_EFFECT_KEYS`: Duplicity, Exhilaration, Hope, Grace,
+Validation, Melancholy) is kept whenever another candidate exists -- unless
+keeping it loses the game: some rival one round win from the game would take
+the round with that pick but not with an alternative (the same test Panic and
+Validation-first removal use; `GameService::advanceAutomatedTurns()` now passes
+`roundWinsNeededToWinGameForActivePlayers()` to `chooseDecisionAnswer()`, and
+unknown round-win counts never create the exception). Between two powerful
+moods it is the plain lowest swing.
+
 **Thrill and replay moods (reported live).** The same card-advantage logic
 applies to Thrill ("you may put any number of your other moods into your
 hand; if you do, you may play that many additional moods this turn"): a bot
