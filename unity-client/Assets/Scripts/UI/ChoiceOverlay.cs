@@ -55,6 +55,8 @@ namespace MoodSwings.UI
         private readonly Button _submit;
         private readonly Text _submitLabel;
         private readonly Button _cancel;
+        private readonly Button _viewBoard;
+        private readonly GameObject _backBar;
         private readonly List<OptionButton> _options = new List<OptionButton>();
         /// <summary>Called with a card and where it is when the player taps the eye on an option that is a card.</summary>
         public Action<BoardCard, string> Inspect;
@@ -64,6 +66,7 @@ namespace MoodSwings.UI
         private Action _onSubmit;
         private Action _onCancel;
         private bool _busy;
+        private bool _viewing;
         private string _error;
 
         public ChoiceOverlay(Transform parent, UiTheme theme)
@@ -118,6 +121,10 @@ namespace MoodSwings.UI
 
             var buttons = UiFactory.Row(right, "Buttons", 24f, TextAnchor.MiddleRight);
             UiFactory.Size(buttons.gameObject, height: UiFactory.ControlHeight);
+            // Looking at the table before answering: the form steps aside until "Back to decision".
+            _viewBoard = UiFactory.Button(buttons.transform, "View board", theme, () => ViewBoard(), primary: false);
+            _viewBoard.gameObject.name = "View board";
+            UiFactory.Size(_viewBoard.gameObject, 280f);
             _cancel = UiFactory.Button(buttons.transform, "Cancel", theme, () => Cancel(), primary: false);
             _cancel.gameObject.name = "Cancel";
             UiFactory.Size(_cancel.gameObject, 260f);
@@ -126,10 +133,29 @@ namespace MoodSwings.UI
             UiFactory.Size(_submit.gameObject, 340f);
             _submitLabel = _submit.GetComponentInChildren<Text>();
 
+            // The way back, over the table while the form is out of the way. In the middle of it, under Pass, where no mood
+            // sits in.
+            var bar = UiFactory.Create("Back to decision bar", parent);
+            _backBar = bar.gameObject;
+            bar.anchorMin = bar.anchorMax = bar.pivot = new Vector2(0.5f, 0.5f);
+            bar.sizeDelta = new Vector2(440f, UiFactory.ControlHeight);
+            bar.anchoredPosition = new Vector2(0f, -128f);
+            var back = UiFactory.Button(bar, "Back to decision", theme, () => BackToDecision());
+            back.gameObject.name = "Back to decision";
+            UiFactory.Stretch((RectTransform)back.transform);
+            _backBar.SetActive(false);
+
             _root.SetActive(false);
         }
 
-        public bool IsOpen => _root.activeSelf;
+        /// <summary>A question is up: covering the table, or stepped aside so the player can look at it.</summary>
+        public bool IsOpen => _root.activeSelf || _viewing;
+
+        /// <summary>The form is on screen, over the table (not while the player is looking at the table).</summary>
+        public bool IsCovering => _root.activeSelf;
+
+        /// <summary>The player is looking at the table, with the form out of the way.</summary>
+        public bool IsViewingBoard => _viewing;
 
         public ChoiceForm Form => _form;
 
@@ -150,6 +176,8 @@ namespace MoodSwings.UI
             _onCancel = onCancel;
             _busy = false;
             _error = null;
+            _viewing = false;
+            _backBar.SetActive(false);
             _form.FieldsChanged += Rebuild;
 
             _title.text = prompt.Title;
@@ -182,6 +210,8 @@ namespace MoodSwings.UI
         public void Close()
         {
             Detach();
+            _viewing = false;
+            _backBar.SetActive(false);
             _root.SetActive(false);
             _form = null;
             _prompt = null;
@@ -190,6 +220,13 @@ namespace MoodSwings.UI
         /// <summary>Back / Escape: calls it off if that's allowed. True if it was.</summary>
         public bool Cancel()
         {
+            // Looking at the table: Back goes back to the question (a question that is owed can't be dismissed either way).
+            if (_viewing)
+            {
+                BackToDecision();
+                return true;
+            }
+
             if (!Cancellable || _busy)
             {
                 return false;
@@ -201,12 +238,41 @@ namespace MoodSwings.UI
             return true;
         }
 
+        /// <summary>Steps the form aside to show the table, with a button to come back to it. Not while an answer is being sent.</summary>
+        public void ViewBoard()
+        {
+            if (!_root.activeSelf || _busy)
+            {
+                return;
+            }
+
+            _viewing = true;
+            _root.SetActive(false);
+            _backBar.SetActive(true);
+            // At the form's own place in the stack: over the table, under the menu and anything opened over the form.
+            _backBar.transform.SetSiblingIndex(_root.transform.GetSiblingIndex());
+        }
+
+        /// <summary>Brings the form back, as it was.</summary>
+        public void BackToDecision()
+        {
+            if (!_viewing)
+            {
+                return;
+            }
+
+            _viewing = false;
+            _backBar.SetActive(false);
+            _root.SetActive(true);
+        }
+
         /// <summary>Greys the buttons while the answer is on its way, so a slow reply can't be sent twice.</summary>
         public void SetBusy(bool busy, string label = null)
         {
             _busy = busy;
             _submitLabel.text = busy && label != null ? label : _prompt?.SubmitLabel ?? "OK";
             _cancel.interactable = !busy;
+            _viewBoard.interactable = !busy;
             Refresh();
         }
 

@@ -12124,6 +12124,27 @@ rejected purely for the points it gives up. *Opponent's:* never a target
 tests Rationalization/Shock use. Every other opponent mood stays a normal
 Panic candidate.
 
+**Instability (reported live: "bots seem to make bad decisions when
+responding to Instability").** Both of its decisions used to fall through to
+`BotChoiceResolver`'s generic policy -- the HIGHEST-value candidate for "which
+of the two moods do you give up" (the field's scope defaults to `'any'`), and
+the LOWEST-value own mood for the give-back, which hands over a 0-value Hope
+or Duplicity. `BotPlayerService::chooseDecisionAnswer()` now answers
+`instability_choose_mood` and (against a single opponent) `instability_give_mood`
+through `instabilityMoodToGive()`: the candidate that leaves the bot's round
+lead best off -- its projected total minus the strongest rival's, with the mood
+moved, through the real `RoundScorer` (`projectedGroupTotals()`, shared with
+Panic's projection) -- i.e. the lowest point swing, ties to the lower printed
+value. A mood with a powerful while-in-play ability
+(`POWERFUL_WHILE_IN_PLAY_EFFECT_KEYS`: Duplicity, Exhilaration, Hope, Grace,
+Validation, Melancholy) is kept whenever another candidate exists -- unless
+keeping it loses the game: some rival one round win from the game would take
+the round with that pick but not with an alternative (the same test Panic and
+Validation-first removal use; `GameService::advanceAutomatedTurns()` now passes
+`roundWinsNeededToWinGameForActivePlayers()` to `chooseDecisionAnswer()`, and
+unknown round-win counts never create the exception). Between two powerful
+moods it is the plain lowest swing.
+
 **Thrill and replay moods (reported live).** The same card-advantage logic
 applies to Thrill ("you may put any number of your other moods into your
 hand; if you do, you may play that many additional moods this turn"): a bot
@@ -14119,6 +14140,22 @@ than a parallel bespoke system:
   or Boredom loses; your own Patience next round instead of Glee ties 10-10.
   An exhaustive search through the real engine -- every play order, every
   Recklessness target, passing included -- found that one board.
+
+- **28th puzzle, "Return to Sender"** (a Denial puzzle: the tempting bounce of
+  the opponent's two big green moods only ties; bounce a red mood of theirs and
+  your own Recklessness instead, then play Recklessness again to take one),
+  medium, `win_game`, no new puzzle infrastructure. Both sides have two round
+  wins and the opponent went first (a tie is theirs). The opponent has two
+  Generosity (green 6), Thrill (red 1) and Contempt (black 1): 14. The solver has
+  Validation (1) and Recklessness (0) in play and holds Denial, with one play;
+  Validation grants a play for each 0/1-valued mood played, so Denial and
+  Recklessness each pay for themselves. The one winning line: Denial bouncing
+  their Thrill and your own Recklessness (both red), then Recklessness again
+  taking a Generosity -- 2 + 6 = 8 against 6 + 1 = 7. (The two Generosities are
+  identical, so which one you take is the same board.) Denial on the two
+  Generosities leaves 2 against 2: a tie. An exhaustive search through the real
+  engine -- every legal Denial pair and every Recklessness target -- found that
+  one board.
 
 ### Duel: separate per-player decks
 

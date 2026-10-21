@@ -580,12 +580,20 @@ namespace MoodSwings.Core
         public static bool CanResign(GameState state)
         {
             var viewer = Viewer(state);
-            return viewer != null
-                && !IsPuzzle(state)
-                && !viewer.Resigned
-                && state.Game.Status == "in_progress"
-                && (state.Round.PendingDecision == null || state.Round.PendingDecision.IsYou);
+            if (viewer == null || IsPuzzle(state) || viewer.Resigned)
+            {
+                return false;
+            }
+
+            // Drafting and deck building come before any game has started, and a player can leave from them too.
+            return DraftDisplay.InDraftStage(state)
+                || (state.Game.Status == "in_progress"
+                    && (state.Round.PendingDecision == null || state.Round.PendingDecision.IsYou));
         }
+
+        /// <summary>Whether the menu has a Resign button at all: a seated player in a game that is on, or in a draft that is being drafted.</summary>
+        public static bool ResignOffered(GameState state) =>
+            !IsSpectator(state) && !IsPuzzle(state) && (state.Game.Status == "in_progress" || DraftDisplay.InDraftStage(state));
 
         /// <summary>A synchronous game's ready check is waiting on the viewer.</summary>
         public static bool NeedsReady(GameState state)

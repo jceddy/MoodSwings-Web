@@ -622,6 +622,43 @@ namespace MoodSwings.Tests
             ScreenshotHelper.Capture("draft-sealed-caps");
         }
 
+        [UnityTest]
+        public IEnumerator DuringDeckBuilding_APlayerCanResign_FromTheMenu()
+        {
+            var server = Serve(DraftBoard(DeckBuilding(poolSize: 14), null, "sealed_pool_of_the_day"));
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+            Assert.IsTrue(Board().Draft.IsShown);
+
+            yield return PhaseFiveSceneTests.OpenMenu();
+            var resign = PhaseFiveSceneTests.ButtonNamed("Resign");
+            Assert.IsNotNull(resign, "Resign is in the menu while building a deck");
+            Assert.IsTrue(resign.interactable);
+
+            yield return PhaseFiveSceneTests.Tap(resign);
+            Assert.IsTrue(Board().Confirm.IsOpen);
+            StringAssert.Contains("Resign from this draft", Board().Confirm.MessageText);
+            yield return PhaseFiveSceneTests.Tap(PhaseTwoSceneTests.FindButton("Stay in the draft"));
+            Assert.AreEqual(0, server.Posts("/games/resign").Count());
+
+            yield return PhaseFiveSceneTests.OpenMenu();
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.ButtonNamed("Resign"));
+            yield return PhaseFiveSceneTests.Tap(PhaseTwoSceneTests.FindButton("Resign"));
+            Assert.AreEqual(1, server.Posts("/games/resign").Count());
+        }
+
+        [UnityTest]
+        public IEnumerator DuringADraft_APlayerCanResign_FromTheMenu()
+        {
+            var server = Serve(Rotisserie());
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+
+            yield return PhaseFiveSceneTests.OpenMenu();
+
+            var resign = PhaseFiveSceneTests.ButtonNamed("Resign");
+            Assert.IsNotNull(resign);
+            Assert.IsTrue(resign.interactable);
+        }
+
         // --- Chaos Draft --------------------------------------------------------------------------
 
         private const string TwoEffects =
@@ -993,7 +1030,20 @@ namespace MoodSwings.Tests
             var server = Serve(HarmonyGame());
             yield return PhaseFiveSceneTests.OpenBoard(server, 406);
 
-            Assert.IsTrue(Texts().Contains("Discard 1  -  play from it"), string.Join(" | ", Texts()));
+            Assert.IsTrue(Texts().Contains("Discard 1\n(play from it)"), "stacked, so it can't run off the screen: " + string.Join(" | ", Texts()));
+
+            // Both lines are centered over the pile and inside the screen.
+            var caption = Object.FindObjectsByType<Text>(FindObjectsInactive.Exclude).First(t => t.text.StartsWith("Discard 1"));
+            Assert.AreEqual(TextAnchor.LowerCenter, caption.alignment);
+            var screen = Object.FindAnyObjectByType<Canvas>().rootCanvas.GetComponent<RectTransform>();
+            var screenCorners = new Vector3[4];
+            screen.GetWorldCorners(screenCorners);
+            var corners = new Vector3[4];
+            caption.rectTransform.GetWorldCorners(corners);
+            var pile = caption.transform.parent.Find("Window");
+            Assert.AreEqual(((RectTransform)pile).position.x, caption.rectTransform.position.x, 0.5f, "centered on the pile");
+            Assert.GreaterOrEqual(corners[0].x, screenCorners[0].x - 0.5f);
+            Assert.LessOrEqual(caption.preferredWidth, caption.rectTransform.rect.width, "the widest line fits in the space for it");
             Assert.IsFalse(Board().DiscardOverlay.IsOpen);
             ScreenshotHelper.Capture("discard-playable");
         }
@@ -1310,6 +1360,55 @@ namespace MoodSwings.Tests
 
             Assert.IsFalse(Board().DetailOpen);
             Assert.IsTrue(Board().Choices.IsOpen, "an answer that is owed can't be dismissed");
+        }
+
+        // --- looking at the board before answering ---------------------------------------------------------
+
+        [UnityTest]
+        public IEnumerator Choosing_YouCanLookAtTheBoard_AndComeBackToTheSameQuestion()
+        {
+            var server = Serve(PhaseFiveSceneTests.Load(407));
+            yield return PhaseFiveSceneTests.OpenBoard(server, 407);
+            var option = Object.FindObjectsByType<Button>(FindObjectsInactive.Exclude).First(b => b.name.StartsWith("Option Loyalty"));
+            yield return PhaseFiveSceneTests.Tap(option);
+            Assert.IsTrue(Board().Choices.SubmitEnabled);
+            Assert.IsNull(PhaseTwoSceneTests.FindButton("Back to decision"), "nothing to go back to yet");
+
+            yield return PhaseTwoSceneTests.Click("View board");
+            yield return PhaseTwoSceneTests.Frames(4);
+
+            Assert.IsFalse(Board().Choices.IsCovering, "the form is out of the way");
+            Assert.IsTrue(Board().Choices.IsOpen, "but the question is still outstanding");
+            Assert.IsTrue(Board().Choices.IsViewingBoard);
+            Assert.IsNotNull(PhaseTwoSceneTests.FindButton("Back to decision"));
+            ScreenshotHelper.Capture("choice-view-board");
+
+            // The board is read again while looking, and that doesn't put the form back over it.
+            yield return PhaseFiveSceneTests.Poll();
+            Assert.IsFalse(Board().Choices.IsCovering);
+            Assert.IsTrue(Board().Choices.IsViewingBoard);
+
+            yield return PhaseTwoSceneTests.Click("Back to decision");
+            yield return PhaseTwoSceneTests.Frames(4);
+
+            Assert.IsTrue(Board().Choices.IsCovering);
+            Assert.IsFalse(Board().Choices.IsViewingBoard);
+            Assert.IsNull(PhaseTwoSceneTests.FindButton("Back to decision"));
+            Assert.IsTrue(Board().Choices.SubmitEnabled, "the choice made before looking is still made");
+        }
+
+        [UnityTest]
+        public IEnumerator WhileLookingAtTheBoard_BackReturnsToTheQuestion()
+        {
+            var server = Serve(PhaseFiveSceneTests.Load(407));
+            yield return PhaseFiveSceneTests.OpenBoard(server, 407);
+            yield return PhaseTwoSceneTests.Click("View board");
+
+            Assert.IsTrue(Board().HandleBack());
+
+            Assert.IsTrue(Board().Choices.IsCovering);
+            Assert.IsTrue(Board().HandleBack() == false, "an answer that is owed can't be dismissed");
+            Assert.IsTrue(Board().Choices.IsOpen);
         }
 
         // --- Winston's piles: five to a row, and face-down piles show card backs -------------------------

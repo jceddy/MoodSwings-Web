@@ -727,9 +727,11 @@ final class BotPlayerService
      *     existing callers (tests, and any decision type that never
      *     needs it) have no reason to plumb a source card id through at
      *     all.
+     * @param array<int, int> $roundWinsNeededToWinGameByPlayerId game_player_id => round wins still needed (empty = unknown); only Instability's
+     *     two decisions use it, to tell when the usual choice would lose the game
      * @return array<string, mixed>
      */
-    public function chooseDecisionAnswer(BoardState $state, array $field, int $botGamePlayerId, string $decisionType = '', ?int $sourceCardId = null): array
+    public function chooseDecisionAnswer(BoardState $state, array $field, int $botGamePlayerId, string $decisionType = '', ?int $sourceCardId = null, array $roundWinsNeededToWinGameByPlayerId = []): array
     {
         // chaos_010 (issue #405 follow-up) is Disillusionment's own chaos
         // analog -- identical printed text, identical field shape (an
@@ -770,9 +772,135 @@ final class BotPlayerService
             return $repeatChoices === null ? [] : [$field['key'] => ['repeat' => true, 'choices' => $repeatChoices]];
         }
 
+        // Instability's two decisions -- which of the two chosen moods to give
+        // up (asked of the bot when an opponent plays it), and which of its own
+        // moods to give back (asked of the bot when it plays it). The generic
+        // resolver gets both wrong: it picks the HIGHEST-value candidate for the
+        // first (field scope defaults to 'any') and the LOWEST-value one for the
+        // second, which hands over a 0-value Hope or Duplicity. See
+        // instabilityMoodToGive().
+        if ($decisionType === 'instability_choose_mood' && $sourceCardId !== null && isset($field['candidate_card_ids'])) {
+            $moodId = $this->instabilityMoodToGive($state, $field['candidate_card_ids'], $botGamePlayerId, $state->ownerOf($sourceCardId), $roundWinsNeededToWinGameByPlayerId);
+
+            return $moodId === null ? [] : [$field['key'] => $moodId];
+        }
+        if ($decisionType === 'instability_give_mood' && $sourceCardId !== null) {
+            $recipientId = $this->soleOpponentId($state, $botGamePlayerId);
+            $ownMoodIds = array_map(fn ($mood) => $mood->cardId, $state->moodsOwnedBy($botGamePlayerId));
+            if ($recipientId !== null && $ownMoodIds !== []) {
+                $moodId = $this->instabilityMoodToGive($state, $ownMoodIds, $botGamePlayerId, $recipientId, $roundWinsNeededToWinGameByPlayerId);
+
+                return $moodId === null ? [] : [$field['key'] => $moodId];
+            }
+        }
+
         $value = $this->resolver->resolve($state, $field, $botGamePlayerId, 0, '');
 
         return $value === null ? [] : [$field['key'] => $value];
+    }
+
+    /**
+     * Effect keys whose "while in play" ability is worth far more than the
+     * mood's own printed points -- extra plays every turn (Hope, Grace,
+     * Validation, Melancholy's plays from the discard pile) or doubled
+     * effects (Duplicity, Exhilaration) -- so Instability's give-away
+     * choices keep them even when giving up something worth more points
+     * would cost less on the board. See instabilityMoodToGive().
+     */
+    private const POWERFUL_WHILE_IN_PLAY_EFFECT_KEYS = ['duplicity', 'exhilaration', 'hope', 'grace', 'validation', 'melancholy'];
+
+    /** The only opponent of $botGamePlayerId (not counting teammates), or null if there are none or several. */
+    private function soleOpponentId(BoardState $state, int $botGamePlayerId): ?int
+    {
+        $opponentIds = array_values(array_filter(
+            $state->activePlayerOrder(),
+            fn (int $id): bool => $id !== $botGamePlayerId && !$state->isTeammate($botGamePlayerId, $id),
+        ));
+
+        return count($opponentIds) === 1 ? $opponentIds[0] : null;
+    }
+
+    /**
+     * Which of $candidateMoodIds the bot should hand to $recipientId for
+     * Instability (reported: "bots seem to make bad decisions when responding
+     * to Instability -- make sure the bot chooses the card that results in
+     * the lowest point swing, with exceptions for cards with powerful while
+     * in play effects like Duplicity, Exhilaration, Hope, Validation, unless
+     * it means a game loss"): the candidate that leaves the bot's round lead
+     * best off -- its projected total minus the strongest rival's, with the
+     * mood moved, through the real scorer, so conditional values (colors,
+     * mood counts, owner-dependent moods) are accounted for -- except that a
+     * POWERFUL_WHILE_IN_PLAY_EFFECT_KEYS mood is kept whenever a different
+     * candidate is available. That preference is dropped (the plain lowest
+     * swing wins) only when it would cost the game: some rival one round win
+     * from the game would take the round with the powerful-keeping pick but
+     * not with an alternative. Unknown round-win counts
+     * ($roundWinsNeededToWinGameByPlayerId empty) never create that
+     * exception. Ties go to the lower printed value, then the lower id.
+     *
+     * @param int[] $candidateMoodIds
+     * @param array<int, int> $roundWinsNeededToWinGameByPlayerId
+     */
+    private function instabilityMoodToGive(BoardState $state, array $candidateMoodIds, int $botGamePlayerId, int $recipientId, array $roundWinsNeededToWinGameByPlayerId): ?int
+    {
+        $candidateMoodIds = array_values(array_filter($candidateMoodIds, fn (int $id) => $state->isInPlay($id)));
+        if ($candidateMoodIds === []) {
+            return null;
+        }
+        if (count($candidateMoodIds) === 1) {
+            return $candidateMoodIds[0];
+        }
+
+        $predictedRoundWinsAwarded = 1;
+        foreach ($state->moodsInPlay() as $mood) {
+            if ($state->effectState($mood->cardId, 'awardsExtraWin')) {
+                $predictedRoundWinsAwarded = 2;
+                break;
+            }
+        }
+
+        $options = [];
+        foreach ($candidateMoodIds as $moodId) {
+            $sim = clone $state;
+            $sim->giveInPlayToPlayer($moodId, $recipientId);
+            [$myTotal, $rivalTotals] = $this->projectedGroupTotals($sim, $botGamePlayerId);
+
+            $losesTheGame = false;
+            foreach ($rivalTotals as $groupKey => $groupTotal) {
+                $groupWinsNeeded = $roundWinsNeededToWinGameByPlayerId[$groupKey] ?? null;
+                if ($groupWinsNeeded !== null && $groupWinsNeeded <= $predictedRoundWinsAwarded && $groupTotal > $myTotal) {
+                    $losesTheGame = true;
+                }
+            }
+
+            $catalogRow = $state->catalogRow($state->effectiveCardId($moodId));
+            $options[] = [
+                'id' => $moodId,
+                'margin' => $myTotal - ($rivalTotals === [] ? 0 : max($rivalTotals)),
+                'powerful' => in_array($catalogRow['effectKey'], self::POWERFUL_WHILE_IN_PLAY_EFFECT_KEYS, true),
+                'loses' => $losesTheGame,
+                'value' => $catalogRow['baseValue'],
+            ];
+        }
+
+        // Lowest swing first (highest remaining margin), then lower printed value, then id.
+        $bySwing = static fn (array $a, array $b): int => [$b['margin'], $a['value'], $a['id']] <=> [$a['margin'], $b['value'], $b['id']];
+        usort($options, $bySwing);
+
+        // The usual pick keeps a powerful mood whenever any candidate isn't one.
+        $preferred = $options;
+        usort($preferred, static fn (array $a, array $b): int => ($a['powerful'] <=> $b['powerful']) ?: $bySwing($a, $b));
+        $pick = $preferred[0];
+
+        if ($pick['loses']) {
+            foreach ($options as $option) {
+                if (!$option['loses']) {
+                    return $option['id'];
+                }
+            }
+        }
+
+        return $pick['id'];
     }
 
     /** Mirrors GameService::ENTHUSIASM_DECISION_TYPE/PASSION_DECISION_TYPE (private there). */
@@ -4028,6 +4156,21 @@ final class BotPlayerService
                 $sim->moveInPlayToHand($moodId);
             }
         }
+        [$myTotal, $rivalTotals] = $this->projectedGroupTotals($sim, $botGamePlayerId);
+        $myTotal += $this->baseValue($state, $panicCardId);
+
+        return [$myTotal, $rivalTotals === [] ? 0 : max($rivalTotals), $rivalTotals];
+    }
+
+    /**
+     * The projected round score of $botGamePlayerId's own side (the bot plus
+     * any teammates) and of each rival group (keyed by the group's first
+     * seat), scored against $sim with the usual projected scoring decisions.
+     *
+     * @return array{0: int, 1: array<int, int>}
+     */
+    private function projectedGroupTotals(BoardState $sim, int $botGamePlayerId): array
+    {
         $scores = (new RoundScorer())->score($sim, $this->projectedScoringDecisions($sim));
 
         $activeIds = $sim->activePlayerOrder();
@@ -4035,7 +4178,7 @@ final class BotPlayerService
             $activeIds,
             fn (int $id): bool => $id === $botGamePlayerId || $sim->isTeammate($botGamePlayerId, $id),
         ));
-        $myTotal = array_sum(array_map(fn (int $id) => $scores[$id] ?? 0, $myGroupIds)) + $this->baseValue($state, $panicCardId);
+        $myTotal = array_sum(array_map(fn (int $id) => $scores[$id] ?? 0, $myGroupIds));
 
         $rivalTotals = [];
         $grouped = [];
@@ -4051,7 +4194,7 @@ final class BotPlayerService
             $rivalTotals[$id] = array_sum(array_map(fn (int $gid) => $scores[$gid] ?? 0, $group));
         }
 
-        return [$myTotal, $rivalTotals === [] ? 0 : max($rivalTotals), $rivalTotals];
+        return [$myTotal, $rivalTotals];
     }
 
     /**

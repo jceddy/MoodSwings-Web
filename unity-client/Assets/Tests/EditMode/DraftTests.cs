@@ -37,6 +37,43 @@ namespace MoodSwings.Tests
             "\"rarity_caps\":" + caps + "}}";
 
         [Test]
+        public void APlayerCanResign_WhileDraftingAndWhileBuildingTheirDeck()
+        {
+            Assert.IsTrue(BoardDisplay.CanResign(DraftGame("quick_draft", "waiting", Drafting())));
+            Assert.IsTrue(BoardDisplay.ResignOffered(DraftGame("quick_draft", "waiting", Drafting())));
+            Assert.IsTrue(BoardDisplay.CanResign(DraftGame("quick_draft", "waiting", Building(false, false))));
+            Assert.IsTrue(BoardDisplay.CanResign(DraftGame("quick_draft", "waiting", Building(true, false))), "even with their deck in");
+        }
+
+        [Test]
+        public void ResigningFromADraft_IsNotOfferedOnceTheyHave_OrToAWatcher_OrBeforeItStarts()
+        {
+            var resigned = DraftGame("quick_draft", "waiting", Drafting());
+            BoardDisplay.Viewer(resigned).Resigned = true;
+            Assert.IsFalse(BoardDisplay.CanResign(resigned));
+
+            var watcher = DraftGame("quick_draft", "waiting", Drafting());
+            watcher.You.GamePlayerId = null;
+            Assert.IsFalse(BoardDisplay.ResignOffered(watcher));
+
+            // A synchronous game still waiting for everyone to be ready hasn't started drafting.
+            var notStarted = DraftGame("quick_draft", "waiting", Drafting());
+            notStarted.Game.SynchronousMode = true;
+            foreach (var player in notStarted.Players)
+            {
+                player.Ready = false;
+            }
+
+            Assert.IsFalse(BoardDisplay.CanResign(notStarted));
+
+            // A game that is not a draft, and has not started, has nothing to resign from.
+            var waiting = BoardFixtures.Load(405);
+            waiting.Game.Status = "waiting";
+            Assert.IsFalse(BoardDisplay.CanResign(waiting));
+            Assert.IsFalse(BoardDisplay.ResignOffered(waiting));
+        }
+
+        [Test]
         public void EachDraftType_ReadsItsOwnBlock()
         {
             var state = DraftGame("quick_draft", "waiting", Drafting());
