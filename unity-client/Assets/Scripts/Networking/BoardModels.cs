@@ -89,6 +89,15 @@ namespace MoodSwings.Networking
         [JsonProperty("value_locked")]
         public bool ValueLocked { get; set; }
 
+        /// <summary>
+        /// In play: a "while in play" mood is worth its alternate value right now, because its own condition holds ("While in
+        /// play, this mood's value is 6 if ..."). The server's own flag, so it follows the board and goes false when the condition
+        /// stops holding. A locked-in value has its own flag (<see cref="ValueLocked"/>), and this is never set for a mood that is
+        /// suppressed, has a Chaos Draft value, or has the alternate value only as a dice number from Encouragement or Idealism.
+        /// </summary>
+        [JsonProperty("alt_value_active")]
+        public bool WhileInPlayAltValueActive { get; set; }
+
         /// <summary>In play, Bliss only: the color of the card that was discarded to it, which is what it now cares about.</summary>
         [JsonProperty("bliss_discard_color")]
         public string BlissDiscardColor { get; set; }
@@ -132,30 +141,13 @@ namespace MoodSwings.Networking
         public bool ValueIsModified => Value != BaseValue;
 
         /// <summary>
-        /// In play: the mood's alternate value (the number printed upside down in the corner of its card) is the one in effect --
-        /// by its own live condition ("While in play, this mood's value is 6 if ...", or applied by Encouragement or Idealism) or
-        /// because it was locked in ("After playing this mood ... its value becomes 7"). By tabletop convention such a mood is turned
-        /// 180 degrees, so that number is the one the right way up. An effect that fixes the value some other way (a Chaos Draft
-        /// effect) doesn't count, and neither does a mood that is suppressed (its value is 0) unless the value was already locked in.
+        /// In play: the mood is on its alternate value (the number printed upside down in the corner of its card), so by
+        /// tabletop convention it is turned 180 degrees and that number is the one the right way up. Either its own "while in play"
+        /// condition holds right now (<see cref="WhileInPlayAltValueActive"/>) or an "After playing this mood ... its value becomes 7"
+        /// has locked the value in (<see cref="ValueLocked"/>) -- both of them the server's own flags, the same two the web client
+        /// turns a card for.
         /// </summary>
-        public bool IsAltValueActive
-        {
-            get
-            {
-                if (!AltValue.HasValue || ChaosValueOverride.HasValue)
-                {
-                    return false;
-                }
-
-                if (ValueLocked)
-                {
-                    return true;
-                }
-
-                // Its own value, before any Chaos Draft adjustment on top; it has to differ from the printed one to be the alternate.
-                return !IsSuppressed && Value - ChaosValueDelta == AltValue.Value && BaseValue != AltValue.Value;
-            }
-        }
+        public bool IsAltValueActive => ValueLocked || WhileInPlayAltValueActive;
 
         /// <summary>True when an effect (Imagination) has changed the color from the printed one.</summary>
         public bool IsRecolored => !string.IsNullOrEmpty(BaseColor) && !string.IsNullOrEmpty(Color) && Color != BaseColor;

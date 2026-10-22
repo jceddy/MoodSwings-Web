@@ -216,10 +216,16 @@ namespace MoodSwings.Core
         /// What a card's close-up says about its alternate value when that is the one in effect (the table shows such a mood
         /// turned around), or null.
         /// </summary>
-        public static string AltValueNote(BoardCard card) =>
-            card != null && card.IsAltValueActive
-                ? $"Its alternate value ({card.AltValue}) is the one in effect, so it lies turned around on the table."
-                : null;
+        public static string AltValueNote(BoardCard card)
+        {
+            if (card == null || !card.IsAltValueActive)
+            {
+                return null;
+            }
+
+            var which = card.AltValue.HasValue ? $"alternate value ({card.AltValue})" : "alternate value";
+            return $"Its {which} is the one in effect, so it lies turned around on the table.";
+        }
 
         /// <summary>Whether to draw attention to the banner: it's on the viewer.</summary>
         public static bool BannerNeedsViewer(GameState state)

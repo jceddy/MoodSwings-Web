@@ -1,116 +1,94 @@
 using MoodSwings.Core;
 using MoodSwings.Networking;
+using Newtonsoft.Json;
 using NUnit.Framework;
 
 namespace MoodSwings.Tests
 {
-    /// <summary>When a mood's alternate value is the one in effect, so the table turns it around.</summary>
+    /// <summary>
+    /// When a mood is turned around on the table for being on its alternate value: when the server says so -- its own while-in-play
+    /// condition holds (alt_value_active) or the value was locked in (value_locked), the same two flags the web client turns a card for.
+    /// </summary>
     public class AltValueTests
     {
-        // Chivalry-like: worth 3, 5 under its condition.
-        private static BoardCard Mood(int value, int baseValue = 3, int? alt = 5) =>
-            new BoardCard { CardId = 1, Name = "Chivalry", Value = value, BaseValue = baseValue, AltValue = alt, HasDiceValue = alt.HasValue };
+        private static BoardCard Mood() =>
+            new BoardCard { CardId = 1, Name = "Chivalry", Value = 3, BaseValue = 3, AltValue = 5, HasDiceValue = true };
 
         [Test]
-        public void ACardWithNoAlternateValue_IsNeverTurnedAround()
+        public void ANormalMood_IsNotTurnedAround()
         {
-            Assert.IsFalse(Mood(3, alt: null).IsAltValueActive);
-            Assert.IsFalse(Mood(7, alt: null).IsAltValueActive, "its value moved, but not to an alternate one");
+            Assert.IsFalse(Mood().IsAltValueActive);
         }
 
         [Test]
-        public void ALiveCondition_TurnsItAround_WhileItHolds()
+        public void AMoodWhoseOwnConditionHolds_IsTurnedAround_AccordingToTheServer()
         {
-            Assert.IsFalse(Mood(3).IsAltValueActive, "worth its printed value");
-            Assert.IsTrue(Mood(5).IsAltValueActive, "worth its alternate value");
+            var card = Mood();
+            card.WhileInPlayAltValueActive = true;
+
+            Assert.IsTrue(card.IsAltValueActive);
         }
 
         [Test]
-        public void AValueThatIsSomethingElse_IsNotTheAlternate()
+        public void ALockedInValue_IsTurnedAround()
         {
-            Assert.IsFalse(Mood(4).IsAltValueActive);
-            Assert.IsFalse(Mood(0).IsAltValueActive);
+            var card = Mood();
+            card.ValueLocked = true;
+
+            Assert.IsTrue(card.IsAltValueActive);
         }
 
         [Test]
-        public void AnAlternateValueBelowThePrintedOne_ShowsWhenItTakesOver_NotWhenTheHigherOneIsKept()
+        public void TheClientDoesNotWorkItOutFromTheNumbers_ItGoesByTheServersFlags()
         {
-            // Discipline-like: 6, and 3 under its condition. Encouragement and Idealism take the higher of the two.
-            Assert.IsFalse(Mood(6, baseValue: 6, alt: 3).IsAltValueActive, "boosted: still 6, the printed one");
-            Assert.IsTrue(Mood(3, baseValue: 6, alt: 3).IsAltValueActive, "its own condition holds: 3");
+            // Worth its alternate value as far as the numbers go (a dice boost from Encouragement, say), but the server does
+            // not say its own condition holds, and nothing is locked in: not turned.
+            var boosted = Mood();
+            boosted.Value = 5;
+            boosted.BoostedByCardId = 99;
+            Assert.IsFalse(boosted.IsAltValueActive);
+
+            // And the other way round: the flag says so whatever the numbers look like.
+            var flagged = Mood();
+            flagged.WhileInPlayAltValueActive = true;
+            flagged.Value = 3;
+            Assert.IsTrue(flagged.IsAltValueActive);
         }
 
         [Test]
-        public void ALockedInValue_TurnsItAround()
+        public void TheFlagsComeFromWhatTheServerSends()
         {
-            var locked = Mood(5);
-            locked.ValueLocked = true;
+            var live = JsonConvert.DeserializeObject<BoardCard>(
+                "{\"card_id\":5,\"name\":\"Tranquility\",\"value\":6,\"base_value\":3,\"alt_value\":6,\"has_dice_value\":true,"
+                + "\"value_locked\":false,\"alt_value_active\":true,\"is_suppressed\":false}");
+            var locked = JsonConvert.DeserializeObject<BoardCard>(
+                "{\"card_id\":6,\"name\":\"Dignity\",\"value\":5,\"base_value\":3,\"alt_value\":5,\"value_locked\":true,\"alt_value_active\":false}");
+            var plain = JsonConvert.DeserializeObject<BoardCard>("{\"card_id\":7,\"name\":\"Calm\",\"value\":3,\"base_value\":3}");
 
-            Assert.IsTrue(locked.IsAltValueActive);
-        }
-
-        [Test]
-        public void ASuppressedMood_IsNotTurnedAround_ByALiveCondition_ButIsByALockedValue()
-        {
-            var live = Mood(0);
-            live.IsSuppressed = true;
-            Assert.IsFalse(live.IsAltValueActive, "its value is 0: the alternate isn't in effect");
-
-            var locked = Mood(0);
-            locked.IsSuppressed = true;
-            locked.ValueLocked = true;
-            Assert.IsTrue(locked.IsAltValueActive, "the value was locked in before it was suppressed");
-        }
-
-        [Test]
-        public void AChaosEffectThatFixesTheValue_DoesNotTurnItAround()
-        {
-            var fixedValue = Mood(5);
-            fixedValue.ChaosValueOverride = 5;
-            fixedValue.ValueLocked = true;
-
-            Assert.IsFalse(fixedValue.IsAltValueActive);
-        }
-
-        [Test]
-        public void AChaosAdjustmentOnTop_IsLeftOutOfTheComparison()
-        {
-            // Its own value is 5 (the alternate), and a chaos effect has added 2 on top.
-            var raised = Mood(7);
-            raised.ChaosValueDelta = 2;
-            Assert.IsTrue(raised.IsAltValueActive);
-
-            // Its own value is 3, and the same effect has raised it to 5: that is not the alternate value.
-            var lifted = Mood(5);
-            lifted.ChaosValueDelta = 2;
-            Assert.IsFalse(lifted.IsAltValueActive);
-        }
-
-        [Test]
-        public void AnAlternateValueEqualToThePrintedOne_HasNothingToTurn()
-        {
-            Assert.IsFalse(Mood(3, baseValue: 3, alt: 3).IsAltValueActive);
+            Assert.IsTrue(live.WhileInPlayAltValueActive);
+            Assert.IsTrue(live.IsAltValueActive);
+            Assert.IsFalse(locked.WhileInPlayAltValueActive);
+            Assert.IsTrue(locked.IsAltValueActive, "locked in, which has its own flag");
+            Assert.IsFalse(plain.IsAltValueActive, "a state from a server that doesn't send the flag: nothing turned");
         }
 
         [Test]
         public void TheCloseUp_SaysSoWhenItIsTurnedAround()
         {
-            var note = BoardDisplay.AltValueNote(Mood(5));
+            var live = Mood();
+            live.WhileInPlayAltValueActive = true;
+
+            var note = BoardDisplay.AltValueNote(live);
 
             StringAssert.Contains("alternate value (5)", note);
             StringAssert.Contains("turned around", note);
-            Assert.IsNull(BoardDisplay.AltValueNote(Mood(3)));
+            Assert.IsNull(BoardDisplay.AltValueNote(Mood()));
             Assert.IsNull(BoardDisplay.AltValueNote(null));
-        }
 
-        [Test]
-        public void TheFlagComesFromWhatTheServerSends()
-        {
-            var card = Newtonsoft.Json.JsonConvert.DeserializeObject<BoardCard>(
-                "{\"card_id\":5,\"name\":\"Tranquility\",\"value\":6,\"base_value\":3,\"alt_value\":6,\"has_dice_value\":true,"
-                + "\"value_locked\":false,\"chaos_value_delta\":0,\"chaos_value_override\":null,\"is_suppressed\":false}");
-
-            Assert.IsTrue(card.IsAltValueActive);
+            var noNumber = Mood();
+            noNumber.AltValue = null;
+            noNumber.ValueLocked = true;
+            StringAssert.Contains("alternate value is", BoardDisplay.AltValueNote(noNumber));
         }
     }
 }

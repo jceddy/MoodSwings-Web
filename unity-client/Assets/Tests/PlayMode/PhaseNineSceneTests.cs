@@ -1652,7 +1652,7 @@ namespace MoodSwings.Tests
             }
 
             var server = Serve();
-            // Ambition worth 3, or 5 under its condition -- and it is: the alternate value is in effect.
+            // Ambition worth 3, or 5 under its condition -- and the server says it is: the alternate value is in effect.
             server.State = Quiet(406, s =>
             {
                 var ambition = s["in_play"][0];
@@ -1660,6 +1660,7 @@ namespace MoodSwings.Tests
                 ambition["alt_value"] = 5;
                 ambition["base_value"] = 3;
                 ambition["value"] = 5;
+                ambition["alt_value_active"] = true;
             });
             yield return PhaseFiveSceneTests.OpenBoard(server, 406);
 
@@ -1669,7 +1670,7 @@ namespace MoodSwings.Tests
             Assert.IsNull(FaceOf("Frustration"), "a mood on its printed value stays upright");
             ScreenshotHelper.Capture("alt-value-turned");
 
-            // Back to its printed value: upright again.
+            // Its condition stops holding: upright again.
             server.State = Quiet(406, s =>
             {
                 var ambition = s["in_play"][0];
@@ -1677,9 +1678,35 @@ namespace MoodSwings.Tests
                 ambition["alt_value"] = 5;
                 ambition["base_value"] = 3;
                 ambition["value"] = 3;
+                ambition["alt_value_active"] = false;
             });
             yield return PhaseFiveSceneTests.Poll();
             Assert.IsNull(FaceOf("Ambition"), "its condition no longer holds");
+        }
+
+        [UnityTest]
+        public IEnumerator AMoodOnItsAlternateValueOnlyAsADiceBoost_IsNotTurnedAround_BecauseTheServerSaysNot()
+        {
+            if (CardArtLibrary.ForCard(53) == null)
+            {
+                Assert.Inconclusive("The card art has not been generated on this machine (tools/convert_card_art.py).");
+            }
+
+            var server = Serve();
+            // Worth 5, the alternate, because Encouragement is applying its dice value: not a condition being met.
+            server.State = Quiet(406, s =>
+            {
+                var ambition = s["in_play"][0];
+                ambition["has_dice_value"] = true;
+                ambition["alt_value"] = 5;
+                ambition["base_value"] = 3;
+                ambition["value"] = 5;
+                ambition["boosted_by_card_id"] = s["in_play"][1]["card_id"];
+                ambition["alt_value_active"] = false;
+            });
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+
+            Assert.IsNull(FaceOf("Ambition"));
         }
 
         [UnityTest]
@@ -1699,6 +1726,7 @@ namespace MoodSwings.Tests
                 ambition["base_value"] = 3;
                 ambition["value"] = 0;
                 ambition["value_locked"] = true;
+                ambition["alt_value_active"] = false;
                 ambition["is_suppressed"] = true;
             });
             yield return PhaseFiveSceneTests.OpenBoard(server, 406);
@@ -1731,6 +1759,7 @@ namespace MoodSwings.Tests
                 ambition["alt_value"] = 5;
                 ambition["base_value"] = 3;
                 ambition["value"] = 5;
+                ambition["alt_value_active"] = true;
             });
             yield return PhaseFiveSceneTests.OpenBoard(server, 406);
 
