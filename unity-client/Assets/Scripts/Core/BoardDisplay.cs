@@ -212,6 +212,21 @@ namespace MoodSwings.Core
             return state.Round.PlaysRemaining == 1 ? "1 play left" : $"{state.Round.PlaysRemaining} plays left";
         }
 
+        /// <summary>
+        /// What a card's close-up says about its alternate value when that is the one in effect (the table shows such a mood
+        /// turned around), or null.
+        /// </summary>
+        public static string AltValueNote(BoardCard card)
+        {
+            if (card == null || !card.IsAltValueActive)
+            {
+                return null;
+            }
+
+            var which = card.AltValue.HasValue ? $"alternate value ({card.AltValue})" : "alternate value";
+            return $"Its {which} is the one in effect, so it lies turned around on the table.";
+        }
+
         /// <summary>Whether to draw attention to the banner: it's on the viewer.</summary>
         public static bool BannerNeedsViewer(GameState state)
         {

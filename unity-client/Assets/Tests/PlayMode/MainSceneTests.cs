@@ -75,6 +75,9 @@ namespace MoodSwings.Tests
         /// <summary>Launches in the dark palette (for screenshots of it).</summary>
         internal static bool DarkMode;
 
+        /// <summary>Lets the welcome tour start by itself on the main menu. Off, so it doesn't cover the screen in every other test.</summary>
+        internal static bool ShowTour;
+
         /// <summary>A stand-in for the system's file dialogs, for tests of adding art packs.</summary>
         internal static IFilePicker FilePicker;
 
@@ -94,6 +97,7 @@ namespace MoodSwings.Tests
             AppServices.Override(api, null, store, disk, pushProvider,
                 artPacksFolder: System.IO.Path.Combine(System.IO.Path.GetTempPath(), "moodswings-test-artpacks-" + System.Guid.NewGuid().ToString("N")));
             AppServices.FilePicker = FilePicker ?? AppServices.FilePicker;
+            AppServices.Device.TourSeen = !ShowTour;
             if (DarkMode)
             {
                 AppServices.Device.DarkMode = true;

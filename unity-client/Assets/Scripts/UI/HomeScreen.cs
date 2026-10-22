@@ -20,6 +20,8 @@ namespace MoodSwings.UI
         private Text _achievementsLabel;
         private RectTransform _gridRow;
         private bool _built;
+        private readonly System.Collections.Generic.Dictionary<string, RectTransform> _tourTargets =
+            new System.Collections.Generic.Dictionary<string, RectTransform>();
 
         public string GreetingText => _greeting != null ? _greeting.text : null;
 
@@ -28,6 +30,13 @@ namespace MoodSwings.UI
         public string FriendsButtonText => _friendsLabel != null ? _friendsLabel.text : null;
 
         public string AchievementsButtonText => _achievementsLabel != null ? _achievementsLabel.text : null;
+
+        /// <summary>A main menu button the welcome tour points at ("play", "puzzles", "friends"...), or null.</summary>
+        public RectTransform TourTarget(string id)
+        {
+            EnsureBuilt();
+            return id != null && _tourTargets.TryGetValue(id, out var target) ? target : null;
+        }
 
         public override void OnShown(object args)
         {
@@ -69,6 +78,7 @@ namespace MoodSwings.UI
 
             var play = UiFactory.Button(column, "Play", theme, () => Router.Show<PlayScreen>());
             _playLabel = play.GetComponentInChildren<Text>();
+            _tourTargets["play"] = (RectTransform)play.transform;
 
             // Everything but Play sits two to a row, so the menu keeps fitting a landscape screen as it grows.
             GridButton(column, "Puzzles", theme, () => Router.Show<PuzzlesScreen>());
@@ -103,6 +113,7 @@ namespace MoodSwings.UI
 
             var button = UiFactory.Button(_gridRow, text, theme, onClick, primary: false);
             UiFactory.Flexible(button.gameObject, width: 1f);
+            _tourTargets[text.ToLowerInvariant()] = (RectTransform)button.transform;
             return button.GetComponentInChildren<Text>();
         }
 
