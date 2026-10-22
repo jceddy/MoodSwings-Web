@@ -21,6 +21,8 @@ namespace MoodSwings.UI
         public TourOverlay Tour => _tour;
         private bool _tourOffered;
         private bool _tourStarting;
+        private bool _tourNavigating;       // the tour is moving between screens itself
+        private bool _tourPushedSettings;   // ... and Settings is on top of the main menu because of it
         private GameObject _banner;
         private Rect _bannerSafeArea;
         private Vector2Int _bannerScreenSize;
@@ -44,7 +46,9 @@ namespace MoodSwings.UI
             MusicPlayer.Instance.SetTheme(MusicTheme.Main);
             _updates = new UpdatePrompt(transform, AppServices.Theme);
             UpdatePrompt.Current = _updates;
-            _tour = new TourOverlay(transform, AppServices.Theme, AppServices.Tour, id => (_router.Current as HomeScreen)?.TourTarget(id));
+            _tour = new TourOverlay(transform, AppServices.Theme, AppServices.Tour, TourTargetOnScreen);
+            AppServices.Tour.Changed += ShowTourStepScreen;
+            AppServices.Tour.Ended += _ => LeaveTourScreens();
             _router.ScreenChanged += (previous, next) =>
             {
                 // The welcome tour is about the main menu: the first time it is reached on this device, and whenever Settings
@@ -59,7 +63,7 @@ namespace MoodSwings.UI
 
                     _tourOffered = true;
                 }
-                else if (AppServices.Tour.IsActive)
+                else if (AppServices.Tour.IsActive && !_tourNavigating)
                 {
                     AppServices.Tour.Skip();
                 }
@@ -86,6 +90,59 @@ namespace MoodSwings.UI
             BackgroundSound.Apply();
             BuildServerBanner();
             _router.Show<SplashScreen>();
+        }
+
+        // What a tour step points at, on whichever screen it is on.
+        private RectTransform TourTargetOnScreen(string id)
+        {
+            switch (_router.Current)
+            {
+                case HomeScreen home:
+                    return home.TourTarget(id);
+                case SettingsScreen settings:
+                    return settings.TourTarget(id);
+                default:
+                    return null;
+            }
+        }
+
+        // A step about a setting is shown on the Settings screen: the tour takes the player there, and brings them back.
+        private void ShowTourStepScreen()
+        {
+            var step = AppServices.Tour.Current;
+            if (step == null || _router == null)
+            {
+                return;
+            }
+
+            if (step.Screen == TourScreen.Settings && !(_router.Current is SettingsScreen) && _router.Current is HomeScreen)
+            {
+                _tourNavigating = true;
+                _tourPushedSettings = true;
+                _router.Show<SettingsScreen>();
+                _tourNavigating = false;
+            }
+            else if (step.Screen == TourScreen.Home && _tourPushedSettings && _router.Current is SettingsScreen)
+            {
+                LeaveTourScreens();
+            }
+        }
+
+        // Back from Settings to the main menu, if it was the tour that went there.
+        private void LeaveTourScreens()
+        {
+            if (!_tourPushedSettings)
+            {
+                return;
+            }
+
+            _tourPushedSettings = false;
+            if (_router != null && _router.Current is SettingsScreen)
+            {
+                _tourNavigating = true;
+                _router.Back();
+                _tourNavigating = false;
+            }
         }
 
         // The main menu is laid out a frame after it is shown, and the tour points at where its buttons end up.

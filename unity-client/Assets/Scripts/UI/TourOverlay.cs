@@ -14,7 +14,8 @@ namespace MoodSwings.UI
     {
         private const float Pad = 14f;          // room around the highlighted button
         private const float FrameThickness = 6f;
-        private const float SideWidth = 500f;   // the card beside a highlighted button
+        private const float SideWidth = 500f;   // the card beside a highlighted button, at most
+        private const float MinSideWidth = 380f;
         private const float CenterWidth = 1000f;
         private const float DiagramWidth = 640f;
         private const float DiagramHeight = 330f;
@@ -74,8 +75,9 @@ namespace MoodSwings.UI
 
             _counter = UiFactory.Label(_card, string.Empty, 22, theme.textMuted, TextAnchor.MiddleLeft);
             UiFactory.Size(_counter.gameObject, height: 28f);
-            _title = UiFactory.Label(_card, string.Empty, 42, theme.accent, TextAnchor.MiddleLeft, FontStyle.Bold);
-            UiFactory.Size(_title.gameObject, height: 56f);
+            _title = UiFactory.Label(_card, string.Empty, 38, theme.accent, TextAnchor.MiddleLeft, FontStyle.Bold);
+            // As tall as its words need: a long title wraps in the narrow card beside a row in Settings.
+            _title.gameObject.AddComponent<LayoutElement>().minHeight = 52f;
 
             // In a row of its own, so it keeps its size and sits in the middle rather than stretching to the card's width.
             var diagramRow = UiFactory.Row(_card, "Table diagram row", 0f, TextAnchor.MiddleCenter);
@@ -265,11 +267,15 @@ namespace MoodSwings.UI
             Set(_frame[2], x0 - FrameThickness, y0, x0, y1);                                      // left
             Set(_frame[3], x1, y0, x1 + FrameThickness, y1);                                      // right
 
-            // The card goes on whichever side of the screen the button is not on.
-            _card.sizeDelta = new Vector2(SideWidth, 0f);
-            var middleX = (x0 + x1) * 0.5f;
-            var cardX = middleX <= 0f ? half.x - 40f - SideWidth * 0.5f : -(half.x - 40f - SideWidth * 0.5f);
-            var limit = Mathf.Max(0f, half.y - 330f);
+            // The card goes on whichever side of the button has more room, at the edge of the screen, and is as wide as
+            // that room allows (a wide row in Settings leaves less at the sides than a button on the main menu does).
+            var roomLeft = x0 + half.x;
+            var roomRight = half.x - x1;
+            var onRight = roomRight >= roomLeft;
+            var cardWidth = Mathf.Clamp(Mathf.Max(roomLeft, roomRight) - 60f, MinSideWidth, SideWidth);
+            _card.sizeDelta = new Vector2(cardWidth, 0f);
+            var cardX = onRight ? half.x - 40f - cardWidth * 0.5f : -(half.x - 40f - cardWidth * 0.5f);
+            var limit = Mathf.Max(0f, half.y - 340f);
             _card.anchoredPosition = new Vector2(cardX, Mathf.Clamp((y0 + y1) * 0.5f, -limit, limit));
         }
 

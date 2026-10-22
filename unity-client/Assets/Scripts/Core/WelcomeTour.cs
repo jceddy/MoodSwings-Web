@@ -3,16 +3,28 @@ using System.Collections.Generic;
 
 namespace MoodSwings.Core
 {
+    /// <summary>The screen a tour step is shown on. The tour takes the player there.</summary>
+    public enum TourScreen
+    {
+        Home,
+        Settings,
+    }
+
     /// <summary>One stop on the welcome tour.</summary>
     public sealed class TourStep
     {
         public string Id { get; set; }
 
+        public TourScreen Screen { get; set; } = TourScreen.Home;
+
         public string Title { get; set; }
 
         public string Body { get; set; }
 
-        /// <summary>A main menu button to point at ("play", "puzzles", ...), or null for a step that talks about the whole app.</summary>
+        /// <summary>
+        /// Something on its screen to point at: a main menu button ("play", "puzzles", ...), or one of Settings' switches
+        /// ("custom-formats", "discoverable"); null for a step that talks about the whole app.
+        /// </summary>
         public string Target { get; set; }
 
         /// <summary>Show a little picture of the table with it.</summary>
@@ -89,7 +101,28 @@ namespace MoodSwings.Core
                 Target = "settings",
                 Title = "Settings",
                 Body = "Dark mode, sound and music, notifications, your privacy options and your own card art. "
-                    + "The welcome tour can be run again from here.",
+                    + "Two of its switches change a lot about the games you can start and who you can play them with, "
+                    + "so the next two steps take you to them.",
+            },
+            new TourStep
+            {
+                Id = "custom-formats",
+                Screen = TourScreen.Settings,
+                Target = "custom-formats",
+                Title = "Show custom card/effect formats",
+                Body = "Off by default. Switched on, New game also offers custom formats such as Chaos Draft, "
+                    + "where each round you are offered random effects to attach to the cards in your hand. "
+                    + "Without it, those formats are not in the list.",
+            },
+            new TourStep
+            {
+                Id = "discoverable",
+                Screen = TourScreen.Settings,
+                Target = "discoverable",
+                Title = "Discoverable for open games",
+                Body = "On by default. It lets strangers see and join the games you post to the open lobby, and join the open "
+                    + "tournaments you run. Switch it off and you can't post to the lobby, so the games you start are "
+                    + "only with the friends and bots you invite.",
             },
             new TourStep
             {

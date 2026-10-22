@@ -712,8 +712,11 @@ Python scripts in `tools/` (`pip install pillow` for the first):
 
 The first time someone reaches the main menu on a device, a tour walks them through the app: a welcome, then a step for each
 of the menu's buttons (Play, Puzzles, Decklists, Friends, Achievements, Tournaments, Stats, Settings) with the screen dimmed
-and a frame round the button being described, a picture of the table and what is where on it, and a last word on how to see
-the tour again. Each step has **Back** and **Next** (**Done** at the end), and **Skip the tour** is there at every step; Back
+and a frame round the button being described. Two steps then take the player into Settings, scroll to the two switches that
+change which games they can start and who with -- **Show custom card/effect formats** (what offers Chaos Draft and the other
+custom formats) and **Discoverable for open games** (whether strangers can see and join what they post to the open lobby) --
+and frame them, then bring them back to the main menu for a picture of the table and what is where on it, and a last word on
+how to see the tour again. Each step has **Back** and **Next** (**Done** at the end), and **Skip the tour** is there at every step; Back
 or Escape (Android's Back button too) skips as well. Finishing and skipping both count as having seen it
 (`DeviceSettings.TourSeen`, per device), so it doesn't start by itself again.
 
@@ -722,7 +725,8 @@ waiting, its box comes up after the tour, not on top of it. Signing out or being
 
 What it says is `TourSteps` (`Assets/Scripts/Core/WelcomeTour.cs`): change the text, or add a step by giving it a `Target`
 (a main menu button -- `HomeScreen.TourTarget` knows them by name) or none. `TourFlow` is the state (UI-free) and
-`TourOverlay` draws it. PlayMode tests start with the tour off (`MainSceneTests.ShowTour`), or it would cover every test's
+`TourOverlay` draws it; a step's `Screen` says which screen it is on (the tour moves the player there and back, and a test pins
+the two switches' names to `PreferenceCatalog`'s labels). PlayMode tests start with the tour off (`MainSceneTests.ShowTour`), or it would cover every test's
 main menu.
 
 ## Updates

@@ -36,19 +36,44 @@ namespace MoodSwings.Tests
         }
 
         [Test]
-        public void TheStepsPointAtMainMenuButtons_AndTheTourOpensAndClosesInTheMiddle()
+        public void TheStepsPointAtMainMenuButtons_OrSettingsSwitches_AndTheTourOpensAndClosesInTheMiddle()
         {
             var buttons = new[] { "play", "puzzles", "decklists", "friends", "achievements", "tournaments", "stats", "settings" };
+            var switches = new[] { "custom-formats", "discoverable" };
 
             foreach (var step in TourSteps.All.Where(s => s.Target != null))
             {
-                CollectionAssert.Contains(buttons, step.Target, step.Id);
+                CollectionAssert.Contains(step.Screen == TourScreen.Home ? buttons : switches, step.Target, step.Id);
             }
 
             Assert.IsNull(TourSteps.All.First().Target, "it opens by welcoming you");
             Assert.IsNull(TourSteps.All.Last().Target, "and ends by saying how to see it again");
             StringAssert.Contains("Settings", TourSteps.All.Last().Body);
             Assert.AreEqual(1, TourSteps.All.Count(s => s.TableDiagram), "one step draws the table");
+        }
+
+        [Test]
+        public void TwoSettingsThatShapeYourGames_AreCalledOutByName_OnTheSettingsScreen()
+        {
+            var formats = PreferenceCatalog.GameDefaults.Single(p => p.JsonKey == "allow_custom_content");
+            var discoverable = PreferenceCatalog.Privacy.Single(p => p.JsonKey == "matchmaking_discoverable");
+
+            var formatsStep = TourSteps.All.Single(s => s.Id == "custom-formats");
+            var discoverableStep = TourSteps.All.Single(s => s.Id == "discoverable");
+
+            Assert.AreEqual(formats.Label, formatsStep.Title, "named as Settings names it");
+            Assert.AreEqual(discoverable.Label, discoverableStep.Title, "named as Settings names it");
+            Assert.AreEqual(TourScreen.Settings, formatsStep.Screen);
+            Assert.AreEqual(TourScreen.Settings, discoverableStep.Screen);
+            StringAssert.Contains("Chaos Draft", formatsStep.Body);
+            StringAssert.Contains("open lobby", discoverableStep.Body);
+
+            // They come right after the Settings step on the main menu, which says they are next.
+            var order = TourSteps.All.Select(s => s.Id).ToList();
+            Assert.AreEqual(order.IndexOf("settings") + 1, order.IndexOf("custom-formats"));
+            Assert.AreEqual(order.IndexOf("custom-formats") + 1, order.IndexOf("discoverable"));
+            Assert.AreEqual(TourScreen.Home, TourSteps.All.Single(s => s.Id == "table").Screen, "and the tour comes back to the main menu");
+            Assert.AreEqual(TourScreen.Home, TourSteps.All.Last().Screen);
         }
 
         [Test]

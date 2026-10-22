@@ -52,13 +52,28 @@ namespace MoodSwings.Tests
             Assert.IsTrue(Tour.IsOpen);
             Assert.IsTrue(AppServices.Tour.IsActive);
             Assert.AreEqual("Welcome to MOOD", Tour.TitleText);
-            Assert.AreEqual("Step 1 of 11", Tour.CounterText);
+            Assert.AreEqual($"Step 1 of {TourSteps.All.Count}", Tour.CounterText);
             StringAssert.Contains("skip it at any time", Tour.BodyText);
             Assert.IsFalse(Tour.CanGoBack, "nothing before the first step");
             Assert.AreEqual("Start the tour", Tour.NextLabel);
             Assert.IsNull(Tour.HighlightRect, "the welcome points at nothing");
             Assert.IsNotNull(PhaseFiveSceneTests.ButtonNamed("Tour skip"), "and it can be skipped from the first step");
             ScreenshotHelper.Capture("tour-welcome");
+        }
+
+        private static ScreenRouter Router => Object.FindAnyObjectByType<ScreenRouter>();
+
+        // Settings fills in its rows once it has read the account, so the frame can take a moment to appear.
+        private static IEnumerator WaitForFrame(float seconds = 4f)
+        {
+            var waited = 0f;
+            while (Tour.HighlightRect == null && waited < seconds)
+            {
+                waited += Time.unscaledDeltaTime;
+                yield return null;
+            }
+
+            yield return PhaseTwoSceneTests.Frames(3);
         }
 
         [UnityTest]
@@ -73,6 +88,11 @@ namespace MoodSwings.Tests
             {
                 yield return Next();
                 var current = TourSteps.All[step];
+                if (current.Screen != TourScreen.Home)
+                {
+                    continue; // the switches in Settings have a test of their own
+                }
+
                 Assert.AreEqual(current.Title, Tour.TitleText);
                 Assert.AreEqual($"Step {step + 1} of {TourSteps.All.Count}", Tour.CounterText);
 
@@ -94,6 +114,110 @@ namespace MoodSwings.Tests
                     ScreenshotHelper.Capture("tour-" + current.Id);
                 }
             }
+        }
+
+        private static IEnumerator GoToStep(string id)
+        {
+            while (AppServices.Tour.Current.Id != id)
+            {
+                yield return Next();
+            }
+
+            yield return PhaseTwoSceneTests.Frames(3);
+        }
+
+        [UnityTest]
+        public IEnumerator TheTourOpensSettings_AndFramesTheTwoSwitchesThatShapeYourGames()
+        {
+            yield return ToHome();
+            var canvas = Object.FindAnyObjectByType<Canvas>().rootCanvas.GetComponent<RectTransform>();
+            var screen = WorldRect(canvas);
+            yield return GoToStep("settings");
+            Assert.IsInstanceOf<HomeScreen>(Router.Current, "the Settings button is on the main menu");
+            StringAssert.Contains("next two steps", Tour.BodyText);
+
+            yield return Next();
+            yield return WaitForFrame();
+
+            Assert.AreEqual("custom-formats", AppServices.Tour.Current.Id);
+            Assert.IsInstanceOf<SettingsScreen>(Router.Current, "the tour took the player to Settings");
+            Assert.AreEqual("Show custom card/effect formats", Tour.TitleText);
+            var row = WorldRect(MainSceneTests.Screen<SettingsScreen>().TourTarget("custom-formats"));
+            Assert.IsNotNull(Tour.HighlightRect, "the switch is framed");
+            Assert.IsTrue(Contains(Tour.HighlightRect.Value, row));
+            Assert.IsTrue(Contains(screen, row), "and scrolled into view");
+            var toggleLabel = MainSceneTests.Screen<SettingsScreen>().TourTarget("custom-formats").GetComponentInChildren<Text>().text;
+            Assert.AreEqual("Show custom card/effect formats", toggleLabel);
+            Assert.IsFalse(WorldRect(Tour.Card).Overlaps(row), "the card is beside the row");
+            Assert.IsTrue(Contains(screen, WorldRect(Tour.Card)));
+            ScreenshotHelper.Capture("tour-custom-formats");
+
+            yield return Next();
+            yield return WaitForFrame();
+
+            Assert.AreEqual("Discoverable for open games", Tour.TitleText);
+            Assert.IsInstanceOf<SettingsScreen>(Router.Current);
+            var discoverable = MainSceneTests.Screen<SettingsScreen>().TourTarget("discoverable");
+            Assert.AreEqual("Discoverable for open games", discoverable.GetComponentInChildren<Text>().text);
+            Assert.IsTrue(Contains(screen, WorldRect(discoverable)), "scrolled down to the Privacy section, in view");
+            Assert.IsTrue(Contains(Tour.HighlightRect.Value, WorldRect(discoverable)));
+            Assert.IsFalse(WorldRect(Tour.Card).Overlaps(WorldRect(discoverable)));
+            ScreenshotHelper.Capture("tour-discoverable");
+
+            // Then back to the main menu for the rest.
+            yield return Next();
+            yield return PhaseTwoSceneTests.Frames(4);
+            Assert.AreEqual("table", AppServices.Tour.Current.Id);
+            Assert.IsInstanceOf<HomeScreen>(Router.Current);
+        }
+
+        [UnityTest]
+        public IEnumerator Back_FromTheSettingsSteps_FollowsTheTourBetweenScreens()
+        {
+            yield return ToHome();
+            yield return GoToStep("discoverable");
+            Assert.IsInstanceOf<SettingsScreen>(Router.Current);
+
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.ButtonNamed("Tour back"));
+            Assert.AreEqual("custom-formats", AppServices.Tour.Current.Id);
+            Assert.IsInstanceOf<SettingsScreen>(Router.Current, "still in Settings");
+
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.ButtonNamed("Tour back"));
+            Assert.AreEqual("settings", AppServices.Tour.Current.Id);
+            Assert.IsInstanceOf<HomeScreen>(Router.Current, "back on the main menu for the Settings button");
+
+            // And forward again.
+            yield return Next();
+            yield return PhaseTwoSceneTests.Frames(4);
+            Assert.IsInstanceOf<SettingsScreen>(Router.Current);
+        }
+
+        [UnityTest]
+        public IEnumerator SkippingInSettings_BringsThePlayerBackToTheMainMenu()
+        {
+            yield return ToHome();
+            yield return GoToStep("custom-formats");
+            Assert.IsInstanceOf<SettingsScreen>(Router.Current);
+
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.ButtonNamed("Tour skip"));
+            yield return PhaseTwoSceneTests.Frames(4);
+
+            Assert.IsFalse(Tour.IsOpen);
+            Assert.IsInstanceOf<HomeScreen>(Router.Current, "where the tour began, not left in Settings");
+            Assert.IsTrue(AppServices.Device.TourSeen);
+        }
+
+        [UnityTest]
+        public IEnumerator TheBackKey_InSettings_SkipsTheTour_AndReturnsToTheMainMenu()
+        {
+            yield return ToHome();
+            yield return GoToStep("discoverable");
+
+            AndroidBack.SimulatedPresses = 1;
+            yield return PhaseTwoSceneTests.Frames(6);
+
+            Assert.IsFalse(Tour.IsOpen);
+            Assert.IsInstanceOf<HomeScreen>(Router.Current);
         }
 
         [UnityTest]
@@ -203,7 +327,7 @@ namespace MoodSwings.Tests
 
             Assert.IsTrue(Tour.IsOpen, "back on the main menu, with the tour running");
             Assert.AreEqual("Welcome to MOOD", Tour.TitleText);
-            Assert.AreEqual("Step 1 of 11", Tour.CounterText);
+            Assert.AreEqual($"Step 1 of {TourSteps.All.Count}", Tour.CounterText);
             Assert.IsNotNull(PhaseFiveSceneTests.ButtonNamed("Tour skip"));
         }
 
