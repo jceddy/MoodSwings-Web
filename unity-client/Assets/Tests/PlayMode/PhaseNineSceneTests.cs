@@ -1638,6 +1638,110 @@ namespace MoodSwings.Tests
             }
         }
 
+        // The face of the mood named so on the table, which is the child that turns (null when the card is simply upright).
+        private static Transform FaceOf(string mood) => PhaseFiveSceneTests.Child("Card " + mood)?.Find("Face");
+
+        private static float TurnOf(Transform face) => Mathf.Round(face.localEulerAngles.z);
+
+        [UnityTest]
+        public IEnumerator AMoodWhoseAlternateValueIsInEffect_LiesTurnedAround_OnTheTable()
+        {
+            if (CardArtLibrary.ForCard(53) == null)
+            {
+                Assert.Inconclusive("The card art has not been generated on this machine (tools/convert_card_art.py).");
+            }
+
+            var server = Serve();
+            // Ambition worth 3, or 5 under its condition -- and it is: the alternate value is in effect.
+            server.State = Quiet(406, s =>
+            {
+                var ambition = s["in_play"][0];
+                ambition["has_dice_value"] = true;
+                ambition["alt_value"] = 5;
+                ambition["base_value"] = 3;
+                ambition["value"] = 5;
+            });
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+
+            var face = FaceOf("Ambition");
+            Assert.IsNotNull(face, "the card's face is its own object, so it can turn while the badges stay put");
+            Assert.AreEqual(180f, TurnOf(face), "turned around");
+            Assert.IsNull(FaceOf("Frustration"), "a mood on its printed value stays upright");
+            ScreenshotHelper.Capture("alt-value-turned");
+
+            // Back to its printed value: upright again.
+            server.State = Quiet(406, s =>
+            {
+                var ambition = s["in_play"][0];
+                ambition["has_dice_value"] = true;
+                ambition["alt_value"] = 5;
+                ambition["base_value"] = 3;
+                ambition["value"] = 3;
+            });
+            yield return PhaseFiveSceneTests.Poll();
+            Assert.IsNull(FaceOf("Ambition"), "its condition no longer holds");
+        }
+
+        [UnityTest]
+        public IEnumerator ASuppressedMoodWithItsAlternateValueLockedIn_LiesThreeQuartersAround()
+        {
+            if (CardArtLibrary.ForCard(53) == null)
+            {
+                Assert.Inconclusive("The card art has not been generated on this machine (tools/convert_card_art.py).");
+            }
+
+            var server = Serve();
+            server.State = Quiet(406, s =>
+            {
+                var ambition = s["in_play"][0];
+                ambition["has_dice_value"] = true;
+                ambition["alt_value"] = 5;
+                ambition["base_value"] = 3;
+                ambition["value"] = 0;
+                ambition["value_locked"] = true;
+                ambition["is_suppressed"] = true;
+            });
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+
+            Assert.AreEqual(90f, TurnOf(FaceOf("Ambition")), "a quarter turn clockwise for suppressed, a half turn more for the alternate value: 270 clockwise");
+
+            // Suppressed alone is the quarter turn the table already used.
+            server.State = Quiet(406, s =>
+            {
+                s["in_play"][0]["is_suppressed"] = true;
+                s["in_play"][0]["value"] = 0;
+            });
+            yield return PhaseFiveSceneTests.Poll();
+            Assert.AreEqual(270f, TurnOf(FaceOf("Ambition")));
+        }
+
+        [UnityTest]
+        public IEnumerator TheCloseUp_OfATurnedAroundMood_IsTheRightWayUp_AndSaysWhy()
+        {
+            if (CardArtLibrary.ForCard(53) == null)
+            {
+                Assert.Inconclusive("The card art has not been generated on this machine (tools/convert_card_art.py).");
+            }
+
+            var server = Serve();
+            server.State = Quiet(406, s =>
+            {
+                var ambition = s["in_play"][0];
+                ambition["has_dice_value"] = true;
+                ambition["alt_value"] = 5;
+                ambition["base_value"] = 3;
+                ambition["value"] = 5;
+            });
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.Child("Card Ambition").GetComponent<Button>());
+
+            Assert.IsTrue(PhaseFiveSceneTests.Board().DetailOpen);
+            Assert.IsTrue(Texts().Any(t => t.Contains("alternate value (5)") && t.Contains("turned around")), string.Join(" | ", Texts()));
+            var holder = Object.FindObjectsByType<Transform>(FindObjectsInactive.Exclude).First(t => t.name == "Card" && t.parent != null && t.parent.name == "Content");
+            Assert.IsNull(holder.GetComponentsInChildren<Transform>().FirstOrDefault(t => t.name == "Face"), "the close-up is not turned: it is there to be read");
+        }
+
         [UnityTest]
         public IEnumerator ABlissInPlay_NamesTheColorDiscardedToIt_WhenClicked()
         {

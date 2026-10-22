@@ -1676,7 +1676,8 @@ namespace MoodSwings.UI
             var ghosts = new List<RectTransform>();
             foreach (var target in plan.Targets)
             {
-                var ghost = CardView.Create(transform, target.Mood, target.Width, theme, showValue: true, onItsSide: target.Mood.IsSuppressed);
+                var ghost = CardView.Create(transform, target.Mood, target.Width, theme, showValue: true, onItsSide: target.Mood.IsSuppressed,
+                    alternateValue: target.Mood.IsAltValueActive);
                 ghost.name = ZappedCardName;
                 ghost.anchorMin = ghost.anchorMax = ghost.pivot = new Vector2(0.5f, 0.5f);
                 ghost.position = target.Center;
@@ -1811,7 +1812,8 @@ namespace MoodSwings.UI
             var target = flight.Card.position;
             var source = SourceOf(flight.OwnerId) ?? target;
 
-            var ghost = CardView.Create(transform, flight.Mood, flight.Width, AppServices.Theme, showValue: true);
+            var ghost = CardView.Create(transform, flight.Mood, flight.Width, AppServices.Theme, showValue: true,
+                alternateValue: flight.Mood.IsAltValueActive);
             ghost.name = "Flying card";
             ghost.anchorMin = ghost.anchorMax = ghost.pivot = new Vector2(0.5f, 0.5f);
             var group = ghost.gameObject.AddComponent<CanvasGroup>();
@@ -1927,7 +1929,8 @@ namespace MoodSwings.UI
                 UnityEngine.Events.UnityAction open = () => ShowDetail(card, "In play for " + player.Username);
                 if (!card.IsSuppressed)
                 {
-                    var upright = CardView.Create(row.transform, card, width, theme, showValue: true, onClick: open);
+                    var upright = CardView.Create(row.transform, card, width, theme, showValue: true, onClick: open,
+                        alternateValue: card.IsAltValueActive);
                     MakeHoverable(upright, card);
                     _moodViews[card.CardId] = upright;
                     if (BoardEffects.IsAffectingTheGame(state, card, _links))
@@ -1942,7 +1945,8 @@ namespace MoodSwings.UI
                 var side = CardView.HeightFor(width);
                 var slot = UiFactory.Create("Suppressed slot", row.transform);
                 UiFactory.Size(slot.gameObject, side, side);
-                var tapped = CardView.Create(slot, card, width, theme, showValue: true, onClick: open, onItsSide: true);
+                var tapped = CardView.Create(slot, card, width, theme, showValue: true, onClick: open, onItsSide: true,
+                    alternateValue: card.IsAltValueActive);
                 MakeHoverable(tapped, card);
                 tapped.anchorMin = tapped.anchorMax = tapped.pivot = new Vector2(0.5f, 0.5f);
                 tapped.anchoredPosition = Vector2.zero;
@@ -2465,6 +2469,13 @@ namespace MoodSwings.UI
             if (chaosValue != null)
             {
                 lines.Add(chaosValue);
+            }
+
+            var altNote = BoardDisplay.AltValueNote(card);
+            if (altNote != null)
+            {
+                lines.Add(string.Empty);
+                lines.Add("<color=#9aa0aa>" + altNote + "</color>");
             }
 
             var bliss = BoardDisplay.BlissNote(card, word => $"<b><color=#{ColorUtility.ToHtmlStringRGB(CardView.IndicatorColor(word))}>{word}</color></b>");

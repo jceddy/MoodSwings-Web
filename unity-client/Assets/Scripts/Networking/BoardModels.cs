@@ -131,6 +131,32 @@ namespace MoodSwings.Networking
         /// <summary>True when an effect has moved the value away from the printed one.</summary>
         public bool ValueIsModified => Value != BaseValue;
 
+        /// <summary>
+        /// In play: the mood's alternate value (the number printed upside down in the corner of its card) is the one in effect --
+        /// by its own live condition ("While in play, this mood's value is 6 if ...", or applied by Encouragement or Idealism) or
+        /// because it was locked in ("After playing this mood ... its value becomes 7"). By tabletop convention such a mood is turned
+        /// 180 degrees, so that number is the one the right way up. An effect that fixes the value some other way (a Chaos Draft
+        /// effect) doesn't count, and neither does a mood that is suppressed (its value is 0) unless the value was already locked in.
+        /// </summary>
+        public bool IsAltValueActive
+        {
+            get
+            {
+                if (!AltValue.HasValue || ChaosValueOverride.HasValue)
+                {
+                    return false;
+                }
+
+                if (ValueLocked)
+                {
+                    return true;
+                }
+
+                // Its own value, before any Chaos Draft adjustment on top; it has to differ from the printed one to be the alternate.
+                return !IsSuppressed && Value - ChaosValueDelta == AltValue.Value && BaseValue != AltValue.Value;
+            }
+        }
+
         /// <summary>True when an effect (Imagination) has changed the color from the printed one.</summary>
         public bool IsRecolored => !string.IsNullOrEmpty(BaseColor) && !string.IsNullOrEmpty(Color) && Color != BaseColor;
     }

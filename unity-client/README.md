@@ -286,6 +286,15 @@ under "Playing a game" below.
   the printed value at every card size. A **suppressed** mood lies on its side
   (only the face turns; the label and chip stay upright), is labelled SUPPRESSED,
   and its close-up says "Suppressed by <card>" -- suppression only makes the value 0.
+  A mood whose **alternate value** is the one in effect (`BoardCard.IsAltValueActive`) is turned 180 degrees, by
+  tabletop convention: the alternate value is printed upside down in the lower left corner of the art, so turning the card
+  brings it to the top right, where the value is read. That is when the mood's own live condition holds ("While in play,
+  this mood's value is 6 if ..."), when Encouragement or Idealism applies it, or when an "After playing ... its value
+  becomes 7" has locked it in. A suppressed mood with a locked-in alternate value is three quarter turns; one only
+  suppressed (value 0) is the quarter turn above. An effect that fixes the value some other way (a Chaos Draft effect)
+  doesn't turn it, and a chaos adjustment on top is left out of the comparison. Only the art turns -- the badges, the value
+  chip and the close-up stay upright, and the close-up says why the card lies the way it does. A drawn stand-in (no art
+  on this machine) isn't turned, since its text would be upside down.
   A mood **recolored** by an effect (Imagination) wears a pill in its current color naming it (BLUE),
   and its close-up and hover preview say "Color is now blue (printed green) - changed
   by Imagination" (the effect is found from the board-wide effects the server lists).
