@@ -1281,6 +1281,51 @@ const THEME_STORAGE_KEY = 'themePreference';
     });
 })();
 
+// Cookie notice. The site only sets one first-party cookie of its own
+// (`session_token`, the login session -- strictly necessary, so no consent
+// is required for it), but the embedded Buy Me a Coffee widget in the
+// Resources dialog is third-party content that may set its own, so a
+// one-time dismissible notice tells visitors that. Built here rather than
+// in each page's HTML since this is the one script every page already
+// loads. Acknowledgement is remembered in localStorage; if that's
+// unavailable (e.g. private browsing) the notice simply shows again next
+// page load, which is harmless.
+const COOKIE_NOTICE_STORAGE_KEY = 'cookieNoticeAcknowledged';
+
+(function initCookieNotice() {
+    try {
+        if (localStorage.getItem(COOKIE_NOTICE_STORAGE_KEY) === '1') {
+            return;
+        }
+    } catch (e) {
+        // localStorage unavailable -- fall through and show the notice.
+    }
+
+    const notice = document.createElement('div');
+    notice.id = 'cookie-notice';
+    notice.setAttribute('role', 'region');
+    notice.setAttribute('aria-label', 'Cookie notice');
+
+    const text = document.createElement('p');
+    text.textContent = 'This site uses a cookie to keep you logged in. '
+        + 'Third-party content, such as the Buy Me a Coffee button in Resources, may set cookies of its own.';
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = 'Got it';
+    button.addEventListener('click', () => {
+        try {
+            localStorage.setItem(COOKIE_NOTICE_STORAGE_KEY, '1');
+        } catch (e) {
+            // ignore -- the notice just shows again on the next page load
+        }
+        notice.remove();
+    });
+
+    notice.append(text, button);
+    document.body.appendChild(notice);
+})();
+
 // Clicking a <dialog>'s own backdrop closes it, the same as Escape or a
 // Close button already does. `event.target === dialog` alone isn't
 // enough to detect this -- every dialog here has its own padding/border

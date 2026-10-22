@@ -657,6 +657,33 @@ footer {
     margin-left: 1rem;
 }
 
+/* One-time cookie notice (see initCookieNotice() in js/app.js) -- a bar
+   fixed to the bottom of the viewport, themed like every other surface. */
+#cookie-notice {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1000;
+    box-sizing: border-box;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem 1rem;
+    padding: 0.75rem 1rem;
+    background-color: var(--color-surface);
+    backdrop-filter: var(--surface-blur, none);
+    -webkit-backdrop-filter: var(--surface-blur, none);
+    color: var(--color-text);
+    border-top: 1px solid var(--color-border);
+    font-size: 0.85rem;
+}
+
+#cookie-notice p {
+    margin: 0;
+}
+
 dialog#resources-dialog {
     position: relative;
     box-sizing: border-box;
