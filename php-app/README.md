@@ -14157,6 +14157,23 @@ than a parallel bespoke system:
   engine -- every legal Denial pair and every Recklessness target -- found that
   one board.
 
+- **29th puzzle, "Hand-Me-Down"** (a Thrill/Harmony/Suspicion puzzle: return two
+  moods for two plays, make the opponent discard their only card, and play it
+  from the discard pile), hard, `win_game`, no new puzzle infrastructure. Both
+  sides have two round wins and the opponent went first (a tie is theirs). The
+  opponent has three Generosity (green 6): 18, and holds only Bashfulness (blue
+  6). The solver has Vulnerability (1; 7 once any card has gone to the discard
+  pile this round), Complacency (4) and Indifference (4) in play and holds
+  Thrill, Harmony and Suspicion, with one play. The one winning board: Thrill
+  returning Complacency and Indifference (two plays), Suspicion and Harmony
+  (either order) -- the opponent must discard Bashfulness, which turns
+  Vulnerability into a 7 -- then Bashfulness from the discard pile via Harmony's
+  grant: 1 + 3 + 2 + 6 + 7 = 19 against 18. (Returning Vulnerability too and
+  replaying it is the same board.) Suspicion alone ties 18-18; returning
+  Vulnerability (it reads 1) instead of a 4 ends at 16. An exhaustive search
+  through the real engine -- every Thrill return set, every Suspicion target
+  set, discard-pile plays included -- found that one board and that one tie.
+
 ### Duel: separate per-player decks
 
 `format: 'duel'` and `format: 'draft'` (see "Draft format" below) are the

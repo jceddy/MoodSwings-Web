@@ -2464,6 +2464,81 @@ final class PuzzleContentTest extends TestCase
         }
     }
 
+    /**
+     * "Hand-Me-Down": the only winning board (exhaustive search of the real
+     * flow, every Thrill return set and Suspicion target set, plays from the
+     * discard pile included) is Thrill returning Complacency and Indifference,
+     * then Suspicion (they discard Bashfulness, which makes Vulnerability 7),
+     * Harmony, and Bashfulness from the discard pile: 1 + 3 + 2 + 6 + 7 = 19
+     * against 18. See migration 0469's own docblock.
+     */
+    public function testHandMeDownSolvedByReturningTwoMoodsAndPlayingTheDiscardedCard(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('hand-me-down');
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 103, 'hand'), ['hand_mood_ids' => [
+            $this->instanceId($gameId, 5, 'in_play'),
+            $this->instanceId($gameId, 44, 'in_play'),
+        ]]);
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 78, 'hand'), ['player_ids' => [$opp]]);
+        $this->assertGameNotSolved($gameId);
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 123, 'hand'));
+        $this->assertGameNotSolved($gameId);
+
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 30, 'discard'));
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameSolved($gameId, $p);
+    }
+
+    /** Harmony may be played before Suspicion: the discard-pile play it grants waits for the discard. */
+    public function testHandMeDownHarmonyBeforeSuspicionAlsoSolves(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('hand-me-down');
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 103, 'hand'), ['hand_mood_ids' => [
+            $this->instanceId($gameId, 5, 'in_play'),
+            $this->instanceId($gameId, 44, 'in_play'),
+        ]]);
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 123, 'hand'));
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 78, 'hand'), ['player_ids' => [$opp]]);
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 30, 'discard'));
+
+        $this->assertGameSolved($gameId, $p);
+    }
+
+    /** Suspicion on its own: 7 + 4 + 4 + 3 = 18 against 18, a tie, and a tie goes to the opponent. */
+    public function testHandMeDownSuspicionAloneTies(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('hand-me-down');
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 78, 'hand'), ['player_ids' => [$opp]]);
+        $this->games->advanceAutomatedTurns($gameId);
+
+        $this->assertGameFailed($gameId);
+    }
+
+    /** Returning Vulnerability (it reads 1) with a 4 instead keeps only 4 + 1 + 3 + 2 + 6 = 16. */
+    public function testHandMeDownReturningVulnerabilityLoses(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('hand-me-down');
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 103, 'hand'), ['hand_mood_ids' => [
+            $this->instanceId($gameId, 132, 'in_play'),
+            $this->instanceId($gameId, 5, 'in_play'),
+        ]]);
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 78, 'hand'), ['player_ids' => [$opp]]);
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 123, 'hand'));
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 30, 'discard'));
+        $this->games->advanceAutomatedTurns($gameId);
+
+        $this->assertGameFailed($gameId);
+    }
+
     /** A solve is never marked failed, and puzzle_failed is false while an attempt is open. */
     public function testDeadHeatSolveIsNotFailedAndOpenAttemptIsNotFailed(): void
     {
