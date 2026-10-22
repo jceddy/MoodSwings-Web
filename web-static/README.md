@@ -17,6 +17,19 @@ endpoints -- and renders it as e.g. "v0.2.0". Fetched with `cache:
 stale, browser-cached version string. See "Versioning" in the top-level
 README for what the version itself means and where it's bumped.
 
+## Cookie notice
+
+`initCookieNotice()` in `js/app.js` (the one script every page already
+loads, so no per-page HTML) shows a bar fixed to the bottom of the
+viewport the first time a visitor loads any page: the site's only own
+cookie is the `session_token` login cookie (strictly necessary), and
+third-party content such as the Buy Me a Coffee widget in the Resources
+dialog may set its own. Clicking "Got it" removes the bar and stores
+`cookieNoticeAcknowledged` in `localStorage`, so it never shows again in
+that browser. If `localStorage` is unavailable (e.g. private browsing) the
+notice just reappears on each page load. Styled in `css/style.css`
+(`#cookie-notice`) with the same theme variables as every other surface.
+
 ## Resources
 
 Every page has a `<a id="resources-link">Resources</a>` next to the theme
