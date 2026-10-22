@@ -179,6 +179,7 @@ final class CardCatalog
                 'is_playable' => false,
                 'is_suppressed' => false,
                 'value_locked' => false,
+                'alt_value_active' => false,
                 'is_creativity_copy' => false,
                 'copy_simulation' => null,
             ];

@@ -512,12 +512,14 @@ rotating the art itself (badges are siblings of the `<img>`, not children
 of it, so they always stay upright and legible -- the rotation is a
 visual reinforcement of the badge, never a replacement for it): a
 suppressed in-play mood's `.card-thumb--suppressed` class
-rotates it 90 degrees, and a mood whose `value_locked` flag is true --
-a permanent "after playing this mood" trigger (Dignity, Delight, ...)
-has locked in its alt value, as opposed to a continuously-recomputed
-"while in play" value (Determination) -- see `value_locked` in
-`php-app/README.md` -- gets its own `.card-thumb--value-locked` class,
-rotating it 180 degrees. Both classes
+rotates it 90 degrees, and a mood that is on its alternate value gets
+its own `.card-thumb--value-locked` class, rotating it 180 degrees --
+either because its `value_locked` flag is true (a permanent "after playing
+this mood" trigger such as Dignity or Delight has locked in its alt value),
+or because its `alt_value_active` flag is true (a continuously-recomputed
+"while in play" card such as Enjoyment or Discipline currently has its
+condition met, and so turns back upright when it stops holding) -- see
+both flags in `php-app/README.md`. Both classes
 can apply at once (a suppressed, value-locked mood), for which a third
 CSS rule (`.card-thumb--suppressed.card-thumb--value-locked`) rotates
 270 degrees rather than letting the two `transform`s silently clobber

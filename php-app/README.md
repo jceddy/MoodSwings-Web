@@ -1262,6 +1262,17 @@ degree rotation -- see "Card art rendering" in `web-static/README.md`.
 own value -- see `chaos_value_override` below for the (superficially
 identical-looking) case where an attached chaos effect did it instead.
 
+Every in-play mood also carries `alt_value_active` -- true while a
+"while in play" mood's printed alternate value is what it is currently worth
+(Enjoyment's 6 with two or more red and/or white moods, Discipline's 3 with
+two or more black and/or red, Vulnerability's 7 after a discard, ...; see
+`BoardState::whileInPlayAltValueActive()`). Unlike `value_locked` it follows
+the board, so it goes back to false when the condition stops holding. It is
+false for a suppressed mood, a locked value (that has its own flag), a chaos
+override, and a dice-value booster's target. The frontend rotates the card
+art 180 degrees for either flag -- see "Card art rendering" in
+`web-static/README.md`.
+
 **`chaos_value_delta` (issue #405 follow-up -- a bug caught live).** A
 DIFFERENT wording -- an attached chaos effect's own "permanently
 increase/decrease this mood's value BY N" (chaos_056/064/120/133) -- used

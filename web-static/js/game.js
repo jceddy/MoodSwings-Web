@@ -6238,14 +6238,17 @@
             button.appendChild(chaosBadge);
         }
 
-        if (card.value_locked) {
-            // A permanent "after playing this mood, ... this mood's value
-            // becomes N" trigger (Dignity, Delight, ...) has locked in its
-            // alt value, as opposed to a "while in play" card (Determination)
-            // whose value is only ever recomputed live -- rotated 180deg to
-            // distinguish the two at a glance, per table convention. Only
-            // ever true for the card's OWN printed ability -- an attached
-            // chaos effect's own "becomes N" wording never sets this (see
+        if (card.value_locked || card.alt_value_active) {
+            // The card is on its alternate value, so it's rotated 180deg to
+            // show that at a glance, per table convention -- either because
+            // a permanent "after playing this mood, ... this mood's value
+            // becomes N" trigger (Dignity, Delight, ...) locked it in
+            // (value_locked), or because a "while in play" card
+            // (Enjoyment, Determination, ...) has its condition met right
+            // now (alt_value_active, which follows the board and so turns
+            // back upright when the condition stops holding). Only ever
+            // true for the card's OWN printed ability -- an attached chaos
+            // effect's own "becomes N" wording never sets either (see
             // card.chaos_value_override above), so it never rotates the
             // card the way this does.
             button.classList.add('card-thumb--value-locked');

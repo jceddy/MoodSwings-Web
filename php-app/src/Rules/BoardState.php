@@ -1923,6 +1923,41 @@ final class BoardState
     }
 
     /**
+     * Whether $cardId is a "while in play" mood whose printed alternate
+     * value is what it's currently worth -- Enjoyment's 6 once two or more
+     * red and/or white moods are in play, Discipline's 3 once two or more
+     * black and/or red are, Vulnerability's 7 after a discard, and so on.
+     * Purely presentational: the frontend rotates such a card 180 degrees,
+     * the same way it does a mood whose value an "after playing this mood"
+     * trigger has locked in (see GameService::serializeCard()'s
+     * 'value_locked'), so either way "this mood is on its alt value" reads
+     * at a glance. A locked value is NOT reported here (it has its own
+     * flag), and neither is anything else that replaces the card's own
+     * computation: a suppressed mood (worth 0), a chaos override, or a
+     * dice-value booster (Encouragement/Idealism -- the alt value there is
+     * a dice number, not a condition being met).
+     */
+    public function whileInPlayAltValueActive(int $cardId): bool
+    {
+        $mood = $this->moodsInPlay[$cardId] ?? null;
+        if ($mood === null
+            || $mood->suppressions !== []
+            || array_key_exists('chaosValueOverride', $mood->effectState)
+            || array_key_exists('valueOverride', $mood->effectState)
+            || $this->diceValueBoosterCardId($cardId) !== null
+        ) {
+            return false;
+        }
+
+        $row = $this->catalogRow($this->effectiveCardId($cardId));
+        if (!$row['hasWhileInPlay'] || $row['altValue'] === null || $row['altValue'] === $row['baseValue']) {
+            return false;
+        }
+
+        return $this->registry->for($row['effectKey'])->computeValue($this, $cardId) === $row['altValue'];
+    }
+
+    /**
      * This mood's value from its OWN printed identity alone -- an
      * override, the dice rule, its own while-in-play computation, or its
      * flat base value -- exactly what valueOf() always returned before
