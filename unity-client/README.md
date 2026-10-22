@@ -708,6 +708,23 @@ Python scripts in `tools/` (`pip install pillow` for the first):
   read-only API responses, email/phone redacted, to
   `Assets/Tests/Fixtures/` for model tests.
 
+## Welcome tour
+
+The first time someone reaches the main menu on a device, a tour walks them through the app: a welcome, then a step for each
+of the menu's buttons (Play, Puzzles, Decklists, Friends, Achievements, Tournaments, Stats, Settings) with the screen dimmed
+and a frame round the button being described, a picture of the table and what is where on it, and a last word on how to see
+the tour again. Each step has **Back** and **Next** (**Done** at the end), and **Skip the tour** is there at every step; Back
+or Escape (Android's Back button too) skips as well. Finishing and skipping both count as having seen it
+(`DeviceSettings.TourSeen`, per device), so it doesn't start by itself again.
+
+**Settings > Welcome tour > Show the welcome tour** takes the player back to the main menu and runs it again. If an update is
+waiting, its box comes up after the tour, not on top of it. Signing out or being sent to another screen mid-tour ends it.
+
+What it says is `TourSteps` (`Assets/Scripts/Core/WelcomeTour.cs`): change the text, or add a step by giving it a `Target`
+(a main menu button -- `HomeScreen.TourTarget` knows them by name) or none. `TourFlow` is the state (UI-free) and
+`TourOverlay` draws it. PlayMode tests start with the tour off (`MainSceneTests.ShowTour`), or it would cover every test's
+main menu.
+
 ## Updates
 
 The Windows, macOS and Android apps look for a newer version once each time they start (when the player gets to the

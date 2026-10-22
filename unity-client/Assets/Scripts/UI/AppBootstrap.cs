@@ -15,6 +15,12 @@ namespace MoodSwings.UI
         private ScreenRouter _router;
         private UpdatePrompt _updates;
         private bool _updatesChecked;
+        private TourOverlay _tour;
+
+        /// <summary>The welcome tour's overlay.</summary>
+        public TourOverlay Tour => _tour;
+        private bool _tourOffered;
+        private bool _tourStarting;
         private GameObject _banner;
         private Rect _bannerSafeArea;
         private Vector2Int _bannerScreenSize;
@@ -38,15 +44,33 @@ namespace MoodSwings.UI
             MusicPlayer.Instance.SetTheme(MusicTheme.Main);
             _updates = new UpdatePrompt(transform, AppServices.Theme);
             UpdatePrompt.Current = _updates;
+            _tour = new TourOverlay(transform, AppServices.Theme, AppServices.Tour, id => (_router.Current as HomeScreen)?.TourTarget(id));
             _router.ScreenChanged += (previous, next) =>
             {
+                // The welcome tour is about the main menu: the first time it is reached on this device, and whenever Settings
+                // asks for it again. It goes away if the player is taken somewhere else (signed out, say).
+                if (next is HomeScreen)
+                {
+                    var replay = AppServices.Tour.TakeReplayRequest();
+                    if (replay || (!_tourOffered && !AppServices.Tour.Seen))
+                    {
+                        StartCoroutine(StartTour());
+                    }
+
+                    _tourOffered = true;
+                }
+                else if (AppServices.Tour.IsActive)
+                {
+                    AppServices.Tour.Skip();
+                }
+
                 // Once a launch, when the player gets as far as the main menu (not while logging in, or mid-game).
                 if (!_updatesChecked && next is HomeScreen)
                 {
                     _updatesChecked = true;
                     if (AppServices.Device.CheckForUpdates && AppServices.Updates != null)
                     {
-                        _ = _updates.CheckAsync(manual: false);
+                        StartCoroutine(CheckForUpdatesAfterTour());
                     }
                 }
 
@@ -62,6 +86,38 @@ namespace MoodSwings.UI
             BackgroundSound.Apply();
             BuildServerBanner();
             _router.Show<SplashScreen>();
+        }
+
+        // The main menu is laid out a frame after it is shown, and the tour points at where its buttons end up.
+        private System.Collections.IEnumerator StartTour()
+        {
+            if (_tourStarting || AppServices.Tour.IsActive)
+            {
+                yield break;
+            }
+
+            _tourStarting = true;
+            yield return null;
+            yield return null;
+            _tourStarting = false;
+            if (_router.Current is HomeScreen)
+            {
+                AppServices.Tour.Start();
+            }
+        }
+
+        // The tour comes first: a box offering an update over it would be one thing too many.
+        private System.Collections.IEnumerator CheckForUpdatesAfterTour()
+        {
+            yield return null;
+            yield return null;
+            yield return null;
+            while (_tourStarting || AppServices.Tour.IsActive)
+            {
+                yield return null;
+            }
+
+            _ = _updates.CheckAsync(manual: false);
         }
 
         // A small tag in the corner while the app is on the dev server, so nobody mistakes it for production.
@@ -176,9 +232,10 @@ namespace MoodSwings.UI
             }
 
             // Escape on desktop; the system Back button on Android (which has no keyboard to report it as Escape).
+            _tour.Tick();
             if (KeyInput.EscapePressed || AndroidBack.Consume())
             {
-                if (_updates.Dismiss())
+                if (_tour.Dismiss() || _updates.Dismiss())
                 {
                     return;
                 }

@@ -171,6 +171,27 @@ namespace MoodSwings.UI
             }
 
             AddArtPackRows(theme);
+            AddTourRow(theme);
+        }
+
+        // --- welcome tour ---------------------------------------------------------------------------
+
+        // The tour runs by itself the first time; this is the way to see it again.
+        private void AddTourRow(UiTheme theme)
+        {
+            UiFactory.SectionTitle(_list, theme, "Welcome tour");
+            var panel = NewPanel(theme);
+            AddDescription(theme, panel.transform, "A short walk through what the app can do, starting from the main menu. You can skip out of it at any time.");
+            var replay = UiFactory.Button(panel.transform, "Show the welcome tour", theme, ReplayTour, primary: false);
+            replay.gameObject.name = "Replay tour";
+        }
+
+        // The tour is about the main menu, so it begins there.
+        private void ReplayTour()
+        {
+            AppServices.Tour.RequestReplay();
+            Router.ClearHistory();
+            Router.Show<HomeScreen>(null, addToHistory: false);
         }
 
         // --- updates --------------------------------------------------------------------------------
