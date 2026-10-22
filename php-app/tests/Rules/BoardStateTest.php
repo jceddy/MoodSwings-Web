@@ -1187,4 +1187,46 @@ final class BoardStateTest extends TestCase
 
         self::assertNull($state->activeNeighbor(2, 'right'));
     }
+
+    /** Discipline is 6, or 3 once two or more black and/or red moods are in play -- and only then is its alt value active. */
+    public function testWhileInPlayAltValueActiveFollowsTheCondition(): void
+    {
+        $state = $this->boardState(hands: [1 => [9, 55, 103]]);
+        $state->moveHandToInPlay(1, 9); // Discipline
+
+        self::assertSame(6, $state->valueOf(9));
+        self::assertFalse($state->whileInPlayAltValueActive(9));
+
+        $state->moveHandToInPlay(1, 55); // Apathy (black)
+        self::assertFalse($state->whileInPlayAltValueActive(9));
+
+        $state->moveHandToInPlay(1, 103); // Thrill (red)
+        self::assertSame(3, $state->valueOf(9));
+        self::assertTrue($state->whileInPlayAltValueActive(9));
+
+        $state->moveInPlayToHand(103);
+        self::assertSame(6, $state->valueOf(9));
+        self::assertFalse($state->whileInPlayAltValueActive(9), 'turns back off when the condition stops holding');
+    }
+
+    public function testWhileInPlayAltValueActiveIsFalseForSuppressedLockedAndPlainCards(): void
+    {
+        $state = $this->boardState(hands: [1 => [132, 8, 5]]);
+        $state->moveHandToInPlay(1, 132); // Vulnerability: 1, or 7 after a discard
+        $state->moveHandToInPlay(1, 8); // Dignity: no while-in-play ability
+        $state->moveHandToInPlay(1, 5); // Complacency: no alt value
+        $state->moveInPlayToDiscard(5);
+
+        self::assertSame(7, $state->valueOf(132));
+        self::assertTrue($state->whileInPlayAltValueActive(132));
+        self::assertFalse($state->whileInPlayAltValueActive(8));
+        self::assertFalse($state->whileInPlayAltValueActive(5), 'not in play');
+
+        $state->setValueOverride(8, 5);
+        self::assertFalse($state->whileInPlayAltValueActive(8), 'a locked value has its own flag');
+
+        $state->suppress(132, 'while_source_in_play', 8);
+        self::assertSame(0, $state->valueOf(132));
+        self::assertFalse($state->whileInPlayAltValueActive(132));
+    }
 }

@@ -3030,6 +3030,46 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertTrue($inPlay[0]['value_locked']);
     }
 
+    /**
+     * alt_value_active is the "while in play" counterpart of value_locked:
+     * Discipline is 3 (its alt value) once two or more black and/or red
+     * moods are in play, and the frontend rotates it 180deg while that holds.
+     */
+    public function testGetStateMarksAltValueActiveWhileAWhileInPlayConditionHolds(): void
+    {
+        $u1 = $this->insertUser('altactive1');
+        $u2 = $this->insertUser('altactive2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $disciplineId = $this->insertGameCard($gameId, 9, 'in_play', $p1); // Discipline: 6, or 3 with two black/red moods
+        $apathyId = $this->insertGameCard($gameId, 55, 'in_play', $p1); // black
+        $thrillId = $this->insertGameCard($gameId, 103, 'hand', $p1); // red, not yet played
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $byCardId = fn (array $inPlay): array => array_column($inPlay, null, 'card_id');
+
+        $before = $byCardId($this->games->getState($gameId, $u1)['in_play']);
+        self::assertSame(6, $before[$disciplineId]['value']);
+        self::assertFalse($before[$disciplineId]['alt_value_active']);
+
+        $this->games->playMood($gameId, $p1, $thrillId, []);
+
+        $after = $byCardId($this->games->getState($gameId, $u1)['in_play']);
+        self::assertSame(3, $after[$disciplineId]['value']);
+        self::assertTrue($after[$disciplineId]['alt_value_active']);
+        self::assertFalse($after[$disciplineId]['value_locked']);
+        self::assertFalse($after[$apathyId]['alt_value_active'], 'Apathy has no alt value');
+        self::assertFalse($after[$thrillId]['alt_value_active']);
+    }
+
     public function testGetStateLeavesValueLockedFalseWhenDignitysTriggerIsDeclined(): void
     {
         $u1 = $this->insertUser('valuenotlocked1');

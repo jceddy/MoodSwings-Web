@@ -18969,6 +18969,7 @@ final class GameService
                 // reusing setValueOverride() for either chaos-effect case
                 // incorrectly rotated cards they had no business rotating).
                 'value_locked' => array_key_exists('valueOverride', $mood->effectState),
+                'alt_value_active' => $state->whileInPlayAltValueActive($cardId),
                 // The net permanent chaos-effect delta currently applied
                 // to this card's value (0 for every card nothing has ever
                 // adjusted) -- already folded into 'value' above, this is
@@ -19645,6 +19646,7 @@ final class GameService
                         'owner_game_player_id' => $mood->ownerId,
                         'has_unused_play_grant' => false,
                         'value_locked' => array_key_exists('valueOverride', $mood->effectState),
+                        'alt_value_active' => $state->whileInPlayAltValueActive($cardId),
                         'chaos_value_delta' => $state->chaosValueDeltaOf($cardId),
                         'chaos_value_override' => $state->chaosValueOverrideOf($cardId),
                         ...$this->suppressionFields($state, $cardId, $names),
@@ -19992,6 +19994,7 @@ final class GameService
                         'owner_game_player_id' => $mood->ownerId,
                         'has_unused_play_grant' => false,
                         'value_locked' => array_key_exists('valueOverride', $mood->effectState),
+                        'alt_value_active' => $state->whileInPlayAltValueActive($cardId),
                         'chaos_value_delta' => $state->chaosValueDeltaOf($cardId),
                         'chaos_value_override' => $state->chaosValueOverrideOf($cardId),
                         ...$this->suppressionFields($state, $cardId, $names),
