@@ -8563,9 +8563,11 @@
             // metric (puzzle_plays_made) rather than who beat whom.
             if (state.game.format === 'puzzle' && state.game.puzzle_failed) {
                 // A "win the game this turn" puzzle whose turn ended without
-                // winning (see GameService::failPuzzleAttempt()).
+                // winning (see GameService::failPuzzleAttempt()), or one whose
+                // opponent takes real turns losing the final round (see
+                // GameService::finishPuzzleFromScoring()).
                 document.getElementById('board-round-status').textContent =
-                    'Puzzle failed — your turn ended before you won the game. Try again from the Puzzles menu.';
+                    "Puzzle failed — you didn't win the game. Try again from the Puzzles menu.";
             } else if (state.game.format === 'puzzle') {
                 document.getElementById('board-round-status').textContent =
                     'Puzzle solved in ' + state.game.puzzle_plays_made + ' play'

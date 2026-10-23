@@ -14185,6 +14185,37 @@ than a parallel bespoke system:
   through the real engine -- every Thrill return set, every Suspicion target
   set, discard-pile plays included -- found that one board and that one tie.
 
+- **30th puzzle, "Calculated Loss"** (an Insecurity/Ambition/Patience puzzle:
+  lose this round on purpose, so that the opponent's Intimidation -- played twice,
+  they have Duplicity -- can only take Ambition next round), hard, `win_game`, with
+  new puzzle infrastructure: `puzzles.opponent_takes_turns` (default 0) makes a
+  puzzle play out over real rounds -- the puzzle opponent takes its own turns as an
+  ordinary bot (so it plays the cards it holds), rounds are scored by the normal
+  pipeline, and a lost round carries the attempt on instead of ending it. The
+  attempt is a solve if the solver wins the round that completes the game and a
+  loss ('puzzle_failed') if the opponent does
+  (`GameService::finishPuzzleFromScoring()`); `checkPuzzleGoal()` leaves such a
+  puzzle to the scoring, and the "solved in N plays" counter only counts the
+  solver's own plays. You have two round wins and the opponent one; they played
+  first this round (Glee, played this round -- 6 now, 0 next round -- Duplicity,
+  Bashfulness, Boredom and Apathy in play, Intimidation in hand) and you hold
+  Insecurity, Ambition, Patience and Triumph with Celebration and Apathy in play and
+  an empty deck. The one winning line: Insecurity, Ambition discarding Triumph,
+  Patience -- you lose the round, but Patience now reads 5 for good and Insecurity
+  puts Ambition back in your hand. Next round Intimidation takes Ambition (your
+  only card, so the one you must give up; the Duplicity repeat finds an empty hand)
+  and your turn passes with nothing to play. Your Celebration reads 7 -- green,
+  black, blue and white against their red, blue and black -- so Celebration 7 +
+  Apathy 4 + Insecurity 2 + Patience 5 = 18 against Bashfulness 6 + Boredom 4 +
+  Apathy 4 + Intimidation 1 + Ambition 2 = 17. Holding more cards means Intimidation
+  takes two of them: Patience alone and the rest next round ties 19-19 at best
+  (giving up Insecurity and Ambition and playing Triumph -- worth 5 to them, they
+  go first, and 3 to you); skipping the discard leaves Patience at 1 next round;
+  giving up Insecurity instead of Ambition costs you the fourth color (Celebration
+  reads 3: 14-17). An exhaustive search through the real engine -- both rounds,
+  every reveal, every play order, passing included -- found that one winning board
+  and that tie.
+
 ### Duel: separate per-player decks
 
 `format: 'duel'` and `format: 'draft'` (see "Draft format" below) are the

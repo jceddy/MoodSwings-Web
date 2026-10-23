@@ -11589,7 +11589,7 @@ final class GameService
             return $this->advanceTeamTurn($gameId, $round, $state, $requestingGamePlayerId);
         }
 
-        if ($this->fetchGame($gameId)['format'] === 'puzzle') {
+        if ($this->fetchGame($gameId)['format'] === 'puzzle' && !$this->puzzleOpponentTakesTurns($gameId)) {
             return $this->advancePuzzleTurn($gameId, $round, $state, $requestingGamePlayerId);
         }
 
@@ -11703,6 +11703,23 @@ final class GameService
         return $stmt->fetchColumn() !== false;
     }
 
+    /**
+     * puzzles.opponent_takes_turns: the puzzle plays out as a real game --
+     * PuzzleOpponent takes its own turns as an ordinary bot, rounds are
+     * scored by the normal pipeline, and the attempt ends when a round
+     * completes the game (see finishScoringAndAdvance()) instead of when the
+     * solver's one turn does.
+     */
+    private function puzzleOpponentTakesTurns(int $gameId): bool
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT p.opponent_takes_turns FROM games g JOIN puzzles p ON p.id = g.puzzle_id WHERE g.id = :game_id'
+        );
+        $stmt->execute(['game_id' => $gameId]);
+
+        return (bool) $stmt->fetchColumn();
+    }
+
     private function puzzleGoalType(int $gameId): ?string
     {
         $stmt = Connection::get()->prepare(
@@ -11777,7 +11794,13 @@ final class GameService
      */
     private function countMoodsPlayed(int $gameId): int
     {
-        $stmt = Connection::get()->prepare("SELECT COUNT(*) FROM game_events WHERE game_id = :game_id AND event_type = 'mood_played'");
+        // The solver's own plays only (seat 0): a puzzle whose opponent takes
+        // real turns (puzzles.opponent_takes_turns) has plays of its own in the
+        // log, which aren't the solver's to be counted -- see finishPuzzleFromScoring().
+        $stmt = Connection::get()->prepare(
+            "SELECT COUNT(*) FROM game_events e JOIN game_players gp ON gp.id = e.acting_game_player_id
+             WHERE e.game_id = :game_id AND e.event_type = 'mood_played' AND gp.seat_order = 0"
+        );
         $stmt->execute(['game_id' => $gameId]);
 
         return (int) $stmt->fetchColumn();
@@ -11801,6 +11824,13 @@ final class GameService
         // The attempt carries on into the next round instead -- see
         // advancePuzzleTurn().
         if ($puzzle['goal_type'] === 'win_game' && $this->hasSkipScoringMarker($state)) {
+            return false;
+        }
+
+        // A puzzle whose opponent takes real turns is decided by the round
+        // actually being scored once everyone has had theirs -- the board
+        // mid-round, with turns still to come, isn't the result.
+        if ((bool) $puzzle['opponent_takes_turns']) {
             return false;
         }
 
@@ -11863,6 +11893,49 @@ final class GameService
             'game_id' => $gameId,
         ]);
 
+        $this->recordPuzzleSolve($gameId, $gamePlayerId, $puzzle, $game, $playsMade);
+
+        return true;
+    }
+
+    /**
+     * A real-rounds puzzle's (puzzles.opponent_takes_turns) round was just
+     * scored and completed the game: the solver winning it is a solve, the
+     * opponent winning it is the same loss failPuzzleAttempt() records
+     * ('puzzle_failed', which getState() surfaces as the board's own
+     * "Puzzle failed" banner).
+     */
+    private function finishPuzzleFromScoring(int $gameId, int $roundId, int $winnerGamePlayerId): void
+    {
+        $pdo = Connection::get();
+        $game = $this->fetchGame($gameId);
+        $solverStmt = $pdo->prepare('SELECT id FROM game_players WHERE game_id = :game_id ORDER BY seat_order LIMIT 1');
+        $solverStmt->execute(['game_id' => $gameId]);
+        $solverGamePlayerId = (int) $solverStmt->fetchColumn();
+
+        if ($winnerGamePlayerId !== $solverGamePlayerId) {
+            $this->logEvent($gameId, $roundId, $solverGamePlayerId, 'puzzle_failed', null, []);
+
+            return;
+        }
+
+        $puzzleStmt = $pdo->prepare('SELECT * FROM puzzles WHERE id = :id');
+        $puzzleStmt->execute(['id' => (int) $game['puzzle_id']]);
+        $this->recordPuzzleSolve($gameId, $solverGamePlayerId, $puzzleStmt->fetch(), $game, $this->countMoodsPlayed($gameId));
+    }
+
+    /**
+     * A solve's own bookkeeping, shared by checkPuzzleGoal() and a
+     * real-rounds puzzle's final round being scored: puzzle_solves
+     * (first solve or a new personal best) and the achievements hook.
+     *
+     * @param array<string, mixed> $puzzle
+     * @param array<string, mixed> $game
+     */
+    private function recordPuzzleSolve(int $gameId, int $gamePlayerId, array $puzzle, array $game, int $playsMade): void
+    {
+        $pdo = Connection::get();
+
         $userIdStmt = $pdo->prepare('SELECT user_id FROM game_players WHERE id = :id');
         $userIdStmt->execute(['id' => $gamePlayerId]);
         $userId = (int) $userIdStmt->fetchColumn();
@@ -11887,8 +11960,6 @@ final class GameService
         ]);
 
         $this->achievements->onPuzzleSolved($userId, $isNewPuzzleSolve, (bool) $game['puzzle_hint_viewed']);
-
-        return true;
     }
 
     /** @param int[] $cardIds */
@@ -12836,6 +12907,16 @@ final class GameService
                 "UPDATE games SET status = 'completed', winner_game_player_id = :winner, completed_at = NOW() WHERE id = :game_id"
             );
             $completeGame->execute(['winner' => $winnerId, 'game_id' => $gameId]);
+
+            // A puzzle whose opponent takes real turns (puzzles.opponent_takes_turns)
+            // is a solve or a loss, not a game for the stats/draft/match/
+            // tournament pipelines below.
+            if ($this->fetchGame($gameId)['format'] === 'puzzle') {
+                $this->finishPuzzleFromScoring($gameId, $roundId, $winnerId);
+
+                return ['round_scored' => true, 'game_completed' => true, 'winner_game_player_id' => $winnerId];
+            }
+
             $this->recordGameCompletionStats($gameId, $winnerId, null, $requestingGamePlayerId);
 
             // A no-op for every non-quick_draft game (games.draft_match_id
