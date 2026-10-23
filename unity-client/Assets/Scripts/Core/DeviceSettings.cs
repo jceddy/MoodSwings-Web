@@ -14,6 +14,7 @@ namespace MoodSwings.Core
         private const string EffectsVolumeKey = "device.effectsVolume";
         private const string BackgroundSoundKey = "device.backgroundSound";
         private const string CheckForUpdatesKey = "device.checkForUpdates";
+        private const string TourSeenKey = "device.tourSeen";
         private const string SkippedUpdateKey = "device.skippedUpdate";
         private const string MusicKey = "device.music";
         private const string MusicVolumeKey = "device.musicVolume";
@@ -65,6 +66,13 @@ namespace MoodSwings.Core
                     _store.SetString(ArtPackKey, value);
                 }
             }
+        }
+
+        /// <summary>The welcome tour has been gone through (or skipped) on this device, so it doesn't start by itself again.</summary>
+        public bool TourSeen
+        {
+            get => _store.GetString(TourSeenKey) == "1";
+            set => _store.SetString(TourSeenKey, value ? "1" : "0");
         }
 
         /// <summary>Look for a newer version of the app when it starts, on until switched off.</summary>

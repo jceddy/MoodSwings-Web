@@ -29,10 +29,18 @@ namespace MoodSwings.UI
         /// takes -- a card's height wide and its width tall -- and the SUPPRESSED label and value
         /// chip are laid out on that, upright, with the chip in its top-right corner.
         /// </param>
+        /// <param name="alternateValue">
+        /// The card's alternate value is the one in effect (<see cref="BoardCard.IsAltValueActive"/>): by convention the card is
+        /// turned 180 degrees, which brings the alternate value, printed upside down in the lower left corner of the art, to the
+        /// top right. Combined with <paramref name="onItsSide"/> it is three quarter turns. Only the face turns, as above. A drawn
+        /// stand-in (no art) is left the right way up: it has no alternate value printed on it, and its text has to stay readable.
+        /// </param>
         public static RectTransform Create(
             Transform parent, BoardCard card, float width, UiTheme theme, bool showValue = true, UnityAction onClick = null,
-            bool onItsSide = false)
+            bool onItsSide = false, bool alternateValue = false)
         {
+            var art = CardArtLibrary.ForCard(card.CatalogCardId);
+            var turnedAround = alternateValue && art != null;
             var height = HeightFor(width);
             var boundsWidth = onItsSide ? height : width;
             var boundsHeight = onItsSide ? width : height;
@@ -44,7 +52,7 @@ namespace MoodSwings.UI
             var face = rect;
             Graphic hitArea;
             Image image;
-            if (onItsSide)
+            if (onItsSide || turnedAround)
             {
                 var clear = rect.gameObject.AddComponent<Image>();
                 clear.color = Color.clear;
@@ -54,7 +62,7 @@ namespace MoodSwings.UI
                 face.anchorMin = face.anchorMax = face.pivot = new Vector2(0.5f, 0.5f);
                 face.sizeDelta = new Vector2(width, height);
                 face.anchoredPosition = Vector2.zero;
-                face.localRotation = Quaternion.Euler(0f, 0f, -90f);
+                face.localRotation = Quaternion.Euler(0f, 0f, (onItsSide ? -90f : 0f) + (turnedAround ? 180f : 0f));
                 image = face.gameObject.AddComponent<Image>();
             }
             else
@@ -63,7 +71,6 @@ namespace MoodSwings.UI
                 hitArea = image;
             }
 
-            var art = CardArtLibrary.ForCard(card.CatalogCardId);
             if (art != null)
             {
                 image.sprite = art;

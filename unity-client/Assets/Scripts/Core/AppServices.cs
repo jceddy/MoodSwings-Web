@@ -45,6 +45,9 @@ namespace MoodSwings.Core
         /// <summary>The art packs the player has added (replacement card art), kept in the app's own storage.</summary>
         public static ArtPackStore ArtPacks { get; private set; }
 
+        /// <summary>The welcome tour: where it is, and whether it has been seen.</summary>
+        public static TourFlow Tour { get; set; }
+
         /// <summary>Looks for a newer version of the app (null where updates aren't offered).</summary>
         public static UpdateFlow Updates { get; set; }
 
@@ -153,6 +156,7 @@ namespace MoodSwings.Core
             // A pack that has since been deleted is just the default again.
             CardArtLibrary.ActivePackId = ArtPacks.Find(Device.ArtPack)?.Id;
             FilePicker = FilePickers.ForThisPlatform();
+            Tour = new TourFlow(Device);
 
             // Only a built app looks (never the Editor or its tests, which set their own when they want to).
             var platform = UpdateFlow.PlatformKey(Application.platform);

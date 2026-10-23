@@ -15,6 +15,14 @@ namespace MoodSwings.UI
         private ScreenRouter _router;
         private UpdatePrompt _updates;
         private bool _updatesChecked;
+        private TourOverlay _tour;
+
+        /// <summary>The welcome tour's overlay.</summary>
+        public TourOverlay Tour => _tour;
+        private bool _tourOffered;
+        private bool _tourStarting;
+        private bool _tourNavigating;       // the tour is moving between screens itself
+        private bool _tourPushedSettings;   // ... and Settings is on top of the main menu because of it
         private GameObject _banner;
         private Rect _bannerSafeArea;
         private Vector2Int _bannerScreenSize;
@@ -38,15 +46,35 @@ namespace MoodSwings.UI
             MusicPlayer.Instance.SetTheme(MusicTheme.Main);
             _updates = new UpdatePrompt(transform, AppServices.Theme);
             UpdatePrompt.Current = _updates;
+            _tour = new TourOverlay(transform, AppServices.Theme, AppServices.Tour, TourTargetOnScreen);
+            AppServices.Tour.Changed += ShowTourStepScreen;
+            AppServices.Tour.Ended += _ => LeaveTourScreens();
             _router.ScreenChanged += (previous, next) =>
             {
+                // The welcome tour is about the main menu: the first time it is reached on this device, and whenever Settings
+                // asks for it again. It goes away if the player is taken somewhere else (signed out, say).
+                if (next is HomeScreen)
+                {
+                    var replay = AppServices.Tour.TakeReplayRequest();
+                    if (replay || (!_tourOffered && !AppServices.Tour.Seen))
+                    {
+                        StartCoroutine(StartTour());
+                    }
+
+                    _tourOffered = true;
+                }
+                else if (AppServices.Tour.IsActive && !_tourNavigating)
+                {
+                    AppServices.Tour.Skip();
+                }
+
                 // Once a launch, when the player gets as far as the main menu (not while logging in, or mid-game).
                 if (!_updatesChecked && next is HomeScreen)
                 {
                     _updatesChecked = true;
                     if (AppServices.Device.CheckForUpdates && AppServices.Updates != null)
                     {
-                        _ = _updates.CheckAsync(manual: false);
+                        StartCoroutine(CheckForUpdatesAfterTour());
                     }
                 }
 
@@ -62,6 +90,91 @@ namespace MoodSwings.UI
             BackgroundSound.Apply();
             BuildServerBanner();
             _router.Show<SplashScreen>();
+        }
+
+        // What a tour step points at, on whichever screen it is on.
+        private RectTransform TourTargetOnScreen(string id)
+        {
+            switch (_router.Current)
+            {
+                case HomeScreen home:
+                    return home.TourTarget(id);
+                case SettingsScreen settings:
+                    return settings.TourTarget(id);
+                default:
+                    return null;
+            }
+        }
+
+        // A step about a setting is shown on the Settings screen: the tour takes the player there, and brings them back.
+        private void ShowTourStepScreen()
+        {
+            var step = AppServices.Tour.Current;
+            if (step == null || _router == null)
+            {
+                return;
+            }
+
+            if (step.Screen == TourScreen.Settings && !(_router.Current is SettingsScreen) && _router.Current is HomeScreen)
+            {
+                _tourNavigating = true;
+                _tourPushedSettings = true;
+                _router.Show<SettingsScreen>();
+                _tourNavigating = false;
+            }
+            else if (step.Screen == TourScreen.Home && _tourPushedSettings && _router.Current is SettingsScreen)
+            {
+                LeaveTourScreens();
+            }
+        }
+
+        // Back from Settings to the main menu, if it was the tour that went there.
+        private void LeaveTourScreens()
+        {
+            if (!_tourPushedSettings)
+            {
+                return;
+            }
+
+            _tourPushedSettings = false;
+            if (_router != null && _router.Current is SettingsScreen)
+            {
+                _tourNavigating = true;
+                _router.Back();
+                _tourNavigating = false;
+            }
+        }
+
+        // The main menu is laid out a frame after it is shown, and the tour points at where its buttons end up.
+        private System.Collections.IEnumerator StartTour()
+        {
+            if (_tourStarting || AppServices.Tour.IsActive)
+            {
+                yield break;
+            }
+
+            _tourStarting = true;
+            yield return null;
+            yield return null;
+            _tourStarting = false;
+            if (_router.Current is HomeScreen)
+            {
+                AppServices.Tour.Start();
+            }
+        }
+
+        // The tour comes first: a box offering an update over it would be one thing too many.
+        private System.Collections.IEnumerator CheckForUpdatesAfterTour()
+        {
+            yield return null;
+            yield return null;
+            yield return null;
+            while (_tourStarting || AppServices.Tour.IsActive)
+            {
+                yield return null;
+            }
+
+            _ = _updates.CheckAsync(manual: false);
         }
 
         // A small tag in the corner while the app is on the dev server, so nobody mistakes it for production.
@@ -176,9 +289,10 @@ namespace MoodSwings.UI
             }
 
             // Escape on desktop; the system Back button on Android (which has no keyboard to report it as Escape).
+            _tour.Tick();
             if (KeyInput.EscapePressed || AndroidBack.Consume())
             {
-                if (_updates.Dismiss())
+                if (_tour.Dismiss() || _updates.Dismiss())
                 {
                     return;
                 }

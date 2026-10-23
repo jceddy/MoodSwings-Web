@@ -25,8 +25,55 @@ namespace MoodSwings.UI
         private bool _built;
         private int _loadRun;
         private string _notificationsError;
+        private readonly System.Collections.Generic.Dictionary<string, RectTransform> _tourRows =
+            new System.Collections.Generic.Dictionary<string, RectTransform>();
+        private string _tourScrolledTo;
 
         public string StatusText => _status != null ? _status.text : null;
+
+        /// <summary>
+        /// A row the welcome tour points at: "custom-formats" or "discoverable". Null until the rows are on screen; the first
+        /// time it is asked for, the list is scrolled so the row is in view.
+        /// </summary>
+        public RectTransform TourTarget(string id)
+        {
+            string key;
+            switch (id)
+            {
+                case "custom-formats":
+                    key = "allow_custom_content";
+                    break;
+                case "discoverable":
+                    key = "matchmaking_discoverable";
+                    break;
+                default:
+                    return null;
+            }
+
+            if (!_tourRows.TryGetValue(key, out var row) || row == null)
+            {
+                return null;
+            }
+
+            if (_tourScrolledTo != id)
+            {
+                _tourScrolledTo = id;
+                ScrollTo(row);
+            }
+
+            return row;
+        }
+
+        // Brings a row up into the upper part of the list.
+        private void ScrollTo(RectTransform row)
+        {
+            var viewport = (RectTransform)_list.parent;
+            Canvas.ForceUpdateCanvases();
+            var top = (Vector2)_list.InverseTransformPoint(row.TransformPoint(new Vector3(0f, row.rect.yMax)));
+            var distanceFromTop = -top.y;
+            var farthest = Mathf.Max(0f, _list.rect.height - viewport.rect.height);
+            _list.anchoredPosition = new Vector2(_list.anchoredPosition.x, Mathf.Clamp(distanceFromTop - 120f, 0f, farthest));
+        }
 
         public override void OnShown(object args)
         {
@@ -77,6 +124,8 @@ namespace MoodSwings.UI
 
         private void ClearList()
         {
+            _tourRows.Clear();
+            _tourScrolledTo = null;
             // Destroy() waits for the end of the frame, so hide the old rows too.
             foreach (Transform child in _list)
             {
@@ -171,6 +220,27 @@ namespace MoodSwings.UI
             }
 
             AddArtPackRows(theme);
+            AddTourRow(theme);
+        }
+
+        // --- welcome tour ---------------------------------------------------------------------------
+
+        // The tour runs by itself the first time; this is the way to see it again.
+        private void AddTourRow(UiTheme theme)
+        {
+            UiFactory.SectionTitle(_list, theme, "Welcome tour");
+            var panel = NewPanel(theme);
+            AddDescription(theme, panel.transform, "A short walk through what the app can do, starting from the main menu. You can skip out of it at any time.");
+            var replay = UiFactory.Button(panel.transform, "Show the welcome tour", theme, ReplayTour, primary: false);
+            replay.gameObject.name = "Replay tour";
+        }
+
+        // The tour is about the main menu, so it begins there.
+        private void ReplayTour()
+        {
+            AppServices.Tour.RequestReplay();
+            Router.ClearHistory();
+            Router.Show<HomeScreen>(null, addToHistory: false);
         }
 
         // --- updates --------------------------------------------------------------------------------
@@ -534,6 +604,7 @@ namespace MoodSwings.UI
         private void AddPreferenceRow(UiTheme theme, BoolPreference preference)
         {
             var panel = NewPanel(theme);
+            _tourRows[preference.JsonKey] = (RectTransform)panel.transform;
             var toggle = UiFactory.Toggle(panel.transform, preference.Label, theme, AppServices.Preferences.Get(preference));
             AddDescription(theme, panel.transform, preference.Description);
             toggle.onValueChanged.AddListener(value => OnPreferenceToggled(preference, toggle, value));

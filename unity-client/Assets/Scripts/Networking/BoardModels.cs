@@ -89,6 +89,15 @@ namespace MoodSwings.Networking
         [JsonProperty("value_locked")]
         public bool ValueLocked { get; set; }
 
+        /// <summary>
+        /// In play: a "while in play" mood is worth its alternate value right now, because its own condition holds ("While in
+        /// play, this mood's value is 6 if ..."). The server's own flag, so it follows the board and goes false when the condition
+        /// stops holding. A locked-in value has its own flag (<see cref="ValueLocked"/>), and this is never set for a mood that is
+        /// suppressed, has a Chaos Draft value, or has the alternate value only as a dice number from Encouragement or Idealism.
+        /// </summary>
+        [JsonProperty("alt_value_active")]
+        public bool WhileInPlayAltValueActive { get; set; }
+
         /// <summary>In play, Bliss only: the color of the card that was discarded to it, which is what it now cares about.</summary>
         [JsonProperty("bliss_discard_color")]
         public string BlissDiscardColor { get; set; }
@@ -130,6 +139,15 @@ namespace MoodSwings.Networking
 
         /// <summary>True when an effect has moved the value away from the printed one.</summary>
         public bool ValueIsModified => Value != BaseValue;
+
+        /// <summary>
+        /// In play: the mood is on its alternate value (the number printed upside down in the corner of its card), so by
+        /// tabletop convention it is turned 180 degrees and that number is the one the right way up. Either its own "while in play"
+        /// condition holds right now (<see cref="WhileInPlayAltValueActive"/>) or an "After playing this mood ... its value becomes 7"
+        /// has locked the value in (<see cref="ValueLocked"/>) -- both of them the server's own flags, the same two the web client
+        /// turns a card for.
+        /// </summary>
+        public bool IsAltValueActive => ValueLocked || WhileInPlayAltValueActive;
 
         /// <summary>True when an effect (Imagination) has changed the color from the printed one.</summary>
         public bool IsRecolored => !string.IsNullOrEmpty(BaseColor) && !string.IsNullOrEmpty(Color) && Color != BaseColor;

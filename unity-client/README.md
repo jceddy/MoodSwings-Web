@@ -286,6 +286,16 @@ under "Playing a game" below.
   the printed value at every card size. A **suppressed** mood lies on its side
   (only the face turns; the label and chip stay upright), is labelled SUPPRESSED,
   and its close-up says "Suppressed by <card>" -- suppression only makes the value 0.
+  A mood that is on its **alternate value** (`BoardCard.IsAltValueActive`) is turned 180 degrees, by tabletop
+  convention: the alternate value is printed upside down in the lower left corner of the art, so turning the card brings it to
+  the top right, where the value is read. The server says when, with the two flags the web client turns a card for:
+  `alt_value_active` (a "while in play" mood whose own condition holds right now -- "While in play, this mood's value is 6
+  if ...", following the board and going false when it stops holding) and `value_locked` (an "After playing ... its value
+  becomes 7" has locked it in). The server leaves `alt_value_active` false for a suppressed mood, a Chaos Draft value, and
+  an alternate value that is only a dice number from Encouragement or Idealism, so those aren't turned. A suppressed mood
+  with a locked-in value is three quarter turns; one only suppressed (value 0) is the quarter turn above. Only the art
+  turns -- the badges, the value chip and the close-up stay upright, and the close-up says why the card lies the way it
+  does. A drawn stand-in (no art on this machine) isn't turned, since its text would be upside down.
   A mood **recolored** by an effect (Imagination) wears a pill in its current color naming it (BLUE),
   and its close-up and hover preview say "Color is now blue (printed green) - changed
   by Imagination" (the effect is found from the board-wide effects the server lists).
@@ -707,6 +717,27 @@ Python scripts in `tools/` (`pip install pillow` for the first):
   (credentials from `MOODSWINGS_USER`/`MOODSWINGS_PASSWORD`) and saves
   read-only API responses, email/phone redacted, to
   `Assets/Tests/Fixtures/` for model tests.
+
+## Welcome tour
+
+The first time someone reaches the main menu on a device, a tour walks them through the app: a welcome, then a step for each
+of the menu's buttons (Play, Puzzles, Decklists, Friends, Achievements, Tournaments, Stats, Settings) with the screen dimmed
+and a frame round the button being described. Two steps then take the player into Settings, scroll to the two switches that
+change which games they can start and who with -- **Show custom card/effect formats** (what offers Chaos Draft and the other
+custom formats) and **Discoverable for open games** (whether strangers can see and join what they post to the open lobby) --
+and frame them, then bring them back to the main menu for a picture of the table and what is where on it, and a last word on
+how to see the tour again. Each step has **Back** and **Next** (**Done** at the end), and **Skip the tour** is there at every step; Back
+or Escape (Android's Back button too) skips as well. Finishing and skipping both count as having seen it
+(`DeviceSettings.TourSeen`, per device), so it doesn't start by itself again.
+
+**Settings > Welcome tour > Show the welcome tour** takes the player back to the main menu and runs it again. If an update is
+waiting, its box comes up after the tour, not on top of it. Signing out or being sent to another screen mid-tour ends it.
+
+What it says is `TourSteps` (`Assets/Scripts/Core/WelcomeTour.cs`): change the text, or add a step by giving it a `Target`
+(a main menu button -- `HomeScreen.TourTarget` knows them by name) or none. `TourFlow` is the state (UI-free) and
+`TourOverlay` draws it; a step's `Screen` says which screen it is on (the tour moves the player there and back, and a test pins
+the two switches' names to `PreferenceCatalog`'s labels). PlayMode tests start with the tour off (`MainSceneTests.ShowTour`), or it would cover every test's
+main menu.
 
 ## Updates
 

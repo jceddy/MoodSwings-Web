@@ -97,9 +97,10 @@ def main():
         copy = staging / published
         copy.write_bytes(path.read_bytes())
         uploads.append(str(copy))
-    uploads.append(str(out))
-    # The manifest goes last: an app only hears about a version once every file it points at is there.
     subprocess.run(["gh", "release", "upload", TAG, "--repo", REPO, "--clobber", *uploads], check=True)
+    # The manifest goes in a call of its own, after the files: gh sends the files of one call at the same time, so the
+    # small manifest would land first, and an app would be told about a version whose downloads aren't there yet.
+    subprocess.run(["gh", "release", "upload", TAG, "--repo", REPO, "--clobber", str(out)], check=True)
     print("Uploaded.")
 
 

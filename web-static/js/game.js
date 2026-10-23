@@ -6140,7 +6140,17 @@
         img.alt = card.name + '. ' + (card.rules_text || 'No ability.');
         button.appendChild(img);
 
-        if (card.value !== card.base_value) {
+        // A card rotated 180deg onto its alternate value (see
+        // card-thumb--value-locked below) already shows that number printed
+        // on the art itself, so repeating it in a badge would only cover
+        // the art -- skipped, unless a chaos delta (which has its own badge
+        // and makes the shown value differ from the printed one) applies.
+        const showingPrintedAltValue = (card.value_locked || card.alt_value_active)
+            && card.alt_value !== null && card.alt_value !== undefined
+            && card.value === card.alt_value
+            && !card.chaos_value_delta;
+
+        if (card.value !== card.base_value && !showingPrintedAltValue) {
             const valueBadge = document.createElement('span');
             valueBadge.className = 'card-thumb__badge card-thumb__badge--value';
             valueBadge.textContent = card.value;
@@ -8553,9 +8563,11 @@
             // metric (puzzle_plays_made) rather than who beat whom.
             if (state.game.format === 'puzzle' && state.game.puzzle_failed) {
                 // A "win the game this turn" puzzle whose turn ended without
-                // winning (see GameService::failPuzzleAttempt()).
+                // winning (see GameService::failPuzzleAttempt()), or one whose
+                // opponent takes real turns losing the final round (see
+                // GameService::finishPuzzleFromScoring()).
                 document.getElementById('board-round-status').textContent =
-                    'Puzzle failed — your turn ended before you won the game. Try again from the Puzzles menu.';
+                    "Puzzle failed — you didn't win the game. Try again from the Puzzles menu.";
             } else if (state.game.format === 'puzzle') {
                 document.getElementById('board-round-status').textContent =
                     'Puzzle solved in ' + state.game.puzzle_plays_made + ' play'
