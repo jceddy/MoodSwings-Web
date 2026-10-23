@@ -14185,6 +14185,34 @@ than a parallel bespoke system:
   through the real engine -- every Thrill return set, every Suspicion target
   set, discard-pile plays included -- found that one board and that one tie.
 
+- **30th puzzle, "Calculated Loss"** (an Insecurity/Ambition/Patience puzzle:
+  lose this round on purpose, so that the opponent's Intimidation can only take
+  Ambition next round), hard, `win_game`, with new puzzle infrastructure:
+  `puzzles.opponent_takes_turns` (default 0) makes a puzzle play out over real
+  rounds -- the puzzle opponent takes its own turns as an ordinary bot (so it
+  plays the cards it holds), rounds are scored by the normal pipeline, and a lost
+  round carries the attempt on instead of ending it. The attempt is a solve if the
+  solver wins the round that completes the game and a loss ('puzzle_failed') if the
+  opponent does (`GameService::finishPuzzleFromScoring()`); `checkPuzzleGoal()`
+  leaves such a puzzle to the scoring, and the "solved in N plays" counter only
+  counts the solver's own plays. You have two round wins and the opponent one; they
+  played first this round (Glee, played this round -- 6 now, 0 next round --
+  Celebration and Apathy in play, Intimidation in hand) and you hold Insecurity,
+  Ambition, Patience and Triumph with Boredom in play and an empty deck. The one
+  winning line: Insecurity, Ambition discarding Triumph, Patience -- you lose the
+  round, but Patience now reads 5 for good and Insecurity puts Ambition back in
+  your hand. Next round Intimidation takes Ambition (your only card, so the one
+  you must give up), and your turn passes with nothing to play: Boredom 4 +
+  Insecurity 2 + Patience 5 = 11 against Celebration 3 + Apathy 4 + Intimidation 1 +
+  Ambition 2 = 10. (Patience alone this round and Insecurity next reaches the same
+  board a round later, and adding Triumph to that wins by more.) Skipping the
+  discard leaves Patience at 1 next round; Triumph first ties 10-10; giving up
+  Triumph instead of Ambition ties 13-13 (it is worth 5 to them, they go first, and
+  3 to you); giving up Insecurity instead loses outright (blue is a color the
+  opponent lacked, so Celebration reads 7). An exhaustive search through the real
+  engine -- both rounds, every reveal, every play order, passing included --
+  found those boards.
+
 ### Duel: separate per-player decks
 
 `format: 'duel'` and `format: 'draft'` (see "Draft format" below) are the

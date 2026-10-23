@@ -11794,7 +11794,13 @@ final class GameService
      */
     private function countMoodsPlayed(int $gameId): int
     {
-        $stmt = Connection::get()->prepare("SELECT COUNT(*) FROM game_events WHERE game_id = :game_id AND event_type = 'mood_played'");
+        // The solver's own plays only (seat 0): a puzzle whose opponent takes
+        // real turns (puzzles.opponent_takes_turns) has plays of its own in the
+        // log, which aren't the solver's to be counted -- see finishPuzzleFromScoring().
+        $stmt = Connection::get()->prepare(
+            "SELECT COUNT(*) FROM game_events e JOIN game_players gp ON gp.id = e.acting_game_player_id
+             WHERE e.game_id = :game_id AND e.event_type = 'mood_played' AND gp.seat_order = 0"
+        );
         $stmt->execute(['game_id' => $gameId]);
 
         return (int) $stmt->fetchColumn();

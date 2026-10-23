@@ -62,6 +62,7 @@ final class PuzzleContentTest extends TestCase
         $pdo->exec('TRUNCATE TABLE game_pending_decisions');
         $pdo->exec('TRUNCATE TABLE game_pending_decision_batches');
         $pdo->exec('TRUNCATE TABLE game_cards');
+        $pdo->exec('TRUNCATE TABLE game_round_scores');
         $pdo->exec('TRUNCATE TABLE game_rounds');
         $pdo->exec('TRUNCATE TABLE game_players');
         $pdo->exec('TRUNCATE TABLE games');
@@ -2535,6 +2536,92 @@ final class PuzzleContentTest extends TestCase
         $this->playDriven($gameId, $p, $this->instanceId($gameId, 123, 'hand'));
         $this->playDriven($gameId, $p, $this->instanceId($gameId, 30, 'discard'));
         $this->games->advanceAutomatedTurns($gameId);
+
+        $this->assertGameFailed($gameId);
+    }
+
+    /** The score each seat got in the most recently scored round of $gameId, keyed 'solver'/'opponent'. @return array{solver: int, opponent: int} */
+    private function lastRoundScores(int $gameId, int $solverGamePlayerId): array
+    {
+        $stmt = $this->pdo->prepare(
+            "SELECT s.game_player_id, s.score FROM game_round_scores s
+             JOIN game_rounds r ON r.id = s.game_round_id
+             WHERE r.game_id = :game_id AND r.round_number = (SELECT MAX(round_number) FROM game_rounds WHERE game_id = :game_id2 AND status = 'scored')"
+        );
+        $stmt->execute(['game_id' => $gameId, 'game_id2' => $gameId]);
+        $scores = ['solver' => 0, 'opponent' => 0];
+        foreach ($stmt->fetchAll() as $row) {
+            $scores[(int) $row['game_player_id'] === $solverGamePlayerId ? 'solver' : 'opponent'] = (int) $row['score'];
+        }
+
+        return $scores;
+    }
+
+    /** Answers the pending Intimidation reveal (the solver's own decision) with $catalogCardId from the solver's hand, then lets the opponent finish its turn. */
+    private function revealToIntimidation(int $gameId, int $gamePlayerId, int $catalogCardId): void
+    {
+        $this->games->advanceAutomatedTurns($gameId);
+        $this->games->respondToDecision($gameId, $gamePlayerId, ['revealed_card_id' => $this->ownedInstanceId($gameId, $catalogCardId, 'hand', $gamePlayerId)]);
+        $this->games->advanceAutomatedTurns($gameId);
+    }
+
+    /**
+     * "Calculated Loss": the one winning line (exhaustive search of the real
+     * flow -- see migration 0474's own docblock) is, in the round you can't win,
+     * Insecurity, then Ambition discarding Triumph to play Patience; the opponent
+     * wins that round, Insecurity returns Ambition to your hand, and next round
+     * their Intimidation takes it (your only card). Boredom 4 + Insecurity 2 +
+     * Patience 5 = 11 against Celebration 3 + Apathy 4 + Intimidation 1 +
+     * Ambition 2 = 10.
+     */
+    public function testCalculatedLossSolvedByLosingTheFirstRoundOnPurpose(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('calculated-loss');
+
+        $this->play($gameId, $p, $this->instanceId($gameId, 45, 'hand'));
+        $this->play($gameId, $p, $this->instanceId($gameId, 53, 'hand'), ['discard_card_id' => $this->instanceId($gameId, 104, 'hand')]);
+        $this->play($gameId, $p, $this->instanceId($gameId, 21, 'hand'));
+
+        // Round one is scored (and lost) once that turn ends -- the attempt carries on.
+        $this->games->advanceAutomatedTurns($gameId);
+        $this->assertGameNotSolved($gameId);
+        self::assertSame(['hand'], [$this->pdo->query('SELECT zone FROM game_cards WHERE card_id = 53 LIMIT 1')->fetchColumn()], 'Insecurity returned Ambition to the solver');
+
+        // Nothing left to play, so the solver's turn passes by itself (users default to auto-pass on an empty hand).
+        $this->revealToIntimidation($gameId, $p, 53);
+        self::assertSame([], $this->games->getState($gameId, $this->userIdForGamePlayer($p))['you']['hand']);
+
+        $this->assertGameSolved($gameId, $p);
+        self::assertSame(['solver' => 11, 'opponent' => 10], $this->lastRoundScores($gameId, $p));
+        self::assertSame(3, $this->games->getState($gameId, $this->userIdForGamePlayer($p))['game']['puzzle_plays_made'], "only the solver's own plays are counted");
+    }
+
+    /** Playing Triumph first instead leaves Patience worth 1 next round: 10-10, a tie, and a tie goes to the opponent. */
+    public function testCalculatedLossTriumphFirstTiesTheSecondRound(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('calculated-loss');
+
+        $this->play($gameId, $p, $this->instanceId($gameId, 104, 'hand'));
+        $this->games->advanceAutomatedTurns($gameId);
+        $this->revealToIntimidation($gameId, $p, 53);
+        $this->play($gameId, $p, $this->instanceId($gameId, 45, 'hand'));
+        $this->play($gameId, $p, $this->instanceId($gameId, 21, 'hand'));
+        $this->games->advanceAutomatedTurns($gameId);
+
+        $this->assertGameFailed($gameId);
+        self::assertSame(['solver' => 10, 'opponent' => 10], $this->lastRoundScores($gameId, $p));
+        self::assertTrue($this->games->getState($gameId, $this->userIdForGamePlayer($p))['game']['puzzle_failed']);
+    }
+
+    /** Giving up Insecurity instead of Ambition hands the opponent a color they lacked: Celebration reads 7 and they win. */
+    public function testCalculatedLossGivingUpInsecurityLoses(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('calculated-loss');
+
+        $this->play($gameId, $p, $this->instanceId($gameId, 53, 'hand'), ['discard_card_id' => $this->instanceId($gameId, 104, 'hand')]);
+        $this->play($gameId, $p, $this->instanceId($gameId, 21, 'hand'));
+        $this->games->advanceAutomatedTurns($gameId);
+        $this->revealToIntimidation($gameId, $p, 45);
 
         $this->assertGameFailed($gameId);
     }
