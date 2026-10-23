@@ -1684,6 +1684,51 @@ namespace MoodSwings.Tests
             Assert.IsNull(FaceOf("Ambition"), "its condition no longer holds");
         }
 
+        private static bool HasValueChip(string mood) =>
+            PhaseFiveSceneTests.Child("Card " + mood)?.GetComponentsInChildren<Transform>().Any(t => t.name == "Value") == true;
+
+        [UnityTest]
+        public IEnumerator ACardTurnedOntoItsPrintedAlternateValue_HasNoValueBadge_ButOneOnItsOtherValueDoes()
+        {
+            if (CardArtLibrary.ForCard(53) == null)
+            {
+                Assert.Inconclusive("The card art has not been generated on this machine (tools/convert_card_art.py).");
+            }
+
+            var server = Serve();
+            server.State = Quiet(406, s =>
+            {
+                var ambition = s["in_play"][0];
+                ambition["has_dice_value"] = true;
+                ambition["alt_value"] = 5;
+                ambition["base_value"] = 3;
+                ambition["value"] = 5;
+                ambition["alt_value_active"] = true;
+                // Another mood, changed by something else: it keeps its badge.
+                s["in_play"][1]["value"] = (int)s["in_play"][1]["base_value"] + 2;
+            });
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+
+            Assert.IsNotNull(FaceOf("Ambition"), "turned onto its alternate value");
+            Assert.IsFalse(HasValueChip("Ambition"), "which the turned art already prints: no badge over it");
+            Assert.IsTrue(HasValueChip("Frustration"), "a value changed some other way still gets its badge");
+
+            // The same card on a chaos-adjusted value keeps the badge.
+            server.State = Quiet(406, s =>
+            {
+                var ambition = s["in_play"][0];
+                ambition["has_dice_value"] = true;
+                ambition["alt_value"] = 5;
+                ambition["base_value"] = 3;
+                ambition["value"] = 7;
+                ambition["chaos_value_delta"] = 2;
+                ambition["alt_value_active"] = true;
+            });
+            yield return PhaseFiveSceneTests.Poll();
+            Assert.IsNotNull(FaceOf("Ambition"));
+            Assert.IsTrue(HasValueChip("Ambition"), "a chaos adjustment makes the value something else");
+        }
+
         [UnityTest]
         public IEnumerator AMoodOnItsAlternateValueOnlyAsADiceBoost_IsNotTurnedAround_BecauseTheServerSaysNot()
         {

@@ -27,6 +27,8 @@ namespace MoodSwings.UI
         private int? _cardId;
         private string _teammateOwner;
         private string _offerKey;
+        private readonly BackToDecisionBar _backBar;
+        private bool _viewing;
 
         /// <summary>Effect id, card id, and the partner's name when the card is theirs (null for your own).</summary>
         public Action<int, int, string> Attach;
@@ -64,10 +66,18 @@ namespace MoodSwings.UI
             _buttons = (RectTransform)UiFactory.Row(panel, "Buttons", 24f, TextAnchor.MiddleCenter).transform;
             UiFactory.Size(_buttons.gameObject, height: UiFactory.ControlHeight);
 
+            _backBar = new BackToDecisionBar(parent, theme, () => BackToDecision());
             _root.SetActive(false);
         }
 
-        public bool IsOpen => _root.activeSelf;
+        /// <summary>An offer is up: covering the table, or stepped aside so the player can look at it.</summary>
+        public bool IsOpen => _root.activeSelf || _viewing;
+
+        /// <summary>The offer is on screen, over the table (not while the player is looking at the table).</summary>
+        public bool IsCovering => _root.activeSelf;
+
+        /// <summary>The player is looking at the table, with the offer out of the way.</summary>
+        public bool IsViewingBoard => _viewing;
 
         public string StatusText => _status.text;
 
@@ -86,7 +96,12 @@ namespace MoodSwings.UI
                 _cardId = null;
             }
 
-            _root.SetActive(true);
+            // While the player is looking at the table the offer is kept up to date, but stays out of the way.
+            if (!_viewing)
+            {
+                _root.SetActive(true);
+            }
+
             Clear(_body);
             Clear(_buttons);
 
@@ -102,17 +117,65 @@ namespace MoodSwings.UI
             {
                 ShowCards(state, offer);
             }
+
+            AddViewBoardButton();
         }
 
         public void Hide()
         {
+            _viewing = false;
+            _backBar.Hide();
             _root.SetActive(false);
             _offerKey = null;
         }
 
-        /// <summary>Back from choosing the card returns to the two effects. False when there's nowhere to go back to.</summary>
+        /// <summary>Steps the offer aside to show the table, with a button to come back to it.</summary>
+        public void ViewBoard()
+        {
+            if (!_root.activeSelf)
+            {
+                return;
+            }
+
+            _viewing = true;
+            _root.SetActive(false);
+            _backBar.Show(_root.transform.GetSiblingIndex());
+        }
+
+        /// <summary>Brings the offer back, at the stage it was left.</summary>
+        public void BackToDecision()
+        {
+            if (!_viewing)
+            {
+                return;
+            }
+
+            _viewing = false;
+            _backBar.Hide();
+            _root.SetActive(true);
+        }
+
+        // Left of whatever else is in the row, at every stage.
+        private void AddViewBoardButton()
+        {
+            var view = UiFactory.Button(_buttons, "View board", _theme, () => ViewBoard(), primary: false);
+            view.gameObject.name = "View board";
+            UiFactory.Size(view.gameObject, 280f);
+            view.transform.SetAsFirstSibling();
+        }
+
+        /// <summary>
+        /// Back / Escape: from looking at the table, back to the offer; from choosing the card, back to the two effects.
+        /// False when there's nowhere to go back to.
+        /// </summary>
         public bool Back()
         {
+            if (_viewing)
+            {
+                BackToDecision();
+                return true;
+            }
+
             if (!IsOpen || _effectId == null)
             {
                 return false;

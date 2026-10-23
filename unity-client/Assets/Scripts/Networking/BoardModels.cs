@@ -149,6 +149,13 @@ namespace MoodSwings.Networking
         /// </summary>
         public bool IsAltValueActive => ValueLocked || WhileInPlayAltValueActive;
 
+        /// <summary>
+        /// The card is turned onto its alternate value and is worth exactly that: the number is printed right there on the (turned)
+        /// art, so repeating it in a badge would only cover the art. Not when a Chaos Draft adjustment has moved the value off the
+        /// printed one (which has its own badge).
+        /// </summary>
+        public bool ShowsPrintedAltValue => IsAltValueActive && AltValue.HasValue && Value == AltValue.Value && ChaosValueDelta == 0;
+
         /// <summary>True when an effect (Imagination) has changed the color from the printed one.</summary>
         public bool IsRecolored => !string.IsNullOrEmpty(BaseColor) && !string.IsNullOrEmpty(Color) && Color != BaseColor;
     }
@@ -469,6 +476,10 @@ namespace MoodSwings.Networking
         /// <summary>Which game of its best-of-three match this is; null when it isn't part of one.</summary>
         [JsonProperty("match_game_number")]
         public int? MatchGameNumber { get; set; }
+
+        /// <summary>The draft match this game belongs to; every game of one shares it, and its chat. Null when it isn't a draft game.</summary>
+        [JsonProperty("draft_match_id")]
+        public int? DraftMatchId { get; set; }
 
         /// <summary>A puzzle: what the goal is. Always shown.</summary>
         [JsonProperty("puzzle_description")]

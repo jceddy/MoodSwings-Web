@@ -56,7 +56,7 @@ namespace MoodSwings.UI
         private readonly Text _submitLabel;
         private readonly Button _cancel;
         private readonly Button _viewBoard;
-        private readonly GameObject _backBar;
+        private readonly BackToDecisionBar _backBar;
         private readonly List<OptionButton> _options = new List<OptionButton>();
         /// <summary>Called with a card and where it is when the player taps the eye on an option that is a card.</summary>
         public Action<BoardCard, string> Inspect;
@@ -135,15 +135,7 @@ namespace MoodSwings.UI
 
             // The way back, over the table while the form is out of the way. In the middle of it, under Pass, where no mood
             // sits in.
-            var bar = UiFactory.Create("Back to decision bar", parent);
-            _backBar = bar.gameObject;
-            bar.anchorMin = bar.anchorMax = bar.pivot = new Vector2(0.5f, 0.5f);
-            bar.sizeDelta = new Vector2(440f, UiFactory.ControlHeight);
-            bar.anchoredPosition = new Vector2(0f, -128f);
-            var back = UiFactory.Button(bar, "Back to decision", theme, () => BackToDecision());
-            back.gameObject.name = "Back to decision";
-            UiFactory.Stretch((RectTransform)back.transform);
-            _backBar.SetActive(false);
+            _backBar = new BackToDecisionBar(parent, theme, () => BackToDecision());
 
             _root.SetActive(false);
         }
@@ -177,7 +169,7 @@ namespace MoodSwings.UI
             _busy = false;
             _error = null;
             _viewing = false;
-            _backBar.SetActive(false);
+            _backBar.Hide();
             _form.FieldsChanged += Rebuild;
 
             _title.text = prompt.Title;
@@ -211,7 +203,7 @@ namespace MoodSwings.UI
         {
             Detach();
             _viewing = false;
-            _backBar.SetActive(false);
+            _backBar.Hide();
             _root.SetActive(false);
             _form = null;
             _prompt = null;
@@ -248,9 +240,7 @@ namespace MoodSwings.UI
 
             _viewing = true;
             _root.SetActive(false);
-            _backBar.SetActive(true);
-            // At the form's own place in the stack: over the table, under the menu and anything opened over the form.
-            _backBar.transform.SetSiblingIndex(_root.transform.GetSiblingIndex());
+            _backBar.Show(_root.transform.GetSiblingIndex());
         }
 
         /// <summary>Brings the form back, as it was.</summary>
@@ -262,7 +252,7 @@ namespace MoodSwings.UI
             }
 
             _viewing = false;
-            _backBar.SetActive(false);
+            _backBar.Hide();
             _root.SetActive(true);
         }
 

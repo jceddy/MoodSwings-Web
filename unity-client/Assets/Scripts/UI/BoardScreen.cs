@@ -109,7 +109,8 @@ namespace MoodSwings.UI
         private bool _chatTabShown;
         private bool _chatEntryAllowed;
         private bool _chatChannelAllowed;
-        private int _chatSeen;
+        private string _chatThread;        // which chat the unread count is of: the draft match's, or the game's own
+        private int _chatSeenThrough;      // the newest message id read in it
         private GameObject _menuBadge;
         private Text _menuBadgeLabel;
         private RectTransform _detailCardHolder;
@@ -357,7 +358,8 @@ namespace MoodSwings.UI
 
             // A game starts on the main theme; its first mood played moves it on.
             MusicPlayer.Instance.SetTheme(MusicTheme.Main);
-            _chatSeen = _session == null ? 0 : AppServices.Device.ChatSeen(_session.GameId);
+            _chatThread = null;
+            _chatSeenThrough = 0;
             _chatTabShown = false;
 
             // Nothing of the game that was up before stays up while this one loads: the draft or deck-building view, the
@@ -881,7 +883,7 @@ namespace MoodSwings.UI
         {
             var state = _session?.State;
             // Unread chat is what you probably came for.
-            var unread = state != null && state.ChatMessages.Count > _chatSeen;
+            var unread = state != null && ChatThreads.Unread(state.ChatMessages, ChatSeenThrough(state)) > 0;
             // Above whatever else is up (a question waiting on you, say), so Resign can be reached.
             _menuOverlay.transform.SetAsLastSibling();
             _menuOverlay.SetActive(true);
@@ -912,34 +914,49 @@ namespace MoodSwings.UI
 
             if (chat && _menuOverlay.activeSelf && _session?.State != null)
             {
-                MarkChatSeen(_session.State.ChatMessages.Count);
+                MarkChatSeen(_session.State);
                 UpdateMenuBadge();
             }
         }
 
-        // Remembered on the device, so it survives leaving the game or the app.
-        private void MarkChatSeen(int count)
+        // How much of this game's chat has been read. A draft match shares one chat between its games, so this is kept for the
+        // match, not for the game: the next game of it starts from what was read in the last, not from nothing.
+        private int ChatSeenThrough(GameState state)
         {
-            if (count == _chatSeen)
+            var thread = ChatThreads.KeyFor(state);
+            if (_chatThread != thread)
+            {
+                _chatThread = thread;
+                var remembered = AppServices.Device.ChatSeenThrough(thread);
+                // An older version remembered only how many of a game's messages had been read.
+                _chatSeenThrough = remembered
+                    ?? ChatThreads.ReadThroughCount(state.ChatMessages, _session != null ? AppServices.Device.ChatSeen(_session.GameId) : 0);
+            }
+
+            return _chatSeenThrough;
+        }
+
+        // Remembered on the device, so it survives leaving the game or the app.
+        private void MarkChatSeen(GameState state)
+        {
+            var through = Mathf.Max(ChatSeenThrough(state), ChatThreads.NewestId(state.ChatMessages));
+            if (through == _chatSeenThrough)
             {
                 return;
             }
 
-            _chatSeen = count;
-            if (_session != null)
-            {
-                AppServices.Device.SetChatSeen(_session.GameId, count);
-            }
+            _chatSeenThrough = through;
+            AppServices.Device.SetChatSeenThrough(_chatThread, through);
         }
 
         private void UpdateMenuBadge()
         {
             var state = _session?.State;
-            var unread = state == null ? 0 : Mathf.Max(0, state.ChatMessages.Count - _chatSeen);
+            var unread = state == null ? 0 : ChatThreads.Unread(state.ChatMessages, ChatSeenThrough(state));
             // Chat that is being read as it arrives isn't unread.
             if (_menuOverlay.activeSelf && _chatTabShown && state != null)
             {
-                MarkChatSeen(state.ChatMessages.Count);
+                MarkChatSeen(state);
                 unread = 0;
             }
 

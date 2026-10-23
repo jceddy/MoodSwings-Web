@@ -742,6 +742,79 @@ namespace MoodSwings.Tests
         }
 
         [UnityTest]
+        public IEnumerator Chaos_YouCanLookAtTheBoard_AndComeBackToTheSameChoice()
+        {
+            var server = Serve(ChaosGame());
+            server.ChaosOfferJson = OfferJson();
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+            Assert.IsNotNull(PhaseTwoSceneTests.FindButton("View board"), "offered with the two effects");
+            Assert.IsNull(PhaseTwoSceneTests.FindButton("Back to decision"), "nothing to go back to yet");
+
+            // Part way through: an effect chosen, on to choosing the card.
+            yield return PhaseFiveSceneTests.Tap(Named("Effect 12"));
+            Assert.AreEqual(12, Board().ChaosOverlay.ChosenEffectId);
+
+            yield return PhaseTwoSceneTests.Click("View board");
+            yield return PhaseTwoSceneTests.Frames(4);
+
+            Assert.IsFalse(Board().ChaosOverlay.IsCovering, "the offer is out of the way");
+            Assert.IsTrue(Board().ChaosOverlay.IsOpen, "but still outstanding");
+            Assert.IsTrue(Board().ChaosOverlay.IsViewingBoard);
+            Assert.IsNotNull(PhaseTwoSceneTests.FindButton("Back to decision"));
+            ScreenshotHelper.Capture("chaos-view-board");
+
+            // The board is read again while looking, and that doesn't put the offer back over it.
+            yield return PhaseFiveSceneTests.Poll();
+            Assert.IsFalse(Board().ChaosOverlay.IsCovering);
+            Assert.IsTrue(Board().ChaosOverlay.IsViewingBoard);
+
+            yield return PhaseTwoSceneTests.Click("Back to decision");
+            yield return PhaseTwoSceneTests.Frames(4);
+
+            Assert.IsTrue(Board().ChaosOverlay.IsCovering);
+            Assert.IsFalse(Board().ChaosOverlay.IsViewingBoard);
+            Assert.IsNull(PhaseTwoSceneTests.FindButton("Back to decision"));
+            Assert.AreEqual(12, Board().ChaosOverlay.ChosenEffectId, "the effect already chosen is still chosen");
+            StringAssert.Contains("Attach it to which card?", Board().ChaosOverlay.StatusText);
+        }
+
+        [UnityTest]
+        public IEnumerator Chaos_WhileLookingAtTheBoard_BackReturnsToTheOffer_AndTheOfferGoesIfTheRoundMovesOn()
+        {
+            var server = Serve(ChaosGame());
+            server.ChaosOfferJson = OfferJson();
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+            yield return PhaseTwoSceneTests.Click("View board");
+
+            Assert.IsTrue(Board().HandleBack(), "Back is the way back to the offer");
+            Assert.IsTrue(Board().ChaosOverlay.IsCovering);
+
+            // Looking again, and the offer is settled in the meantime (everyone else chose): nothing is left to go back to.
+            yield return PhaseTwoSceneTests.Click("View board");
+            server.ChaosOfferJson = NoOffer;
+            yield return PhaseFiveSceneTests.Poll();
+
+            Assert.IsFalse(Board().ChaosOverlay.IsOpen);
+            Assert.IsNull(PhaseTwoSceneTests.FindButton("Back to decision"), "the bar goes with it");
+        }
+
+        [UnityTest]
+        public IEnumerator Chaos_ATeamProposal_CanBeSetAsideToLookAtTheBoardToo()
+        {
+            var server = Serve(ChaosGame());
+            server.ChaosOfferJson = OfferJson(team: true, phase: "confirm", proposer: 99999);
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+            Assert.IsNotNull(Named("Agree"));
+
+            yield return PhaseTwoSceneTests.Click("View board");
+            Assert.IsFalse(Board().ChaosOverlay.IsCovering);
+            yield return PhaseTwoSceneTests.Click("Back to decision");
+
+            Assert.IsTrue(Board().ChaosOverlay.IsCovering);
+            Assert.IsNotNull(Named("Agree"));
+        }
+
+        [UnityTest]
         public IEnumerator Chaos_BackFromTheCardsReturnsToTheEffects()
         {
             var server = Serve(ChaosGame());

@@ -263,7 +263,10 @@ under "Playing a game" below.
   panel from the left: **< Lobby**, **Resign**, and a **Log** tab (the recent events
   and any effects in force) and a **Chat** tab (the game's messages, with a box to
   answer). It opens on the chat when there is something unread, and the tab shows only
-  how many are unread ("Chat (2)"), not how many there have ever been. The client's
+  how many are unread ("Chat (2)"), not how many there have ever been. What has been read is remembered per chat, as the
+  newest message id read: a draft match shares one chat between its games (`draft_match_id`), so the next game of the
+  match carries on from what was read in the last instead of showing every old message as unread again
+  (`ChatThreads`; a game outside a match has a chat of its own, and a count remembered by an older version is converted). The client's
   version is in its lower left corner.
 
 - **Seating matches the web client exactly** (`BoardLayout`, from
@@ -280,7 +283,9 @@ under "Playing a game" below.
   (name, value, rules text) when not, so the board never depends on the art. The
   art prints a card's main value in its top-right corner, so when an effect has
   **changed** a mood's value, a chip is laid over that corner showing the current
-  one; an unchanged value gets no chip. (Cards in hand always have their printed
+  one; an unchanged value gets no chip, and neither does a mood turned onto its printed alternate value (below), whose
+  turned art already prints that number there (the web client's rule; not when a Chaos Draft adjustment has moved it).
+  (Cards in hand always have their printed
   value, so only moods in play get one; a stand-in card, which prints no value,
   always shows it.) The chip is placed by fractions of the card, so it stays over
   the printed value at every card size. A **suppressed** mood lies on its side
@@ -404,7 +409,9 @@ under "Playing a game" below.
   then **Attach**. Nobody can play or pass until everyone has attached theirs, and the banner says
   who is being waited for. A card carrying an effect has a **CHAOS** pill (coloured by the
   effect's rarity) and its detail and hover text give the effect and any change to its value. When a
-  repeating effect sets up a loop, a box offers to apply it up to a cap of times at once.
+  repeating effect sets up a loop, a box offers to apply it up to a cap of times at once. Like any question, the
+  offer can be set aside with **View board** to look at the table (the effect already chosen stays chosen), and
+  **Back to decision** brings it back.
 - **Building the deck** follows the last round: every card in your pool starts in your deck, tap
   one to take it out (or put it back), **Clear** / **Select all**, and **Submit deck** once it is
   within the size limits (and any rarity caps) -- the line under the cards says what's wrong. A

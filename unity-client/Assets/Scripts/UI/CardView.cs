@@ -114,7 +114,10 @@ namespace MoodSwings.UI
                     level: (card.IsRecolored ? 1 : 0) + (card.ChaosEffect != null ? 1 : 0));
             }
 
-            if (showValue && (card.ValueIsModified || art == null))
+            // A card turned onto its printed alternate value already shows that number, so it gets no chip over the art; a stand-in
+            // (which is never turned, and prints no value at all) always does.
+            var printedAlt = turnedAround && card.ShowsPrintedAltValue;
+            if (showValue && ((card.ValueIsModified && !printedAlt) || art == null))
             {
                 AddValueChip(rect, card, width, theme, upright: !onItsSide);
             }
