@@ -2557,11 +2557,20 @@ final class PuzzleContentTest extends TestCase
         return $scores;
     }
 
-    /** Answers the pending Intimidation reveal (the solver's own decision) with $catalogCardId from the solver's hand, then lets the opponent finish its turn. */
-    private function revealToIntimidation(int $gameId, int $gamePlayerId, int $catalogCardId): void
+    /**
+     * Answers the opponent's Intimidation (played twice -- they have Duplicity):
+     * each pending reveal is the solver's own decision, answered with the next of
+     * $catalogCardIds from the solver's hand, then the opponent finishes its turn.
+     *
+     * @param int[] $catalogCardIds
+     */
+    private function revealToIntimidation(int $gameId, int $gamePlayerId, array $catalogCardIds): void
     {
-        $this->games->advanceAutomatedTurns($gameId);
-        $this->games->respondToDecision($gameId, $gamePlayerId, ['revealed_card_id' => $this->ownedInstanceId($gameId, $catalogCardId, 'hand', $gamePlayerId)]);
+        foreach ($catalogCardIds as $catalogCardId) {
+            // The opponent answers its own Duplicity offer (to repeat Intimidation) in between.
+            $this->games->advanceAutomatedTurns($gameId);
+            $this->games->respondToDecision($gameId, $gamePlayerId, ['revealed_card_id' => $this->ownedInstanceId($gameId, $catalogCardId, 'hand', $gamePlayerId)]);
+        }
         $this->games->advanceAutomatedTurns($gameId);
     }
 
@@ -2570,9 +2579,9 @@ final class PuzzleContentTest extends TestCase
      * flow -- see migration 0474's own docblock) is, in the round you can't win,
      * Insecurity, then Ambition discarding Triumph to play Patience; the opponent
      * wins that round, Insecurity returns Ambition to your hand, and next round
-     * their Intimidation takes it (your only card). Boredom 4 + Insecurity 2 +
-     * Patience 5 = 11 against Celebration 3 + Apathy 4 + Intimidation 1 +
-     * Ambition 2 = 10.
+     * their Intimidation (twice, with Duplicity) takes it -- your only card.
+     * Celebration 7 + Apathy 4 + Insecurity 2 + Patience 5 = 18 against
+     * Bashfulness 6 + Boredom 4 + Apathy 4 + Intimidation 1 + Ambition 2 = 17.
      */
     public function testCalculatedLossSolvedByLosingTheFirstRoundOnPurpose(): void
     {
@@ -2585,35 +2594,39 @@ final class PuzzleContentTest extends TestCase
         // Round one is scored (and lost) once that turn ends -- the attempt carries on.
         $this->games->advanceAutomatedTurns($gameId);
         $this->assertGameNotSolved($gameId);
-        self::assertSame(['hand'], [$this->pdo->query('SELECT zone FROM game_cards WHERE card_id = 53 LIMIT 1')->fetchColumn()], 'Insecurity returned Ambition to the solver');
+        self::assertSame('hand', $this->pdo->query('SELECT zone FROM game_cards WHERE card_id = 53 LIMIT 1')->fetchColumn(), 'Insecurity returned Ambition to the solver');
 
-        // Nothing left to play, so the solver's turn passes by itself (users default to auto-pass on an empty hand).
-        $this->revealToIntimidation($gameId, $p, 53);
+        // Ambition is all there is to take; the second Intimidation finds an empty hand.
+        // Nothing is left to play, so the solver's turn passes by itself (users default to auto-pass on an empty hand).
+        $this->revealToIntimidation($gameId, $p, [53]);
         self::assertSame([], $this->games->getState($gameId, $this->userIdForGamePlayer($p))['you']['hand']);
 
         $this->assertGameSolved($gameId, $p);
-        self::assertSame(['solver' => 11, 'opponent' => 10], $this->lastRoundScores($gameId, $p));
+        self::assertSame(['solver' => 18, 'opponent' => 17], $this->lastRoundScores($gameId, $p));
         self::assertSame(3, $this->games->getState($gameId, $this->userIdForGamePlayer($p))['game']['puzzle_plays_made'], "only the solver's own plays are counted");
     }
 
-    /** Playing Triumph first instead leaves Patience worth 1 next round: 10-10, a tie, and a tie goes to the opponent. */
-    public function testCalculatedLossTriumphFirstTiesTheSecondRound(): void
+    /**
+     * Playing Patience alone and keeping the rest means Intimidation takes two
+     * cards: giving up Insecurity and Ambition and playing Triumph ties 19-19,
+     * and a tie goes to the opponent.
+     */
+    public function testCalculatedLossPatienceAloneTiesTheSecondRound(): void
     {
         ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('calculated-loss');
 
-        $this->play($gameId, $p, $this->instanceId($gameId, 104, 'hand'));
-        $this->games->advanceAutomatedTurns($gameId);
-        $this->revealToIntimidation($gameId, $p, 53);
-        $this->play($gameId, $p, $this->instanceId($gameId, 45, 'hand'));
         $this->play($gameId, $p, $this->instanceId($gameId, 21, 'hand'));
+        $this->games->advanceAutomatedTurns($gameId);
+        $this->revealToIntimidation($gameId, $p, [45, 53]);
+        $this->play($gameId, $p, $this->instanceId($gameId, 104, 'hand'));
         $this->games->advanceAutomatedTurns($gameId);
 
         $this->assertGameFailed($gameId);
-        self::assertSame(['solver' => 10, 'opponent' => 10], $this->lastRoundScores($gameId, $p));
+        self::assertSame(['solver' => 19, 'opponent' => 19], $this->lastRoundScores($gameId, $p));
         self::assertTrue($this->games->getState($gameId, $this->userIdForGamePlayer($p))['game']['puzzle_failed']);
     }
 
-    /** Giving up Insecurity instead of Ambition hands the opponent a color they lacked: Celebration reads 7 and they win. */
+    /** Giving up Insecurity instead of Ambition leaves you three colors, not four: Celebration reads 3 and you lose 14-17. */
     public function testCalculatedLossGivingUpInsecurityLoses(): void
     {
         ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('calculated-loss');
@@ -2621,9 +2634,10 @@ final class PuzzleContentTest extends TestCase
         $this->play($gameId, $p, $this->instanceId($gameId, 53, 'hand'), ['discard_card_id' => $this->instanceId($gameId, 104, 'hand')]);
         $this->play($gameId, $p, $this->instanceId($gameId, 21, 'hand'));
         $this->games->advanceAutomatedTurns($gameId);
-        $this->revealToIntimidation($gameId, $p, 45);
+        $this->revealToIntimidation($gameId, $p, [45]);
 
         $this->assertGameFailed($gameId);
+        self::assertSame(['solver' => 14, 'opponent' => 17], $this->lastRoundScores($gameId, $p));
     }
 
     /** A solve is never marked failed, and puzzle_failed is false while an attempt is open. */
