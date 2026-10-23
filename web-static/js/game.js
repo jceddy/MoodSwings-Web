@@ -374,6 +374,8 @@
         const discordStatusText = document.getElementById('discord-status-text');
         const discordConnectLink = document.getElementById('discord-connect-link');
         const discordDisconnectButton = document.getElementById('discord-disconnect-button');
+        const notifyDiscordLabel = document.getElementById('notify-discord-label');
+        const notifyDiscordCheckbox = document.getElementById('notify-discord-checkbox');
 
         async function refreshDiscordStatus() {
             const { ok, body } = await getDiscordStatus();
@@ -381,7 +383,25 @@
             discordStatusText.textContent = linked ? `connected as ${body.discord_username}` : 'not connected';
             discordConnectLink.hidden = linked;
             discordDisconnectButton.hidden = !linked;
+            notifyDiscordLabel.hidden = !linked;
+            if (linked) {
+                const prefs = await getNotificationPreferences();
+                if (prefs.ok) {
+                    notifyDiscordCheckbox.checked = prefs.body.preferences.notify_discord;
+                }
+            }
         }
+
+        // Independent of browser push being supported/subscribed, so it
+        // saves on its own -- POST /notifications/preferences defaults every
+        // omitted flag, so this re-sends the full set it just loaded rather
+        // than only notify_discord.
+        notifyDiscordCheckbox.addEventListener('change', async () => {
+            const prefs = await getNotificationPreferences();
+            if (prefs.ok) {
+                await saveNotificationPreferences({ ...prefs.body.preferences, notify_discord: notifyDiscordCheckbox.checked });
+            }
+        });
 
         discordDisconnectButton.addEventListener('click', async () => {
             await disconnectDiscord();
