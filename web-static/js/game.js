@@ -6140,7 +6140,17 @@
         img.alt = card.name + '. ' + (card.rules_text || 'No ability.');
         button.appendChild(img);
 
-        if (card.value !== card.base_value) {
+        // A card rotated 180deg onto its alternate value (see
+        // card-thumb--value-locked below) already shows that number printed
+        // on the art itself, so repeating it in a badge would only cover
+        // the art -- skipped, unless a chaos delta (which has its own badge
+        // and makes the shown value differ from the printed one) applies.
+        const showingPrintedAltValue = (card.value_locked || card.alt_value_active)
+            && card.alt_value !== null && card.alt_value !== undefined
+            && card.value === card.alt_value
+            && !card.chaos_value_delta;
+
+        if (card.value !== card.base_value && !showingPrintedAltValue) {
             const valueBadge = document.createElement('span');
             valueBadge.className = 'card-thumb__badge card-thumb__badge--value';
             valueBadge.textContent = card.value;
