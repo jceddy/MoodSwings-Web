@@ -16,6 +16,7 @@ namespace MoodSwings.UI
         private UpdatePrompt _updates;
         private bool _updatesChecked;
         private TourOverlay _tour;
+        private readonly WindowSizeKeeper _windowSize = new WindowSizeKeeper();
 
         /// <summary>The welcome tour's overlay.</summary>
         public TourOverlay Tour => _tour;
@@ -290,6 +291,16 @@ namespace MoodSwings.UI
 
             // Escape on desktop; the system Back button on Android (which has no keyboard to report it as Escape).
             _tour.Tick();
+
+            // A desktop window can be resized by dragging its edges (when it isn't full screen); not below what the screens fit in.
+            if (AppExit.CanToggleFullscreen && !Application.isEditor)
+            {
+                var size = _windowSize.Check(Screen.width, Screen.height, Screen.fullScreen, Time.unscaledTime);
+                if (size.HasValue)
+                {
+                    Screen.SetResolution(size.Value.x, size.Value.y, FullScreenMode.Windowed);
+                }
+            }
             if (KeyInput.EscapePressed || AndroidBack.Consume())
             {
                 if (_tour.Dismiss() || _updates.Dismiss())

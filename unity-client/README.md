@@ -662,7 +662,9 @@ graphics for the screenshots, so omit `-nographics` there.
   system's `security` tool), like DPAPI on Windows. That part only runs on a Mac and **has not been run on one yet**;
   if the Keychain can't be used, the app simply doesn't remember the login.
 - No push notifications on the Mac (as on Windows). Cmd+Q quits; **Option+Enter** switches between full screen and a
-  window (macOS keeps F11 for itself), and so does the green window button.
+  window (macOS keeps F11 for itself), and so does the green window button. When it is a window it can be resized by
+  dragging its edges (`PlayerSettings.resizableWindow`, kept on by `ProjectSettingsEnforcer`); the screens scale to fit, and
+  `WindowSizeKeeper` puts a window dragged below 960 x 540 back to that once it stops moving, since Unity has no minimum size.
 
 ## Android
 
