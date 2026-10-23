@@ -519,7 +519,7 @@ this mood" trigger such as Dignity or Delight has locked in its alt value),
 or because its `alt_value_active` flag is true (a continuously-recomputed
 "while in play" card such as Enjoyment or Discipline currently has its
 condition met, and so turns back upright when it stops holding) -- see
-both flags in `php-app/README.md`. Both classes
+both flags in `php-app/README.md`. While the value shown equals the card's printed `alt_value` (and no chaos delta applies), the upper-left value badge is omitted -- the rotated art already prints that number. Both classes
 can apply at once (a suppressed, value-locked mood), for which a third
 CSS rule (`.card-thumb--suppressed.card-thumb--value-locked`) rotates
 270 degrees rather than letting the two `transform`s silently clobber
