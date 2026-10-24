@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using MoodSwings.Core;
 using UnityEngine;
 using UnityEngine.UI;
@@ -9,6 +10,8 @@ namespace MoodSwings.UI
     /// <summary>
     /// Draws the welcome tour over the screen it is about: the screen dimmed, with a frame around the button a step is
     /// about, and a card with what it says and Back / Next / Skip. Takes every tap while it is up. Back or Escape skips.
+    /// A step of the sample game puts the table (<see cref="SampleTable"/>) at the left instead, with frames round the things
+    /// it is talking about, and the card at the right.
     /// </summary>
     public sealed class TourOverlay
     {
@@ -17,24 +20,31 @@ namespace MoodSwings.UI
         private const float SideWidth = 500f;   // the card beside a highlighted button, at most
         private const float MinSideWidth = 380f;
         private const float CenterWidth = 1000f;
+        private const float SampleCardWidth = 620f;
+        private const float Margin = 40f;
         private const float DiagramWidth = 640f;
         private const float DiagramHeight = 330f;
+        private const int MaxFrames = 6;        // boxes at once: the sample game points at up to this many things
 
         private readonly TourFlow _flow;
         private readonly UiTheme _theme;
         private readonly Func<string, RectTransform> _targets;
         private readonly RectTransform _root;
         private readonly Image[] _dim = new Image[4];
-        private readonly Image[] _frame = new Image[4];
+        private readonly Image[] _frame = new Image[MaxFrames * 4];
+        private readonly SampleTable _table;
         private readonly RectTransform _card;
         private readonly Text _counter;
         private readonly Text _title;
         private readonly Text _body;
+        private readonly Text _notes;
         private readonly GameObject _diagram;
-        private readonly List<Image> _dots = new List<Image>();
+        private readonly RectTransform _progressFill;
         private readonly Button _back;
         private readonly Button _next;
         private readonly Text _nextLabel;
+        private readonly Button _skipSection;
+        private readonly Text _skipSectionLabel;
         private readonly Button _skip;
 
         /// <param name="targets">Finds the button a step points at (by the step's Target), or null when it isn't on screen.</param>
@@ -56,9 +66,13 @@ namespace MoodSwings.UI
                 _dim[i] = Piece("Dim " + i, new Color(0f, 0f, 0f, 0.74f));
             }
 
+            // Above the dimming, under the frames and the card.
+            _table = new SampleTable(_root, theme);
+
             for (var i = 0; i < _frame.Length; i++)
             {
                 _frame[i] = Piece("Frame " + i, theme.accent);
+                _frame[i].gameObject.SetActive(false);
             }
 
             _card = UiFactory.Create("Tour card", _root);
@@ -88,17 +102,21 @@ namespace MoodSwings.UI
             _diagram.SetActive(false);
             _body = UiFactory.Label(_card, string.Empty, 28, theme.textPrimary, TextAnchor.UpperLeft);
 
-            var dots = UiFactory.Row(_card, "Progress", 8f, TextAnchor.MiddleLeft);
-            dots.childForceExpandWidth = false;
-            UiFactory.Size(dots.gameObject, height: 20f);
-            for (var i = 0; i < _flow.Count; i++)
-            {
-                var dot = UiFactory.Create("Dot " + i, dots.transform);
-                UiFactory.Size(dot.gameObject, 14f, 14f);
-                var image = dot.gameObject.AddComponent<Image>();
-                image.raycastTarget = false;
-                _dots.Add(image);
-            }
+            // The rules a step brings up, apart from what it says.
+            _notes = UiFactory.Label(_card, string.Empty, 26, theme.accent, TextAnchor.UpperLeft, FontStyle.Bold);
+
+            var bar = UiFactory.Create("Progress", _card);
+            UiFactory.Size(bar.gameObject, height: 8f);
+            var barBack = bar.gameObject.AddComponent<Image>();
+            barBack.color = theme.faint;
+            barBack.raycastTarget = false;
+            _progressFill = UiFactory.Create("Fill", bar);
+            _progressFill.anchorMin = Vector2.zero;
+            _progressFill.anchorMax = new Vector2(0f, 1f);
+            _progressFill.offsetMin = _progressFill.offsetMax = Vector2.zero;
+            var fill = _progressFill.gameObject.AddComponent<Image>();
+            fill.color = theme.accent;
+            fill.raycastTarget = false;
 
             var buttons = UiFactory.Row(_card, "Buttons", 16f, TextAnchor.MiddleCenter);
             UiFactory.Size(buttons.gameObject, height: UiFactory.ControlHeight);
@@ -109,6 +127,11 @@ namespace MoodSwings.UI
             _next.gameObject.name = "Tour next";
             UiFactory.Size(_next.gameObject, 240f);
             _nextLabel = _next.GetComponentInChildren<Text>();
+
+            // A second way on, where a step has one: past the whole sample game.
+            _skipSection = UiFactory.Button(_card, "Skip", theme, () => _flow.JumpTo(_flow.Current?.SkipTo), primary: false);
+            _skipSection.gameObject.name = "Tour skip section";
+            _skipSectionLabel = _skipSection.GetComponentInChildren<Text>();
 
             _skip = UiFactory.Link(_card, "Skip the tour", theme, () => _flow.Skip());
             _skip.gameObject.name = "Tour skip";
@@ -124,6 +147,8 @@ namespace MoodSwings.UI
 
         public string BodyText => _body.text;
 
+        public string NotesText => _notes.gameObject.activeSelf ? _notes.text : string.Empty;
+
         public string CounterText => _counter.text;
 
         public bool ShowsDiagram => _diagram.activeSelf;
@@ -132,24 +157,45 @@ namespace MoodSwings.UI
 
         public string NextLabel => _nextLabel.text;
 
-        /// <summary>The frame around the highlighted button, in world space; null when the step points at nothing.</summary>
+        public bool OffersSkipSection => _skipSection.gameObject.activeSelf;
+
+        /// <summary>The words on the Next button fit on one line, with room to spare at its sides.</summary>
+        public bool NextLabelFitsOnOneLine => _nextLabel.preferredWidth <= _nextLabel.rectTransform.rect.width - 20f;
+
+        /// <summary>The table of a sample game step.</summary>
+        public SampleTable Table => _table;
+
+        /// <summary>The frames round what a step points at, as one box in world space (null when it points at nothing).</summary>
         public Rect? HighlightRect
         {
             get
             {
-                if (!_frame[0].gameObject.activeSelf)
+                var any = false;
+                var min = new Vector2(float.MaxValue, float.MaxValue);
+                var max = new Vector2(float.MinValue, float.MinValue);
+                var corners = new Vector3[4];
+                foreach (var piece in _frame)
                 {
-                    return null;
+                    if (!piece.gameObject.activeSelf)
+                    {
+                        continue;
+                    }
+
+                    any = true;
+                    piece.rectTransform.GetWorldCorners(corners);
+                    foreach (var corner in corners)
+                    {
+                        min = Vector2.Min(min, corner);
+                        max = Vector2.Max(max, corner);
+                    }
                 }
 
-                var corners = new Vector3[4];
-                _frame[0].rectTransform.GetWorldCorners(corners);
-                var topLeft = corners[1];
-                _frame[3].rectTransform.GetWorldCorners(corners);
-                var bottomRight = corners[3];
-                return Rect.MinMaxRect(topLeft.x, bottomRight.y, bottomRight.x, topLeft.y);
+                return any ? Rect.MinMaxRect(min.x, min.y, max.x, max.y) : (Rect?)null;
             }
         }
+
+        /// <summary>How many things are framed at the moment.</summary>
+        public int FramedCount => _frame.Count(f => f.gameObject.activeSelf) / 4;
 
         /// <summary>The card, so a test can see it sits clear of the highlighted button.</summary>
         public RectTransform Card => _card;
@@ -190,6 +236,7 @@ namespace MoodSwings.UI
             if (!_flow.IsActive)
             {
                 _root.gameObject.SetActive(false);
+                _table.Hide();
                 return;
             }
 
@@ -198,24 +245,43 @@ namespace MoodSwings.UI
             _root.SetAsLastSibling();
             _root.gameObject.SetActive(true);
 
-            _counter.text = $"Step {_flow.Index + 1} of {_flow.Count}";
+            var sample = step.Sample != null;
+            _counter.text = sample
+                ? $"Sample game: move {SampleGame.NumberOf(step.Sample)} of {SampleGame.Steps.Count}"
+                : $"Step {_flow.Index + 1} of {_flow.Count}";
             _title.text = step.Title;
             _body.text = step.Body;
+            _body.fontSize = sample ? 26 : 28;
+            _notes.text = string.Join("\n", step.Notes.Select(n => "Rule: " + n));
+            _notes.gameObject.SetActive(step.Notes.Count > 0);
             _diagram.SetActive(step.TableDiagram);
             _back.gameObject.SetActive(!_flow.IsFirst);
-            _nextLabel.text = _flow.IsLast ? "Done" : _flow.IsFirst ? "Start the tour" : "Next";
-            UiFactory.Size(_next.gameObject, _flow.IsFirst ? 300f : 240f);
-            _skip.gameObject.SetActive(!_flow.IsLast);
-            for (var i = 0; i < _dots.Count; i++)
+            _nextLabel.text = step.NextLabel ?? (_flow.IsLast ? "Done" : _flow.IsFirst ? "Start the tour" : "Next");
+            // As wide as its words need (a longer label would otherwise wrap), and never narrower than a plain "Next".
+            UiFactory.Size(_next.gameObject, Mathf.Max(240f, _nextLabel.preferredWidth + 72f));
+            _skipSection.gameObject.SetActive(step.SkipTo != null);
+            if (step.SkipTo != null)
             {
-                _dots[i].color = i == _flow.Index ? _theme.accent : _theme.faint;
+                _skipSectionLabel.text = step.SkipLabel ?? "Skip";
+            }
+
+            _skip.gameObject.SetActive(!_flow.IsLast);
+            _progressFill.anchorMax = new Vector2((_flow.Index + 1) / (float)_flow.Count, 1f);
+
+            if (sample)
+            {
+                _table.Show(step.Sample);
+            }
+            else
+            {
+                _table.Hide();
             }
 
             Place();
         }
 
         // The dimmed screen with a hole where the button is, a frame around the hole, and the card beside it (or in the
-        // middle when the step is about the whole app).
+        // middle when the step is about the whole app). A sample game step is the table and the card side by side.
         private void Place()
         {
             var step = _flow.Current;
@@ -226,6 +292,12 @@ namespace MoodSwings.UI
 
             var area = _root.rect;
             var half = new Vector2(area.width * 0.5f, area.height * 0.5f);
+            if (step.Sample != null)
+            {
+                PlaceSample(step, area, half);
+                return;
+            }
+
             var target = step.Target != null ? _targets?.Invoke(step.Target) : null;
             var hasTarget = target != null && target.gameObject.activeInHierarchy;
 
@@ -237,11 +309,7 @@ namespace MoodSwings.UI
                     _dim[i].gameObject.SetActive(false);
                 }
 
-                foreach (var frame in _frame)
-                {
-                    frame.gameObject.SetActive(false);
-                }
-
+                HideFramesFrom(0);
                 var width = step.TableDiagram ? CenterWidth + 100f : CenterWidth;
                 _card.sizeDelta = new Vector2(width, 0f);
                 _card.anchoredPosition = Vector2.zero;
@@ -262,10 +330,8 @@ namespace MoodSwings.UI
             Set(_dim[1], -half.x, y1, half.x, half.y);           // above
             Set(_dim[2], -half.x, y0, x0, y1);                   // left
             Set(_dim[3], x1, y0, half.x, y1);                    // right
-            Set(_frame[0], x0 - FrameThickness, y1, x1 + FrameThickness, y1 + FrameThickness);   // top
-            Set(_frame[1], x0 - FrameThickness, y0 - FrameThickness, x1 + FrameThickness, y0);   // bottom
-            Set(_frame[2], x0 - FrameThickness, y0, x0, y1);                                      // left
-            Set(_frame[3], x1, y0, x1 + FrameThickness, y1);                                      // right
+            SetFrame(0, x0, y0, x1, y1);
+            HideFramesFrom(1);
 
             // The card goes on whichever side of the button has more room, at the edge of the screen, and is as wide as
             // that room allows (a wide row in Settings leaves less at the sides than a button on the main menu does).
@@ -277,6 +343,68 @@ namespace MoodSwings.UI
             var cardX = onRight ? half.x - 40f - cardWidth * 0.5f : -(half.x - 40f - cardWidth * 0.5f);
             var limit = Mathf.Max(0f, half.y - 340f);
             _card.anchoredPosition = new Vector2(cardX, Mathf.Clamp((y0 + y1) * 0.5f, -limit, limit));
+        }
+
+        // The table at the left, scaled down if the window is narrow; the card at the right; a frame round each thing the step
+        // is about.
+        private void PlaceSample(TourStep step, Rect area, Vector2 half)
+        {
+            Set(_dim[0], -half.x, -half.y, half.x, half.y);
+            for (var i = 1; i < _dim.Length; i++)
+            {
+                _dim[i].gameObject.SetActive(false);
+            }
+
+            _card.sizeDelta = new Vector2(SampleCardWidth, 0f);
+            _card.anchoredPosition = new Vector2(half.x - Margin - SampleCardWidth * 0.5f, 0f);
+
+            var availableWidth = Mathf.Max(400f, area.width - Margin - SampleCardWidth - Margin - Margin);
+            var availableHeight = area.height - 2f * Margin;
+            var scale = Mathf.Min(1f, availableWidth / SampleTable.Width, availableHeight / SampleTable.Height);
+            var table = _table.Root;
+            table.localScale = new Vector3(scale, scale, 1f);
+            table.anchoredPosition = new Vector2(-half.x + Margin + SampleTable.Width * scale * 0.5f, 0f);
+
+            var boxes = 0;
+            var corners = new Vector3[4];
+            foreach (var key in step.Sample.Focus)
+            {
+                if (boxes >= MaxFrames || !_table.Targets.TryGetValue(key, out var target) || target == null)
+                {
+                    continue;
+                }
+
+                target.GetWorldCorners(corners);
+                var low = (Vector2)_root.InverseTransformPoint(corners[0]);
+                var high = (Vector2)_root.InverseTransformPoint(corners[2]);
+                // Not laid out yet (the table was just built): nothing to frame until it is.
+                if (high.x - low.x < 4f && high.y - low.y < 4f)
+                {
+                    continue;
+                }
+
+                SetFrame(boxes++, low.x - 6f, low.y - 6f, high.x + 6f, high.y + 6f);
+            }
+
+            HideFramesFrom(boxes);
+        }
+
+        // Four thin bars round a box, in the overlay's centered coordinates.
+        private void SetFrame(int box, float x0, float y0, float x1, float y1)
+        {
+            var first = box * 4;
+            Set(_frame[first], x0 - FrameThickness, y1, x1 + FrameThickness, y1 + FrameThickness);        // top
+            Set(_frame[first + 1], x0 - FrameThickness, y0 - FrameThickness, x1 + FrameThickness, y0);    // bottom
+            Set(_frame[first + 2], x0 - FrameThickness, y0, x0, y1);                                       // left
+            Set(_frame[first + 3], x1, y0, x1 + FrameThickness, y1);                                       // right
+        }
+
+        private void HideFramesFrom(int box)
+        {
+            for (var i = box * 4; i < _frame.Length; i++)
+            {
+                _frame[i].gameObject.SetActive(false);
+            }
         }
 
         // A rectangle between two corners, in the overlay's centered coordinates.

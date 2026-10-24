@@ -239,7 +239,13 @@ under "Playing a game" below.
   round won stacked beside it (dim ones for the rounds still to win), a **1ST** tag on the
   box for whoever went first this round, then their name, and the Hurt Feelings card for
   whoever has it. It is lit when it is their turn. In a duel, where each player has their own
-  deck, its size shows too.
+  deck, its size shows too. A player who has unlocked an achievement has a **trophy beside
+  their name** in the colour of their best tier (Bronze, Silver, Gold, Platinum or Diamond,
+  the colours the web board uses; `highest_achievement_tier`); tapping it says which. On the
+  turn holder's scoreboard, "2 plays left" is underlined: tap it for a list of where those
+  plays come from ("Your normal turn", "An extra play from Charity" -- the server's
+  `round.play_grants`, as in the web board's expandable plays panel). Like the note itself,
+  the list is not there before the turn is acknowledged or once the game is over.
 - **The deck and discard** peek up from the bottom edge, the discard at the far left and the deck at the far right of the bottom edge, with your scoreboard
   and your hand between them, with a line above each: "Deck 30", "Discard 3" (and
   "play from it" when an effect makes a card in it playable). Tap the deck for its
@@ -263,7 +269,10 @@ under "Playing a game" below.
   panel from the left: **< Lobby**, **Resign**, and a **Log** tab (the recent events
   and any effects in force) and a **Chat** tab (the game's messages, with a box to
   answer). It opens on the chat when there is something unread, and the tab shows only
-  how many are unread ("Chat (2)"), not how many there have ever been. The client's
+  how many are unread ("Chat (2)"), not how many there have ever been. What has been read is remembered per chat, as the
+  newest message id read: a draft match shares one chat between its games (`draft_match_id`), so the next game of the
+  match carries on from what was read in the last instead of showing every old message as unread again
+  (`ChatThreads`; a game outside a match has a chat of its own, and a count remembered by an older version is converted). The client's
   version is in its lower left corner.
 
 - **Seating matches the web client exactly** (`BoardLayout`, from
@@ -280,7 +289,9 @@ under "Playing a game" below.
   (name, value, rules text) when not, so the board never depends on the art. The
   art prints a card's main value in its top-right corner, so when an effect has
   **changed** a mood's value, a chip is laid over that corner showing the current
-  one; an unchanged value gets no chip. (Cards in hand always have their printed
+  one; an unchanged value gets no chip, and neither does a mood turned onto its printed alternate value (below), whose
+  turned art already prints that number there (the web client's rule; not when a Chaos Draft adjustment has moved it).
+  (Cards in hand always have their printed
   value, so only moods in play get one; a stand-in card, which prints no value,
   always shows it.) The chip is placed by fractions of the card, so it stays over
   the printed value at every card size. A **suppressed** mood lies on its side
@@ -404,7 +415,9 @@ under "Playing a game" below.
   then **Attach**. Nobody can play or pass until everyone has attached theirs, and the banner says
   who is being waited for. A card carrying an effect has a **CHAOS** pill (coloured by the
   effect's rarity) and its detail and hover text give the effect and any change to its value. When a
-  repeating effect sets up a loop, a box offers to apply it up to a cap of times at once.
+  repeating effect sets up a loop, a box offers to apply it up to a cap of times at once. Like any question, the
+  offer can be set aside with **View board** to look at the table (the effect already chosen stays chosen), and
+  **Back to decision** brings it back.
 - **Building the deck** follows the last round: every card in your pool starts in your deck, tap
   one to take it out (or put it back), **Clear** / **Select all**, and **Submit deck** once it is
   within the size limits (and any rarity caps) -- the line under the cards says what's wrong. A
@@ -655,7 +668,9 @@ graphics for the screenshots, so omit `-nographics` there.
   system's `security` tool), like DPAPI on Windows. That part only runs on a Mac and **has not been run on one yet**;
   if the Keychain can't be used, the app simply doesn't remember the login.
 - No push notifications on the Mac (as on Windows). Cmd+Q quits; **Option+Enter** switches between full screen and a
-  window (macOS keeps F11 for itself), and so does the green window button.
+  window (macOS keeps F11 for itself), and so does the green window button. When it is a window it can be resized by
+  dragging its edges (`PlayerSettings.resizableWindow`, kept on by `ProjectSettingsEnforcer`); the screens scale to fit, and
+  `WindowSizeKeeper` puts a window dragged below 960 x 540 back to that once it stops moving, since Unity has no minimum size.
 
 ## Android
 
@@ -711,6 +726,8 @@ Python scripts in `tools/` (`pip install pillow` for the first):
   card as uncompressed RGBA32 (~3 MB instead of under 1 MB). Mipmaps are on
   (Kaiser filter, trilinear): cards are drawn at ~112 px from 744 px art, and
   without them the shrunken art is harsh, speckled noise.
+- `make_tour_cards.py` -- writes the cards the welcome tour's sample game uses (art key, color, values, rules) to
+  `Assets/Resources/Tour/sample-cards.json`, from the card catalog fixture.
 - `fetch_emoji.py` -- downloads the emoji the chat can draw (see Chat and emoji above) into `Assets/Resources/Emoji/`.
 - `publish_client.py` -- writes the update manifest for the builds (see Updates above) and, with `--upload`, publishes them.
 - `capture_fixtures.py` -- logs in to a server with a throwaway account
@@ -729,6 +746,18 @@ and frame them, then bring them back to the main menu for a picture of the table
 how to see the tour again. Each step has **Back** and **Next** (**Done** at the end), and **Skip the tour** is there at every step; Back
 or Escape (Android's Back button too) skips as well. Finishing and skipping both count as having seen it
 (`DeviceSettings.TourSeen`, per device), so it doesn't start by itself again.
+
+After the picture of the table the tour offers **a sample game**: a short game between two bots, MarkBot (you, along
+the bottom) and AriBot, played out one move at a time (23 of them, five rounds of a Traditional game with the Structure deck).
+Each move draws the table at the left -- both seats with their scoreboards (the score, a trophy for each round won, the
+cards in hand), the moods in play with their real art, and the shared discard pile -- with a frame round each thing the
+commentary is about, and the commentary at the right, with the rules it brings up ("Rule: The highest score wins the
+round."). The cards are drawn the way the board draws them, so a mood on its alternate value is upside down and a
+suppressed one lies on its side. The step before it has **Skip the sample game**, which goes on to what changes with more
+players; Back, Skip the tour and Escape work in the game as anywhere in the tour. The game is data, not a recording:
+`SampleGame` (Core) says what happens in each move and works every table out from the cards, so its scores are checked
+against the numbers in the commentary by a test; `SampleTable` (UI) draws it; the cards come from
+`Assets/Resources/Tour/sample-cards.json` (made by `tools/make_tour_cards.py` from the catalog fixture).
 
 **Settings > Welcome tour > Show the welcome tour** takes the player back to the main menu and runs it again. If an update is
 waiting, its box comes up after the tour, not on top of it. Signing out or being sent to another screen mid-tour ends it.

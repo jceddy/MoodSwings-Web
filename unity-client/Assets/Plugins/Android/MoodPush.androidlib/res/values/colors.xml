@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The tint of the notification icon when the notification is opened out: the blue of the card back's corner. -->
+    <color name="mood_notification_color">#1C84E8</color>
+</resources>

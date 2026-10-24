@@ -380,6 +380,66 @@ namespace MoodSwings.Tests
         }
 
         [Test]
+        public void TheListOfPlays_NamesWhereEachComesFrom_WhileTheNoteIsShown()
+        {
+            var state = BoardFixtures.Load(406); // an extra play from Ambition
+            var you = state.Players.First(p => p.GamePlayerId == state.You.GamePlayerId);
+            var other = state.Players.First(p => p.GamePlayerId != state.You.GamePlayerId);
+            state.Round.TurnPendingAcknowledgment = false;
+            state.Round.PlaysRemaining = 2;
+            state.Round.PlayGrants = new System.Collections.Generic.List<MoodSwings.Networking.PlayGrant>
+            {
+                new MoodSwings.Networking.PlayGrant { Description = "Your normal turn" },
+                new MoodSwings.Networking.PlayGrant { Description = " An extra play from Ambition ", SourceCardName = "Ambition" },
+                new MoodSwings.Networking.PlayGrant { Description = "" },
+            };
+
+            CollectionAssert.AreEqual(new[] { "Your normal turn", "An extra play from Ambition" }, BoardDisplay.PlayGrantLines(state, you));
+            Assert.IsEmpty(BoardDisplay.PlayGrantLines(state, other), "it is not their turn");
+
+            state.Round.TurnPendingAcknowledgment = true;
+            Assert.IsEmpty(BoardDisplay.PlayGrantLines(state, you), "nothing can be spent before the turn is acknowledged");
+
+            state.Round.TurnPendingAcknowledgment = false;
+            state.Round.PlayGrants = null;
+            Assert.IsEmpty(BoardDisplay.PlayGrantLines(state, you), "a server that does not say");
+        }
+
+        [Test]
+        public void ThePlayGrants_AreReadFromTheServersState()
+        {
+            var state = BoardFixtures.Load(406);
+
+            Assert.AreEqual(1, state.Round.PlayGrants.Count);
+            Assert.AreEqual("An extra play from Ambition", state.Round.PlayGrants[0].Description);
+            Assert.AreEqual("Ambition", state.Round.PlayGrants[0].SourceCardName);
+            Assert.AreEqual(14173, state.Round.PlayGrants[0].SourceCardId);
+        }
+
+        [Test]
+        public void TheAchievementTier_IsReadFromTheState_AndOnlyTheFiveKnownOnesCount()
+        {
+            var state = BoardFixtures.Load(406);
+
+            Assert.AreEqual("Gold", BoardDisplay.AchievementTier(state.Players[0]));
+            Assert.AreEqual("Bronze", BoardDisplay.AchievementTier(state.Players[1]));
+            Assert.IsNull(BoardDisplay.AchievementTier(state.Players[2]), "no unlocked achievements, no trophy");
+
+            var player = state.Players[0];
+            player.HighestAchievementTier = "diamond";
+            Assert.AreEqual("Diamond", BoardDisplay.AchievementTier(player));
+            player.HighestAchievementTier = "Mythic";
+            Assert.IsNull(BoardDisplay.AchievementTier(player));
+            player.HighestAchievementTier = "  ";
+            Assert.IsNull(BoardDisplay.AchievementTier(player));
+            Assert.IsNull(BoardDisplay.AchievementTierNote(player));
+
+            player.HighestAchievementTier = "Platinum";
+            Assert.AreEqual($"{player.Username}'s highest unlocked achievement tier: Platinum", BoardDisplay.AchievementTierNote(player));
+            CollectionAssert.AreEqual(new[] { "Bronze", "Silver", "Gold", "Platinum", "Diamond" }, BoardDisplay.AchievementTiers);
+        }
+
+        [Test]
         public void TheScoreboard_SaysNothingAboutPlays_BeforeTheTurnIsAcknowledged_OrWhenTheGameIsOver()
         {
             var state = BoardFixtures.Load(406);

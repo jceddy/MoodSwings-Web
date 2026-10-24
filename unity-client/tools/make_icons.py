@@ -12,6 +12,8 @@ Writes:
     android-background.png / android-foreground.png   the adaptive icon's two layers (432x432; the
                           foreground keeps its art inside the central 66% so any mask shape works)
     MOOD.ico              multi-size Windows icon (used by the installer and the .exe)
+    Assets/Plugins/Android/MoodPush.androidlib/res/drawable-*/ic_stat_mood.png   the small icon on Android's notification
+                          bar: a diamond with the M cut out of it (see notification_icon())
 
 To use real art instead, replace icon-1024.png (and the two android-* layers) with your own and run
 only the .ico step: python tools/make_icons.py --from-icon
@@ -25,6 +27,10 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 OUT = Path(__file__).resolve().parent.parent / "Assets" / "Icons"
+ANDROID_RES = Path(__file__).resolve().parent.parent / "Assets" / "Plugins" / "Android" / "MoodPush.androidlib" / "res"
+
+# The notification small icon at each screen density: 24dp square.
+NOTIFICATION_ICON_SIZES = {"mdpi": 24, "hdpi": 36, "xhdpi": 48, "xxhdpi": 72, "xxxhdpi": 96}
 
 BLACK = (12, 12, 14, 255)
 WHITE = (250, 249, 245, 255)
@@ -144,8 +150,42 @@ def diamond_with_m(size, d, with_corners_behind=None):
     return layer
 
 
+def notification_icon(size):
+    """
+    The small icon for Android's notification bar. Android draws only the shape of such an icon -- every pixel with any alpha
+    becomes white, whatever its color -- so the card back would be just a solid square or circle. This is a diamond with the M
+    cut out of it as transparent, which gives it a profile of its own among the other apps' circles. The M is drawn larger and
+    plainer than on the card (no wobble, no ink splatter, no flourish): at 24 pixels the fine detail would only be noise.
+    """
+    s = size * 4
+    c = s / 2
+    d = 0.47 * s
+    img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.polygon([(c - d, c), (c, c - d), (c + d, c), (c, c + d)], fill=(255, 255, 255, 255))
+
+    # The M, in the same shape as on the card back, scaled in so its strokes leave white around its ends; erased, not painted.
+    m = [(-0.44, 0.40), (-0.47, -0.36), (0.0, 0.10), (0.47, -0.36), (0.44, 0.40)]
+    pts = []
+    for (ax, ay), (bx, by) in zip(m, m[1:]):
+        for i in range(0, 80):
+            t = i / 80
+            pts.append((c + (ax + (bx - ax) * t) * d * 0.80, c + (ay + (by - ay) * t) * d * 0.80))
+    pts.append((c + m[-1][0] * d * 0.80, c + m[-1][1] * d * 0.80))
+    stroke(draw, pts, 0.20 * d, (0, 0, 0, 0))
+    return img.resize((size, size), Image.LANCZOS)
+
+
+def make_notification_icons() -> None:
+    for density, size in NOTIFICATION_ICON_SIZES.items():
+        folder = ANDROID_RES / f"drawable-{density}"
+        folder.mkdir(parents=True, exist_ok=True)
+        notification_icon(size).save(folder / "ic_stat_mood.png")
+
+
 def make_icons() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
+    make_notification_icons()
 
     # The full icon: the whole card back, the diamond filling most of it.
     full = corners(1024, 0.40)

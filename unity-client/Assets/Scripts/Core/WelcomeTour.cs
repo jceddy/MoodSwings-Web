@@ -29,13 +29,31 @@ namespace MoodSwings.Core
 
         /// <summary>Show a little picture of the table with it.</summary>
         public bool TableDiagram { get; set; }
+
+        /// <summary>Rules this step brings up, one short line each, shown apart from what it says.</summary>
+        public List<string> Notes { get; set; } = new List<string>();
+
+        /// <summary>A step of the sample game: the table to draw beside what it says.</summary>
+        public SampleStep Sample { get; set; }
+
+        /// <summary>Gives the step a second button, labelled <see cref="SkipLabel"/>, that jumps to the step with this id.</summary>
+        public string SkipTo { get; set; }
+
+        public string SkipLabel { get; set; }
+
+        /// <summary>What Next says on this step, when it is not just "Next".</summary>
+        public string NextLabel { get; set; }
     }
 
     /// <summary>What the welcome tour says, in order. The targets are the main menu's buttons (see HomeScreen.TourTarget).</summary>
     public static class TourSteps
     {
-        public static readonly IReadOnlyList<TourStep> All = new List<TourStep>
+        public static readonly IReadOnlyList<TourStep> All = Build();
+
+        private static List<TourStep> Build()
         {
+            var steps = new List<TourStep>
+            {
             new TourStep
             {
                 Id = "welcome",
@@ -133,14 +151,53 @@ namespace MoodSwings.Core
                     + "and Pass ends your turn. Tap any card to read it up close. The menu, top left, has the game log, "
                     + "chat with quick messages and emoji, and Resign.",
             },
-            new TourStep
+            };
+
+            // The sample game: an introduction, then one step for each move, then what changes with more players.
+            steps.Add(new TourStep
+            {
+                Id = "sample-intro",
+                Title = "A sample game",
+                Body = "Here is a short game between two bots, MarkBot (you) and AriBot, played one move at a time. It shows how "
+                    + "the cards, the scoreboards and the discard pile work, how rounds are won, and what the dice on a card mean. "
+                    + "It takes a few minutes, and you can skip it.",
+                NextLabel = "Show me a sample game",
+                SkipTo = "more-players",
+                SkipLabel = "Skip the sample game",
+            });
+
+            var number = 0;
+            foreach (var move in SampleGame.Steps)
+            {
+                number++;
+                steps.Add(new TourStep
+                {
+                    Id = "sample-" + number,
+                    Title = move.Title,
+                    Body = move.Commentary,
+                    Notes = move.Notes,
+                    Sample = move,
+                });
+            }
+
+            steps.Add(new TourStep
+            {
+                Id = "more-players",
+                Title = "Playing with more people",
+                Body = "More players make a longer game. Ties go to the player who goes earlier. The player with the lowest score "
+                    + "at the end of a round gets Hurt Feelings (if players tie for the lowest, the last of them in turn order "
+                    + "gets it), and a player with Hurt Feelings gets an extra play that round.",
+            });
+
+            steps.Add(new TourStep
             {
                 Id = "done",
                 Title = "You're ready",
                 Body = "That's everything. Find a game under Play, or try a puzzle to get the feel of the cards. "
                     + "To see this tour again, open Settings and choose Welcome tour.",
-            },
-        };
+            });
+            return steps;
+        }
     }
 
     /// <summary>
@@ -218,6 +275,25 @@ namespace MoodSwings.Core
             if (IsActive)
             {
                 Finish(completed: false);
+            }
+        }
+
+        /// <summary>Goes straight to the step with this id (the sample game's "skip" button).</summary>
+        public void JumpTo(string id)
+        {
+            if (!IsActive)
+            {
+                return;
+            }
+
+            for (var i = 0; i < Count; i++)
+            {
+                if (TourSteps.All[i].Id == id)
+                {
+                    Index = i;
+                    Changed?.Invoke();
+                    return;
+                }
             }
         }
 

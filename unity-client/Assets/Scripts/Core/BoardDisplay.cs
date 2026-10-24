@@ -213,6 +213,53 @@ namespace MoodSwings.Core
         }
 
         /// <summary>
+        /// The lines of the list behind the "N plays left" note: one per play the turn holder still has, saying where it comes
+        /// from. Empty when the note is not shown, or the server did not say.
+        /// </summary>
+        public static IReadOnlyList<string> PlayGrantLines(GameState state, BoardPlayer player)
+        {
+            if (PlaysLeftNote(state, player) == null || state.Round.PlayGrants == null)
+            {
+                return new List<string>();
+            }
+
+            return state.Round.PlayGrants
+                .Where(g => !string.IsNullOrWhiteSpace(g.Description))
+                .Select(g => g.Description.Trim())
+                .ToList();
+        }
+
+        /// <summary>The highest achievement tier a player has unlocked, spelled "Bronze" to "Diamond", or null for none (or one we don't know).</summary>
+        public static string AchievementTier(BoardPlayer player)
+        {
+            var tier = player?.HighestAchievementTier;
+            if (string.IsNullOrWhiteSpace(tier))
+            {
+                return null;
+            }
+
+            foreach (var known in AchievementTiers)
+            {
+                if (string.Equals(known, tier.Trim(), System.StringComparison.OrdinalIgnoreCase))
+                {
+                    return known;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>The tiers, lowest first.</summary>
+        public static readonly string[] AchievementTiers = { "Bronze", "Silver", "Gold", "Platinum", "Diamond" };
+
+        /// <summary>What the trophy beside a player's name says when it is tapped.</summary>
+        public static string AchievementTierNote(BoardPlayer player)
+        {
+            var tier = AchievementTier(player);
+            return tier == null ? null : $"{player.Username}'s highest unlocked achievement tier: {tier}";
+        }
+
+        /// <summary>
         /// What a card's close-up says about its alternate value when that is the one in effect (the table shows such a mood
         /// turned around), or null.
         /// </summary>

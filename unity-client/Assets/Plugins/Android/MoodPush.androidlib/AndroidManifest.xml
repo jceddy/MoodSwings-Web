@@ -2,4 +2,15 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- Android 13+ asks before an app may show notifications. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application>
+        <!-- What a push notification shows on the notification bar: a diamond with the M cut out of it (res/drawable-*/ic_stat_mood.png,
+             made by tools/make_icons.py), instead of the launcher icon, which Android would flatten to a plain circle or square. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_stat_mood" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_color"
+            android:resource="@color/mood_notification_color" />
+    </application>
 </manifest>

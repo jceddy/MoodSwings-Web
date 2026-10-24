@@ -73,6 +73,56 @@ namespace MoodSwings.Tests
         }
 
         [Test]
+        public void ACardTurnedOntoItsPrintedAlternateValue_NeedsNoBadgeForIt()
+        {
+            // Worth exactly the alternate value, which is printed on the turned art itself.
+            var live = Mood();
+            live.WhileInPlayAltValueActive = true;
+            live.Value = 5;
+            Assert.IsTrue(live.ShowsPrintedAltValue);
+
+            var locked = Mood();
+            locked.ValueLocked = true;
+            locked.Value = 5;
+            Assert.IsTrue(locked.ShowsPrintedAltValue);
+        }
+
+        [Test]
+        public void AValueThatIsNotThePrintedAlternate_StillNeedsItsBadge()
+        {
+            // Turned, but worth something else: a chaos adjustment on top of it.
+            var adjusted = Mood();
+            adjusted.WhileInPlayAltValueActive = true;
+            adjusted.Value = 7;
+            adjusted.ChaosValueDelta = 2;
+            Assert.IsFalse(adjusted.ShowsPrintedAltValue);
+
+            // Turned, and the delta nets out to the alternate value, but it is still a chaos adjustment, which has its own badge.
+            var netted = Mood();
+            netted.WhileInPlayAltValueActive = true;
+            netted.Value = 5;
+            netted.ChaosValueDelta = 1;
+            Assert.IsFalse(netted.ShowsPrintedAltValue);
+
+            // Locked in at a value that is not the printed alternate.
+            var odd = Mood();
+            odd.ValueLocked = true;
+            odd.Value = 4;
+            Assert.IsFalse(odd.ShowsPrintedAltValue);
+
+            // Not turned at all.
+            var plain = Mood();
+            plain.Value = 5;
+            Assert.IsFalse(plain.ShowsPrintedAltValue);
+
+            // No alternate value to show.
+            var none = Mood();
+            none.AltValue = null;
+            none.ValueLocked = true;
+            Assert.IsFalse(none.ShowsPrintedAltValue);
+        }
+
+        [Test]
         public void TheCloseUp_SaysSoWhenItIsTurnedAround()
         {
             var live = Mood();

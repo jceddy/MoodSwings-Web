@@ -56,6 +56,7 @@ namespace MoodSwings.Tests
             StringAssert.Contains("skip it at any time", Tour.BodyText);
             Assert.IsFalse(Tour.CanGoBack, "nothing before the first step");
             Assert.AreEqual("Start the tour", Tour.NextLabel);
+            Assert.IsTrue(Tour.NextLabelFitsOnOneLine);
             Assert.IsNull(Tour.HighlightRect, "the welcome points at nothing");
             Assert.IsNotNull(PhaseFiveSceneTests.ButtonNamed("Tour skip"), "and it can be skipped from the first step");
             ScreenshotHelper.Capture("tour-welcome");
@@ -88,9 +89,9 @@ namespace MoodSwings.Tests
             {
                 yield return Next();
                 var current = TourSteps.All[step];
-                if (current.Screen != TourScreen.Home)
+                if (current.Screen != TourScreen.Home || current.Sample != null)
                 {
-                    continue; // the switches in Settings have a test of their own
+                    continue; // the switches in Settings and the sample game's moves have tests of their own
                 }
 
                 Assert.AreEqual(current.Title, Tour.TitleText);
@@ -329,6 +330,213 @@ namespace MoodSwings.Tests
             Assert.AreEqual("Welcome to MOOD", Tour.TitleText);
             Assert.AreEqual($"Step 1 of {TourSteps.All.Count}", Tour.CounterText);
             Assert.IsNotNull(PhaseFiveSceneTests.ButtonNamed("Tour skip"));
+        }
+
+        // --- the sample game --------------------------------------------------------------------------
+
+        private static string IdOf(string title) => TourSteps.All.First(s => s.Title == title).Id;
+
+        private static IEnumerator GoToMove(string title) => GoToStep(IdOf(title));
+
+        private static RectTransform OnTable(string key) => Tour.Table.Targets[key];
+
+        private static string Points(string seat) =>
+            OnTable("score:" + seat).GetComponentsInChildren<Text>().First(t => t.name == "Points").text;
+
+        private static Transform FaceOf(string mood) => OnTable("mood:" + mood).Find("Face");
+
+        private static float Turn(Transform face) => Mathf.Round(face.localEulerAngles.z);
+
+        [UnityTest]
+        public IEnumerator TheSampleGameIsOfferedAfterTheTable_AndCanBeSkippedPast()
+        {
+            yield return ToHome();
+            yield return GoToStep("sample-intro");
+
+            Assert.AreEqual("A sample game", Tour.TitleText);
+            Assert.AreEqual("Show me a sample game", Tour.NextLabel);
+            yield return PhaseTwoSceneTests.Frames(3);
+            Assert.IsTrue(Tour.NextLabelFitsOnOneLine, "the button is as wide as its words, which don't wrap");
+            Assert.IsTrue(Tour.OffersSkipSection);
+            Assert.IsFalse(Tour.Table.IsShown, "the table is for the moves, not for the introduction");
+            ScreenshotHelper.Capture("tour-sample-intro");
+
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.ButtonNamed("Tour skip section"));
+
+            Assert.AreEqual("more-players", AppServices.Tour.Current.Id, "past the whole game, to what changes with more people");
+            Assert.AreEqual("Playing with more people", Tour.TitleText);
+            Assert.IsFalse(Tour.OffersSkipSection);
+            Assert.IsTrue(Tour.IsOpen);
+        }
+
+        [UnityTest]
+        public IEnumerator TheFirstMove_DrawsTheTable_WithBothScoreboards_AndTheCommentaryBesideIt()
+        {
+            yield return ToHome();
+            yield return GoToStep("sample-intro");
+            yield return Next();
+            yield return PhaseTwoSceneTests.Frames(4);
+
+            Assert.IsTrue(Tour.Table.IsShown);
+            Assert.AreEqual("Setting up", Tour.TitleText);
+            Assert.AreEqual($"Sample game: move 1 of {SampleGame.Steps.Count}", Tour.CounterText);
+            Assert.AreEqual("0", Points("MarkBot"));
+            Assert.AreEqual("0", Points("AriBot"));
+            StringAssert.Contains("Each player draws 5 cards", Tour.BodyText);
+            StringAssert.Contains("On your turn, play 1 card.", Tour.NotesText);
+            Assert.AreEqual(2, Tour.FramedCount, "both scoreboards are pointed at");
+            Assert.IsTrue(Tour.CanGoBack);
+
+            var canvas = Object.FindAnyObjectByType<Canvas>().rootCanvas.GetComponent<RectTransform>();
+            var screen = WorldRect(canvas);
+            var table = WorldRect(Tour.Table.Root);
+            var card = WorldRect(Tour.Card);
+            Assert.IsFalse(table.Overlaps(card), "the table and the commentary sit side by side");
+            Assert.IsTrue(Contains(screen, table), "both on the screen");
+            Assert.IsTrue(Contains(screen, card));
+            ScreenshotHelper.Capture("tour-sample-first");
+        }
+
+        [UnityTest]
+        [Timeout(900000)] // 23 moves, each drawn and checked: well over the default three minutes when the machine is busy
+        public IEnumerator EveryMove_ShowsTheScoresAndTheCardsItsDataSays_AndFramesWhatItIsAbout()
+        {
+            yield return ToHome();
+            yield return GoToStep("sample-1");
+            var canvas = Object.FindAnyObjectByType<Canvas>().rootCanvas.GetComponent<RectTransform>();
+            var screen = WorldRect(canvas);
+
+            foreach (var move in SampleGame.Steps)
+            {
+                yield return PhaseTwoSceneTests.Frames(3);
+                Assert.AreEqual(move.Title, Tour.TitleText);
+                Assert.AreEqual(SampleGame.Score(move.State.You).ToString(), Points("MarkBot"), move.Title);
+                Assert.AreEqual(SampleGame.Score(move.State.Them).ToString(), Points("AriBot"), move.Title);
+
+                // The cards on the table are the ones the move has in play, and the discard pile counts what it has.
+                foreach (var seat in move.State.Seats)
+                {
+                    foreach (var mood in seat.Moods)
+                    {
+                        Assert.IsTrue(Tour.Table.Targets.ContainsKey("mood:" + mood.Card), move.Title + ": " + mood.Card);
+                    }
+                }
+
+                var discard = OnTable("discard").GetComponentsInChildren<Text>().First(t => t.name == "Discard count").text;
+                Assert.AreEqual($"Discard {move.State.Discard.Count}", discard, move.Title);
+
+                Assert.Greater(Tour.FramedCount, 0, move.Title + ": something is pointed at");
+                var box = Tour.HighlightRect.Value;
+                Assert.IsTrue(Contains(WorldRect(Tour.Table.Root), box) || WorldRect(Tour.Table.Root).Overlaps(box), move.Title + ": framed on the table");
+                Assert.IsFalse(WorldRect(Tour.Table.Root).Overlaps(WorldRect(Tour.Card)), move.Title + ": the commentary is clear of the table");
+                Assert.IsTrue(Contains(screen, WorldRect(Tour.Card)), move.Title + ": and on the screen");
+
+                if (AppServices.Tour.Current.Sample == SampleGame.Steps.Last())
+                {
+                    break;
+                }
+
+                yield return Next();
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator ACardOnItsAlternateValueIsUpsideDown_AndASuppressedOneIsOnItsSide()
+        {
+            if (CardArtLibrary.ForCard(77) == null)
+            {
+                Assert.Inconclusive("The card art has not been generated on this machine (tools/convert_card_art.py).");
+            }
+
+            yield return ToHome();
+
+            yield return GoToMove("AriBot plays Superiority");
+            Assert.IsNull(FaceOf("Superiority"), "just played: worth 3, upright");
+
+            yield return Next();
+            Assert.AreEqual("Superiority goes up to 7", Tour.TitleText);
+            yield return PhaseTwoSceneTests.Frames(3);
+            Assert.AreEqual(180f, Turn(FaceOf("Superiority")), "worth 7 now, so upside down");
+            ScreenshotHelper.Capture("tour-sample-superiority");
+
+            yield return GoToMove("MarkBot plays Rage");
+            Assert.IsNull(FaceOf("Superiority"), "it lost its moods, so it is upright again");
+            Assert.IsNull(Tour.Table.Targets.Keys.FirstOrDefault(k => k == "mood:Serenity"), "Serenity went to the discard pile");
+            ScreenshotHelper.Capture("tour-sample-rage");
+
+            yield return GoToMove("AriBot plays Meekness");
+            yield return PhaseTwoSceneTests.Frames(3);
+            Assert.AreEqual(90f, Turn(FaceOf("Cheer")), "on its side AND turned around: three quarter turns");
+            Assert.AreEqual(270f, Turn(FaceOf("Betrayal")), "on its side");
+            ScreenshotHelper.Capture("tour-sample-meekness");
+
+            yield return GoToMove("Meekness returns to AriBot's hand");
+            yield return PhaseTwoSceneTests.Frames(3);
+            Assert.AreEqual(180f, Turn(FaceOf("Cheer")), "no longer suppressed: just turned around");
+            Assert.IsNull(FaceOf("Betrayal"), "upright again");
+            ScreenshotHelper.Capture("tour-sample-end");
+        }
+
+        [UnityTest]
+        public IEnumerator Back_FromTheFirstMove_GoesToTheIntroduction_AndSkippingEndsTheTourFromAnywhereInTheGame()
+        {
+            yield return ToHome();
+            yield return GoToStep("sample-1");
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.ButtonNamed("Tour back"));
+
+            Assert.AreEqual("sample-intro", AppServices.Tour.Current.Id);
+            Assert.IsFalse(Tour.Table.IsShown);
+
+            yield return GoToMove("MarkBot plays Rage");
+            yield return PhaseFiveSceneTests.Tap(PhaseFiveSceneTests.ButtonNamed("Tour skip"));
+
+            Assert.IsFalse(Tour.IsOpen);
+            Assert.IsFalse(Tour.Table.IsShown, "the table goes with it");
+            Assert.IsTrue(AppServices.Device.TourSeen);
+            yield return PhaseTwoSceneTests.Click("Puzzles");
+            yield return MainSceneTests.WaitFor<PuzzlesScreen>();
+        }
+
+        [UnityTest]
+        public IEnumerator TheBackKey_DuringTheSampleGame_SkipsTheTour()
+        {
+            yield return ToHome();
+            yield return GoToMove("AriBot plays Charity");
+
+            AndroidBack.SimulatedPresses = 1;
+            yield return PhaseTwoSceneTests.Frames(4);
+
+            Assert.IsFalse(Tour.IsOpen);
+            Assert.IsFalse(Tour.Table.IsShown);
+        }
+
+        [UnityTest]
+        public IEnumerator TheSampleGame_FitsANarrowerWindow_ByScalingTheTableDown()
+        {
+            yield return ToHome();
+            yield return GoToStep("sample-1");
+            yield return PhaseTwoSceneTests.Frames(3);
+            var full = WorldRect(Tour.Table.Root).width;
+
+            // A 4:3 window: the same screens in less width.
+            var canvas = Object.FindAnyObjectByType<Canvas>().rootCanvas.GetComponent<RectTransform>();
+            var scaler = canvas.GetComponent<CanvasScaler>();
+            var before = scaler.matchWidthOrHeight;
+            try
+            {
+                scaler.referenceResolution = new Vector2(1440f, 1080f);
+                yield return PhaseTwoSceneTests.Frames(4);
+
+                var screen = WorldRect(canvas);
+                Assert.IsTrue(Contains(screen, WorldRect(Tour.Table.Root)), "the table still fits");
+                Assert.IsFalse(WorldRect(Tour.Table.Root).Overlaps(WorldRect(Tour.Card)), "and the commentary is still beside it");
+                Assert.IsTrue(full > 0f);
+            }
+            finally
+            {
+                scaler.referenceResolution = new Vector2(1920f, 1080f);
+                scaler.matchWidthOrHeight = before;
+            }
         }
 
         private sealed class NewerVersion : IHttpTransport

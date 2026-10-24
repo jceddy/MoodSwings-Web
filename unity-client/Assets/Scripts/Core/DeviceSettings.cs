@@ -24,6 +24,7 @@ namespace MoodSwings.Core
         private const string DevServerKey = "device.devServer";
         private const string HideLockedKey = "device.achievements.hideLocked";
         private const string ChatSeenPrefix = "device.chatSeen.";
+        private const string ChatSeenThroughPrefix = "device.chatSeenThrough.";
         private const string SeenAtKey = "device.achievements.seenAt";
 
         private readonly IKeyValueStore _store;
@@ -206,6 +207,16 @@ namespace MoodSwings.Core
             int.TryParse(_store.GetString(ChatSeenPrefix + gameId), out var count) ? count : 0;
 
         public void SetChatSeen(int gameId, int count) => _store.SetString(ChatSeenPrefix + gameId, count.ToString());
+
+        /// <summary>
+        /// The newest message id read in a chat (see <see cref="ChatThreads"/>), or null if none has been remembered -- which is
+        /// all of them on a device that remembered only counts, per game, in an older version.
+        /// </summary>
+        public int? ChatSeenThrough(string thread) =>
+            int.TryParse(_store.GetString(ChatSeenThroughPrefix + thread), out var id) ? id : (int?)null;
+
+        public void SetChatSeenThrough(string thread, int messageId) =>
+            _store.SetString(ChatSeenThroughPrefix + thread, messageId.ToString());
 
         private float ReadVolume(string key, float fallback) =>
             int.TryParse(_store.GetString(key), out var percent) ? Math.Max(0, Math.Min(100, percent)) / 100f : fallback;
