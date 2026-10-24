@@ -7,7 +7,7 @@ namespace MoodSwings\Discord;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
 use MoodSwings\Config;
-use MoodSwings\Notifications\NotificationChannel;
+use MoodSwings\Notifications\OptOutNotificationChannel;
 use MoodSwings\Repository\DiscordAccountRepository;
 use MoodSwings\SiteUrl;
 
@@ -32,7 +32,7 @@ use MoodSwings\SiteUrl;
  * against this origin) -- so $payload['url'] is resolved against
  * SiteUrl::root() before being included in the DM.
  */
-final class DiscordNotificationChannel implements NotificationChannel
+final class DiscordNotificationChannel implements OptOutNotificationChannel
 {
     private const API_BASE = 'https://discord.com/api/v10';
 
@@ -40,6 +40,12 @@ final class DiscordNotificationChannel implements NotificationChannel
         private readonly DiscordAccountRepository $accounts,
         private readonly Client $http = new Client(),
     ) {
+    }
+
+    /** A user can turn Discord DMs off (notify_discord, migration 0476) without touching their web/Android push notifications. */
+    public function preferenceKey(): string
+    {
+        return 'notify_discord';
     }
 
     public function send(int $userId, array $payload): bool

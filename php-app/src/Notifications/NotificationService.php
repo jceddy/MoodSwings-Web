@@ -234,13 +234,14 @@ final class NotificationService
             // must not abort the flush for every other queued row behind
             // it in this same cron run.
             try {
-                if ($this->preferences->forUser($userId)[$row['preference_key']]) {
+                $preferences = $this->preferences->forUser($userId);
+                if ($preferences[$row['preference_key']]) {
                     $delivered = $this->deliver($userId, [
                         'title' => $row['title'],
                         'body' => $row['body'],
                         'url' => $row['url'],
                         'tag' => $row['tag'],
-                    ]);
+                    ], $preferences);
 
                     if ($delivered) {
                         $this->cooldowns->markNotified($userId, $scope);
@@ -304,7 +305,7 @@ final class NotificationService
             // deliver to on ANY channel still silently burned the
             // 5-minute cooldown, demoting the *next* attempt to a queued
             // one instead of a live send.
-            if ($this->deliver($userId, $payload)) {
+            if ($this->deliver($userId, $payload, $preferences)) {
                 $this->cooldowns->markNotified($userId, $scope);
                 $this->queuedNotifications->delete($userId, $scope);
             }
@@ -316,15 +317,23 @@ final class NotificationService
     /**
      * Attempts every configured channel independently -- one channel
      * throwing (rather than returning false, as NotificationChannel's own
-     * contract asks) must not stop the others from being tried.
+     * contract asks) must not stop the others from being tried. A channel
+     * the user has switched off on its own (OptOutNotificationChannel --
+     * Discord's notify_discord) is skipped here, leaving every other
+     * channel unaffected.
      *
      * @param array{title: string, body: string, url: string, tag: string} $payload
+     * @param array<string, bool> $preferences the user's NotificationPreferenceRepository::forUser() result
      */
-    private function deliver(int $userId, array $payload): bool
+    private function deliver(int $userId, array $payload, array $preferences): bool
     {
         $delivered = false;
 
         foreach ($this->channels as $channel) {
+            if ($channel instanceof OptOutNotificationChannel && !($preferences[$channel->preferenceKey()] ?? true)) {
+                continue;
+            }
+
             try {
                 if ($channel->send($userId, $payload)) {
                     $delivered = true;
