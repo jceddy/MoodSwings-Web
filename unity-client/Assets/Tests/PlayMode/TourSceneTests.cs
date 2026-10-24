@@ -56,6 +56,7 @@ namespace MoodSwings.Tests
             StringAssert.Contains("skip it at any time", Tour.BodyText);
             Assert.IsFalse(Tour.CanGoBack, "nothing before the first step");
             Assert.AreEqual("Start the tour", Tour.NextLabel);
+            Assert.IsTrue(Tour.NextLabelFitsOnOneLine);
             Assert.IsNull(Tour.HighlightRect, "the welcome points at nothing");
             Assert.IsNotNull(PhaseFiveSceneTests.ButtonNamed("Tour skip"), "and it can be skipped from the first step");
             ScreenshotHelper.Capture("tour-welcome");
@@ -354,6 +355,8 @@ namespace MoodSwings.Tests
 
             Assert.AreEqual("A sample game", Tour.TitleText);
             Assert.AreEqual("Show me a sample game", Tour.NextLabel);
+            yield return PhaseTwoSceneTests.Frames(3);
+            Assert.IsTrue(Tour.NextLabelFitsOnOneLine, "the button is as wide as its words, which don't wrap");
             Assert.IsTrue(Tour.OffersSkipSection);
             Assert.IsFalse(Tour.Table.IsShown, "the table is for the moves, not for the introduction");
             ScreenshotHelper.Capture("tour-sample-intro");

@@ -159,6 +159,9 @@ namespace MoodSwings.UI
 
         public bool OffersSkipSection => _skipSection.gameObject.activeSelf;
 
+        /// <summary>The words on the Next button fit on one line, with room to spare at its sides.</summary>
+        public bool NextLabelFitsOnOneLine => _nextLabel.preferredWidth <= _nextLabel.rectTransform.rect.width - 20f;
+
         /// <summary>The table of a sample game step.</summary>
         public SampleTable Table => _table;
 
@@ -254,7 +257,8 @@ namespace MoodSwings.UI
             _diagram.SetActive(step.TableDiagram);
             _back.gameObject.SetActive(!_flow.IsFirst);
             _nextLabel.text = step.NextLabel ?? (_flow.IsLast ? "Done" : _flow.IsFirst ? "Start the tour" : "Next");
-            UiFactory.Size(_next.gameObject, step.NextLabel != null || _flow.IsFirst ? 330f : 240f);
+            // As wide as its words need (a longer label would otherwise wrap), and never narrower than a plain "Next".
+            UiFactory.Size(_next.gameObject, Mathf.Max(240f, _nextLabel.preferredWidth + 72f));
             _skipSection.gameObject.SetActive(step.SkipTo != null);
             if (step.SkipTo != null)
             {
