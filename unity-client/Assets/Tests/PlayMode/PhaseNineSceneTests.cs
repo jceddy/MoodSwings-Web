@@ -1570,6 +1570,90 @@ namespace MoodSwings.Tests
             ScreenshotHelper.Capture("plays-left-three");
         }
 
+        [UnityTest]
+        public IEnumerator TappingThePlaysLeft_ListsWhereThePlaysComeFrom()
+        {
+            var server = Serve();
+            server.State = Quiet(406, s =>
+            {
+                s["round"]["plays_remaining"] = 2;
+                s["round"]["play_grants"] = Newtonsoft.Json.Linq.JArray.Parse(
+                    "[{\"description\":\"Your normal turn\",\"source_card_id\":null,\"source_card_name\":null},"
+                    + "{\"description\":\"An extra play from Ambition\",\"source_card_id\":14173,\"source_card_name\":\"Ambition\"}]");
+            });
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+
+            var label = PhaseFiveSceneTests.Child("Plays left");
+            Assert.IsNotNull(label.GetComponent<Button>(), "it can be tapped");
+            Assert.IsNotNull(label.Find("Underline"), "and looks it");
+            Assert.IsFalse(PhaseFiveSceneTests.Board().Confirm.IsOpen);
+
+            yield return PhaseFiveSceneTests.Tap(label.GetComponent<Button>());
+
+            Assert.IsTrue(PhaseFiveSceneTests.Board().Confirm.IsOpen);
+            StringAssert.Contains("2 plays left", PhaseFiveSceneTests.Board().Confirm.MessageText);
+            StringAssert.Contains("• Your normal turn", PhaseFiveSceneTests.Board().Confirm.MessageText);
+            StringAssert.Contains("• An extra play from Ambition", PhaseFiveSceneTests.Board().Confirm.MessageText);
+            ScreenshotHelper.Capture("plays-left-sources");
+
+            PhaseFiveSceneTests.Board().Confirm.Dismiss();
+            Assert.IsFalse(PhaseFiveSceneTests.Board().Confirm.IsOpen);
+        }
+
+        [UnityTest]
+        public IEnumerator ThePlaysLeft_IsPlainText_WhenTheServerGivesNoSources()
+        {
+            var server = Serve();
+            server.State = Quiet(406, s =>
+            {
+                s["round"]["plays_remaining"] = 1;
+                s["round"]["play_grants"] = new Newtonsoft.Json.Linq.JArray();
+            });
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+
+            Assert.IsNull(PhaseFiveSceneTests.Child("Plays left").GetComponent<Button>());
+        }
+
+        [UnityTest]
+        public IEnumerator EachPlayersAchievementTier_IsATrophyBesideTheirName_InTheTiersColor()
+        {
+            var server = Serve();
+            server.State = Quiet(406, s => { });
+            yield return PhaseFiveSceneTests.OpenBoard(server, 406);
+
+            var gold = Object.FindObjectsByType<Image>(FindObjectsInactive.Exclude).Where(i => i.name == "Achievement tier Gold").ToList();
+            var bronze = Object.FindObjectsByType<Image>(FindObjectsInactive.Exclude).Where(i => i.name == "Achievement tier Bronze").ToList();
+            Assert.AreEqual(1, gold.Count);
+            Assert.AreEqual(1, bronze.Count);
+            Assert.AreEqual(UiIcons.Trophy(), gold[0].sprite);
+            Assert.AreEqual((Color)BoardScreen.TierColor("Gold"), gold[0].color);
+            Assert.AreNotEqual(gold[0].color, bronze[0].color);
+            Assert.AreEqual(2, Object.FindObjectsByType<Image>(FindObjectsInactive.Exclude).Count(i => i.name.StartsWith("Achievement tier")),
+                "the third player has unlocked nothing, so no trophy");
+
+            // On the name's own row, in front of it.
+            var row = gold[0].transform.parent;
+            Assert.Less(gold[0].transform.GetSiblingIndex(), row.Find("Name").GetSiblingIndex());
+            ScreenshotHelper.Capture("achievement-tiers");
+
+            yield return PhaseFiveSceneTests.Tap(gold[0].GetComponent<Button>());
+            StringAssert.Contains("highest unlocked achievement tier: Gold", PhaseFiveSceneTests.Board().Confirm.MessageText);
+            PhaseFiveSceneTests.Board().Confirm.Dismiss();
+        }
+
+        [UnityTest]
+        public IEnumerator TheTierColors_AreTheWebBoardsFive()
+        {
+            Assert.AreEqual((Color)new Color32(0xcd, 0x7f, 0x32, 0xff), BoardScreen.TierColor("Bronze"));
+            Assert.AreEqual((Color)new Color32(0xb9, 0xf2, 0xff, 0xff), BoardScreen.TierColor("Diamond"));
+            foreach (var tier in MoodSwings.Core.BoardDisplay.AchievementTiers)
+            {
+                Assert.Greater(BoardScreen.TierColor(tier).a, 0f, tier);
+            }
+
+            yield return null;
+        }
+
         private sealed class ZapSounds : ISoundPlayer
         {
             public readonly System.Collections.Generic.List<SoundId> Played = new System.Collections.Generic.List<SoundId>();
@@ -2114,6 +2198,7 @@ namespace MoodSwings.Tests
                     var opponent = s["players"].First(p => (string)p["username"] != "bshaftoe");
                     opponent["username"] = username;
                     opponent["is_bot"] = true;
+                    opponent["highest_achievement_tier"] = null; // a trophy beside the name takes room of its own
                 });
                 yield return PhaseFiveSceneTests.OpenBoard(server, 405);
                 yield return PhaseTwoSceneTests.Frames(4);

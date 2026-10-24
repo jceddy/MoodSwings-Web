@@ -239,7 +239,13 @@ under "Playing a game" below.
   round won stacked beside it (dim ones for the rounds still to win), a **1ST** tag on the
   box for whoever went first this round, then their name, and the Hurt Feelings card for
   whoever has it. It is lit when it is their turn. In a duel, where each player has their own
-  deck, its size shows too.
+  deck, its size shows too. A player who has unlocked an achievement has a **trophy beside
+  their name** in the colour of their best tier (Bronze, Silver, Gold, Platinum or Diamond,
+  the colours the web board uses; `highest_achievement_tier`); tapping it says which. On the
+  turn holder's scoreboard, "2 plays left" is underlined: tap it for a list of where those
+  plays come from ("Your normal turn", "An extra play from Charity" -- the server's
+  `round.play_grants`, as in the web board's expandable plays panel). Like the note itself,
+  the list is not there before the turn is acknowledged or once the game is over.
 - **The deck and discard** peek up from the bottom edge, the discard at the far left and the deck at the far right of the bottom edge, with your scoreboard
   and your hand between them, with a line above each: "Deck 30", "Discard 3" (and
   "play from it" when an effect makes a card in it playable). Tap the deck for its

@@ -1976,19 +1976,22 @@ namespace MoodSwings.UI
         // turn marker.
         private const float InfoOverhead = 178f;
 
+        // ...and the trophy that shows a player's achievement tier, when they have one.
+        private const float TierFlagWidth = 36f;
+
         // The smallest the name is set before the scoreboard grows instead.
         private const int MinNameSize = 15;
 
         // A long screen name must not break in the middle of a word. It is set smaller first, as far as MinNameSize; only if
         // it still doesn't fit does the scoreboard grow, toward where there is room (up to InfoGrowTo, a fraction of the
         // table's width).
-        private static void FitInfoToName(RectTransform area, Text nameLabel, string username, float growTo)
+        private static void FitInfoToName(RectTransform area, Text nameLabel, string username, float growTo, float extraOverhead = 0f)
         {
             var text = nameLabel.text;
             var size = nameLabel.fontSize;
             nameLabel.text = username;
             var width = (area.anchorMax.x - area.anchorMin.x) * ReferenceWidth;
-            var room = width - InfoOverhead;
+            var room = width - InfoOverhead - extraOverhead;
 
             // The largest size at which the whole name fits on a line, if there is one.
             var fitted = size;
@@ -2120,6 +2123,13 @@ namespace MoodSwings.UI
             marker.gameObject.AddComponent<Image>().color = isTurn ? theme.accent : theme.faint;
             UiFactory.Size(marker.gameObject, 14f, 14f);
 
+            // The achievement tier: a trophy to the left of the name, in the tier's color. Tapping it says which tier it is.
+            var tier = BoardDisplay.AchievementTier(player);
+            if (tier != null)
+            {
+                BuildTierFlag(theme, heading.transform, player, tier);
+            }
+
             var teamTag = BoardDisplay.TeamTag(state, player);
             var name = player.Username
                 + (player.IsBot ? "  (bot)" : string.Empty)
@@ -2130,7 +2140,7 @@ namespace MoodSwings.UI
             nameLabel.name = "Name";
             nameLabel.raycastTarget = false;
             UiFactory.Flexible(nameLabel.gameObject, width: 1f);
-            FitInfoToName(area, nameLabel, player.Username, growTo);
+            FitInfoToName(area, nameLabel, player.Username, growTo, tier != null ? TierFlagWidth : 0f);
 
             // How many plays the player whose turn it is has: one, unless something has granted more.
             var plays = BoardDisplay.PlaysLeftNote(state, player);
@@ -2141,6 +2151,28 @@ namespace MoodSwings.UI
                 playsLabel.name = "Plays left";
                 playsLabel.raycastTarget = false;
                 UiFactory.Size(playsLabel.gameObject, height: 24f);
+
+                // Tapping it lists where the plays come from, as the web board's expandable "plays" panel does.
+                var lines = BoardDisplay.PlayGrantLines(state, player);
+                if (lines.Count > 0)
+                {
+                    playsLabel.raycastTarget = true;
+                    var button = playsLabel.gameObject.AddComponent<Button>();
+                    button.targetGraphic = playsLabel;
+                    button.onClick.AddListener(() => ShowPlayGrants(plays, lines));
+
+                    // A thin line under it, so it reads as something to tap.
+                    var underline = UiFactory.Create("Underline", playsLabel.transform);
+                    underline.gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
+                    underline.anchorMin = new Vector2(0f, 0f);
+                    underline.anchorMax = new Vector2(0f, 0f);
+                    underline.pivot = new Vector2(0f, 0f);
+                    underline.sizeDelta = new Vector2(Mathf.Min(playsLabel.preferredWidth, 200f), 2f);
+                    underline.anchoredPosition = new Vector2(0f, 1f);
+                    var underlineImage = underline.gameObject.AddComponent<Image>();
+                    underlineImage.color = playsLabel.color;
+                    underlineImage.raycastTarget = false;
+                }
             }
 
             // Each player has their own deck in a duel, so its size is theirs to show.
@@ -2155,6 +2187,51 @@ namespace MoodSwings.UI
             {
                 CardView.CreateHurtFeelings(details, 34f, theme);
             }
+        }
+
+        // The colors of the five achievement tiers (the web board's trophy uses the same ones).
+        public static Color TierColor(string tier)
+        {
+            switch (tier)
+            {
+                case "Bronze":
+                    return new Color32(0xcd, 0x7f, 0x32, 0xff);
+                case "Silver":
+                    return new Color32(0xc0, 0xc0, 0xc0, 0xff);
+                case "Gold":
+                    return new Color32(0xd4, 0xaf, 0x37, 0xff);
+                case "Platinum":
+                    return new Color32(0xa8, 0xd0, 0xe6, 0xff);
+                case "Diamond":
+                    return new Color32(0xb9, 0xf2, 0xff, 0xff);
+                default:
+                    return Color.clear;
+            }
+        }
+
+        private void BuildTierFlag(UiTheme theme, Transform heading, BoardPlayer player, string tier)
+        {
+            var flag = UiFactory.Create("Achievement tier " + tier, heading);
+            var image = flag.gameObject.AddComponent<Image>();
+            image.sprite = UiIcons.Trophy();
+            image.color = TierColor(tier);
+            image.preserveAspect = true;
+
+            // The pale tiers vanish on a light panel without an edge.
+            var edge = flag.gameObject.AddComponent<Outline>();
+            edge.effectColor = new Color(0f, 0f, 0f, 0.55f);
+            edge.effectDistance = new Vector2(1.5f, -1.5f);
+
+            var note = BoardDisplay.AchievementTierNote(player);
+            var button = flag.gameObject.AddComponent<Button>();
+            button.targetGraphic = image;
+            button.onClick.AddListener(() => _ = _confirm.AskAsync(note, "OK", null));
+            UiFactory.Size(flag.gameObject, 28f, 28f);
+        }
+
+        private void ShowPlayGrants(string heading, IReadOnlyList<string> lines)
+        {
+            _ = _confirm.AskAsync(heading + "\n\n" + string.Join("\n", lines.Select(l => "• " + l)), "OK", null);
         }
 
         // An opponent's hand: the backs of their cards, peeking in from their edge of the screen -- only the part

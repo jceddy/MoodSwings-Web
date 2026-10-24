@@ -237,6 +237,10 @@ namespace MoodSwings.Networking
         [JsonProperty("resigned")]
         public bool Resigned { get; set; }
 
+        /// <summary>The best achievement tier the player has unlocked ("Bronze" to "Diamond"), or null if none yet.</summary>
+        [JsonProperty("highest_achievement_tier")]
+        public string HighestAchievementTier { get; set; }
+
         [JsonProperty("ready")]
         public bool Ready { get; set; }
 
@@ -317,6 +321,19 @@ namespace MoodSwings.Networking
         public ChoiceField Field { get; set; }
     }
 
+    /// <summary>One play the turn holder has: "Your normal turn", or "An extra play from Charity".</summary>
+    public class PlayGrant
+    {
+        [JsonProperty("description")]
+        public string Description { get; set; }
+
+        [JsonProperty("source_card_id")]
+        public int? SourceCardId { get; set; }
+
+        [JsonProperty("source_card_name")]
+        public string SourceCardName { get; set; }
+    }
+
     public class BoardRound
     {
         [JsonProperty("round_number")]
@@ -341,6 +358,10 @@ namespace MoodSwings.Networking
 
         [JsonProperty("plays_remaining")]
         public int PlaysRemaining { get; set; }
+
+        /// <summary>Where each of the current turn holder's outstanding plays comes from (their normal turn, a card's extra play...).</summary>
+        [JsonProperty("play_grants")]
+        public List<PlayGrant> PlayGrants { get; set; } = new List<PlayGrant>();
 
         /// <summary>Visible to everyone: the current turn holder is waiting to acknowledge the start of their turn.</summary>
         [JsonProperty("turn_pending_acknowledgment")]
