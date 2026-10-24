@@ -720,6 +720,8 @@ Python scripts in `tools/` (`pip install pillow` for the first):
   card as uncompressed RGBA32 (~3 MB instead of under 1 MB). Mipmaps are on
   (Kaiser filter, trilinear): cards are drawn at ~112 px from 744 px art, and
   without them the shrunken art is harsh, speckled noise.
+- `make_tour_cards.py` -- writes the cards the welcome tour's sample game uses (art key, color, values, rules) to
+  `Assets/Resources/Tour/sample-cards.json`, from the card catalog fixture.
 - `fetch_emoji.py` -- downloads the emoji the chat can draw (see Chat and emoji above) into `Assets/Resources/Emoji/`.
 - `publish_client.py` -- writes the update manifest for the builds (see Updates above) and, with `--upload`, publishes them.
 - `capture_fixtures.py` -- logs in to a server with a throwaway account
@@ -738,6 +740,18 @@ and frame them, then bring them back to the main menu for a picture of the table
 how to see the tour again. Each step has **Back** and **Next** (**Done** at the end), and **Skip the tour** is there at every step; Back
 or Escape (Android's Back button too) skips as well. Finishing and skipping both count as having seen it
 (`DeviceSettings.TourSeen`, per device), so it doesn't start by itself again.
+
+After the picture of the table the tour offers **a sample game**: a short game between two bots, MarkBot (you, along
+the bottom) and AriBot, played out one move at a time (23 of them, five rounds of a Traditional game with the Structure deck).
+Each move draws the table at the left -- both seats with their scoreboards (the score, a trophy for each round won, the
+cards in hand), the moods in play with their real art, and the shared discard pile -- with a frame round each thing the
+commentary is about, and the commentary at the right, with the rules it brings up ("Rule: The highest score wins the
+round."). The cards are drawn the way the board draws them, so a mood on its alternate value is upside down and a
+suppressed one lies on its side. The step before it has **Skip the sample game**, which goes on to what changes with more
+players; Back, Skip the tour and Escape work in the game as anywhere in the tour. The game is data, not a recording:
+`SampleGame` (Core) says what happens in each move and works every table out from the cards, so its scores are checked
+against the numbers in the commentary by a test; `SampleTable` (UI) draws it; the cards come from
+`Assets/Resources/Tour/sample-cards.json` (made by `tools/make_tour_cards.py` from the catalog fixture).
 
 **Settings > Welcome tour > Show the welcome tour** takes the player back to the main menu and runs it again. If an update is
 waiting, its box comes up after the tour, not on top of it. Signing out or being sent to another screen mid-tour ends it.
