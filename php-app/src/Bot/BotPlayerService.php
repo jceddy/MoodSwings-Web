@@ -437,6 +437,16 @@ final class BotPlayerService
     /** @see disillusionmentBestColor()'s own docblock -- mirrors DisillusionmentEffect::COLORS. */
     private const DISILLUSIONMENT_COLORS = ['white', 'blue', 'black', 'red', 'green'];
 
+    /**
+     * Moods whose worth to their owner is in what they do rather than in
+     * their score (Duplicity/Validation/Exhilaration/Hope/Grace print a
+     * value of 0 or score off something else), so a plain before/after
+     * RoundScorer comparison understates losing one -- Disillusionment's
+     * color pick never hits a color holding one of the bot's own (or a
+     * teammate's), whatever else that color would take out.
+     */
+    private const PROTECTED_EFFECT_KEYS = ['duplicity', 'validation', 'exhilaration', 'hope', 'grace'];
+
     public function __construct(
         private readonly BotChoiceResolver $resolver,
     ) {
@@ -1065,17 +1075,31 @@ final class BotPlayerService
      */
     private function disillusionmentBestColor(BoardState $state, array $field, int $botGamePlayerId, ?int $sourceCardId): ?string
     {
-        $bestColor = null;
+        $bestSwingColor = null;
         $bestSwing = 0;
+        $bestSwingOwnHit = 0;
+        $bestHarmlessColor = null;
+        $bestHarmlessCount = 0;
+
         foreach ($field['options'] ?? [] as $color) {
+            [$ownHit, $opponentHit, $hitsProtected] = $this->disillusionmentColorHits($state, $botGamePlayerId, $color, $sourceCardId);
+            if ($hitsProtected || $ownHit + $opponentHit === 0) {
+                continue;
+            }
+
             $swing = $this->disillusionmentColorSwing($state, $botGamePlayerId, $color, $sourceCardId);
-            if ($swing > $bestSwing) {
+            if ($swing > $bestSwing || ($swing === $bestSwing && $swing > 0 && $ownHit < $bestSwingOwnHit)) {
                 $bestSwing = $swing;
-                $bestColor = $color;
+                $bestSwingColor = $color;
+                $bestSwingOwnHit = $ownHit;
+            }
+            if ($ownHit === 0 && $swing >= 0 && $opponentHit > $bestHarmlessCount) {
+                $bestHarmlessCount = $opponentHit;
+                $bestHarmlessColor = $color;
             }
         }
 
-        return $bestColor;
+        return $bestSwingColor ?? $bestHarmlessColor;
     }
 
     /**
@@ -1118,19 +1142,65 @@ final class BotPlayerService
         return $best;
     }
 
-    /** @see disillusionmentBestColor()'s own docblock for the swing computation itself. */
-    private function disillusionmentColorSwing(BoardState $state, int $botGamePlayerId, string $color, ?int $sourceCardId): int
+    /**
+     * How many of the bot's own group's moods ($ownHit), how many
+     * rivals' ($opponentHit), and whether any of the bot's own group's is
+     * one of PROTECTED_EFFECT_KEYS ($hitsProtected) choosing $color would
+     * discard -- same "every other mood of that color, regardless of
+     * owner, but never $sourceCardId itself" reach as
+     * DisillusionmentEffect::resolveDecisions().
+     *
+     * @return array{0: int, 1: int, 2: bool} [$ownHit, $opponentHit, $hitsProtected]
+     */
+    private function disillusionmentColorHits(BoardState $state, int $botGamePlayerId, string $color, ?int $sourceCardId): array
     {
-        $swing = 0;
+        $ownHit = 0;
+        $opponentHit = 0;
+        $hitsProtected = false;
         foreach ($state->moodsInPlay() as $mood) {
             if ($mood->cardId === $sourceCardId || $state->colorOf($mood->cardId) !== $color) {
                 continue;
             }
-            $value = $state->valueOf($mood->cardId);
-            $swing += ($mood->ownerId === $botGamePlayerId || $state->isTeammate($botGamePlayerId, $mood->ownerId)) ? -$value : $value;
+            if ($mood->ownerId === $botGamePlayerId || $state->isTeammate($botGamePlayerId, $mood->ownerId)) {
+                $ownHit++;
+                if (in_array($state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'], self::PROTECTED_EFFECT_KEYS, true)) {
+                    $hitsProtected = true;
+                }
+            } else {
+                $opponentHit++;
+            }
         }
 
-        return $swing;
+        return [$ownHit, $opponentHit, $hitsProtected];
+    }
+
+    /**
+     * Choosing $color's net effect on the bot's lead: the change in (its
+     * group's round score minus the best rival group's) from discarding
+     * every other mood of that color, simulated on a clone and scored
+     * with the real RoundScorer rather than summed from printed values --
+     * a mood's removal can also change what the moods left behind are
+     * worth (Hope, Grace and other scaling moods), and raw valueOf()
+     * never sees that. Positive favors the bot. See
+     * disillusionmentBestColor()'s own docblock for how this is used.
+     */
+    private function disillusionmentColorSwing(BoardState $state, int $botGamePlayerId, string $color, ?int $sourceCardId): int
+    {
+        $scorer = new RoundScorer();
+        [$myBefore, $rivalBefore] = $this->groupTotals($state, $botGamePlayerId, $scorer->score($state));
+
+        $hypothetical = clone $state;
+        foreach ($state->moodsInPlay() as $mood) {
+            if ($mood->cardId === $sourceCardId || $state->colorOf($mood->cardId) !== $color) {
+                continue;
+            }
+            if ($hypothetical->isInPlay($mood->cardId)) {
+                $hypothetical->moveInPlayToDiscard($mood->cardId);
+            }
+        }
+        [$myAfter, $rivalAfter] = $this->groupTotals($hypothetical, $botGamePlayerId, $scorer->score($hypothetical));
+
+        return ($myAfter - $rivalAfter) - ($myBefore - $rivalBefore);
     }
 
     /**
@@ -1160,7 +1230,9 @@ final class BotPlayerService
     private function disillusionmentHasAGoodReasonToPlayNow(BoardState $state, int $botGamePlayerId): bool
     {
         foreach (self::DISILLUSIONMENT_COLORS as $color) {
-            if ($this->disillusionmentColorSwing($state, $botGamePlayerId, $color, null) > 0) {
+            if (!$this->disillusionmentColorHits($state, $botGamePlayerId, $color, null)[2]
+                && $this->disillusionmentColorSwing($state, $botGamePlayerId, $color, null) > 0
+            ) {
                 return true;
             }
         }
