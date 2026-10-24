@@ -722,6 +722,7 @@ if ($path === '/notifications/preferences' && $method === 'GET') {
 if ($path === '/notifications/preferences' && $method === 'POST') {
     $currentUser = requireAuth($auth);
     $body = requestBody();
+    $current = $notificationPreferences->forUser((int) $currentUser['id']);
 
     $notificationPreferences->save(
         (int) $currentUser['id'],
@@ -731,7 +732,12 @@ if ($path === '/notifications/preferences' && $method === 'POST') {
         (bool) ($body['disable_cooldown'] ?? false),
         (bool) ($body['notify_chat_message'] ?? true),
         (bool) ($body['notify_timeout_warning'] ?? true),
-        (bool) ($body['notify_achievement_unlocked'] ?? true)
+        (bool) ($body['notify_achievement_unlocked'] ?? true),
+        // Unlike the flags above, an omitted notify_discord keeps its
+        // stored value -- clients that predate it (the Unity client) post
+        // the full set without it and must not silently re-enable Discord
+        // DMs a user had turned off.
+        (bool) ($body['notify_discord'] ?? $current['notify_discord'])
     );
     respond(200, ['status' => 'ok', 'preferences' => $notificationPreferences->forUser((int) $currentUser['id'])]);
 }

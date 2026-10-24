@@ -7,6 +7,7 @@ namespace MoodSwings\Tests;
 use MoodSwings\Notifications\NotificationChannel;
 use MoodSwings\Notifications\NotificationScope;
 use MoodSwings\Notifications\NotificationService;
+use MoodSwings\Notifications\OptOutNotificationChannel;
 use MoodSwings\Repository\NotificationCooldownRepository;
 use MoodSwings\Repository\NotificationPreferenceRepository;
 use MoodSwings\Repository\QueuedNotificationRepository;
@@ -250,6 +251,89 @@ final class NotificationServiceMultiChannelTest extends TestCase
         $this->service([$liveChannel])->notifyGameFinished($userId, 12, 'Game #12 is over -- you won!');
 
         self::assertSame(0, $liveChannel->calls);
+    }
+
+    private function optOutChannel(bool $delivers): OptOutNotificationChannel
+    {
+        return new class ($delivers) implements OptOutNotificationChannel {
+            public int $calls = 0;
+
+            public function __construct(private readonly bool $delivers)
+            {
+            }
+
+            public function preferenceKey(): string
+            {
+                return 'notify_discord';
+            }
+
+            public function send(int $userId, array $payload): bool
+            {
+                $this->calls++;
+                return $this->delivers;
+            }
+        };
+    }
+
+    // notify_discord off skips only the opt-out (Discord) channel -- push
+    // still delivers, and the event still counts as delivered.
+    public function testDiscordOptOutSkipsOnlyTheOptOutChannel(): void
+    {
+        $userId = $this->insertUser('discord-off');
+        $this->preferences->save($userId, true, true, true, notifyDiscord: false);
+        $discord = $this->optOutChannel(true);
+        $push = $this->stubChannel(true);
+
+        $this->service([$push, $discord])->notifyYourTurn($userId, 13, 'waiting on you');
+
+        self::assertSame(1, $push->calls);
+        self::assertSame(0, $discord->calls);
+        self::assertTrue($this->cooldowns->wasNotifiedRecently($userId, NotificationScope::forGame(13), 300));
+    }
+
+    public function testOptOutChannelStillDeliversByDefaultAndWhenOn(): void
+    {
+        $userId = $this->insertUser('discord-default');
+        $discord = $this->optOutChannel(true);
+
+        $this->service([$discord])->notifyYourTurn($userId, 14, 'waiting on you');
+
+        self::assertSame(1, $discord->calls);
+    }
+
+    // With Discord as the only deliverable channel and it switched off,
+    // nothing is delivered, so the cooldown must not be burned.
+    public function testDiscordOffAsTheOnlyChannelDoesNotBurnTheCooldown(): void
+    {
+        $userId = $this->insertUser('discord-off-only');
+        $this->preferences->save($userId, true, true, true, notifyDiscord: false);
+        $discord = $this->optOutChannel(true);
+
+        $this->service([$discord])->notifyYourTurn($userId, 15, 'waiting on you');
+
+        self::assertSame(0, $discord->calls);
+        self::assertFalse($this->cooldowns->wasNotifiedRecently($userId, NotificationScope::forGame(15), 300));
+    }
+
+    // The opt-out also applies to the cron flush of a queued notification.
+    public function testQueuedNotificationFlushRespectsDiscordOptOut(): void
+    {
+        $userId = $this->insertUser('discord-off-flush');
+        $this->preferences->save($userId, true, true, true, notifyDiscord: false);
+        $this->queuedNotifications->enqueue($userId, NotificationScope::forGame(16), 'notify_your_turn', [
+            'title' => "It's your turn",
+            'body' => 'waiting on you',
+            'url' => '/game/?id=16',
+            'tag' => 'game-16-turn',
+        ]);
+        $this->pdo->exec('UPDATE queued_notifications SET queued_at = NOW() - INTERVAL 1 HOUR');
+        $discord = $this->optOutChannel(true);
+        $push = $this->stubChannel(true);
+
+        $this->service([$push, $discord])->flushQueuedNotifications();
+
+        self::assertSame(1, $push->calls);
+        self::assertSame(0, $discord->calls);
     }
 
     /** @return array<string, mixed>|null */

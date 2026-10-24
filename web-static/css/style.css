@@ -1083,6 +1083,16 @@ dialog#settings-dialog #settings-game-defaults-section label {
     gap: 0.5rem;
 }
 
+/* On its own line under the Connect/Disconnect Discord button. :not([hidden])
+   so this display doesn't override the hidden attribute while Discord is
+   unlinked. */
+dialog#settings-dialog #notify-discord-label:not([hidden]) {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+}
+
 /* Same reasoning as #new-game-close-button et al above -- without this,
    Close sits flush against whichever of Connect/Disconnect Discord is
    currently visible directly above it. */

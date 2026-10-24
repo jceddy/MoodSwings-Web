@@ -120,8 +120,8 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/notifications/unsubscribe` | `{"endpoint"}`                                          | Requires auth. Removes the current user's subscription for that endpoint, if any (silently a no-op otherwise). |
 | POST   | `/notifications/device-token` | `{"token", "platform"}` | Requires auth. Registers a native app install's FCM registration token (`platform` is `android` or `ios`; token up to 512 characters) so `FcmNotificationChannel` can push to it; re-registering the same token moves it to the caller. `400` for a missing/oversized token or an unknown platform. See "Native push (FCM)" below. |
 | POST   | `/notifications/device-token/remove` | `{"token"}` | Requires auth. Removes the caller's own registration of that token (the app calls it on sign-out); a no-op if it isn't theirs or isn't there. |
-| GET    | `/notifications/preferences` | —                                                        | Requires auth. Returns `{"preferences": {"notify_your_turn", "notify_friend_request", "notify_game_finished", "notify_chat_message", "notify_timeout_warning", "disable_cooldown"}}` -- the five `notify_*` toggles default `true`, `disable_cooldown` defaults `false`, for a user who's never changed them. |
-| POST   | `/notifications/preferences` | `{"notify_your_turn"?, "notify_friend_request"?, "notify_game_finished"?, "notify_chat_message"?, "notify_timeout_warning"?, "disable_cooldown"?}` | Requires auth. Upserts the current user's preferences (each `notify_*` field defaults to `true` if omitted, `disable_cooldown` defaults to `false`); returns the saved `{"preferences"}`. See "Browser push notifications" below for what `disable_cooldown` does, "In-game chat" above for `notify_chat_message`, "Turn and decision timeouts" above for `notify_timeout_warning`. |
+| GET    | `/notifications/preferences` | —                                                        | Requires auth. Returns `{"preferences": {"notify_your_turn", "notify_friend_request", "notify_game_finished", "notify_chat_message", "notify_timeout_warning", "notify_achievement_unlocked", "notify_discord", "disable_cooldown"}}` -- the `notify_*` toggles default `true`, `disable_cooldown` defaults `false`, for a user who's never changed them. |
+| POST   | `/notifications/preferences` | `{"notify_your_turn"?, "notify_friend_request"?, "notify_game_finished"?, "notify_chat_message"?, "notify_timeout_warning"?, "notify_discord"?, "disable_cooldown"?}` | Requires auth. Upserts the current user's preferences (each `notify_*` field defaults to `true` if omitted -- except `notify_discord`, which keeps its stored value if omitted -- and `disable_cooldown` defaults to `false`); returns the saved `{"preferences"}`. See "Browser push notifications" below for what `disable_cooldown` does, "In-game chat" above for `notify_chat_message`, "Turn and decision timeouts" above for `notify_timeout_warning`. |
 | GET    | `/discord/status` | —                                                             | Requires auth. Returns `{"linked", "discord_username"}` (the latter `null` if unlinked). See "Discord" below. |
 | GET    | `/discord/oauth/start` | —                                                        | Requires auth. Not a JSON endpoint -- a `302` straight to Discord's own OAuth2 consent screen. Meant for browser navigation (a link/button), not `fetch()`. See "Discord" below. |
 | GET    | `/discord/oauth/callback` | `code`, `state` (query params, set by Discord's own redirect) | Requires auth. Not a JSON endpoint -- a `302` back to the lobby, `?discord_linked=1` on success or `?discord_link_error=<message>` on failure. See "Discord" below. |
@@ -7473,6 +7473,16 @@ one push *and* one Discord DM per event, a player linked to only one
 gets just that one, and a player linked to neither still doesn't error,
 just delivers nothing. One channel throwing is caught and logged without
 stopping the others from being tried.
+
+A channel implementing `OptOutNotificationChannel` can additionally be
+switched off by the user on its own: `NotificationService::deliver()`
+skips it when the preference named by its `preferenceKey()` is off, while
+every other channel still delivers. Discord is the only one so far
+(`notify_discord`, migration `0476`, default on) -- a player can stop
+Discord DMs and keep web and Android push notifications. Push channels
+don't implement it; their opt-out is simply not having a subscription or
+registered device. An event with Discord as the only eligible channel
+and `notify_discord` off delivers nothing, so doesn't burn the cooldown.
 
 **5-minute cooldown per (user, game), with a queue-and-replace fallback**:
 `NotificationService::notify()` checks whether that user was already
