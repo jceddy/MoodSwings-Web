@@ -3322,14 +3322,79 @@ final class BotPlayerServiceTest extends TestCase
 
     public function testChooseDecisionAnswerDeclinesDisillusionmentWhenEveryColorIsUnsafe(): void
     {
-        $state = $this->boardState(hands: [1 => [8, 27, 55, 80, 107]]); // one mood of each color, all the bot's own
-        foreach ([8, 27, 55, 80, 107] as $cardId) {
+        $ids = [5, 28, 55, 80, 107]; // one mood of each color, none interacting with another, all the bot's own
+        $state = $this->boardState(hands: [1 => $ids]);
+        foreach ($ids as $cardId) {
             $state->moveHandToInPlay(1, $cardId);
         }
 
         $answer = $this->bot->chooseDecisionAnswer($state, $this->disillusionmentColorField(1), 1, 'disillusionment_choose_color');
 
         self::assertSame([], $answer);
+    }
+
+    /**
+     * The swing is the real before/after round score, not a sum of printed
+     * values: Ambivalence is worth 3 while two or more red/green moods are
+     * in play, 6 otherwise. With Anger (red, 0) and Awe (green, 4) both out,
+     * discarding red (just the worthless Anger) drops the count to one and
+     * lifts Ambivalence from 3 to 6 -- a net gain to the bot's own side.
+     */
+    public function testChooseDecisionAnswerScoresDisillusionmentByTheRealRoundScore(): void
+    {
+        $ids = [8, 27, 55, 80, 107];
+        $state = $this->boardState(hands: [1 => $ids]);
+        foreach ($ids as $cardId) {
+            $state->moveHandToInPlay(1, $cardId);
+        }
+
+        $answer = $this->bot->chooseDecisionAnswer($state, $this->disillusionmentColorField(1), 1, 'disillusionment_choose_color');
+
+        self::assertSame(['chosen_color_1' => 'red'], $answer);
+    }
+
+    /**
+     * Reported live: bots always declined. A color that only touches other
+     * players' moods is worth choosing even when it gains nothing in
+     * points -- here the opponent's only red mood is a value-0 Anger.
+     */
+    public function testChooseDecisionAnswerPicksAColorThatOnlyAffectsOpponentsEvenForNoPointGain(): void
+    {
+        $state = $this->boardState(hands: [2 => [80]]); // opponent: Anger (red, value 0)
+        $state->moveHandToInPlay(2, 80);
+
+        $answer = $this->bot->chooseDecisionAnswer($state, $this->disillusionmentColorField(1), 1, 'disillusionment_choose_color');
+
+        self::assertSame(['chosen_color_1' => 'red'], $answer);
+    }
+
+    /**
+     * Blue would take out the opponent's 6-point Bashfulness -- a clear
+     * net gain -- but also the bot's own Duplicity, which a point count
+     * can't price. No other color touches anything, so the bot declines.
+     */
+    public function testChooseDecisionAnswerNeverHitsItsOwnProtectedMoodForAGain(): void
+    {
+        $state = $this->boardState(hands: [1 => [37], 2 => [30]]); // bot: Duplicity (blue, 0); opponent: Bashfulness (blue, 6)
+        $state->moveHandToInPlay(1, 37);
+        $state->moveHandToInPlay(2, 30);
+
+        $answer = $this->bot->chooseDecisionAnswer($state, $this->disillusionmentColorField(1), 1, 'disillusionment_choose_color');
+
+        self::assertSame([], $answer);
+    }
+
+    /** Same board plus an unrelated opponent mood in another color: that color is the one picked instead. */
+    public function testChooseDecisionAnswerPicksAnotherColorWhenTheBestOneWouldHitAProtectedMood(): void
+    {
+        $state = $this->boardState(hands: [1 => [37], 2 => [30, 55]]); // opponent also has Apathy (black, 4)
+        $state->moveHandToInPlay(1, 37);
+        $state->moveHandToInPlay(2, 30);
+        $state->moveHandToInPlay(2, 55);
+
+        $answer = $this->bot->chooseDecisionAnswer($state, $this->disillusionmentColorField(1), 1, 'disillusionment_choose_color');
+
+        self::assertSame(['chosen_color_1' => 'black'], $answer);
     }
 
     /**
