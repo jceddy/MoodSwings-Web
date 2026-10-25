@@ -12561,8 +12561,34 @@
         return card.choice_fields.some((field) => field.requires_mode !== undefined && field.key in choices) && !('mode' in choices);
     }
 
+    // Paranoia ("choose a player with one or more cards in their hand ...
+    // that player reveals a random card and puts it on the bottom of the
+    // deck, then you draw a card") lets the player target themselves, which
+    // is rarely what they want while an opponent has a card in hand to
+    // target instead -- worth a "did you mean that?" prompt, same spirit as
+    // cardHasNoTargetSelected() above. Opponent means anyone who isn't the
+    // player or their teammate (teammate_game_player_id is undefined outside
+    // team format, so that comparison is a harmless no-op there).
+    function cardTargetsSelfWhileAnOpponentHasCards(card, choices) {
+        if (card.effect_key !== 'paranoia' || choices.target_player_id === undefined) {
+            return false;
+        }
+        const you = currentState.you;
+        if (Number(choices.target_player_id) !== you.game_player_id) {
+            return false;
+        }
+        return currentState.players.some((p) => !p.resigned
+            && p.game_player_id !== you.game_player_id
+            && p.game_player_id !== you.teammate_game_player_id
+            && p.hand_count > 0);
+    }
+
     document.getElementById('play-card-button').addEventListener('click', async () => {
         const choices = buildChoicesFromFields(selectedCard.choice_fields);
+        if (cardTargetsSelfWhileAnOpponentHasCards(selectedCard, choices)
+            && !(await showConfirmDialog(`You've chosen yourself as ${selectedCard.name}'s target, but an opponent has cards in hand. Play it anyway?`))) {
+            return;
+        }
         if (cardHasNoTargetSelected(selectedCard, choices)
             && !(await showConfirmDialog(`You haven't selected a target for ${selectedCard.name} -- its ability won't do anything. Play it anyway?`))) {
             return;
