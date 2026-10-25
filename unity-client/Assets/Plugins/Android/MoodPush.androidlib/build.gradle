@@ -1,5 +1,7 @@
-// Holds only the manifest entry for the notification permission. Written out (rather than left for Unity to
-// generate) because the generated one has no namespace, which the Android Gradle Plugin now requires.
+// Holds the notification permission and the notification bar icon (the manifest and res/ beside this file). Written out
+// (rather than left for Unity to generate) because the generated one has no namespace, which the Android Gradle Plugin
+// now requires. The source sets say where the manifest and the resources are: without them the plugin looks under
+// src/main, finds nothing, and both are silently left out of the app.
 apply plugin: 'com.android.library'
 
 android {
@@ -8,6 +10,13 @@ android {
 
     defaultConfig {
         minSdk 26
+    }
+
+    sourceSets {
+        main {
+            manifest.srcFile 'AndroidManifest.xml'
+            res.srcDirs = ['res']
+        }
     }
 
     lint {

@@ -149,6 +149,13 @@ namespace MoodSwings.Networking
         /// </summary>
         public bool IsAltValueActive => ValueLocked || WhileInPlayAltValueActive;
 
+        /// <summary>
+        /// The card is turned onto its alternate value and is worth exactly that: the number is printed right there on the (turned)
+        /// art, so repeating it in a badge would only cover the art. Not when a Chaos Draft adjustment has moved the value off the
+        /// printed one (which has its own badge).
+        /// </summary>
+        public bool ShowsPrintedAltValue => IsAltValueActive && AltValue.HasValue && Value == AltValue.Value && ChaosValueDelta == 0;
+
         /// <summary>True when an effect (Imagination) has changed the color from the printed one.</summary>
         public bool IsRecolored => !string.IsNullOrEmpty(BaseColor) && !string.IsNullOrEmpty(Color) && Color != BaseColor;
     }
@@ -230,6 +237,10 @@ namespace MoodSwings.Networking
         [JsonProperty("resigned")]
         public bool Resigned { get; set; }
 
+        /// <summary>The best achievement tier the player has unlocked ("Bronze" to "Diamond"), or null if none yet.</summary>
+        [JsonProperty("highest_achievement_tier")]
+        public string HighestAchievementTier { get; set; }
+
         [JsonProperty("ready")]
         public bool Ready { get; set; }
 
@@ -310,6 +321,19 @@ namespace MoodSwings.Networking
         public ChoiceField Field { get; set; }
     }
 
+    /// <summary>One play the turn holder has: "Your normal turn", or "An extra play from Charity".</summary>
+    public class PlayGrant
+    {
+        [JsonProperty("description")]
+        public string Description { get; set; }
+
+        [JsonProperty("source_card_id")]
+        public int? SourceCardId { get; set; }
+
+        [JsonProperty("source_card_name")]
+        public string SourceCardName { get; set; }
+    }
+
     public class BoardRound
     {
         [JsonProperty("round_number")]
@@ -334,6 +358,10 @@ namespace MoodSwings.Networking
 
         [JsonProperty("plays_remaining")]
         public int PlaysRemaining { get; set; }
+
+        /// <summary>Where each of the current turn holder's outstanding plays comes from (their normal turn, a card's extra play...).</summary>
+        [JsonProperty("play_grants")]
+        public List<PlayGrant> PlayGrants { get; set; } = new List<PlayGrant>();
 
         /// <summary>Visible to everyone: the current turn holder is waiting to acknowledge the start of their turn.</summary>
         [JsonProperty("turn_pending_acknowledgment")]
@@ -469,6 +497,10 @@ namespace MoodSwings.Networking
         /// <summary>Which game of its best-of-three match this is; null when it isn't part of one.</summary>
         [JsonProperty("match_game_number")]
         public int? MatchGameNumber { get; set; }
+
+        /// <summary>The draft match this game belongs to; every game of one shares it, and its chat. Null when it isn't a draft game.</summary>
+        [JsonProperty("draft_match_id")]
+        public int? DraftMatchId { get; set; }
 
         /// <summary>A puzzle: what the goal is. Always shown.</summary>
         [JsonProperty("puzzle_description")]

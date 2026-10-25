@@ -219,6 +219,36 @@ namespace MoodSwings.Tests
         }
 
         [Test]
+        public void JumpingToAStep_GoesStraightThere()
+        {
+            _tour.Start();
+            var changes = 0;
+            _tour.Changed += () => changes++;
+
+            _tour.JumpTo("more-players");
+
+            Assert.AreEqual("more-players", _tour.Current.Id);
+            Assert.AreEqual(1, changes);
+
+            _tour.JumpTo("no-such-step");
+            Assert.AreEqual("more-players", _tour.Current.Id, "an unknown step changes nothing");
+            Assert.AreEqual(1, changes);
+
+            _tour.Back();
+            Assert.AreEqual(TourSteps.All.Count(s => s.Sample != null) > 0 ? "sample-" + SampleGame.Steps.Count : null, _tour.Current.Id,
+                "Back from there is the last move of the sample game");
+        }
+
+        [Test]
+        public void JumpingWhenItIsNotRunning_DoesNothing()
+        {
+            _tour.JumpTo("more-players");
+
+            Assert.IsFalse(_tour.IsActive);
+            Assert.IsNull(_tour.Current);
+        }
+
+        [Test]
         public void AskingForTheTourAgain_IsTakenOnce()
         {
             Assert.IsFalse(_tour.TakeReplayRequest());

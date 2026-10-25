@@ -26,9 +26,12 @@ namespace MoodSwings.Editor
             changed |= Set(PlayerSettings.allowedAutorotateToLandscapeRight, true,
                 v => PlayerSettings.allowedAutorotateToLandscapeRight = v);
 
+            // The desktop window can be resized by its edges when it is not full screen (Windows and macOS).
+            changed |= Set(PlayerSettings.resizableWindow, true, v => PlayerSettings.resizableWindow = v);
+
             if (changed)
             {
-                Debug.Log("ProjectSettingsEnforcer: applied landscape-only orientation.");
+                Debug.Log("ProjectSettingsEnforcer: applied the project's player settings.");
                 AssetDatabase.SaveAssets();
             }
         }
