@@ -689,6 +689,44 @@ namespace MoodSwings.Tests
         }
 
         [UnityTest]
+        public IEnumerator ParanoiaAimedAtYourself_WhileAnOpponentHasCards_AsksFirst()
+        {
+            var server = new PlayServer
+            {
+                State = Load(406, s =>
+                {
+                    var card = s["you"]["hand"][0];
+                    card["effect_key"] = "paranoia";
+                    card["choice_fields"] = JArray.Parse(
+                        "[{\"key\":\"target_player_id\",\"type\":\"player\",\"scope\":\"any\",\"required\":false,\"label\":\"Player to target\"}]");
+                }),
+            };
+            server.OnPost = (path, body) =>
+            {
+                server.State = AfterPlaying(14171);
+                return null;
+            };
+            yield return OpenBoard(server, 406);
+
+            yield return TapHandCard("Superiority");
+            yield return Tap(Option("bshaftoe"));
+            yield return Submit();
+
+            Assert.IsTrue(Board().Confirm.IsOpen);
+            StringAssert.Contains("chosen yourself", Board().Confirm.MessageText);
+            StringAssert.Contains("an opponent has cards in hand", Board().Confirm.MessageText);
+            Assert.AreEqual(0, server.Posts("/games/play").Count());
+
+            yield return Tap(PhaseTwoSceneTests.FindButton("Cancel"));
+            Assert.AreEqual(0, server.Posts("/games/play").Count());
+            Assert.IsTrue(Board().Choices.IsOpen, "you're back in the form");
+
+            yield return Submit();
+            yield return Tap(PhaseTwoSceneTests.FindButton("Play anyway"));
+            Assert.AreEqual(1, server.Posts("/games/play").Count());
+        }
+
+        [UnityTest]
         public IEnumerator ACardWithATargetList_GroupsMoodsByOwner()
         {
             var server = new PlayServer
