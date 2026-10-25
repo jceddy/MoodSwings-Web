@@ -4154,6 +4154,13 @@ button).
     docblock) -- most rejections here are an ordinary fixable mistake in
     the choices themselves, not stale state, and closing it would force
     re-picking everything from scratch every time.
+    Playing Paranoia with *yourself* as its target while an opponent (not
+    you, not your teammate, not resigned) still has a card in hand --
+    `cardTargetsSelfWhileAnOpponentHasCards()` -- interrupts the same way
+    ("You've chosen yourself as Paranoia's target, but an opponent has
+    cards in hand. Play it anyway?"); targeting yourself is still legal
+    and goes through on OK, and no prompt appears when every opponent's
+    hand is empty.
     Clicking Play on a card whose entire `choice_fields` is a single
     optional target left blank -- Anger, Hate, Denial, Shock, Creativity
     with no copy target, etc., `cardHasNoTargetSelected()` -- interrupts
