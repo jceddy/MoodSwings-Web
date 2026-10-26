@@ -16,7 +16,8 @@ Writes into Assets/Resources/CardArt/:
 unity-client/art-overrides/ holds the replacement card faces (our own art, replacing the web-static
 set one card at a time) and is always used. --overrides DIR (repeatable) adds more folders takes replacement card images -- finished card faces named
 <number>-<slug>.png (or .webp/.jpg), like "01-altruism.png" -- and uses them instead of the
-web-static art for those card numbers. They are always re-converted.
+web-static art for those card numbers. A "hurt-feelings.png" (or .webp/.jpg) among them replaces the Hurt Feelings card's
+default face (the themed skins keep the web-static ones). They are always re-converted.
 
 Names are id-only so CardArtLibrary can look a card up without knowing its
 slug. Images are resized up to a multiple-of-4 size so Unity can GPU-compress
@@ -60,6 +61,7 @@ def convert(source: Path, target: Path, force: bool = False) -> bool:
 
 
 OVERRIDE_NAME = re.compile(r"^(\d+)-.+\.(png|webp|jpe?g)$", re.IGNORECASE)
+HURT_FEELINGS_NAME = re.compile(r"^hurt-feelings\.(png|webp|jpe?g)$", re.IGNORECASE)
 
 
 def main() -> int:
@@ -90,6 +92,8 @@ def main() -> int:
             match = OVERRIDE_NAME.match(source.name)
             if match:
                 overridden[OUT_DIR / f"{int(match.group(1))}.png"] = source
+            elif HURT_FEELINGS_NAME.match(source.name):
+                overridden[OUT_DIR / "hurt-feelings.png"] = source
     jobs = [(source, target) for source, target in jobs if target not in overridden]
     converted = sum(convert(source, target) for source, target in jobs)
     converted += sum(convert(source, target, force=True) for target, source in overridden.items())

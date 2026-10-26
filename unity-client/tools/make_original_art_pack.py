@@ -63,8 +63,8 @@ def build(folder: Path) -> int:
 
     with Image.open(SOURCE / "hurt-feelings.webp") as image:
         image.convert("RGBA").save(folder / "hurt-feelings.png", "PNG", compress_level=9)
-    with Image.open(UNITY_CLIENT / "Assets" / "Resources" / "UI" / "card-back.jpg") as image:
-        image.convert("RGB").save(folder / "back.png", "PNG", compress_level=9)
+    with Image.open(UNITY_CLIENT / "Assets" / "Resources" / "UI" / "card-back.png") as image:
+        image.convert("RGBA").save(folder / "back.png", "PNG", compress_level=9)
     (folder / "README.txt").write_text(README % count, encoding="utf-8")
     return count
 
