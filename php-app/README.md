@@ -14233,6 +14233,22 @@ than a parallel bespoke system:
   every reveal, every play order, passing included -- found that one winning board
   and that tie.
 
+- **31st puzzle, "Grave Robber"** (a Melancholy/Recklessness/Validation puzzle: take
+  the opponent's Melancholy, then use Validation's extra play to play a card from
+  the discard pile), medium, `win_game`, no new puzzle infrastructure. Both sides
+  have two round wins and the opponent went first (a tie is theirs). The opponent
+  has Melancholy, Joy, Faith and Worry (3 each): 12. You have Validation and
+  Charity (1 each) in play, hold Recklessness and Boredom, and have one play; the
+  discard pile holds Chivalry (3, but 5 when you did not go first) and Discipline
+  (6, but 3 with two or more black and/or red moods). The one winning line:
+  Recklessness taking Melancholy -- a printed 0, so Validation grants an extra play
+  -- and then Chivalry from the discard pile, now allowed: 2 + 3 + 0 + 5 = 10
+  against 9. Discipline reads 3 (Melancholy black, Recklessness red): 8-9. Ties:
+  Recklessness taking Melancholy and then Boredom, or taking Joy, Faith or Worry
+  and then Boredom, both 9-9. An exhaustive search through the real engine -- every
+  Recklessness target, discard-pile plays included -- found that one winning board
+  and those four ties.
+
 ### Duel: separate per-player decks
 
 `format: 'duel'` and `format: 'draft'` (see "Draft format" below) are the
