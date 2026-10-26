@@ -95,5 +95,16 @@ namespace MoodSwings.Tests
             Assert.Throws<System.InvalidOperationException>(() => protector.Protect(Secret));
             Assert.IsFalse(protector.TryUnprotect(new KeychainSecretProtector(new MemoryKeys()).Protect(Secret), out _));
         }
+
+        [Test]
+        public void TheIosKeychainKeyStore_IsOnlyAvailableOnADevice_SoAnUnsupportedPlaceFailsClosed()
+        {
+            var keys = new IosKeychainKeyStore();
+
+            Assert.IsFalse(keys.IsAvailable, "not an iPhone or iPad");
+            Assert.IsNull(keys.GetOrCreateKey());
+            Assert.IsFalse(new KeychainSecretProtector(keys).IsAvailable, "so no session is saved, rather than one in the clear");
+            Assert.IsFalse(new KeychainSecretProtector(keys).TryUnprotect(new byte[80], out _));
+        }
     }
 }

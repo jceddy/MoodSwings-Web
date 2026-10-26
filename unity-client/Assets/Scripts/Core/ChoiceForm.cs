@@ -722,6 +722,18 @@ namespace MoodSwings.Core
             var name = copied != null ? $"{_card.Name} (copying {copied.Name})" : _card.Name;
             var fields = _creativityPicker != null ? _fields.Where(f => f.Key != "copy_card_id").ToList() : _fields;
 
+            // Paranoia aimed at yourself while an opponent has a card in hand to be aimed at instead. (Like the web board, only
+            // Paranoia itself: a Creativity copying it is not asked.) An opponent is anyone who is neither you nor your teammate.
+            if (_card.EffectKey == "paranoia" && choices.TryGetValue("target_player_id", out var target)
+                && (int)target == _state.You.GamePlayerId
+                && _state.Players.Any(p => !p.Resigned
+                    && p.GamePlayerId != _state.You.GamePlayerId
+                    && p.GamePlayerId != _state.You.TeammateGamePlayerId
+                    && p.HandCount > 0))
+            {
+                questions.Add($"You've chosen yourself as {_card.Name}'s target, but an opponent has cards in hand. Play it anyway?");
+            }
+
             // A card whose only question is an optional "pick one" and nothing was picked.
             if (fields.Count == 1)
             {
