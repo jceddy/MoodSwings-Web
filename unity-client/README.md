@@ -476,14 +476,21 @@ cards or all of them. The choice is stored on the device.
   pack can be flat. The card back (`back.png`) and Hurt Feelings (`hurt-feelings.png`) sit **at the top of the
   pack**, not in a set folder. WebP isn't supported (Unity can't read it at run time). Images are shrunk to at
   most 1040 px tall; the card art that ships is 744 x 1040, so that shape looks right.
-- **Examples:** two packs, **Original Mood Swings Art** (all 138 cards of the original art) and **AI Assisted Mood
-  Swings Art** (the art the app ships with: all 138 cards, the Hurt Feelings card and the card back), are attached to
-  the GitHub release `example-art-pack-msw` as `Original-Mood-Swings-Art.zip` (82 MB) and
-  `AI-Assisted-Mood-Swings-Art.zip` (166 MB). `python tools/make_art_packs.py --original <folder> --ai-source <folder>`
-  rebuilds them: the original art's folder (already laid out as a pack) is zipped as it is, and the folder of finished
-  card faces the `art-overrides` are made from (`<number>-<name>.png`, `card-back.png`, `hurt-feelings.png`) is laid out as
-  the AI-assisted pack. Each comes out as a folder and a `.zip` (next to the original art's folder, or at `--out`). Unzip
+- **Examples:** three packs, **Original Mood Swings Art** (all 138 cards of the original art), **AI Assisted Mood
+  Swings Art** (the AI-assisted art the app has shipped with: all 138 cards, the Hurt Feelings card and the card back) and
+  **Hand Made Mood Swings Art** (the hand-made art that is replacing it a card at a time, so only the cards finished so
+  far), are attached to the GitHub release `example-art-pack-msw` as `Original-Mood-Swings-Art.zip` (82 MB),
+  `AI-Assisted-Mood-Swings-Art.zip` (166 MB) and `Hand-Made-Mood-Swings-Art.zip`.
+  `python tools/make_art_packs.py --original <folder> --ai-source <folder> [--handmade <folder>]`
+  rebuilds them: the original art's folder (already laid out as a pack) is zipped as it is, and the folders of finished
+  card faces (`<number>-<name>.png`, plus `card-back.png` and `hurt-feelings.png` where there are any) are laid out as the
+  other two. Each comes out as a folder and a `.zip` (next to the original art's folder, or at `--out`). Unzip
   one to see the layout, or add it as it is.
+- **Replacing the art the app ships with:** `python tools/import_card_art.py <folder of finished cards>` turns the
+  PNGs into `art-overrides/<number>-<slug>.webp` (replacing that card's earlier image), the Hurt Feelings card into
+  `art-overrides/hurt-feelings.webp` and the card back into `Assets/Resources/UI/card-back.png`, then regenerates the
+  Unity copy; commit `art-overrides/` afterwards. The hand-made cards go in this way, one by one, and keep the artist
+  credit printed on them.
 - **Adding one:** **Add a folder...** / **Add a .zip...** open the system's own dialog (PowerShell's on Windows,
   AppleScript's on macOS, the document picker on Android -- which needs no storage permission). The images are
   **copied into the app's own storage** (`<persistentDataPath>/ArtPacks/<name>/<SET>/<number>.png`), so the pack keeps working if the
