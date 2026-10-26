@@ -26,7 +26,29 @@ namespace MoodSwings.Editor
 
             // Unity 6 makes the round and legacy icons from the adaptive layers.
             SetAndroid(AndroidPlatformIconKind.Adaptive, Load("android-background.png"), Load("android-foreground.png"));
+            SetIos(full);
             AssetDatabase.SaveAssets();
+        }
+
+        // Every iOS icon (the app, Settings, notifications, Spotlight, the App Store) is made from the one big image; iOS
+        // draws the rounded corners itself.
+        private static void SetIos(Texture2D full)
+        {
+            if (full == null)
+            {
+                return;
+            }
+
+            foreach (var kind in PlayerSettings.GetSupportedIconKindsForPlatform(BuildTargetGroup.iOS))
+            {
+                var icons = PlayerSettings.GetPlatformIcons(BuildTargetGroup.iOS, kind);
+                foreach (var icon in icons)
+                {
+                    icon.SetTexture(full);
+                }
+
+                PlayerSettings.SetPlatformIcons(BuildTargetGroup.iOS, kind, icons);
+            }
         }
 
         private static void SetAndroid(PlatformIconKind kind, params Texture2D[] layers)

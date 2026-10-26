@@ -213,7 +213,7 @@ namespace MoodSwings.UI
                 AddUpdateRows(theme);
             }
 
-            if (Application.isMobilePlatform)
+            if (Application.isMobilePlatform && PlatformHaptics.IsSupported)
             {
                 AddDeviceRow(theme, "Vibration", "A short buzz for your turn and for questions that need an answer.",
                     AppServices.Device.VibrationOn, on => AppServices.Device.VibrationOn = on);

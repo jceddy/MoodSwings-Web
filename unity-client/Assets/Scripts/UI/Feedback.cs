@@ -126,6 +126,14 @@ namespace MoodSwings.UI
     /// <summary>Short buzzes on a phone; nothing anywhere else.</summary>
     public static class PlatformHaptics
     {
+        /// <summary>Whether this build can buzz at all (a phone's Vibration switch is only offered where it would do something).</summary>
+        public static bool IsSupported =>
+#if UNITY_ANDROID && !UNITY_EDITOR
+            true;
+#else
+            false;
+#endif
+
         public static IHaptics Create()
         {
 #if UNITY_ANDROID && !UNITY_EDITOR

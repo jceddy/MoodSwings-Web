@@ -165,8 +165,11 @@ before it touches `PlayerPrefs`:
   Verified on an Android 16 (API 36) x86_64 emulator under Unity 6000.2.1f1 --
   see "Android" below. Not yet re-run since the move to 6.6 (which can't
   target that emulator), and never run on a physical device.
-- **Anything else** (macOS/Linux/iOS): no secure storage yet, so sessions
-  aren't remembered there.
+- **macOS:** a random key in the login Keychain (through the system's `security` tool) encrypts it.
+- **iOS:** the same encryption, with the key in the app's own Keychain
+  (`Assets/Plugins/iOS/MoodKeychain.mm`, `IosKeychainKeyStore`). Written for the iOS build, which
+  has not been run yet (see "iOS" below).
+- **Anything else** (Linux): no secure storage yet, so sessions aren't remembered there.
 
 It fails closed: a corrupt blob, a failed decrypt, or an unsupported
 platform all mean "no saved session" -- never a plaintext fallback.
@@ -473,10 +476,14 @@ cards or all of them. The choice is stored on the device.
   pack can be flat. The card back (`back.png`) and Hurt Feelings (`hurt-feelings.png`) sit **at the top of the
   pack**, not in a set folder. WebP isn't supported (Unity can't read it at run time). Images are shrunk to at
   most 1040 px tall; the card art that ships is 744 x 1040, so that shape looks right.
-- **An example:** `python tools/make_original_art_pack.py` builds the original Mood Swings art as a pack from
-  `web-static/img` -- all 138 cards under `MSW/`, `back.png`, `hurt-feelings.png`, and a `README.txt` describing the
-  format -- as `art-packs/Original-Mood-Swings-Art.zip` (81 MB, git-ignored; `--folder DIR` also leaves it unzipped).
-  Unzip it to see the layout, or add it as it is.
+- **Examples:** two packs, **Original Mood Swings Art** (all 138 cards of the original art) and **AI Assisted Mood
+  Swings Art** (the art the app ships with: all 138 cards, the Hurt Feelings card and the card back), are attached to
+  the GitHub release `example-art-pack-msw` as `Original-Mood-Swings-Art.zip` (82 MB) and
+  `AI-Assisted-Mood-Swings-Art.zip` (166 MB). `python tools/make_art_packs.py --original <folder> --ai-source <folder>`
+  rebuilds them: the original art's folder (already laid out as a pack) is zipped as it is, and the folder of finished
+  card faces the `art-overrides` are made from (`<number>-<name>.png`, `card-back.png`, `hurt-feelings.png`) is laid out as
+  the AI-assisted pack. Each comes out as a folder and a `.zip` (next to the original art's folder, or at `--out`). Unzip
+  one to see the layout, or add it as it is.
 - **Adding one:** **Add a folder...** / **Add a .zip...** open the system's own dialog (PowerShell's on Windows,
   AppleScript's on macOS, the document picker on Android -- which needs no storage permission). The images are
   **copied into the app's own storage** (`<persistentDataPath>/ArtPacks/<name>/<SET>/<number>.png`), so the pack keeps working if the
@@ -799,6 +806,24 @@ Publishing: build the clients, then `python tools/publish_client.py --note "What
 repository is public, so builds on its releases are downloadable by anyone; point `ManifestUrl` and the script at
 another host to change that.
 
+## iOS
+
+The project can make an Xcode project for an iPhone or iPad build -- **MoodSwings > Build iOS Xcode Project** in the
+Editor (`IosBuild`; headless:
+`Unity -batchmode -quit -buildTarget iOS -executeMethod MoodSwings.Editor.IosBuild.Build`), which needs the Editor's
+"iOS Build Support" module and writes `Build/iOS/Unity-iPhone.xcodeproj` -- and Xcode, on a Mac, turns that into the app.
+**[docs/building-for-ios.md](docs/building-for-ios.md)** is the step-by-step guide to building it on a Mac and installing
+it on a device over USB, with no paid Apple account needed.
+
+- **Settings it applies:** bundle id `com.jceddy.moodswings` (`MOOD_IOS_BUNDLE_ID` overrides it), iPhone and iPad,
+  landscape, iOS 15 or later, full screen only (no iPad split view), IL2CPP / ARM64, automatic signing
+  (`MOOD_IOS_TEAM_ID` sets the team; `MOOD_IOS_BUILD_NUMBER` the build number), and the app icon from `Assets/Icons`.
+  `IosPostProcess` marks the app as exempt from export-compliance questions (`ITSAppUsesNonExemptEncryption`).
+- **What's missing on iOS:** in-app updates (and so the update settings), push notifications (APNs), the art-pack file
+  picker, vibration and Quit; everything else is the shared client.
+- **Not yet verified:** the machine the client is built on is Windows, which can't build for iOS, so the iOS build,
+  the Keychain plugin and the layout on a real iPhone/iPad are untested. The Editor scripts compile; nothing has run.
+
 ## Mobile + desktop from one project
 
 Nothing here is platform-specific yet -- that's mostly a Build Settings
@@ -808,8 +833,7 @@ mouse/keyboard/controller) against the same game logic, and a
 `CanvasScaler` set to "Scale With Screen Size" handles the aspect-ratio
 spread across phones/tablets/desktop monitors. The one hard platform
 constraint: an iOS build has to go through Xcode on an actual Mac --
-that step can't be done from this environment, or from Windows/Linux at
-all.
+that step can't be done from Windows/Linux at all (see "iOS" below).
 
 ## Versioning
 

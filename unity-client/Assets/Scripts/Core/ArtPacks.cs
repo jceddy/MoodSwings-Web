@@ -44,7 +44,7 @@ namespace MoodSwings.Core
         public string StoredName =>
             (Kind == ArtKind.Card ? Number.ToString() : Kind == ArtKind.Back ? "back" : "hurt-feelings") + "." + Extension;
 
-        // "12-faith.png", "012.jpg", "Card 12.PNG" -> card 12; "back.png", "card-back.jpg"; "hurt-feelings.png".
+        // "12-faith.png", "012.jpg", "Card 12.PNG" -> card 12; "back.png", "card-back.png"; "hurt-feelings.png".
         private static readonly Regex CardName = new Regex(@"^(?:card[\s_-]*)?0*(?<n>\d{1,4})(?:[\s_-].*)?\.(?<ext>png|jpe?g)$", RegexOptions.IgnoreCase);
         private static readonly Regex BackName = new Regex(@"^(?:card[\s_-]*)?back\.(?<ext>png|jpe?g)$|^cardback\.(?<ext2>png|jpe?g)$", RegexOptions.IgnoreCase);
         private static readonly Regex HurtName = new Regex(@"^hurt[\s_-]*feelings\.(?<ext>png|jpe?g)$", RegexOptions.IgnoreCase);
