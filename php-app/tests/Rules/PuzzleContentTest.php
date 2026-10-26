@@ -2540,6 +2540,74 @@ final class PuzzleContentTest extends TestCase
         $this->assertGameFailed($gameId);
     }
 
+    /** Grave Robber's Recklessness, taking the opponent's mood $catalogId. */
+    private function playGraveRobberRecklessness(int $gameId, int $p, ?int $takeCatalogId): void
+    {
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+        $choices = $takeCatalogId === null ? [] : ['target_mood_id' => $this->ownedInstanceId($gameId, $takeCatalogId, 'in_play', $opp)];
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 100, 'hand'), $choices);
+    }
+
+    /**
+     * "Grave Robber": the only winning line (exhaustive search of the real
+     * flow, every Recklessness target, discard-pile plays included) is
+     * Recklessness taking Melancholy -- Validation grants an extra play for the
+     * printed 0 -- and then Chivalry from the discard pile: 2 + 3 + 0 + 5 = 10
+     * against 9. See migration 0480's own docblock.
+     */
+    public function testGraveRobberSolvedByTakingMelancholyAndPlayingChivalryFromTheDiscardPile(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('grave-robber');
+
+        $this->playGraveRobberRecklessness($gameId, $p, 69);
+        $this->assertGameNotSolved($gameId);
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 4, 'discard'));
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameSolved($gameId, $p);
+    }
+
+    /** Discipline reads 3 once Recklessness is out (Melancholy black, Recklessness red): 2 + 3 + 3 = 8 against 9. */
+    public function testGraveRobberDisciplineFromTheDiscardPileLoses(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('grave-robber');
+
+        $this->playGraveRobberRecklessness($gameId, $p, 69);
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 9, 'discard'));
+        $this->games->advanceAutomatedTurns($gameId);
+
+        $this->assertGameFailed($gameId);
+    }
+
+    /** Boredom instead of a discard-pile card: 9-9 whether Recklessness took Melancholy or one of the 3s, and a tie is the opponent's. */
+    public function testGraveRobberBoredomAfterAnyTakeTies(): void
+    {
+        foreach ([69, 125, 12, 52] as $takeCatalogId) {
+            ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('grave-robber');
+
+            $this->playGraveRobberRecklessness($gameId, $p, $takeCatalogId);
+            $this->playDriven($gameId, $p, $this->instanceId($gameId, 83, 'hand'));
+            $this->games->advanceAutomatedTurns($gameId);
+
+            $this->assertGameFailed($gameId);
+        }
+    }
+
+    /** Without Melancholy the discard pile is out of reach, and Boredom alone (or Recklessness taking nothing) is far behind. */
+    public function testGraveRobberOtherLinesLose(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('grave-robber');
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 83, 'hand'));
+        $this->games->advanceAutomatedTurns($gameId);
+        $this->assertGameFailed($gameId);
+
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('grave-robber');
+        $this->playGraveRobberRecklessness($gameId, $p, null);
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 83, 'hand'));
+        $this->games->advanceAutomatedTurns($gameId);
+        $this->assertGameFailed($gameId);
+    }
+
     /** The score each seat got in the most recently scored round of $gameId, keyed 'solver'/'opponent'. @return array{solver: int, opponent: int} */
     private function lastRoundScores(int $gameId, int $solverGamePlayerId): array
     {
