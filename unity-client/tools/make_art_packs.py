@@ -66,9 +66,10 @@ def zip_pack(folder: Path, target: Path) -> int:
 
 def build_ai_assisted(source: Path, folder: Path) -> int:
     """Lays the app's card art out as a pack in `folder`; returns how many cards."""
-    if folder.exists():
-        shutil.rmtree(folder)
-    (folder / "MSW").mkdir(parents=True)
+    # The old cards are removed one by one and the folders kept: a synced folder (OneDrive) can refuse to be deleted.
+    (folder / "MSW").mkdir(parents=True, exist_ok=True)
+    for old in (folder / "MSW").glob("*.png"):
+        old.unlink()
     cards = sorted((f for f in source.iterdir() if CARD.match(f.name)), key=lambda f: int(f.name.split("-")[0]))
     for card in cards:
         shutil.copyfile(card, folder / "MSW" / card.name)

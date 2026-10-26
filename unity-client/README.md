@@ -474,9 +474,9 @@ cards or all of them. The choice is stored on the device.
   pack**, not in a set folder. WebP isn't supported (Unity can't read it at run time). Images are shrunk to at
   most 1040 px tall; the card art that ships is 744 x 1040, so that shape looks right.
 - **Examples:** two packs, **Original Mood Swings Art** (all 138 cards of the original art) and **AI Assisted Mood
-  Swings Art** (the art the app ships with: 137 cards so far, the Hurt Feelings card and the card back), are attached to
+  Swings Art** (the art the app ships with: all 138 cards, the Hurt Feelings card and the card back), are attached to
   the GitHub release `example-art-pack-msw` as `Original-Mood-Swings-Art.zip` (82 MB) and
-  `AI-Assisted-Mood-Swings-Art.zip` (165 MB). `python tools/make_art_packs.py --original <folder> --ai-source <folder>`
+  `AI-Assisted-Mood-Swings-Art.zip` (166 MB). `python tools/make_art_packs.py --original <folder> --ai-source <folder>`
   rebuilds them: the original art's folder (already laid out as a pack) is zipped as it is, and the folder of finished
   card faces the `art-overrides` are made from (`<number>-<name>.png`, `card-back.png`, `hurt-feelings.png`) is laid out as
   the AI-assisted pack. Each comes out as a folder and a `.zip` (next to the original art's folder, or at `--out`). Unzip
