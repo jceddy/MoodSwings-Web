@@ -625,6 +625,80 @@ namespace MoodSwings.Tests
             Assert.AreEqual(0, form.Confirmations().Count);
         }
 
+        private static ChoiceForm Paranoia(GameState state) =>
+            ChoiceForm.ForCard(state, new BoardCard
+            {
+                CardId = 999,
+                Name = "Paranoia",
+                EffectKey = "paranoia",
+                IsPlayable = true,
+                ChoiceFields = new List<ChoiceField>
+                {
+                    Field(@"{""key"":""target_player_id"",""type"":""player"",""scope"":""any"",""required"":false,""label"":""x"",""filter"":{""min_hand_count"":1}}"),
+                },
+            });
+
+        [Test]
+        public void Paranoia_OnYourself_WhileAnOpponentHasCards_Asks()
+        {
+            var form = Paranoia(Table()); // Bo has two cards in hand
+
+            form.Select("target_player_id", Me.ToString());
+
+            StringAssert.Contains("You've chosen yourself as Paranoia's target, but an opponent has cards in hand", form.Confirmations().Single());
+        }
+
+        [Test]
+        public void Paranoia_OnAnOpponent_OrOnYourselfWhenNoOneElseHasCards_DoesNotAskAboutYourself()
+        {
+            var form = Paranoia(Table());
+            form.Select("target_player_id", Bo.ToString());
+            Assert.AreEqual(0, form.Confirmations().Count);
+
+            var state = Table();
+            state.Players.First(p => p.GamePlayerId == Bo).HandCount = 0;
+            var alone = Paranoia(state);
+            alone.Select("target_player_id", Me.ToString());
+            Assert.AreEqual(0, alone.Confirmations().Count, "nobody else to aim it at");
+        }
+
+        [Test]
+        public void Paranoia_OnYourself_IgnoresResignedOpponents_AndATeammate()
+        {
+            var state = Table();
+            state.Players.First(p => p.GamePlayerId == Bo).Resigned = true;
+            var form = Paranoia(state);
+            form.Select("target_player_id", Me.ToString());
+            Assert.AreEqual(0, form.Confirmations().Count, "a resigned player is not an opponent worth aiming at");
+
+            state = Table();
+            state.You.TeammateGamePlayerId = Bo;
+            var team = Paranoia(state);
+            team.Select("target_player_id", Me.ToString());
+            Assert.AreEqual(0, team.Confirmations().Count, "a teammate is not an opponent");
+
+            state.Players.First(p => p.GamePlayerId == Ann).HandCount = 1;
+            Assert.AreEqual(1, team.Confirmations().Count, "but an opponent with a card is");
+        }
+
+        [Test]
+        public void Paranoia_WithNoTargetAtAll_StillGetsTheNoTargetQuestion_NotTheSelfOne()
+        {
+            var form = Paranoia(Table());
+
+            StringAssert.Contains("haven't selected a target for Paranoia", form.Confirmations().Single());
+        }
+
+        [Test]
+        public void OtherCards_AreNotAskedAboutAimingAtYourself()
+        {
+            var form = FormForCard("curiosity", "Curiosity",
+                Field(@"{""key"":""target_player_id"",""type"":""player"",""scope"":""any"",""required"":false,""label"":""x""}"));
+            form.Select("target_player_id", Me.ToString());
+
+            Assert.AreEqual(0, form.Confirmations().Count);
+        }
+
         [Test]
         public void ACardWithSeveralChoices_DoesNotAskAboutAnEmptyOne()
         {
