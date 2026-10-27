@@ -14249,6 +14249,22 @@ than a parallel bespoke system:
   Recklessness target, discard-pile plays included -- found that one winning board
   and those four ties.
 
+- **32nd puzzle, "Backfire"** (a Passion puzzle: removing the opponent's biggest mood
+  backfires, because your Passion was scoring it too), medium, `win_game`, with one
+  piece of puzzle infrastructure: `GameService::puzzleSolverOutscoresOpponent()` (the
+  check behind `win_game` and `outscore_opponent`) now scores the board with
+  Enthusiasm's and Passion's bonuses counted, as a bot takes them
+  (`BotPlayerService::projectedScoringDecisions()`: always, on the highest-value
+  target) -- they are scoring-time decisions and a puzzle solves without that pause,
+  so before this a Passion in a puzzle was worth nothing. Both sides have two round
+  wins and the opponent went first (a tie is theirs). The opponent has Generosity (6),
+  Charity (1) and Courage (1): 8. You have Passion in play -- you also score
+  Generosity: 6 against 8 -- and hold Hate, Anger, Patience and Joy, with one play. The
+  one winning line is Joy: 6 + 3 = 9 against 8. Hate on Generosity takes it from both
+  of you (Passion scores Charity: 1-2); Anger can only reach the small moods (6-6, a
+  tie); Patience reads 1 (7-8). An exhaustive search through the real engine -- every
+  Hate target and Anger set -- found that one winning board and that tie.
+
 ### Duel: separate per-player decks
 
 `format: 'duel'` and `format: 'draft'` (see "Draft format" below) are the
