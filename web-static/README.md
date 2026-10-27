@@ -1289,6 +1289,17 @@ every other Settings checkbox (`POST /user/matchmaking-discoverable-preference`)
 Only gates whether YOUR OWN listings are shown to strangers -- joining
 someone else's listing needs no opt-in of its own.
 
+### League play (issue #171)
+
+A "League" button (after "Weekly Sealed Pool") opens `#league-dialog`:
+event name/rules, a saved-deck picker (`#league-deck-select`, optional on
+the very first join, which uses the granted structure deck), a single
+Join/Leave queue pair, the player's W/L record and recent matches, and a
+"My collection" button opening `#league-collection-dialog`. API calls live
+in `app.js` (`getLeagueStatus`, `getLeagueCollection`, `joinLeague`,
+`leaveLeagueQueue`); a `{"status": "paired"}` join response opens the new
+game. See "League play" in `php-app/README.md`.
+
 ### Weekly Sealed Pool (issue #520)
 
 A new "Weekly Sealed Pool" button (next to "Open games") opens
