@@ -2608,6 +2608,64 @@ final class PuzzleContentTest extends TestCase
         $this->assertGameFailed($gameId);
     }
 
+    /**
+     * "Backfire": the only winning line (exhaustive search of the real flow, every
+     * Hate target and Anger set) is Joy -- Passion still scores Generosity: 6 + 3 = 9
+     * against 8. Passion's bonus is only counted because of the puzzle goal check's
+     * own Enthusiasm/Passion handling (see migration 0481's own docblock).
+     */
+    public function testBackfireSolvedByPlayingJoy(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('backfire');
+
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 125, 'hand'));
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameSolved($gameId, $p);
+    }
+
+    /** Hate on Generosity: Passion has to score Charity instead -- 1 against their remaining 2. */
+    public function testBackfireHateOnTheBigMoodLoses(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('backfire');
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 66, 'hand'), [
+            'target_mood_id' => $this->ownedInstanceId($gameId, 120, 'in_play', $opp),
+        ]);
+        $this->games->advanceAutomatedTurns($gameId);
+
+        $this->assertGameFailed($gameId);
+    }
+
+    /** Anger can only reach the two 1s: 6 against Generosity's 6, a tie, and a tie goes to the opponent. */
+    public function testBackfireAngerOnTheSmallMoodsTies(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('backfire');
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 80, 'hand'), [
+            'target_mood_ids' => [
+                $this->ownedInstanceId($gameId, 3, 'in_play', $opp),
+                $this->ownedInstanceId($gameId, 7, 'in_play', $opp),
+            ],
+        ]);
+        $this->games->advanceAutomatedTurns($gameId);
+
+        $this->assertGameFailed($gameId);
+    }
+
+    /** Patience reads 1 once it is played: 7 against 8. */
+    public function testBackfirePatienceLoses(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('backfire');
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 21, 'hand'));
+        $this->games->advanceAutomatedTurns($gameId);
+
+        $this->assertGameFailed($gameId);
+    }
+
     /** The score each seat got in the most recently scored round of $gameId, keyed 'solver'/'opponent'. @return array{solver: int, opponent: int} */
     private function lastRoundScores(int $gameId, int $solverGamePlayerId): array
     {

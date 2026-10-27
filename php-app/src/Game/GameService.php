@@ -12007,7 +12007,12 @@ final class GameService
         }
 
         $opponentId = (int) $opponentId;
-        $scores = $this->scorer->score($state);
+        // Enthusiasm/Passion bonuses are scoring-time decisions (see
+        // RoundScorer::score()), and a solve is decided without that
+        // pause -- so they're counted as taken the way a bot takes them
+        // (always, on the highest-value target), the one choice a solver
+        // would make; without this a Passion in a puzzle scored nothing.
+        $scores = $this->scorer->score($state, $this->bots->projectedScoringDecisions($state));
 
         // Turn order is whoever the live round says went first -- the
         // opponent for most puzzles, the solver when puzzles.solver_goes_first
