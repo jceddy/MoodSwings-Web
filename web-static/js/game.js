@@ -5725,6 +5725,142 @@
         await refreshWeeklySealedPoolQueueStatus();
     });
 
+    // League dialog (issue #171) -- see LeagueService's own docblock. Like the
+    // Weekly Sealed Pool dialog, a player paired while sitting here isn't
+    // specially detected; the new game shows up on the next lobby poll.
+    const leagueDialog = document.getElementById('league-dialog');
+    const leagueCollectionDialog = document.getElementById('league-collection-dialog');
+    const leagueDeckSelect = document.getElementById('league-deck-select');
+    const leagueJoinButton = document.getElementById('league-join-button');
+
+    function updateLeagueJoinButtonEnabled() {
+        // A player who has joined must pick a deck; a first-time joiner plays
+        // the deck they are about to be granted, so has nothing to pick.
+        leagueJoinButton.disabled = !document.getElementById('league-deck-label').hidden && leagueDeckSelect.value === '';
+    }
+
+    async function refreshLeague() {
+        const noEvent = document.getElementById('league-no-event');
+        const section = document.getElementById('league-event-section');
+        const { ok, body } = await getLeagueStatus();
+        if (!ok || body.event === null) {
+            noEvent.hidden = false;
+            section.hidden = true;
+            return;
+        }
+        noEvent.hidden = true;
+        section.hidden = false;
+
+        document.getElementById('league-event-name').textContent = body.event.set_code ? `${body.event.name} (${body.event.set_code})` : body.event.name;
+        document.getElementById('league-summary').textContent = `Record ${body.wins}-${body.losses}. ${body.in_progress_count}/${body.concurrent_match_cap} matches in progress. `
+            + `Collection: ${body.collection.total_cards} cards (${body.collection.unique_cards} different).`;
+        document.getElementById('league-rules').textContent = `Matches are best-of-three Duels. Decks need at least ${body.deck_rules.min_cards} cards from your collection `
+            + `(no more copies of a card than you own), with at most ${body.deck_rules.max_mythics} mythics and ${body.deck_rules.max_rares} rares. `
+            + 'You never play the same opponent twice in one event.';
+
+        const queueStatus = document.getElementById('league-queue-status');
+        const leaveButton = document.getElementById('league-leave-button');
+        const deckLabel = document.getElementById('league-deck-label');
+        if (body.queued) {
+            queueStatus.textContent = "You're in the queue, waiting for an opponent.";
+            leagueJoinButton.hidden = true;
+            deckLabel.hidden = true;
+            leaveButton.hidden = false;
+        } else {
+            leaveButton.hidden = true;
+            leagueJoinButton.hidden = false;
+            if (body.joined) {
+                queueStatus.textContent = '';
+                leagueJoinButton.textContent = 'Queue for a match';
+                deckLabel.hidden = false;
+                await populateSavedDecklistSelect(leagueDeckSelect, 'Choose a saved deck');
+            } else {
+                queueStatus.textContent = "You'll be granted a random Structure deck for your collection, and queued to play with it.";
+                leagueJoinButton.textContent = 'Join League';
+                deckLabel.hidden = true;
+            }
+            updateLeagueJoinButtonEnabled();
+            if (body.in_progress_count >= body.concurrent_match_cap) {
+                leagueJoinButton.disabled = true;
+            }
+        }
+
+        const list = document.getElementById('league-matches-list');
+        const empty = document.getElementById('league-matches-empty');
+        list.innerHTML = '';
+        empty.hidden = body.matches.length > 0;
+        body.matches.forEach((match) => {
+            const item = document.createElement('li');
+            const result = match.status === 'in_progress' ? 'in progress' : (match.won ? 'won' : 'lost');
+            item.textContent = `vs ${match.opponent_username} — ${result}`;
+            if (match.game_id !== null) {
+                const openButton = document.createElement('button');
+                openButton.type = 'button';
+                openButton.textContent = match.status === 'in_progress' ? 'Open game' : 'View';
+                openButton.addEventListener('click', () => {
+                    leagueDialog.close();
+                    showBoard(match.game_id);
+                });
+                item.append(' ', openButton);
+            }
+            list.appendChild(item);
+        });
+    }
+
+    document.getElementById('league-button').addEventListener('click', async () => {
+        document.getElementById('league-error').hidden = true;
+        leagueDialog.showModal();
+        await refreshLeague();
+    });
+
+    document.getElementById('league-close-button').addEventListener('click', () => leagueDialog.close());
+    leagueDeckSelect.addEventListener('change', updateLeagueJoinButtonEnabled);
+
+    leagueJoinButton.addEventListener('click', async () => {
+        const errorEl = document.getElementById('league-error');
+        errorEl.hidden = true;
+
+        const { ok, body } = await joinLeague(leagueDeckSelect.value || null);
+        if (!ok) {
+            errorEl.textContent = body.message || 'Could not join the League.';
+            errorEl.hidden = false;
+            await refreshLeague();
+            return;
+        }
+
+        if (body.status === 'paired') {
+            leagueDialog.close();
+            showBoard(body.game_id);
+            return;
+        }
+
+        await refreshLeague();
+    });
+
+    document.getElementById('league-leave-button').addEventListener('click', async () => {
+        await leaveLeagueQueue();
+        await refreshLeague();
+    });
+
+    document.getElementById('league-collection-button').addEventListener('click', async () => {
+        const { ok, body } = await getLeagueCollection();
+        const cards = ok ? body.cards : [];
+        const list = document.getElementById('league-collection-list');
+        list.innerHTML = '';
+        document.getElementById('league-collection-empty').hidden = cards.length > 0;
+        document.getElementById('league-collection-summary').textContent = cards.length > 0
+            ? `${cards.reduce((total, card) => total + card.copies, 0)} cards, ${cards.length} different.`
+            : '';
+        cards.forEach((card) => {
+            const item = document.createElement('li');
+            item.textContent = `${card.copies}x ${card.name} (${card.color} ${card.rarity})`;
+            list.appendChild(item);
+        });
+        leagueCollectionDialog.showModal();
+    });
+
+    document.getElementById('league-collection-close-button').addEventListener('click', () => leagueCollectionDialog.close());
+
     newGameForm.addEventListener('submit', async (event) => {
         event.preventDefault();
         newGameError.hidden = true;

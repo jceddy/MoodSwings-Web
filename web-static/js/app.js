@@ -648,6 +648,31 @@ function pickPodDraftCard(tournamentId, direction, cardId) {
     });
 }
 
+// League play (issue #171) -- see LeagueService's own docblock
+// (php-app/src/League/). getLeagueStatus() describes the active event (or
+// null) and the player's own standing in it; joinLeague() joins the event --
+// granting the first-time structure deck -- and queues, resolving to either
+// { status: 'waiting' } or { status: 'paired', game_id, opponent_username }.
+// savedDecklistId may be omitted only on the very first join of an event.
+function getLeagueStatus() {
+    return apiRequest('/league');
+}
+
+function getLeagueCollection() {
+    return apiRequest('/league/collection');
+}
+
+function joinLeague(savedDecklistId) {
+    return apiRequest('/league/join', {
+        method: 'POST',
+        body: JSON.stringify(savedDecklistId ? { saved_decklist_id: Number(savedDecklistId) } : {}),
+    });
+}
+
+function leaveLeagueQueue() {
+    return apiRequest('/league/queue/leave', { method: 'POST' });
+}
+
 // Weekly Sealed Pool's own queue (issue #520) -- a FIFO auto-pairing
 // ladder, deliberately separate from the open-lobby endpoints above (see
 // WeeklySealedPoolQueueService's own docblock). getWeeklySealedPoolQueueStatus()

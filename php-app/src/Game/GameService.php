@@ -3172,6 +3172,49 @@ final class GameService
     }
 
     /**
+     * League play's grant (issue #171): one randomized Structure deck's worth
+     * of cards -- exactly what a 'structure' game deals, never a Chaos Draft
+     * token -- see buildStructureDeckCardIds().
+     *
+     * @return int[]
+     */
+    public function randomStructureDeckCardIds(): array
+    {
+        return $this->buildStructureDeckCardIds();
+    }
+
+    /**
+     * League play's own deck check (issue #171): resolves one of $userId's
+     * saved decklists and validates it against $rules (League's own minimum
+     * size and mythic/rare caps) AND against what the player actually owns --
+     * no card may appear more times than $copiesByCardId says their
+     * collection holds. Like resolvePowerDuelTournamentDeck() there is no
+     * games row to read rules from at queue time, so the caller passes them
+     * in and persists the result itself.
+     *
+     * @param array<int, int> $copiesByCardId catalog card id => copies owned
+     * @return array{name: ?string, cardIds: int[]}
+     */
+    public function resolveLeagueDeck(int $userId, int $savedDecklistId, DuelDeckRules $rules, array $copiesByCardId): array
+    {
+        $catalog = $this->loadCardCatalog();
+        $parsed = $this->userDecklists->cardIdsForUse($userId, $savedDecklistId);
+
+        $rules->validate($parsed['cardIds'], $catalog['rowsById'], 'Your decklist');
+
+        foreach (array_count_values($parsed['cardIds']) as $cardId => $copies) {
+            $owned = $copiesByCardId[$cardId] ?? 0;
+            if ($copies > $owned) {
+                $name = $catalog['rowsById'][$cardId]['name'];
+                $ownedText = $owned === 0 ? "your collection doesn't have it" : "your collection only has {$owned}";
+                throw new GameStateException("Your decklist uses {$copies} cop" . ($copies === 1 ? 'y' : 'ies') . " of \"{$name}\", but {$ownedText}.");
+            }
+        }
+
+        return ['name' => $parsed['name'], 'cardIds' => $parsed['cardIds']];
+    }
+
+    /**
      * @param int[] $cardIds a submitted deck
      * @param int[] $allowedCardIds the submitting seat's own drafted pool -- see submitCustomDuelDeck()'s own docblock
      */
