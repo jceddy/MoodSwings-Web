@@ -14332,6 +14332,18 @@ than a parallel bespoke system:
   tie); Patience reads 1 (7-8). An exhaustive search through the real engine -- every
   Hate target and Anger set -- found that one winning board and that tie.
 
+- **33rd puzzle, "Fear Itself"** (a Fear puzzle: Fear's extra play isn't tied to
+  returning a mood, so it is free), easy, `win_game`, no new puzzle infrastructure.
+  Both sides have two round wins and the opponent went first (a tie is theirs). The
+  opponent has the vanilla commons Complacency, Indifference and Apathy (4 each): 12.
+  You have Boredom and Laziness (4 each) in play, hold Fear, Superiority and Joy, and
+  have one play. The one winning line: Fear, returning nothing, then Superiority --
+  four moods against their three, so it reads 7: 4 + 4 + 0 + 7 = 15 against 12.
+  Superiority alone is three moods against three ("more" isn't "as many"): 11-12; Joy
+  alone, or Fear and then Joy, is 11-12; returning a mood with Fear costs you a body
+  (Fear and Superiority: 7-12). An exhaustive search through the real engine -- every
+  Fear return -- found that one winning board and no ties.
+
 ### Duel: separate per-player decks
 
 `format: 'duel'` and `format: 'draft'` (see "Draft format" below) are the
