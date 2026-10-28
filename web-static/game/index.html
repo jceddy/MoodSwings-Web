@@ -1183,6 +1183,21 @@
             <p id="league-matches-empty" hidden>No League matches yet this event.</p>
             <button id="league-collection-button" type="button">View my collection</button>
         </section>
+        <!-- Leaderboard: the active event's live standings, or the most
+             recently ended event's final ones -- outside the event section
+             above so the previous event stays viewable while nothing is
+             running. Same shape as Weekly Sealed Pool's standings (see
+             LeagueService::leaderboard()). -->
+        <section id="league-leaderboard-section">
+            <h3>Leaderboard</h3>
+            <div>
+                <button id="league-leaderboard-current-button" type="button" aria-pressed="true">Current event</button>
+                <button id="league-leaderboard-previous-button" type="button" aria-pressed="false">Previous event</button>
+            </div>
+            <p id="league-leaderboard-event"></p>
+            <ul id="league-leaderboard-list"></ul>
+            <p id="league-leaderboard-empty" hidden></p>
+        </section>
         <button id="league-close-button" type="button">Close</button>
     </dialog>
 

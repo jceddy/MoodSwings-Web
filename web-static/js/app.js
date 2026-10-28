@@ -660,6 +660,14 @@ function getLeagueStatus() {
     return apiRequest('/league');
 }
 
+// which: 'current' (the active event's live standings) or 'previous' (the
+// most recently ended event's final ones) -- see LeagueService::leaderboard().
+// Resolves to { event: {...}|null, standings: [{ user_id, username, wins,
+// losses, rank, percentile }] }.
+function getLeagueLeaderboard(which = 'current') {
+    return apiRequest(`/league/leaderboard?event=${which === 'previous' ? 'prior' : 'current'}`);
+}
+
 function getLeagueCollection() {
     return apiRequest('/league/collection');
 }

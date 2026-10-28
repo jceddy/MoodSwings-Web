@@ -1660,6 +1660,13 @@ if ($path === '/league' && $method === 'GET') {
     respond(200, ['status' => 'ok', ...$league->statusFor((int) $currentUser['id'])]);
 }
 
+// ?event=prior shows the most recently ended event's final standings instead
+// of the active event's live ones -- see LeagueService::leaderboard().
+if ($path === '/league/leaderboard' && $method === 'GET') {
+    requireAuth($auth);
+    respond(200, ['status' => 'ok', ...$league->leaderboard(($_GET['event'] ?? '') === 'prior')]);
+}
+
 if ($path === '/league/collection' && $method === 'GET') {
     $currentUser = requireAuth($auth);
     respond(200, ['status' => 'ok', 'cards' => $league->collectionFor((int) $currentUser['id'])]);
