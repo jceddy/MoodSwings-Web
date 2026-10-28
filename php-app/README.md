@@ -3983,6 +3983,73 @@ supports -- see "Duel: separate per-player decks" above), so
 `draftGamesToWin()`'s own single-game (3-4 players) branch is simply
 never reached here -- always the best-of-three branch.
 
+### League play (issue #171)
+
+An open-ended, manually started event in which each player builds a
+permanent card collection and plays best-of-three Duels against other
+league members using only cards they own.
+
+- **Events.** An operator starts/ends events from the shell:
+  `php bin/league_event.php start "<name>" [set code]`, `status`, `end`.
+  Only one event is active at a time (`league_events`, `LeagueEventRepository`).
+  Ending an event empties the queue; in-progress matches finish normally.
+- **Eligibility.** Humans only (bots are excluded entirely) and the player
+  must have "Discoverable for open games" (`matchmaking_discoverable`) on.
+- **Join = queue.** `POST /league/join` both joins the event and enters the
+  queue (no deck is chosen here). The first join of each event grants one
+  randomized structure deck (45 cards, 23C/14U/6R/2M, no chaos tokens) into
+  the permanent collection (`user_collection_cards`) and saves it as a private
+  decklist. Leaving and rejoining never grants a second deck.
+- **Pairing.** FIFO under a `GET_LOCK` advisory lock, like Weekly Sealed
+  Pool: at most `CONCURRENT_MATCH_CAP` (2) in-progress matches per player,
+  never the same opponent twice in one event, never blocked users.
+- **Games.** 2-player `custom_duel`, best-of-three, created with no decks
+  seeded and each seat restricted to its own collection
+  (`custom_deck_allowed_card_ids`). Each player builds their deck in the game
+  -- before game 1 and again before each later game, as for any custom_duel
+  match -- and `submitCustomDuelDeck()` enforces the rules on every game's deck:
+  minimum 12 cards, at most 2 mythics and 6 rares, and per-card copies no
+  greater than owned.
+- **Sideboard.** League matches are created with `game_matches.allow_sideboarding`
+  on (`GameService::enableLeagueSideboarding()`). On game 1 a player declares a
+  main deck plus a sideboard of up to 3 cards (`LEAGUE_SIDEBOARD_MAX_CARDS`;
+  repeated cards are fine as long as main + sideboard fit the collection, and
+  the sideboard itself is exempt from the rarity caps). From game 2 on the deck
+  can only be reshuffled within that declared pool, copy for copy
+  (`validateLeagueSideboardSwap()`), so the sideboard cards are the only ones
+  that can be swapped in; the new sideboard is whatever the deck leaves over.
+  This is the Power Duel sideboarding mechanism (see "Power Duel"), generalised
+  for League's multi-copy pools.
+  While a League game waits on decks, `getState()` carries a
+  `league_deck_builder` object (`pool`: the cards the viewer may use with their
+  `copies` -- their collection on game 1, the declared deck + sideboard from game
+  2; `fixed_pool`; `sideboard_max` (0 once the pool is fixed);
+  `default_deck_card_ids`: their previous game's deck or, for game 1, the
+  starter deck they were granted; plus `min_cards`/`rarity_limits`);
+  `GameService::notifyLeagueDeckNeeded()` pushes the player who was waiting in
+  the queue when the pairing is made.
+- **Results.** `league_matches` is synced from `game_matches` on read
+  (`LeagueService::syncMatches`).
+- **Leaderboard.** `LeagueService::leaderboard()` ranks everyone with at least
+  one completed match in the active event (or, with `?event=prior`, the most
+  recently ended one, so standings outlive the event): abandoned matches don't
+  count and bots can't play. It uses Weekly Sealed Pool's asymmetric hidden
+  score (+3 per match win, -2 per loss -- `RANKING_POINTS`; never returned), so
+  playing and winning more always helps; ties on record share a rank
+  (`GameService::rankedStandingsRows()`, competition ranking) and each row
+  carries a "top N%" percentile.
+- **No Rematch.** `getState()['game']['is_league_match']` (creator-only, like
+  `is_tournament_match`) tells the client to hide the Rematch button: League
+  opponents come from the queue and are never played twice per event.
+
+| Route | Purpose |
+| --- | --- |
+| `GET /league` | Event, queue state, record, recent matches, deck rules |
+| `GET /league/leaderboard` | Ranked standings (`event`, `standings[]` with `rank`, `wins`, `losses`, `percentile`); `?event=prior` for the most recently ended event |
+| `GET /league/collection` | The caller's permanent collection: full catalog cards plus `copies`, ordered color, rarity, name |
+| `POST /league/join` | Join the active event and enter the queue |
+| `POST /league/queue/leave` | Leave the queue |
+
 ### Weekly Sealed Pool (issue #520)
 
 The slower-cadence sibling of Sealed Pool of the Day, paired with its own
@@ -14264,6 +14331,18 @@ than a parallel bespoke system:
   of you (Passion scores Charity: 1-2); Anger can only reach the small moods (6-6, a
   tie); Patience reads 1 (7-8). An exhaustive search through the real engine -- every
   Hate target and Anger set -- found that one winning board and that tie.
+
+- **33rd puzzle, "Fear Itself"** (a Fear puzzle: Fear's extra play isn't tied to
+  returning a mood, so it is free), easy, `win_game`, no new puzzle infrastructure.
+  Both sides have two round wins and the opponent went first (a tie is theirs). The
+  opponent has the vanilla commons Complacency, Indifference and Apathy (4 each): 12.
+  You have Boredom and Laziness (4 each) in play, hold Fear, Superiority and Joy, and
+  have one play. The one winning line: Fear, returning nothing, then Superiority --
+  four moods against their three, so it reads 7: 4 + 4 + 0 + 7 = 15 against 12.
+  Superiority alone is three moods against three ("more" isn't "as many"): 11-12; Joy
+  alone, or Fear and then Joy, is 11-12; returning a mood with Fear costs you a body
+  (Fear and Superiority: 7-12). An exhaustive search through the real engine -- every
+  Fear return -- found that one winning board and no ties.
 
 ### Duel: separate per-player decks
 

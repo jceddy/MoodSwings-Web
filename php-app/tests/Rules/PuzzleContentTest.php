@@ -2666,6 +2666,62 @@ final class PuzzleContentTest extends TestCase
         $this->assertGameFailed($gameId);
     }
 
+    /**
+     * "Fear Itself": the only winning line (exhaustive search of the real flow, every
+     * Fear return) is Fear -- returning nothing, its extra play isn't tied to that --
+     * and then Superiority: four moods against their three, so Superiority reads 7,
+     * 4 + 4 + 0 + 7 = 15 against 12.
+     */
+    public function testFearItselfSolvedByFearWithoutAReturnThenSuperiority(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('fear-itself');
+
+        $afterFear = $this->playDriven($gameId, $p, $this->instanceId($gameId, 38, 'hand'));
+        self::assertFalse($afterFear['game_completed'] ?? false, "Fear's extra play keeps the turn going");
+
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 77, 'hand'));
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameSolved($gameId, $p);
+    }
+
+    /** Superiority alone makes three moods against their three -- not more: it reads 3, 11 against 12. */
+    public function testFearItselfSuperiorityAloneLoses(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('fear-itself');
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 77, 'hand'));
+        $this->games->advanceAutomatedTurns($gameId);
+
+        $this->assertGameFailed($gameId);
+    }
+
+    /** Fear and then Joy: 4 + 4 + 0 + 3 = 11 against 12. */
+    public function testFearItselfFearThenJoyLoses(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('fear-itself');
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 38, 'hand'));
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 125, 'hand'));
+        $this->games->advanceAutomatedTurns($gameId);
+
+        $this->assertGameFailed($gameId);
+    }
+
+    /** Returning Boredom with Fear costs a body: Superiority is then only three moods against three, 7 against 12. */
+    public function testFearItselfReturningAMoodThenSuperiorityLoses(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('fear-itself');
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 38, 'hand'), [
+            'hand_mood_id' => $this->ownedInstanceId($gameId, 83, 'in_play', $p),
+        ]);
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 77, 'hand'));
+        $this->games->advanceAutomatedTurns($gameId);
+
+        $this->assertGameFailed($gameId);
+    }
+
     /** The score each seat got in the most recently scored round of $gameId, keyed 'solver'/'opponent'. @return array{solver: int, opponent: int} */
     private function lastRoundScores(int $gameId, int $solverGamePlayerId): array
     {

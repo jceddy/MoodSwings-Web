@@ -1289,6 +1289,39 @@ every other Settings checkbox (`POST /user/matchmaking-discoverable-preference`)
 Only gates whether YOUR OWN listings are shown to strangers -- joining
 someone else's listing needs no opt-in of its own.
 
+### League play (issue #171)
+
+A "League" button (after "Weekly Sealed Pool") opens `#league-dialog`:
+event name/rules, a single Join/Leave queue pair (no deck is picked when
+queueing), the player's W/L record and recent matches, and a "View my
+collection" button opening `#league-collection-dialog` -- a card-thumbnail
+grid in color/rarity/name order with an "xN" copies badge in each thumbnail's
+lower-right corner (`.card-thumb__badge--count`); clicking a thumbnail opens
+the usual card detail. API calls live in `app.js` (`getLeagueStatus`,
+`getLeagueCollection`, `joinLeague`, `leaveLeagueQueue`); a
+`{"status": "paired"}` join response opens the new game.
+
+The dialog also hosts the leaderboard (`#league-leaderboard-section`, outside
+the event section so the previous event stays viewable while nothing runs):
+"Current event" / "Previous event" toggle buttons over a list rendered like
+Weekly Sealed Pool's standings -- `#rank name (you) -- W-L (top N%)`, tied
+records sharing a rank; the ranking score is never shown (`getLeagueLeaderboard()`
+in `app.js`). `canRematch()` hides the Rematch button for League games
+(`state.game.is_league_match`).
+
+The deck is built inside the paired game: while a League game waits on decks,
+`renderDuelDeckSubmission()` shows `#duel-deck-league-builder` instead of the
+paste/saved-deck form (`state.league_deck_builder`). It is the same
+collection grid with a lower-left "in deck" badge (and an "SB n" sideboard
+badge above it), and tapping a card opens the card detail with "+ Deck" /
+"- Deck" rows -- plus "+ Sideboard" / "- Sideboard" on game 1, where up to 3
+sideboard cards are declared (same pattern as the Deck Builder). From game 2 the
+pool is fixed (`builder.fixed_pool`) to the game-1 deck + sideboard: there is no
+separate sideboard to edit, whatever the deck leaves over is the sideboard, so
+swapping is only ever between the two. The selection starts from the previous
+game's deck (or the granted starter deck for game 1), and submits through the
+ordinary `submitCustomDuelDeck()` endpoint, with a `Sideboard` section on game 1. See "League play" in `php-app/README.md`.
+
 ### Weekly Sealed Pool (issue #520)
 
 A new "Weekly Sealed Pool" button (next to "Open games") opens
