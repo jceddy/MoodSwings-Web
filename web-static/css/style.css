@@ -790,6 +790,13 @@ dialog#resources-dialog #resources-close-button {
     margin-bottom: 0.5rem;
 }
 
+/* "View my collection" is the last thing inside #league-event-section,
+   with #league-close-button right after the section -- without this the
+   two buttons touch. */
+#league-collection-button {
+    margin-bottom: 0.75rem;
+}
+
 /* Tournaments/Puzzles sit on their own line below the main action row
    (New game/Open games/Weekly Sealed Pool/League), with a gap above. */
 #lobby-browse-actions {
