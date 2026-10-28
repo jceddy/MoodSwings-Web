@@ -2444,6 +2444,14 @@ final class GameService
     private const POWER_DUEL_SIDEBOARD_MAX_CARDS = 5;
 
     /**
+     * League play's own sideboard cap (issue #171) -- see
+     * validateLeagueSideboardPool(). Smaller than Power Duel's because League
+     * decks are as small as 12 cards: three benched cards are the only ones a
+     * player can ever swap in between the games of a match.
+     */
+    private const LEAGUE_SIDEBOARD_MAX_CARDS = 3;
+
+    /**
      * Every draft-based deck_type. Originally pulled out purely for
      * botsSupportedFor()/advanceBotDraftTurn() (issue #359) rather than
      * as a wholesale refactor of the many inline copies that predated it
@@ -2986,8 +2994,19 @@ final class GameService
 
         $gameMatchId = $game['game_match_id'] !== null ? (int) $game['game_match_id'] : null;
         $allowSideboarding = $gameMatchId !== null && (bool) $this->fetchGameMatch($gameMatchId)['allow_sideboarding'];
+        $isLeagueMatch = $gameMatchId !== null && $this->isLeagueGameMatch($gameMatchId);
 
-        if (!$allowSideboarding) {
+        if ($isLeagueMatch && $allowSideboarding) {
+            // League play: a small sideboard declared on game 1, and from then
+            // on the match's deck can only be reshuffled within that pool.
+            // $allowedCardIds (the player's collection) is checked below
+            // against the main deck AND the sideboard together.
+            if ((int) $game['match_game_number'] === 1) {
+                [$mainCardIds, $sideboardCardIds] = $this->validateLeagueSideboardPool($parsed, $rules, $catalog['rowsById']);
+            } else {
+                [$mainCardIds, $sideboardCardIds] = $this->validateLeagueSideboardSwap($gameMatchId, $ownerUserId, $parsed['cardIds'], $rules, $catalog['rowsById']);
+            }
+        } elseif (!$allowSideboarding) {
             $rules->validate($parsed['cardIds'], $catalog['rowsById'], 'Your decklist');
             $mainCardIds = $parsed['cardIds'];
             $sideboardCardIds = [];
@@ -3010,7 +3029,7 @@ final class GameService
         // duel_deck_rules for why no further cap is meaningful here, the
         // pool itself already being the only restriction that matters.
         if ($allowedCardIds !== null) {
-            $this->assertWithinAllowedCardPool($mainCardIds, $allowedCardIds);
+            $this->assertWithinAllowedCardPool($isLeagueMatch ? [...$mainCardIds, ...$sideboardCardIds] : $mainCardIds, $allowedCardIds);
         }
 
         $update = Connection::get()->prepare(
@@ -3197,18 +3216,21 @@ final class GameService
 
     /**
      * League play's deck builder state (issue #171): while a League game is
-     * still waiting on decklists, the viewer's own collection as it applies to
-     * THIS game (their per-seat allowed card pool, one entry per distinct card
-     * with how many copies they own), plus a starting selection to pre-fill the
-     * builder with -- the deck they played in the immediately preceding game of
-     * the match, or, for game 1, the starter deck their event grant gave them.
-     * Null for any other game (non-League, or no longer waiting) and for a
-     * spectator. League games are the only custom_duel games linked from
-     * league_matches, which is what tells them apart from a tournament's
-     * pool-restricted custom_duel games.
+     * still waiting on decklists, what the viewer may build their deck from.
+     * Game 1: their whole collection as it applies to this game (their per-seat
+     * allowed card pool, one entry per distinct card with its copy count), a
+     * sideboard of up to $sideboard_max cards may be declared, and the builder
+     * starts from the starter deck their event grant gave them. Game 2/3: the
+     * pool is fixed at the main deck + sideboard they declared on game 1 (the
+     * only cards that can be swapped in -- see validateLeagueSideboardSwap()),
+     * `fixed_pool` is true, and the builder starts from the deck they played in
+     * the immediately preceding game. Null for any other game (non-League, or no
+     * longer waiting) and for a spectator. League games are the only custom_duel
+     * games linked from league_matches, which is what tells them apart from a
+     * tournament's pool-restricted custom_duel games.
      *
      * @param array<string, mixed> $game
-     * @return array{pool: array<int, array<string, mixed>>, default_deck_card_ids: int[], min_cards: int, rarity_limits: array<string, int>}|null
+     * @return array{pool: array<int, array<string, mixed>>, default_deck_card_ids: int[], min_cards: int, rarity_limits: array<string, int>, sideboard_max: int, fixed_pool: bool}|null
      */
     private function leagueDeckBuilderFor(array $game, ?int $viewerUserId): ?array
     {
@@ -3236,7 +3258,12 @@ final class GameService
             return null;
         }
 
-        $copiesByCardId = array_count_values(array_map(intval(...), (array) json_decode((string) $allowed, true)));
+        $gameNumber = (int) $game['match_game_number'];
+        $matchPool = $gameNumber > 1 ? $this->leagueMatchPool((int) $game['game_match_id'], $viewerUserId) : null;
+        $fixedPool = $matchPool !== null;
+        $poolCardIds = $fixedPool ? $matchPool : array_map(intval(...), (array) json_decode((string) $allowed, true));
+
+        $copiesByCardId = array_count_values($poolCardIds);
         $pool = [];
         foreach (CardCatalog::serialize(array_keys($copiesByCardId)) as $card) {
             $card['copies'] = $copiesByCardId[$card['card_id']];
@@ -3251,7 +3278,7 @@ final class GameService
         );
         $previousStmt->execute([
             'match_id' => $game['game_match_id'],
-            'previous' => (int) $game['match_game_number'] - 1,
+            'previous' => $gameNumber - 1,
             'user_id' => $viewerUserId,
         ]);
         $previousDeck = $previousStmt->fetchColumn();
@@ -3271,7 +3298,148 @@ final class GameService
             'default_deck_card_ids' => $defaultDeckCardIds,
             'min_cards' => (int) $game['custom_duel_min_cards'],
             'rarity_limits' => array_map(intval(...), (array) json_decode((string) $game['custom_duel_rarity_limits'], true)),
+            'sideboard_max' => $fixedPool ? 0 : self::LEAGUE_SIDEBOARD_MAX_CARDS,
+            'fixed_pool' => $fixedPool,
         ];
+    }
+
+    /** Whether $gameMatchId is the best-of-three wrapper of a League match -- see leagueDeckBuilderFor(). */
+    private function isLeagueGameMatch(int $gameMatchId): bool
+    {
+        $stmt = Connection::get()->prepare('SELECT 1 FROM league_matches WHERE game_match_id = :game_match_id');
+        $stmt->execute(['game_match_id' => $gameMatchId]);
+
+        return $stmt->fetchColumn() !== false;
+    }
+
+    /**
+     * League play (issue #171): turns on sideboarding for a freshly created
+     * League match. createGame()'s own $allowSideboarding only applies to the
+     * 'power' preset, so LeagueService flips it on here instead, before any
+     * deck is submitted.
+     */
+    public function enableLeagueSideboarding(int $gameId): void
+    {
+        $gameMatchId = $this->fetchGame($gameId)['game_match_id'];
+        if ($gameMatchId === null) {
+            throw new GameStateException("Game {$gameId} has no best-of-three match to sideboard in");
+        }
+
+        Connection::get()->prepare('UPDATE game_matches SET allow_sideboarding = 1 WHERE id = :id')->execute(['id' => $gameMatchId]);
+    }
+
+    /**
+     * League play's game-1 half (the analog of validateAndStorePowerDuelSideboardPool()):
+     * the main deck must satisfy the League's rules -- minimum size and the
+     * mythic/rare caps -- and up to LEAGUE_SIDEBOARD_MAX_CARDS extra cards may
+     * be declared as a sideboard. Unlike Power Duel's, a League sideboard may
+     * repeat a card (or repeat one in the main deck) since collections hold
+     * several copies; whether the player actually owns them is checked against
+     * their collection by the caller. The sideboard itself is exempt from the
+     * rarity caps -- a benched third mythic is fine, because every game's ACTIVE
+     * deck is re-validated against them (see validateLeagueSideboardSwap()).
+     *
+     * @param array{name: ?string, cardIds: int[], sideboardCardIds: int[]} $parsed
+     * @param array<int, array{name: string, rarity: string, color: string}> $catalogById
+     * @return array{0: int[], 1: int[]}
+     */
+    private function validateLeagueSideboardPool(array $parsed, DuelDeckRules $rules, array $catalogById): array
+    {
+        if (count($parsed['sideboardCardIds']) > self::LEAGUE_SIDEBOARD_MAX_CARDS) {
+            throw new GameStateException(
+                'Your sideboard has ' . count($parsed['sideboardCardIds']) . ' card(s), but at most '
+                . self::LEAGUE_SIDEBOARD_MAX_CARDS . ' are allowed.'
+            );
+        }
+
+        $rules->validate($parsed['cardIds'], $catalogById, 'Your decklist');
+
+        return [$parsed['cardIds'], $parsed['sideboardCardIds']];
+    }
+
+    /**
+     * League play's game-2/3 half (the analog of validateAndStorePowerDuelSideboardSwap()):
+     * the new main deck may only be reshuffled within the pool the player
+     * declared on game 1 -- their original main deck plus sideboard, copy for
+     * copy -- so the (at most three) sideboard cards are the only cards that can
+     * ever be swapped in. Every game's deck is re-validated against the League's
+     * minimum size and mythic/rare caps, and the new sideboard is whatever is
+     * left of the pool.
+     *
+     * @param int[] $newMainCardIds
+     * @param array<int, array{name: string, rarity: string, color: string}> $catalogById
+     * @return array{0: int[], 1: int[]}
+     */
+    private function validateLeagueSideboardSwap(int $gameMatchId, int $userId, array $newMainCardIds, DuelDeckRules $rules, array $catalogById): array
+    {
+        $pool = $this->leagueMatchPool($gameMatchId, $userId);
+        if ($pool === null) {
+            throw new GameStateException('Could not find your original deck/sideboard for this match.');
+        }
+
+        $poolCounts = array_count_values($pool);
+        foreach (array_count_values($newMainCardIds) as $cardId => $count) {
+            if ($count > ($poolCounts[$cardId] ?? 0)) {
+                throw new GameStateException(
+                    'Your decklist has a card (or an extra copy of one) that isn\'t part of your original deck or sideboard -- between games you can only swap cards between the two.'
+                );
+            }
+        }
+
+        $rules->validate($newMainCardIds, $catalogById, 'Your decklist');
+
+        return [$newMainCardIds, self::multisetDifference($pool, $newMainCardIds)];
+    }
+
+    /**
+     * A League player's pool for the whole match: the main deck and sideboard
+     * they submitted for game 1, combined (one entry per copy). Null if game 1
+     * has no deck recorded for them.
+     *
+     * @return int[]|null
+     */
+    private function leagueMatchPool(int $gameMatchId, int $userId): ?array
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT gp.custom_deck_card_ids, gp.custom_deck_sideboard_card_ids
+             FROM game_players gp JOIN games g ON g.id = gp.game_id
+             WHERE g.game_match_id = :match_id AND g.match_game_number = 1 AND gp.user_id = :user_id'
+        );
+        $stmt->execute(['match_id' => $gameMatchId, 'user_id' => $userId]);
+        $row = $stmt->fetch();
+        if ($row === false || $row['custom_deck_card_ids'] === null) {
+            return null;
+        }
+
+        return array_merge(
+            array_map(intval(...), (array) json_decode((string) $row['custom_deck_card_ids'], true)),
+            $row['custom_deck_sideboard_card_ids'] !== null
+                ? array_map(intval(...), (array) json_decode((string) $row['custom_deck_sideboard_card_ids'], true))
+                : [],
+        );
+    }
+
+    /**
+     * $pool minus $remove, copy for copy (array_diff() would drop every copy of
+     * a card as soon as one is removed), keeping $pool's order.
+     *
+     * @param int[] $pool
+     * @param int[] $remove
+     * @return int[]
+     */
+    private static function multisetDifference(array $pool, array $remove): array
+    {
+        $toRemove = array_count_values($remove);
+        $left = [];
+        foreach ($pool as $cardId) {
+            if (($toRemove[$cardId] ?? 0) > 0) {
+                $toRemove[$cardId]--;
+            } else {
+                $left[] = $cardId;
+            }
+        }
+
+        return $left;
     }
 
     /**

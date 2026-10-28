@@ -26,8 +26,10 @@ use PDO;
  * holds, with at most MAX_MYTHICS mythics and MAX_RARES rares and at least
  * MIN_DECK_SIZE cards. Decks are not chosen when queueing: the game is created
  * with no decks seeded, and each player builds theirs from their collection
- * inside the game (before game 1, and again before each later game of the
- * match, as for any custom_duel match). Nobody plays the same opponent twice in
+ * inside the game: on game 1 a main deck plus a sideboard of up to three cards,
+ * and before each later game a reshuffle within that pool only (the sideboard
+ * cards are the only ones that can be swapped in). Every game's deck must meet
+ * the mythic/rare caps. Nobody plays the same opponent twice in
  * one event, and practice bots can't take part.
  *
  * Match results are never pushed in from GameService: league_matches rows
@@ -302,6 +304,8 @@ final class LeagueService
                 $secondUserId => $this->expandCopies($this->collectionCopies($secondUserId)),
             ],
         );
+
+        $this->games->enableLeagueSideboarding($gameId);
 
         $gameMatchId = $this->games->gameMatchWrapperIds($gameId)['game_match_id'];
         if ($gameMatchId === null) {

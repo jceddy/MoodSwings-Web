@@ -1304,11 +1304,15 @@ the usual card detail. API calls live in `app.js` (`getLeagueStatus`,
 The deck is built inside the paired game: while a League game waits on decks,
 `renderDuelDeckSubmission()` shows `#duel-deck-league-builder` instead of the
 paste/saved-deck form (`state.league_deck_builder`). It is the same
-collection grid with a lower-left "in deck" badge, and tapping a card opens the
-card detail with "+ Deck" / "- Deck" rows (same pattern as the Deck Builder).
-The selection starts from the previous game's deck (or the granted starter deck
-for game 1), and submits through the ordinary `submitCustomDuelDeck()`
-endpoint. See "League play" in `php-app/README.md`.
+collection grid with a lower-left "in deck" badge (and an "SB n" sideboard
+badge above it), and tapping a card opens the card detail with "+ Deck" /
+"- Deck" rows -- plus "+ Sideboard" / "- Sideboard" on game 1, where up to 3
+sideboard cards are declared (same pattern as the Deck Builder). From game 2 the
+pool is fixed (`builder.fixed_pool`) to the game-1 deck + sideboard: there is no
+separate sideboard to edit, whatever the deck leaves over is the sideboard, so
+swapping is only ever between the two. The selection starts from the previous
+game's deck (or the granted starter deck for game 1), and submits through the
+ordinary `submitCustomDuelDeck()` endpoint, with a `Sideboard` section on game 1. See "League play" in `php-app/README.md`.
 
 ### Weekly Sealed Pool (issue #520)
 

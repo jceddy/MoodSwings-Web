@@ -2038,6 +2038,14 @@ body.game-page {
     background: var(--color-success);
 }
 
+/* Sideboard copies (game 1: the declared ones; later games: whatever the
+   deck leaves over), stacked just above the in-deck badge. */
+.card-thumb__badge--in-sideboard {
+    bottom: calc((0.25rem + 1.4rem) * var(--card-scale, 1));
+    left: calc(0.25rem * var(--card-scale, 1));
+    background: var(--color-info);
+}
+
 .league-card-grid {
     display: flex;
     flex-wrap: wrap;

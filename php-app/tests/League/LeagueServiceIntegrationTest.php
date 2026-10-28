@@ -423,6 +423,142 @@ final class LeagueServiceIntegrationTest extends TestCase
         self::assertSame('paired', $this->league->joinAndQueue($bob)['status']);
     }
 
+    /**
+     * Alice and Bob paired into a League game, Alice owning one extra mythic on
+     * top of her granted deck (added while she waits in the queue, before the
+     * pairing snapshots her collection).
+     *
+     * @return array{alice: int, bob: int, gameId: int, granted: int[], byRarity: array<string, int[]>, extraMythic: int}
+     */
+    private function pairedGameWithAnExtraMythic(): array
+    {
+        $this->startEvent();
+        $alice = $this->insertUser('alice');
+        $bob = $this->insertUser('bob');
+        $this->firstJoin($alice);
+
+        $granted = array_map('intval', (array) json_decode((string) $this->pdo->query("SELECT granted_card_ids FROM league_participants WHERE user_id = {$alice}")->fetchColumn(), true));
+        $extraMythic = (int) $this->pdo->query(
+            'SELECT id FROM cards WHERE is_token = 0 AND rarity = \'mythic\' AND id NOT IN (' . implode(',', $granted) . ') LIMIT 1'
+        )->fetchColumn();
+        $this->pdo->exec("INSERT INTO user_collection_cards (user_id, card_id, copies) VALUES ({$alice}, {$extraMythic}, 1)");
+
+        $gameId = $this->firstJoin($bob)['game_id'];
+
+        $byRarity = ['common' => [], 'uncommon' => [], 'rare' => [], 'mythic' => []];
+        foreach ($this->pdo->query('SELECT id, rarity FROM cards WHERE id IN (' . implode(',', $granted) . ')')->fetchAll() as $row) {
+            $byRarity[$row['rarity']][] = (int) $row['id'];
+        }
+
+        return ['alice' => $alice, 'bob' => $bob, 'gameId' => $gameId, 'granted' => $granted, 'byRarity' => $byRarity, 'extraMythic' => $extraMythic];
+    }
+
+    private function submitCards(int $gameId, int $userId, array $main, ?array $sideboard = null): void
+    {
+        $this->submitDeck($gameId, $userId, $this->decklists->create($userId, 'Test deck', $main, $sideboard, 'private'));
+    }
+
+    private function sideboardOf(int $gameId, int $userId): array
+    {
+        $json = $this->pdo->query('SELECT custom_deck_sideboard_card_ids FROM game_players WHERE id = ' . $this->gamePlayerId($gameId, $userId))->fetchColumn();
+
+        return $json === null ? [] : array_map('intval', json_decode((string) $json, true));
+    }
+
+    public function testGameOneDeclaresASideboardOfUpToThreeOwnedCards(): void
+    {
+        ['alice' => $alice, 'gameId' => $gameId, 'byRarity' => $r, 'extraMythic' => $extraMythic] = $this->pairedGameWithAnExtraMythic();
+        $main = [...$r['mythic'], ...array_slice($r['common'], 0, 10)];
+
+        // Four sideboard cards is one too many.
+        try {
+            $this->submitCards($gameId, $alice, $main, [$r['rare'][0], $r['rare'][1], $r['uncommon'][0], $r['common'][10]]);
+            self::fail('a fourth sideboard card should be refused');
+        } catch (GameStateException $e) {
+            self::assertStringContainsString('at most 3', $e->getMessage());
+        }
+
+        // A sideboard card the player does not own.
+        $unowned = (int) $this->pdo->query(
+            "SELECT id FROM cards WHERE is_token = 0 AND rarity = 'common' AND id NOT IN (" . implode(',', array_merge(...array_values($r))) . ') LIMIT 1'
+        )->fetchColumn();
+        try {
+            $this->submitCards($gameId, $alice, $main, [$unowned]);
+            self::fail('a sideboard card outside the collection should be refused');
+        } catch (GameStateException $e) {
+            self::assertStringContainsString('not in your own', $e->getMessage());
+        }
+
+        // The deck and sideboard together cannot use more copies than are owned: the one copy of this common is already in the main deck.
+        try {
+            $this->submitCards($gameId, $alice, $main, [$r['common'][0]]);
+            self::fail('main deck + sideboard may not exceed the copies owned');
+        } catch (GameStateException $e) {
+            self::assertStringContainsString('not in your own', $e->getMessage());
+        }
+
+        // Three sideboard cards are fine -- including a third mythic, since the sideboard is exempt from the rarity caps while the deck is not.
+        $sideboard = [$extraMythic, $r['rare'][0], $r['common'][10]];
+        $this->submitCards($gameId, $alice, $main, $sideboard);
+        self::assertEqualsCanonicalizing($sideboard, $this->sideboardOf($gameId, $alice));
+
+        // ...but the submitted deck itself still keeps the mythic cap.
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('at most 2 mythic');
+        $this->submitCards($gameId, $alice, [...$r['mythic'], $extraMythic, ...array_slice($r['common'], 0, 9)]);
+    }
+
+    public function testBetweenGamesOnlyTheSideboardCanBeSwappedInAndTheRarityCapsStillApply(): void
+    {
+        ['alice' => $alice, 'bob' => $bob, 'gameId' => $gameId, 'byRarity' => $r, 'extraMythic' => $extraMythic] = $this->pairedGameWithAnExtraMythic();
+        $main = [...$r['mythic'], ...array_slice($r['common'], 0, 10)];
+        $sideboard = [$extraMythic, $r['rare'][0], $r['common'][10]];
+        $this->submitCards($gameId, $alice, $main, $sideboard);
+        $this->submitDeck($gameId, $bob, $this->grantedDeckId($bob));
+        $this->games->startGame($gameId);
+        $this->games->resignGame($gameId, $this->gamePlayerId($gameId, $alice));
+
+        $gameMatchId = (int) $this->pdo->query("SELECT game_match_id FROM games WHERE id = {$gameId}")->fetchColumn();
+        $game2 = (int) $this->pdo->query("SELECT id FROM games WHERE game_match_id = {$gameMatchId} AND match_game_number = 2")->fetchColumn();
+        self::assertGreaterThan(0, $game2);
+
+        // The builder is now limited to the 15 declared cards, starting from last game's deck.
+        $builder = $this->games->getState($game2, $alice)['league_deck_builder'];
+        self::assertTrue($builder['fixed_pool']);
+        self::assertSame(0, $builder['sideboard_max']);
+        self::assertSame(15, array_sum(array_column($builder['pool'], 'copies')));
+        self::assertEqualsCanonicalizing($main, $builder['default_deck_card_ids']);
+
+        // A card Alice owns but never declared cannot be swapped in.
+        try {
+            $this->submitCards($game2, $alice, [...array_slice($main, 1), $r['common'][11]]);
+            self::fail('a card outside the declared pool should be refused');
+        } catch (GameStateException $e) {
+            self::assertStringContainsString('original deck or sideboard', $e->getMessage());
+        }
+
+        // Bringing in the sideboard mythic without benching one would be a third mythic.
+        try {
+            $this->submitCards($game2, $alice, [...$main, $extraMythic]);
+            self::fail('three mythics should be refused');
+        } catch (GameStateException $e) {
+            self::assertStringContainsString('at most 2 mythic', $e->getMessage());
+        }
+
+        // The deck cannot shrink below the League minimum either.
+        try {
+            $this->submitCards($game2, $alice, array_slice($main, 0, 11));
+            self::fail('an undersized deck should be refused');
+        } catch (GameStateException $e) {
+            self::assertStringContainsString('at least 12', $e->getMessage());
+        }
+
+        // Swapping a mythic for the sideboard mythic and a common for the sideboard rare is legal; the new sideboard is what was benched.
+        $swapped = [$r['mythic'][0], $extraMythic, ...array_slice($r['common'], 1, 9), $r['rare'][0]];
+        $this->submitCards($game2, $alice, $swapped);
+        self::assertEqualsCanonicalizing([$r['mythic'][1], $r['common'][0], $r['common'][10]], $this->sideboardOf($game2, $alice));
+    }
+
     public function testCollectionListsOwnedCardsWithCopiesInColorRarityNameOrder(): void
     {
         $this->startEvent();

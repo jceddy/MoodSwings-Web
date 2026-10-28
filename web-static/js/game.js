@@ -11030,15 +11030,22 @@
     }
 
     // League play's in-game deck builder (issue #171) -- see
-    // GameService::leagueDeckBuilderFor(). The player's collection as it applies
-    // to this game, one thumbnail per distinct card (lower-right "xN" = copies
-    // owned, lower-left = copies currently in the deck), in color/rarity/name
-    // order. Tapping a card opens the card detail with + / - Deck actions that
-    // refresh in place, like the Deck Builder's own. The selection is a plain
-    // Map<card_id, copies> kept across the 4-second polls' re-renders and
-    // re-seeded (from builder.default_deck_card_ids: last game's deck, or the
-    // granted starter deck) whenever a different game is shown.
+    // GameService::leagueDeckBuilderFor(). The player's cards as they apply to
+    // this game, one thumbnail per distinct card (lower-right "xN" = copies
+    // available, lower-left = copies in the deck and, below that, in the
+    // sideboard), in color/rarity/name order. Tapping a card opens the card
+    // detail with + / - rows that refresh in place, like the Deck Builder's own.
+    //
+    // Game 1 builds from the whole collection and may declare a sideboard of up
+    // to builder.sideboard_max cards. From game 2 on (builder.fixed_pool) the
+    // pool is just that game-1 deck + sideboard: there is no separate sideboard
+    // to edit -- whatever is not in the deck IS the sideboard -- so swapping is
+    // only ever between the two. Selections are plain Map<card_id, copies> kept
+    // across the 4-second polls' re-renders and re-seeded (from
+    // builder.default_deck_card_ids: last game's deck, or the granted starter
+    // deck) whenever a different game is shown.
     let leagueBuilderSelection = new Map();
+    let leagueBuilderSideboard = new Map();
     let leagueBuilderGameId = null;
     let leagueBuilderCurrent = null;
 
@@ -11053,6 +11060,7 @@
     function seedLeagueBuilderSelection(builder) {
         const ownedByCardId = new Map(builder.pool.map((card) => [card.card_id, card.copies]));
         leagueBuilderSelection = new Map();
+        leagueBuilderSideboard = new Map();
         for (const cardId of builder.default_deck_card_ids) {
             const owned = ownedByCardId.get(cardId) || 0;
             const inDeck = leagueBuilderSelection.get(cardId) || 0;
@@ -11062,49 +11070,86 @@
         }
     }
 
+    function leagueBuilderInDeck(card) {
+        return leagueBuilderSelection.get(card.card_id) || 0;
+    }
+
+    // Declared sideboard copies on game 1; on a fixed pool, whatever the deck
+    // leaves over.
+    function leagueBuilderInSideboard(builder, card) {
+        return builder.fixed_pool ? card.copies - leagueBuilderInDeck(card) : (leagueBuilderSideboard.get(card.card_id) || 0);
+    }
+
     function leagueBuilderCounts(builder) {
-        const counts = { total: 0, byRarity: {} };
+        const counts = { deck: 0, sideboard: 0, byRarity: {} };
         for (const card of builder.pool) {
-            const inDeck = leagueBuilderSelection.get(card.card_id) || 0;
-            counts.total += inDeck;
+            const inDeck = leagueBuilderInDeck(card);
+            counts.deck += inDeck;
+            counts.sideboard += leagueBuilderInSideboard(builder, card);
             counts.byRarity[card.rarity] = (counts.byRarity[card.rarity] || 0) + inDeck;
         }
         return counts;
     }
 
-    function canAddLeagueCard(builder, card) {
-        const inDeck = leagueBuilderSelection.get(card.card_id) || 0;
+    function canAddLeagueDeckCard(builder, card) {
         const limit = builder.rarity_limits[card.rarity];
-        return inDeck < card.copies && (limit === undefined || (leagueBuilderCounts(builder).byRarity[card.rarity] || 0) < limit);
+        const used = leagueBuilderInDeck(card) + (builder.fixed_pool ? 0 : leagueBuilderInSideboard(builder, card));
+        return used < card.copies && (limit === undefined || (leagueBuilderCounts(builder).byRarity[card.rarity] || 0) < limit);
     }
 
-    function changeLeagueBuilderCard(card, delta) {
-        const next = (leagueBuilderSelection.get(card.card_id) || 0) + delta;
+    function canAddLeagueSideboardCard(builder, card) {
+        return !builder.fixed_pool
+            && leagueBuilderCounts(builder).sideboard < builder.sideboard_max
+            && leagueBuilderInDeck(card) + leagueBuilderInSideboard(builder, card) < card.copies;
+    }
+
+    function changeLeagueBuilderCard(card, zone, delta) {
+        const map = zone === 'deck' ? leagueBuilderSelection : leagueBuilderSideboard;
+        const next = (map.get(card.card_id) || 0) + delta;
         if (next > 0) {
-            leagueBuilderSelection.set(card.card_id, next);
+            map.set(card.card_id, next);
         } else {
-            leagueBuilderSelection.delete(card.card_id);
+            map.delete(card.card_id);
         }
         renderLeagueDeckBuilder(leagueBuilderCurrent);
         openLeagueBuilderCardDetail(card);
     }
 
     function openLeagueBuilderCardDetail(card) {
-        const inDeck = leagueBuilderSelection.get(card.card_id) || 0;
-        openCardDetail(card, null, null, null, [
+        const builder = leagueBuilderCurrent;
+        const inDeck = leagueBuilderInDeck(card);
+        const inSideboard = leagueBuilderInSideboard(builder, card);
+        const actions = [
             {
                 label: '+ Deck',
-                count: `${inDeck} / ${card.copies} in deck`,
-                disabled: !canAddLeagueCard(leagueBuilderCurrent, card),
-                onAction: () => changeLeagueBuilderCard(card, 1),
+                count: `${inDeck} in deck`,
+                disabled: !canAddLeagueDeckCard(builder, card),
+                onAction: () => changeLeagueBuilderCard(card, 'deck', 1),
             },
             {
                 label: '- Deck',
-                count: `${card.copies} owned`,
+                count: builder.fixed_pool ? `${inSideboard} in sideboard` : `${card.copies} owned`,
                 disabled: inDeck === 0,
-                onAction: () => changeLeagueBuilderCard(card, -1),
+                onAction: () => changeLeagueBuilderCard(card, 'deck', -1),
             },
-        ]);
+        ];
+        if (!builder.fixed_pool) {
+            actions.push(
+                {
+                    label: '+ Sideboard',
+                    count: `${inSideboard} in sideboard`,
+                    disabled: !canAddLeagueSideboardCard(builder, card),
+                    onAction: () => changeLeagueBuilderCard(card, 'sideboard', 1),
+                },
+                {
+                    label: '- Sideboard',
+                    count: '',
+                    disabled: inSideboard === 0,
+                    onAction: () => changeLeagueBuilderCard(card, 'sideboard', -1),
+                },
+            );
+        }
+        openCardDetail(card, null, null, null, actions);
     }
 
     function renderLeagueDeckBuilder(builder) {
@@ -11119,20 +11164,27 @@
         const limitsText = Object.entries(builder.rarity_limits)
             .map(([rarity, limit]) => `${counts.byRarity[rarity] || 0}/${limit} ${rarity}`)
             .join(', ');
-        document.getElementById('duel-deck-league-builder-status').textContent =
-            `Build your deck from your collection: ${counts.total} card(s) selected (at least ${builder.min_cards} needed; ${limitsText}). `
-            + 'Tap a card to add or remove copies.';
-        document.getElementById('duel-deck-league-builder-submit-button').disabled = counts.total < builder.min_cards;
+        const deckText = `${counts.deck} card(s) in your deck (at least ${builder.min_cards} needed; ${limitsText})`;
+        document.getElementById('duel-deck-league-builder-status').textContent = builder.fixed_pool
+            ? `Sideboarding: swap cards between your deck and your sideboard -- ${deckText}, ${counts.sideboard} in your sideboard. `
+                + 'Only the cards you declared for game 1 can be used. Tap a card to add or remove copies.'
+            : `Build your deck from your collection: ${deckText}. Sideboard: ${counts.sideboard}/${builder.sideboard_max} card(s) -- `
+                + 'between games you can swap only your sideboard cards into your deck. Tap a card to add or remove copies.';
+        document.getElementById('duel-deck-league-builder-submit-button').disabled = counts.deck < builder.min_cards;
 
         const grid = document.getElementById('duel-deck-league-builder-cards');
         grid.innerHTML = '';
         for (const card of builder.pool.slice().sort(compareDraftPoolCards)) {
-            const inDeck = leagueBuilderSelection.get(card.card_id) || 0;
+            const inDeck = leagueBuilderInDeck(card);
+            const inSideboard = leagueBuilderInSideboard(builder, card);
             const thumb = buildCardThumb(card, { onClick: () => openLeagueBuilderCardDetail(card), notPlayable: inDeck === 0 });
             thumb.classList.toggle('selected', inDeck > 0);
-            thumb.appendChild(buildLeagueCardBadge('card-thumb__badge--count', `x${card.copies}`, `${card.copies} owned`));
+            thumb.appendChild(buildLeagueCardBadge('card-thumb__badge--count', `x${card.copies}`, `${card.copies} ${builder.fixed_pool ? 'in your pool' : 'owned'}`));
             if (inDeck > 0) {
                 thumb.appendChild(buildLeagueCardBadge('card-thumb__badge--in-deck', String(inDeck), `${inDeck} in your deck`));
+            }
+            if (inSideboard > 0) {
+                thumb.appendChild(buildLeagueCardBadge('card-thumb__badge--in-sideboard', `SB ${inSideboard}`, `${inSideboard} in your sideboard`));
             }
             grid.appendChild(thumb);
         }
@@ -11148,28 +11200,31 @@
     document.getElementById('duel-deck-league-builder-clear-button').addEventListener('click', () => {
         if (leagueBuilderCurrent) {
             leagueBuilderSelection = new Map();
+            leagueBuilderSideboard = new Map();
             renderLeagueDeckBuilder(leagueBuilderCurrent);
         }
     });
 
     // Posts the selection through the same endpoint as every other custom_duel
-    // deck, converted back into decklist text -- GameService::
-    // submitCustomDuelDeck() re-validates it against the League's rules and the
-    // player's own pool, so the limits above are guidance, not enforcement.
+    // deck, converted back into decklist text (with a Sideboard section on game
+    // 1) -- GameService::submitCustomDuelDeck() re-validates it against the
+    // League's rules, the player's own pool and, from game 2, the declared
+    // deck + sideboard, so the limits above are guidance, not enforcement.
     document.getElementById('duel-deck-league-builder-submit-button').addEventListener('click', async () => {
         const errorEl = document.getElementById('duel-deck-league-builder-error');
         errorEl.hidden = true;
-        if (!leagueBuilderCurrent) {
+        const builder = leagueBuilderCurrent;
+        if (!builder) {
             return;
         }
 
-        const selectedCards = [];
-        for (const card of leagueBuilderCurrent.pool) {
-            for (let i = 0; i < (leagueBuilderSelection.get(card.card_id) || 0); i++) {
-                selectedCards.push(card);
-            }
+        const expand = (map) => builder.pool.flatMap((card) => Array(map.get(card.card_id) || 0).fill(card));
+        let decklistText = 'About\nName League deck\n\n' + formatDecklistCardLines(expand(leagueBuilderSelection)).join('\n');
+        const sideboardCards = builder.fixed_pool ? [] : expand(leagueBuilderSideboard);
+        if (sideboardCards.length > 0) {
+            decklistText += '\n\nSideboard\n' + formatDecklistCardLines(sideboardCards).join('\n');
         }
-        const { ok, body } = await submitCustomDuelDeck(currentGameId, 'About\nName League deck\n\n' + formatDecklistCardLines(selectedCards).join('\n'), undefined);
+        const { ok, body } = await submitCustomDuelDeck(currentGameId, decklistText, undefined);
 
         if (!ok) {
             errorEl.textContent = body.message || 'Could not submit that deck.';

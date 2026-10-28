@@ -4007,12 +4007,25 @@ league members using only cards they own.
   seeded and each seat restricted to its own collection
   (`custom_deck_allowed_card_ids`). Each player builds their deck in the game
   -- before game 1 and again before each later game, as for any custom_duel
-  match -- and `submitCustomDuelDeck()` enforces the rules: minimum 12 cards, at
-  most 2 mythics and 6 rares, and per-card copies no greater than owned.
+  match -- and `submitCustomDuelDeck()` enforces the rules on every game's deck:
+  minimum 12 cards, at most 2 mythics and 6 rares, and per-card copies no
+  greater than owned.
+- **Sideboard.** League matches are created with `game_matches.allow_sideboarding`
+  on (`GameService::enableLeagueSideboarding()`). On game 1 a player declares a
+  main deck plus a sideboard of up to 3 cards (`LEAGUE_SIDEBOARD_MAX_CARDS`;
+  repeated cards are fine as long as main + sideboard fit the collection, and
+  the sideboard itself is exempt from the rarity caps). From game 2 on the deck
+  can only be reshuffled within that declared pool, copy for copy
+  (`validateLeagueSideboardSwap()`), so the sideboard cards are the only ones
+  that can be swapped in; the new sideboard is whatever the deck leaves over.
+  This is the Power Duel sideboarding mechanism (see "Power Duel"), generalised
+  for League's multi-copy pools.
   While a League game waits on decks, `getState()` carries a
-  `league_deck_builder` object (`pool`: the viewer's cards with `copies`,
+  `league_deck_builder` object (`pool`: the cards the viewer may use with their
+  `copies` -- their collection on game 1, the declared deck + sideboard from game
+  2; `fixed_pool`; `sideboard_max` (0 once the pool is fixed);
   `default_deck_card_ids`: their previous game's deck or, for game 1, the
-  starter deck they were granted, plus `min_cards`/`rarity_limits`);
+  starter deck they were granted; plus `min_cards`/`rarity_limits`);
   `GameService::notifyLeagueDeckNeeded()` pushes the player who was waiting in
   the queue when the pairing is made.
 - **Results.** `league_matches` is synced from `game_matches` on read
