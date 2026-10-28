@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace MoodSwings\League;
 
 use MoodSwings\Database\Connection;
+use MoodSwings\Game\CardCatalog;
 use MoodSwings\Game\DuelDeckRules;
 use MoodSwings\Game\Exceptions\GameStateException;
 use MoodSwings\Game\GameService;
@@ -23,8 +24,13 @@ use PDO;
  * players play a best-of-three 2-player Duel ('custom_duel') whose decks may
  * only use cards -- and as many copies of each -- as their own collection
  * holds, with at most MAX_MYTHICS mythics and MAX_RARES rares and at least
- * MIN_DECK_SIZE cards. Nobody plays the same opponent twice in one event, and
- * practice bots can't take part.
+ * MIN_DECK_SIZE cards. Decks are not chosen when queueing: the game is created
+ * with no decks seeded, and each player builds theirs from their collection
+ * inside the game: on game 1 a main deck plus a sideboard of up to three cards,
+ * and before each later game a reshuffle within that pool only (the sideboard
+ * cards are the only ones that can be swapped in). Every game's deck must meet
+ * the mythic/rare caps. Nobody plays the same opponent twice in
+ * one event, and practice bots can't take part.
  *
  * Match results are never pushed in from GameService: league_matches rows
  * point at the best-of-three wrapper (game_matches), and syncMatches() reads
@@ -40,6 +46,10 @@ final class LeagueService
     public const CONCURRENT_MATCH_CAP = 2;
 
     private const RECENT_MATCH_LIMIT = 20;
+
+    /** The card-list order every other collection/pool view uses. */
+    private const COLOR_ORDER = ['white', 'blue', 'black', 'red', 'green'];
+    private const RARITY_ORDER = ['common', 'uncommon', 'rare', 'mythic'];
 
     public function __construct(
         private readonly GameService $games,
@@ -57,14 +67,12 @@ final class LeagueService
 
     /**
      * Joins the active event (granting the structure deck the first time) and
-     * enters the queue with $savedDecklistId, pairing straight away if an
-     * eligible player is already waiting. A null $savedDecklistId is only
-     * allowed on the very first join of an event, where it means "play the deck
-     * I was just granted" -- a new player has no saved deck to name yet.
+     * enters the queue, pairing straight away if an eligible player is already
+     * waiting.
      *
      * @return array{status: 'waiting'}|array{status: 'paired', game_id: int, opponent_username: string}
      */
-    public function joinAndQueue(int $userId, ?int $savedDecklistId): array
+    public function joinAndQueue(int $userId): array
     {
         $event = $this->events->active();
         if ($event === null) {
@@ -82,7 +90,7 @@ final class LeagueService
             throw new GameStateException('League play pairs you with strangers -- turn on Settings > "Discoverable for open games" first.');
         }
 
-        return $this->withQueueLock(function () use ($event, $userId, $savedDecklistId): array {
+        return $this->withQueueLock(function () use ($event, $userId): array {
             $eventId = $event['id'];
 
             if ($this->isQueued($userId)) {
@@ -95,13 +103,7 @@ final class LeagueService
                 throw new GameStateException('You already have ' . self::CONCURRENT_MATCH_CAP . ' League matches in progress -- finish one before queueing again.');
             }
 
-            $grantedDecklistId = $this->grantIfFirstJoin($event, $userId);
-            $savedDecklistId ??= $grantedDecklistId;
-            if ($savedDecklistId === null) {
-                throw new GameStateException('Choose a saved decklist to play with.');
-            }
-
-            $deck = $this->games->resolveLeagueDeck($userId, $savedDecklistId, self::deckRules(), $this->collectionCopies($userId));
+            $this->grantIfFirstJoin($event, $userId);
 
             foreach ($this->queuedCandidates($eventId) as $candidate) {
                 $candidateUserId = (int) $candidate['user_id'];
@@ -112,24 +114,16 @@ final class LeagueService
                     continue;
                 }
 
-                $candidateDeck = [
-                    'name' => $candidate['deck_name'] !== null ? (string) $candidate['deck_name'] : null,
-                    'cardIds' => array_map(intval(...), (array) json_decode((string) $candidate['deck_card_ids'], true)),
-                ];
                 Connection::get()->prepare('DELETE FROM league_queue WHERE id = :id')->execute(['id' => $candidate['id']]);
 
-                $gameId = $this->startMatch($eventId, $candidateUserId, $candidateDeck, $userId, $deck);
+                $gameId = $this->startMatch($eventId, $candidateUserId, $userId);
+                $this->games->notifyLeagueDeckNeeded($gameId, $candidateUserId);
 
                 return ['status' => 'paired', 'game_id' => $gameId, 'opponent_username' => (string) $candidate['username']];
             }
 
-            Connection::get()->prepare('INSERT INTO league_queue (event_id, user_id, deck_name, deck_card_ids) VALUES (:event_id, :user_id, :deck_name, :deck_card_ids)')
-                ->execute([
-                    'event_id' => $eventId,
-                    'user_id' => $userId,
-                    'deck_name' => $deck['name'],
-                    'deck_card_ids' => json_encode($deck['cardIds'], JSON_THROW_ON_ERROR),
-                ]);
+            Connection::get()->prepare('INSERT INTO league_queue (event_id, user_id) VALUES (:event_id, :user_id)')
+                ->execute(['event_id' => $eventId, 'user_id' => $userId]);
 
             return ['status' => 'waiting'];
         });
@@ -203,27 +197,30 @@ final class LeagueService
         ];
     }
 
-    /** @return array<int, array{card_id: int, name: string, color: string, rarity: string, copies: int}> */
+    /**
+     * The player's permanent collection as full catalog cards (the shape the
+     * web client's card thumbnails/detail popup render) with the number owned,
+     * ordered color, then rarity, then name.
+     *
+     * @return array<int, array<string, mixed>>
+     */
     public function collectionFor(int $userId): array
     {
-        $stmt = Connection::get()->prepare(
-            'SELECT c.card_id, k.name, k.color, k.rarity, c.copies
-             FROM user_collection_cards c JOIN cards k ON k.id = c.card_id
-             WHERE c.user_id = :user_id
-             ORDER BY k.name'
-        );
-        $stmt->execute(['user_id' => $userId]);
+        $copies = $this->collectionCopies($userId);
 
-        return array_map(
-            static fn (array $row): array => [
-                'card_id' => (int) $row['card_id'],
-                'name' => (string) $row['name'],
-                'color' => (string) $row['color'],
-                'rarity' => (string) $row['rarity'],
-                'copies' => (int) $row['copies'],
-            ],
-            $stmt->fetchAll(),
-        );
+        $cards = [];
+        foreach (CardCatalog::serialize(array_keys($copies)) as $card) {
+            $card['copies'] = $copies[$card['card_id']];
+            $cards[] = $card;
+        }
+
+        $colorRank = array_flip(self::COLOR_ORDER);
+        $rarityRank = array_flip(self::RARITY_ORDER);
+        usort($cards, static fn (array $a, array $b): int => ($colorRank[$a['color']] ?? PHP_INT_MAX) <=> ($colorRank[$b['color']] ?? PHP_INT_MAX)
+            ?: ($rarityRank[$a['rarity']] ?? PHP_INT_MAX) <=> ($rarityRank[$b['rarity']] ?? PHP_INT_MAX)
+            ?: strcmp($a['name'], $b['name']));
+
+        return $cards;
     }
 
     /** @return array<int, int> catalog card id => copies owned */
@@ -285,14 +282,11 @@ final class LeagueService
     }
 
     /**
-     * Creates the best-of-three Duel for a pairing, seeds each seat's already
-     * validated deck (the same carry-forward tournaments use), starts it, and
-     * records it. $first is seated first; $second is whoever just joined.
-     *
-     * @param array{name: ?string, cardIds: int[]} $firstDeck
-     * @param array{name: ?string, cardIds: int[]} $secondDeck
+     * Creates the best-of-three Duel for a pairing, with each seat restricted
+     * to its own collection and NO deck seeded -- both players build theirs
+     * inside the game. $first is seated first; $second is whoever just joined.
      */
-    private function startMatch(int $eventId, int $firstUserId, array $firstDeck, int $secondUserId, array $secondDeck): int
+    private function startMatch(int $eventId, int $firstUserId, int $secondUserId): int
     {
         $gameId = $this->games->createGame(
             createdByUserId: $secondUserId,
@@ -311,8 +305,7 @@ final class LeagueService
             ],
         );
 
-        $this->games->seedCustomDuelDeckFromTournament($gameId, $firstUserId, $firstDeck['name'], $firstDeck['cardIds'], null);
-        $this->games->seedCustomDuelDeckFromTournament($gameId, $secondUserId, $secondDeck['name'], $secondDeck['cardIds'], null);
+        $this->games->enableLeagueSideboarding($gameId);
 
         $gameMatchId = $this->games->gameMatchWrapperIds($gameId)['game_match_id'];
         if ($gameMatchId === null) {
@@ -321,12 +314,6 @@ final class LeagueService
 
         Connection::get()->prepare('INSERT INTO league_matches (event_id, user1_id, user2_id, game_match_id) VALUES (:event_id, :user1_id, :user2_id, :game_match_id)')
             ->execute(['event_id' => $eventId, 'user1_id' => $firstUserId, 'user2_id' => $secondUserId, 'game_match_id' => $gameMatchId]);
-
-        try {
-            $this->games->startGame($gameId);
-        } catch (GameStateException) {
-            // Left for the ordinary start flow, as TournamentService does.
-        }
 
         return $gameId;
     }
@@ -351,7 +338,7 @@ final class LeagueService
     private function queuedCandidates(int $eventId): array
     {
         $stmt = Connection::get()->prepare(
-            'SELECT q.id, q.user_id, q.deck_name, q.deck_card_ids, u.username
+            'SELECT q.id, q.user_id, u.username
              FROM league_queue q JOIN users u ON u.id = q.user_id
              WHERE q.event_id = :event_id
              ORDER BY q.queued_at ASC, q.id ASC'

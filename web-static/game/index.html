@@ -293,6 +293,23 @@
                     <p id="duel-deck-sideboard-picker-error" class="error" hidden></p>
                 </div>
 
+                <!-- League play (issue #171) -- shown INSTEAD of
+                     #duel-deck-submit-form-container for a League game
+                     (GameService::getState()'s own 'league_deck_builder'),
+                     before game 1 and again before each later game of the
+                     match: the player's own collection as a card grid
+                     (xN = copies owned, tap a card for + / - Deck), starting
+                     from the deck they played last (or their granted
+                     starter deck for game 1). -->
+                <div id="duel-deck-league-builder" hidden>
+                    <p id="duel-deck-league-builder-status"></p>
+                    <div id="duel-deck-league-builder-cards" class="league-card-grid"></div>
+                    <button id="duel-deck-league-builder-submit-button" type="button">Submit deck</button>
+                    <button id="duel-deck-league-builder-reset-button" type="button">Start over</button>
+                    <button id="duel-deck-league-builder-clear-button" type="button">Clear deck</button>
+                    <p id="duel-deck-league-builder-error" class="error" hidden></p>
+                </div>
+
                 <div id="duel-deck-submit-form-container">
                     <label>Use a saved deck
                         <select id="duel-deck-submit-saved-decklist">
@@ -1157,7 +1174,6 @@
             <p id="league-rules"></p>
             <p id="league-queue-status"></p>
             <div id="league-join-controls">
-                <label id="league-deck-label" hidden>Deck: <select id="league-deck-select"></select></label>
                 <button id="league-join-button" type="button">Join League</button>
                 <button id="league-leave-button" type="button" hidden>Leave queue</button>
             </div>
@@ -1173,7 +1189,7 @@
     <dialog id="league-collection-dialog">
         <h2>My League collection</h2>
         <p id="league-collection-summary"></p>
-        <ul id="league-collection-list"></ul>
+        <div id="league-collection-cards" class="league-card-grid"></div>
         <p id="league-collection-empty" hidden>Your collection is empty -- join a League event to be granted your first deck.</p>
         <button id="league-collection-close-button" type="button">Close</button>
     </dialog>

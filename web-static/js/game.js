@@ -5730,14 +5730,7 @@
     // specially detected; the new game shows up on the next lobby poll.
     const leagueDialog = document.getElementById('league-dialog');
     const leagueCollectionDialog = document.getElementById('league-collection-dialog');
-    const leagueDeckSelect = document.getElementById('league-deck-select');
     const leagueJoinButton = document.getElementById('league-join-button');
-
-    function updateLeagueJoinButtonEnabled() {
-        // A player who has joined must pick a deck; a first-time joiner plays
-        // the deck they are about to be granted, so has nothing to pick.
-        leagueJoinButton.disabled = !document.getElementById('league-deck-label').hidden && leagueDeckSelect.value === '';
-    }
 
     async function refreshLeague() {
         const noEvent = document.getElementById('league-no-event');
@@ -5760,29 +5753,21 @@
 
         const queueStatus = document.getElementById('league-queue-status');
         const leaveButton = document.getElementById('league-leave-button');
-        const deckLabel = document.getElementById('league-deck-label');
         if (body.queued) {
-            queueStatus.textContent = "You're in the queue, waiting for an opponent.";
+            queueStatus.textContent = "You're in the queue, waiting for an opponent. You'll choose your deck from your collection once a match starts.";
             leagueJoinButton.hidden = true;
-            deckLabel.hidden = true;
             leaveButton.hidden = false;
         } else {
             leaveButton.hidden = true;
             leagueJoinButton.hidden = false;
             if (body.joined) {
-                queueStatus.textContent = '';
+                queueStatus.textContent = 'You choose your deck from your collection once a match starts.';
                 leagueJoinButton.textContent = 'Queue for a match';
-                deckLabel.hidden = false;
-                await populateSavedDecklistSelect(leagueDeckSelect, 'Choose a saved deck');
             } else {
-                queueStatus.textContent = "You'll be granted a random Structure deck for your collection, and queued to play with it.";
+                queueStatus.textContent = "You'll be granted a random Structure deck for your collection and queued for a match -- you choose your deck from your collection once it starts.";
                 leagueJoinButton.textContent = 'Join League';
-                deckLabel.hidden = true;
             }
-            updateLeagueJoinButtonEnabled();
-            if (body.in_progress_count >= body.concurrent_match_cap) {
-                leagueJoinButton.disabled = true;
-            }
+            leagueJoinButton.disabled = body.in_progress_count >= body.concurrent_match_cap;
         }
 
         const list = document.getElementById('league-matches-list');
@@ -5814,13 +5799,12 @@
     });
 
     document.getElementById('league-close-button').addEventListener('click', () => leagueDialog.close());
-    leagueDeckSelect.addEventListener('change', updateLeagueJoinButtonEnabled);
 
     leagueJoinButton.addEventListener('click', async () => {
         const errorEl = document.getElementById('league-error');
         errorEl.hidden = true;
 
-        const { ok, body } = await joinLeague(leagueDeckSelect.value || null);
+        const { ok, body } = await joinLeague();
         if (!ok) {
             errorEl.textContent = body.message || 'Could not join the League.';
             errorEl.hidden = false;
@@ -5842,19 +5826,22 @@
         await refreshLeague();
     });
 
+    // The player's collection as a card grid in color/rarity/name order (the
+    // server already sorts it that way), each thumbnail carrying an "xN" copies
+    // badge in its lower-right corner; clicking one opens the usual card detail.
     document.getElementById('league-collection-button').addEventListener('click', async () => {
         const { ok, body } = await getLeagueCollection();
         const cards = ok ? body.cards : [];
-        const list = document.getElementById('league-collection-list');
-        list.innerHTML = '';
+        const grid = document.getElementById('league-collection-cards');
+        grid.innerHTML = '';
         document.getElementById('league-collection-empty').hidden = cards.length > 0;
         document.getElementById('league-collection-summary').textContent = cards.length > 0
             ? `${cards.reduce((total, card) => total + card.copies, 0)} cards, ${cards.length} different.`
             : '';
         cards.forEach((card) => {
-            const item = document.createElement('li');
-            item.textContent = `${card.copies}x ${card.name} (${card.color} ${card.rarity})`;
-            list.appendChild(item);
+            const thumb = buildCardThumb(card, { onClick: () => openCardDetail(card, null) });
+            thumb.appendChild(buildLeagueCardBadge('card-thumb__badge--count', `x${card.copies}`, `${card.copies} owned`));
+            grid.appendChild(thumb);
         });
         leagueCollectionDialog.showModal();
     });
@@ -11042,6 +11029,213 @@
         button.hidden = !you || you.ready;
     }
 
+    // League play's in-game deck builder (issue #171) -- see
+    // GameService::leagueDeckBuilderFor(). The player's cards as they apply to
+    // this game, one thumbnail per distinct card (lower-right "xN" = copies
+    // available, lower-left = copies in the deck and, below that, in the
+    // sideboard), in color/rarity/name order. Tapping a card opens the card
+    // detail with + / - rows that refresh in place, like the Deck Builder's own.
+    //
+    // Game 1 builds from the whole collection and may declare a sideboard of up
+    // to builder.sideboard_max cards. From game 2 on (builder.fixed_pool) the
+    // pool is just that game-1 deck + sideboard: there is no separate sideboard
+    // to edit -- whatever is not in the deck IS the sideboard -- so swapping is
+    // only ever between the two. Selections are plain Map<card_id, copies> kept
+    // across the 4-second polls' re-renders and re-seeded (from
+    // builder.default_deck_card_ids: last game's deck, or the granted starter
+    // deck) whenever a different game is shown.
+    let leagueBuilderSelection = new Map();
+    let leagueBuilderSideboard = new Map();
+    let leagueBuilderGameId = null;
+    let leagueBuilderCurrent = null;
+
+    function buildLeagueCardBadge(modifierClass, text, title) {
+        const badge = document.createElement('span');
+        badge.className = 'card-thumb__badge ' + modifierClass;
+        badge.textContent = text;
+        badge.title = title;
+        return badge;
+    }
+
+    function seedLeagueBuilderSelection(builder) {
+        const ownedByCardId = new Map(builder.pool.map((card) => [card.card_id, card.copies]));
+        leagueBuilderSelection = new Map();
+        leagueBuilderSideboard = new Map();
+        for (const cardId of builder.default_deck_card_ids) {
+            const owned = ownedByCardId.get(cardId) || 0;
+            const inDeck = leagueBuilderSelection.get(cardId) || 0;
+            if (inDeck < owned) {
+                leagueBuilderSelection.set(cardId, inDeck + 1);
+            }
+        }
+    }
+
+    function leagueBuilderInDeck(card) {
+        return leagueBuilderSelection.get(card.card_id) || 0;
+    }
+
+    // Declared sideboard copies on game 1; on a fixed pool, whatever the deck
+    // leaves over.
+    function leagueBuilderInSideboard(builder, card) {
+        return builder.fixed_pool ? card.copies - leagueBuilderInDeck(card) : (leagueBuilderSideboard.get(card.card_id) || 0);
+    }
+
+    function leagueBuilderCounts(builder) {
+        const counts = { deck: 0, sideboard: 0, byRarity: {} };
+        for (const card of builder.pool) {
+            const inDeck = leagueBuilderInDeck(card);
+            counts.deck += inDeck;
+            counts.sideboard += leagueBuilderInSideboard(builder, card);
+            counts.byRarity[card.rarity] = (counts.byRarity[card.rarity] || 0) + inDeck;
+        }
+        return counts;
+    }
+
+    function canAddLeagueDeckCard(builder, card) {
+        const limit = builder.rarity_limits[card.rarity];
+        const used = leagueBuilderInDeck(card) + (builder.fixed_pool ? 0 : leagueBuilderInSideboard(builder, card));
+        return used < card.copies && (limit === undefined || (leagueBuilderCounts(builder).byRarity[card.rarity] || 0) < limit);
+    }
+
+    function canAddLeagueSideboardCard(builder, card) {
+        return !builder.fixed_pool
+            && leagueBuilderCounts(builder).sideboard < builder.sideboard_max
+            && leagueBuilderInDeck(card) + leagueBuilderInSideboard(builder, card) < card.copies;
+    }
+
+    function changeLeagueBuilderCard(card, zone, delta) {
+        const map = zone === 'deck' ? leagueBuilderSelection : leagueBuilderSideboard;
+        const next = (map.get(card.card_id) || 0) + delta;
+        if (next > 0) {
+            map.set(card.card_id, next);
+        } else {
+            map.delete(card.card_id);
+        }
+        renderLeagueDeckBuilder(leagueBuilderCurrent);
+        openLeagueBuilderCardDetail(card);
+    }
+
+    function openLeagueBuilderCardDetail(card) {
+        const builder = leagueBuilderCurrent;
+        const inDeck = leagueBuilderInDeck(card);
+        const inSideboard = leagueBuilderInSideboard(builder, card);
+        const actions = [
+            {
+                label: '+ Deck',
+                count: `${inDeck} in deck`,
+                disabled: !canAddLeagueDeckCard(builder, card),
+                onAction: () => changeLeagueBuilderCard(card, 'deck', 1),
+            },
+            {
+                label: '- Deck',
+                count: builder.fixed_pool ? `${inSideboard} in sideboard` : `${card.copies} owned`,
+                disabled: inDeck === 0,
+                onAction: () => changeLeagueBuilderCard(card, 'deck', -1),
+            },
+        ];
+        if (!builder.fixed_pool) {
+            actions.push(
+                {
+                    label: '+ Sideboard',
+                    count: `${inSideboard} in sideboard`,
+                    disabled: !canAddLeagueSideboardCard(builder, card),
+                    onAction: () => changeLeagueBuilderCard(card, 'sideboard', 1),
+                },
+                {
+                    label: '- Sideboard',
+                    count: '',
+                    disabled: inSideboard === 0,
+                    onAction: () => changeLeagueBuilderCard(card, 'sideboard', -1),
+                },
+            );
+        }
+        openCardDetail(card, null, null, null, actions);
+    }
+
+    function renderLeagueDeckBuilder(builder) {
+        leagueBuilderCurrent = builder;
+        document.getElementById('duel-deck-league-builder').hidden = false;
+        if (leagueBuilderGameId !== currentGameId) {
+            leagueBuilderGameId = currentGameId;
+            seedLeagueBuilderSelection(builder);
+        }
+
+        const counts = leagueBuilderCounts(builder);
+        const limitsText = Object.entries(builder.rarity_limits)
+            .map(([rarity, limit]) => `${counts.byRarity[rarity] || 0}/${limit} ${rarity}`)
+            .join(', ');
+        const deckText = `${counts.deck} card(s) in your deck (at least ${builder.min_cards} needed; ${limitsText})`;
+        document.getElementById('duel-deck-league-builder-status').textContent = builder.fixed_pool
+            ? `Sideboarding: swap cards between your deck and your sideboard -- ${deckText}, ${counts.sideboard} in your sideboard. `
+                + 'Only the cards you declared for game 1 can be used. Tap a card to add or remove copies.'
+            : `Build your deck from your collection: ${deckText}. Sideboard: ${counts.sideboard}/${builder.sideboard_max} card(s) -- `
+                + 'between games you can swap only your sideboard cards into your deck. Tap a card to add or remove copies.';
+        document.getElementById('duel-deck-league-builder-submit-button').disabled = counts.deck < builder.min_cards;
+
+        const grid = document.getElementById('duel-deck-league-builder-cards');
+        grid.innerHTML = '';
+        for (const card of builder.pool.slice().sort(compareDraftPoolCards)) {
+            const inDeck = leagueBuilderInDeck(card);
+            const inSideboard = leagueBuilderInSideboard(builder, card);
+            const thumb = buildCardThumb(card, { onClick: () => openLeagueBuilderCardDetail(card), notPlayable: inDeck === 0 });
+            thumb.classList.toggle('selected', inDeck > 0);
+            thumb.appendChild(buildLeagueCardBadge('card-thumb__badge--count', `x${card.copies}`, `${card.copies} ${builder.fixed_pool ? 'in your pool' : 'owned'}`));
+            if (inDeck > 0) {
+                thumb.appendChild(buildLeagueCardBadge('card-thumb__badge--in-deck', String(inDeck), `${inDeck} in your deck`));
+            }
+            if (inSideboard > 0) {
+                thumb.appendChild(buildLeagueCardBadge('card-thumb__badge--in-sideboard', `SB ${inSideboard}`, `${inSideboard} in your sideboard`));
+            }
+            grid.appendChild(thumb);
+        }
+    }
+
+    document.getElementById('duel-deck-league-builder-reset-button').addEventListener('click', () => {
+        if (leagueBuilderCurrent) {
+            seedLeagueBuilderSelection(leagueBuilderCurrent);
+            renderLeagueDeckBuilder(leagueBuilderCurrent);
+        }
+    });
+
+    document.getElementById('duel-deck-league-builder-clear-button').addEventListener('click', () => {
+        if (leagueBuilderCurrent) {
+            leagueBuilderSelection = new Map();
+            leagueBuilderSideboard = new Map();
+            renderLeagueDeckBuilder(leagueBuilderCurrent);
+        }
+    });
+
+    // Posts the selection through the same endpoint as every other custom_duel
+    // deck, converted back into decklist text (with a Sideboard section on game
+    // 1) -- GameService::submitCustomDuelDeck() re-validates it against the
+    // League's rules, the player's own pool and, from game 2, the declared
+    // deck + sideboard, so the limits above are guidance, not enforcement.
+    document.getElementById('duel-deck-league-builder-submit-button').addEventListener('click', async () => {
+        const errorEl = document.getElementById('duel-deck-league-builder-error');
+        errorEl.hidden = true;
+        const builder = leagueBuilderCurrent;
+        if (!builder) {
+            return;
+        }
+
+        const expand = (map) => builder.pool.flatMap((card) => Array(map.get(card.card_id) || 0).fill(card));
+        let decklistText = 'About\nName League deck\n\n' + formatDecklistCardLines(expand(leagueBuilderSelection)).join('\n');
+        const sideboardCards = builder.fixed_pool ? [] : expand(leagueBuilderSideboard);
+        if (sideboardCards.length > 0) {
+            decklistText += '\n\nSideboard\n' + formatDecklistCardLines(sideboardCards).join('\n');
+        }
+        const { ok, body } = await submitCustomDuelDeck(currentGameId, decklistText, undefined);
+
+        if (!ok) {
+            errorEl.textContent = body.message || 'Could not submit that deck.';
+            errorEl.hidden = false;
+            return;
+        }
+
+        leagueBuilderGameId = null;
+        await refreshBoard();
+    });
+
     // The 'custom_duel' waiting-room view: shows the creator's own locked-
     // in deck-building rules, both players' submission status (never the
     // decklist contents themselves -- see deck_submitted's own docblock in
@@ -11088,9 +11282,19 @@
             document.getElementById('duel-deck-submitted-message').textContent =
                 'You submitted: ' + (you.custom_deck_name || 'Uploaded Deck');
             document.getElementById('duel-deck-sideboard-picker').hidden = true;
+            document.getElementById('duel-deck-league-builder').hidden = true;
             document.getElementById('duel-deck-submit-form-container').hidden = true;
             return;
         }
+
+        // League play -- see renderLeagueDeckBuilder()'s own docblock.
+        if (state.league_deck_builder) {
+            document.getElementById('duel-deck-sideboard-picker').hidden = true;
+            document.getElementById('duel-deck-submit-form-container').hidden = true;
+            renderLeagueDeckBuilder(state.league_deck_builder);
+            return;
+        }
+        document.getElementById('duel-deck-league-builder').hidden = true;
 
         // Power Duel sideboarding (migration 0228/0233, issue #90
         // follow-up) -- power_duel_sideboard_pool is only ever non-null

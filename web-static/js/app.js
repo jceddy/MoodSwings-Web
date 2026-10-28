@@ -653,7 +653,9 @@ function pickPodDraftCard(tournamentId, direction, cardId) {
 // null) and the player's own standing in it; joinLeague() joins the event --
 // granting the first-time structure deck -- and queues, resolving to either
 // { status: 'waiting' } or { status: 'paired', game_id, opponent_username }.
-// savedDecklistId may be omitted only on the very first join of an event.
+// No deck is chosen here: each player builds theirs from their collection
+// inside the paired game. getLeagueCollection() returns the player's cards
+// (full catalog cards plus `copies`) in color/rarity/name order.
 function getLeagueStatus() {
     return apiRequest('/league');
 }
@@ -662,11 +664,8 @@ function getLeagueCollection() {
     return apiRequest('/league/collection');
 }
 
-function joinLeague(savedDecklistId) {
-    return apiRequest('/league/join', {
-        method: 'POST',
-        body: JSON.stringify(savedDecklistId ? { saved_decklist_id: Number(savedDecklistId) } : {}),
-    });
+function joinLeague() {
+    return apiRequest('/league/join', { method: 'POST' });
 }
 
 function leaveLeagueQueue() {
