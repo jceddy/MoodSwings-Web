@@ -790,8 +790,15 @@ dialog#resources-dialog #resources-close-button {
     margin-bottom: 0.5rem;
 }
 
+/* Tournaments/Puzzles sit on their own line below the main action row
+   (New game/Open games/Weekly Sealed Pool/League), with a gap above. */
+#lobby-browse-actions {
+    margin-top: 0.75rem;
+}
+
 /* Past games/Import replay wrap onto their own line below the main
-   action row (New game/Open games/Weekly Sealed Pool/Tournaments)
+   action row (New game/Open games/Weekly Sealed Pool/League and the
+   Tournaments/Puzzles line)
    rather than just flowing inline with them, with some breathing room
    above (between it and that row) and below (between it and
    #games-list). */
