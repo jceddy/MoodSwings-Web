@@ -1301,6 +1301,14 @@ the usual card detail. API calls live in `app.js` (`getLeagueStatus`,
 `getLeagueCollection`, `joinLeague`, `leaveLeagueQueue`); a
 `{"status": "paired"}` join response opens the new game.
 
+The dialog also hosts the leaderboard (`#league-leaderboard-section`, outside
+the event section so the previous event stays viewable while nothing runs):
+"Current event" / "Previous event" toggle buttons over a list rendered like
+Weekly Sealed Pool's standings -- `#rank name (you) -- W-L (top N%)`, tied
+records sharing a rank; the ranking score is never shown (`getLeagueLeaderboard()`
+in `app.js`). `canRematch()` hides the Rematch button for League games
+(`state.game.is_league_match`).
+
 The deck is built inside the paired game: while a League game waits on decks,
 `renderDuelDeckSubmission()` shows `#duel-deck-league-builder` instead of the
 paste/saved-deck form (`state.league_deck_builder`). It is the same

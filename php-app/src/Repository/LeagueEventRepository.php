@@ -21,6 +21,14 @@ final class LeagueEventRepository
         return $row === false ? null : $this->hydrate($row);
     }
 
+    /** The most recently ended event -- the "previous event" a leaderboard can still show once nothing is active. */
+    public function latestEnded(): ?array
+    {
+        $row = Connection::get()->query("SELECT * FROM league_events WHERE status = 'ended' ORDER BY ended_at DESC, id DESC LIMIT 1")->fetch();
+
+        return $row === false ? null : $this->hydrate($row);
+    }
+
     /** @throws RuntimeException if an event is already active */
     public function start(string $name, ?string $setCode): int
     {

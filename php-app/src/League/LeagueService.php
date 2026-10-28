@@ -47,6 +47,15 @@ final class LeagueService
 
     private const RECENT_MATCH_LIMIT = 20;
 
+    /**
+     * The leaderboard's hidden ranking score, the same asymmetric one Weekly
+     * Sealed Pool uses (GameService::WEEKLY_SEALED_POOL_RANKING_POINTS): a
+     * match win is worth more than a loss costs, so playing and winning more
+     * always helps -- a cautious 1-0 never outranks a grindier 4-2. Never
+     * shown; players see their win/loss record and a percentile.
+     */
+    private const RANKING_POINTS = ['win' => 3, 'loss' => -2];
+
     /** The card-list order every other collection/pool view uses. */
     private const COLOR_ORDER = ['white', 'blue', 'black', 'red', 'green'];
     private const RARITY_ORDER = ['common', 'uncommon', 'rare', 'mythic'];
@@ -194,6 +203,54 @@ final class LeagueService
             'matches' => $this->recentMatches($eventId, $userId),
             'collection' => $collection,
             'deck_rules' => $rules,
+        ];
+    }
+
+    /**
+     * The leaderboard for the active event ($previous false) or the most
+     * recently ended one ($previous true): every player with at least one
+     * completed match (abandoned matches don't count; bots can't play), ranked
+     * by the hidden RANKING_POINTS score, ties on record sharing a rank, each
+     * with a "top N%" percentile -- the same shape as Weekly Sealed Pool's
+     * standings. `event` is null when there is no such event; `standings` is
+     * then empty.
+     *
+     * @return array{
+     *     event: array{id: int, name: string, set_code: ?string, status: string}|null,
+     *     standings: list<array{user_id: int, username: string, wins: int, losses: int, rank: int, percentile: int}>
+     * }
+     */
+    public function leaderboard(bool $previous): array
+    {
+        $event = $previous ? $this->events->latestEnded() : $this->events->active();
+        if ($event === null) {
+            return ['event' => null, 'standings' => []];
+        }
+
+        // Results are copied in from the game_matches wrappers on read, so
+        // an ended event's last games are picked up here too.
+        $this->syncMatches($event['id']);
+
+        $stmt = Connection::get()->prepare(
+            "SELECT u.id AS user_id, u.username,
+                    SUM(m.winner_user_id = u.id) AS wins,
+                    SUM(m.winner_user_id != u.id) AS losses
+             FROM league_matches m
+             JOIN users u ON u.id IN (m.user1_id, m.user2_id)
+             WHERE m.event_id = :event_id AND m.status = 'completed' AND m.winner_user_id IS NOT NULL
+             GROUP BY u.id, u.username"
+        );
+        $stmt->execute(['event_id' => $event['id']]);
+        $rows = $stmt->fetchAll();
+
+        $score = static fn (array $row): int => (int) $row['wins'] * self::RANKING_POINTS['win'] + (int) $row['losses'] * self::RANKING_POINTS['loss'];
+        usort($rows, static fn (array $a, array $b): int => $score($b) <=> $score($a)
+            ?: (int) $b['wins'] <=> (int) $a['wins']
+            ?: strcmp((string) $a['username'], (string) $b['username']));
+
+        return [
+            'event' => ['id' => $event['id'], 'name' => $event['name'], 'set_code' => $event['set_code'], 'status' => $event['status']],
+            'standings' => GameService::rankedStandingsRows($rows),
         ];
     }
 

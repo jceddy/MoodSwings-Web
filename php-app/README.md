@@ -4029,11 +4029,23 @@ league members using only cards they own.
   `GameService::notifyLeagueDeckNeeded()` pushes the player who was waiting in
   the queue when the pairing is made.
 - **Results.** `league_matches` is synced from `game_matches` on read
-  (`LeagueService::syncMatches`); W/L only, no leaderboard UI yet.
+  (`LeagueService::syncMatches`).
+- **Leaderboard.** `LeagueService::leaderboard()` ranks everyone with at least
+  one completed match in the active event (or, with `?event=prior`, the most
+  recently ended one, so standings outlive the event): abandoned matches don't
+  count and bots can't play. It uses Weekly Sealed Pool's asymmetric hidden
+  score (+3 per match win, -2 per loss -- `RANKING_POINTS`; never returned), so
+  playing and winning more always helps; ties on record share a rank
+  (`GameService::rankedStandingsRows()`, competition ranking) and each row
+  carries a "top N%" percentile.
+- **No Rematch.** `getState()['game']['is_league_match']` (creator-only, like
+  `is_tournament_match`) tells the client to hide the Rematch button: League
+  opponents come from the queue and are never played twice per event.
 
 | Route | Purpose |
 | --- | --- |
 | `GET /league` | Event, queue state, record, recent matches, deck rules |
+| `GET /league/leaderboard` | Ranked standings (`event`, `standings[]` with `rank`, `wins`, `losses`, `percentile`); `?event=prior` for the most recently ended event |
 | `GET /league/collection` | The caller's permanent collection: full catalog cards plus `copies`, ordered color, rarity, name |
 | `POST /league/join` | Join the active event and enter the queue |
 | `POST /league/queue/leave` | Leave the queue |

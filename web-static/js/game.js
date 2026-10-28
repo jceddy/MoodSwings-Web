@@ -5792,10 +5792,53 @@
         });
     }
 
+    // Leaderboard (the active event's live standings, or the most recently
+    // ended event's final ones) -- rendered like Weekly Sealed Pool's
+    // standings: competition rank (tied records share one), win-loss record
+    // and a "top N%" percentile; the ranking score itself is never shown.
+    async function loadLeagueLeaderboard(which) {
+        document.getElementById('league-leaderboard-current-button').setAttribute('aria-pressed', String(which === 'current'));
+        document.getElementById('league-leaderboard-previous-button').setAttribute('aria-pressed', String(which === 'previous'));
+
+        const eventEl = document.getElementById('league-leaderboard-event');
+        const list = document.getElementById('league-leaderboard-list');
+        const empty = document.getElementById('league-leaderboard-empty');
+        list.innerHTML = '';
+
+        const { ok, body } = await getLeagueLeaderboard(which);
+        if (!ok || body.event === null) {
+            eventEl.textContent = '';
+            empty.textContent = which === 'previous' ? 'There is no previous League event yet.' : 'There is no League event running right now.';
+            empty.hidden = false;
+            return;
+        }
+
+        eventEl.textContent = body.event.set_code ? `${body.event.name} (${body.event.set_code})` : body.event.name;
+        if (body.standings.length === 0) {
+            empty.textContent = which === 'previous'
+                ? 'Nobody finished a match in that event.'
+                : 'No standings yet -- be the first to finish a match!';
+            empty.hidden = false;
+            return;
+        }
+        empty.hidden = true;
+
+        body.standings.forEach((row) => {
+            const item = document.createElement('li');
+            const isYou = row.user_id === user.id;
+            item.textContent = `#${row.rank} ${row.username}${isYou ? ' (you)' : ''} — ${row.wins}-${row.losses} (top ${row.percentile}%)`;
+            list.appendChild(item);
+        });
+    }
+
+    document.getElementById('league-leaderboard-current-button').addEventListener('click', () => loadLeagueLeaderboard('current'));
+    document.getElementById('league-leaderboard-previous-button').addEventListener('click', () => loadLeagueLeaderboard('previous'));
+
     document.getElementById('league-button').addEventListener('click', async () => {
         document.getElementById('league-error').hidden = true;
         leagueDialog.showModal();
         await refreshLeague();
+        await loadLeagueLeaderboard('current');
     });
 
     document.getElementById('league-close-button').addEventListener('click', () => leagueDialog.close());
@@ -9585,6 +9628,11 @@
         // here would just be confusing (see GameService::buildGameState()'s
         // own docblock for how this is computed).
         if (state.game.is_tournament_match) {
+            return false;
+        }
+        // League play: your opponent came from the queue and you never
+        // play the same one twice in an event, so no ad hoc rematch.
+        if (state.game.is_league_match) {
             return false;
         }
         // Issue #524: a solved puzzle already has its own "Try Again"

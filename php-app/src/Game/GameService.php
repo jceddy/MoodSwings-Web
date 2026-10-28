@@ -1124,7 +1124,7 @@ final class GameService
      * @param list<array{user_id: int, username: string, wins: int, losses: int}> $scoreOrderedRows
      * @return list<array{user_id: int, username: string, wins: int, losses: int, rank: int, percentile: int}>
      */
-    private static function rankedStandingsRows(array $scoreOrderedRows): array
+    public static function rankedStandingsRows(array $scoreOrderedRows): array
     {
         $total = count($scoreOrderedRows);
         $ranked = [];
@@ -18458,6 +18458,13 @@ final class GameService
         // hides Rematch from everyone else, the only consumer of this
         // field, so there's no reason to spend the query otherwise.
         $isTournamentMatch = false;
+        // League play (issue #171): the same "hide Rematch" treatment -- a
+        // League opponent comes from the queue (nobody plays the same one
+        // twice in an event), so an ad hoc rematch makes no sense there.
+        $isLeagueMatch = false;
+        if ($isCreator && $game['game_match_id'] !== null) {
+            $isLeagueMatch = $this->isLeagueGameMatch((int) $game['game_match_id']);
+        }
         if ($isCreator) {
             $tournamentMatchStmt = $pdo->prepare(
                 'SELECT 1 FROM tournament_matches
@@ -18729,6 +18736,8 @@ final class GameService
                 // purely so the frontend can hide the "Rematch" button
                 // for a tournament match.
                 'is_tournament_match' => $isTournamentMatch,
+                // See $isLeagueMatch's own comment above.
+                'is_league_match' => $isLeagueMatch,
                 'format' => $game['format'],
                 'deck_type' => $game['deck_type'],
                 'custom_deck_name' => $game['custom_deck_name'],

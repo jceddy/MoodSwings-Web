@@ -559,6 +559,100 @@ final class LeagueServiceIntegrationTest extends TestCase
         self::assertEqualsCanonicalizing([$r['mythic'][1], $r['common'][0], $r['common'][10]], $this->sideboardOf($game2, $alice));
     }
 
+    private int $nextFakeGameMatchId = 9000;
+
+    /** Records a finished (or otherwise-statused) League match directly, as syncMatches() would have left it. */
+    private function recordMatch(int $eventId, int $winner, int $loser, string $status = 'completed'): void
+    {
+        $this->pdo->prepare(
+            'INSERT INTO league_matches (event_id, user1_id, user2_id, game_match_id, status, winner_user_id) VALUES (:event_id, :user1, :user2, :game_match_id, :status, :winner)'
+        )->execute([
+            'event_id' => $eventId, 'user1' => $winner, 'user2' => $loser, 'game_match_id' => $this->nextFakeGameMatchId++,
+            'status' => $status, 'winner' => $status === 'completed' ? $winner : null,
+        ]);
+    }
+
+    public function testLeaderboardRanksByTheHiddenScoreWithTiesSharingARank(): void
+    {
+        $eventId = $this->startEvent();
+        [$alice, $bob, $carol, $dave] = [$this->insertUser('alice'), $this->insertUser('bob'), $this->insertUser('carol'), $this->insertUser('dave')];
+        $erin = $this->insertUser('erin');
+
+        $this->recordMatch($eventId, $alice, $bob);
+        $this->recordMatch($eventId, $alice, $carol);
+        $this->recordMatch($eventId, $dave, $bob);
+        $this->recordMatch($eventId, $carol, $dave);
+        // Unfinished and abandoned matches don't count, and erin has no finished match at all.
+        $this->recordMatch($eventId, $erin, $alice, 'abandoned');
+        $this->pdo->prepare("INSERT INTO league_matches (event_id, user1_id, user2_id, game_match_id) VALUES (:e, :a, :b, 99999)")->execute(['e' => $eventId, 'a' => $erin, 'b' => $bob]);
+
+        $board = $this->league->leaderboard(false);
+
+        self::assertSame('Test League', $board['event']['name']);
+        $rows = array_map(static fn (array $r): array => [$r['username'], $r['wins'] . '-' . $r['losses'], $r['rank'], $r['percentile']], $board['standings']);
+        self::assertSame([
+            ['alice', '2-0', 1, 25],
+            ['carol', '1-1', 2, 50],
+            ['dave', '1-1', 2, 50],
+            ['bob', '0-2', 4, 100],
+        ], $rows);
+    }
+
+    public function testLeaderboardScoreFavoursPlayingAndWinningMoreOverACautiousRecord(): void
+    {
+        $eventId = $this->startEvent();
+        [$willow, $xavier, $yara, $zed] = [$this->insertUser('willow'), $this->insertUser('xavier'), $this->insertUser('yara'), $this->insertUser('zed')];
+
+        $this->recordMatch($eventId, $willow, $yara);        // willow 1-0
+        for ($i = 0; $i < 4; $i++) {
+            $this->recordMatch($eventId, $xavier, $yara);    // xavier 4-0 so far
+        }
+        for ($i = 0; $i < 2; $i++) {
+            $this->recordMatch($eventId, $zed, $xavier);     // xavier 4-2, zed 2-0
+        }
+
+        $order = array_column($this->league->leaderboard(false)['standings'], 'username');
+
+        // xavier 4-2 (score 8) > zed 2-0 (6) > willow 1-0 (3) > yara 0-5.
+        self::assertSame(['xavier', 'zed', 'willow', 'yara'], $order);
+    }
+
+    public function testLeaderboardShowsThePreviousEventOnceTheActiveOneEnds(): void
+    {
+        self::assertNull($this->league->leaderboard(false)['event']);
+        self::assertNull($this->league->leaderboard(true)['event']);
+
+        $eventId = $this->startEvent();
+        [$alice, $bob] = [$this->insertUser('alice'), $this->insertUser('bob')];
+        $this->recordMatch($eventId, $alice, $bob);
+        $this->events->endActive();
+
+        self::assertNull($this->league->leaderboard(false)['event'], 'nothing is active any more');
+        $previous = $this->league->leaderboard(true);
+        self::assertSame('Test League', $previous['event']['name']);
+        self::assertSame(['alice', 'bob'], array_column($previous['standings'], 'username'));
+
+        // A new event starts with an empty board; the old one stays available as "previous".
+        $this->events->start('Second League', null);
+        self::assertSame([], $this->league->leaderboard(false)['standings']);
+        self::assertSame(['alice', 'bob'], array_column($this->league->leaderboard(true)['standings'], 'username'));
+    }
+
+    public function testLeagueGamesAreFlaggedSoTheClientCanHideRematch(): void
+    {
+        $this->startEvent();
+        $alice = $this->insertUser('alice');
+        $bob = $this->insertUser('bob');
+        $this->firstJoin($alice);
+        $leagueGameId = $this->firstJoin($bob)['game_id'];
+
+        // Bob joined second, so he created the game and is the one Rematch would be offered to.
+        self::assertTrue($this->games->getState($leagueGameId, $bob)['game']['is_league_match']);
+
+        $ordinaryGameId = $this->games->createGame($bob, [$bob, $alice]);
+        self::assertFalse($this->games->getState($ordinaryGameId, $bob)['game']['is_league_match']);
+    }
+
     public function testCollectionListsOwnedCardsWithCopiesInColorRarityNameOrder(): void
     {
         $this->startEvent();
