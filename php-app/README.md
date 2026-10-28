@@ -3995,25 +3995,33 @@ league members using only cards they own.
   Ending an event empties the queue; in-progress matches finish normally.
 - **Eligibility.** Humans only (bots are excluded entirely) and the player
   must have "Discoverable for open games" (`matchmaking_discoverable`) on.
-- **Join = queue.** `POST /league/join` (optional `saved_decklist_id`) both
-  joins the event and enters the queue. The first join of each event grants
-  one randomized structure deck (45 cards, 23C/14U/6R/2M, no chaos tokens)
-  into the permanent collection (`user_collection_cards`) and saves it as a
-  private decklist; the first join may omit the deck and uses that one.
-  Leaving and rejoining never grants a second deck.
+- **Join = queue.** `POST /league/join` both joins the event and enters the
+  queue (no deck is chosen here). The first join of each event grants one
+  randomized structure deck (45 cards, 23C/14U/6R/2M, no chaos tokens) into
+  the permanent collection (`user_collection_cards`) and saves it as a private
+  decklist. Leaving and rejoining never grants a second deck.
 - **Pairing.** FIFO under a `GET_LOCK` advisory lock, like Weekly Sealed
   Pool: at most `CONCURRENT_MATCH_CAP` (2) in-progress matches per player,
   never the same opponent twice in one event, never blocked users.
-- **Games.** 2-player `custom_duel`, best-of-three, decks snapshotted from the
-  queue entry. Deck rules: minimum 12 cards, at most 2 mythics and 6 rares,
-  and per-card copies no greater than owned (`GameService::resolveLeagueDeck`).
+- **Games.** 2-player `custom_duel`, best-of-three, created with no decks
+  seeded and each seat restricted to its own collection
+  (`custom_deck_allowed_card_ids`). Each player builds their deck in the game
+  -- before game 1 and again before each later game, as for any custom_duel
+  match -- and `submitCustomDuelDeck()` enforces the rules: minimum 12 cards, at
+  most 2 mythics and 6 rares, and per-card copies no greater than owned.
+  While a League game waits on decks, `getState()` carries a
+  `league_deck_builder` object (`pool`: the viewer's cards with `copies`,
+  `default_deck_card_ids`: their previous game's deck or, for game 1, the
+  starter deck they were granted, plus `min_cards`/`rarity_limits`);
+  `GameService::notifyLeagueDeckNeeded()` pushes the player who was waiting in
+  the queue when the pairing is made.
 - **Results.** `league_matches` is synced from `game_matches` on read
   (`LeagueService::syncMatches`); W/L only, no leaderboard UI yet.
 
 | Route | Purpose |
 | --- | --- |
 | `GET /league` | Event, queue state, record, recent matches, deck rules |
-| `GET /league/collection` | The caller's permanent collection |
+| `GET /league/collection` | The caller's permanent collection: full catalog cards plus `copies`, ordered color, rarity, name |
 | `POST /league/join` | Join the active event and enter the queue |
 | `POST /league/queue/leave` | Leave the queue |
 

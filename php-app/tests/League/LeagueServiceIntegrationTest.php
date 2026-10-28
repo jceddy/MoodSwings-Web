@@ -27,6 +27,7 @@ final class LeagueServiceIntegrationTest extends TestCase
 {
     private PDO $pdo;
     private LeagueService $league;
+    private GameService $games;
     private LeagueEventRepository $events;
     private UserDecklistRepository $decklists;
 
@@ -69,7 +70,7 @@ final class LeagueServiceIntegrationTest extends TestCase
         $this->pdo = $pdo;
 
         $registry = DefaultEffectRegistry::build();
-        $games = new GameService(
+        $this->games = $games = new GameService(
             new BoardStateRepository($registry),
             new MoodPlayService($registry),
             new RoundScorer(),
@@ -94,7 +95,7 @@ final class LeagueServiceIntegrationTest extends TestCase
         return (int) $this->pdo->lastInsertId();
     }
 
-    /** The granted structure deck is saved automatically on a player's first join -- but joining needs a deck, so this makes the grant happen via a throwaway first attempt. */
+    /** The granted structure deck is saved as a private decklist on a player's first join. */
     private function grantedDeckId(int $userId): int
     {
         $stmt = $this->pdo->prepare('SELECT id FROM user_decklists WHERE user_id = :user_id ORDER BY id LIMIT 1');
@@ -105,10 +106,23 @@ final class LeagueServiceIntegrationTest extends TestCase
         return (int) $id;
     }
 
-    /** A brand-new player's first join names no deck: they play the one they were just granted. */
     private function firstJoin(int $userId): array
     {
-        return $this->league->joinAndQueue($userId, null);
+        return $this->league->joinAndQueue($userId);
+    }
+
+    private function gamePlayerId(int $gameId, int $userId): int
+    {
+        $stmt = $this->pdo->prepare('SELECT id FROM game_players WHERE game_id = :game_id AND user_id = :user_id');
+        $stmt->execute(['game_id' => $gameId, 'user_id' => $userId]);
+
+        return (int) $stmt->fetchColumn();
+    }
+
+    /** Submits a saved decklist as $userId's deck for the League game, as the in-game builder does. */
+    private function submitDeck(int $gameId, int $userId, int $savedDecklistId): void
+    {
+        $this->games->submitCustomDuelDeck($gameId, $this->gamePlayerId($gameId, $userId), null, $savedDecklistId, $userId);
     }
 
     private function startEvent(): int
@@ -121,7 +135,7 @@ final class LeagueServiceIntegrationTest extends TestCase
         $userId = $this->insertUser('alice');
 
         $this->expectException(GameStateException::class);
-        $this->league->joinAndQueue($userId, 1);
+        $this->league->joinAndQueue($userId);
     }
 
     public function testOnlyOneEventCanBeActiveAndEndingEmptiesTheQueue(): void
@@ -152,7 +166,7 @@ final class LeagueServiceIntegrationTest extends TestCase
 
         foreach ([$bot, $private] as $userId) {
             try {
-                $this->league->joinAndQueue($userId, 1);
+                $this->league->joinAndQueue($userId);
                 self::fail('should have been refused');
             } catch (GameStateException) {
                 self::addToAssertionCount(1);
@@ -182,11 +196,11 @@ final class LeagueServiceIntegrationTest extends TestCase
 
         // Leaving and rejoining the same event does not grant a second deck.
         $this->league->leaveQueue($alice);
-        $this->league->joinAndQueue($alice, $this->grantedDeckId($alice));
+        $this->league->joinAndQueue($alice);
         self::assertSame(45, $this->league->statusFor($alice)['collection']['total_cards']);
     }
 
-    public function testASecondPlayerIsPairedIntoABestOfThreeDuelWithSeededDecks(): void
+    public function testASecondPlayerIsPairedIntoABestOfThreeDuelThatWaitsForDecks(): void
     {
         $this->startEvent();
         $alice = $this->insertUser('alice');
@@ -201,20 +215,61 @@ final class LeagueServiceIntegrationTest extends TestCase
         $game = $this->pdo->query('SELECT * FROM games WHERE id = ' . (int) $paired['game_id'])->fetch();
         self::assertSame('custom_duel', $game['deck_type']);
         self::assertSame('duel', $game['format']);
-        self::assertSame('in_progress', $game['status'], 'both decks were seeded, so the match starts straight away');
+        self::assertSame('waiting', $game['status'], 'no deck is seeded: each player chooses theirs in the game');
         self::assertNotNull($game['game_match_id']);
         self::assertSame(12, (int) $game['custom_duel_min_cards']);
         self::assertEquals(['mythic' => 2, 'rare' => 6], json_decode((string) $game['custom_duel_rarity_limits'], true));
 
-        $decks = $this->pdo->query('SELECT custom_deck_card_ids FROM game_players WHERE game_id = ' . (int) $paired['game_id'])->fetchAll(PDO::FETCH_COLUMN);
-        self::assertCount(2, $decks);
-        foreach ($decks as $deck) {
-            self::assertCount(45, json_decode((string) $deck, true));
+        $seats = $this->pdo->query('SELECT custom_deck_card_ids, custom_deck_allowed_card_ids FROM game_players WHERE game_id = ' . (int) $paired['game_id'])->fetchAll();
+        self::assertCount(2, $seats);
+        foreach ($seats as $seat) {
+            self::assertNull($seat['custom_deck_card_ids']);
+            self::assertCount(45, json_decode((string) $seat['custom_deck_allowed_card_ids'], true), 'each seat may only use its own collection');
         }
 
         self::assertSame(1, $this->league->statusFor($alice)['in_progress_count']);
         self::assertFalse($this->league->statusFor($alice)['queued']);
         self::assertSame('in_progress', $this->league->statusFor($bob)['matches'][0]['status']);
+    }
+
+    public function testTheGameStateOffersTheCollectionAsADeckBuilderStartingFromTheGrantedDeck(): void
+    {
+        $this->startEvent();
+        $alice = $this->insertUser('alice');
+        $bob = $this->insertUser('bob');
+        $this->firstJoin($alice);
+        $gameId = $this->firstJoin($bob)['game_id'];
+
+        $builder = $this->games->getState($gameId, $alice)['league_deck_builder'];
+
+        self::assertNotNull($builder);
+        self::assertSame(12, $builder['min_cards']);
+        self::assertEquals(['mythic' => 2, 'rare' => 6], $builder['rarity_limits']);
+        self::assertSame(45, array_sum(array_column($builder['pool'], 'copies')));
+        self::assertArrayHasKey('rules_text', $builder['pool'][0]);
+
+        $granted = array_map('intval', (array) json_decode((string) $this->pdo->query("SELECT granted_card_ids FROM league_participants WHERE user_id = {$alice}")->fetchColumn(), true));
+        self::assertEquals($granted, $builder['default_deck_card_ids']);
+
+        // Each player sees only their own pool, and an ordinary game has no builder at all.
+        $bobBuilder = $this->games->getState($gameId, $bob)['league_deck_builder'];
+        self::assertNotEquals($builder['default_deck_card_ids'], $bobBuilder['default_deck_card_ids']);
+    }
+
+    public function testBothPlayersSubmittingFromTheirCollectionsStartsTheMatch(): void
+    {
+        $this->startEvent();
+        $alice = $this->insertUser('alice');
+        $bob = $this->insertUser('bob');
+        $this->firstJoin($alice);
+        $gameId = $this->firstJoin($bob)['game_id'];
+
+        $this->submitDeck($gameId, $alice, $this->grantedDeckId($alice));
+        $this->submitDeck($gameId, $bob, $this->grantedDeckId($bob));
+        $this->games->startGame($gameId);
+
+        self::assertSame('in_progress', $this->pdo->query("SELECT status FROM games WHERE id = {$gameId}")->fetchColumn());
+        self::assertNull($this->games->getState($gameId, $alice)['league_deck_builder'], 'the builder is only offered while the game waits for decks');
     }
 
     public function testPlayersNeverFaceTheSameOpponentTwiceInOneEvent(): void
@@ -227,8 +282,8 @@ final class LeagueServiceIntegrationTest extends TestCase
         $this->firstJoin($bob);
 
         // Both queue again; they've already played each other, so neither is paired.
-        self::assertSame('waiting', $this->league->joinAndQueue($alice, $this->grantedDeckId($alice))['status']);
-        self::assertSame('waiting', $this->league->joinAndQueue($bob, $this->grantedDeckId($bob))['status']);
+        self::assertSame('waiting', $this->league->joinAndQueue($alice)['status']);
+        self::assertSame('waiting', $this->league->joinAndQueue($bob)['status']);
 
         // A newcomer is paired with whoever has waited longest -- alice.
         $carol = $this->insertUser('carol');
@@ -259,23 +314,24 @@ final class LeagueServiceIntegrationTest extends TestCase
 
         $this->firstJoin($alice);
         $this->firstJoin($bob);
-        $this->league->joinAndQueue($alice, $this->grantedDeckId($alice));
+        $this->league->joinAndQueue($alice);
         $this->firstJoin($carol);
         self::assertSame(LeagueService::CONCURRENT_MATCH_CAP, $this->league->statusFor($alice)['in_progress_count']);
 
         $this->expectException(GameStateException::class);
         $this->expectExceptionMessage('in progress');
-        $this->league->joinAndQueue($alice, $this->grantedDeckId($alice));
+        $this->league->joinAndQueue($alice);
     }
 
-    public function testDecklistsMustFitTheCollectionAndTheLeagueRules(): void
+    public function testSubmittedDecksMustFitTheCollectionAndTheLeagueRules(): void
     {
         $this->startEvent();
         $alice = $this->insertUser('alice');
+        $bob = $this->insertUser('bob');
         $this->firstJoin($alice);
-        $this->league->leaveQueue($alice);
+        $gameId = $this->firstJoin($bob)['game_id'];
 
-        $granted = (array) json_decode((string) $this->pdo->query("SELECT granted_card_ids FROM league_participants WHERE user_id = {$alice}")->fetchColumn(), true);
+        $granted = array_map('intval', (array) json_decode((string) $this->pdo->query("SELECT granted_card_ids FROM league_participants WHERE user_id = {$alice}")->fetchColumn(), true));
 
         // A card that was never granted.
         $unowned = (int) $this->pdo->query(
@@ -283,25 +339,25 @@ final class LeagueServiceIntegrationTest extends TestCase
         )->fetchColumn();
         $deckWithUnowned = $this->decklists->create($alice, 'Unowned', array_merge(array_slice($granted, 0, 11), [$unowned]), null, 'private');
         try {
-            $this->league->joinAndQueue($alice, $deckWithUnowned);
+            $this->submitDeck($gameId, $alice, $deckWithUnowned);
             self::fail('a card outside the collection should be refused');
         } catch (GameStateException $e) {
-            self::assertStringContainsString("collection doesn't have it", $e->getMessage());
+            self::assertStringContainsString('not in your own', $e->getMessage());
         }
 
         // Too many copies of a card that was granted once.
         $twice = $this->decklists->create($alice, 'Twice', array_merge(array_slice($granted, 0, 11), [$granted[0]]), null, 'private');
         try {
-            $this->league->joinAndQueue($alice, $twice);
+            $this->submitDeck($gameId, $alice, $twice);
             self::fail('more copies than owned should be refused');
         } catch (GameStateException $e) {
-            self::assertStringContainsString('only has 1', $e->getMessage());
+            self::assertStringContainsString('not in your own', $e->getMessage());
         }
 
         // Fewer than 12 cards.
         $small = $this->decklists->create($alice, 'Small', array_slice($granted, 0, 11), null, 'private');
         try {
-            $this->league->joinAndQueue($alice, $small);
+            $this->submitDeck($gameId, $alice, $small);
             self::fail('an undersized deck should be refused');
         } catch (GameStateException $e) {
             self::assertStringContainsString('at least 12', $e->getMessage());
@@ -309,27 +365,32 @@ final class LeagueServiceIntegrationTest extends TestCase
 
         // Exactly 12 owned cards is legal.
         $legal = $this->decklists->create($alice, 'Legal', array_slice($granted, 0, 12), null, 'private');
-        self::assertSame('waiting', $this->league->joinAndQueue($alice, $legal)['status']);
+        $this->submitDeck($gameId, $alice, $legal);
+        self::assertCount(12, json_decode((string) $this->pdo->query('SELECT custom_deck_card_ids FROM game_players WHERE id = ' . $this->gamePlayerId($gameId, $alice))->fetchColumn(), true));
     }
 
     public function testMythicAndRareCapsApplyEvenWhenOwned(): void
     {
         $this->startEvent();
         $alice = $this->insertUser('alice');
+        $bob = $this->insertUser('bob');
+
+        // Give alice plenty of mythics before the pairing snapshots her collection, so only the cap can stop a deck with three.
         $this->firstJoin($alice);
         $this->league->leaveQueue($alice);
-
-        // Give alice plenty of mythics so only the cap can stop a deck with three.
         $mythics = array_map('intval', $this->pdo->query("SELECT id FROM cards WHERE rarity = 'mythic' AND is_token = 0 LIMIT 3")->fetchAll(PDO::FETCH_COLUMN));
         foreach ($mythics as $cardId) {
             $this->pdo->exec("INSERT INTO user_collection_cards (user_id, card_id, copies) VALUES ({$alice}, {$cardId}, 1) ON DUPLICATE KEY UPDATE copies = GREATEST(copies, 1)");
         }
         $commons = array_map('intval', $this->pdo->query("SELECT card_id FROM user_collection_cards c JOIN cards k ON k.id = c.card_id WHERE c.user_id = {$alice} AND k.rarity = 'common' LIMIT 9")->fetchAll(PDO::FETCH_COLUMN));
 
+        $this->league->joinAndQueue($alice);
+        $gameId = $this->firstJoin($bob)['game_id'];
+
         $threeMythics = $this->decklists->create($alice, 'Three mythics', array_merge($mythics, $commons), null, 'private');
         $this->expectException(GameStateException::class);
         $this->expectExceptionMessage('at most 2 mythic');
-        $this->league->joinAndQueue($alice, $threeMythics);
+        $this->submitDeck($gameId, $alice, $threeMythics);
     }
 
     public function testCompletedMatchesAreCountedInTheRecordAndFreeAConcurrentSlot(): void
@@ -355,14 +416,14 @@ final class LeagueServiceIntegrationTest extends TestCase
         self::assertTrue($bobStatus['matches'][0]['won']);
 
         // A match whose wrapper was cleaned up is abandoned, not counted, and no longer blocks a rematch.
-        $this->league->joinAndQueue($alice, $this->grantedDeckId($alice));
+        $this->league->joinAndQueue($alice);
         $this->league->leaveQueue($alice);
         $this->pdo->exec("UPDATE league_matches SET status = 'abandoned'");
-        self::assertSame('waiting', $this->league->joinAndQueue($alice, $this->grantedDeckId($alice))['status']);
-        self::assertSame('paired', $this->league->joinAndQueue($bob, $this->grantedDeckId($bob))['status']);
+        self::assertSame('waiting', $this->league->joinAndQueue($alice)['status']);
+        self::assertSame('paired', $this->league->joinAndQueue($bob)['status']);
     }
 
-    public function testCollectionListsOwnedCardsWithCopies(): void
+    public function testCollectionListsOwnedCardsWithCopiesInColorRarityNameOrder(): void
     {
         $this->startEvent();
         $alice = $this->insertUser('alice');
@@ -370,8 +431,15 @@ final class LeagueServiceIntegrationTest extends TestCase
 
         $collection = $this->league->collectionFor($alice);
 
-        self::assertCount(45, $collection);
         self::assertSame(45, array_sum(array_column($collection, 'copies')));
-        self::assertArrayHasKey('name', $collection[0]);
+        self::assertArrayHasKey('rules_text', $collection[0], 'full catalog cards, so the client can draw thumbnails and the detail view');
+        self::assertArrayHasKey('card_id', $collection[0]);
+
+        $colorRank = array_flip(['white', 'blue', 'black', 'red', 'green']);
+        $rarityRank = array_flip(['common', 'uncommon', 'rare', 'mythic']);
+        $keys = array_map(static fn (array $c): array => [$colorRank[$c['color']], $rarityRank[$c['rarity']], $c['name']], $collection);
+        $sorted = $keys;
+        usort($sorted, static fn (array $a, array $b): int => [$a[0], $a[1]] <=> [$b[0], $b[1]] ?: strcmp($a[2], $b[2]));
+        self::assertSame($sorted, $keys);
     }
 }

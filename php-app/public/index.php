@@ -1667,15 +1667,10 @@ if ($path === '/league/collection' && $method === 'GET') {
 
 if ($path === '/league/join' && $method === 'POST') {
     $currentUser = requireAuth($auth);
-    $body = requestBody();
 
     try {
-        $result = $league->joinAndQueue((int) $currentUser['id'], isset($body['saved_decklist_id']) ? (int) $body['saved_decklist_id'] : null);
+        $result = $league->joinAndQueue((int) $currentUser['id']);
         respond(200, ['status' => 'ok', ...$result]);
-    } catch (DecklistNotFoundException $e) {
-        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
-    } catch (NotAuthorizedToAccessDecklistException $e) {
-        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
     } catch (GameStateException $e) {
         respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
     }

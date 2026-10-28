@@ -3184,34 +3184,94 @@ final class GameService
     }
 
     /**
-     * League play's own deck check (issue #171): resolves one of $userId's
-     * saved decklists and validates it against $rules (League's own minimum
-     * size and mythic/rare caps) AND against what the player actually owns --
-     * no card may appear more times than $copiesByCardId says their
-     * collection holds. Like resolvePowerDuelTournamentDeck() there is no
-     * games row to read rules from at queue time, so the caller passes them
-     * in and persists the result itself.
-     *
-     * @param array<int, int> $copiesByCardId catalog card id => copies owned
-     * @return array{name: ?string, cardIds: int[]}
+     * League play (issue #171): tells $userId a paired League game is waiting
+     * on their decklist. League games are created with no decks seeded -- both
+     * players choose theirs from their own collection once the game exists --
+     * so the player who was already waiting in the queue (and so isn't looking
+     * at the game) needs a nudge. A no-op without a NotificationService.
      */
-    public function resolveLeagueDeck(int $userId, int $savedDecklistId, DuelDeckRules $rules, array $copiesByCardId): array
+    public function notifyLeagueDeckNeeded(int $gameId, int $userId): void
     {
-        $catalog = $this->loadCardCatalog();
-        $parsed = $this->userDecklists->cardIdsForUse($userId, $savedDecklistId);
+        $this->notifyDraftUsersItsYourTurn($gameId, [$userId], "Your League match (game #{$gameId}) is ready -- choose your deck.", 'custom-duel-deck');
+    }
 
-        $rules->validate($parsed['cardIds'], $catalog['rowsById'], 'Your decklist');
+    /**
+     * League play's deck builder state (issue #171): while a League game is
+     * still waiting on decklists, the viewer's own collection as it applies to
+     * THIS game (their per-seat allowed card pool, one entry per distinct card
+     * with how many copies they own), plus a starting selection to pre-fill the
+     * builder with -- the deck they played in the immediately preceding game of
+     * the match, or, for game 1, the starter deck their event grant gave them.
+     * Null for any other game (non-League, or no longer waiting) and for a
+     * spectator. League games are the only custom_duel games linked from
+     * league_matches, which is what tells them apart from a tournament's
+     * pool-restricted custom_duel games.
+     *
+     * @param array<string, mixed> $game
+     * @return array{pool: array<int, array<string, mixed>>, default_deck_card_ids: int[], min_cards: int, rarity_limits: array<string, int>}|null
+     */
+    private function leagueDeckBuilderFor(array $game, ?int $viewerUserId): ?array
+    {
+        if (
+            $viewerUserId === null
+            || $game['deck_type'] !== 'custom_duel'
+            || $game['status'] !== 'waiting'
+            || $game['game_match_id'] === null
+        ) {
+            return null;
+        }
 
-        foreach (array_count_values($parsed['cardIds']) as $cardId => $copies) {
-            $owned = $copiesByCardId[$cardId] ?? 0;
-            if ($copies > $owned) {
-                $name = $catalog['rowsById'][$cardId]['name'];
-                $ownedText = $owned === 0 ? "your collection doesn't have it" : "your collection only has {$owned}";
-                throw new GameStateException("Your decklist uses {$copies} cop" . ($copies === 1 ? 'y' : 'ies') . " of \"{$name}\", but {$ownedText}.");
+        $pdo = Connection::get();
+        $leagueStmt = $pdo->prepare('SELECT event_id FROM league_matches WHERE game_match_id = :game_match_id');
+        $leagueStmt->execute(['game_match_id' => $game['game_match_id']]);
+        $eventId = $leagueStmt->fetchColumn();
+        if ($eventId === false) {
+            return null;
+        }
+
+        $seatStmt = $pdo->prepare('SELECT custom_deck_allowed_card_ids FROM game_players WHERE game_id = :game_id AND user_id = :user_id');
+        $seatStmt->execute(['game_id' => $game['id'], 'user_id' => $viewerUserId]);
+        $allowed = $seatStmt->fetchColumn();
+        if ($allowed === false || $allowed === null) {
+            return null;
+        }
+
+        $copiesByCardId = array_count_values(array_map(intval(...), (array) json_decode((string) $allowed, true)));
+        $pool = [];
+        foreach (CardCatalog::serialize(array_keys($copiesByCardId)) as $card) {
+            $card['copies'] = $copiesByCardId[$card['card_id']];
+            $pool[] = $card;
+        }
+
+        $defaultDeckCardIds = [];
+        $previousStmt = $pdo->prepare(
+            'SELECT gp.custom_deck_card_ids
+             FROM game_players gp JOIN games g ON g.id = gp.game_id
+             WHERE g.game_match_id = :match_id AND g.match_game_number = :previous AND gp.user_id = :user_id'
+        );
+        $previousStmt->execute([
+            'match_id' => $game['game_match_id'],
+            'previous' => (int) $game['match_game_number'] - 1,
+            'user_id' => $viewerUserId,
+        ]);
+        $previousDeck = $previousStmt->fetchColumn();
+        if ($previousDeck !== false && $previousDeck !== null) {
+            $defaultDeckCardIds = array_map(intval(...), (array) json_decode((string) $previousDeck, true));
+        } else {
+            $grantStmt = $pdo->prepare('SELECT granted_card_ids FROM league_participants WHERE event_id = :event_id AND user_id = :user_id');
+            $grantStmt->execute(['event_id' => $eventId, 'user_id' => $viewerUserId]);
+            $granted = $grantStmt->fetchColumn();
+            if ($granted !== false && $granted !== null) {
+                $defaultDeckCardIds = array_map(intval(...), (array) json_decode((string) $granted, true));
             }
         }
 
-        return ['name' => $parsed['name'], 'cardIds' => $parsed['cardIds']];
+        return [
+            'pool' => $pool,
+            'default_deck_card_ids' => $defaultDeckCardIds,
+            'min_cards' => (int) $game['custom_duel_min_cards'],
+            'rarity_limits' => array_map(intval(...), (array) json_decode((string) $game['custom_duel_rarity_limits'], true)),
+        ];
     }
 
     /**
@@ -18706,6 +18766,9 @@ final class GameService
             // bare ids for the visual picker's own pre-selection, null
             // under the exact same conditions $powerDuelSideboardPool is.
             'power_duel_previous_deck_card_ids' => $powerDuelPreviousDeckCardIds,
+            // League play's collection-based deck builder -- see
+            // leagueDeckBuilderFor()'s own docblock.
+            'league_deck_builder' => $this->leagueDeckBuilderFor($game, $viewerUserId),
         ];
 
         if ($viewerGamePlayerId !== null) {

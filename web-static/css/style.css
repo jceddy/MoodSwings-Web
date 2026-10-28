@@ -2023,6 +2023,28 @@ body.game-page {
     z-index: 1;
 }
 
+/* League play (issue #171): "xN" copies-owned badge in the lower-right
+   corner of a collection/deck-builder thumbnail, and (builder only) the
+   copies currently in the deck in the lower-left. Sits on the card's own
+   bottom edge, clear of the printed name/value up top. */
+.card-thumb__badge--count {
+    bottom: calc(0.25rem * var(--card-scale, 1));
+    right: calc(0.25rem * var(--card-scale, 1));
+}
+
+.card-thumb__badge--in-deck {
+    bottom: calc(0.25rem * var(--card-scale, 1));
+    left: calc(0.25rem * var(--card-scale, 1));
+    background: var(--color-success);
+}
+
+.league-card-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+}
+
 /* Nudged down ~20px from the card's own top edge, same as
    --value/--chaos-delta/--chaos-override above -- the extreme top-left
    corner sits right over the card name printed on the art, while a bit

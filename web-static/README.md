@@ -1292,13 +1292,23 @@ someone else's listing needs no opt-in of its own.
 ### League play (issue #171)
 
 A "League" button (after "Weekly Sealed Pool") opens `#league-dialog`:
-event name/rules, a saved-deck picker (`#league-deck-select`, optional on
-the very first join, which uses the granted structure deck), a single
-Join/Leave queue pair, the player's W/L record and recent matches, and a
-"My collection" button opening `#league-collection-dialog`. API calls live
-in `app.js` (`getLeagueStatus`, `getLeagueCollection`, `joinLeague`,
-`leaveLeagueQueue`); a `{"status": "paired"}` join response opens the new
-game. See "League play" in `php-app/README.md`.
+event name/rules, a single Join/Leave queue pair (no deck is picked when
+queueing), the player's W/L record and recent matches, and a "View my
+collection" button opening `#league-collection-dialog` -- a card-thumbnail
+grid in color/rarity/name order with an "xN" copies badge in each thumbnail's
+lower-right corner (`.card-thumb__badge--count`); clicking a thumbnail opens
+the usual card detail. API calls live in `app.js` (`getLeagueStatus`,
+`getLeagueCollection`, `joinLeague`, `leaveLeagueQueue`); a
+`{"status": "paired"}` join response opens the new game.
+
+The deck is built inside the paired game: while a League game waits on decks,
+`renderDuelDeckSubmission()` shows `#duel-deck-league-builder` instead of the
+paste/saved-deck form (`state.league_deck_builder`). It is the same
+collection grid with a lower-left "in deck" badge, and tapping a card opens the
+card detail with "+ Deck" / "- Deck" rows (same pattern as the Deck Builder).
+The selection starts from the previous game's deck (or the granted starter deck
+for game 1), and submits through the ordinary `submitCustomDuelDeck()`
+endpoint. See "League play" in `php-app/README.md`.
 
 ### Weekly Sealed Pool (issue #520)
 
