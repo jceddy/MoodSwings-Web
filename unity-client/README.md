@@ -568,6 +568,28 @@ Emoji art: [Twemoji](https://github.com/jdecked/twemoji), graphics licensed CC-B
   whether Discord is linked. **This app does not receive push notifications yet** (that needs a native push service
   on the backend -- see the open decisions in `PLAN.md`), and Discord is linked from the website.
 
+## League
+
+An open-ended event run from the server: you keep a permanent card collection and play best-of-three Duels against
+other members, using only cards you own.
+
+- **Play > League** shows the running event (or says there is none), your record, how many of your two allowed matches
+  are going, the rules, and your matches (**Open game** for one under way, **View** for a finished one). **Join League**
+  joins the event -- the first time grants a random Structure deck for your collection -- and queues you for a match;
+  there is no deck to choose here. A game appears at once if someone was already waiting, otherwise **Leave queue** takes
+  you out and the screen checks for a match every few seconds. **View my collection** is every card you own, with how many
+  copies (tap one to read it).
+- The **Leaderboard** is the running event's standings or, with **Previous event**, the last one's: rank, record and "top
+  N%", you marked, ties sharing a rank. (The ranking score itself is never shown.)
+- **Building the deck happens in the game.** Before each game of a match the board shows your pool as thumbnails with how
+  many you own (lower right), how many are in the deck (lower left) and in the sideboard ("SB 1"). Tap a card for a
+  popup with **-** and **+** for the deck and, on game 1, the sideboard (up to three cards declared then; the League's
+  mythic and rare caps and the copies you own are kept to as you go). **Reset** goes back to the suggested deck (your
+  last game's, or the starter deck) and **Clear** empties it. From game 2 the pool is fixed at what game 1 declared and
+  whatever the deck leaves over is the sideboard, so you can only swap between the two. **Submit deck** sends it as
+  decklist text; the server checks it again.
+- A League game has no **Rematch** (your opponents come from the queue and are never played twice in an event).
+
 ## App icons
 
 `Assets/Icons/` holds the app icon: `icon-1024.png` (the Windows `.exe`, and the source of

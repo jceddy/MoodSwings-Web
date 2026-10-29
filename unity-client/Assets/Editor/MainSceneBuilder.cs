@@ -66,6 +66,8 @@ namespace MoodSwings.Editor
                 AddScreen<NewTournamentScreen>(canvasObject.transform),
                 AddScreen<PodDraftScreen>(canvasObject.transform),
                 AddScreen<WeeklySealedPoolScreen>(canvasObject.transform),
+                AddScreen<LeagueScreen>(canvasObject.transform),
+                AddScreen<LeagueCollectionScreen>(canvasObject.transform),
                 AddScreen<MaintenanceScreen>(canvasObject.transform),
             };
 

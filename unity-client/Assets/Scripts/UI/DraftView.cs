@@ -58,6 +58,15 @@ namespace MoodSwings.UI
             public CanvasGroup Group;
         }
 
+        // A League pool card's cell: what to update when its counts change.
+        private sealed class LeagueCell
+        {
+            public BoardCard Card;
+            public CanvasGroup Group;
+            public Text InDeck;
+            public Text InSideboard;
+        }
+
         private readonly UiTheme _theme;
         private readonly DraftActions _actions;
         private readonly RectTransform _root;
@@ -79,6 +88,13 @@ namespace MoodSwings.UI
         private int _pickLimit;
         private Action _refresh;
         private GameState _state;
+
+        // League: the deck being built (kept across redraws, started over for each game), its popup, and the cells to update in place.
+        private LeagueDeckSelection _league;
+        private string _leagueKey;
+        private LeagueCardPopup _leaguePopup;
+        private readonly Dictionary<int, LeagueCell> _leagueCells = new Dictionary<int, LeagueCell>();
+        private Button _leagueSubmit;
 
         public DraftView(Transform parent, UiTheme theme, DraftActions actions, float topInset)
         {
@@ -144,7 +160,17 @@ namespace MoodSwings.UI
         {
             _root.gameObject.SetActive(false);
             _signature = null;
+            _leaguePopup?.Close();
         }
+
+        /// <summary>Back closes the League card popup if it is open. True if it was.</summary>
+        public bool DismissPopup() => _leaguePopup != null && _leaguePopup.Dismiss();
+
+        /// <summary>The League popup (null until a League deck has been built), for tests.</summary>
+        public LeagueCardPopup LeaguePopup => _leaguePopup;
+
+        /// <summary>The League deck being built, for tests; null when this is not a League game.</summary>
+        public LeagueDeckSelection LeagueSelection => _league;
 
         /// <summary>Draws the stage the game is in. Redrawing is skipped when nothing about it has changed.</summary>
         public void Render(GameState state)
@@ -165,6 +191,7 @@ namespace MoodSwings.UI
         private static string DuelSignature(GameState state) =>
             "duel|" + string.Join(",", state.Players.Select(p => p.DeckSubmitted ? "1" : "0"))
             + "|" + string.Join(",", (state.PowerDuelSideboardPool ?? new List<BoardCard>()).Select(c => c.CardId))
+            + "|" + (state.LeagueDeckBuilder == null ? string.Empty : state.Game.Id + ":" + state.LeagueDeckBuilder.FixedPool + ":" + string.Join(",", state.LeagueDeckBuilder.Pool.Select(c => c.CardId + "x" + c.Copies)))
             + "|" + AppServices.Decklists.Loaded + AppServices.Decklists.Own.Count + "|" + AppServices.Decklists.Friends.Sum(f => f.Decklists.Count);
 
         private static string SignatureOf(GameState state, DraftMatchState block) =>
@@ -548,6 +575,13 @@ namespace MoodSwings.UI
                 return;
             }
 
+            // League play: the deck is built from your collection, right here.
+            if (state.LeagueDeckBuilder != null)
+            {
+                BuildLeagueDeck(state);
+                return;
+            }
+
             var pool = state.PowerDuelSideboardPool;
             if (pool != null && pool.Count > 0)
             {
@@ -627,6 +661,83 @@ namespace MoodSwings.UI
                 _problem.color = problem != null ? _theme.danger : _theme.textMuted;
                 submit.interactable = problem == null && !_busy;
             };
+        }
+
+        // League play: a thumbnail for each card of your pool with how many you own (lower right), how many are in the deck
+        // (lower left) and in the sideboard (above that). Tapping one opens its popup to change those; the grid is updated in
+        // place, so a long collection is not scrolled back to the top by every change.
+        private void BuildLeagueDeck(GameState state)
+        {
+            var builder = state.LeagueDeckBuilder;
+            var key = state.Game.Id + ":" + builder.FixedPool;
+            if (_league == null || _leagueKey != key)
+            {
+                _leagueKey = key;
+                _league = new LeagueDeckSelection(builder);
+            }
+
+            if (_leaguePopup == null)
+            {
+                _leaguePopup = new LeagueCardPopup(_root.parent, _theme);
+            }
+
+            _leaguePopup.Close();
+            _leaguePopup.Changed = UpdateLeague;
+            _leagueCells.Clear();
+
+            var area = UiFactory.Create("Cards", _content);
+            var grid = area.gameObject.AddComponent<GridLayoutGroup>();
+            grid.cellSize = new Vector2(CardWidth + 2f * Pad, CardView.HeightFor(CardWidth) + 2f * Pad);
+            grid.spacing = new Vector2(8f, 8f);
+            grid.constraint = GridLayoutGroup.Constraint.FixedColumnCount;
+            grid.constraintCount = Columns;
+            grid.childAlignment = TextAnchor.UpperCenter;
+
+            foreach (var card in _league.Pool)
+            {
+                var shown = card;
+                var cell = UiFactory.Create("Cell " + card.Name, area);
+                var view = PlaceCard(cell, card, CardWidth, true, builder.FixedPool ? "In your pool for this match" : "In your collection", () => _leaguePopup.Show(shown, _league));
+                var group = view.gameObject.AddComponent<CanvasGroup>();
+                CardBadge.Add(cell, "Copies " + card.Name, "x" + card.Copies, CardBadge.Place.BottomRight, _theme.raised, _theme.textPrimary);
+                var inDeck = CardBadge.Add(cell, "In deck " + card.Name, string.Empty, CardBadge.Place.BottomLeft, _theme.accent, _theme.onAccent);
+                var inSideboard = CardBadge.Add(cell, "In sideboard " + card.Name, string.Empty, CardBadge.Place.AboveBottomLeft, _theme.success, Color.white, width: 96f, fontSize: 26);
+                _leagueCells[card.CardId] = new LeagueCell { Card = card, Group = group, InDeck = inDeck, InSideboard = inSideboard };
+            }
+
+            AddButton("Reset", 240f, () => { _league.Reset(); UpdateLeague(); }, primary: false);
+            AddButton("Clear", 240f, () => { _league.Clear(); UpdateLeague(); }, primary: false);
+            _leagueSubmit = AddButton("Submit deck", 360f, () => RunAction(() => _actions.SubmitDuelDeck(null, _league.DecklistText())));
+
+            _title.text = "Choose your deck";
+            _refresh = UpdateLeague;
+            UpdateLeague();
+        }
+
+        private void UpdateLeague()
+        {
+            if (_league == null)
+            {
+                return;
+            }
+
+            foreach (var cell in _leagueCells.Values)
+            {
+                var inDeck = _league.InDeck(cell.Card);
+                var inSideboard = _league.InSideboard(cell.Card);
+                CardBadge.Set(cell.InDeck, inDeck > 0 ? inDeck.ToString() : string.Empty);
+                CardBadge.Set(cell.InSideboard, inSideboard > 0 ? "SB " + inSideboard : string.Empty);
+                cell.Group.alpha = inDeck > 0 ? 1f : 0.45f;
+            }
+
+            _status.text = _league.Instructions();
+            var problem = _league.Problem();
+            _problem.text = problem ?? string.Empty;
+            _problem.color = problem != null ? _theme.danger : _theme.textMuted;
+            if (_leagueSubmit != null)
+            {
+                _leagueSubmit.interactable = problem == null && !_busy;
+            }
         }
 
         private void AddLine(string text, Color color)
