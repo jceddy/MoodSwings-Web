@@ -38,7 +38,10 @@ namespace MoodSwings.Core
         /// <summary>The caps on a deck's rares and mythics.</summary>
         public IReadOnlyDictionary<string, int> RarityLimits => _builder.RarityLimits;
 
-        /// <summary>Starts again from the deck the server suggests: last game's, or (game 1) the starter deck you were granted.</summary>
+        /// <summary>
+        /// Starts again from what the server suggests: last game's deck; on game 1 the deck and sideboard of your last match, or
+        /// (for a first-ever match) the starter deck you were granted.
+        /// </summary>
         public void Reset()
         {
             _deck.Clear();
@@ -50,6 +53,18 @@ namespace MoodSwings.Core
                 if (have < (owned.TryGetValue(id, out var copies) ? copies : 0))
                 {
                     _deck[id] = have + 1;
+                }
+            }
+
+            // The carried-over sideboard, kept to the copies the deck left free and to the sideboard's size.
+            var sideboardTotal = 0;
+            foreach (var id in _builder.DefaultSideboardCardIds ?? new List<int>())
+            {
+                var have = _sideboard.TryGetValue(id, out var inSideboard) ? inSideboard : 0;
+                if (sideboardTotal < _builder.SideboardMax && InDeck(id) + have < (owned.TryGetValue(id, out var copies) ? copies : 0))
+                {
+                    _sideboard[id] = have + 1;
+                    sideboardTotal++;
                 }
             }
         }

@@ -250,7 +250,7 @@ namespace MoodSwings.Tests
         private static string Card(int id, string name, string color, string rarity, int copies) =>
             $@"{{""card_id"":{id},""catalog_card_id"":{id},""name"":""{name}"",""color"":""{color}"",""rarity"":""{rarity}"",""copies"":{copies}}}";
 
-        private static LeagueDeckBuilder Builder(bool fixedPool = false, string defaults = "[1,1,2,3]", int min = 3)
+        private static LeagueDeckBuilder Builder(bool fixedPool = false, string defaults = "[1,1,2,3]", int min = 3, string sideboard = null)
         {
             var pool = string.Join(",",
                 Card(1, "Calm", "white", "common", 3),
@@ -258,8 +258,9 @@ namespace MoodSwings.Tests
                 Card(3, "Joy", "red", "mythic", 1),
                 Card(4, "Fury", "red", "rare", 1),
                 Card(5, "Hope", "green", "common", 2));
+            var defaultSideboard = sideboard != null ? $@"""default_sideboard_card_ids"":{sideboard}," : string.Empty;
             return JsonConvert.DeserializeObject<LeagueDeckBuilder>(
-                $@"{{""pool"":[{pool}],""default_deck_card_ids"":{defaults},""min_cards"":{min},""rarity_limits"":{{""mythic"":1,""rare"":2}},""sideboard_max"":{(fixedPool ? 0 : 3)},""fixed_pool"":{(fixedPool ? "true" : "false")}}}");
+                $@"{{""pool"":[{pool}],""default_deck_card_ids"":{defaults},{defaultSideboard}""min_cards"":{min},""rarity_limits"":{{""mythic"":1,""rare"":2}},""sideboard_max"":{(fixedPool ? 0 : 3)},""fixed_pool"":{(fixedPool ? "true" : "false")}}}");
         }
 
         private static BoardCard Pick(LeagueDeckSelection selection, string name) => selection.Pool.First(c => c.Name == name);
@@ -361,6 +362,48 @@ namespace MoodSwings.Tests
 
             selection.AddToDeck(Pick(selection, "Hope"));
             Assert.IsNull(selection.Problem());
+        }
+
+        [Test]
+        public void OnGameOne_TheDeckAndSideboardOfYourLastMatchAreWhereYouStart()
+        {
+            var selection = new LeagueDeckSelection(Builder(defaults: "[1,1,2,3]", sideboard: "[5,5,1]"));
+
+            Assert.AreEqual(4, selection.DeckCount);
+            Assert.AreEqual(2, selection.InSideboard(Pick(selection, "Hope")));
+            Assert.AreEqual(1, selection.InSideboard(Pick(selection, "Calm")), "three owned, two in the deck, so one is free");
+            Assert.AreEqual(3, selection.SideboardCount);
+
+            selection.Clear();
+            Assert.AreEqual(0, selection.SideboardCount);
+            selection.Reset();
+            Assert.AreEqual(3, selection.SideboardCount, "Reset goes back to it");
+            StringAssert.EndsWith("Sideboard\n1 Calm\n2 Hope", selection.DecklistText());
+        }
+
+        [Test]
+        public void TheCarriedOverSideboard_IsKeptToTheCopiesFreeAndToItsSize()
+        {
+            // Joy's one copy is in the deck, so it can't also be in the sideboard; the rest fit, three in all.
+            var selection = new LeagueDeckSelection(Builder(defaults: "[3]", sideboard: "[3,5,5,1]"));
+
+            Assert.AreEqual(0, selection.InSideboard(Pick(selection, "Joy")), "its one copy is in the deck");
+            Assert.AreEqual(2, selection.InSideboard(Pick(selection, "Hope")));
+            Assert.AreEqual(1, selection.InSideboard(Pick(selection, "Calm")));
+            Assert.AreEqual(3, selection.SideboardCount);
+
+            var tooMany = new LeagueDeckSelection(Builder(defaults: "[3]", sideboard: "[1,1,1,5]"));
+            Assert.AreEqual(3, tooMany.SideboardCount, "no more than the sideboard allows");
+            Assert.AreEqual(0, tooMany.InSideboard(Pick(tooMany, "Hope")));
+        }
+
+        [Test]
+        public void AnOlderServerWithoutADefaultSideboard_StartsWithNone()
+        {
+            var selection = new LeagueDeckSelection(Builder());
+
+            Assert.AreEqual(0, selection.SideboardCount);
+            Assert.IsEmpty(Builder().DefaultSideboardCardIds);
         }
 
         [Test]

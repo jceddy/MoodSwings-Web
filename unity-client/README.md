@@ -585,7 +585,7 @@ other members, using only cards you own.
   many you own (lower right), how many are in the deck (lower left) and in the sideboard ("SB 1"). Tap a card for a
   popup with **-** and **+** for the deck and, on game 1, the sideboard (up to three cards declared then; the League's
   mythic and rare caps and the copies you own are kept to as you go). **Reset** goes back to the suggested deck (your
-  last game's, or the starter deck) and **Clear** empties it. From game 2 the pool is fixed at what game 1 declared and
+  last game's; on game 1, the deck and sideboard from your last match, or the starter deck for a first match) and **Clear** empties it. From game 2 the pool is fixed at what game 1 declared and
   whatever the deck leaves over is the sideboard, so you can only swap between the two. **Submit deck** sends it as
   decklist text; the server checks it again.
 - A League game has no **Rematch** (your opponents come from the queue and are never played twice in an event).

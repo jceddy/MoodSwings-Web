@@ -144,9 +144,16 @@ namespace MoodSwings.Networking
         [JsonProperty("pool")]
         public List<BoardCard> Pool { get; set; } = new List<BoardCard>();
 
-        /// <summary>The deck to start from: your last game's, or (game 1) the starter deck you were granted. One id per copy.</summary>
+        /// <summary>
+        /// The deck to start from, one id per copy: your last game's; on game 1, the deck you submitted for game 1 of your
+        /// last League match (before any sideboarding); or, for a first-ever match, the starter deck you were granted.
+        /// </summary>
         [JsonProperty("default_deck_card_ids")]
         public List<int> DefaultDeckCardIds { get; set; } = new List<int>();
+
+        /// <summary>Game 1 only: the sideboard you declared with that carried-over deck; empty otherwise (and from an older server).</summary>
+        [JsonProperty("default_sideboard_card_ids")]
+        public List<int> DefaultSideboardCardIds { get; set; } = new List<int>();
 
         [JsonProperty("min_cards")]
         public int MinCards { get; set; }
