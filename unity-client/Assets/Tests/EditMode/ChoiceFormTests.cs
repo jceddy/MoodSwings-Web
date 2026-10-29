@@ -689,6 +689,50 @@ namespace MoodSwings.Tests
             StringAssert.Contains("haven't selected a target for Paranoia", form.Confirmations().Single());
         }
 
+        private static ChoiceForm Suspicion(GameState state) =>
+            ChoiceForm.ForCard(state, new BoardCard
+            {
+                CardId = 999,
+                Name = "Suspicion",
+                EffectKey = "suspicion",
+                IsPlayable = true,
+                ChoiceFields = new List<ChoiceField>
+                {
+                    Field(@"{""key"":""player_ids"",""type"":""player"",""scope"":""any"",""multi"":true,""required"":false,""label"":""x""}"),
+                },
+            });
+
+        [Test]
+        public void Suspicion_OnlyOnYourself_WhileAnOpponentHasCards_Asks()
+        {
+            var form = Suspicion(Table());
+
+            form.Toggle("player_ids", Me.ToString());
+
+            StringAssert.Contains("You've chosen yourself as Suspicion's target, but an opponent has cards in hand", form.Confirmations().Single());
+        }
+
+        [Test]
+        public void Suspicion_YourselfAlongsideAnOpponent_OrOnAnOpponent_OrWithNoOne_DoesNotAskAboutYourself()
+        {
+            var form = Suspicion(Table());
+            form.Toggle("player_ids", Me.ToString());
+            form.Toggle("player_ids", Bo.ToString());
+            Assert.AreEqual(0, form.Confirmations().Count, "an opponent is in the list too");
+
+            form.Toggle("player_ids", Me.ToString());
+            Assert.AreEqual(0, form.Confirmations().Count, "only an opponent");
+
+            form.Toggle("player_ids", Bo.ToString());
+            StringAssert.Contains("haven't selected a target for Suspicion", form.Confirmations().Single());
+
+            var state = Table();
+            state.Players.First(p => p.GamePlayerId == Bo).HandCount = 0;
+            var alone = Suspicion(state);
+            alone.Toggle("player_ids", Me.ToString());
+            Assert.AreEqual(0, alone.Confirmations().Count, "nobody else to aim it at");
+        }
+
         [Test]
         public void OtherCards_AreNotAskedAboutAimingAtYourself()
         {
