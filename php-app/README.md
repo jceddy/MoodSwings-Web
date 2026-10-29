@@ -4024,8 +4024,12 @@ league members using only cards they own.
   `league_deck_builder` object (`pool`: the cards the viewer may use with their
   `copies` -- their collection on game 1, the declared deck + sideboard from game
   2; `fixed_pool`; `sideboard_max` (0 once the pool is fixed);
-  `default_deck_card_ids`: their previous game's deck or, for game 1, the
-  starter deck they were granted; plus `min_cards`/`rarity_limits`);
+  `default_deck_card_ids`: their previous game's deck or, for game 1, the deck
+  they ended their most recent earlier League match with
+  (`GameService::leagueCarriedForwardDeck()`) -- falling back to the starter deck
+  they were granted only for a first-ever match; `default_sideboard_card_ids`:
+  on game 1, the rest of that earlier match's pool (up to the 3-card sideboard
+  limit), otherwise empty; plus `min_cards`/`rarity_limits`);
   `GameService::notifyLeagueDeckNeeded()` pushes the player who was waiting in
   the queue when the pairing is made.
 - **Results.** `league_matches` is synced from `game_matches` on read

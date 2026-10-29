@@ -3220,7 +3220,9 @@ final class GameService
      * Game 1: their whole collection as it applies to this game (their per-seat
      * allowed card pool, one entry per distinct card with its copy count), a
      * sideboard of up to $sideboard_max cards may be declared, and the builder
-     * starts from the starter deck their event grant gave them. Game 2/3: the
+     * starts from the deck + sideboard they ended their most recent earlier match
+     * with (see leagueCarriedForwardDeck()), or the starter deck their event grant
+     * gave them if this is their first match. Game 2/3: the
      * pool is fixed at the main deck + sideboard they declared on game 1 (the
      * only cards that can be swapped in -- see validateLeagueSideboardSwap()),
      * `fixed_pool` is true, and the builder starts from the deck they played in
@@ -3230,7 +3232,7 @@ final class GameService
      * tournament's pool-restricted custom_duel games.
      *
      * @param array<string, mixed> $game
-     * @return array{pool: array<int, array<string, mixed>>, default_deck_card_ids: int[], min_cards: int, rarity_limits: array<string, int>, sideboard_max: int, fixed_pool: bool}|null
+     * @return array{pool: array<int, array<string, mixed>>, default_deck_card_ids: int[], default_sideboard_card_ids: int[], min_cards: int, rarity_limits: array<string, int>, sideboard_max: int, fixed_pool: bool}|null
      */
     private function leagueDeckBuilderFor(array $game, ?int $viewerUserId): ?array
     {
@@ -3271,6 +3273,7 @@ final class GameService
         }
 
         $defaultDeckCardIds = [];
+        $defaultSideboardCardIds = [];
         $previousStmt = $pdo->prepare(
             'SELECT gp.custom_deck_card_ids
              FROM game_players gp JOIN games g ON g.id = gp.game_id
@@ -3285,22 +3288,65 @@ final class GameService
         if ($previousDeck !== false && $previousDeck !== null) {
             $defaultDeckCardIds = array_map(intval(...), (array) json_decode((string) $previousDeck, true));
         } else {
-            $grantStmt = $pdo->prepare('SELECT granted_card_ids FROM league_participants WHERE event_id = :event_id AND user_id = :user_id');
-            $grantStmt->execute(['event_id' => $eventId, 'user_id' => $viewerUserId]);
-            $granted = $grantStmt->fetchColumn();
-            if ($granted !== false && $granted !== null) {
-                $defaultDeckCardIds = array_map(intval(...), (array) json_decode((string) $granted, true));
+            // Game 1 of a match: carry forward the deck (and sideboard) from the
+            // player's most recent earlier League match in this event, so they
+            // adjust it rather than rebuild; only a first-ever match starts from
+            // the starter deck their event grant gave them.
+            $carried = $this->leagueCarriedForwardDeck((int) $eventId, (int) $game['game_match_id'], $viewerUserId);
+            if ($carried !== null) {
+                [$defaultDeckCardIds, $defaultSideboardCardIds] = $carried;
+            } else {
+                $grantStmt = $pdo->prepare('SELECT granted_card_ids FROM league_participants WHERE event_id = :event_id AND user_id = :user_id');
+                $grantStmt->execute(['event_id' => $eventId, 'user_id' => $viewerUserId]);
+                $granted = $grantStmt->fetchColumn();
+                if ($granted !== false && $granted !== null) {
+                    $defaultDeckCardIds = array_map(intval(...), (array) json_decode((string) $granted, true));
+                }
             }
         }
 
         return [
             'pool' => $pool,
             'default_deck_card_ids' => $defaultDeckCardIds,
+            'default_sideboard_card_ids' => $defaultSideboardCardIds,
             'min_cards' => (int) $game['custom_duel_min_cards'],
             'rarity_limits' => array_map(intval(...), (array) json_decode((string) $game['custom_duel_rarity_limits'], true)),
             'sideboard_max' => $fixedPool ? 0 : self::LEAGUE_SIDEBOARD_MAX_CARDS,
             'fixed_pool' => $fixedPool,
         ];
+    }
+
+    /**
+     * The deck a League player ended their most recent earlier match in $eventId
+     * with (the last deck they submitted, i.e. after any sideboarding), and the
+     * sideboard that goes with it: the rest of that match's pool (game-1 main +
+     * sideboard) not in that deck, capped at LEAGUE_SIDEBOARD_MAX_CARDS. Null if
+     * they have no earlier match with a submitted deck in this event.
+     *
+     * @return array{0: int[], 1: int[]}|null
+     */
+    private function leagueCarriedForwardDeck(int $eventId, int $currentGameMatchId, int $userId): ?array
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT g.game_match_id, gp.custom_deck_card_ids
+             FROM league_matches lm
+             JOIN games g ON g.game_match_id = lm.game_match_id
+             JOIN game_players gp ON gp.game_id = g.id AND gp.user_id = :user_id
+             WHERE lm.event_id = :event_id AND lm.game_match_id <> :current_match_id
+               AND gp.custom_deck_card_ids IS NOT NULL
+             ORDER BY g.id DESC LIMIT 1'
+        );
+        $stmt->execute(['user_id' => $userId, 'event_id' => $eventId, 'current_match_id' => $currentGameMatchId]);
+        $row = $stmt->fetch();
+        if ($row === false) {
+            return null;
+        }
+
+        $deck = array_map(intval(...), (array) json_decode((string) $row['custom_deck_card_ids'], true));
+        $pool = $this->leagueMatchPool((int) $row['game_match_id'], $userId) ?? $deck;
+        $sideboard = array_slice(self::multisetDifference($pool, $deck), 0, self::LEAGUE_SIDEBOARD_MAX_CARDS);
+
+        return [$deck, $sideboard];
     }
 
     /** Whether $gameMatchId is the best-of-three wrapper of a League match -- see leagueDeckBuilderFor(). */
