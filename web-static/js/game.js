@@ -11118,7 +11118,7 @@
             }
         }
         // Game 1 only (builder.default_sideboard_card_ids is empty otherwise):
-        // the sideboard carried forward from the previous match, clamped to the
+        // the sideboard declared for game 1 of the previous match, clamped to the
         // copies still free and to the sideboard limit.
         let sideboardTotal = 0;
         for (const cardId of builder.default_sideboard_card_ids || []) {

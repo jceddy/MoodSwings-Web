@@ -3220,8 +3220,8 @@ final class GameService
      * Game 1: their whole collection as it applies to this game (their per-seat
      * allowed card pool, one entry per distinct card with its copy count), a
      * sideboard of up to $sideboard_max cards may be declared, and the builder
-     * starts from the deck + sideboard they ended their most recent earlier match
-     * with (see leagueCarriedForwardDeck()), or the starter deck their event grant
+     * starts from the deck + sideboard they submitted for game 1 of their most
+     * recent earlier match (before any sideboarding; see leagueCarriedForwardDeck()), or the starter deck their event grant
      * gave them if this is their first match. Game 2/3: the
      * pool is fixed at the main deck + sideboard they declared on game 1 (the
      * only cards that can be swapped in -- see validateLeagueSideboardSwap()),
@@ -3317,20 +3317,19 @@ final class GameService
     }
 
     /**
-     * The deck a League player ended their most recent earlier match in $eventId
-     * with (the last deck they submitted, i.e. after any sideboarding), and the
-     * sideboard that goes with it: the rest of that match's pool (game-1 main +
-     * sideboard) not in that deck, capped at LEAGUE_SIDEBOARD_MAX_CARDS. Null if
-     * they have no earlier match with a submitted deck in this event.
+     * The deck and sideboard a League player submitted for game 1 of their most
+     * recent earlier match in $eventId -- as built, before any sideboarding
+     * between games. Null if they have no earlier match with a game-1 deck in
+     * this event.
      *
      * @return array{0: int[], 1: int[]}|null
      */
     private function leagueCarriedForwardDeck(int $eventId, int $currentGameMatchId, int $userId): ?array
     {
         $stmt = Connection::get()->prepare(
-            'SELECT g.game_match_id, gp.custom_deck_card_ids
+            'SELECT gp.custom_deck_card_ids, gp.custom_deck_sideboard_card_ids
              FROM league_matches lm
-             JOIN games g ON g.game_match_id = lm.game_match_id
+             JOIN games g ON g.game_match_id = lm.game_match_id AND g.match_game_number = 1
              JOIN game_players gp ON gp.game_id = g.id AND gp.user_id = :user_id
              WHERE lm.event_id = :event_id AND lm.game_match_id <> :current_match_id
                AND gp.custom_deck_card_ids IS NOT NULL
@@ -3342,11 +3341,12 @@ final class GameService
             return null;
         }
 
-        $deck = array_map(intval(...), (array) json_decode((string) $row['custom_deck_card_ids'], true));
-        $pool = $this->leagueMatchPool((int) $row['game_match_id'], $userId) ?? $deck;
-        $sideboard = array_slice(self::multisetDifference($pool, $deck), 0, self::LEAGUE_SIDEBOARD_MAX_CARDS);
-
-        return [$deck, $sideboard];
+        return [
+            array_map(intval(...), (array) json_decode((string) $row['custom_deck_card_ids'], true)),
+            $row['custom_deck_sideboard_card_ids'] !== null
+                ? array_map(intval(...), (array) json_decode((string) $row['custom_deck_sideboard_card_ids'], true))
+                : [],
+        ];
     }
 
     /** Whether $gameMatchId is the best-of-three wrapper of a League match -- see leagueDeckBuilderFor(). */
