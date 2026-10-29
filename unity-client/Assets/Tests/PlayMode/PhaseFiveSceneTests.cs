@@ -498,6 +498,22 @@ namespace MoodSwings.Tests
         }
 
         [UnityTest]
+        public IEnumerator TheCardInThePlayForm_KeepsItsSize_WhateverTheLengthOfTheRulesText()
+        {
+            var longRules = string.Join(" ", Enumerable.Repeat("While in play, this mood's value is twelve if there's a mood of every color.", 8));
+            var server = new PlayServer { State = Load(406, s => s["you"]["hand"][0]["rules_text"] = longRules) };
+            yield return OpenBoard(server, 406);
+
+            yield return TapHandCard("Superiority");
+            yield return null;
+            yield return null;
+
+            var card = (RectTransform)Child("Prompt card");
+            Assert.AreEqual(380f, card.rect.width, 1f, "the text wraps; it does not take the card's room");
+            Assert.AreEqual(CardView.HeightFor(380f), card.rect.height, 1f);
+        }
+
+        [UnityTest]
         public IEnumerator PlayingACardWithNoChoices_SendsItAndMovesTheGameOn()
         {
             var server = new PlayServer { State = Load(406) };
