@@ -4193,7 +4193,9 @@ button).
     ("You've chosen yourself as Paranoia's target, but an opponent has
     cards in hand. Play it anyway?"); targeting yourself is still legal
     and goes through on OK, and no prompt appears when every opponent's
-    hand is empty.
+    hand is empty. Suspicion (whose `player_ids` is a list) gets the same
+    prompt when yourself is the *only* player ticked -- choosing yourself
+    alongside an opponent doesn't prompt.
     Clicking Play on a card whose entire `choice_fields` is a single
     optional target left blank -- Anger, Hate, Denial, Shock, Creativity
     with no copy target, etc., `cardHasNoTargetSelected()` -- interrupts
