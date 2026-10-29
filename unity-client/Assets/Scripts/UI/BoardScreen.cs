@@ -415,7 +415,7 @@ namespace MoodSwings.UI
 
         public override bool HandleBack()
         {
-            if (_confirm.Dismiss() || _shortcutOverlay.Dismiss() || _chaosOverlay.Back() || _discardOverlay.Dismiss() || _deckList.Dismiss())
+            if (_confirm.Dismiss() || _shortcutOverlay.Dismiss() || _chaosOverlay.Back() || _discardOverlay.Dismiss() || _deckList.Dismiss() || _draft.DismissPopup())
             {
                 return true;
             }

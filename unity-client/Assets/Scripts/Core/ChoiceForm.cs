@@ -722,10 +722,16 @@ namespace MoodSwings.Core
             var name = copied != null ? $"{_card.Name} (copying {copied.Name})" : _card.Name;
             var fields = _creativityPicker != null ? _fields.Where(f => f.Key != "copy_card_id").ToList() : _fields;
 
-            // Paranoia aimed at yourself while an opponent has a card in hand to be aimed at instead. (Like the web board, only
-            // Paranoia itself: a Creativity copying it is not asked.) An opponent is anyone who is neither you nor your teammate.
-            if (_card.EffectKey == "paranoia" && choices.TryGetValue("target_player_id", out var target)
-                && (int)target == _state.You.GamePlayerId
+            // Paranoia aimed at yourself, or Suspicion with yourself the only player ticked (choosing yourself alongside someone
+            // else is fine), while an opponent has a card in hand to be aimed at instead. (Like the web board, only these cards
+            // themselves: a Creativity copying one is not asked.) An opponent is anyone who is neither you nor your teammate.
+            var chosenPlayers = _card.EffectKey == "paranoia" && choices.TryGetValue("target_player_id", out var target)
+                ? new List<int> { (int)target }
+                : _card.EffectKey == "suspicion" && choices.TryGetValue("player_ids", out var ticked) && ticked is JArray tickedIds
+                    ? tickedIds.Select(id => (int)id).ToList()
+                    : new List<int>();
+            if (chosenPlayers.Count > 0
+                && chosenPlayers.All(id => id == _state.You.GamePlayerId)
                 && _state.Players.Any(p => !p.Resigned
                     && p.GamePlayerId != _state.You.GamePlayerId
                     && p.GamePlayerId != _state.You.TeammateGamePlayerId

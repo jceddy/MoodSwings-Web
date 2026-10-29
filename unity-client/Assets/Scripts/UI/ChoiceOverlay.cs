@@ -35,6 +35,7 @@ namespace MoodSwings.UI
     public sealed class ChoiceOverlay
     {
         private const float OptionHeight = 56f;
+        private const float CardColumnWidth = 400f;
 
         private sealed class OptionButton
         {
@@ -91,7 +92,11 @@ namespace MoodSwings.UI
             split.childForceExpandHeight = true;
 
             _cardColumn = UiFactory.Create("CardColumn", panel);
-            UiFactory.Size(_cardColumn.gameObject, 400f);
+            // Pinned, not just preferred: a layout group squeezes a child toward its minimum when a neighbor wants more
+            // room, and long rules text in the form would otherwise shrink the card; now the text wraps instead.
+            var columnSize = UiFactory.Size(_cardColumn.gameObject, CardColumnWidth);
+            columnSize.minWidth = CardColumnWidth;
+            columnSize.flexibleWidth = 0f;
             var cardLayout = _cardColumn.gameObject.AddComponent<VerticalLayoutGroup>();
             cardLayout.childAlignment = TextAnchor.UpperCenter;
             cardLayout.childControlWidth = true;
@@ -101,7 +106,7 @@ namespace MoodSwings.UI
             _cardHolder = UiFactory.Create("Card", _cardColumn);
 
             var right = UiFactory.Create("Form", panel);
-            UiFactory.Flexible(right.gameObject, width: 1f);
+            UiFactory.Flexible(right.gameObject, width: 1f).preferredWidth = 0f; // take the leftover width and wrap within it
             var rightLayout = right.gameObject.AddComponent<VerticalLayoutGroup>();
             rightLayout.spacing = 12f;
             rightLayout.childControlWidth = true;

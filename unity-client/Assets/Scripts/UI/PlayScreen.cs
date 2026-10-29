@@ -50,6 +50,8 @@ namespace MoodSwings.UI
             UiFactory.Flexible(watch.gameObject, width: 1f);
             var weekly = UiFactory.Button(actions.transform, "Weekly pool", theme, () => Router.Show<WeeklySealedPoolScreen>(), primary: false);
             UiFactory.Flexible(weekly.gameObject, width: 1f);
+            var league = UiFactory.Button(actions.transform, "League", theme, () => Router.Show<LeagueScreen>(), primary: false);
+            UiFactory.Flexible(league.gameObject, width: 1f);
         }
 
         private async Task Refresh()

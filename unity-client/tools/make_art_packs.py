@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Builds the two example art packs: "Original Mood Swings Art" and "AI Assisted Mood Swings Art".
+"""Builds the example art packs: "Original Mood Swings Art", "AI Assisted Mood Swings Art" and "Hand Made Mood Swings Art".
 
-    python tools/make_art_packs.py --original "<folder>" --ai-source "<folder>" [--out DIR]
+    python tools/make_art_packs.py --original "<folder>" --ai-source "<folder>" [--handmade "<folder>"] [--out DIR]
 
 --original is the folder the original art lives in, already laid out as a pack (MSW/<number>-<name>.png, back.png,
 hurt-feelings.png, README.txt -- see "Art packs" in README.md). It is zipped as it is, so whatever is in it (the card
@@ -10,6 +10,10 @@ back with its transparent corners, say) is what the pack gets.
 --ai-source is the folder of finished card faces the app itself ships (the unity-client/art-overrides images, as the
 PNGs they are made from): <number>-<name>.png for each card, card-back.png and hurt-feelings.png. It is laid out as a
 pack in "AI Assisted Mood Swings Art" -- a card the folder lacks is left out of the pack, so it keeps the app's art.
+
+--handmade is the folder of hand-made card faces so far, laid out the same way (<number>-<name>.png, and
+card-back.png / hurt-feelings.png if there are any). "Hand Made Mood Swings Art" is made from whatever is in it, so
+it grows as the folder does; a card it lacks keeps the app's art.
 
 --out is where the packs go (default: next to the original folder): each pack as a folder and as a .zip of the same name.
 The zips are what to add in the app (Settings > Card art > Add a .zip...) or attach to a GitHub release.
@@ -48,6 +52,7 @@ README) are ignored.
 
 ORIGINAL = "Original Mood Swings Art"
 AI_ASSISTED = "AI Assisted Mood Swings Art"
+HAND_MADE = "Hand Made Mood Swings Art"
 CARD = re.compile(r"^(\d+)-.+\.png$", re.IGNORECASE)
 
 
@@ -64,8 +69,8 @@ def zip_pack(folder: Path, target: Path) -> int:
     return count
 
 
-def build_ai_assisted(source: Path, folder: Path) -> int:
-    """Lays the app's card art out as a pack in `folder`; returns how many cards."""
+def build_from_cards(source: Path, folder: Path, description: str, require_extras: bool) -> int:
+    """Lays a folder of finished card faces out as a pack in `folder`; returns how many cards."""
     # The old cards are removed one by one and the folders kept: a synced folder (OneDrive) can refuse to be deleted.
     (folder / "MSW").mkdir(parents=True, exist_ok=True)
     for old in (folder / "MSW").glob("*.png"):
@@ -73,13 +78,17 @@ def build_ai_assisted(source: Path, folder: Path) -> int:
     cards = sorted((f for f in source.iterdir() if CARD.match(f.name)), key=lambda f: int(f.name.split("-")[0]))
     for card in cards:
         shutil.copyfile(card, folder / "MSW" / card.name)
-    for name, target in (("card-back.png", "back.png"), ("hurt-feelings.png", "hurt-feelings.png")):
-        if not (source / name).is_file():
+    extras = []
+    for name, target, what in (("card-back.png", "back.png", "the card back"), ("hurt-feelings.png", "hurt-feelings.png", "the Hurt Feelings card")):
+        if (source / name).is_file():
+            shutil.copyfile(source / name, folder / target)
+            extras.append(what)
+        elif require_extras:
             raise SystemExit(f"{source} has no {name}")
-        shutil.copyfile(source / name, folder / target)
+        elif (folder / target).exists():
+            (folder / target).unlink()  # one left over from an earlier build
     (folder / "README.txt").write_text(
-        FORMAT
-        + f"This pack is the AI-assisted Mood Swings art the app ships with: {len(cards)} cards, the Hurt Feelings card and the card back.\n",
+        FORMAT + description.format(cards=len(cards), s="" if len(cards) == 1 else "s", extras="".join(", " + e for e in extras)) + "\n",
         encoding="utf-8",
     )
     return len(cards)
@@ -89,6 +98,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--original", required=True, metavar="DIR", help="the original art, laid out as a pack")
     parser.add_argument("--ai-source", required=True, metavar="DIR", help="the finished card faces the app ships")
+    parser.add_argument("--handmade", default=None, metavar="DIR", help="the hand-made card faces so far (optional)")
     parser.add_argument("--out", default=None, metavar="DIR", help="where the packs go (default: next to --original)")
     args = parser.parse_args()
 
@@ -107,9 +117,25 @@ def main() -> int:
     zip_pack(original, out / f"{ORIGINAL}.zip")
     print(f"{ORIGINAL}: {sum(1 for _ in (original / 'MSW').glob('*.png'))} cards -> {out / (ORIGINAL + '.zip')}")
 
-    cards = build_ai_assisted(source, out / AI_ASSISTED)
+    cards = build_from_cards(
+        source, out / AI_ASSISTED,
+        "This pack is the AI-assisted Mood Swings art the app ships with: {cards} cards, the Hurt Feelings card and the card back.",
+        require_extras=True)
     zip_pack(out / AI_ASSISTED, out / f"{AI_ASSISTED}.zip")
     print(f"{AI_ASSISTED}: {cards} cards -> {out / (AI_ASSISTED + '.zip')}")
+
+    if args.handmade:
+        handmade = Path(args.handmade)
+        if not handmade.is_dir():
+            print(f"Can't find {handmade}", file=sys.stderr)
+            return 1
+        cards = build_from_cards(
+            handmade, out / HAND_MADE,
+            "This pack is the hand-made Mood Swings art, as far as it has got: {cards} card{s}{extras}. "
+            "A card it doesn't have keeps the art that comes with the app.",
+            require_extras=False)
+        zip_pack(out / HAND_MADE, out / f"{HAND_MADE}.zip")
+        print(f"{HAND_MADE}: {cards} cards -> {out / (HAND_MADE + '.zip')}")
     return 0
 
 
