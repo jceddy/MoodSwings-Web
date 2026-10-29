@@ -1124,7 +1124,7 @@ final class GameService
      * @param list<array{user_id: int, username: string, wins: int, losses: int}> $scoreOrderedRows
      * @return list<array{user_id: int, username: string, wins: int, losses: int, rank: int, percentile: int}>
      */
-    private static function rankedStandingsRows(array $scoreOrderedRows): array
+    public static function rankedStandingsRows(array $scoreOrderedRows): array
     {
         $total = count($scoreOrderedRows);
         $ranked = [];
@@ -2444,6 +2444,14 @@ final class GameService
     private const POWER_DUEL_SIDEBOARD_MAX_CARDS = 5;
 
     /**
+     * League play's own sideboard cap (issue #171) -- see
+     * validateLeagueSideboardPool(). Smaller than Power Duel's because League
+     * decks are as small as 12 cards: three benched cards are the only ones a
+     * player can ever swap in between the games of a match.
+     */
+    private const LEAGUE_SIDEBOARD_MAX_CARDS = 3;
+
+    /**
      * Every draft-based deck_type. Originally pulled out purely for
      * botsSupportedFor()/advanceBotDraftTurn() (issue #359) rather than
      * as a wholesale refactor of the many inline copies that predated it
@@ -2986,8 +2994,19 @@ final class GameService
 
         $gameMatchId = $game['game_match_id'] !== null ? (int) $game['game_match_id'] : null;
         $allowSideboarding = $gameMatchId !== null && (bool) $this->fetchGameMatch($gameMatchId)['allow_sideboarding'];
+        $isLeagueMatch = $gameMatchId !== null && $this->isLeagueGameMatch($gameMatchId);
 
-        if (!$allowSideboarding) {
+        if ($isLeagueMatch && $allowSideboarding) {
+            // League play: a small sideboard declared on game 1, and from then
+            // on the match's deck can only be reshuffled within that pool.
+            // $allowedCardIds (the player's collection) is checked below
+            // against the main deck AND the sideboard together.
+            if ((int) $game['match_game_number'] === 1) {
+                [$mainCardIds, $sideboardCardIds] = $this->validateLeagueSideboardPool($parsed, $rules, $catalog['rowsById']);
+            } else {
+                [$mainCardIds, $sideboardCardIds] = $this->validateLeagueSideboardSwap($gameMatchId, $ownerUserId, $parsed['cardIds'], $rules, $catalog['rowsById']);
+            }
+        } elseif (!$allowSideboarding) {
             $rules->validate($parsed['cardIds'], $catalog['rowsById'], 'Your decklist');
             $mainCardIds = $parsed['cardIds'];
             $sideboardCardIds = [];
@@ -3010,7 +3029,7 @@ final class GameService
         // duel_deck_rules for why no further cap is meaningful here, the
         // pool itself already being the only restriction that matters.
         if ($allowedCardIds !== null) {
-            $this->assertWithinAllowedCardPool($mainCardIds, $allowedCardIds);
+            $this->assertWithinAllowedCardPool($isLeagueMatch ? [...$mainCardIds, ...$sideboardCardIds] : $mainCardIds, $allowedCardIds);
         }
 
         $update = Connection::get()->prepare(
@@ -3169,6 +3188,304 @@ final class GameService
             'game_id' => $gameId,
             'user_id' => $userId,
         ]);
+    }
+
+    /**
+     * League play's grant (issue #171): one randomized Structure deck's worth
+     * of cards -- exactly what a 'structure' game deals, never a Chaos Draft
+     * token -- see buildStructureDeckCardIds().
+     *
+     * @return int[]
+     */
+    public function randomStructureDeckCardIds(): array
+    {
+        return $this->buildStructureDeckCardIds();
+    }
+
+    /**
+     * League play (issue #171): tells $userId a paired League game is waiting
+     * on their decklist. League games are created with no decks seeded -- both
+     * players choose theirs from their own collection once the game exists --
+     * so the player who was already waiting in the queue (and so isn't looking
+     * at the game) needs a nudge. A no-op without a NotificationService.
+     */
+    public function notifyLeagueDeckNeeded(int $gameId, int $userId): void
+    {
+        $this->notifyDraftUsersItsYourTurn($gameId, [$userId], "Your League match (game #{$gameId}) is ready -- choose your deck.", 'custom-duel-deck');
+    }
+
+    /**
+     * League play's deck builder state (issue #171): while a League game is
+     * still waiting on decklists, what the viewer may build their deck from.
+     * Game 1: their whole collection as it applies to this game (their per-seat
+     * allowed card pool, one entry per distinct card with its copy count), a
+     * sideboard of up to $sideboard_max cards may be declared, and the builder
+     * starts from the deck + sideboard they submitted for game 1 of their most
+     * recent earlier match (before any sideboarding; see leagueCarriedForwardDeck()), or the starter deck their event grant
+     * gave them if this is their first match. Game 2/3: the
+     * pool is fixed at the main deck + sideboard they declared on game 1 (the
+     * only cards that can be swapped in -- see validateLeagueSideboardSwap()),
+     * `fixed_pool` is true, and the builder starts from the deck they played in
+     * the immediately preceding game. Null for any other game (non-League, or no
+     * longer waiting) and for a spectator. League games are the only custom_duel
+     * games linked from league_matches, which is what tells them apart from a
+     * tournament's pool-restricted custom_duel games.
+     *
+     * @param array<string, mixed> $game
+     * @return array{pool: array<int, array<string, mixed>>, default_deck_card_ids: int[], default_sideboard_card_ids: int[], min_cards: int, rarity_limits: array<string, int>, sideboard_max: int, fixed_pool: bool}|null
+     */
+    private function leagueDeckBuilderFor(array $game, ?int $viewerUserId): ?array
+    {
+        if (
+            $viewerUserId === null
+            || $game['deck_type'] !== 'custom_duel'
+            || $game['status'] !== 'waiting'
+            || $game['game_match_id'] === null
+        ) {
+            return null;
+        }
+
+        $pdo = Connection::get();
+        $leagueStmt = $pdo->prepare('SELECT event_id FROM league_matches WHERE game_match_id = :game_match_id');
+        $leagueStmt->execute(['game_match_id' => $game['game_match_id']]);
+        $eventId = $leagueStmt->fetchColumn();
+        if ($eventId === false) {
+            return null;
+        }
+
+        $seatStmt = $pdo->prepare('SELECT custom_deck_allowed_card_ids FROM game_players WHERE game_id = :game_id AND user_id = :user_id');
+        $seatStmt->execute(['game_id' => $game['id'], 'user_id' => $viewerUserId]);
+        $allowed = $seatStmt->fetchColumn();
+        if ($allowed === false || $allowed === null) {
+            return null;
+        }
+
+        $gameNumber = (int) $game['match_game_number'];
+        $matchPool = $gameNumber > 1 ? $this->leagueMatchPool((int) $game['game_match_id'], $viewerUserId) : null;
+        $fixedPool = $matchPool !== null;
+        $poolCardIds = $fixedPool ? $matchPool : array_map(intval(...), (array) json_decode((string) $allowed, true));
+
+        $copiesByCardId = array_count_values($poolCardIds);
+        $pool = [];
+        foreach (CardCatalog::serialize(array_keys($copiesByCardId)) as $card) {
+            $card['copies'] = $copiesByCardId[$card['card_id']];
+            $pool[] = $card;
+        }
+
+        $defaultDeckCardIds = [];
+        $defaultSideboardCardIds = [];
+        $previousStmt = $pdo->prepare(
+            'SELECT gp.custom_deck_card_ids
+             FROM game_players gp JOIN games g ON g.id = gp.game_id
+             WHERE g.game_match_id = :match_id AND g.match_game_number = :previous AND gp.user_id = :user_id'
+        );
+        $previousStmt->execute([
+            'match_id' => $game['game_match_id'],
+            'previous' => $gameNumber - 1,
+            'user_id' => $viewerUserId,
+        ]);
+        $previousDeck = $previousStmt->fetchColumn();
+        if ($previousDeck !== false && $previousDeck !== null) {
+            $defaultDeckCardIds = array_map(intval(...), (array) json_decode((string) $previousDeck, true));
+        } else {
+            // Game 1 of a match: carry forward the deck (and sideboard) from the
+            // player's most recent earlier League match in this event, so they
+            // adjust it rather than rebuild; only a first-ever match starts from
+            // the starter deck their event grant gave them.
+            $carried = $this->leagueCarriedForwardDeck((int) $eventId, (int) $game['game_match_id'], $viewerUserId);
+            if ($carried !== null) {
+                [$defaultDeckCardIds, $defaultSideboardCardIds] = $carried;
+            } else {
+                $grantStmt = $pdo->prepare('SELECT granted_card_ids FROM league_participants WHERE event_id = :event_id AND user_id = :user_id');
+                $grantStmt->execute(['event_id' => $eventId, 'user_id' => $viewerUserId]);
+                $granted = $grantStmt->fetchColumn();
+                if ($granted !== false && $granted !== null) {
+                    $defaultDeckCardIds = array_map(intval(...), (array) json_decode((string) $granted, true));
+                }
+            }
+        }
+
+        return [
+            'pool' => $pool,
+            'default_deck_card_ids' => $defaultDeckCardIds,
+            'default_sideboard_card_ids' => $defaultSideboardCardIds,
+            'min_cards' => (int) $game['custom_duel_min_cards'],
+            'rarity_limits' => array_map(intval(...), (array) json_decode((string) $game['custom_duel_rarity_limits'], true)),
+            'sideboard_max' => $fixedPool ? 0 : self::LEAGUE_SIDEBOARD_MAX_CARDS,
+            'fixed_pool' => $fixedPool,
+        ];
+    }
+
+    /**
+     * The deck and sideboard a League player submitted for game 1 of their most
+     * recent earlier match in $eventId -- as built, before any sideboarding
+     * between games. Null if they have no earlier match with a game-1 deck in
+     * this event.
+     *
+     * @return array{0: int[], 1: int[]}|null
+     */
+    private function leagueCarriedForwardDeck(int $eventId, int $currentGameMatchId, int $userId): ?array
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT gp.custom_deck_card_ids, gp.custom_deck_sideboard_card_ids
+             FROM league_matches lm
+             JOIN games g ON g.game_match_id = lm.game_match_id AND g.match_game_number = 1
+             JOIN game_players gp ON gp.game_id = g.id AND gp.user_id = :user_id
+             WHERE lm.event_id = :event_id AND lm.game_match_id <> :current_match_id
+               AND gp.custom_deck_card_ids IS NOT NULL
+             ORDER BY g.id DESC LIMIT 1'
+        );
+        $stmt->execute(['user_id' => $userId, 'event_id' => $eventId, 'current_match_id' => $currentGameMatchId]);
+        $row = $stmt->fetch();
+        if ($row === false) {
+            return null;
+        }
+
+        return [
+            array_map(intval(...), (array) json_decode((string) $row['custom_deck_card_ids'], true)),
+            $row['custom_deck_sideboard_card_ids'] !== null
+                ? array_map(intval(...), (array) json_decode((string) $row['custom_deck_sideboard_card_ids'], true))
+                : [],
+        ];
+    }
+
+    /** Whether $gameMatchId is the best-of-three wrapper of a League match -- see leagueDeckBuilderFor(). */
+    private function isLeagueGameMatch(int $gameMatchId): bool
+    {
+        $stmt = Connection::get()->prepare('SELECT 1 FROM league_matches WHERE game_match_id = :game_match_id');
+        $stmt->execute(['game_match_id' => $gameMatchId]);
+
+        return $stmt->fetchColumn() !== false;
+    }
+
+    /**
+     * League play (issue #171): turns on sideboarding for a freshly created
+     * League match. createGame()'s own $allowSideboarding only applies to the
+     * 'power' preset, so LeagueService flips it on here instead, before any
+     * deck is submitted.
+     */
+    public function enableLeagueSideboarding(int $gameId): void
+    {
+        $gameMatchId = $this->fetchGame($gameId)['game_match_id'];
+        if ($gameMatchId === null) {
+            throw new GameStateException("Game {$gameId} has no best-of-three match to sideboard in");
+        }
+
+        Connection::get()->prepare('UPDATE game_matches SET allow_sideboarding = 1 WHERE id = :id')->execute(['id' => $gameMatchId]);
+    }
+
+    /**
+     * League play's game-1 half (the analog of validateAndStorePowerDuelSideboardPool()):
+     * the main deck must satisfy the League's rules -- minimum size and the
+     * mythic/rare caps -- and up to LEAGUE_SIDEBOARD_MAX_CARDS extra cards may
+     * be declared as a sideboard. Unlike Power Duel's, a League sideboard may
+     * repeat a card (or repeat one in the main deck) since collections hold
+     * several copies; whether the player actually owns them is checked against
+     * their collection by the caller. The sideboard itself is exempt from the
+     * rarity caps -- a benched third mythic is fine, because every game's ACTIVE
+     * deck is re-validated against them (see validateLeagueSideboardSwap()).
+     *
+     * @param array{name: ?string, cardIds: int[], sideboardCardIds: int[]} $parsed
+     * @param array<int, array{name: string, rarity: string, color: string}> $catalogById
+     * @return array{0: int[], 1: int[]}
+     */
+    private function validateLeagueSideboardPool(array $parsed, DuelDeckRules $rules, array $catalogById): array
+    {
+        if (count($parsed['sideboardCardIds']) > self::LEAGUE_SIDEBOARD_MAX_CARDS) {
+            throw new GameStateException(
+                'Your sideboard has ' . count($parsed['sideboardCardIds']) . ' card(s), but at most '
+                . self::LEAGUE_SIDEBOARD_MAX_CARDS . ' are allowed.'
+            );
+        }
+
+        $rules->validate($parsed['cardIds'], $catalogById, 'Your decklist');
+
+        return [$parsed['cardIds'], $parsed['sideboardCardIds']];
+    }
+
+    /**
+     * League play's game-2/3 half (the analog of validateAndStorePowerDuelSideboardSwap()):
+     * the new main deck may only be reshuffled within the pool the player
+     * declared on game 1 -- their original main deck plus sideboard, copy for
+     * copy -- so the (at most three) sideboard cards are the only cards that can
+     * ever be swapped in. Every game's deck is re-validated against the League's
+     * minimum size and mythic/rare caps, and the new sideboard is whatever is
+     * left of the pool.
+     *
+     * @param int[] $newMainCardIds
+     * @param array<int, array{name: string, rarity: string, color: string}> $catalogById
+     * @return array{0: int[], 1: int[]}
+     */
+    private function validateLeagueSideboardSwap(int $gameMatchId, int $userId, array $newMainCardIds, DuelDeckRules $rules, array $catalogById): array
+    {
+        $pool = $this->leagueMatchPool($gameMatchId, $userId);
+        if ($pool === null) {
+            throw new GameStateException('Could not find your original deck/sideboard for this match.');
+        }
+
+        $poolCounts = array_count_values($pool);
+        foreach (array_count_values($newMainCardIds) as $cardId => $count) {
+            if ($count > ($poolCounts[$cardId] ?? 0)) {
+                throw new GameStateException(
+                    'Your decklist has a card (or an extra copy of one) that isn\'t part of your original deck or sideboard -- between games you can only swap cards between the two.'
+                );
+            }
+        }
+
+        $rules->validate($newMainCardIds, $catalogById, 'Your decklist');
+
+        return [$newMainCardIds, self::multisetDifference($pool, $newMainCardIds)];
+    }
+
+    /**
+     * A League player's pool for the whole match: the main deck and sideboard
+     * they submitted for game 1, combined (one entry per copy). Null if game 1
+     * has no deck recorded for them.
+     *
+     * @return int[]|null
+     */
+    private function leagueMatchPool(int $gameMatchId, int $userId): ?array
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT gp.custom_deck_card_ids, gp.custom_deck_sideboard_card_ids
+             FROM game_players gp JOIN games g ON g.id = gp.game_id
+             WHERE g.game_match_id = :match_id AND g.match_game_number = 1 AND gp.user_id = :user_id'
+        );
+        $stmt->execute(['match_id' => $gameMatchId, 'user_id' => $userId]);
+        $row = $stmt->fetch();
+        if ($row === false || $row['custom_deck_card_ids'] === null) {
+            return null;
+        }
+
+        return array_merge(
+            array_map(intval(...), (array) json_decode((string) $row['custom_deck_card_ids'], true)),
+            $row['custom_deck_sideboard_card_ids'] !== null
+                ? array_map(intval(...), (array) json_decode((string) $row['custom_deck_sideboard_card_ids'], true))
+                : [],
+        );
+    }
+
+    /**
+     * $pool minus $remove, copy for copy (array_diff() would drop every copy of
+     * a card as soon as one is removed), keeping $pool's order.
+     *
+     * @param int[] $pool
+     * @param int[] $remove
+     * @return int[]
+     */
+    private static function multisetDifference(array $pool, array $remove): array
+    {
+        $toRemove = array_count_values($remove);
+        $left = [];
+        foreach ($pool as $cardId) {
+            if (($toRemove[$cardId] ?? 0) > 0) {
+                $toRemove[$cardId]--;
+            } else {
+                $left[] = $cardId;
+            }
+        }
+
+        return $left;
     }
 
     /**
@@ -6948,7 +7265,7 @@ final class GameService
 
                 try {
                     $this->boardStates->save($gameId, $state);
-                    $this->updateRoundTurnState($roundId, $gamePlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId(), $state, persistedPlayGrants: $state->allPlayGrantsForPersistence());
+                    $this->updateRoundTurnState($roundId, $gamePlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId(), $state, persistedPlayGrants: $state->allPlayGrantsForPersistence(), registerOccurrence: false);
                     $this->writePendingBatch($gameId, $roundId, $gamePlayerId, $playerChoices, $result->invocationChoices, $result);
                     $this->logEvent($gameId, $roundId, $gamePlayerId, 'pending_decision_created', $cardId, $this->withPlayedFrom($state, $cardId, $choices), $state);
 
@@ -10298,7 +10615,7 @@ final class GameService
                 // Already inside this method's own transaction, so this
                 // just writes rows -- no nested beginTransaction().
                 $this->boardStates->save($gameId, $state);
-                $this->updateRoundTurnState($roundId, $initiatingPlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId(), $state, persistedPlayGrants: $state->allPlayGrantsForPersistence());
+                $this->updateRoundTurnState($roundId, $initiatingPlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId(), $state, persistedPlayGrants: $state->allPlayGrantsForPersistence(), registerOccurrence: false);
                 $this->writePendingBatch($gameId, $roundId, $initiatingPlayerId, $topLevelChoices, $result->invocationChoices, $result);
                 $this->logEvent($gameId, $roundId, $initiatingPlayerId, 'pending_decision_created', $playedCardId, $this->withPlayedFrom($state, $playedCardId, []), $state);
 
@@ -12007,7 +12324,12 @@ final class GameService
         }
 
         $opponentId = (int) $opponentId;
-        $scores = $this->scorer->score($state);
+        // Enthusiasm/Passion bonuses are scoring-time decisions (see
+        // RoundScorer::score()), and a solve is decided without that
+        // pause -- so they're counted as taken the way a bot takes them
+        // (always, on the highest-value target), the one choice a solver
+        // would make; without this a Passion in a puzzle scored nothing.
+        $scores = $this->scorer->score($state, $this->bots->projectedScoringDecisions($state));
 
         // Turn order is whoever the live round says went first -- the
         // opponent for most puzzles, the solver when puzzles.solver_goes_first
@@ -18182,6 +18504,13 @@ final class GameService
         // hides Rematch from everyone else, the only consumer of this
         // field, so there's no reason to spend the query otherwise.
         $isTournamentMatch = false;
+        // League play (issue #171): the same "hide Rematch" treatment -- a
+        // League opponent comes from the queue (nobody plays the same one
+        // twice in an event), so an ad hoc rematch makes no sense there.
+        $isLeagueMatch = false;
+        if ($isCreator && $game['game_match_id'] !== null) {
+            $isLeagueMatch = $this->isLeagueGameMatch((int) $game['game_match_id']);
+        }
         if ($isCreator) {
             $tournamentMatchStmt = $pdo->prepare(
                 'SELECT 1 FROM tournament_matches
@@ -18453,6 +18782,8 @@ final class GameService
                 // purely so the frontend can hide the "Rematch" button
                 // for a tournament match.
                 'is_tournament_match' => $isTournamentMatch,
+                // See $isLeagueMatch's own comment above.
+                'is_league_match' => $isLeagueMatch,
                 'format' => $game['format'],
                 'deck_type' => $game['deck_type'],
                 'custom_deck_name' => $game['custom_deck_name'],
@@ -18658,6 +18989,9 @@ final class GameService
             // bare ids for the visual picker's own pre-selection, null
             // under the exact same conditions $powerDuelSideboardPool is.
             'power_duel_previous_deck_card_ids' => $powerDuelPreviousDeckCardIds,
+            // League play's collection-based deck builder -- see
+            // leagueDeckBuilderFor()'s own docblock.
+            'league_deck_builder' => $this->leagueDeckBuilderFor($game, $viewerUserId),
         ];
 
         if ($viewerGamePlayerId !== null) {
@@ -22608,9 +22942,13 @@ final class GameService
      * site (a fresh turn/round's own newly COMPUTED grants, which have
      * no "already existed, might reactivate" history to preserve).
      *
+     * $registerOccurrence = false persists/restores the counters without
+     * counting this save as an occurrence -- see the comment at the register
+     * call below.
+     *
      * @return array{exactCount: int, chaosLoopAutoPass: bool}
      */
-    private function updateRoundTurnState(int $roundId, int $playerId, array $playGrants, bool $discardedThisRound, bool $skipScoringThisRound, ?int $skipScoringFirstPlayerId, ?int $skipScoringSourceCardId, ?int $skipScoringOwnerId, bool $awardsExtraWinThisRound, ?int $awardsExtraWinSourceCardId, ?int $awardsExtraWinOwnerId, BoardState $state, ?array $persistedPlayGrants = null): array
+    private function updateRoundTurnState(int $roundId, int $playerId, array $playGrants, bool $discardedThisRound, bool $skipScoringThisRound, ?int $skipScoringFirstPlayerId, ?int $skipScoringSourceCardId, ?int $skipScoringOwnerId, bool $awardsExtraWinThisRound, ?int $awardsExtraWinSourceCardId, ?int $awardsExtraWinOwnerId, BoardState $state, ?array $persistedPlayGrants = null, bool $registerOccurrence = true): array
     {
         $pdo = Connection::get();
 
@@ -22650,9 +22988,22 @@ final class GameService
             $chaosLoopState = $previousRow['chaos_loop_state'] !== null ? json_decode((string) $previousRow['chaos_loop_state'], true) : [];
             $state->restoreCoarseTurnStateSignatureCounts($chaosLoopState['coarseCounts'] ?? []);
         }
-        $occurrenceCount = $state->registerTurnStateOccurrence();
-        $coarseOccurrenceCount = $state->registerCoarseTurnStateOccurrence();
-        $chaosLoopAutoPass = $this->resolveChaosLoopShortcutOffer($state, $coarseOccurrenceCount);
+        // A play that merely pauses for a pending decision (Duplicity's
+        // "repeat again?" offer, an opponent's reveal/choice) hasn't
+        // finished resolving, so the board as of this save is a
+        // mid-play snapshot, not a recurrence of anything -- counting it
+        // made one play with N Duplicity repeats register N+1 times, so
+        // two repeats of a board-neutral trigger tripped the "same board
+        // state 3 times" warning. The play's own finishPlay() registers
+        // the one real occurrence once it fully resolves.
+        if ($registerOccurrence) {
+            $occurrenceCount = $state->registerTurnStateOccurrence();
+            $coarseOccurrenceCount = $state->registerCoarseTurnStateOccurrence();
+            $chaosLoopAutoPass = $this->resolveChaosLoopShortcutOffer($state, $coarseOccurrenceCount);
+        } else {
+            $occurrenceCount = $state->currentTurnStateOccurrenceCount();
+            $chaosLoopAutoPass = false;
+        }
 
         $stmt = $pdo->prepare(
             'UPDATE game_rounds SET current_turn_game_player_id = :player_id, plays_remaining = :plays_remaining, pending_play_grants = :pending_play_grants, loop_state_signature_counts = :loop_state_signature_counts, chaos_loop_state = :chaos_loop_state, discarded_this_round = :discarded_this_round, skip_scoring = :skip_scoring, skip_scoring_first_player_game_player_id = :skip_scoring_first_player_id, skip_scoring_source_card_id = :skip_scoring_source_card_id, skip_scoring_owner_game_player_id = :skip_scoring_owner_id, awards_extra_win = :awards_extra_win, awards_extra_win_source_card_id = :awards_extra_win_source_card_id, awards_extra_win_owner_game_player_id = :awards_extra_win_owner_id WHERE id = :round_id'

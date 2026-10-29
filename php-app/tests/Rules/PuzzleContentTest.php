@@ -2540,6 +2540,257 @@ final class PuzzleContentTest extends TestCase
         $this->assertGameFailed($gameId);
     }
 
+    /** Grave Robber's Recklessness, taking the opponent's mood $catalogId. */
+    private function playGraveRobberRecklessness(int $gameId, int $p, ?int $takeCatalogId): void
+    {
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+        $choices = $takeCatalogId === null ? [] : ['target_mood_id' => $this->ownedInstanceId($gameId, $takeCatalogId, 'in_play', $opp)];
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 100, 'hand'), $choices);
+    }
+
+    /**
+     * "Grave Robber": the only winning line (exhaustive search of the real
+     * flow, every Recklessness target, discard-pile plays included) is
+     * Recklessness taking Melancholy -- Validation grants an extra play for the
+     * printed 0 -- and then Chivalry from the discard pile: 2 + 3 + 0 + 5 = 10
+     * against 9. See migration 0480's own docblock.
+     */
+    public function testGraveRobberSolvedByTakingMelancholyAndPlayingChivalryFromTheDiscardPile(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('grave-robber');
+
+        $this->playGraveRobberRecklessness($gameId, $p, 69);
+        $this->assertGameNotSolved($gameId);
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 4, 'discard'));
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameSolved($gameId, $p);
+    }
+
+    /** Discipline reads 3 once Recklessness is out (Melancholy black, Recklessness red): 2 + 3 + 3 = 8 against 9. */
+    public function testGraveRobberDisciplineFromTheDiscardPileLoses(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('grave-robber');
+
+        $this->playGraveRobberRecklessness($gameId, $p, 69);
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 9, 'discard'));
+        $this->games->advanceAutomatedTurns($gameId);
+
+        $this->assertGameFailed($gameId);
+    }
+
+    /** Boredom instead of a discard-pile card: 9-9 whether Recklessness took Melancholy or one of the 3s, and a tie is the opponent's. */
+    public function testGraveRobberBoredomAfterAnyTakeTies(): void
+    {
+        foreach ([69, 125, 12, 52] as $takeCatalogId) {
+            ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('grave-robber');
+
+            $this->playGraveRobberRecklessness($gameId, $p, $takeCatalogId);
+            $this->playDriven($gameId, $p, $this->instanceId($gameId, 83, 'hand'));
+            $this->games->advanceAutomatedTurns($gameId);
+
+            $this->assertGameFailed($gameId);
+        }
+    }
+
+    /** Without Melancholy the discard pile is out of reach, and Boredom alone (or Recklessness taking nothing) is far behind. */
+    public function testGraveRobberOtherLinesLose(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('grave-robber');
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 83, 'hand'));
+        $this->games->advanceAutomatedTurns($gameId);
+        $this->assertGameFailed($gameId);
+
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('grave-robber');
+        $this->playGraveRobberRecklessness($gameId, $p, null);
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 83, 'hand'));
+        $this->games->advanceAutomatedTurns($gameId);
+        $this->assertGameFailed($gameId);
+    }
+
+    /**
+     * "Backfire": the only winning line (exhaustive search of the real flow, every
+     * Hate target and Anger set) is Joy -- Passion still scores Generosity: 6 + 3 = 9
+     * against 8. Passion's bonus is only counted because of the puzzle goal check's
+     * own Enthusiasm/Passion handling (see migration 0481's own docblock).
+     */
+    public function testBackfireSolvedByPlayingJoy(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('backfire');
+
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 125, 'hand'));
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameSolved($gameId, $p);
+    }
+
+    /** Hate on Generosity: Passion has to score Charity instead -- 1 against their remaining 2. */
+    public function testBackfireHateOnTheBigMoodLoses(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('backfire');
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 66, 'hand'), [
+            'target_mood_id' => $this->ownedInstanceId($gameId, 120, 'in_play', $opp),
+        ]);
+        $this->games->advanceAutomatedTurns($gameId);
+
+        $this->assertGameFailed($gameId);
+    }
+
+    /** Anger can only reach the two 1s: 6 against Generosity's 6, a tie, and a tie goes to the opponent. */
+    public function testBackfireAngerOnTheSmallMoodsTies(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('backfire');
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 80, 'hand'), [
+            'target_mood_ids' => [
+                $this->ownedInstanceId($gameId, 3, 'in_play', $opp),
+                $this->ownedInstanceId($gameId, 7, 'in_play', $opp),
+            ],
+        ]);
+        $this->games->advanceAutomatedTurns($gameId);
+
+        $this->assertGameFailed($gameId);
+    }
+
+    /** Patience reads 1 once it is played: 7 against 8. */
+    public function testBackfirePatienceLoses(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('backfire');
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 21, 'hand'));
+        $this->games->advanceAutomatedTurns($gameId);
+
+        $this->assertGameFailed($gameId);
+    }
+
+    /**
+     * "Fear Itself": the only winning line (exhaustive search of the real flow, every
+     * Fear return) is Fear -- returning nothing, its extra play isn't tied to that --
+     * and then Superiority: four moods against their three, so Superiority reads 7,
+     * 4 + 4 + 0 + 7 = 15 against 12.
+     */
+    public function testFearItselfSolvedByFearWithoutAReturnThenSuperiority(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('fear-itself');
+
+        $afterFear = $this->playDriven($gameId, $p, $this->instanceId($gameId, 38, 'hand'));
+        self::assertFalse($afterFear['game_completed'] ?? false, "Fear's extra play keeps the turn going");
+
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 77, 'hand'));
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameSolved($gameId, $p);
+    }
+
+    /** Superiority alone makes three moods against their three -- not more: it reads 3, 11 against 12. */
+    public function testFearItselfSuperiorityAloneLoses(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('fear-itself');
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 77, 'hand'));
+        $this->games->advanceAutomatedTurns($gameId);
+
+        $this->assertGameFailed($gameId);
+    }
+
+    /** Fear and then Joy: 4 + 4 + 0 + 3 = 11 against 12. */
+    public function testFearItselfFearThenJoyLoses(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('fear-itself');
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 38, 'hand'));
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 125, 'hand'));
+        $this->games->advanceAutomatedTurns($gameId);
+
+        $this->assertGameFailed($gameId);
+    }
+
+    /** Returning Boredom with Fear costs a body: Superiority is then only three moods against three, 7 against 12. */
+    public function testFearItselfReturningAMoodThenSuperiorityLoses(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('fear-itself');
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 38, 'hand'), [
+            'hand_mood_id' => $this->ownedInstanceId($gameId, 83, 'in_play', $p),
+        ]);
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 77, 'hand'));
+        $this->games->advanceAutomatedTurns($gameId);
+
+        $this->assertGameFailed($gameId);
+    }
+
+    /**
+     * "Leap of Faith": the only winning line (exhaustive search of the real flow, every
+     * Conviction target and every choice of which play to spend) is Conviction on your
+     * own Hope, spending HOPE'S play on it -- so the normal play is left for the card
+     * you draw, Boredom: 2 + 4 = 6 against 5.
+     */
+    public function testLeapOfFaithSolvedByConvictionOnHopeUsingHopesPlayThenTheDrawnCard(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('leap-of-faith');
+        $hope = $this->instanceId($gameId, 124, 'in_play');
+
+        $afterConviction = $this->playDriven($gameId, $p, $this->instanceId($gameId, 6, 'hand'), [
+            'target_mood_id' => $hope,
+            'grant_source_card_id' => $hope,
+        ]);
+        self::assertFalse($afterConviction['game_completed'] ?? false, 'the normal play is still to come');
+
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 83, 'hand'));
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameSolved($gameId, $p);
+    }
+
+    /** The tempting line: Conviction on the opponent's Joy leaves 2 against 2 -- and the opponent drew the card. A tie goes to them. */
+    public function testLeapOfFaithConvictionOnTheOpponentsJoyTies(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('leap-of-faith');
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 6, 'hand'), [
+            'target_mood_id' => $this->ownedInstanceId($gameId, 125, 'in_play', $opp),
+            'grant_source_card_id' => $this->instanceId($gameId, 124, 'in_play'),
+        ]);
+        self::assertNull($this->ownedInstanceId($gameId, 83, 'hand', $p), 'the opponent drew Boredom, not you');
+        $this->games->pass($gameId, $p);
+
+        $this->assertGameFailed($gameId);
+    }
+
+    /** Spending the NORMAL play on Conviction and bottoming Hope loses Hope's play with it: Boredom is drawn but there is no play left for it, so the turn ends on its own, 2 against 5. */
+    public function testLeapOfFaithSpendingTheNormalPlayOnConvictionLosesHopesPlay(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('leap-of-faith');
+        $hope = $this->instanceId($gameId, 124, 'in_play');
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 6, 'hand'), [
+            'target_mood_id' => $hope,
+            'grant_source_card_id' => 0,
+        ]);
+
+        $this->assertGameFailed($gameId);
+    }
+
+    /** Conviction on itself draws Boredom but gives up its own 2: 4 against 5. */
+    public function testLeapOfFaithConvictionOnItselfLoses(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('leap-of-faith');
+        $conviction = $this->instanceId($gameId, 6, 'hand');
+
+        $this->playDriven($gameId, $p, $conviction, [
+            'target_mood_id' => $conviction,
+            'grant_source_card_id' => $this->instanceId($gameId, 124, 'in_play'),
+        ]);
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 83, 'hand'));
+        $this->games->advanceAutomatedTurns($gameId);
+
+        $this->assertGameFailed($gameId);
+    }
+
     /** The score each seat got in the most recently scored round of $gameId, keyed 'solver'/'opponent'. @return array{solver: int, opponent: int} */
     private function lastRoundScores(int $gameId, int $solverGamePlayerId): array
     {

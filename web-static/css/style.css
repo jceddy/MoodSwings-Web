@@ -790,8 +790,22 @@ dialog#resources-dialog #resources-close-button {
     margin-bottom: 0.5rem;
 }
 
+/* "View my collection" is the last thing inside #league-event-section,
+   with #league-close-button right after the section -- without this the
+   two buttons touch. */
+#league-collection-button {
+    margin-bottom: 0.75rem;
+}
+
+/* Tournaments/Puzzles sit on their own line below the main action row
+   (New game/Open games/Weekly Sealed Pool/League), with a gap above. */
+#lobby-browse-actions {
+    margin-top: 0.75rem;
+}
+
 /* Past games/Import replay wrap onto their own line below the main
-   action row (New game/Open games/Weekly Sealed Pool/Tournaments)
+   action row (New game/Open games/Weekly Sealed Pool/League and the
+   Tournaments/Puzzles line)
    rather than just flowing inline with them, with some breathing room
    above (between it and that row) and below (between it and
    #games-list). */
@@ -1763,7 +1777,11 @@ body.game-page {
        .deck-builder-card-grid (issue #93 follow-up) covers both the deck
        builder's own catalog panel and its deck-under-construction panel
        in one selector -- same reasoning, just two grids instead of one,
-       so fitting more cards per row matters even more here. */
+       so fitting more cards per row matters even more here. The League
+       collection grid (#league-collection-cards) takes the same shrink:
+       measured on a 360px phone its dialog's grid is 322px wide, which
+       holds three of the normal 88px thumbnails per row but four 64px
+       ones (4*64 + 3*8 = 280px). */
     #deck-view-cards .card-thumb,
     #deck-view-cards .card-thumb__art,
     #deck-view-sideboard-cards .card-thumb,
@@ -1771,7 +1789,9 @@ body.game-page {
     #shared-deck-cards .card-thumb,
     #shared-deck-cards .card-thumb__art,
     .deck-builder-card-grid .card-thumb,
-    .deck-builder-card-grid .card-thumb__art {
+    .deck-builder-card-grid .card-thumb__art,
+    #league-collection-cards .card-thumb,
+    #league-collection-cards .card-thumb__art {
         width: calc(4rem * var(--card-scale, 1));
     }
 
@@ -2007,6 +2027,36 @@ body.game-page {
     right: calc(0.25rem * var(--card-scale, 1));
     background: #b00020;
     z-index: 1;
+}
+
+/* League play (issue #171): "xN" copies-owned badge in the lower-right
+   corner of a collection/deck-builder thumbnail, and (builder only) the
+   copies currently in the deck in the lower-left. Sits on the card's own
+   bottom edge, clear of the printed name/value up top. */
+.card-thumb__badge--count {
+    bottom: calc(0.25rem * var(--card-scale, 1));
+    right: calc(0.25rem * var(--card-scale, 1));
+}
+
+.card-thumb__badge--in-deck {
+    bottom: calc(0.25rem * var(--card-scale, 1));
+    left: calc(0.25rem * var(--card-scale, 1));
+    background: var(--color-success);
+}
+
+/* Sideboard copies (game 1: the declared ones; later games: whatever the
+   deck leaves over), stacked just above the in-deck badge. */
+.card-thumb__badge--in-sideboard {
+    bottom: calc((0.25rem + 1.4rem) * var(--card-scale, 1));
+    left: calc(0.25rem * var(--card-scale, 1));
+    background: var(--color-info);
+}
+
+.league-card-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
 }
 
 /* Nudged down ~20px from the card's own top edge, same as

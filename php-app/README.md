@@ -3983,6 +3983,76 @@ supports -- see "Duel: separate per-player decks" above), so
 `draftGamesToWin()`'s own single-game (3-4 players) branch is simply
 never reached here -- always the best-of-three branch.
 
+### League play (issue #171)
+
+An open-ended, manually started event in which each player builds a
+permanent card collection and plays best-of-three Duels against other
+league members using only cards they own.
+
+- **Events.** An operator starts/ends events from the shell:
+  `php bin/league_event.php start "<name>" [set code]`, `status`, `end`.
+  Only one event is active at a time (`league_events`, `LeagueEventRepository`).
+  Ending an event empties the queue; in-progress matches finish normally.
+- **Eligibility.** Humans only (bots are excluded entirely) and the player
+  must have "Discoverable for open games" (`matchmaking_discoverable`) on.
+- **Join = queue.** `POST /league/join` both joins the event and enters the
+  queue (no deck is chosen here). The first join of each event grants one
+  randomized structure deck (45 cards, 23C/14U/6R/2M, no chaos tokens) into
+  the permanent collection (`user_collection_cards`) and saves it as a private
+  decklist. Leaving and rejoining never grants a second deck.
+- **Pairing.** FIFO under a `GET_LOCK` advisory lock, like Weekly Sealed
+  Pool: at most `CONCURRENT_MATCH_CAP` (2) in-progress matches per player,
+  never the same opponent twice in one event, never blocked users.
+- **Games.** 2-player `custom_duel`, best-of-three, created with no decks
+  seeded and each seat restricted to its own collection
+  (`custom_deck_allowed_card_ids`). Each player builds their deck in the game
+  -- before game 1 and again before each later game, as for any custom_duel
+  match -- and `submitCustomDuelDeck()` enforces the rules on every game's deck:
+  minimum 12 cards, at most 2 mythics and 6 rares, and per-card copies no
+  greater than owned.
+- **Sideboard.** League matches are created with `game_matches.allow_sideboarding`
+  on (`GameService::enableLeagueSideboarding()`). On game 1 a player declares a
+  main deck plus a sideboard of up to 3 cards (`LEAGUE_SIDEBOARD_MAX_CARDS`;
+  repeated cards are fine as long as main + sideboard fit the collection, and
+  the sideboard itself is exempt from the rarity caps). From game 2 on the deck
+  can only be reshuffled within that declared pool, copy for copy
+  (`validateLeagueSideboardSwap()`), so the sideboard cards are the only ones
+  that can be swapped in; the new sideboard is whatever the deck leaves over.
+  This is the Power Duel sideboarding mechanism (see "Power Duel"), generalised
+  for League's multi-copy pools.
+  While a League game waits on decks, `getState()` carries a
+  `league_deck_builder` object (`pool`: the cards the viewer may use with their
+  `copies` -- their collection on game 1, the declared deck + sideboard from game
+  2; `fixed_pool`; `sideboard_max` (0 once the pool is fixed);
+  `default_deck_card_ids`: their previous game's deck or, for game 1, the deck
+  they submitted for game 1 of their most recent earlier League match, before
+  any sideboarding (`GameService::leagueCarriedForwardDeck()`) -- falling back to the starter deck
+  they were granted only for a first-ever match; `default_sideboard_card_ids`:
+  on game 1, the sideboard they declared with that deck, otherwise empty; plus `min_cards`/`rarity_limits`);
+  `GameService::notifyLeagueDeckNeeded()` pushes the player who was waiting in
+  the queue when the pairing is made.
+- **Results.** `league_matches` is synced from `game_matches` on read
+  (`LeagueService::syncMatches`).
+- **Leaderboard.** `LeagueService::leaderboard()` ranks everyone with at least
+  one completed match in the active event (or, with `?event=prior`, the most
+  recently ended one, so standings outlive the event): abandoned matches don't
+  count and bots can't play. It uses Weekly Sealed Pool's asymmetric hidden
+  score (+3 per match win, -2 per loss -- `RANKING_POINTS`; never returned), so
+  playing and winning more always helps; ties on record share a rank
+  (`GameService::rankedStandingsRows()`, competition ranking) and each row
+  carries a "top N%" percentile.
+- **No Rematch.** `getState()['game']['is_league_match']` (creator-only, like
+  `is_tournament_match`) tells the client to hide the Rematch button: League
+  opponents come from the queue and are never played twice per event.
+
+| Route | Purpose |
+| --- | --- |
+| `GET /league` | Event, queue state, record, recent matches, deck rules |
+| `GET /league/leaderboard` | Ranked standings (`event`, `standings[]` with `rank`, `wins`, `losses`, `percentile`); `?event=prior` for the most recently ended event |
+| `GET /league/collection` | The caller's permanent collection: full catalog cards plus `copies`, ordered color, rarity, name |
+| `POST /league/join` | Join the active event and enter the queue |
+| `POST /league/queue/leave` | Leave the queue |
+
 ### Weekly Sealed Pool (issue #520)
 
 The slower-cadence sibling of Sealed Pool of the Day, paired with its own
@@ -12600,6 +12670,15 @@ notification also decides whether to reset this), carried forward
 untouched for a same-player continuation (an extra play, a Duplicity
 repeat).
 
+A play that merely *pauses* for a pending decision -- Duplicity's "repeat
+again?" offer, an opponent's reveal/choice -- is not a fully-resolved
+action: `playMood()`/`respondToDecision()` persist the counters through
+`updateRoundTurnState(..., registerOccurrence: false)` without counting that
+mid-play snapshot, and only the play's own `finishPlay()` registers its one
+occurrence. (Counting every pause made a single play with two Duplicity
+repeats of a board-neutral trigger register three times and trip the
+warning.)
+
 **Human-facing: warn, then auto-pass.** `GameService::finishPlay()`'s own
 "plays remaining, same player continues" branch reads the occurrence
 count `updateRoundTurnState()` returns: at 3 (two full repeats), nothing
@@ -14232,6 +14311,64 @@ than a parallel bespoke system:
   reads 3: 14-17). An exhaustive search through the real engine -- both rounds,
   every reveal, every play order, passing included -- found that one winning board
   and that tie.
+
+- **31st puzzle, "Grave Robber"** (a Melancholy/Recklessness/Validation puzzle: take
+  the opponent's Melancholy, then use Validation's extra play to play a card from
+  the discard pile), medium, `win_game`, no new puzzle infrastructure. Both sides
+  have two round wins and the opponent went first (a tie is theirs). The opponent
+  has Melancholy, Joy, Faith and Worry (3 each): 12. You have Validation and
+  Charity (1 each) in play, hold Recklessness and Boredom, and have one play; the
+  discard pile holds Chivalry (3, but 5 when you did not go first) and Discipline
+  (6, but 3 with two or more black and/or red moods). The one winning line:
+  Recklessness taking Melancholy -- a printed 0, so Validation grants an extra play
+  -- and then Chivalry from the discard pile, now allowed: 2 + 3 + 0 + 5 = 10
+  against 9. Discipline reads 3 (Melancholy black, Recklessness red): 8-9. Ties:
+  Recklessness taking Melancholy and then Boredom, or taking Joy, Faith or Worry
+  and then Boredom, both 9-9. An exhaustive search through the real engine -- every
+  Recklessness target, discard-pile plays included -- found that one winning board
+  and those four ties.
+
+- **32nd puzzle, "Backfire"** (a Passion puzzle: removing the opponent's biggest mood
+  backfires, because your Passion was scoring it too), medium, `win_game`, with one
+  piece of puzzle infrastructure: `GameService::puzzleSolverOutscoresOpponent()` (the
+  check behind `win_game` and `outscore_opponent`) now scores the board with
+  Enthusiasm's and Passion's bonuses counted, as a bot takes them
+  (`BotPlayerService::projectedScoringDecisions()`: always, on the highest-value
+  target) -- they are scoring-time decisions and a puzzle solves without that pause,
+  so before this a Passion in a puzzle was worth nothing. Both sides have two round
+  wins and the opponent went first (a tie is theirs). The opponent has Generosity (6),
+  Charity (1) and Courage (1): 8. You have Passion in play -- you also score
+  Generosity: 6 against 8 -- and hold Hate, Anger, Patience and Joy, with one play. The
+  one winning line is Joy: 6 + 3 = 9 against 8. Hate on Generosity takes it from both
+  of you (Passion scores Charity: 1-2); Anger can only reach the small moods (6-6, a
+  tie); Patience reads 1 (7-8). An exhaustive search through the real engine -- every
+  Hate target and Anger set -- found that one winning board and that tie.
+
+- **33rd puzzle, "Fear Itself"** (a Fear puzzle: Fear's extra play isn't tied to
+  returning a mood, so it is free), easy, `win_game`, no new puzzle infrastructure.
+  Both sides have two round wins and the opponent went first (a tie is theirs). The
+  opponent has the vanilla commons Complacency, Indifference and Apathy (4 each): 12.
+  You have Boredom and Laziness (4 each) in play, hold Fear, Superiority and Joy, and
+  have one play. The one winning line: Fear, returning nothing, then Superiority --
+  four moods against their three, so it reads 7: 4 + 4 + 0 + 7 = 15 against 12.
+  Superiority alone is three moods against three ("more" isn't "as many"): 11-12; Joy
+  alone, or Fear and then Joy, is 11-12; returning a mood with Fear costs you a body
+  (Fear and Superiority: 7-12). An exhaustive search through the real engine -- every
+  Fear return -- found that one winning board and no ties.
+
+- **34th puzzle, "Leap of Faith"** (a Conviction/Hope puzzle: spend Hope's play on a
+  Conviction that bottoms Hope itself), medium, `win_game`, no new puzzle
+  infrastructure (Hope is seeded in play and named as `extra_play_source_card_id`, which
+  builds the real Hope grant -- lost if Hope leaves play before the play is used). Both
+  sides have two round wins and the opponent went first (a tie is theirs). The opponent
+  has Joy (3), Charity (1) and Courage (1): 5. You have Hope in play, hold Conviction, and
+  have two plays; Boredom (4, no ability) is on top of the deck. The one winning line:
+  Conviction on your own Hope, choosing Hope's play to spend on it, then Boredom with
+  your normal play: 2 + 4 = 6 against 5. Conviction on Joy leaves the opponent drawing
+  the card: 2-2, a tie; spending your normal play on Conviction and bottoming Hope loses
+  Hope's play with it (2-5); Conviction on itself throws away its own 2 (4-5). An
+  exhaustive search through the real engine -- every Conviction target and every choice
+  of which play to spend, passing included -- found that one winning board and that tie.
 
 ### Duel: separate per-player decks
 

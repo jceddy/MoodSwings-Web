@@ -3851,6 +3851,57 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * Reported live: with two Duplicity sources in play, repeating a
+     * board-neutral trigger twice warned "this exact board state has
+     * repeated 3 times". Each Duplicity "repeat again?" pause used to
+     * register its own mid-play board snapshot as an occurrence, so one
+     * play with two repeats counted three times. Charity's unconditional
+     * extra play leaves the board identical after every repeat (and keeps
+     * the turn going, so the counter isn't reset), which is exactly the
+     * case that tripped it -- a single play must count once.
+     */
+    public function testRepeatingATriggerTwiceViaTwoDuplicitiesCountsAsOneBoardStateOccurrence(): void
+    {
+        $u1 = $this->insertUser('twodupwarn1');
+        $u2 = $this->insertUser('twodupwarn2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $duplicityId = $this->insertGameCard($gameId, 37, 'in_play', $p1); // real Duplicity
+        $creativityId = $this->insertGameCard($gameId, 32, 'in_play', $p1); // Creativity, already copying Duplicity
+        $this->pdo->prepare('UPDATE game_cards SET copied_card_id = :copied_card_id WHERE id = :id')
+            ->execute(['copied_card_id' => $duplicityId, 'id' => $creativityId]);
+        $charityId = $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $playResult = $this->games->playMood($gameId, $p1, $charityId, []);
+        self::assertTrue($playResult['pending_decision'] ?? false);
+        self::assertNull($this->games->getState($gameId, $p1)['game']['loop_warning']);
+
+        $respondResult1 = $this->games->respondToDecision($gameId, $p1, [
+            'duplicity_repeat' => ['repeat' => true, 'choices' => []],
+        ]);
+        self::assertTrue($respondResult1['pending_decision'] ?? false);
+        self::assertNull($this->games->getState($gameId, $p1)['game']['loop_warning']);
+
+        $respondResult2 = $this->games->respondToDecision($gameId, $p1, [
+            'duplicity_repeat' => ['repeat' => true, 'choices' => []],
+        ]);
+        self::assertArrayNotHasKey('pending_decision', $respondResult2);
+
+        $state = $this->games->getState($gameId, $p1);
+        self::assertNull($state['game']['loop_warning'], 'one play, however many Duplicity repeats, is a single occurrence');
+        self::assertSame(1, (new BoardStateRepository(DefaultEffectRegistry::build()))->load($gameId)->currentTurnStateOccurrenceCount());
+    }
+
+    /**
      * A real bug, caught live: Duplicity never offered to repeat Anger's
      * own effect, because the old design stored the repeat-eligible-
      * sources snapshot on the just-played card's own BoardState

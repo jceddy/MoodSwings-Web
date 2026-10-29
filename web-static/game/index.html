@@ -102,8 +102,11 @@
                 <button id="new-game-button" type="button">New game</button>
                 <button id="open-games-button" type="button">Open games</button>
                 <button id="weekly-sealed-pool-button" type="button">Weekly Sealed Pool</button>
-                <button id="tournaments-button" type="button">Tournaments</button>
-                <button id="puzzles-button" type="button">Puzzles</button>
+                <button id="league-button" type="button">League</button>
+                <div id="lobby-browse-actions">
+                    <button id="tournaments-button" type="button">Tournaments</button>
+                    <button id="puzzles-button" type="button">Puzzles</button>
+                </div>
                 <div id="lobby-secondary-actions">
                     <button id="past-games-button" type="button">Past games</button>
                     <!-- "Is there a way I can replay these in the dev site using
@@ -288,6 +291,23 @@
                     <div id="duel-deck-sideboard-picker-cards"></div>
                     <button id="duel-deck-sideboard-picker-submit-button" type="button">Submit deck</button>
                     <p id="duel-deck-sideboard-picker-error" class="error" hidden></p>
+                </div>
+
+                <!-- League play (issue #171) -- shown INSTEAD of
+                     #duel-deck-submit-form-container for a League game
+                     (GameService::getState()'s own 'league_deck_builder'),
+                     before game 1 and again before each later game of the
+                     match: the player's own collection as a card grid
+                     (xN = copies owned, tap a card for + / - Deck), starting
+                     from the deck they played last (or their granted
+                     starter deck for game 1). -->
+                <div id="duel-deck-league-builder" hidden>
+                    <p id="duel-deck-league-builder-status"></p>
+                    <div id="duel-deck-league-builder-cards" class="league-card-grid"></div>
+                    <button id="duel-deck-league-builder-submit-button" type="button">Submit deck</button>
+                    <button id="duel-deck-league-builder-reset-button" type="button">Start over</button>
+                    <button id="duel-deck-league-builder-clear-button" type="button">Clear deck</button>
+                    <p id="duel-deck-league-builder-error" class="error" hidden></p>
                 </div>
 
                 <div id="duel-deck-submit-form-container">
@@ -1137,6 +1157,56 @@
             <p id="weekly-sealed-pool-standings-empty" hidden>No standings yet -- be the first to finish a match this week!</p>
         </section>
         <button id="weekly-sealed-pool-close-button" type="button">Close</button>
+    </dialog>
+
+    <!-- League play (issue #171): an open-ended event started by hand. The
+         first time a player joins an event they are granted a random
+         Structure deck for their permanent collection; joining also queues
+         them for a best-of-three Duel against another League player, played
+         with a deck built only from cards (and copies) they own. See
+         LeagueService's own docblock (php-app/src/League/). -->
+    <dialog id="league-dialog">
+        <h2>League</h2>
+        <p id="league-no-event" hidden>There is no League event running right now.</p>
+        <section id="league-event-section" hidden>
+            <h3 id="league-event-name"></h3>
+            <p id="league-summary"></p>
+            <p id="league-rules"></p>
+            <p id="league-queue-status"></p>
+            <div id="league-join-controls">
+                <button id="league-join-button" type="button">Join League</button>
+                <button id="league-leave-button" type="button" hidden>Leave queue</button>
+            </div>
+            <p id="league-error" class="error" hidden></p>
+            <h3>Your matches</h3>
+            <ul id="league-matches-list"></ul>
+            <p id="league-matches-empty" hidden>No League matches yet this event.</p>
+            <button id="league-collection-button" type="button">View my collection</button>
+        </section>
+        <!-- Leaderboard: the active event's live standings, or the most
+             recently ended event's final ones -- outside the event section
+             above so the previous event stays viewable while nothing is
+             running. Same shape as Weekly Sealed Pool's standings (see
+             LeagueService::leaderboard()). -->
+        <section id="league-leaderboard-section">
+            <h3>Leaderboard</h3>
+            <div>
+                <button id="league-leaderboard-current-button" type="button" aria-pressed="true">Current event</button>
+                <button id="league-leaderboard-previous-button" type="button" aria-pressed="false">Previous event</button>
+            </div>
+            <p id="league-leaderboard-event"></p>
+            <ul id="league-leaderboard-list"></ul>
+            <p id="league-leaderboard-empty" hidden></p>
+        </section>
+        <button id="league-close-button" type="button">Close</button>
+    </dialog>
+
+    <dialog id="league-collection-dialog">
+        <h2>My League collection</h2>
+        <p id="league-collection-summary"></p>
+        <div id="league-collection-cards" class="league-card-grid"></div>
+        <p id="league-collection-empty" hidden>Your collection is empty -- join a League event to be granted your first deck.</p>
+        <button id="league-collection-close-button" type="button">Close</button>
     </dialog>
 
     <!-- Issue #91: tournaments -- single/double elimination or Swiss-round

@@ -37,6 +37,7 @@ use MoodSwings\Game\GameService;
 use MoodSwings\Game\ReplayStateBuilder;
 use MoodSwings\Mail\Mailer;
 use MoodSwings\Maintenance\MaintenanceGate;
+use MoodSwings\League\LeagueService;
 use MoodSwings\Matchmaking\AlreadyJoinedListingException;
 use MoodSwings\Matchmaking\MatchmakingService;
 use MoodSwings\Matchmaking\NotAuthorizedToCancelListingException;
@@ -51,6 +52,7 @@ use MoodSwings\Repository\DiscordAccountRepository;
 use MoodSwings\Repository\DiscordOAuthStateRepository;
 use MoodSwings\Repository\EmailVerificationRepository;
 use MoodSwings\Repository\FriendshipRepository;
+use MoodSwings\Repository\LeagueEventRepository;
 use MoodSwings\Repository\NotificationCooldownRepository;
 use MoodSwings\Repository\NotificationPreferenceRepository;
 use MoodSwings\Repository\OpenGameListingRepository;
@@ -995,6 +997,8 @@ if ($path === '/discord/hand-image' && $method === 'GET') {
 }
 $matchmaking = new MatchmakingService(new OpenGameListingRepository(), new UserRepository(), new FriendshipRepository(), $games);
 $weeklySealedPoolQueue = new WeeklySealedPoolQueueService($games);
+// League play (issue #171) -- see LeagueService's own docblock.
+$league = new LeagueService($games, new LeagueEventRepository(), new UserRepository(), new FriendshipRepository(), new UserDecklistRepository());
 // Issue #91 -- see TournamentMatchObserver's own docblock for why this
 // is a setter rather than a constructor dependency on $games.
 $tournaments = new TournamentService(new TournamentRepository(), new TournamentParticipantRepository(), new TournamentMatchRepository(), new TournamentBracketBuilder(), $games, new UserRepository(), new FriendshipRepository(), new TournamentPodRepository(), new BoosterPackBuilder(), new BoosterDraftPodBuilder(), new GridDraftPodBuilder(), $achievements);
@@ -1648,6 +1652,41 @@ if ($path === '/weekly-sealed-pool/standings' && $method === 'GET') {
         'status' => 'ok',
         'standings' => $periodicSealedPoolId !== null ? $games->weeklySealedPoolStandings($periodicSealedPoolId) : null,
     ]);
+}
+
+// League play (issue #171) -- see LeagueService's own docblock.
+if ($path === '/league' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    respond(200, ['status' => 'ok', ...$league->statusFor((int) $currentUser['id'])]);
+}
+
+// ?event=prior shows the most recently ended event's final standings instead
+// of the active event's live ones -- see LeagueService::leaderboard().
+if ($path === '/league/leaderboard' && $method === 'GET') {
+    requireAuth($auth);
+    respond(200, ['status' => 'ok', ...$league->leaderboard(($_GET['event'] ?? '') === 'prior')]);
+}
+
+if ($path === '/league/collection' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    respond(200, ['status' => 'ok', 'cards' => $league->collectionFor((int) $currentUser['id'])]);
+}
+
+if ($path === '/league/join' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+
+    try {
+        $result = $league->joinAndQueue((int) $currentUser['id']);
+        respond(200, ['status' => 'ok', ...$result]);
+    } catch (GameStateException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/league/queue/leave' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $league->leaveQueue((int) $currentUser['id']);
+    respond(200, ['status' => 'ok']);
 }
 
 // Issue #91: tournaments -- see TournamentService's own docblock.
