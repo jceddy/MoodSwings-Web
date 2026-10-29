@@ -7219,7 +7219,7 @@ final class GameService
 
                 try {
                     $this->boardStates->save($gameId, $state);
-                    $this->updateRoundTurnState($roundId, $gamePlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId(), $state, persistedPlayGrants: $state->allPlayGrantsForPersistence());
+                    $this->updateRoundTurnState($roundId, $gamePlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId(), $state, persistedPlayGrants: $state->allPlayGrantsForPersistence(), registerOccurrence: false);
                     $this->writePendingBatch($gameId, $roundId, $gamePlayerId, $playerChoices, $result->invocationChoices, $result);
                     $this->logEvent($gameId, $roundId, $gamePlayerId, 'pending_decision_created', $cardId, $this->withPlayedFrom($state, $cardId, $choices), $state);
 
@@ -10569,7 +10569,7 @@ final class GameService
                 // Already inside this method's own transaction, so this
                 // just writes rows -- no nested beginTransaction().
                 $this->boardStates->save($gameId, $state);
-                $this->updateRoundTurnState($roundId, $initiatingPlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId(), $state, persistedPlayGrants: $state->allPlayGrantsForPersistence());
+                $this->updateRoundTurnState($roundId, $initiatingPlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId(), $state->awardsExtraWinThisRound(), $state->awardsExtraWinSourceCardId(), $state->awardsExtraWinOwnerId(), $state, persistedPlayGrants: $state->allPlayGrantsForPersistence(), registerOccurrence: false);
                 $this->writePendingBatch($gameId, $roundId, $initiatingPlayerId, $topLevelChoices, $result->invocationChoices, $result);
                 $this->logEvent($gameId, $roundId, $initiatingPlayerId, 'pending_decision_created', $playedCardId, $this->withPlayedFrom($state, $playedCardId, []), $state);
 
@@ -22896,9 +22896,13 @@ final class GameService
      * site (a fresh turn/round's own newly COMPUTED grants, which have
      * no "already existed, might reactivate" history to preserve).
      *
+     * $registerOccurrence = false persists/restores the counters without
+     * counting this save as an occurrence -- see the comment at the register
+     * call below.
+     *
      * @return array{exactCount: int, chaosLoopAutoPass: bool}
      */
-    private function updateRoundTurnState(int $roundId, int $playerId, array $playGrants, bool $discardedThisRound, bool $skipScoringThisRound, ?int $skipScoringFirstPlayerId, ?int $skipScoringSourceCardId, ?int $skipScoringOwnerId, bool $awardsExtraWinThisRound, ?int $awardsExtraWinSourceCardId, ?int $awardsExtraWinOwnerId, BoardState $state, ?array $persistedPlayGrants = null): array
+    private function updateRoundTurnState(int $roundId, int $playerId, array $playGrants, bool $discardedThisRound, bool $skipScoringThisRound, ?int $skipScoringFirstPlayerId, ?int $skipScoringSourceCardId, ?int $skipScoringOwnerId, bool $awardsExtraWinThisRound, ?int $awardsExtraWinSourceCardId, ?int $awardsExtraWinOwnerId, BoardState $state, ?array $persistedPlayGrants = null, bool $registerOccurrence = true): array
     {
         $pdo = Connection::get();
 
@@ -22938,9 +22942,22 @@ final class GameService
             $chaosLoopState = $previousRow['chaos_loop_state'] !== null ? json_decode((string) $previousRow['chaos_loop_state'], true) : [];
             $state->restoreCoarseTurnStateSignatureCounts($chaosLoopState['coarseCounts'] ?? []);
         }
-        $occurrenceCount = $state->registerTurnStateOccurrence();
-        $coarseOccurrenceCount = $state->registerCoarseTurnStateOccurrence();
-        $chaosLoopAutoPass = $this->resolveChaosLoopShortcutOffer($state, $coarseOccurrenceCount);
+        // A play that merely pauses for a pending decision (Duplicity's
+        // "repeat again?" offer, an opponent's reveal/choice) hasn't
+        // finished resolving, so the board as of this save is a
+        // mid-play snapshot, not a recurrence of anything -- counting it
+        // made one play with N Duplicity repeats register N+1 times, so
+        // two repeats of a board-neutral trigger tripped the "same board
+        // state 3 times" warning. The play's own finishPlay() registers
+        // the one real occurrence once it fully resolves.
+        if ($registerOccurrence) {
+            $occurrenceCount = $state->registerTurnStateOccurrence();
+            $coarseOccurrenceCount = $state->registerCoarseTurnStateOccurrence();
+            $chaosLoopAutoPass = $this->resolveChaosLoopShortcutOffer($state, $coarseOccurrenceCount);
+        } else {
+            $occurrenceCount = $state->currentTurnStateOccurrenceCount();
+            $chaosLoopAutoPass = false;
+        }
 
         $stmt = $pdo->prepare(
             'UPDATE game_rounds SET current_turn_game_player_id = :player_id, plays_remaining = :plays_remaining, pending_play_grants = :pending_play_grants, loop_state_signature_counts = :loop_state_signature_counts, chaos_loop_state = :chaos_loop_state, discarded_this_round = :discarded_this_round, skip_scoring = :skip_scoring, skip_scoring_first_player_game_player_id = :skip_scoring_first_player_id, skip_scoring_source_card_id = :skip_scoring_source_card_id, skip_scoring_owner_game_player_id = :skip_scoring_owner_id, awards_extra_win = :awards_extra_win, awards_extra_win_source_card_id = :awards_extra_win_source_card_id, awards_extra_win_owner_game_player_id = :awards_extra_win_owner_id WHERE id = :round_id'

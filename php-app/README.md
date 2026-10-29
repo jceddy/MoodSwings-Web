@@ -12667,6 +12667,15 @@ notification also decides whether to reset this), carried forward
 untouched for a same-player continuation (an extra play, a Duplicity
 repeat).
 
+A play that merely *pauses* for a pending decision -- Duplicity's "repeat
+again?" offer, an opponent's reveal/choice -- is not a fully-resolved
+action: `playMood()`/`respondToDecision()` persist the counters through
+`updateRoundTurnState(..., registerOccurrence: false)` without counting that
+mid-play snapshot, and only the play's own `finishPlay()` registers its one
+occurrence. (Counting every pause made a single play with two Duplicity
+repeats of a board-neutral trigger register three times and trip the
+warning.)
+
 **Human-facing: warn, then auto-pass.** `GameService::finishPlay()`'s own
 "plays remaining, same player continues" branch reads the occurrence
 count `updateRoundTurnState()` returns: at 3 (two full repeats), nothing
