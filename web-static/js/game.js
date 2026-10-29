@@ -12954,15 +12954,24 @@
     // deck, then you draw a card") lets the player target themselves, which
     // is rarely what they want while an opponent has a card in hand to
     // target instead -- worth a "did you mean that?" prompt, same spirit as
-    // cardHasNoTargetSelected() above. Opponent means anyone who isn't the
-    // player or their teammate (teammate_game_player_id is undefined outside
-    // team format, so that comparison is a harmless no-op there).
+    // cardHasNoTargetSelected() above. Suspicion ("choose any number of
+    // players. Each chosen player discards a card") gets the same prompt when
+    // the ONLY player chosen is yourself (player_ids is a list there, so
+    // choosing yourself alongside someone else is fine). Opponent means anyone
+    // who isn't the player or their teammate (teammate_game_player_id is
+    // undefined outside team format, so that comparison is a harmless no-op
+    // there).
     function cardTargetsSelfWhileAnOpponentHasCards(card, choices) {
-        if (card.effect_key !== 'paranoia' || choices.target_player_id === undefined) {
+        let chosenPlayerIds;
+        if (card.effect_key === 'paranoia' && choices.target_player_id !== undefined) {
+            chosenPlayerIds = [Number(choices.target_player_id)];
+        } else if (card.effect_key === 'suspicion' && Array.isArray(choices.player_ids) && choices.player_ids.length > 0) {
+            chosenPlayerIds = choices.player_ids.map(Number);
+        } else {
             return false;
         }
         const you = currentState.you;
-        if (Number(choices.target_player_id) !== you.game_player_id) {
+        if (!chosenPlayerIds.every((id) => id === you.game_player_id)) {
             return false;
         }
         return currentState.players.some((p) => !p.resigned
