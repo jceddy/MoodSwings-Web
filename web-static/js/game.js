@@ -11090,8 +11090,9 @@
     // to edit -- whatever is not in the deck IS the sideboard -- so swapping is
     // only ever between the two. Selections are plain Map<card_id, copies> kept
     // across the 4-second polls' re-renders and re-seeded (from
-    // builder.default_deck_card_ids: last game's deck, or the granted starter
-    // deck) whenever a different game is shown.
+    // builder.default_deck_card_ids: last game's deck, else the previous match's
+    // final deck + sideboard, else the granted starter deck) whenever a different
+    // game is shown.
     let leagueBuilderSelection = new Map();
     let leagueBuilderSideboard = new Map();
     let leagueBuilderGameId = null;
@@ -11114,6 +11115,18 @@
             const inDeck = leagueBuilderSelection.get(cardId) || 0;
             if (inDeck < owned) {
                 leagueBuilderSelection.set(cardId, inDeck + 1);
+            }
+        }
+        // Game 1 only (builder.default_sideboard_card_ids is empty otherwise):
+        // the sideboard declared for game 1 of the previous match, clamped to the
+        // copies still free and to the sideboard limit.
+        let sideboardTotal = 0;
+        for (const cardId of builder.default_sideboard_card_ids || []) {
+            const owned = ownedByCardId.get(cardId) || 0;
+            const inSideboard = leagueBuilderSideboard.get(cardId) || 0;
+            if (sideboardTotal < builder.sideboard_max && (leagueBuilderSelection.get(cardId) || 0) + inSideboard < owned) {
+                leagueBuilderSideboard.set(cardId, inSideboard + 1);
+                sideboardTotal++;
             }
         }
     }
