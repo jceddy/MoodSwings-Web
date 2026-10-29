@@ -2722,6 +2722,75 @@ final class PuzzleContentTest extends TestCase
         $this->assertGameFailed($gameId);
     }
 
+    /**
+     * "Leap of Faith": the only winning line (exhaustive search of the real flow, every
+     * Conviction target and every choice of which play to spend) is Conviction on your
+     * own Hope, spending HOPE'S play on it -- so the normal play is left for the card
+     * you draw, Boredom: 2 + 4 = 6 against 5.
+     */
+    public function testLeapOfFaithSolvedByConvictionOnHopeUsingHopesPlayThenTheDrawnCard(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('leap-of-faith');
+        $hope = $this->instanceId($gameId, 124, 'in_play');
+
+        $afterConviction = $this->playDriven($gameId, $p, $this->instanceId($gameId, 6, 'hand'), [
+            'target_mood_id' => $hope,
+            'grant_source_card_id' => $hope,
+        ]);
+        self::assertFalse($afterConviction['game_completed'] ?? false, 'the normal play is still to come');
+
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 83, 'hand'));
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameSolved($gameId, $p);
+    }
+
+    /** The tempting line: Conviction on the opponent's Joy leaves 2 against 2 -- and the opponent drew the card. A tie goes to them. */
+    public function testLeapOfFaithConvictionOnTheOpponentsJoyTies(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('leap-of-faith');
+        $opp = $this->opponentGamePlayerId($gameId, $p);
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 6, 'hand'), [
+            'target_mood_id' => $this->ownedInstanceId($gameId, 125, 'in_play', $opp),
+            'grant_source_card_id' => $this->instanceId($gameId, 124, 'in_play'),
+        ]);
+        self::assertNull($this->ownedInstanceId($gameId, 83, 'hand', $p), 'the opponent drew Boredom, not you');
+        $this->games->pass($gameId, $p);
+
+        $this->assertGameFailed($gameId);
+    }
+
+    /** Spending the NORMAL play on Conviction and bottoming Hope loses Hope's play with it: Boredom is drawn but there is no play left for it, so the turn ends on its own, 2 against 5. */
+    public function testLeapOfFaithSpendingTheNormalPlayOnConvictionLosesHopesPlay(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('leap-of-faith');
+        $hope = $this->instanceId($gameId, 124, 'in_play');
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 6, 'hand'), [
+            'target_mood_id' => $hope,
+            'grant_source_card_id' => 0,
+        ]);
+
+        $this->assertGameFailed($gameId);
+    }
+
+    /** Conviction on itself draws Boredom but gives up its own 2: 4 against 5. */
+    public function testLeapOfFaithConvictionOnItselfLoses(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('leap-of-faith');
+        $conviction = $this->instanceId($gameId, 6, 'hand');
+
+        $this->playDriven($gameId, $p, $conviction, [
+            'target_mood_id' => $conviction,
+            'grant_source_card_id' => $this->instanceId($gameId, 124, 'in_play'),
+        ]);
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 83, 'hand'));
+        $this->games->advanceAutomatedTurns($gameId);
+
+        $this->assertGameFailed($gameId);
+    }
+
     /** The score each seat got in the most recently scored round of $gameId, keyed 'solver'/'opponent'. @return array{solver: int, opponent: int} */
     private function lastRoundScores(int $gameId, int $solverGamePlayerId): array
     {
