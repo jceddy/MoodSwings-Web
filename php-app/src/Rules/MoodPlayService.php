@@ -119,8 +119,8 @@ final class MoodPlayService
         // 'grant_source_card_id' (see GameService::grantChoiceOptions()) is
         // only ever offered/submitted when 2+ distinct grants would
         // actually work for this play, and is optional even then -- left
-        // unset, useGrantFor() falls back to its old "whichever comes
-        // first" behavior. Validated explicitly against usableGrants()
+        // unset, useGrantFor() spends the most restrictive usable
+        // grant. Validated explicitly against usableGrants()
         // (not just handed straight to useGrantFor()) so a stale or
         // fabricated preference (the one grant it names having since been
         // consumed or lost -- see BoardState::grantIsActive()) is rejected

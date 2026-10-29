@@ -4311,8 +4311,8 @@ button).
     returns `field.options` as-is. It's optional even when offered: like
     every other non-multi field, `buildFieldWidget()` auto-prepends a blank
     default option, and leaving it selected omits `grant_source_card_id`
-    from the submitted payload entirely, falling back to the server's old
-    "whichever grant comes first" behavior — no special-case JS needed for
+    from the submitted payload entirely, falling back to the server spending the
+    most restrictive usable grant — no special-case JS needed for
     that leave-it-blank path. That default option reads "(any)" rather than
     every other field's "(none)", the one place `buildFieldWidget()`
     special-cases the label by `field.type` — leaving this blank doesn't

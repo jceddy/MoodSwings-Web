@@ -896,7 +896,7 @@ final class DiscordGameCommandService
         // grant comes first" fallback (see its own docblock) since none
         // was named.
         $skipLabel = $field['type'] === 'grant_choice'
-            ? 'Skip -- use whichever grant comes first'
+            ? 'Skip -- use the most restrictive grant'
             : 'Skip -- play without this effect';
         array_unshift($options, ['label' => $skipLabel, 'value' => self::SKIP_FIELD_VALUE]);
 
