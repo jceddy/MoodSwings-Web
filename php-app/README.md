@@ -14344,6 +14344,20 @@ than a parallel bespoke system:
   (Fear and Superiority: 7-12). An exhaustive search through the real engine -- every
   Fear return -- found that one winning board and no ties.
 
+- **34th puzzle, "Leap of Faith"** (a Conviction/Hope puzzle: spend Hope's play on a
+  Conviction that bottoms Hope itself), medium, `win_game`, no new puzzle
+  infrastructure (Hope is seeded in play and named as `extra_play_source_card_id`, which
+  builds the real Hope grant -- lost if Hope leaves play before the play is used). Both
+  sides have two round wins and the opponent went first (a tie is theirs). The opponent
+  has Joy (3), Charity (1) and Courage (1): 5. You have Hope in play, hold Conviction, and
+  have two plays; Boredom (4, no ability) is on top of the deck. The one winning line:
+  Conviction on your own Hope, choosing Hope's play to spend on it, then Boredom with
+  your normal play: 2 + 4 = 6 against 5. Conviction on Joy leaves the opponent drawing
+  the card: 2-2, a tie; spending your normal play on Conviction and bottoming Hope loses
+  Hope's play with it (2-5); Conviction on itself throws away its own 2 (4-5). An
+  exhaustive search through the real engine -- every Conviction target and every choice
+  of which play to spend, passing included -- found that one winning board and that tie.
+
 ### Duel: separate per-player decks
 
 `format: 'duel'` and `format: 'draft'` (see "Draft format" below) are the
