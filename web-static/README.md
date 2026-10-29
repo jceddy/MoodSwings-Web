@@ -1319,7 +1319,10 @@ sideboard cards are declared (same pattern as the Deck Builder). From game 2 the
 pool is fixed (`builder.fixed_pool`) to the game-1 deck + sideboard: there is no
 separate sideboard to edit, whatever the deck leaves over is the sideboard, so
 swapping is only ever between the two. The selection starts from the previous
-game's deck (or the granted starter deck for game 1), and submits through the
+game's deck; on game 1 it starts from the deck and sideboard the player submitted
+for game 1 of their last League match (before any sideboarding) (`builder.default_deck_card_ids` /
+`default_sideboard_card_ids`), or the granted starter deck for a first-ever
+match, and submits through the
 ordinary `submitCustomDuelDeck()` endpoint, with a `Sideboard` section on game 1. See "League play" in `php-app/README.md`.
 
 ### Weekly Sealed Pool (issue #520)
@@ -4308,8 +4311,8 @@ button).
     returns `field.options` as-is. It's optional even when offered: like
     every other non-multi field, `buildFieldWidget()` auto-prepends a blank
     default option, and leaving it selected omits `grant_source_card_id`
-    from the submitted payload entirely, falling back to the server's old
-    "whichever grant comes first" behavior — no special-case JS needed for
+    from the submitted payload entirely, falling back to the server spending the
+    most restrictive usable grant — no special-case JS needed for
     that leave-it-blank path. That default option reads "(any)" rather than
     every other field's "(none)", the one place `buildFieldWidget()`
     special-cases the label by `field.type` — leaving this blank doesn't

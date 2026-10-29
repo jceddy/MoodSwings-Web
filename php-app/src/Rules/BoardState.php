@@ -2684,13 +2684,17 @@ final class BoardState
      * allowance, which has no 'sourceCardId' of its own -- see
      * usableGrants()) -- how a player picks which of 2+ usable grants to
      * spend when GameService's own 'grant_source_card_id' choice field
-     * offered one. Left null (the default), this behaves exactly as
-     * before: whichever usable grant happens to come first.
+     * offered one. Left null (the default -- the player didn't choose),
+     * the most restrictive usable grant is spent, so the broadest ones
+     * stay available for later plays -- see grantRestrictiveness() --
+     * with ties going to whichever comes first.
      *
      * @return ?array{type?: string, values?: int[], source?: string, onUseEffectState?: array<string, mixed>}
      */
     public function useGrantFor(int $cardId, int $playerId, ?int $preferredSourceCardId = null): ?array
     {
+        $chosenIndex = null;
+        $chosenRank = null;
         foreach ($this->playGrants as $index => $restriction) {
             if (!$this->grantIsActive($restriction)) {
                 continue;
@@ -2698,27 +2702,76 @@ final class BoardState
             if ($preferredSourceCardId !== null && ($restriction['sourceCardId'] ?? 0) !== $preferredSourceCardId) {
                 continue;
             }
-            if ($this->grantAllows($restriction, $cardId, $playerId)) {
-                // Pride's own grant ('requiresBehindPlayer') is never
-                // removed on use -- it isn't a one-shot extra play at all,
-                // but a standing permission that keeps re-qualifying itself
-                // (via grantIsActive()) for as long as the chosen player
-                // stays ahead, so it has to remain in $playGrants for the
-                // next play to find again.
-                if (!isset($restriction['requiresBehindPlayer'])) {
-                    unset($this->playGrants[$index]);
-                    $this->playGrants = array_values($this->playGrants);
-                }
-
-                if ($restriction !== null) {
-                    $this->pendingGrantUsed = $restriction;
-                }
-
-                return $restriction;
+            if (!$this->grantAllows($restriction, $cardId, $playerId)) {
+                continue;
+            }
+            if ($preferredSourceCardId !== null) {
+                $chosenIndex = $index;
+                break;
+            }
+            $rank = $this->grantRestrictiveness($restriction);
+            if ($chosenRank === null || $rank < $chosenRank) {
+                $chosenIndex = $index;
+                $chosenRank = $rank;
             }
         }
 
-        return null;
+        if ($chosenIndex === null) {
+            return null;
+        }
+
+        $restriction = $this->playGrants[$chosenIndex];
+
+        // Pride's own grant ('requiresBehindPlayer') is never
+        // removed on use -- it isn't a one-shot extra play at all,
+        // but a standing permission that keeps re-qualifying itself
+        // (via grantIsActive()) for as long as the chosen player
+        // stays ahead, so it has to remain in $playGrants for the
+        // next play to find again.
+        if (!isset($restriction['requiresBehindPlayer'])) {
+            unset($this->playGrants[$chosenIndex]);
+            $this->playGrants = array_values($this->playGrants);
+        }
+
+        if ($restriction !== null) {
+            $this->pendingGrantUsed = $restriction;
+        }
+
+        return $restriction;
+    }
+
+    /**
+     * How narrowly a grant restricts what it can be spent on, as a sortable
+     * tuple where SMALLER means MORE restrictive -- what useGrantFor() spends
+     * first when the player didn't pick a grant, so the broad ones are still
+     * there for plays the narrow ones can't cover. In order of weight:
+     * discard-sourced before hand-sourced; a specific-cards grant before a
+     * base-value one before a color one before no card restriction at all,
+     * fewer allowed cards/values first within a kind. Grants that restrict
+     * nothing about the card -- the base allowance, Charity's, Hope's and
+     * Grace's bonus, Pride's -- all tie, leaving the first in list order, so
+     * a board-conditional grant is never preferred or avoided just for
+     * being conditional (spending the base allowance first is what rulings
+     * like "sacrifice Hope to Infatuation as your first play" assume).
+     *
+     * @param ?array<string, mixed> $restriction
+     * @return int[]
+     */
+    private function grantRestrictiveness(?array $restriction): array
+    {
+        $type = $restriction['type'] ?? null;
+        $typeRank = match ($type) {
+            'specific_card_ids' => 0,
+            'base_value_in' => 1,
+            'shares_color_with_your_moods', 'does_not_share_color_with_your_moods' => 2,
+            default => 3,
+        };
+
+        return [
+            ($restriction['source'] ?? 'hand') === 'discard' ? 0 : 1,
+            $typeRank,
+            is_array($restriction['values'] ?? null) ? count($restriction['values']) : 0,
+        ];
     }
 
     /**

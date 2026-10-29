@@ -559,6 +559,44 @@ final class LeagueServiceIntegrationTest extends TestCase
         self::assertEqualsCanonicalizing([$r['mythic'][1], $r['common'][0], $r['common'][10]], $this->sideboardOf($game2, $alice));
     }
 
+    public function testTheNextMatchStartsFromTheDeckAndSideboardSubmittedForGameOneOfTheLastMatch(): void
+    {
+        ['alice' => $alice, 'bob' => $bob, 'gameId' => $gameId, 'byRarity' => $r, 'extraMythic' => $extraMythic] = $this->pairedGameWithAnExtraMythic();
+        $main = [...$r['mythic'], ...array_slice($r['common'], 0, 10)];
+        $this->submitCards($gameId, $alice, $main, [$extraMythic, $r['rare'][0], $r['common'][10]]);
+        $this->submitDeck($gameId, $bob, $this->grantedDeckId($bob));
+        $this->games->startGame($gameId);
+        $this->games->resignGame($gameId, $this->gamePlayerId($gameId, $alice));
+
+        $gameMatchId = (int) $this->pdo->query("SELECT game_match_id FROM games WHERE id = {$gameId}")->fetchColumn();
+        $game2 = (int) $this->pdo->query("SELECT id FROM games WHERE game_match_id = {$gameMatchId} AND match_game_number = 2")->fetchColumn();
+        $swapped = [$r['mythic'][0], $extraMythic, ...array_slice($r['common'], 1, 9), $r['rare'][0]];
+        $this->submitCards($game2, $alice, $swapped);
+
+        $this->pdo->exec("UPDATE game_matches SET status = 'completed', winner_user_id = {$bob}, completed_at = NOW() WHERE id = {$gameMatchId}");
+        $this->league->statusFor($alice);
+
+        // A new opponent, and so a new match: Alice starts from the deck and sideboard she submitted for game 1 of
+        // the last one -- before the game-2 swap -- instead of her original starter deck or game 2's deck.
+        $carol = $this->insertUser('carol');
+        $this->league->joinAndQueue($alice);
+        $nextGameId = (int) $this->league->joinAndQueue($carol)['game_id'];
+        self::assertNotSame($gameId, $nextGameId);
+
+        $builder = $this->games->getState($nextGameId, $alice)['league_deck_builder'];
+        self::assertFalse($builder['fixed_pool']);
+        self::assertEqualsCanonicalizing($main, $builder['default_deck_card_ids']);
+        self::assertEqualsCanonicalizing([$extraMythic, $r['rare'][0], $r['common'][10]], $builder['default_sideboard_card_ids']);
+
+        // A player's first-ever match still starts from the starter deck, with nothing to carry over.
+        $carolBuilder = $this->games->getState($nextGameId, $carol)['league_deck_builder'];
+        self::assertSame([], $carolBuilder['default_sideboard_card_ids']);
+        self::assertEqualsCanonicalizing(
+            array_map('intval', (array) json_decode((string) $this->pdo->query("SELECT granted_card_ids FROM league_participants WHERE user_id = {$carol}")->fetchColumn(), true)),
+            $carolBuilder['default_deck_card_ids'],
+        );
+    }
+
     private int $nextFakeGameMatchId = 9000;
 
     /** Records a finished (or otherwise-statused) League match directly, as syncMatches() would have left it. */

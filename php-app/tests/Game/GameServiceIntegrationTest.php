@@ -22519,7 +22519,7 @@ final class GameServiceIntegrationTest extends TestCase
         $fieldSelect = $playResponse['data']['components'][0]['components'][0];
         self::assertStringStartsWith("ms:playfield:{$gameId}:{$complacencyId}:0:", $fieldSelect['custom_id']);
         self::assertCount(3, $fieldSelect['options'], 'Skip + one option per usable grant');
-        self::assertSame(['label' => 'Skip -- use whichever grant comes first', 'value' => '__skip__'], $fieldSelect['options'][0]);
+        self::assertSame(['label' => 'Skip -- use the most restrictive grant', 'value' => '__skip__'], $fieldSelect['options'][0]);
         self::assertStringContainsString('Validation', $fieldSelect['options'][1]['label']);
         self::assertStringContainsString('Validation', $fieldSelect['options'][2]['label']);
         self::assertEqualsCanonicalizing([(string) $validation1, (string) $validation2], [$fieldSelect['options'][1]['value'], $fieldSelect['options'][2]['value']]);
