@@ -21348,7 +21348,7 @@ final class GameService
             // outstanding grants would each independently allow playing
             // this card (BoardState::usableGrants()), letting the player
             // pick which one to spend instead of always silently
-            // consuming whichever happens to come first. Prepended, not
+            // consuming the most restrictive one. Prepended, not
             // appended -- like Guile's/Regret's own mandatory discard
             // cost, this is resolved before the card's own after-playing
             // choices, not after them.

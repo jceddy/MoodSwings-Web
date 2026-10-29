@@ -12047,7 +12047,7 @@
             // every other optional field here: leaving it blank doesn't
             // mean "use no grant" (a play always uses one), just "no
             // preference which outstanding one" -- see MoodPlayService::
-            // playMood()'s own fallback to "whichever comes first" -- so
+            // playMood()'s own fallback to the most restrictive usable grant -- so
             // "(any)" says what actually happens, where "(none)" would
             // misleadingly suggest declining to use a grant at all.
             //
