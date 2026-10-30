@@ -2992,7 +2992,19 @@ namespace MoodSwings.UI
                 null);
         }
 
-        private Task SubmitDecision(ChoiceForm form) => SubmitDecision(form, () => _session.RespondAsync(form.BuildChoices()));
+        private async Task SubmitDecision(ChoiceForm form)
+        {
+            // Repeating Duplicity's mood gets the same "did you mean that?" questions as playing it did.
+            foreach (var question in form.Confirmations())
+            {
+                if (!await _confirm.AskAsync(question, "Repeat anyway", "Cancel"))
+                {
+                    return;
+                }
+            }
+
+            await SubmitDecision(form, () => _session.RespondAsync(form.BuildChoices()));
+        }
 
         private async Task SubmitDecision(ChoiceForm form, System.Func<Task<BoardActionResult>> send)
         {

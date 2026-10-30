@@ -342,7 +342,10 @@ under "Playing a game" below.
   are listed under their owner; every control is a tappable button, so nothing needs
   a drop-down or a modifier key. A legal play that would do nothing (an optional
   target left blank, Wrath's box unchecked) asks "Play anyway?" first. Creativity's
-  form takes on the questions of whichever mood it copies.
+  form takes on the questions of whichever mood it copies. Duplicity's repeat offer
+  gets the same questions about the repeated mood's choices (with "Repeat anyway?"),
+  but only when "Repeat again?" is ticked, and its choices start from the server's
+  defaults like the original play's.
 - **Starting.** A waiting game is started by the board once it can be: at once for
   an ordinary game, after everyone presses **I'm ready** in a synchronous one
   (whose header then shows the **action clock**, ticking every second).

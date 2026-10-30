@@ -810,6 +810,83 @@ namespace MoodSwings.Tests
         }
 
         [UnityTest]
+        public IEnumerator DecliningDuplicitysRepeat_NeverAsks()
+        {
+            var server = new PlayServer
+            {
+                State = Load(405, s =>
+                {
+                    var paranoia = ((JArray)s["in_play"]).Single(c => (int)c["card_id"] == 14134);
+                    paranoia["name"] = "Paranoia";
+                    paranoia["effect_key"] = "paranoia";
+                    s["round"]["pending_decision"] = JObject.Parse(@"{
+                        ""decision_type"": ""duplicity_repeat_offer"", ""is_you"": true, ""initiating_game_player_id"": 907,
+                        ""played_card_id"": 14134, ""played_card_name"": ""Duplicity"", ""target_game_player_id"": 907,
+                        ""field"": {""key"": ""duplicity_repeat"", ""type"": ""nested"", ""required"": false, ""label"": ""Repeat?"",
+                            ""fields"": [{""key"": ""repeat"", ""type"": ""bool"", ""required"": false, ""label"": ""Repeat again?""},
+                                         {""key"": ""choices"", ""type"": ""nested"", ""required"": false, ""label"": ""Its choices"",
+                                          ""fields"": [{""key"": ""target_player_id"", ""type"": ""player"", ""scope"": ""any"", ""required"": false,
+                                                        ""label"": ""Player"", ""default"": 907}]}]}}");
+                }),
+            };
+            server.OnPost = (path, body) =>
+            {
+                server.State = Load(405, s => s["round"]["pending_decision"] = null);
+                return null;
+            };
+            yield return OpenBoard(server, 405);
+
+            // The server's default (yourself) is already selected; declining the repeat sends it without a question.
+            yield return Submit();
+            Assert.IsFalse(Board().Confirm.IsOpen, "not repeating, nothing to confirm");
+            Assert.AreEqual(1, server.Posts("/games/respond").Count());
+        }
+
+        [UnityTest]
+        public IEnumerator RepeatingDuplicitysMood_AtYourself_WhileAnOpponentHasCards_Asks()
+        {
+            var server = new PlayServer
+            {
+                State = Load(405, s =>
+                {
+                    var paranoia = ((JArray)s["in_play"]).Single(c => (int)c["card_id"] == 14134);
+                    paranoia["name"] = "Paranoia";
+                    paranoia["effect_key"] = "paranoia";
+                    s["round"]["pending_decision"] = JObject.Parse(@"{
+                        ""decision_type"": ""duplicity_repeat_offer"", ""is_you"": true, ""initiating_game_player_id"": 907,
+                        ""played_card_id"": 14134, ""played_card_name"": ""Duplicity"", ""target_game_player_id"": 907,
+                        ""field"": {""key"": ""duplicity_repeat"", ""type"": ""nested"", ""required"": false, ""label"": ""Repeat?"",
+                            ""fields"": [{""key"": ""repeat"", ""type"": ""bool"", ""required"": false, ""label"": ""Repeat again?""},
+                                         {""key"": ""choices"", ""type"": ""nested"", ""required"": false, ""label"": ""Its choices"",
+                                          ""fields"": [{""key"": ""target_player_id"", ""type"": ""player"", ""scope"": ""any"", ""required"": false,
+                                                        ""label"": ""Player"", ""default"": 907}]}]}}");
+                }),
+            };
+            server.OnPost = (path, body) =>
+            {
+                server.State = Load(405, s => s["round"]["pending_decision"] = null);
+                return null;
+            };
+            yield return OpenBoard(server, 405);
+
+            Board().Choices.Form.SetChecked("duplicity_repeat.repeat", true);
+            yield return Submit();
+
+            Assert.IsTrue(Board().Confirm.IsOpen);
+            StringAssert.Contains("chosen yourself as Paranoia's target for the repeat", Board().Confirm.MessageText);
+            Assert.AreEqual(0, server.Posts("/games/respond").Count());
+
+            yield return Tap(PhaseTwoSceneTests.FindButton("Cancel"));
+            Assert.IsTrue(Board().Choices.IsOpen, "you're back in the form");
+
+            yield return Submit();
+            yield return Tap(PhaseTwoSceneTests.FindButton("Repeat anyway"));
+            var choices = server.Posts("/games/respond").Single()["choices"]["duplicity_repeat"];
+            Assert.IsTrue((bool)choices["repeat"]);
+            Assert.AreEqual(907, (int)choices["choices"]["target_player_id"]);
+        }
+
+        [UnityTest]
         public IEnumerator ACardWithATargetList_GroupsMoodsByOwner()
         {
             var server = new PlayServer
