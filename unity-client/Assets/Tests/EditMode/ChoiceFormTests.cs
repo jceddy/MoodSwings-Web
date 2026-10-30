@@ -131,6 +131,76 @@ namespace MoodSwings.Tests
             Assert.AreEqual(20, (int)choices["duplicity_repeat"]["choices"]["target_mood_id"]);
         }
 
+        // A Duplicity repeat offer for an in-play mood with the given effect key, whose nested choices are <choiceFields>.
+        private static ChoiceForm RepeatOffer(string effectKey, string name, string choiceFields)
+        {
+            var state = Table();
+            var played = state.InPlay.First(c => c.CardId == 10);
+            played.Name = name;
+            played.EffectKey = effectKey;
+            return ChoiceForm.ForDecision(state, new PendingDecision
+            {
+                DecisionType = "duplicity_repeat_offer",
+                IsYou = true,
+                PlayedCardId = 10,
+                Field = Field(@"{""key"":""duplicity_repeat"",""type"":""nested"",""required"":false,""label"":""Repeat?"",
+                    ""fields"":[{""key"":""repeat"",""type"":""bool"",""label"":""Repeat again?""},
+                                {""key"":""choices"",""type"":""nested"",""label"":""Its choices"",""fields"":[" + choiceFields + "]}]}"),
+            });
+        }
+
+        [Test]
+        public void DuplicityRepeat_DeclinedOrUnticked_NeverAsks()
+        {
+            var form = RepeatOffer("paranoia", "Paranoia",
+                @"{""key"":""target_player_id"",""type"":""player"",""scope"":""any"",""required"":false,""label"":""x""}");
+
+            Assert.AreEqual(0, form.Confirmations().Count, "declining sends nothing");
+
+            form.Select("duplicity_repeat.choices.target_player_id", Me.ToString());
+            Assert.AreEqual(0, form.Confirmations().Count, "a target without 'Repeat again?' ticked is not a repeat");
+        }
+
+        [Test]
+        public void DuplicityRepeat_AsksTheSameQuestionsAsThePlay_WithRepeatWording()
+        {
+            var self = RepeatOffer("paranoia", "Paranoia",
+                @"{""key"":""target_player_id"",""type"":""player"",""scope"":""any"",""required"":false,""label"":""x""}");
+            self.SetChecked("duplicity_repeat.repeat", true);
+            self.Select("duplicity_repeat.choices.target_player_id", Me.ToString());
+            Assert.AreEqual(
+                "You've chosen yourself as Paranoia's target for the repeat, but an opponent has cards in hand. Repeat it anyway?",
+                self.Confirmations().Single());
+
+            self.Select("duplicity_repeat.choices.target_player_id", Bo.ToString());
+            Assert.AreEqual(0, self.Confirmations().Count, "aimed at an opponent");
+
+            var none = RepeatOffer("anger", "Anger",
+                @"{""key"":""target_mood_id"",""type"":""mood"",""scope"":""any"",""required"":false,""label"":""x""}");
+            none.SetChecked("duplicity_repeat.repeat", true);
+            Assert.AreEqual(
+                "You haven't selected a target for the repeat of Anger -- its ability won't do anything. Repeat it anyway?",
+                none.Confirmations().Single());
+
+            var wrath = RepeatOffer("wrath", "Wrath",
+                @"{""key"":""discard_all_other_moods"",""type"":""bool"",""required"":false,""label"":""Discard every other mood""}");
+            wrath.SetChecked("duplicity_repeat.repeat", true);
+            Assert.AreEqual(
+                "You haven't checked \"Discard every other mood\" -- the repeat of Wrath's ability won't do anything. Repeat it anyway?",
+                wrath.Confirmations().Single());
+            wrath.SetChecked("duplicity_repeat.choices.discard_all_other_moods", true);
+            Assert.AreEqual(0, wrath.Confirmations().Count);
+
+            var mode = RepeatOffer("contempt", "Contempt",
+                @"{""key"":""target_mood_id"",""type"":""mood"",""scope"":""any"",""required"":false,""requires_mode"":""discard"",""label"":""x""},"
+                + @"{""key"":""mode"",""type"":""mode"",""options"":[""discard"",""other""],""required"":false,""label"":""Mode""}");
+            mode.SetChecked("duplicity_repeat.repeat", true);
+            mode.Select("duplicity_repeat.choices.target_mood_id", "20");
+            Assert.AreEqual(
+                "You've chosen a target for the repeat of Contempt, but haven't chosen a mode -- as submitted, its ability won't do anything. Repeat it anyway?",
+                mode.Confirmations().Single());
+        }
+
         [Test]
         public void ARealCard_ThatIsntPlayableYet_SaysSo()
         {
