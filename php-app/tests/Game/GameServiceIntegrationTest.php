@@ -16448,6 +16448,39 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * Duplicity's repeat offer carries the repeated card's own fields in a
+     * nested 'choices' sub-form; default selections mode pre-fills those the
+     * same way it does for the original play (here Wonder's required color),
+     * and the offer is left bare with the mode off.
+     */
+    public function testDefaultSelectionsModePreFillsTheRepeatedCardsFieldsInDuplicitysRepeatOffer(): void
+    {
+        foreach ([true, false] as $defaultSelectionsMode) {
+            $suffix = $defaultSelectionsMode ? 'on' : 'off';
+            $u1 = $this->insertUser("dsdup1{$suffix}");
+            $u2 = $this->insertUser("dsdup2{$suffix}");
+            $gameId = $this->insertGameRow('standard', 2, $u1, defaultSelectionsMode: $defaultSelectionsMode);
+            $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+            $this->insertGamePlayer($gameId, $u2, 1);
+            $this->insertGameCard($gameId, 37, 'in_play', $p1); // Duplicity
+            $wonderId = $this->insertGameCard($gameId, 133, 'hand', $p1); // Wonder -- required color choice
+            $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+            $playResult = $this->games->playMood($gameId, $p1, $wonderId, ['color' => 'blue']);
+            self::assertTrue($playResult['pending_decision'] ?? false);
+
+            $field = $this->games->getState($gameId, $u1)['round']['pending_decision']['field'];
+            $choicesField = self::findFieldByKey($field['fields'], 'choices');
+            $colorField = self::findFieldByKey($choicesField['fields'], 'color');
+            if ($defaultSelectionsMode) {
+                self::assertSame('white', $colorField['default']);
+            } else {
+                self::assertArrayNotHasKey('default', $colorField);
+            }
+        }
+    }
+
+    /**
      * Dignity's own optional discard-to-boost (required: false) -- the
      * issue's own example of a field whose "reasonable default" is simply
      * not using the optional effect at all. No `default` key at all
@@ -22519,7 +22552,7 @@ final class GameServiceIntegrationTest extends TestCase
         $fieldSelect = $playResponse['data']['components'][0]['components'][0];
         self::assertStringStartsWith("ms:playfield:{$gameId}:{$complacencyId}:0:", $fieldSelect['custom_id']);
         self::assertCount(3, $fieldSelect['options'], 'Skip + one option per usable grant');
-        self::assertSame(['label' => 'Skip -- use whichever grant comes first', 'value' => '__skip__'], $fieldSelect['options'][0]);
+        self::assertSame(['label' => 'Skip -- use the most restrictive grant', 'value' => '__skip__'], $fieldSelect['options'][0]);
         self::assertStringContainsString('Validation', $fieldSelect['options'][1]['label']);
         self::assertStringContainsString('Validation', $fieldSelect['options'][2]['label']);
         self::assertEqualsCanonicalizing([(string) $validation1, (string) $validation2], [$fieldSelect['options'][1]['value'], $fieldSelect['options'][2]['value']]);

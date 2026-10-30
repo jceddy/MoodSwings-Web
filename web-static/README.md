@@ -4199,6 +4199,11 @@ button).
     hand is empty. Suspicion (whose `player_ids` is a list) gets the same
     prompt when yourself is the *only* player ticked -- choosing yourself
     alongside an opponent doesn't prompt.
+    Duplicity's repeat offer gets all of the prompts in this list too
+    (`confirmDuplicityRepeatChoices()`, run by the Respond button): when
+    "Repeat again?" is ticked, the repeated mood's nested `choices` sub-form is
+    checked exactly like the original play's, with "Repeat it anyway?" wording;
+    declining never prompts.
     Clicking Play on a card whose entire `choice_fields` is a single
     optional target left blank -- Anger, Hate, Denial, Shock, Creativity
     with no copy target, etc., `cardHasNoTargetSelected()` -- interrupts
@@ -4311,8 +4316,8 @@ button).
     returns `field.options` as-is. It's optional even when offered: like
     every other non-multi field, `buildFieldWidget()` auto-prepends a blank
     default option, and leaving it selected omits `grant_source_card_id`
-    from the submitted payload entirely, falling back to the server's old
-    "whichever grant comes first" behavior — no special-case JS needed for
+    from the submitted payload entirely, falling back to the server spending the
+    most restrictive usable grant — no special-case JS needed for
     that leave-it-blank path. That default option reads "(any)" rather than
     every other field's "(none)", the one place `buildFieldWidget()`
     special-cases the label by `field.type` — leaving this blank doesn't

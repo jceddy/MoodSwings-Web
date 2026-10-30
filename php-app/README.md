@@ -1786,14 +1786,24 @@ option's label and its `source_card_id` (`0` standing in for the base
 allowance, which has none of its own) as the option's value -- so "An
 extra play from Hope" never needs to be written twice. Submitting
 `grant_source_card_id` is optional even when the field is offered (left
-absent, `MoodPlayService::playMood()` falls back to the old "whichever
-comes first" behavior via `useGrantFor()`'s new optional
-`$preferredSourceCardId` parameter) but, if given, is validated against
+absent, `MoodPlayService::playMood()` has `useGrantFor()` spend the *most
+restrictive* usable grant -- see below) but, if given, is validated against
 `usableGrants()` before being honored -- a stale or fabricated preference
 (naming a grant that's since been consumed or lost) throws
 `InvalidChoiceException` rather than silently falling through to spend
 some *other* grant the player never chose, which would otherwise corrupt
-`playsRemaining()` in a way that's hard to notice after the fact. That
+`playsRemaining()` in a way that's hard to notice after the fact. When the player gives no `grant_source_card_id`, `BoardState::useGrantFor()`
+spends the most restrictive usable grant rather than the first in
+`$playGrants`' order, so the broad grants stay available for plays the narrow
+ones can't cover (`BoardState::grantRestrictiveness()`): a discard-sourced
+grant before a hand-sourced one, then a specific-cards grant (Intimidation)
+before a base-value one (Generosity/Joy-style) before a color-sharing one
+before a grant with no card restriction, fewer allowed cards/values first
+within a kind. Unrestricted grants -- the base allowance, Charity's, Hope's,
+Grace's, Pride's -- all tie and keep list order, so a board-conditional grant is
+neither favored nor avoided just for being conditional (e.g. sacrificing Hope to
+Infatuation as your first play still spends the base allowance).
+That
 exception's message names both cards involved (e.g. "Grant sourced from
 Hope is not currently usable for playing Complacency") rather than their
 opaque in-game ids -- `MoodPlayService::playMood()` takes an optional
@@ -8328,10 +8338,10 @@ naming the source card and any restriction, via
 class has to look up and label itself, so `fieldOptions()`'s own
 `grant_choice` branch just reads them straight through. Optional like
 every other field here, but with its own Skip wording ("Skip -- use
-whichever grant comes first," not the generic "play without this
+the most restrictive grant," not the generic "play without this
 effect") since skipping it doesn't decline anything -- the play still
 happens, using `MoodPlayService::playMood()`'s own already-existing
-"whichever comes first" fallback when no `grant_source_card_id` is
+most-restrictive-grant fallback when no `grant_source_card_id` is
 given. Counts against the same `MAX_CHOICE_FIELDS` total as a card's own
 fields (see that constant's own docblock) -- 3, so even a card with 2 of
 its own (Faith, Guile, Regret, ...) stays playable when 2+ distinguishable
@@ -9222,7 +9232,12 @@ field an Effect class produces -- the latter needs no per-Effect-class
 code at all, since `PendingDecisionRequest::$field` already shares the
 exact same shape `CardChoiceSchema` fields do and is rendered by the same
 frontend `buildFieldRow()`/`buildFieldWidget()` code (`game.js`) either
-way. The policy is deliberately mechanical -- derived from a field's own
+way. Duplicity's repeat offer is a `nested` field, so `withChoiceDefault()`
+alone never reaches the repeated card's own fields inside its `choices`
+sub-form; `serializePendingDecision()` additionally runs
+`withDuplicityRepeatChoiceDefaults()` over them, keyed by the repeated card's
+*effective* effect key (a Creativity copy repeats the copied card), so a
+repeat gets the same pre-fills the original play did. The policy is deliberately mechanical -- derived from a field's own
 `required`/`type`, not a hand-classification of every individual field --
 and deliberately conservative about what counts as "safe":
 

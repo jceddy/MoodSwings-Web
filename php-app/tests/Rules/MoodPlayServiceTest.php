@@ -4276,6 +4276,42 @@ final class MoodPlayServiceTest extends TestCase
     }
 
     /**
+     * With no 'grant_source_card_id' given, the most restrictive usable grant
+     * is spent -- here the base-value-restricted extra play, which only
+     * covers the vanilla 4s -- so the unrestricted base allowance is still
+     * there for a card that grant can't cover, even though it comes first.
+     */
+    public function testPlayMoodWithNoGrantChoiceSpendsTheMostRestrictiveUsableGrant(): void
+    {
+        $state = $this->boardState(hands: [1 => [5, 3]]); // Complacency (base value 4), Charity (base value 1)
+        $state->startTurn(1);
+        $state->grantExtraPlay(1, ['type' => 'base_value_in', 'values' => [4]], sourceCardId: 999);
+
+        self::assertSame(2, $state->playsRemaining());
+
+        $this->plays->playMood($state, 1, 5, new PlayerChoices([]));
+
+        self::assertTrue($state->isInPlay(5));
+        self::assertSame(1, $state->playsRemaining());
+        self::assertTrue($state->hasUsablePlayGrant(3, 1), 'the base allowance must still be unspent for a card the restricted grant could not have covered');
+    }
+
+    /** Narrower kinds of restriction go first: a specific-card grant before a base-value one before the base allowance. */
+    public function testMostRestrictiveGrantRankingPrefersSpecificCardsThenBaseValuesThenUnrestricted(): void
+    {
+        $state = $this->boardState(hands: [1 => [5, 30]]); // Complacency (value 4), Bashfulness (value 6)
+        $state->startTurn(1);
+        $state->grantExtraPlay(1, ['type' => 'base_value_in', 'values' => [4, 6]], sourceCardId: 998);
+        $state->grantExtraPlay(1, ['type' => 'specific_card_ids', 'values' => [5]], sourceCardId: 999);
+
+        $this->plays->playMood($state, 1, 5, new PlayerChoices([]));
+
+        // The specific-card grant (999) was spent: the base-value one (998) and the base allowance both remain for card 30.
+        $remaining = array_map(static fn (?array $g) => $g['sourceCardId'] ?? 0, $state->usableGrants(30, 1));
+        self::assertSame([0, 998], $remaining);
+    }
+
+    /**
      * A stale/fabricated 'grant_source_card_id' (naming a grant that isn't
      * actually usable for this play) must be rejected outright, not
      * silently fall back to consuming whichever grant happens to come

@@ -12047,7 +12047,7 @@
             // every other optional field here: leaving it blank doesn't
             // mean "use no grant" (a play always uses one), just "no
             // preference which outstanding one" -- see MoodPlayService::
-            // playMood()'s own fallback to "whichever comes first" -- so
+            // playMood()'s own fallback to the most restrictive usable grant -- so
             // "(any)" says what actually happens, where "(none)" would
             // misleadingly suggest declining to use a grant at all.
             //
@@ -12788,6 +12788,9 @@
         boardMessage.hidden = true;
 
         const choices = buildChoicesFromFields([activePendingDecision.field]);
+        if (!(await confirmDuplicityRepeatChoices(activePendingDecision, choices))) {
+            return;
+        }
         const { ok, body } = await respondToDecision(currentGameId, choices);
 
         if (!ok) {
@@ -12991,6 +12994,51 @@
             && p.game_player_id !== you.game_player_id
             && p.game_player_id !== you.teammate_game_player_id
             && p.hand_count > 0);
+    }
+
+    // Duplicity's repeat offer gets the same "did you mean that?" prompts the
+    // original play did (self-targeting while an opponent has cards, nothing
+    // targeted, an unchecked Wrath/Rage box, a target without its mode), but
+    // only when the player is actually repeating -- declining is always fine.
+    // The repeated card is the played mood (its effect_key is already the
+    // copied card's for a Creativity copy) with the offer's own nested
+    // 'choices' sub-form as its choice_fields. Resolves false if the player
+    // backs out of any prompt.
+    async function confirmDuplicityRepeatChoices(pendingDecision, answer) {
+        if (pendingDecision.decision_type !== 'duplicity_repeat_offer') {
+            return true;
+        }
+        const offer = answer[pendingDecision.field.key];
+        if (!offer || !offer.repeat) {
+            return true;
+        }
+        const choicesField = pendingDecision.field.fields.find((f) => f.key === 'choices');
+        const playedCard = currentState.in_play.find((c) => c.card_id === pendingDecision.played_card_id);
+        if (!choicesField || !playedCard) {
+            return true;
+        }
+        const card = { name: playedCard.name, effect_key: playedCard.effect_key, choice_fields: choicesField.fields };
+        const repeatChoices = offer.choices || {};
+        const prompts = [];
+        if (cardTargetsSelfWhileAnOpponentHasCards(card, repeatChoices)) {
+            prompts.push(`You've chosen yourself as ${card.name}'s target for the repeat, but an opponent has cards in hand. Repeat it anyway?`);
+        }
+        if (cardHasNoTargetSelected(card, repeatChoices)) {
+            prompts.push(`You haven't selected a target for the repeat of ${card.name} -- its ability won't do anything. Repeat it anyway?`);
+        }
+        if (cardHasAnUncheckedConfirmBox(card, repeatChoices)) {
+            const field = card.choice_fields.find((f) => f.key === UNCHECKED_BOX_CONFIRM_FIELD_KEYS[card.effect_key]);
+            prompts.push(`You haven't checked "${field.label}" -- the repeat of ${card.name}'s ability won't do anything. Repeat it anyway?`);
+        }
+        if (cardHasATargetWithoutItsRequiredMode(card, repeatChoices)) {
+            prompts.push(`You've chosen a target for the repeat of ${card.name}, but haven't chosen a mode -- as submitted, its ability won't do anything. Repeat it anyway?`);
+        }
+        for (const prompt of prompts) {
+            if (!(await showConfirmDialog(prompt))) {
+                return false;
+            }
+        }
+        return true;
     }
 
     document.getElementById('play-card-button').addEventListener('click', async () => {

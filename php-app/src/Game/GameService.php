@@ -21348,7 +21348,7 @@ final class GameService
             // outstanding grants would each independently allow playing
             // this card (BoardState::usableGrants()), letting the player
             // pick which one to spend instead of always silently
-            // consuming whichever happens to come first. Prepended, not
+            // consuming the most restrictive one. Prepended, not
             // appended -- like Guile's/Regret's own mandatory discard
             // cost, this is resolved before the card's own after-playing
             // choices, not after them.
@@ -21510,6 +21510,36 @@ final class GameService
         }
 
         return [...$field, 'default' => $options[0]];
+    }
+
+    /**
+     * "Default selections" mode for Duplicity's repeat offer: the offer is one
+     * nested field whose 'choices' sub-form holds the repeated card's own
+     * after-playing fields (see MoodPlayService::duplicityRepeatOfferRequest()),
+     * which withChoiceDefault() never reaches since it only looks at a field's
+     * own top level. Applies the same policy to each of those fields as the
+     * original play got, keyed by the repeated card's EFFECTIVE effect key (a
+     * Creativity copy repeats the copied card's effect, not Creativity's).
+     *
+     * @param array<string, mixed> $field
+     * @return array<string, mixed>
+     */
+    private function withDuplicityRepeatChoiceDefaults(BoardState $state, array $field, int $playedCardId, int $ownerId): array
+    {
+        $effectKey = $state->catalogRow($state->effectiveCardId($playedCardId))['effectKey'] ?? '';
+        $field['fields'] = array_map(function (array $subField) use ($state, $effectKey, $ownerId): array {
+            if (($subField['key'] ?? null) !== 'choices' || ($subField['type'] ?? null) !== 'nested') {
+                return $subField;
+            }
+            $subField['fields'] = array_map(
+                fn (array $choiceField) => $this->withChoiceDefault($state, $choiceField, $effectKey, $ownerId),
+                $subField['fields'],
+            );
+
+            return $subField;
+        }, $field['fields']);
+
+        return $field;
     }
 
     /**
@@ -23336,6 +23366,9 @@ final class GameService
                     ? ($state->chaosEffectRow($playedCardId)['effectKey'] ?? '')
                     : ($state->catalogRow($playedCardId)['effectKey'] ?? '');
                 $field = $this->withChoiceDefault($state, $field, $effectKey, $targetGamePlayerId);
+                if ($decisionRow['decision_type'] === 'duplicity_repeat_offer') {
+                    $field = $this->withDuplicityRepeatChoiceDefaults($state, $field, $playedCardId, $targetGamePlayerId);
+                }
             }
             $result['field'] = $field;
         }
