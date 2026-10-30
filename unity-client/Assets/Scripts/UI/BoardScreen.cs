@@ -3196,6 +3196,7 @@ namespace MoodSwings.UI
                 context.Add($"{initiator.Username} played {decision.PlayedCardName}.");
             }
 
+            context.AddRange(BoardDisplay.DisillusionmentPickLines(state, decision));
             context.AddRange(BoardDisplay.ScoringPreviewLines(state));
 
             _decisionKey = key;
