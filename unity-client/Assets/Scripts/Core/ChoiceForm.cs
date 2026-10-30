@@ -702,15 +702,16 @@ namespace MoodSwings.Core
         }
 
         /// <summary>
-        /// Questions to put to the player before playing, for answers that are legal but
-        /// would make the card do nothing -- almost always a missed click. Each is a
-        /// yes/no question; ask them in order and don't play unless every one is yes.
+        /// Questions to put to the player before playing (or before repeating, for Duplicity's offer), for answers that are legal
+        /// but would make the card do nothing -- almost always a missed click. Each is a yes/no question; ask them in order and
+        /// don't go ahead unless every one is yes.
         /// </summary>
         public IReadOnlyList<string> Confirmations()
         {
             var questions = new List<string>();
             if (!_playing)
             {
+                AddRepeatConfirmations(questions);
                 return questions;
             }
 
@@ -721,17 +722,57 @@ namespace MoodSwings.Core
             var effectKey = copied != null ? copied.EffectKey : _card.EffectKey;
             var name = copied != null ? $"{_card.Name} (copying {copied.Name})" : _card.Name;
             var fields = _creativityPicker != null ? _fields.Where(f => f.Key != "copy_card_id").ToList() : _fields;
+            AddWarnings(questions, choices, effectKey, name, fields, repeat: false);
+            return questions;
+        }
 
-            // Paranoia aimed at yourself while an opponent has a card in hand to be aimed at instead. (Like the web board, only
-            // Paranoia itself: a Creativity copying it is not asked.) An opponent is anyone who is neither you nor your teammate.
-            if (_card.EffectKey == "paranoia" && choices.TryGetValue("target_player_id", out var target)
-                && (int)target == _state.You.GamePlayerId
+        /// <summary>
+        /// Duplicity's repeat offer gets the same questions as the original play, about the repeated mood's own nested choices,
+        /// but only when "Repeat again?" is ticked: declining is always fine.
+        /// </summary>
+        private void AddRepeatConfirmations(List<string> questions)
+        {
+            if (_card == null || string.IsNullOrEmpty(_card.Name) || _fields.Count != 1 || _fields[0].Type != "nested")
+            {
+                return;
+            }
+
+            var offer = BuildChoices()[_fields[0].Key] as JObject;
+            if (offer == null || offer["repeat"] == null)
+            {
+                return;
+            }
+
+            var choicesField = (_fields[0].Fields ?? new List<ChoiceField>()).FirstOrDefault(f => f.Key == "choices");
+            if (choicesField == null)
+            {
+                return;
+            }
+
+            AddWarnings(questions, offer["choices"] as JObject ?? new JObject(), _card.EffectKey, _card.Name,
+                choicesField.Fields ?? new List<ChoiceField>(), repeat: true);
+        }
+
+        private void AddWarnings(List<string> questions, JObject choices, string effectKey, string name, IReadOnlyList<ChoiceField> fields, bool repeat)
+        {
+            var again = repeat ? "Repeat it anyway?" : "Play it anyway?";
+
+            // Paranoia aimed at yourself, or Suspicion with yourself the only player ticked (choosing yourself alongside someone
+            // else is fine), while an opponent has a card in hand to be aimed at instead. (Like the web board, only these cards
+            // themselves: a Creativity copying one is not asked.) An opponent is anyone who is neither you nor your teammate.
+            var chosenPlayers = _card.EffectKey == "paranoia" && choices.TryGetValue("target_player_id", out var target)
+                ? new List<int> { (int)target }
+                : _card.EffectKey == "suspicion" && choices.TryGetValue("player_ids", out var ticked) && ticked is JArray tickedIds
+                    ? tickedIds.Select(id => (int)id).ToList()
+                    : new List<int>();
+            if (chosenPlayers.Count > 0
+                && chosenPlayers.All(id => id == _state.You.GamePlayerId)
                 && _state.Players.Any(p => !p.Resigned
                     && p.GamePlayerId != _state.You.GamePlayerId
                     && p.GamePlayerId != _state.You.TeammateGamePlayerId
                     && p.HandCount > 0))
             {
-                questions.Add($"You've chosen yourself as {_card.Name}'s target, but an opponent has cards in hand. Play it anyway?");
+                questions.Add($"You've chosen yourself as {_card.Name}'s target{(repeat ? " for the repeat" : string.Empty)}, but an opponent has cards in hand. {again}");
             }
 
             // A card whose only question is an optional "pick one" and nothing was picked.
@@ -741,7 +782,7 @@ namespace MoodSwings.Core
                 var pickType = only.Type == "mood" || only.Type == "player" || only.Type == "hand_card" || only.Type == "discard_card";
                 if (!only.Required && pickType && !choices.ContainsKey(only.Key))
                 {
-                    questions.Add($"You haven't selected a target for {name} -- its ability won't do anything. Play it anyway?");
+                    questions.Add($"You haven't selected a target for {(repeat ? "the repeat of " : string.Empty)}{name} -- its ability won't do anything. {again}");
                 }
             }
 
@@ -754,17 +795,15 @@ namespace MoodSwings.Core
                 var box = fields.FirstOrDefault(f => f.Key == boxKey);
                 if (box != null)
                 {
-                    questions.Add($"You haven't checked \"{box.Label}\" -- {name}'s ability won't do anything. Play it anyway?");
+                    questions.Add($"You haven't checked \"{box.Label}\" -- {(repeat ? "the repeat of " : string.Empty)}{name}'s ability won't do anything. {again}");
                 }
             }
 
             // A target chosen for a card that does nothing without its mode.
             if (fields.Any(f => f.RequiresMode != null && choices.ContainsKey(f.Key)) && !choices.ContainsKey("mode"))
             {
-                questions.Add($"You've chosen a target for {name}, but haven't chosen a mode -- as submitted, its ability won't do anything. Play it anyway?");
+                questions.Add($"You've chosen a target for {(repeat ? "the repeat of " : string.Empty)}{name}, but haven't chosen a mode -- as submitted, its ability won't do anything. {again}");
             }
-
-            return questions;
         }
     }
 }

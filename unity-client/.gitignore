@@ -77,3 +77,4 @@ crashlytics-build.properties
 
 # Gradle's cache, created inside the plugin folder by an Android build
 /Assets/Plugins/Android/MoodPush.androidlib/.gradle/
+__pycache__/

@@ -86,6 +86,22 @@ namespace MoodSwings.Tests
             /// <summary>POST /weekly-sealed-pool/queue answers with this.</summary>
             public string WeeklyJoinJson = "{\"status\":\"waiting\"}";
 
+            /// <summary>GET /league answers with this (no event running by default).</summary>
+            public string LeagueStatusJson = "{\"status\":\"ok\",\"event\":null,\"joined\":false,\"queued\":false,\"in_progress_count\":0,\"concurrent_match_cap\":2,\"wins\":0,\"losses\":0,\"matches\":[],"
+                + "\"collection\":{\"unique_cards\":0,\"total_cards\":0},\"deck_rules\":{\"min_cards\":12,\"max_mythics\":2,\"max_rares\":6}}";
+
+            /// <summary>GET /league/leaderboard answers with this for the running event...</summary>
+            public string LeagueLeaderboardJson = "{\"status\":\"ok\",\"event\":null,\"standings\":[]}";
+
+            /// <summary>... and with this for the previous one (?event=prior).</summary>
+            public string LeaguePriorLeaderboardJson = "{\"status\":\"ok\",\"event\":null,\"standings\":[]}";
+
+            /// <summary>GET /league/collection answers with this.</summary>
+            public string LeagueCollectionJson = "{\"status\":\"ok\",\"cards\":[]}";
+
+            /// <summary>POST /league/join answers with this.</summary>
+            public string LeagueJoinJson = "{\"status\":\"waiting\"}";
+
             /// <summary>GET /notifications/preferences answers with this; a POST there is echoed back as the saved set.</summary>
             public string NotificationPreferencesJson = "{\"status\":\"ok\",\"preferences\":{\"notify_your_turn\":true,\"notify_friend_request\":true,\"notify_game_finished\":false,\"notify_chat_message\":true,\"notify_timeout_warning\":true,\"notify_achievement_unlocked\":true,\"disable_cooldown\":false}}";
 
@@ -166,6 +182,21 @@ namespace MoodSwings.Tests
                 if (path == "/discord/status")
                 {
                     return MainSceneTests.Reply(200, DiscordStatusJson);
+                }
+
+                if (path.StartsWith("/league"))
+                {
+                    if (request.Method == "POST")
+                    {
+                        return MainSceneTests.Reply(LeagueJoinJson.Contains("\"error\"") ? 400 : 200, path.EndsWith("/leave") ? "{\"status\":\"ok\"}" : LeagueJoinJson);
+                    }
+
+                    if (path.StartsWith("/league/leaderboard"))
+                    {
+                        return MainSceneTests.Reply(200, path.Contains("event=prior") ? LeaguePriorLeaderboardJson : LeagueLeaderboardJson);
+                    }
+
+                    return MainSceneTests.Reply(200, path.StartsWith("/league/collection") ? LeagueCollectionJson : LeagueStatusJson);
                 }
 
                 if (path.StartsWith("/weekly-sealed-pool"))
@@ -498,6 +529,22 @@ namespace MoodSwings.Tests
         }
 
         [UnityTest]
+        public IEnumerator TheCardInThePlayForm_KeepsItsSize_WhateverTheLengthOfTheRulesText()
+        {
+            var longRules = string.Join(" ", Enumerable.Repeat("While in play, this mood's value is twelve if there's a mood of every color.", 8));
+            var server = new PlayServer { State = Load(406, s => s["you"]["hand"][0]["rules_text"] = longRules) };
+            yield return OpenBoard(server, 406);
+
+            yield return TapHandCard("Superiority");
+            yield return null;
+            yield return null;
+
+            var card = (RectTransform)Child("Prompt card");
+            Assert.AreEqual(380f, card.rect.width, 1f, "the text wraps; it does not take the card's room");
+            Assert.AreEqual(CardView.HeightFor(380f), card.rect.height, 1f);
+        }
+
+        [UnityTest]
         public IEnumerator PlayingACardWithNoChoices_SendsItAndMovesTheGameOn()
         {
             var server = new PlayServer { State = Load(406) };
@@ -724,6 +771,119 @@ namespace MoodSwings.Tests
             yield return Submit();
             yield return Tap(PhaseTwoSceneTests.FindButton("Play anyway"));
             Assert.AreEqual(1, server.Posts("/games/play").Count());
+        }
+
+        [UnityTest]
+        public IEnumerator SuspicionAimedOnlyAtYourself_WhileAnOpponentHasCards_AsksFirst()
+        {
+            var server = new PlayServer
+            {
+                State = Load(406, s =>
+                {
+                    var card = s["you"]["hand"][0];
+                    card["effect_key"] = "suspicion";
+                    card["choice_fields"] = JArray.Parse(
+                        "[{\"key\":\"player_ids\",\"type\":\"player\",\"scope\":\"any\",\"multi\":true,\"required\":false,\"label\":\"Players\"}]");
+                }),
+            };
+            server.OnPost = (path, body) =>
+            {
+                server.State = AfterPlaying(14171);
+                return null;
+            };
+            yield return OpenBoard(server, 406);
+
+            yield return TapHandCard("Superiority");
+            yield return Tap(Option("bshaftoe"));
+            yield return Submit();
+
+            Assert.IsTrue(Board().Confirm.IsOpen);
+            StringAssert.Contains("chosen yourself", Board().Confirm.MessageText);
+            Assert.AreEqual(0, server.Posts("/games/play").Count());
+
+            yield return Tap(PhaseTwoSceneTests.FindButton("Cancel"));
+            Assert.IsTrue(Board().Choices.IsOpen, "you're back in the form");
+
+            yield return Submit();
+            yield return Tap(PhaseTwoSceneTests.FindButton("Play anyway"));
+            Assert.AreEqual(1, server.Posts("/games/play").Count());
+        }
+
+        [UnityTest]
+        public IEnumerator DecliningDuplicitysRepeat_NeverAsks()
+        {
+            var server = new PlayServer
+            {
+                State = Load(405, s =>
+                {
+                    var paranoia = ((JArray)s["in_play"]).Single(c => (int)c["card_id"] == 14134);
+                    paranoia["name"] = "Paranoia";
+                    paranoia["effect_key"] = "paranoia";
+                    s["round"]["pending_decision"] = JObject.Parse(@"{
+                        ""decision_type"": ""duplicity_repeat_offer"", ""is_you"": true, ""initiating_game_player_id"": 907,
+                        ""played_card_id"": 14134, ""played_card_name"": ""Duplicity"", ""target_game_player_id"": 907,
+                        ""field"": {""key"": ""duplicity_repeat"", ""type"": ""nested"", ""required"": false, ""label"": ""Repeat?"",
+                            ""fields"": [{""key"": ""repeat"", ""type"": ""bool"", ""required"": false, ""label"": ""Repeat again?""},
+                                         {""key"": ""choices"", ""type"": ""nested"", ""required"": false, ""label"": ""Its choices"",
+                                          ""fields"": [{""key"": ""target_player_id"", ""type"": ""player"", ""scope"": ""any"", ""required"": false,
+                                                        ""label"": ""Player"", ""default"": 907}]}]}}");
+                }),
+            };
+            server.OnPost = (path, body) =>
+            {
+                server.State = Load(405, s => s["round"]["pending_decision"] = null);
+                return null;
+            };
+            yield return OpenBoard(server, 405);
+
+            // The server's default (yourself) is already selected; declining the repeat sends it without a question.
+            yield return Submit();
+            Assert.IsFalse(Board().Confirm.IsOpen, "not repeating, nothing to confirm");
+            Assert.AreEqual(1, server.Posts("/games/respond").Count());
+        }
+
+        [UnityTest]
+        public IEnumerator RepeatingDuplicitysMood_AtYourself_WhileAnOpponentHasCards_Asks()
+        {
+            var server = new PlayServer
+            {
+                State = Load(405, s =>
+                {
+                    var paranoia = ((JArray)s["in_play"]).Single(c => (int)c["card_id"] == 14134);
+                    paranoia["name"] = "Paranoia";
+                    paranoia["effect_key"] = "paranoia";
+                    s["round"]["pending_decision"] = JObject.Parse(@"{
+                        ""decision_type"": ""duplicity_repeat_offer"", ""is_you"": true, ""initiating_game_player_id"": 907,
+                        ""played_card_id"": 14134, ""played_card_name"": ""Duplicity"", ""target_game_player_id"": 907,
+                        ""field"": {""key"": ""duplicity_repeat"", ""type"": ""nested"", ""required"": false, ""label"": ""Repeat?"",
+                            ""fields"": [{""key"": ""repeat"", ""type"": ""bool"", ""required"": false, ""label"": ""Repeat again?""},
+                                         {""key"": ""choices"", ""type"": ""nested"", ""required"": false, ""label"": ""Its choices"",
+                                          ""fields"": [{""key"": ""target_player_id"", ""type"": ""player"", ""scope"": ""any"", ""required"": false,
+                                                        ""label"": ""Player"", ""default"": 907}]}]}}");
+                }),
+            };
+            server.OnPost = (path, body) =>
+            {
+                server.State = Load(405, s => s["round"]["pending_decision"] = null);
+                return null;
+            };
+            yield return OpenBoard(server, 405);
+
+            Board().Choices.Form.SetChecked("duplicity_repeat.repeat", true);
+            yield return Submit();
+
+            Assert.IsTrue(Board().Confirm.IsOpen);
+            StringAssert.Contains("chosen yourself as Paranoia's target for the repeat", Board().Confirm.MessageText);
+            Assert.AreEqual(0, server.Posts("/games/respond").Count());
+
+            yield return Tap(PhaseTwoSceneTests.FindButton("Cancel"));
+            Assert.IsTrue(Board().Choices.IsOpen, "you're back in the form");
+
+            yield return Submit();
+            yield return Tap(PhaseTwoSceneTests.FindButton("Repeat anyway"));
+            var choices = server.Posts("/games/respond").Single()["choices"]["duplicity_repeat"];
+            Assert.IsTrue((bool)choices["repeat"]);
+            Assert.AreEqual(907, (int)choices["choices"]["target_player_id"]);
         }
 
         [UnityTest]

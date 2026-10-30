@@ -415,7 +415,7 @@ namespace MoodSwings.UI
 
         public override bool HandleBack()
         {
-            if (_confirm.Dismiss() || _shortcutOverlay.Dismiss() || _chaosOverlay.Back() || _discardOverlay.Dismiss() || _deckList.Dismiss())
+            if (_confirm.Dismiss() || _shortcutOverlay.Dismiss() || _chaosOverlay.Back() || _discardOverlay.Dismiss() || _deckList.Dismiss() || _draft.DismissPopup())
             {
                 return true;
             }
@@ -2992,7 +2992,19 @@ namespace MoodSwings.UI
                 null);
         }
 
-        private Task SubmitDecision(ChoiceForm form) => SubmitDecision(form, () => _session.RespondAsync(form.BuildChoices()));
+        private async Task SubmitDecision(ChoiceForm form)
+        {
+            // Repeating Duplicity's mood gets the same "did you mean that?" questions as playing it did.
+            foreach (var question in form.Confirmations())
+            {
+                if (!await _confirm.AskAsync(question, "Repeat anyway", "Cancel"))
+                {
+                    return;
+                }
+            }
+
+            await SubmitDecision(form, () => _session.RespondAsync(form.BuildChoices()));
+        }
 
         private async Task SubmitDecision(ChoiceForm form, System.Func<Task<BoardActionResult>> send)
         {
@@ -3196,6 +3208,7 @@ namespace MoodSwings.UI
                 context.Add($"{initiator.Username} played {decision.PlayedCardName}.");
             }
 
+            context.AddRange(BoardDisplay.DisillusionmentPickLines(state, decision));
             context.AddRange(BoardDisplay.ScoringPreviewLines(state));
 
             _decisionKey = key;

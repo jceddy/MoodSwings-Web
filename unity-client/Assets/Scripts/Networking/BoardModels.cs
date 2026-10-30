@@ -89,6 +89,10 @@ namespace MoodSwings.Networking
         [JsonProperty("value_locked")]
         public bool ValueLocked { get; set; }
 
+        /// <summary>A League collection or deck-builder card only: how many copies the player has of it. Zero everywhere else.</summary>
+        [JsonProperty("copies")]
+        public int Copies { get; set; }
+
         /// <summary>
         /// In play: a "while in play" mood is worth its alternate value right now, because its own condition holds ("While in
         /// play, this mood's value is 6 if ..."). The server's own flag, so it follows the board and goes false when the condition
@@ -470,6 +474,10 @@ namespace MoodSwings.Networking
         [JsonProperty("is_tournament_match")]
         public bool IsTournamentMatch { get; set; }
 
+        /// <summary>A game in a League match: the opponent came from the queue and is never played twice in an event, so there is no rematch.</summary>
+        [JsonProperty("is_league_match")]
+        public bool IsLeagueMatch { get; set; }
+
         [JsonProperty("default_selections_mode")]
         public bool DefaultSelectionsMode { get; set; }
 
@@ -627,6 +635,10 @@ namespace MoodSwings.Networking
         /// <summary>The deck you played last game, to start from when sideboarding.</summary>
         [JsonProperty("power_duel_previous_deck_card_ids")]
         public List<int> PowerDuelPreviousDeckCardIds { get; set; }
+
+        /// <summary>A League game that is waiting on your deck: what you may build it from. Null otherwise.</summary>
+        [JsonProperty("league_deck_builder")]
+        public LeagueDeckBuilder LeagueDeckBuilder { get; set; }
 
         /// <summary>Game 2 or 3 of a match: who goes first is still being decided. Null otherwise.</summary>
         [JsonProperty("first_player_decision")]

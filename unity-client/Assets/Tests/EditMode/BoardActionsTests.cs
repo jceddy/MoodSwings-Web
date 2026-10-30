@@ -223,6 +223,31 @@ namespace MoodSwings.Tests
         }
 
         [Test]
+        public void Disillusionment_ShowsTheColorsEarlierPlayersAlreadyChose_OldestFirst()
+        {
+            var state = BoardFixtures.Load(405);
+            state.RecentEvents = new List<BoardEvent>
+            {
+                new BoardEvent { Id = 14, Description = "Cy declined to choose a color for Disillusionment" },
+                new BoardEvent { Id = 13, Description = "BotSage chose red for Disillusionment" },
+                new BoardEvent { Id = 12, Description = "bshaftoe played Disillusionment, waiting on a response" },
+                new BoardEvent { Id = 11, Description = "BotSage chose blue for Disillusionment" }, // from an earlier play
+            };
+            var decision = new PendingDecision { DecisionType = "disillusionment_choose_color", PlayedCardName = "Disillusionment" };
+
+            Assert.AreEqual(
+                new[] { "BotSage chose red for Disillusionment", "Cy declined to choose a color for Disillusionment" },
+                BoardDisplay.DisillusionmentPickLines(state, decision).ToArray());
+
+            state.RecentEvents.RemoveRange(0, 2);
+            Assert.IsEmpty(BoardDisplay.DisillusionmentPickLines(state, decision), "nobody has answered yet");
+
+            decision.DecisionType = "fury_discard_mood";
+            state.RecentEvents.Insert(0, new BoardEvent { Id = 13, Description = "BotSage chose red for Disillusionment" });
+            Assert.IsEmpty(BoardDisplay.DisillusionmentPickLines(state, decision), "only Disillusionment's own decision");
+        }
+
+        [Test]
         public void EffectLines_JoinBoardAndScoringEffects()
         {
             var state = BoardFixtures.Load(405);

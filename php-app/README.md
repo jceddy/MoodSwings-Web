@@ -9232,7 +9232,12 @@ field an Effect class produces -- the latter needs no per-Effect-class
 code at all, since `PendingDecisionRequest::$field` already shares the
 exact same shape `CardChoiceSchema` fields do and is rendered by the same
 frontend `buildFieldRow()`/`buildFieldWidget()` code (`game.js`) either
-way. The policy is deliberately mechanical -- derived from a field's own
+way. Duplicity's repeat offer is a `nested` field, so `withChoiceDefault()`
+alone never reaches the repeated card's own fields inside its `choices`
+sub-form; `serializePendingDecision()` additionally runs
+`withDuplicityRepeatChoiceDefaults()` over them, keyed by the repeated card's
+*effective* effect key (a Creativity copy repeats the copied card), so a
+repeat gets the same pre-fills the original play did. The policy is deliberately mechanical -- derived from a field's own
 `required`/`type`, not a hand-classification of every individual field --
 and deliberately conservative about what counts as "safe":
 

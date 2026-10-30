@@ -4199,6 +4199,11 @@ button).
     hand is empty. Suspicion (whose `player_ids` is a list) gets the same
     prompt when yourself is the *only* player ticked -- choosing yourself
     alongside an opponent doesn't prompt.
+    Duplicity's repeat offer gets all of the prompts in this list too
+    (`confirmDuplicityRepeatChoices()`, run by the Respond button): when
+    "Repeat again?" is ticked, the repeated mood's nested `choices` sub-form is
+    checked exactly like the original play's, with "Repeat it anyway?" wording;
+    declining never prompts.
     Clicking Play on a card whose entire `choice_fields` is a single
     optional target left blank -- Anger, Hate, Denial, Shock, Creativity
     with no copy target, etc., `cardHasNoTargetSelected()` -- interrupts

@@ -32,6 +32,8 @@ namespace MoodSwings.Core
 
         public static WeeklySealedFlow WeeklySealed { get; private set; }
 
+        public static LeagueFlow League { get; private set; }
+
         public static NotificationsFlow Notifications { get; private set; }
 
         /// <summary>This device's push token, registered with the server for whoever is signed in.</summary>
@@ -118,6 +120,7 @@ namespace MoodSwings.Core
             Stats.Clear();
             Tournaments.Clear();
             WeeklySealed.Clear();
+            League.Clear();
             Notifications.Clear();
             Push.Clear();
         }
@@ -142,6 +145,7 @@ namespace MoodSwings.Core
             Stats = new StatsFlow(api, Device);
             Tournaments = new TournamentFlow(api);
             WeeklySealed = new WeeklySealedFlow(api);
+            League = new LeagueFlow(api);
             Notifications = new NotificationsFlow(api);
             Push = new PushFlow(api, pushProvider ?? PushProviders.ForThisPlatform(), Device, preferences ?? new InMemoryKeyValueStore());
             if (Theme == null)

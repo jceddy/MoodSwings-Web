@@ -972,7 +972,7 @@ namespace MoodSwings.Tests
         private const string DuelRulesJson =
             "{\"preset\":\"power\",\"min_cards\":3,\"rarity_limits\":{\"mythic\":1,\"rare\":2},\"duplicate_limits\":{\"common\":2},\"even_color_distribution_rarities\":[]}";
 
-        private static JObject DuelWaiting(bool youSubmitted = false, bool otherSubmitted = false, System.Action<JObject> edit = null) =>
+        internal static JObject DuelWaiting(bool youSubmitted = false, bool otherSubmitted = false, System.Action<JObject> edit = null) =>
             PhaseFiveSceneTests.Load(405, s =>
             {
                 s["round"]["pending_decision"] = null;
