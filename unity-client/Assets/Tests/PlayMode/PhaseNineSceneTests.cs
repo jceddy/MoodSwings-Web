@@ -1921,6 +1921,27 @@ namespace MoodSwings.Tests
             StringAssert.Contains("to Bliss", PhaseFiveSceneTests.Board().DetailText);
         }
 
+        [UnityTest]
+        public IEnumerator AWonderInPlay_NamesTheColorsChosenForIt_WhenClicked()
+        {
+            var server = Serve();
+            server.State = Quiet(405, s =>
+            {
+                var card = s["in_play"][0];
+                card["effect_key"] = "wonder";
+                card["name"] = "Wonder";
+                card["wonder_colors"] = new Newtonsoft.Json.Linq.JArray("red", "blue");
+            });
+            yield return PhaseFiveSceneTests.OpenBoard(server, 405);
+
+            PhaseFiveSceneTests.Child("Card Wonder").GetComponent<UnityEngine.UI.Button>().onClick.Invoke();
+            yield return PhaseTwoSceneTests.Frames();
+
+            StringAssert.Contains("Chosen colors: ", PhaseFiveSceneTests.Board().DetailText);
+            StringAssert.Contains(">red</color></b>, ", PhaseFiveSceneTests.Board().DetailText);
+            StringAssert.Contains(">blue</color>", PhaseFiveSceneTests.Board().DetailText);
+        }
+
         private static UnityEngine.UI.Slider SliderNamed(string name) =>
             Object.FindObjectsByType<UnityEngine.UI.Slider>(FindObjectsInactive.Exclude).FirstOrDefault(x => x.name == name);
 

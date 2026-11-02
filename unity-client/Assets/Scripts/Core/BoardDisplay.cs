@@ -888,6 +888,22 @@ namespace MoodSwings.Core
         }
 
         /// <summary>
+        /// "Chosen color: red" ("Chosen colors: red, blue" once Duplicity has repeated the choice), for a Wonder in play; null for
+        /// any other card, or before it has one. The word for each color is given by <paramref name="colorWord"/> so the caller
+        /// can color it.
+        /// </summary>
+        public static string WonderNote(BoardCard card, Func<string, string> colorWord = null)
+        {
+            if (card == null || card.EffectKey != "wonder" || card.WonderColors == null || card.WonderColors.Count == 0)
+            {
+                return null;
+            }
+
+            var words = card.WonderColors.Select(c => c.ToLowerInvariant()).Select(w => colorWord != null ? colorWord(w) : w);
+            return (card.WonderColors.Count > 1 ? "Chosen colors: " : "Chosen color: ") + string.Join(", ", words);
+        }
+
+        /// <summary>
         /// "A copy made by Creativity" for a mood that is Creativity in play as another mood (it shows as the mood it
         /// copies, so nothing else says so); null for any other card.
         /// </summary>

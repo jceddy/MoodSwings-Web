@@ -486,6 +486,20 @@ namespace MoodSwings.Tests
         }
 
         [Test]
+        public void AWonderInPlay_NamesTheColorsChosenForIt()
+        {
+            var wonder = new BoardCard { Name = "Wonder", EffectKey = "wonder", WonderColors = new List<string> { "Red" } };
+
+            Assert.AreEqual("Chosen color: red", BoardDisplay.WonderNote(wonder));
+            wonder.WonderColors.Add("blue");
+            Assert.AreEqual("Chosen colors: red, blue", BoardDisplay.WonderNote(wonder), "Duplicity repeated the choice");
+            Assert.AreEqual("Chosen colors: [red], [blue]", BoardDisplay.WonderNote(wonder, word => "[" + word + "]"));
+            Assert.IsNull(BoardDisplay.WonderNote(new BoardCard { Name = "Wonder", EffectKey = "wonder", WonderColors = new List<string>() }), "none chosen yet");
+            Assert.IsNull(BoardDisplay.WonderNote(new BoardCard { Name = "Wonder", EffectKey = "wonder" }), "none sent");
+            Assert.IsNull(BoardDisplay.WonderNote(new BoardCard { Name = "Fury", EffectKey = "fury", WonderColors = new List<string> { "red" } }), "only Wonder");
+        }
+
+        [Test]
         public void TheBanner_WhenYouHaveSeveralPlaysLeft()
         {
             var state = BoardFixtures.Load(406);
