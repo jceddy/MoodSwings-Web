@@ -2791,6 +2791,70 @@ final class PuzzleContentTest extends TestCase
         $this->assertGameFailed($gameId);
     }
 
+    /**
+     * "Eager Beaver": the only winning line (exhaustive search of the engine, every
+     * choice and order) is Rage -- sweeping Tranquility -- then Eagerness, then Enjoyment
+     * with Eagerness's color-restricted play: 2 + 2 + 3 = 7 against Bashfulness's 6.
+     */
+    public function testEagerBeaverSolvedByRageThenEagernessThenEnjoyment(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('eager-beaver');
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 98, 'hand'), ['discard_qualifying_moods' => true]);
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 114, 'hand'));
+        $result = $this->playDriven($gameId, $p, $this->instanceId($gameId, 115, 'hand'));
+
+        self::assertTrue($result['game_completed']);
+        $this->assertGameSolved($gameId, $p);
+    }
+
+    /** Eagerness before Rage: Rage then discards Eagerness itself, so green Enjoyment shares a color with nothing -- no play left for it. */
+    public function testEagerBeaverEagernessBeforeRageStrandsEnjoyment(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('eager-beaver');
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 114, 'hand'));
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 98, 'hand'), ['discard_qualifying_moods' => true]);
+
+        $this->expectException(IllegalPlayException::class);
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 115, 'hand'));
+    }
+
+    /** The tempting third play: Indifference is a 4, but it is blue and the only color in play is Eagerness's green. */
+    public function testEagerBeaverIndifferenceDoesNotShareAColorWithEagerness(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('eager-beaver');
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 98, 'hand'), ['discard_qualifying_moods' => true]);
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 114, 'hand'));
+
+        $this->expectException(IllegalPlayException::class);
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 44, 'hand'));
+    }
+
+    /** Spending a play on Indifference and leaving Tranquility alone is 9 against 9 -- a tie, which goes to the opponent. */
+    public function testEagerBeaverIndifferenceThenEagernessThenEnjoymentTies(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('eager-beaver');
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 44, 'hand'));
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 114, 'hand'));
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 115, 'hand'));
+
+        $this->assertGameFailed($gameId);
+    }
+
+    /** Rage then Indifference alone: 2 + 4 = 6 against Bashfulness's 6, a tie. */
+    public function testEagerBeaverRageThenIndifferenceTies(): void
+    {
+        ['gameId' => $gameId, 'gamePlayerId' => $p] = $this->attempt('eager-beaver');
+
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 98, 'hand'), ['discard_qualifying_moods' => true]);
+        $this->playDriven($gameId, $p, $this->instanceId($gameId, 44, 'hand'));
+
+        $this->assertGameFailed($gameId);
+    }
+
     /** The score each seat got in the most recently scored round of $gameId, keyed 'solver'/'opponent'. @return array{solver: int, opponent: int} */
     private function lastRoundScores(int $gameId, int $solverGamePlayerId): array
     {
