@@ -106,6 +106,10 @@ namespace MoodSwings.Networking
         [JsonProperty("bliss_discard_color")]
         public string BlissDiscardColor { get; set; }
 
+        /// <summary>In play, Wonder only: the colors chosen for it (more than one when Duplicity repeated the choice); empty or null otherwise.</summary>
+        [JsonProperty("wonder_colors")]
+        public List<string> WonderColors { get; set; }
+
         /// <summary>In play only: the mood whose ability is changing which value this one has (the dice value).</summary>
         [JsonProperty("boosted_by_card_id")]
         public int? BoostedByCardId { get; set; }

@@ -14385,6 +14385,21 @@ than a parallel bespoke system:
   exhaustive search through the real engine -- every Conviction target and every choice
   of which play to spend, passing included -- found that one winning board and that tie.
 
+- **35th puzzle, "Eager Beaver"** (an Eagerness/Rage puzzle: Eagerness's extra play is
+  only usable on a card sharing a color with one of your moods, checked when you play
+  it), medium, `win_game`, no new puzzle infrastructure (Joy in the discard pile is
+  named as `extra_play_source_card_id`, a plain banked play). Both sides have two round
+  wins and the opponent went first (a tie is theirs). The opponent has Tranquility (3)
+  and Bashfulness (6): 9. You have nothing in play, hold Eagerness, Indifference, Rage
+  and Enjoyment, and have two plays. The one winning line: Rage (discarding every other
+  mood worth 3 or less -- Tranquility), then Eagerness, then Enjoyment with Eagerness's
+  play: 2 + 2 + 3 = 7 against 6. Eagerness before Rage lets Rage discard your own
+  Eagerness, so green Enjoyment shares a color with nothing (2-6, no legal play);
+  Indifference is blue, so Eagerness's green can't cover it (an illegal play); Indifference,
+  Eagerness, Enjoyment is 9-9 and Rage then Indifference is 6-6, both ties. An
+  exhaustive search through the engine -- every choice and order, passing included --
+  found that one winning board among 42 lines.
+
 ### Duel: separate per-player decks
 
 `format: 'duel'` and `format: 'draft'` (see "Draft format" below) are the
