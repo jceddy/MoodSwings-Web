@@ -734,8 +734,12 @@ final class TournamentService implements TournamentMatchObserver
     private function startBoosterDraftPods(int $tournamentId, array $participantIds): void
     {
         $cardIdsByRarity = ['mythic' => [], 'rare' => [], 'uncommon' => [], 'common' => []];
+        // Tournaments never choose a card set, so boosters draw from the original set only (custom sets' cards stay out).
+        $originalSetCardIds = array_flip(CardCatalog::cardIdsInSets([CardCatalog::ORIGINAL_SET_CODE]));
         foreach (CardCatalog::load()['rowsById'] as $cardId => $row) {
-            $cardIdsByRarity[$row['rarity']][] = $cardId;
+            if (isset($originalSetCardIds[$cardId])) {
+                $cardIdsByRarity[$row['rarity']][] = $cardId;
+            }
         }
 
         shuffle($participantIds);

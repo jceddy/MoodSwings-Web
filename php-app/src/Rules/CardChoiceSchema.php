@@ -398,6 +398,53 @@ final class CardChoiceSchema
         'awe' => [
             ['key' => 'target_player_id', 'type' => 'player', 'scope' => 'any', 'required' => true, 'label' => 'Player who goes first next round'],
         ],
+        // Community set "Emotional Baggage" (XEMB)
+        'belligerence' => [
+            ['key' => 'discard_qualifying_moods', 'type' => 'bool', 'required' => false, 'label' => "Put all of your opponents' moods valued 2 or less into the discard pile"],
+        ],
+        'chagrin' => [
+            ['key' => 'return_qualifying_moods', 'type' => 'bool', 'required' => false, 'label' => "Put all other moods valued 4 or more into their players' hands"],
+        ],
+        'atonement' => [
+            ['key' => 'color', 'type' => 'mode', 'required' => true, 'options' => self::FIVE_COLORS, 'label' => 'Color whose other moods go into the discard pile'],
+        ],
+        'intuition' => [
+            ['key' => 'value', 'type' => 'value', 'required' => true, 'min' => 0, 'max' => 12, 'label' => 'Printed number whose other moods go into the discard pile'],
+        ],
+        'impartiality' => [
+            ['key' => 'parity', 'type' => 'mode', 'required' => true, 'options' => ['odd', 'even'], 'label' => 'Suppress other moods with odd or even printed numbers until the end of the round'],
+        ],
+        'reminiscence' => [
+            ['key' => 'discard_card_id', 'type' => 'discard_card', 'required' => false, 'label' => 'Discard-pile card to put on the bottom of the deck (then draw a card)'],
+        ],
+        'remorse' => [
+            ['key' => 'discard_card_id', 'type' => 'discard_card', 'required' => false, 'label' => 'Discard-pile card to put on the bottom of the deck (then draw a card)'],
+        ],
+        'levity' => [
+            ['key' => 'bottom_deck_self', 'type' => 'bool', 'required' => false, 'label' => 'Put this mood on the bottom of the deck and draw a card'],
+        ],
+        'distrust' => [
+            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'any', 'required' => false, 'label' => "Red or green mood to put into its player's hand (needs two or more red and/or green moods)", 'filter' => ['colors' => ['red', 'green']]],
+        ],
+        'disdain' => [
+            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'any', 'required' => false, 'label' => 'White or green mood to put into the discard pile (needs two or more white and/or green moods)', 'filter' => ['colors' => ['white', 'green']]],
+        ],
+        'indignation' => [
+            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'any', 'required' => false, 'label' => 'White or blue mood valued 4 or less to put into the discard pile (needs two or more white and/or blue moods)', 'filter' => ['colors' => ['white', 'blue'], 'max_value' => 4]],
+        ],
+        'vigilance' => [
+            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'any', 'required' => false, 'label' => 'Black or red mood to suppress while you have this mood (needs two or more black and/or red moods)', 'filter' => ['colors' => ['black', 'red']]],
+        ],
+        'warmth' => [
+            ['key' => 'discard_card_id', 'type' => 'discard_card', 'required' => false, 'label' => 'Discard-pile card to put into your hand (needs two or more red and/or white moods)'],
+        ],
+        'yearning' => [
+            ['key' => 'hand_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Card to discard from your hand'],
+            ['key' => 'discard_card_id', 'type' => 'discard_card', 'required' => false, 'label' => 'Discard-pile card to put into your hand (needs two or more blue and/or red moods)'],
+        ],
+        'rashness' => [
+            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'other', 'required' => false, 'label' => "An opponent's mood valued 1 or less to put into the discard pile", 'excludes_teammate' => true, 'filter' => ['max_value' => 1]],
+        ],
         'recklessness' => [
             ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'other', 'required' => false, 'label' => "An opponent's mood to take (returns to them after scoring if you still hold it)"],
         ],

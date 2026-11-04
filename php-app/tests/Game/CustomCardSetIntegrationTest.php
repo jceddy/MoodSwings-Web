@@ -34,6 +34,8 @@ final class CustomCardSetIntegrationTest extends TestCase
 
     private PDO $pdo;
     private GameService $games;
+    /** @var array<int, array<string, mixed>> the real XEMB card_sets rows, set aside while each test runs (see setUp()) */
+    private array $realCustomSetRows = [];
 
     protected function setUp(): void
     {
@@ -74,6 +76,11 @@ final class CustomCardSetIntegrationTest extends TestCase
         $this->pdo = $pdo;
         $this->removeTestCards();
 
+        // The real XEMB cards would mix into these tests' pools, so XEMB is emptied while a test runs
+        // (the stand-in cards stand in for it) and its real rows are put back in tearDown().
+        $this->realCustomSetRows = $pdo->query("SELECT cs.* FROM card_sets cs JOIN sets s ON s.id = cs.set_id WHERE s.code = 'XEMB'")->fetchAll();
+        $pdo->exec("DELETE cs FROM card_sets cs JOIN sets s ON s.id = cs.set_id WHERE s.code = 'XEMB'");
+
         $registry = DefaultEffectRegistry::build();
         $this->games = new GameService(
             new BoardStateRepository($registry),
@@ -89,6 +96,11 @@ final class CustomCardSetIntegrationTest extends TestCase
     {
         if (isset($this->pdo)) {
             $this->removeTestCards();
+            $insert = $this->pdo->prepare('INSERT INTO card_sets (card_id, set_id, collector_number) VALUES (:card_id, :set_id, :collector_number)');
+            foreach ($this->realCustomSetRows as $row) {
+                $insert->execute(['card_id' => $row['card_id'], 'set_id' => $row['set_id'], 'collector_number' => $row['collector_number']]);
+            }
+            $this->realCustomSetRows = [];
         }
     }
 

@@ -119,6 +119,21 @@ use MoodSwings\Rules\Effects\WonderEffect;
 use MoodSwings\Rules\Effects\WorryEffect;
 use MoodSwings\Rules\Effects\WrathEffect;
 use MoodSwings\Rules\Effects\ZealEffect;
+use MoodSwings\Rules\Effects\Custom\AtonementEffect;
+use MoodSwings\Rules\Effects\Custom\BulkMoodMoveEffect;
+use MoodSwings\Rules\Effects\Custom\ConditionalExtraPlayEffect;
+use MoodSwings\Rules\Effects\Custom\CustomConditionalValueEffect;
+use MoodSwings\Rules\Effects\Custom\DiscardToDeckBottomEffect;
+use MoodSwings\Rules\Effects\Custom\FrenzyEffect;
+use MoodSwings\Rules\Effects\Custom\ImpartialityEffect;
+use MoodSwings\Rules\Effects\Custom\IntuitionEffect;
+use MoodSwings\Rules\Effects\Custom\LargesseEffect;
+use MoodSwings\Rules\Effects\Custom\LevityEffect;
+use MoodSwings\Rules\Effects\Custom\PairedColorTargetEffect;
+use MoodSwings\Rules\Effects\Custom\RashnessEffect;
+use MoodSwings\Rules\Effects\Custom\SolidarityEffect;
+use MoodSwings\Rules\Effects\Custom\WarmthEffect;
+use MoodSwings\Rules\Effects\Custom\YearningEffect;
 
 /**
  * Wires up every MoodEffect for the full 133-card pool -- every card with
@@ -387,6 +402,43 @@ final class DefaultEffectRegistry
         $registry->register('enjoyment', new PairedColorThresholdEffect('red', 'white'));
         $registry->register('pity', new PairedColorThresholdEffect('blue', 'red'));
         $registry->register('excitement', new PairedColorThresholdEffect('black', 'green'));
+
+        // Community set "Emotional Baggage" (XEMB) -- see Effects/Custom.
+        $registry->register('anticipation', new CustomConditionalValueEffect(CustomConditionalValueEffect::OWN_HAND_AT_LEAST, 4));
+        $registry->register('composure', new CustomConditionalValueEffect(CustomConditionalValueEffect::OWN_HAND_MORE_THAN_EACH_OTHER));
+        $registry->register('equanimity', new CustomConditionalValueEffect(CustomConditionalValueEffect::EVEN_NUMBERED_MOODS_AT_LEAST, 4));
+        $registry->register('exuberance', new CustomConditionalValueEffect(CustomConditionalValueEffect::OTHER_OWN_RED_MOODS_AT_LEAST, 2));
+        $registry->register('hellbent', new CustomConditionalValueEffect(CustomConditionalValueEffect::OWN_HAND_EMPTY));
+        $registry->register('possessiveness', new CustomConditionalValueEffect(CustomConditionalValueEffect::DISCARD_PILE_AT_LEAST, 5));
+        $registry->register('ruthlessness', new CustomConditionalValueEffect(CustomConditionalValueEffect::ANY_OPPONENT_HAND_EMPTY));
+        $registry->register('temperance', new CustomConditionalValueEffect(CustomConditionalValueEffect::OWN_HAND_FEWER_THAN_EACH_OTHER));
+        $registry->register('solidarity', new SolidarityEffect());
+
+        $registry->register('confidence', new ConditionalExtraPlayEffect(restriction: ['type' => 'base_value_in', 'values' => [4, 5, 6]]));
+        $registry->register('modesty', new ConditionalExtraPlayEffect(restriction: ['type' => 'base_value_in', 'values' => [0, 1, 2, 3]]));
+        $registry->register('thrift', new ConditionalExtraPlayEffect(restriction: ['type' => 'base_value_in', 'values' => [0, 1, 2, 3], 'source' => 'discard']));
+        $registry->register('desperation', new ConditionalExtraPlayEffect('own_hand_fewer_than_each_other'));
+        $registry->register('camaraderie', new ConditionalExtraPlayEffect('color_pair', ['green', 'blue']));
+        $registry->register('fervor', new ConditionalExtraPlayEffect('color_pair', ['black', 'green'], onUseEffectState: [
+            'afterScoring' => ['action' => 'discard', 'condition' => 'always'],
+        ]));
+        $registry->register('rashness', new RashnessEffect());
+        $registry->register('frenzy', new FrenzyEffect());
+        $registry->register('largesse', new LargesseEffect());
+        $registry->register('belligerence', new BulkMoodMoveEffect('discard_qualifying_moods', true, true, 2, 'discard'));
+        $registry->register('chagrin', new BulkMoodMoveEffect('return_qualifying_moods', false, false, 4, 'hand'));
+        $registry->register('atonement', new AtonementEffect());
+        $registry->register('intuition', new IntuitionEffect());
+        $registry->register('impartiality', new ImpartialityEffect());
+        $registry->register('reminiscence', new DiscardToDeckBottomEffect());
+        $registry->register('remorse', new DiscardToDeckBottomEffect(true));
+        $registry->register('levity', new LevityEffect());
+        $registry->register('distrust', new PairedColorTargetEffect('red', 'green', 'hand'));
+        $registry->register('disdain', new PairedColorTargetEffect('white', 'green', 'discard'));
+        $registry->register('indignation', new PairedColorTargetEffect('white', 'blue', 'discard', 4));
+        $registry->register('vigilance', new PairedColorTargetEffect('black', 'red', 'suppress'));
+        $registry->register('warmth', new WarmthEffect());
+        $registry->register('yearning', new YearningEffect());
 
         return $registry;
     }

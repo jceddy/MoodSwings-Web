@@ -48,10 +48,12 @@ final class CardCatalogIntegrationTest extends TestCase
         $this->cards = new CardRepository();
     }
 
-    /** Excludes migration 0183's own five Chaos Draft token cards (Smugness/Unconcern/Passivity/Tedium/Idleness, issue #405) -- conjured into play by certain chaos effects, never part of the official 133-card printed gallery these two tests verify against. */
+    /** Excludes migration 0183's own five Chaos Draft token cards (Smugness/Unconcern/Passivity/Tedium/Idleness, issue #405) -- conjured into play by certain chaos effects -- and every card that is only in a custom set (migration 0496+), none of which are part of the official 133-card printed gallery these two tests verify against. */
     private function officialGalleryOnly(array $rows): array
     {
-        return array_values(array_filter($rows, static fn (array $row): bool => (int) $row['is_token'] === 0));
+        $original = array_flip(CardCatalog::cardIdsInSets([CardCatalog::ORIGINAL_SET_CODE]));
+
+        return array_values(array_filter($rows, static fn (array $row): bool => (int) $row['is_token'] === 0 && isset($original[(int) $row['id']])));
     }
 
     public function testCatalogHasExactlyOneHundredThirtyThreeCards(): void

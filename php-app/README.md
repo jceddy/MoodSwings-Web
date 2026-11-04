@@ -9231,6 +9231,21 @@ in custom sets is.
   seated human opted in as well.
 - **Art.** `cards.art_set_code` is the folder under `web-static/img/cards/` a card's art lives in (`MSW`, or
   the custom set's code for its own cards); it's exposed as `art_set_code` on every serialized card.
+- **Emotional Baggage's cards (migrations 0497+).** Added in batches, cheapest effects first. Each card's
+  `effect_key` is its lower-cased name (UNIQUE across all sets), its `cards.id` follows collector order
+  (ids 139+), and its art is `web-static/img/cards/XEMB/<id>-<slug>.webp`. The set's 11 reprints
+  (Compulsion, Determination, Fear, Hate, Joy, Nostalgia, Pacifism, Panic, Shock, Suspicion, Zeal) are
+  linked to XEMB by `card_sets` rows only. Effect classes live in `Rules/Effects/Custom/` -- batch 1
+  (migration 0497, 32 cards) is the effects that need no new engine hook: `CustomConditionalValueEffect`
+  (Anticipation, Composure, Equanimity, Exuberance, Hellbent, Possessiveness, Ruthlessness, Temperance:
+  alt value while a board/hand condition holds), `SolidarityEffect`, `ConditionalExtraPlayEffect`
+  (Confidence, Modesty, Thrift, Desperation, Camaraderie, Fervor), `RashnessEffect`, `FrenzyEffect`,
+  `LargesseEffect`, `BulkMoodMoveEffect` (Belligerence, Chagrin), `AtonementEffect`, `IntuitionEffect`,
+  `ImpartialityEffect`, `DiscardToDeckBottomEffect` (Reminiscence, Remorse), `LevityEffect`,
+  `PairedColorTargetEffect` (Distrust, Disdain, Indignation, Vigilance), `WarmthEffect`, `YearningEffect`.
+  The later batches need new hooks (start-of-turn triggers, static value modifiers on other moods,
+  round-win counts, extra scoring, a colorless color) and aren't implemented yet; until a card is in the
+  `cards` table it simply doesn't exist in the game.
 
 ### Default selections mode (issue #274)
 
