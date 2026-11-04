@@ -412,6 +412,8 @@ final class BoardStateRepository
             // BoardState::turnStateSignatureCoarse()'s own "drop spawned
             // tokens before hashing" normalization.
             'isToken' => (bool) $row['is_token'],
+            // The folder under web-static/img/cards/ this card's art lives in ('MSW', or a custom set's code) -- see migration 0496.
+            'artSetCode' => $row['art_set_code'],
             // Migration 0143 -- the same curated draft-worthiness ranking
             // CardCatalog::load() already exposes for draft picking (see
             // BotPlayerService::draftCardScore()), now also available

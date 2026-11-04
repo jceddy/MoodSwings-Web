@@ -276,9 +276,11 @@ final class CardStatsService
      *
      * @return array<int, array{catalog_card_id:int, name:string, set_code:?string, collector_number:?int, rarity:string, color:string, times_in_deck:int, deck_win_rate:?float, times_played:int, play_win_rate:?float, quick_draft:array{average:?float, count:int}, winston_draft:array{average:?float, count:int}, grid_draft:array{average:?float, count:int}, rotisserie_draft:array{average:?float, count:int}}>
      */
-    public function allCardStats(): array
+    public function allCardStats(bool $includeCustom = true): array
     {
-        $catalog = CardCatalog::load()['rowsById'];
+        // $includeCustom false drops the cards that exist only in a custom set -- what a player
+        // who hasn't opted into custom content gets to see.
+        $catalog = CardCatalog::load($includeCustom)['rowsById'];
         $setInfoByCardId = CardCatalog::loadSetInfo();
 
         $statsByCardId = [];

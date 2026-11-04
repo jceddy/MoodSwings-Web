@@ -9194,6 +9194,44 @@ selected with one click, no typing required; each just calls the same
 differing only in where the message text comes from (a button's own
 `data-quick-chat-text` rather than `#game-chat-input`'s value).
 
+### Card sets and custom sets
+
+`sets` (code, name, `is_custom`) and `card_sets` (card, set, collector number) say which set(s) a card
+belongs to. The original set is `MSW`; a **custom set** (`sets.is_custom`, migration 0496) is a
+community-designed set the game ships alongside it, first **Emotional Baggage (`XEMB`)** from
+`jceddy/mood-swings-custom`. A custom set's reprints of original cards are just the same card rows
+also listed in `card_sets` under the custom set, so a reprint is never hidden; a card that is *only*
+in custom sets is.
+
+- **Visibility.** Custom cards need the custom-content opt-in (`users.allow_custom_content`, Settings >
+  "Show custom content"). `CardCatalog::customOnlyCardIds()` lists the hidden ones;
+  `CardCatalog::load(includeCustom: false)` drops them (the default, `true`, is what the engine itself
+  uses). `GET /cards/catalog` and `GET /stats/cards` take it from the viewer, a decklist (typed, uploaded
+  or saved -- `UserDecklistService`) can't name them without it, and another player's shared saved deck
+  that uses them can't be opened without it. `GET /cards/sets` lists the sets the viewer may pick
+  (`code`, `name`, `is_custom`, `card_count`): the original set, plus custom ones once they opted in --
+  a set that has no cards yet is left out.
+- **Choosing the pool's sets.** `POST /games` (and `POST /open-games`) take `card_set_codes`, a list of set
+  codes (default / empty: the original set only). It decides where every *random* pool comes from --
+  Structure, Power, jceddy's 75/150, One of Each, the Quick/Winston/Grid/Rotisserie draft pool sources
+  (`random_48`, `structure`, `jceddys_75`, `one_of_each`), Tiered Rotisserie's rarity tiers, Chaos Draft's
+  pool and Sealed Deck -- via `GameService::poolCardIds()`, which also dedupes a reprint that's in several
+  chosen sets. It's stored on `games.card_set_codes` (comma-separated, NULL = original set only), carried
+  into game 2/3 of a best-of-three match, and exposed as `game.card_set_codes` (the Rematch prefill reads
+  it). A pool the chosen sets can't fill (say a custom set that's still missing cards) fails with a clear
+  `GameStateException` ("don't have enough cards") instead of a crash. Ignored -- stored as the original
+  set -- for `custom`/`custom_duel` (decklists name their own cards) and the Daily/Weekly Sealed Pools,
+  which always use the original set only (`buildPeriodicSealedPoolCardIds()`). League starter decks and
+  tournaments never choose, so they stay original-set only too.
+- **Opt-in rules.** A custom set in `card_set_codes` is refused (as an unknown set) unless the creator opted
+  in, and `createGame()` also requires every seated *human* to have opted in
+  (`usersWithoutCustomContentOptIn()`, the same rule Chaos Draft uses); open-game listings that pick one are
+  hidden from, and can't be posted or joined by, anyone who hasn't. Decks that name custom-only cards
+  (`assertCustomCardsAllowed()`: custom decklists, custom draft pools, `custom_duel` submissions) need every
+  seated human opted in as well.
+- **Art.** `cards.art_set_code` is the folder under `web-static/img/cards/` a card's art lives in (`MSW`, or
+  the custom set's code for its own cards); it's exposed as `art_set_code` on every serialized card.
+
 ### Default selections mode (issue #274)
 
 A per-game setting (`games.default_selections_mode`, migration `0087`), NOT

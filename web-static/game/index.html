@@ -1093,6 +1093,16 @@
                 </div>
             </div>
 
+            <!-- Which card set(s) the game's RANDOM pools (Structure, Power, jceddy's 75, One of Each, the
+                 draft pool sources, Sealed Deck) are built from. Only shown when there is more than one
+                 set to choose from -- i.e. once the player opted into custom content and a custom set
+                 exists -- and hidden for deck types that name their own cards (custom decklists) or are
+                 original-set only (Daily/Weekly Sealed Pool). See updateCardSetsFieldVisibility(). -->
+            <fieldset class="new-game-field" id="new-game-card-sets-field" hidden>
+                <legend>Card sets for random pools</legend>
+                <div id="new-game-card-sets-options"></div>
+            </fieldset>
+
             <label class="new-game-field"><input type="checkbox" id="new-game-default-selections"> Default selections mode (pre-fill card choices with a reasonable default; still changeable before submitting)</label>
 
             <button id="new-game-submit-button" type="submit">Create game</button>
@@ -1825,7 +1835,7 @@
                  independently re-checks that every seated player (not just
                  whoever's creating the game) has this on, so this checkbox
                  is a convenience, not the actual enforcement. -->
-            <label><input type="checkbox" id="settings-allow-custom-content-checkbox"> Show custom card/effect formats (e.g. Chaos Draft) in the New Game dialog</label>
+            <label><input type="checkbox" id="settings-allow-custom-content-checkbox"> Show custom content: fan-made effect formats (e.g. Chaos Draft) and community-designed card sets</label>
             <!-- "Discoverable for open games" (issue #116, migration 0198)
                  -- same starts-UNCHECKED/opt-in shape as the checkbox
                  above, matching users.matchmaking_discoverable's own

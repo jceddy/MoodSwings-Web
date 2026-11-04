@@ -67,7 +67,6 @@ use Throwable;
 final class GameService
 {
     private const STARTING_HAND_SIZE = 5;
-    private const TOTAL_CARDS = 133;
     private const MIN_PLAYERS = 2;
     private const MAX_PLAYERS = 4;
 
@@ -726,9 +725,9 @@ final class GameService
      * already supports, but there's no picker for any of them right now --
      * every Sealed Deck game gets a structure-deck-style pool.
      */
-    private function buildSealedDeckPlayerPool(): array
+    private function buildSealedDeckPlayerPool(?array $setCodes = null): array
     {
-        return $this->buildStructureDeckCardIds();
+        return $this->buildStructureDeckCardIds($setCodes);
     }
 
     /**
@@ -866,17 +865,15 @@ final class GameService
      */
     private function buildPeriodicSealedPoolCardIds(): array
     {
-        $pdo = Connection::get();
+        // Always the original set -- a Daily/Weekly Sealed Pool is the same pool for
+        // every player, whether or not they opted into custom content, so a custom
+        // set's cards never go into one.
         $cardIds = [];
         foreach (self::PERIODIC_SEALED_POOL_RARITY_COUNTS as $rarity => $count) {
-            $stmt = $pdo->prepare('SELECT id FROM cards WHERE rarity = :rarity AND is_token = 0');
-            $stmt->execute(['rarity' => $rarity]);
-            $rarityCardIds = array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
-
-            $chosenKeys = (array) array_rand($rarityCardIds, $count);
-            foreach ($chosenKeys as $key) {
-                $cardIds[] = $rarityCardIds[$key];
-            }
+            $cardIds = [
+                ...$cardIds,
+                ...$this->pickDistinctRandom($this->poolCardIds([CardCatalog::ORIGINAL_SET_CODE], rarity: $rarity), $count, "{$rarity} card"),
+            ];
         }
 
         return $cardIds;
@@ -1752,6 +1749,15 @@ final class GameService
         // own narrow scope" convention $perSeatAllowedCardIds above
         // already follows.
         ?array $fixedCustomDeckCardIds = null,
+        // Which card set(s) -- by code -- this game's RANDOM pools (Structure,
+        // Power, jceddy's 75, One of Each, the draft pool sources, Sealed Deck,
+        // ...) are built from. NULL/empty means the original set only. A custom
+        // set needs the creator's, and every seated player's, custom-content
+        // opt-in (see usersWithoutCustomContentOptIn()). Ignored (stored as the
+        // original set) wherever no random pool is built from the catalog:
+        // custom decklists, and the Daily/Weekly Sealed Pools, which are always
+        // original-set only.
+        ?array $cardSetCodes = null,
     ): int {
         if (count($userIds) > self::MAX_PLAYERS) {
             throw new GameStateException('A game cannot have more than ' . self::MAX_PLAYERS . ' players');
@@ -1981,6 +1987,23 @@ final class GameService
             }
         }
 
+        // Card sets (migration 0496): which sets this game's random pools draw
+        // from. The Daily/Weekly Sealed Pools are the same pool for every player
+        // whether or not they opted in, and custom decklists name their cards
+        // outright, so both always stay original-set only.
+        $poolSetCodes = CardCatalog::normalizeSetCodes(
+            array_key_exists($deckType, self::PERIODIC_SEALED_POOL_DECK_TYPES) || in_array($deckType, ['custom', 'custom_duel'], true) ? null : $cardSetCodes,
+            $this->userAllowsCustomContent($createdByUserId),
+        );
+        if (CardCatalog::includesCustomSet($poolSetCodes)) {
+            $missingOptIn = $this->usersWithoutCustomContentOptIn($userIds);
+            if ($missingOptIn !== []) {
+                throw new GameStateException(
+                    'A custom card set is in use -- every seated player must opt in first via Settings > "Allow custom card/effect formats" (missing: ' . implode(', ', $missingOptIn) . ')'
+                );
+            }
+        }
+
         if ($deckType === 'custom') {
             if ($format === 'duel') {
                 throw new GameStateException('Custom decklists are not supported for duel games -- use deck_type "custom_duel" instead');
@@ -2009,6 +2032,11 @@ final class GameService
             $duelEvenColorDistributionRarities = $rules->evenColorDistributionRarities;
         }
 
+        // A custom decklist naming cards from a custom set needs every seated human opted in too.
+        if ($customDeckCardIds !== null) {
+            $this->assertCustomCardsAllowed($customDeckCardIds, $userIds);
+        }
+
         // Built once here (buildTieredRotisserieDraftTierPools() draws
         // randomly for 'rarity' mode, so it must not be called twice) --
         // $draftPoolCardIds below just flattens it into the same "whole
@@ -2017,7 +2045,7 @@ final class GameService
         // per-tier state lives in draft_tiered_rotisserie_state.tiers
         // instead (see initializeTieredRotisserieDraft()).
         $tieredRotisserieDraftTierPools = $deckType === 'tiered_rotisserie_draft'
-            ? $this->buildTieredRotisserieDraftTierPools((string) $tieredRotisserieDraftMode, $tieredRotisserieDraftTiers, $createdByUserId, count($userIds))
+            ? $this->buildTieredRotisserieDraftTierPools((string) $tieredRotisserieDraftMode, $tieredRotisserieDraftTiers, $createdByUserId, count($userIds), $poolSetCodes)
             : null;
 
         // Sealed Deck (issue #392): one buildSealedDeckPlayerPool() call
@@ -2040,7 +2068,7 @@ final class GameService
             ? $this->getOrCreatePeriodicSealedPool(self::PERIODIC_SEALED_POOL_DECK_TYPES[$deckType])
             : null;
         $sealedDeckPlayerPools = match (true) {
-            $deckType === 'sealed_deck' => array_map(fn (): array => $this->buildSealedDeckPlayerPool(), $userIds),
+            $deckType === 'sealed_deck' => array_map(fn (): array => $this->buildSealedDeckPlayerPool($poolSetCodes), $userIds),
             $periodicSealedPool !== null => array_fill(0, count($userIds), $periodicSealedPool['pool_card_ids']),
             default => null,
         };
@@ -2072,10 +2100,10 @@ final class GameService
             default => null,
         };
         $draftPoolCardIds = match ($deckType) {
-            'quick_draft', 'chaos_draft' => $this->buildQuickDraftPool((string) $quickDraftPoolSource, $quickDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds)),
-            'winston_draft' => $this->buildWinstonDraftPool((string) $winstonDraftPoolSource, $winstonDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds)),
-            'grid_draft' => $this->buildGridDraftPool((string) $gridDraftPoolSource, $gridDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds)),
-            'rotisserie_draft' => $this->buildRotisserieDraftPool((string) $rotisserieDraftPoolSource, $rotisserieDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds), $rotisserieDraftCutoffCount, $rotisserieDraftRandomizePool, $rotisserieDraftRandomizeSampleSize),
+            'quick_draft', 'chaos_draft' => $this->buildQuickDraftPool((string) $quickDraftPoolSource, $quickDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds), $poolSetCodes),
+            'winston_draft' => $this->buildWinstonDraftPool((string) $winstonDraftPoolSource, $winstonDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds), $poolSetCodes),
+            'grid_draft' => $this->buildGridDraftPool((string) $gridDraftPoolSource, $gridDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds), $poolSetCodes),
+            'rotisserie_draft' => $this->buildRotisserieDraftPool((string) $rotisserieDraftPoolSource, $rotisserieDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds), $rotisserieDraftCutoffCount, $rotisserieDraftRandomizePool, $rotisserieDraftRandomizeSampleSize, $poolSetCodes),
             'tiered_rotisserie_draft' => array_merge(...array_map(static fn (array $tier): array => $tier['pool_card_ids'], $tieredRotisserieDraftTierPools)),
             // The flattened union of every player's own individual pool --
             // draftMatchPoolView()'s own undraftedCardIds computation
@@ -2093,6 +2121,10 @@ final class GameService
             'sealed_deck', 'sealed_pool_of_the_day', 'weekly_sealed_pool' => array_merge(...$sealedDeckPlayerPools),
             default => null,
         };
+        // A pool pasted/saved as custom text can name custom-set cards too.
+        if ($draftPoolCardIds !== null) {
+            $this->assertCustomCardsAllowed($draftPoolCardIds, $userIds);
+        }
 
         // Issue #90: Duel/Open Team Play/Closed Team Play/Traditional's own
         // best-of-three match wrapper (game_matches, migration 0223) -- the
@@ -2207,13 +2239,13 @@ final class GameService
                     custom_duel_rules_preset, custom_duel_min_cards, custom_duel_rarity_limits, custom_duel_duplicate_limits,
                     custom_duel_even_color_distribution_rarities, draft_match_id, game_match_id, match_game_number,
                     status, created_by_user_id, wins_needed, default_selections_mode, bot_goes_first, diagnostic_mode,
-                    timeout_minutes, timeout_action, total_time_limit_minutes, synchronous_mode
+                    timeout_minutes, timeout_action, total_time_limit_minutes, synchronous_mode, card_set_codes
                  ) VALUES (
                     :format, :deck_type, :custom_deck_name, :custom_deck_card_ids,
                     :duel_rules_preset, :duel_min_cards, :duel_rarity_limits, :duel_duplicate_limits,
                     :duel_even_color_distribution_rarities, :draft_match_id, :game_match_id, :match_game_number,
                     'waiting', :created_by, :wins_needed, :default_selections_mode, :bot_goes_first, :diagnostic_mode,
-                    :timeout_minutes, :timeout_action, :total_time_limit_minutes, :synchronous_mode
+                    :timeout_minutes, :timeout_action, :total_time_limit_minutes, :synchronous_mode, :card_set_codes
                  )"
             );
             $insertGame->execute([
@@ -2238,6 +2270,7 @@ final class GameService
                 'timeout_action' => $timeoutActionForGame,
                 'total_time_limit_minutes' => $totalTimeLimitMinutesForGame,
                 'synchronous_mode' => $synchronousMode ? 1 : 0,
+                'card_set_codes' => CardCatalog::encodeSetCodes($poolSetCodes),
             ]);
             $gameId = (int) $pdo->lastInsertId();
 
@@ -2620,6 +2653,44 @@ final class GameService
         $stmt->execute(array_values($userIds));
 
         return $stmt->fetchColumn() !== false;
+    }
+
+    /** Whether $userId has opted into custom content (users.allow_custom_content, Settings). Unknown users read as not. */
+    private function userAllowsCustomContent(int $userId): bool
+    {
+        $stmt = Connection::get()->prepare('SELECT allow_custom_content FROM users WHERE id = :id');
+        $stmt->execute(['id' => $userId]);
+
+        return (bool) $stmt->fetchColumn();
+    }
+
+    /**
+     * Cards that belong only to a custom set may only be used in a game whose
+     * every seated human opted into custom content -- the same rule a custom set
+     * as the pool source follows (see createGame()). A decklist that names such
+     * a card, or a pool built from custom text, hits this too; the message names
+     * who is missing so they can opt in.
+     *
+     * @param int[] $cardIds
+     * @param int[] $userIds
+     */
+    private function assertCustomCardsAllowed(array $cardIds, array $userIds): void
+    {
+        if ($cardIds === []) {
+            return;
+        }
+
+        $customOnly = array_flip(CardCatalog::customOnlyCardIds());
+        if ($customOnly === [] || array_intersect_key($customOnly, array_flip($cardIds)) === []) {
+            return;
+        }
+
+        $missingOptIn = $this->usersWithoutCustomContentOptIn($userIds);
+        if ($missingOptIn !== []) {
+            throw new GameStateException(
+                'That deck uses cards from a custom card set -- every seated player must opt in first via Settings > "Allow custom card/effect formats" (missing: ' . implode(', ', $missingOptIn) . ')'
+            );
+        }
     }
 
     /**
@@ -3031,6 +3102,11 @@ final class GameService
         if ($allowedCardIds !== null) {
             $this->assertWithinAllowedCardPool($isLeagueMatch ? [...$mainCardIds, ...$sideboardCardIds] : $mainCardIds, $allowedCardIds);
         }
+
+        // A deck naming custom-set cards is only legal when every seated human opted into custom content.
+        $seatedStmt = Connection::get()->prepare('SELECT user_id FROM game_players WHERE game_id = :game_id');
+        $seatedStmt->execute(['game_id' => $gameId]);
+        $this->assertCustomCardsAllowed([...$mainCardIds, ...$sideboardCardIds], array_map(intval(...), $seatedStmt->fetchAll(PDO::FETCH_COLUMN)));
 
         $update = Connection::get()->prepare(
             'UPDATE game_players SET custom_deck_name = :name, custom_deck_card_ids = :card_ids, custom_deck_sideboard_card_ids = :sideboard_card_ids WHERE id = :id'
@@ -4808,9 +4884,9 @@ final class GameService
     private function deckCardIdsFor(array $game): array
     {
         return match ($game['deck_type']) {
-            'structure' => $this->buildStructureDeckCardIds(),
-            'power' => $this->buildPowerDeckCardIds(),
-            'jceddys_75' => $this->buildJceddys75DeckCardIds(),
+            'structure' => $this->buildStructureDeckCardIds(CardCatalog::setCodesOfGame($game)),
+            'power' => $this->buildPowerDeckCardIds(CardCatalog::setCodesOfGame($game)),
+            'jceddys_75' => $this->buildJceddys75DeckCardIds(CardCatalog::setCodesOfGame($game)),
             'custom' => $this->customDeckCardIds($game),
             // Each 'custom_duel' player's own deck lives on their
             // game_players row, not the games row this method reads --
@@ -4847,7 +4923,7 @@ final class GameService
             // Draft's own per-player deck lives on
             // draft_match_players.deck_card_ids too.
             'tiered_rotisserie_draft' => throw new \LogicException('deckCardIdsFor() cannot build a "tiered_rotisserie_draft" deck -- each duel player\'s own deck must be read via requireDraftDecksSubmitted()'),
-            default => range(1, self::TOTAL_CARDS), // 'one_of_each'
+            default => $this->poolCardIds(CardCatalog::setCodesOfGame($game)), // 'one_of_each'
         };
     }
 
@@ -4898,23 +4974,68 @@ final class GameService
      *
      * @return int[]
      */
-    private function buildStructureDeckCardIds(): array
+    private function buildStructureDeckCardIds(?array $setCodes = null): array
     {
-        $pdo = Connection::get();
-
         $cardIds = [];
         foreach (self::STRUCTURE_DECK_RARITY_COUNTS as $rarity => $count) {
-            $stmt = $pdo->prepare('SELECT id FROM cards WHERE rarity = :rarity AND is_token = 0');
-            $stmt->execute(['rarity' => $rarity]);
-            $rarityCardIds = array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
-
-            $chosenKeys = (array) array_rand($rarityCardIds, $count);
-            foreach ($chosenKeys as $key) {
-                $cardIds[] = $rarityCardIds[$key];
-            }
+            $cardIds = [...$cardIds, ...$this->pickDistinctRandom($this->poolCardIds($setCodes, rarity: $rarity), $count, "{$rarity} card")];
         }
 
         return $cardIds;
+    }
+
+    /**
+     * The real (non-token) card ids a random pool may draw from: every card in
+     * any of $setCodes' sets (NULL = the original set only, which is what every
+     * flow that never chooses a set gets), optionally narrowed to one rarity,
+     * one color, or everything but Mythics. A card in several of the sets (a
+     * custom set's reprint of an original) is only listed once.
+     *
+     * @param string[]|null $setCodes
+     * @return int[]
+     */
+    private function poolCardIds(?array $setCodes, ?string $rarity = null, ?string $color = null, bool $excludeMythic = false): array
+    {
+        $codes = $setCodes ?? [CardCatalog::ORIGINAL_SET_CODE];
+        $placeholders = implode(',', array_fill(0, count($codes), '?'));
+        $sql = "SELECT DISTINCT c.id FROM cards c JOIN card_sets cs ON cs.card_id = c.id JOIN sets s ON s.id = cs.set_id WHERE c.is_token = 0 AND s.code IN ({$placeholders})";
+        $params = array_values($codes);
+        if ($rarity !== null) {
+            $sql .= ' AND c.rarity = ?';
+            $params[] = $rarity;
+        }
+        if ($color !== null) {
+            $sql .= ' AND c.color = ?';
+            $params[] = $color;
+        }
+        if ($excludeMythic) {
+            $sql .= " AND c.rarity != 'mythic'";
+        }
+        $stmt = Connection::get()->prepare($sql . ' ORDER BY c.id');
+        $stmt->execute($params);
+
+        return array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
+    }
+
+    /**
+     * $count distinct ids chosen uniformly at random from $candidateIds, or a
+     * GameStateException (rather than array_rand()'s ValueError) when the
+     * chosen set(s) don't have that many -- e.g. a custom set that is still
+     * missing most of its cards.
+     *
+     * @param int[] $candidateIds
+     * @return int[]
+     */
+    private function pickDistinctRandom(array $candidateIds, int $count, string $label): array
+    {
+        if (count($candidateIds) < $count) {
+            throw new GameStateException("The selected card set(s) don't have enough cards to build that pool (need {$count} {$label}s, have " . count($candidateIds) . ')');
+        }
+        if ($count === 0) {
+            return [];
+        }
+
+        return array_map(fn (int $key): int => $candidateIds[$key], (array) array_rand($candidateIds, $count));
     }
 
     /**
@@ -4928,25 +5049,12 @@ final class GameService
      *
      * @return int[]
      */
-    private function buildPowerDeckCardIds(): array
+    private function buildPowerDeckCardIds(?array $setCodes = null): array
     {
-        $pdo = Connection::get();
-
-        $mythicStmt = $pdo->prepare('SELECT id FROM cards WHERE rarity = :rarity AND is_token = 0');
-        $mythicStmt->execute(['rarity' => 'mythic']);
-        $mythicCardIds = array_map(intval(...), $mythicStmt->fetchAll(PDO::FETCH_COLUMN));
-        $cardIds = [$mythicCardIds[array_rand($mythicCardIds)]];
-
-        $nonMythicStmt = $pdo->prepare("SELECT id FROM cards WHERE rarity != 'mythic' AND is_token = 0");
-        $nonMythicStmt->execute();
-        $nonMythicCardIds = array_map(intval(...), $nonMythicStmt->fetchAll(PDO::FETCH_COLUMN));
-
-        $chosenKeys = (array) array_rand($nonMythicCardIds, self::POWER_DECK_NON_MYTHIC_COUNT);
-        foreach ($chosenKeys as $key) {
-            $cardIds[] = $nonMythicCardIds[$key];
-        }
-
-        return $cardIds;
+        return [
+            ...$this->pickDistinctRandom($this->poolCardIds($setCodes, rarity: 'mythic'), 1, 'Mythic card'),
+            ...$this->pickDistinctRandom($this->poolCardIds($setCodes, excludeMythic: true), self::POWER_DECK_NON_MYTHIC_COUNT, 'non-Mythic card'),
+        ];
     }
 
     /**
@@ -4962,16 +5070,14 @@ final class GameService
      *
      * @return int[]
      */
-    private function buildJceddys75DeckCardIds(): array
+    private function buildJceddys75DeckCardIds(?array $setCodes = null): array
     {
-        $pdo = Connection::get();
-
         $cardIds = [];
         foreach (self::JCEDDYS_75_DECK_COLORS as $color) {
             foreach (self::JCEDDYS_75_DECK_RARITY_SPEC as $rarity => $spec) {
                 $cardIds = [
                     ...$cardIds,
-                    ...$this->randomCardIdsWithCopyLimit($pdo, $color, $rarity, $spec['count'], $spec['max_copies']),
+                    ...$this->randomCardIdsWithCopyLimit($setCodes, $color, $rarity, $spec['count'], $spec['max_copies']),
                 ];
             }
         }
@@ -4992,16 +5098,14 @@ final class GameService
      *
      * @return int[]
      */
-    private function buildJceddys150DeckCardIds(): array
+    private function buildJceddys150DeckCardIds(?array $setCodes = null): array
     {
-        $pdo = Connection::get();
-
         $cardIds = [];
         foreach (self::JCEDDYS_75_DECK_COLORS as $color) {
             foreach (self::JCEDDYS_150_DECK_RARITY_SPEC as $rarity => $spec) {
                 $cardIds = [
                     ...$cardIds,
-                    ...$this->randomCardIdsWithCopyLimit($pdo, $color, $rarity, $spec['count'], $spec['max_copies']),
+                    ...$this->randomCardIdsWithCopyLimit($setCodes, $color, $rarity, $spec['count'], $spec['max_copies']),
                 ];
             }
         }
@@ -5020,11 +5124,12 @@ final class GameService
      *
      * @return int[]
      */
-    private function randomCardIdsWithCopyLimit(PDO $pdo, string $color, string $rarity, int $count, int $maxCopies): array
+    private function randomCardIdsWithCopyLimit(?array $setCodes, string $color, string $rarity, int $count, int $maxCopies): array
     {
-        $stmt = $pdo->prepare('SELECT id FROM cards WHERE color = :color AND rarity = :rarity AND is_token = 0');
-        $stmt->execute(['color' => $color, 'rarity' => $rarity]);
-        $poolCardIds = array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
+        $poolCardIds = $this->poolCardIds($setCodes, rarity: $rarity, color: $color);
+        if (count($poolCardIds) * $maxCopies < $count) {
+            throw new GameStateException("The selected card set(s) don't have enough {$color} {$rarity} cards to build that pool");
+        }
 
         $expandedPool = array_merge(...array_fill(0, $maxCopies, $poolCardIds));
         shuffle($expandedPool);
@@ -5104,15 +5209,15 @@ final class GameService
      *        "a floor, not an exact match" pool-source convention -- see
      *        buildRotisserieDraftPool()).
      */
-    private function buildDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $targetSize, int $minCustomPoolSize, bool $doubleStructureForMultiplayer = false, bool $truncateToTarget = true): array
+    private function buildDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $targetSize, int $minCustomPoolSize, bool $doubleStructureForMultiplayer = false, bool $truncateToTarget = true, ?array $setCodes = null): array
     {
         $cardIds = match ($poolSource) {
-            'random_48' => $this->buildRandomDraftCardIds($targetSize),
+            'random_48' => $this->buildRandomDraftCardIds($targetSize, $setCodes),
             'structure' => $doubleStructureForMultiplayer
-                ? [...$this->buildStructureDeckCardIds(), ...$this->buildStructureDeckCardIds()]
-                : $this->buildStructureDeckCardIds(),
-            'jceddys_75' => $targetSize > self::JCEDDYS_75_DECK_SIZE ? $this->buildJceddys150DeckCardIds() : $this->buildJceddys75DeckCardIds(),
-            'one_of_each' => range(1, self::TOTAL_CARDS),
+                ? [...$this->buildStructureDeckCardIds($setCodes), ...$this->buildStructureDeckCardIds($setCodes)]
+                : $this->buildStructureDeckCardIds($setCodes),
+            'jceddys_75' => $targetSize > self::JCEDDYS_75_DECK_SIZE ? $this->buildJceddys150DeckCardIds($setCodes) : $this->buildJceddys75DeckCardIds($setCodes),
+            'one_of_each' => $this->poolCardIds($setCodes),
             'custom' => $this->parseDraftCustomPool($customPoolText, $minCustomPoolSize),
             'saved_deck' => $this->resolveSavedDeckDraftPool($requestingUserId, $savedDecklistId, $minCustomPoolSize),
             default => throw new GameStateException("Unknown pool source \"{$poolSource}\""),
@@ -5128,12 +5233,9 @@ final class GameService
     }
 
     /** @return int[] $targetSize distinct catalog card ids, chosen uniformly at random. */
-    private function buildRandomDraftCardIds(int $targetSize): array
+    private function buildRandomDraftCardIds(int $targetSize, ?array $setCodes = null): array
     {
-        $allCardIds = range(1, self::TOTAL_CARDS);
-        $chosenKeys = (array) array_rand($allCardIds, $targetSize);
-
-        return array_map(fn (int $key): int => $allCardIds[$key], $chosenKeys);
+        return $this->pickDistinctRandom($this->poolCardIds($setCodes), $targetSize, 'card');
     }
 
     /**
@@ -5215,7 +5317,7 @@ final class GameService
      *         JCEDDYS_75_DECK_SIZE (always true here), comfortably covering
      *         that target outright.
      */
-    private function buildQuickDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $playerCount): array
+    private function buildQuickDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $playerCount, ?array $setCodes = null): array
     {
         return $this->buildDraftPool(
             $poolSource,
@@ -5225,11 +5327,12 @@ final class GameService
             self::quickDraftPoolTargetSize($playerCount),
             self::quickDraftMinCustomPoolSize($playerCount),
             doubleStructureForMultiplayer: $playerCount > 2,
+            setCodes: $setCodes,
         );
     }
 
     /** @return int[] Winston Draft's own winstonDraftPoolTargetSize($playerCount)-card pool -- see buildDraftPool(). */
-    private function buildWinstonDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $playerCount): array
+    private function buildWinstonDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $playerCount, ?array $setCodes = null): array
     {
         return $this->buildDraftPool(
             $poolSource,
@@ -5239,6 +5342,7 @@ final class GameService
             self::winstonDraftPoolTargetSize($playerCount),
             self::winstonDraftMinCustomPoolSize($playerCount),
             doubleStructureForMultiplayer: $playerCount > 2,
+            setCodes: $setCodes,
         );
     }
 
@@ -5260,11 +5364,11 @@ final class GameService
      *         150-card 'jceddys_150' pool once its own 96-card target
      *         exceeds JCEDDYS_75_DECK_SIZE.
      */
-    private function buildGridDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $playerCount): array
+    private function buildGridDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $playerCount, ?array $setCodes = null): array
     {
         $targetSize = self::gridDraftPoolTargetSize($playerCount);
 
-        $cardIds = $this->buildDraftPool($poolSource, $customPoolText, $savedDecklistId, $requestingUserId, $targetSize, self::gridDraftMinCustomPoolSize($playerCount));
+        $cardIds = $this->buildDraftPool($poolSource, $customPoolText, $savedDecklistId, $requestingUserId, $targetSize, self::gridDraftMinCustomPoolSize($playerCount), setCodes: $setCodes);
 
         if (count($cardIds) < $targetSize) {
             throw new GameStateException(
@@ -5327,7 +5431,7 @@ final class GameService
      *         whenever $randomizePool is false ($sampleSize just reduces
      *         to $minPoolSize, same as $targetSize always was previously).
      */
-    private function buildRotisserieDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $playerCount, int $cutoffCount, bool $randomizePool = false, ?int $randomizeSampleSize = null): array
+    private function buildRotisserieDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $playerCount, int $cutoffCount, bool $randomizePool = false, ?int $randomizeSampleSize = null, ?array $setCodes = null): array
     {
         $minPoolSize = self::rotisserieDraftMinPoolSize($cutoffCount, $playerCount);
 
@@ -5349,6 +5453,7 @@ final class GameService
             $minPoolSize,
             doubleStructureForMultiplayer: $sampleSize > 45,
             truncateToTarget: $randomizePool,
+            setCodes: $setCodes,
         );
 
         if (count($cardIds) < $minPoolSize) {
@@ -5377,10 +5482,10 @@ final class GameService
      *        buildTieredRotisserieDraftCustomTierPools()'s own docblock.
      * @return array<int, array{label: ?string, cutoff_count: int, pool_card_ids: int[]}>
      */
-    private function buildTieredRotisserieDraftTierPools(string $mode, ?array $customTiers, int $requestingUserId, int $playerCount): array
+    private function buildTieredRotisserieDraftTierPools(string $mode, ?array $customTiers, int $requestingUserId, int $playerCount, ?array $setCodes = null): array
     {
         return match ($mode) {
-            'rarity' => $this->buildTieredRotisserieDraftRarityTierPools($playerCount),
+            'rarity' => $this->buildTieredRotisserieDraftRarityTierPools($playerCount, $setCodes),
             'custom' => $this->buildTieredRotisserieDraftCustomTierPools($customTiers ?? [], $requestingUserId, $playerCount),
             default => throw new GameStateException('Tiered Rotisserie Draft requires a "rarity" or "custom" tiering mode'),
         };
@@ -5392,15 +5497,15 @@ final class GameService
      *
      * @return array<int, array{label: string, cutoff_count: int, pool_card_ids: int[]}>
      */
-    private function buildTieredRotisserieDraftRarityTierPools(int $playerCount): array
+    private function buildTieredRotisserieDraftRarityTierPools(int $playerCount, ?array $setCodes = null): array
     {
-        return array_map(function (array $tier) use ($playerCount): array {
+        return array_map(function (array $tier) use ($playerCount, $setCodes): array {
             $layoutSize = 2 * $playerCount * $tier['cutoff_count'];
 
             return [
                 'label' => $tier['label'],
                 'cutoff_count' => $tier['cutoff_count'],
-                'pool_card_ids' => $this->tieredRotisserieDraftRarityLayout($tier['label'], $layoutSize),
+                'pool_card_ids' => $this->tieredRotisserieDraftRarityLayout($tier['label'], $layoutSize, $setCodes),
             ];
         }, self::TIERED_ROTISSERIE_DRAFT_RARITY_TIERS);
     }
@@ -5425,10 +5530,9 @@ final class GameService
      *
      * @return int[]
      */
-    private function tieredRotisserieDraftRarityLayout(string $rarity, int $layoutSize): array
+    private function tieredRotisserieDraftRarityLayout(string $rarity, int $layoutSize, ?array $setCodes = null): array
     {
-        $rowsById = $this->loadCardCatalog()['rowsById'];
-        $distinctIds = array_keys(array_filter($rowsById, static fn (array $row): bool => $row['rarity'] === $rarity));
+        $distinctIds = $this->poolCardIds($setCodes, rarity: $rarity);
 
         if ($layoutSize <= count($distinctIds)) {
             $keys = (array) array_rand($distinctIds, $layoutSize);
@@ -13349,8 +13453,8 @@ final class GameService
         $seats = $seatStmt->fetchAll();
 
         $insertGame = $pdo->prepare(
-            "INSERT INTO games (format, deck_type, draft_match_id, match_game_number, status, created_by_user_id, wins_needed, default_selections_mode, diagnostic_mode, timeout_minutes, timeout_action, total_time_limit_minutes, synchronous_mode)
-             VALUES (:format, :deck_type, :draft_match_id, :match_game_number, 'waiting', :created_by, :wins_needed, :default_selections_mode, :diagnostic_mode, :timeout_minutes, :timeout_action, :total_time_limit_minutes, :synchronous_mode)"
+            "INSERT INTO games (format, deck_type, draft_match_id, match_game_number, status, created_by_user_id, wins_needed, default_selections_mode, diagnostic_mode, timeout_minutes, timeout_action, total_time_limit_minutes, synchronous_mode, card_set_codes)
+             VALUES (:format, :deck_type, :draft_match_id, :match_game_number, 'waiting', :created_by, :wins_needed, :default_selections_mode, :diagnostic_mode, :timeout_minutes, :timeout_action, :total_time_limit_minutes, :synchronous_mode, :card_set_codes)"
         );
         $insertGame->execute([
             'format' => $game['format'],
@@ -13406,6 +13510,7 @@ final class GameService
             // ordinary startGame() hand-deal, which synchronous_mode's
             // own gate already covers generically.
             'synchronous_mode' => (int) $game['synchronous_mode'],
+            'card_set_codes' => $game['card_set_codes'],
         ]);
         $nextGameId = (int) $pdo->lastInsertId();
 
@@ -13576,13 +13681,13 @@ final class GameService
                 custom_duel_rules_preset, custom_duel_min_cards, custom_duel_rarity_limits, custom_duel_duplicate_limits,
                 custom_duel_even_color_distribution_rarities, game_match_id, match_game_number,
                 status, created_by_user_id, wins_needed, default_selections_mode, diagnostic_mode,
-                timeout_minutes, timeout_action, total_time_limit_minutes, synchronous_mode
+                timeout_minutes, timeout_action, total_time_limit_minutes, synchronous_mode, card_set_codes
              ) VALUES (
                 :format, :deck_type, :custom_deck_name, :custom_deck_card_ids,
                 :duel_rules_preset, :duel_min_cards, :duel_rarity_limits, :duel_duplicate_limits,
                 :duel_even_color_distribution_rarities, :game_match_id, :match_game_number,
                 'waiting', :created_by, :wins_needed, :default_selections_mode, :diagnostic_mode,
-                :timeout_minutes, :timeout_action, :total_time_limit_minutes, :synchronous_mode
+                :timeout_minutes, :timeout_action, :total_time_limit_minutes, :synchronous_mode, :card_set_codes
              )"
         );
         $insertGame->execute([
@@ -13629,6 +13734,7 @@ final class GameService
             // game_players rows means everyone's own ready_at resets to
             // NULL by that column's own default.
             'synchronous_mode' => (int) $game['synchronous_mode'],
+            'card_set_codes' => $game['card_set_codes'],
         ]);
         $nextGameId = (int) $pdo->lastInsertId();
 
@@ -16381,6 +16487,7 @@ final class GameService
             'status' => $game['status'],
             'wins_needed' => (int) $game['wins_needed'],
             'default_selections_mode' => (bool) $game['default_selections_mode'],
+            'card_set_codes' => CardCatalog::setCodesOfGame($game),
             'created_at' => $game['created_at'],
             'started_at' => $game['started_at'],
             'last_move_at' => $game['last_move_at'],
@@ -18811,6 +18918,8 @@ final class GameService
                 // already carry a `default` key per field wherever one
                 // was computed, with no client-side re-derivation needed.
                 'default_selections_mode' => (bool) $game['default_selections_mode'],
+                // Which card set(s) this game's random pools were built from (migration 0496) -- the Rematch prefill and the board title read it.
+                'card_set_codes' => CardCatalog::setCodesOfGame($game),
                 // Issue #85's own opt-in turn/decision timeouts -- null
                 // for both when off (the default, and always true for
                 // Sealed Pool of the Day/Weekly Sealed Pool -- see
@@ -20027,6 +20136,8 @@ final class GameService
                 'total_time_limit_minutes' => $game['total_time_limit_minutes'] !== null ? (int) $game['total_time_limit_minutes'] : null,
                 'synchronous_mode' => (bool) $game['synchronous_mode'],
                 'default_selections_mode' => (bool) $game['default_selections_mode'],
+                // Which card set(s) this game's random pools were built from (migration 0496) -- the Rematch prefill and the board title read it.
+                'card_set_codes' => CardCatalog::setCodesOfGame($game),
                 'action_deadline_at' => null,
                 'action_deadline_game_player_id' => null,
                 'draft_pick_deadline_at' => null,
@@ -20375,6 +20486,8 @@ final class GameService
                 'total_time_limit_minutes' => $game['total_time_limit_minutes'] !== null ? (int) $game['total_time_limit_minutes'] : null,
                 'synchronous_mode' => (bool) $game['synchronous_mode'],
                 'default_selections_mode' => (bool) $game['default_selections_mode'],
+                // Which card set(s) this game's random pools were built from (migration 0496) -- the Rematch prefill and the board title read it.
+                'card_set_codes' => CardCatalog::setCodesOfGame($game),
                 'action_deadline_at' => null,
                 'action_deadline_game_player_id' => null,
                 'draft_pick_deadline_at' => null,
@@ -21410,6 +21523,8 @@ final class GameService
             // matching name/rules_text's own switch just below, so the
             // art shown matches whatever mood is actually displayed.
             'catalog_card_id' => $state->catalogCardId($isCreativityCopy ? $effectiveCardId : $cardId),
+            // Which art folder that print lives in -- a custom set's own cards are not under MSW (see migration 0496).
+            'art_set_code' => $diceValueCatalog['artSetCode'] ?? 'MSW',
             'name' => $isCreativityCopy ? ($names[$effectiveCardId] ?? $diceValueCatalog['effectKey']) : ($names[$cardId] ?? $catalog['effectKey']),
             'color' => $color,
             // The printed color, ignoring Imagination's "while in play, all

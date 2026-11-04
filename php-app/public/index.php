@@ -794,8 +794,18 @@ $userDecklists = new UserDecklistService(new UserDecklistRepository(), $friendsh
 // scoped to any particular user/game -- the catalog itself is public
 // knowledge, same reasoning as GET /games/log.
 if ($path === '/cards/catalog' && $method === 'GET') {
-    requireAuth($auth);
-    respond(200, ['status' => 'ok', 'cards' => CardCatalog::serialize(array_keys(CardCatalog::load()['rowsById']))]);
+    $currentUser = requireAuth($auth);
+    // Cards that only exist in a custom set are left out unless the viewer opted into
+    // custom content (Settings > "Allow custom card/effect formats").
+    $includeCustom = (bool) $currentUser['allow_custom_content'];
+    respond(200, ['status' => 'ok', 'cards' => CardCatalog::serialize(array_keys(CardCatalog::load($includeCustom)['rowsById']))]);
+}
+
+// The card sets this viewer may pick from when a game builds a random pool (New Game
+// dialog): the original set, plus any custom set once they opted into custom content.
+if ($path === '/cards/sets' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    respond(200, ['status' => 'ok', 'sets' => CardCatalog::sets((bool) $currentUser['allow_custom_content'], nonEmptyOnly: true)]);
 }
 
 if ($path === '/decklists' && $method === 'GET') {
@@ -1338,6 +1348,9 @@ if ($path === '/games' && $method === 'POST') {
     // createGame()'s own validation to reject if combined. See
     // createGame()'s own $synchronousMode docblock.
     $synchronousMode = (bool) ($body['synchronous_mode'] ?? false);
+    // Which card set(s) the game's random pools draw from -- see createGame()'s own
+    // $cardSetCodes docblock. Anything that isn't a list of strings is ignored.
+    $cardSetCodes = is_array($body['card_set_codes'] ?? null) ? array_map('strval', array_values($body['card_set_codes'])) : null;
     // Only meaningful for deck_type 'rotisserie_draft' -- see createGame()'s own docblock.
     $rotisserieDraftPoolSource = isset($body['rotisserie_draft_pool_source']) ? (string) $body['rotisserie_draft_pool_source'] : null;
     $rotisserieDraftCustomPoolText = isset($body['rotisserie_draft_custom_pool_text']) ? (string) $body['rotisserie_draft_custom_pool_text'] : null;
@@ -1408,6 +1421,7 @@ if ($path === '/games' && $method === 'POST') {
             $timeoutAction,
             $totalTimeLimitMinutes,
             $synchronousMode,
+            cardSetCodes: $cardSetCodes,
         );
         respond(201, ['status' => 'ok', 'game_id' => $gameId]);
     } catch (GameStateException $e) {
@@ -1513,6 +1527,8 @@ function openGameCreateParamsFromRequestBody(array $body): array
         // Reported live: "synchronous" mode -- see createGame()'s own
         // $synchronousMode docblock.
         'synchronous_mode' => (bool) ($body['synchronous_mode'] ?? false),
+        // Which card set(s) the game's random pools draw from -- see createGame()'s own $cardSetCodes docblock.
+        'card_set_codes' => is_array($body['card_set_codes'] ?? null) ? array_map('strval', array_values($body['card_set_codes'])) : null,
     ];
 }
 
@@ -2112,7 +2128,7 @@ if ($path === '/games/past' && $method === 'GET') {
 if ($path === '/stats/cards' && $method === 'GET') {
     $currentUser = requireAuth($auth);
     $achievements->onCardStatsPageViewed((int) $currentUser['id']);
-    respond(200, ['status' => 'ok', 'cards' => $cardStats->allCardStats()]);
+    respond(200, ['status' => 'ok', 'cards' => $cardStats->allCardStats((bool) $currentUser['allow_custom_content'])]);
 }
 
 if ($path === '/games/state' && $method === 'GET') {

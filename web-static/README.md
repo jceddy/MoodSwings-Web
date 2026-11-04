@@ -1325,6 +1325,19 @@ for game 1 of their last League match (before any sideboarding) (`builder.defaul
 match, and submits through the
 ordinary `submitCustomDuelDeck()` endpoint, with a `Sideboard` section on game 1. See "League play" in `php-app/README.md`.
 
+### Card sets (custom sets)
+
+The New Game dialog's "Card sets for random pools" fieldset (`#new-game-card-sets-field`) lists the sets from
+`GET /cards/sets` as checkboxes (the original set ticked by default). It is hidden unless there's more than
+one set to pick from -- i.e. the player turned on Settings > "Show custom content" and a custom set exists --
+and for deck types that don't build a random pool (`custom`, `custom_duel`, the Daily/Weekly Sealed Pools,
+`CARD_SET_DECK_TYPES_WITHOUT_A_RANDOM_POOL`). `selectedCardSetCodes()` sends `card_set_codes` only when
+something other than "just the original set" is ticked, on both `POST /games` and `POST /open-games`; a
+Rematch re-ticks the previous game's sets (`state.game.card_set_codes`). Card art comes from
+`card.art_set_code` (`img/cards/<set>/<id>-<slug>.webp`, `defaultCardArtUrl()`), and the themed skins
+(neon/futuristic/steampunk) only apply to the original set's art. See "Card sets and custom sets" in
+`php-app/README.md`.
+
 ### Weekly Sealed Pool (issue #520)
 
 A new "Weekly Sealed Pool" button (next to "Open games") opens

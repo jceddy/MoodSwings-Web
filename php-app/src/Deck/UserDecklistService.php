@@ -6,6 +6,7 @@ namespace MoodSwings\Deck;
 
 use MoodSwings\Achievements\AchievementService;
 use MoodSwings\Friends\FriendshipService;
+use MoodSwings\Database\Connection;
 use MoodSwings\Game\CardCatalog;
 use MoodSwings\Game\DecklistParser;
 use MoodSwings\Repository\UserDecklistRepository;
@@ -39,7 +40,7 @@ final class UserDecklistService
     {
         $this->assertValidVisibility($visibility);
         $name = $this->sanitizeName($name);
-        [$cardIds, $sideboardCardIds] = $this->resolveCardIds($decklistText, $cardIds, $sideboardCardIds);
+        [$cardIds, $sideboardCardIds] = $this->resolveCardIds($decklistText, $cardIds, $sideboardCardIds, $this->userAllowsCustomContent($userId));
 
         $decklistId = $this->decklists->create($userId, $name, $cardIds, $sideboardCardIds, $visibility);
         $this->achievements->onDecklistSaved($userId, count($this->decklists->listForUser($userId)));
@@ -59,7 +60,7 @@ final class UserDecklistService
         $this->authorizeOwner($userId, $decklistId);
         $this->assertValidVisibility($visibility);
         $name = $this->sanitizeName($name);
-        [$cardIds, $sideboardCardIds] = $this->resolveCardIds($decklistText, $cardIds, $sideboardCardIds);
+        [$cardIds, $sideboardCardIds] = $this->resolveCardIds($decklistText, $cardIds, $sideboardCardIds, $this->userAllowsCustomContent($userId));
 
         $this->decklists->update($decklistId, $name, $cardIds, $sideboardCardIds, $visibility);
         $this->achievements->onDecklistEdited($userId);
@@ -118,6 +119,7 @@ final class UserDecklistService
     public function view(int $viewerUserId, int $decklistId): array
     {
         $row = $this->authorizeViewer($viewerUserId, $decklistId);
+        $this->assertViewerMaySeeCards($viewerUserId, $row);
         $cardIds = array_map(intval(...), (array) json_decode((string) $row['card_ids'], true));
         $sideboardCardIds = $row['sideboard_card_ids'] !== null
             ? array_map(intval(...), (array) json_decode((string) $row['sideboard_card_ids'], true))
@@ -147,6 +149,7 @@ final class UserDecklistService
     public function cardIdsForUse(int $viewerUserId, int $decklistId): array
     {
         $row = $this->authorizeViewer($viewerUserId, $decklistId);
+        $this->assertViewerMaySeeCards($viewerUserId, $row);
 
         return [
             'name' => $row['name'],
@@ -155,6 +158,37 @@ final class UserDecklistService
                 ? array_map(intval(...), (array) json_decode((string) $row['sideboard_card_ids'], true))
                 : [],
         ];
+    }
+
+    /** Whether $userId opted into custom content (users.allow_custom_content). */
+    private function userAllowsCustomContent(int $userId): bool
+    {
+        $stmt = Connection::get()->prepare('SELECT allow_custom_content FROM users WHERE id = :id');
+        $stmt->execute(['id' => $userId]);
+
+        return (bool) $stmt->fetchColumn();
+    }
+
+    /**
+     * A saved deck with cards from a custom set (a friend's shared one, or your own from before you turned the
+     * opt-in off) can only be opened by someone who opted into custom content.
+     *
+     * @param array<string, mixed> $row
+     */
+    private function assertViewerMaySeeCards(int $viewerUserId, array $row): void
+    {
+        $customOnly = array_flip(CardCatalog::customOnlyCardIds());
+        if ($customOnly === [] || $this->userAllowsCustomContent($viewerUserId)) {
+            return;
+        }
+
+        $cardIds = array_merge(
+            array_map(intval(...), (array) json_decode((string) $row['card_ids'], true)),
+            $row['sideboard_card_ids'] !== null ? array_map(intval(...), (array) json_decode((string) $row['sideboard_card_ids'], true)) : [],
+        );
+        if (array_intersect_key($customOnly, array_flip($cardIds)) !== []) {
+            throw new NotAuthorizedToAccessDecklistException('This deck uses cards from a custom card set -- opt in first via Settings > "Allow custom card/effect formats" to open it.');
+        }
     }
 
     private function authorizeOwner(int $userId, int $decklistId): array
@@ -193,10 +227,10 @@ final class UserDecklistService
      * @param ?int[] $sideboardCardIds
      * @return array{0: int[], 1: ?int[]}
      */
-    private function resolveCardIds(?string $decklistText, ?array $cardIds, ?array $sideboardCardIds): array
+    private function resolveCardIds(?string $decklistText, ?array $cardIds, ?array $sideboardCardIds, bool $allowCustom = true): array
     {
         if ($decklistText !== null && trim($decklistText) !== '') {
-            $parsed = (new DecklistParser(CardCatalog::load()['idsByName']))->parse($decklistText);
+            $parsed = (new DecklistParser(CardCatalog::load($allowCustom)['idsByName']))->parse($decklistText);
 
             return [$parsed['cardIds'], $parsed['sideboardCardIds'] !== [] ? $parsed['sideboardCardIds'] : null];
         }
@@ -205,11 +239,11 @@ final class UserDecklistService
             throw new DecklistValidationException('The decklist has no cards in it.');
         }
         $cardIds = array_map(intval(...), $cardIds);
-        $this->assertCardIdsExist($cardIds);
+        $this->assertCardIdsExist($cardIds, $allowCustom);
 
         if ($sideboardCardIds !== null && $sideboardCardIds !== []) {
             $sideboardCardIds = array_map(intval(...), $sideboardCardIds);
-            $this->assertCardIdsExist($sideboardCardIds);
+            $this->assertCardIdsExist($sideboardCardIds, $allowCustom);
         } else {
             $sideboardCardIds = null;
         }
@@ -218,9 +252,10 @@ final class UserDecklistService
     }
 
     /** @param int[] $cardIds */
-    private function assertCardIdsExist(array $cardIds): void
+    private function assertCardIdsExist(array $cardIds, bool $allowCustom = true): void
     {
-        $rowsById = CardCatalog::load()['rowsById'];
+        // A card that only exists in a custom set reads as "no such card" to someone who hasn't opted into custom content.
+        $rowsById = CardCatalog::load($allowCustom)['rowsById'];
         foreach ($cardIds as $cardId) {
             if (!isset($rowsById[$cardId])) {
                 throw new DecklistValidationException("No such card {$cardId} in the catalog.");

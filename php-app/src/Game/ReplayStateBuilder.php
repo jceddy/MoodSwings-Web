@@ -707,6 +707,7 @@ final class ReplayStateBuilder
                 'hasWhileInPlay' => (bool) $row['has_while_in_play_ability'],
                 'hasAfterPlaying' => (bool) $row['has_after_playing_ability'],
                 'rulesText' => $row['rules_text'],
+                'artSetCode' => $row['art_set_code'],
             ];
         }
 
